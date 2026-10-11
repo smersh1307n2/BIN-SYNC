@@ -1,0 +1,2029 @@
+# BIN-SYNC CORE v2.3.6 FINAL
+## Полная спецификация универсального бинарного протокола синхронизации
+
+**Статус:** Ready for Production Implementation  
+**Версия:** 2.3.6 FINAL (implementation hardening release)  
+**Дата:** 2026-09-09  
+**Изменения относительно v2.3.5:**
+- Порядок проверок при получении батча: идемпотентность **ДО** проверки `prevBatchDigest` (§13.4, инвариант [S7])
+- Трансляция сессионных псевдонимов при ретрансляции (§13.6, инвариант [R4])
+- Побайтовые ASCII-диаграммы wire-формата с явным указанием `originOffset = 17` (§12.24, инвариант [C11])
+- Подавление кольцевого эха в антиэнтропии (§8.3, инвариант [E2])
+- Добавлены 19 новых сценариев верификации (24–42)
+- Добавлены инварианты [S7], [E2], [C11], [R4]
+
+---
+
+# 1. Обзор
+
+BIN-SYNC CORE — компактный бинарный протокол для офлайн-первой синхронизации произвольных данных между узлами с произвольной топологией (клиент-сервер, P2P, mesh).
+
+## 1.1. Цели
+
+- **Детерминированная сходимость:** любые два узла, получившие одинаковый набор изменений, приходят к байт-идентичному состоянию.
+- **Компактность:** минимум метаданных на запись, бинарный кодек, колоночные батчи, словарное сжатие.
+- **Офлайн-первость:** узлы работают автономно неограниченно долго, синхронизируются при встрече.
+- **Универсальность:** один транспорт и кодек для разнородных данных; разные сторы под разные модели.
+- **Устойчивость к хаосу:** потерям, дубликатам, out-of-order, сбросам устройств, переводу часов.
+- **Транспортная независимость:** работает через TCP, WebRTC, BLE, MQTT, файлы, QR-коды.
+- **Безопасность:** поддержка E2EE с blind merge на недоверенных серверах.
+
+## 1.2. Не-цели (границы применимости)
+
+- Строгая (линеаризуемая) согласованность.
+- Глобальные уникальные ограничения в офлайне.
+- Реалтайм-совместное редактирование текста (требует отдельного CRDT-модуля поверх).
+- Серверный поиск и фильтрация в E2EE-режиме (сервер становится dumb-хранилищем).
+- Передача тяжелых блобов (BIN-SYNC синхронизирует только метаданные, сами файлы передаются через внешний Data Plane).
+- Межзаписные транзакции между узлами (переводы, каскадные обновления). Атомарность батча [T1] не обеспечивает транзакционную семантику реляционной СУБД на уровне нескольких записей между узлами.
+
+## 1.3. Модель согласованности
+
+**Eventual Consistency with Pairwise FIFO / Single-Origin Causal Ordering:**
+
+- **Внутри одной пары узлов** изменения доставляются строго в порядке создания (in-order per peer, namespace).
+- **Внутри одного автора** изменения причинно упорядочены и не переупорядочиваются.
+- **Глобальная сквозная причинность** (транзитивная между тремя и более узлами в mesh) **не гарантируется** по умолчанию.
+- Для сценариев, требующих строгой каузальности, предусмотрен **опциональный** заголовок `causalDeps: array<b128>` (список `changeId` зависимостей), который приложение может использовать для принудительного порядка.
+
+**Итог:** протокол гарантирует структурную идентичность состояния, но не глобальный happens-before порядок между разными источниками.
+
+## 1.4. Философские границы (Манифест BIN-SYNC)
+
+1. **Сходимость ≠ Смысловая корректность:** протокол гарантирует структурную идентичность, но не бизнес-валидность. Приложение использует Post-Merge Hooks для компенсации бизнес-ошибок.
+2. **LWW — математический арбитр, не UX:** клиентский SDK сохраняет Shadow History для возможности отката «случайных» перезаписей.
+3. **E2EE = Local-First:** режим blind merge ориентирован на персональные хранилища до 1–5 ГБ на устройство.
+4. **GDPR = Crypto-Shredding:** мгновенное удаление данных достигается уничтожением ключа и заменой ciphertext на маркер SHREDDED с пересчётом дайджестов.
+5. **Тяжелые блобы — вне протокола:** BIN-SYNC синхронизирует только BlobDescriptor, передача чанков делегируется внешним протоколам (HTTP Range, WebTorrent, IPFS).
+6. **P2P LWW Poisoning:** в недоверенных mesh-сетях дефолтная политика меняется на MANUAL или SERVER_ARBITRATED.
+
+---
+
+# 2. Терминология
+
+| Термин | Определение |
+|---|---|
+| **Реплика** | Логический участник синхронизации с уникальным `nodeId` |
+| **Запись (record)** | Синхронизируемая сущность, идентифицируемая `recordId` |
+| **Поле (field)** | Именованный атрибут записи, идентифицируемый `fieldId` |
+| **Пир (peer)** | Другая реплика, с которой идёт обмен |
+| **Namespace** | Пространство имён (таблица/коллекция), `u16` |
+| **Alias** | Сессионный `u16`-идентификатор реплики, только на проводе |
+| **InternId** | Долговременный локальный `u32`-идентификатор реплики |
+| **HLC** | Гибридные логические часы (Hybrid Logical Clock) |
+| **Dot** | Стабильный идентификатор события `(authorNodeId, seq)` для CRDT-модулей |
+| **authorNodeId** | Durable `nodeId` узла, СОЗДАВШЕГО изменение (не ретранслятора) |
+| **lifecycleAuthor** | Durable `nodeId` узла, установившего текущий статус жизненного цикла |
+| **Tombstone** | Маркер удаления |
+| **Ghost** | Поле, скрытое при чтении, но хранимое для дайджеста |
+| **Bucket** | Диапазон записей по префиксу `BLAKE3(recordId)` |
+| **Digest** | Хэш-сводка состояния |
+| **Watermark** | Минимальный подтверждённый курсор среди активных членов |
+| **Quarantine** | Состояние узла, отставшего дальше горизонта GC |
+| **Stream** | Логический канал, привязанный к namespace или служебному потоку |
+
+---
+
+# 3. Транспортная абстракция
+
+## 3.1. Принцип
+
+Движок синхронизации полностью отвязан от транспорта. Он принимает и отдаёт сырые байты.
+
+```
+Реплика не знает о сокетах, HTTP, BLE или файлах.
+Реплика знает только: дать байты → получить байты.
+```
+
+## 3.2. Интерфейс транспорта
+
+```typescript
+interface SyncTransport {
+    send(peerId: NodeId, packet: Uint8Array): Promise<void>
+    onReceive(handler: (fromPeerId: NodeId, packet: Uint8Array) => void): void
+    supportsStreaming?: boolean
+    maxPacketSize?: number
+}
+```
+
+## 3.3. Поддерживаемые каналы
+
+| Канал | Использование |
+|---|---|
+| TCP / TLS | Клиент-сервер, сервер-сервер |
+| WebSocket / WebRTC | Браузер, P2P |
+| BLE / Wi-Fi Direct | Локальный mesh, IoT |
+| MQTT / NATS / Kafka | Микросервисный бэкбон |
+| Файлы / USB / QR | Air-gapped, sneakernet |
+| UDP / QUIC | Быстрый мультиплексинг |
+
+## 3.4. Самодостаточность кадров
+
+Каждый кадр протокола:
+- Начинается с магической сигнатуры `0x4253` ("BS").
+- Содержит фиксированный 25-байтный заголовок.
+- Содержит точную длину полезной нагрузки.
+- Содержит контрольную сумму CRC32C.
+- Не зависит от заголовков внешнего транспорта.
+- Может быть сохранён в файл, передан по почте, записан в QR-код и восстановлен без потери семантики.
+
+## 3.5. Файловая синхронизация (Sneakernet)
+
+API движка:
+
+```typescript
+exportDelta(writer: WritableStream): Promise<void>
+importDelta(reader: ReadableStream): Promise<void>
+```
+
+Дамп `DELTA_BATCH` кадров в бинарный файл. Импорт на изолированной реплике вызывает тот же `applyBatch()`, что и сетевое получение. Идентичность и идемпотентность сохраняются.
+
+## 3.6. Управление потоком (Flow Control)
+
+### 3.6.1. Для транспортов без встроенного backpressure
+
+Для WebRTC DataChannel, BLE, сырых UDP:
+
+- Стороны начинают передачу с начальным окном `INITIAL_WINDOW` (дефолт: 256 KB).
+- Отправитель НЕ ИМЕЕТ ПРАВА отправлять кадры суммарным объёмом payload больше текущего остатка кредитов в `streamId`.
+- Получатель по мере обработки данных и освобождения буферов отправляет кадр `WINDOW_UPDATE`.
+- `WINDOW_UPDATE.credits` является **additive credit**: каждое значение увеличивает доступное окно отправителя на указанное число байт.
+- Получатель НЕ МОЖЕТ увеличить окно выше `MAX_WINDOW_SIZE`.
+- Отправитель обязан вести отдельный кредитный баланс для каждого `streamId`; контроль учитывает только байты payload, не 25-байтный frame header.
+
+### 3.6.2. Для транспортов со встроенным backpressure
+
+Для TCP/TLS использование кадров `WINDOW_UPDATE` опционально (флаг `capabilities` в `HELLO`).
+
+## 3.7. Мультиплексирование потоков (streamId ↔ namespaceId)
+
+Поле `streamId: u32` в заголовке кадра связывается с `namespaceId`:
+
+| streamId | Назначение |
+|---|---|
+| `0x0000_0000` | Служебный управляющий поток (Handshake, Membership, Ping, GC_NOTICE) |
+| `0x0001_XXXX` | Поток данных для `namespaceId = XXXX` |
+
+**Правила:**
+- Управляющий поток (Control Plane) имеет **высший приоритет** над потоками данных.
+- Каждый namespace синхронизируется **независимо**: отдельные курсоры, peer state, STATE_DIGEST.
+- Ошибка в одном namespace (например, `NAMESPACE_FORBIDDEN`) завершает только соответствующий `streamId`, **не разрывая сессию** и не затрагивая другие namespace.
+- Частичные сбои изолированы: отказ одного namespace не блокирует остальные.
+
+---
+
+# 4. Идентичность
+
+## 4.1. Глобальные идентификаторы
+
+```
+nodeId    : 128-bit (UUIDv7 или crypto-random)
+recordId  : 128-bit UUIDv7
+changeId  : 128-bit (idempotency key)
+batchId   : 128-bit
+```
+
+## 4.2. Иерархия
+
+| Уровень | Где живёт | Размер | Переиспользование |
+|---|---|---|---|
+| `nodeId` | Глобально, навсегда | 128 bit | Никогда |
+| `internId` | Локально в реплике | 32 bit | Никогда для другого `nodeId` |
+| `alias` | На проводе, в сессии | 16 bit | После каждого HELLO |
+
+## 4.3. Alias map
+
+При установке сессии стороны обмениваются:
+
+```
+ALIAS_MAP:
+    0x0001 ↔ nodeId=0x7f3b... epoch=5
+    0x0002 ↔ nodeId=0x9a2c... epoch=3
+```
+
+**Правила:**
+- Алиас существует только в рамках одной сессии.
+- При получении кадра с неизвестным `alias` → отвергнуть с `UNKNOWN_ALIAS`. Не угадывать.
+- Переиспользование алиаса для другого `nodeId` или `epoch` внутри сессии запрещено.
+- При reconnect алиасы перепривязываются заново.
+
+## 4.4. Epoch реплики
+
+Каждый `nodeId` имеет монотонный `epoch: u32`, инкрементируемый при:
+- Сбросе устройства.
+- Восстановлении из бэкапа.
+- Явном «забыть» состояния (crypto-shredding).
+
+При получении кадра с `remote.epoch < known.epoch[nodeId]`:
+- Reject с `EPOCH_REGRESSION`.
+
+## 4.5. Одна реплика — один логический участник
+
+Запрещено двум процессам писать в один outbox с одним `nodeId` и `epoch`. Решения:
+- Один лидер.
+- Shared worker.
+- Разные `nodeId` для разных процессов.
+
+## 4.6. Модель авторства (authorship)
+
+**Двухуровневая модель идентификации автора изменения:**
+
+1. **`authorNodeId: b128`** — durable глобальный идентификатор узла, **создавшего** изменение (не ретранслятора). Хранится **всегда** в локальном хранилище.
+2. **`origin: u16`** — сессионный alias автора в текущей парной сессии. Используется **только** на проводе для компактности.
+
+**Правила резолва:**
+- При создании записи локально: `authorNodeId = self.nodeId`, `origin` не нужен.
+- При получении записи от пира: `origin` резолвится в `authorNodeId` через `ALIAS_MAP` и сохраняется локально.
+- При ретрансляции через цепочку узлов (A → B → C): узел B **транслирует** `origin` для сессии B↔C, но `authorNodeId(A)` сохраняется в метаданных.
+- **Tie-break ВСЕГДА** производится по `authorNodeId`, никогда по сессионному alias.
+
+---
+
+# 5. Время: HLC
+
+## 5.1. Структура
+
+```
+HLC {
+    wall     : u64     // микросекунды UTC с Unix epoch
+    logical  : u32     // логический счётчик в рамках wall
+    origin   : u16     // wire alias автора; НЕ участвует в tie-break
+}
+```
+
+**Единица времени:** микросекунды UTC. Фиксирована в версии протокола. Клиент в миллисекундах умножает на 1000.
+
+**Инвариант [C11]:** Поле `origin` в wire-формате `FieldWrite` и `FieldTomb` находится на фиксированном смещении **17** (байты 17–18). Смещение 15–16 занято младшими байтами `hlc.logical`. Запись по смещению 15 перезаписывает старшие 16 бит `hlc.logical`, превращая значение 1 в 65537 (0x00010001), что ломает детерминизм tie-break.
+
+## 5.2. Tick-правила
+
+### 5.2.1. Локальная генерация (send) с защитой от обратного хода часов
+
+```
+now = utc_now_µs()
+
+if now > last.wall:
+    wall = now
+    logical = 0
+elif now == last.wall:
+    wall = last.wall
+    logical = last.logical + 1
+else:
+    // Скачок системных часов назад (NTP, перевод времени, просыпание ОС)
+    // Инвариант: HLC.wall ОБЯЗАН быть строго монотонным
+    wall = last.wall
+    logical = last.logical + 1
+
+assert logical < 2^32 - 1, "Logical clock overflow"
+last = (wall, logical)
+```
+
+### 5.2.2. Приём удалённого HLC (receive)
+
+```
+now = utc_now_µs()
+wall = max(now, last.wall, remote.wall)
+
+if wall == now and wall == last.wall and wall == remote.wall:
+    logical = max(last.logical, remote.logical) + 1
+elif wall == last.wall:
+    logical = last.logical + 1
+elif wall == remote.wall:
+    logical = remote.logical + 1
+else:
+    logical = 0
+
+last = (wall, logical)
+```
+
+## 5.3. Skew clamp
+
+```
+MAX_SKEW_µS = 60_000_000   // 60 секунд (конфигурируемо)
+
+if remote.wall > now + MAX_SKEW_µS:
+    reject frame with CLOCK_DRIFT
+```
+
+Clamp применяется только к `wall`. Идентичность не участвует.
+
+## 5.4. Полный порядок (tie-break)
+
+```
+compare(a, b):
+    if a.wall != b.wall:       return cmp(a.wall, b.wall)
+    if a.logical != b.logical: return cmp(a.logical, b.logical)
+    return cmp(a.authorNodeId, b.authorNodeId)   // 128-bit durable nodeId
+```
+
+## 5.5. Использование
+
+- LWW tie-break на уровне поля или записи.
+- Сортировка конкурирующих операций.
+- **НЕ** используется как глобальный курсор.
+
+---
+
+# 6. Канонический бинарный кодек
+
+## 6.1. Примитивы
+
+**Varint (ULEB128):** overlong-формы запрещены. Декодер отвергает с `INVALID_VARINT`.
+
+**Фиксированные размеры:** `u8–u64`, `i8–i64` — little-endian; `b128`, `b256` — 16/32 байт.
+
+**TLV:** `tag: u8, len: varint, value: bytes`.
+
+**Строки:** `len: varint`, UTF-8 без BOM.
+
+**Массивы:** предваряются `count: varint`.
+
+## 6.2. Структуры
+
+- Поля в порядке возрастания `fieldId`.
+- Дубликаты `fieldId` запрещены.
+- Отсутствующие поля = отсутствие значения.
+
+## 6.3. Числа с плавающей точкой
+
+По умолчанию запрещены. Если схема разрешает: только IEEE 754. NaN reject с `INVALID_FLOAT`. `-0.0` → `+0.0`.
+
+## 6.4. Время
+
+`u64` микросекунд UTC.
+
+## 6.5. Неизвестные поля
+
+Сохраняются как raw TLV, входят в digest.
+
+## 6.6. Детерминизм
+
+**Инвариант [C1]:** два энкодера на одинаковых данных → байт-в-байт одинаковый результат.
+
+---
+
+# 7. Модель данных
+
+## 7.1. Запись
+
+```
+Record = {
+    recordId        : b128
+    namespaceId     : u16
+    state           : { fieldId -> FieldState }
+    lifecycleHlc    : HLC
+    lifecycleAuthor : b128
+    lifecycleValue  : u8           // 0x00=alive, 0x01=dead
+    isDead          : bool         // вычисляемое: lifecycleValue == 0x01
+}
+
+FieldState = {
+    value        : bytes
+    hlc          : HLC
+    authorNodeId : b128     // durable nodeId автора изменения поля
+}
+```
+
+## 7.2. Зарезервированные fieldId
+
+```
+0x0000       : LIFECYCLE (0=alive, 1=dead)
+0x0001-0x00FF : системные
+0x0100-0xFFFF : пользовательские
+```
+
+## 7.3. Операции над полями
+
+### FieldWrite
+
+```
+FieldWrite {
+    fieldId      : u16
+    hlc          : HLC
+    authorNodeId : b128
+    value        : canonical bytes
+}
+```
+
+Абсолютное значение поля. Не патч относительно базы.
+
+### FieldTomb
+
+```
+FieldTomb {
+    fieldId      : u16
+    hlc          : HLC
+    authorNodeId : b128
+}
+```
+
+Помечает поле как удалённое.
+
+## 7.4. Lifecycle (delete-wins)
+
+- `value = 0x00` → alive, `value = 0x01` → dead.
+- Undelete только явным `FieldWrite(0x0000, hlc, 0x00)`.
+- Поля с `hlc <= lifecycle.hlc` при `isDead=true` хранятся как **ghost**.
+- Поля с `hlc > lifecycle.hlc` видны, но сущность считается удалённой до явного undelete.
+- Пустой документ ≠ удалённая сущность.
+
+**Инвариант [D7]:** ghost-статус вычисляется по `field.authorNodeId` против `record.lifecycleAuthor`, не по `origin`.
+
+## 7.5. RecordTombstone
+
+Для `LWW_RECORD`: `{ recordId, hlc, authorNodeId }`.
+
+## 7.6. Типы сторов
+
+`RowKVStore`, `FieldDocStore`, `CounterStore`, `SetStore`, `SeqStore`, `BlobStore`.
+
+---
+
+# 8. Политики слияния
+
+## 8.1. Регистрация
+
+```
+0x01 LWW_RECORD    0x06 SEQ_FRACTIONAL
+0x02 LWW_FIELD     0x07 SEQ_CRDT
+0x03 COUNTER_G     0x08 BLOB_REF
+0x04 COUNTER_PN    0x09 MANUAL
+0x05 SET_OR
+```
+
+## 8.2. LWW_RECORD
+
+Record-level discard разрешён.
+
+## 8.3. LWW_FIELD (с подавлением кольцевого эха)
+
+**Запрещён record-level discard.** Поддерживает **подавление кольцевого эха** [E2].
+
+```
+merge(local_fields, remote_fields):
+    result = {}
+    changed = false
+    for each fieldId in union(local.keys, remote.keys):
+        l = local.get(fieldId)
+        r = remote.get(fieldId)
+        if l and r:
+            // Подавление эха: идентичная операция — no-op
+            if l.hlc.wall == r.hlc.wall and 
+               l.hlc.logical == r.hlc.logical and 
+               l.authorNodeId == r.authorNodeId and 
+               l.value == r.value:
+                result[fieldId] = l
+                continue  // changed остаётся false
+            if compare(r.hlc, r.authorNodeId, l.hlc, l.authorNodeId) > 0:
+                result[fieldId] = r
+                changed = true
+            else:
+                result[fieldId] = l
+        elif l:
+            result[fieldId] = l
+        else:
+            result[fieldId] = r
+            changed = true
+    
+    result_lifecycle = merge_lifecycle(local.lifecycle, remote.lifecycle)
+    return (result, result_lifecycle, changed)
+```
+
+**Правило применения в антиэнтропии:**
+
+```
+applyFieldWrite(recordId, fieldId, fieldOp):
+    local = storage.get(recordId)
+    localField = local.get(fieldId)
+    
+    // Проверка идентичности (подавление эха)
+    if localField and 
+       localField.hlc == fieldOp.hlc and 
+       localField.authorNodeId == fieldOp.authorNodeId and 
+       localField.value == fieldOp.value:
+        return { changed: false }
+    
+    merged, changed = policy.merge(local, fieldOp)
+    if changed:
+        storage.put(recordId, merged)
+        updateBucketDigest(recordId, local, merged)
+    return { changed }
+```
+
+**Инвариант [E2]:** Если входящая операция идентична локальной версии (`hlc`, `authorNodeId`, `value` совпадают), узел возвращает `changed = false` и **не добавляет** операцию в `outbox`. Это предотвращает Broadcast Storm в кольцевых топологиях (A → B → C → A).
+
+## 8.4. COUNTER_G
+
+Для каждого автора: `result[author] = max(local, remote)`.
+
+## 8.5. COUNTER_PN
+
+Положительный и отрицательный счётчики сливаются покомпонентно. `value = sum(positive) - sum(negative)`.
+
+## 8.6. SET_OR (Observed-Remove)
+
+Выжившие крышки = все крышки минус все томбстоуны.
+
+## 8.7. SEQ_FRACTIONAL
+
+Полный порядок: `(parentId, orderKey, authorNodeId, seq)`.
+
+## 8.8. BLOB_REF
+
+Иммутабельна. «Изменение» = новый `blobId`.
+
+## 8.9. MANUAL (с FieldResolve)
+
+Приложение разрешает конфликт через `FieldResolve` (системное поле `0x00FF`).
+
+---
+
+# 9. Digest и бакеты
+
+## 9.1. Record digest
+
+```
+recordDigest = BLAKE3-N(
+    recordId ||
+    sort_by_fieldId(FieldDigestPayload*) ||
+    LifecycleDigestPayload
+)
+```
+
+### 9.1.1. Инвариант дайджеста для зашифрованных полей
+
+В режиме E2EE дайджест вычисляется по сырому шифротексту. Повторное шифрование запрещено. [G5].
+
+### 9.1.2. Точная формула FieldDigestPayload
+
+```
+FieldDigestPayload:
+    fieldId      : u16 LE      // 2 bytes
+    keyEpoch     : u16 LE      // 2 bytes
+    wall         : u64 LE      // 8 bytes
+    logical      : u32 LE      // 4 bytes
+    authorNodeId : b128        // 16 bytes (DURABLE, НЕ origin!)
+    valLen       : varint      // 1-10 bytes
+    valueBytes   : bytes       // valLen bytes
+```
+
+Итого: 32 + varint + valLen байт на поле.
+
+### 9.1.3. Точная формула LifecycleDigestPayload
+
+Фиксированно 34 байта (включая `lifecycleAuthor`).
+
+### 9.1.4. StateRootDigest
+
+```
+StateRootDigest = BLAKE3-256(
+    domainTag("BIN-SYNC/STATE/v1") ||
+    namespaceId || outboxCursor || recordCount ||
+    sort_by_prefix_then_recordId(all BucketDigest canonical encodings)
+)
+```
+
+## 9.2. Bucket digest
+
+- `bucket_key = BLAKE3-256(recordId)`.
+- Динамическое ветвление (`bucketRadixBits`: 8/12/16).
+- Инкрементальное обновление: `count ± 1, xor ^= digest, sum ± digest`.
+- Bucket Rollup для разной глубины.
+- Range-split внутри hash-prefix.
+
+---
+
+# 10. Журнал изменений
+
+## 10.1. Outbox
+
+```
+OutboxEntry {
+    namespaceId    : u16
+    seq            : u64    // монотонный per (authorNodeId, namespaceId)
+    changeId       : b128
+    recordId       : b128
+    opKind         : u8
+    payload        : canonical bytes
+    causalDeps     : array<b128>   // опционально
+    createdAt      : u64 (µs UTC)
+    authorNodeId   : b128
+}
+```
+
+## 10.2. Inbox
+
+```
+InboxEntry {
+    namespaceId : u16
+    issuerNodeId: b128
+    issuerEpoch : u32
+    cursorStart : u64
+    cursorEnd   : u64
+    batchId     : b128
+    appliedAt   : u64
+    expiresAt   : u64
+}
+```
+
+**Ключ идемпотентности:** `(issuerNodeId, namespaceId, issuerEpoch, batchId)`.
+
+### 10.2.1. Inbox GC
+
+Удаляется при: `expiresAt < now` И обе стороны подтвердили участок лога.
+
+### 10.2.2. Потерянный ACK
+
+1. B применил batch, отправил ACK.
+2. ACK потерян.
+3. A по таймауту повторно шлёт тот же `batchId`.
+4. B проверяет inbox, находит `batchId`.
+5. B игнорирует batch, но **обязан** повторно выслать ACK.
+
+## 10.3. Peer state
+
+```
+PeerState {
+    peerId, peerNodeId, namespaceId
+    lastPushedSeq, lastReceivedSeq, lastAckedSeq
+    initialSyncComplete, membershipEpoch, lastSeen
+}
+```
+
+## 10.4. Range cursor
+
+Изменения от одного пира применяются строго в порядке `[cursorStart .. cursorEnd]`.
+
+**Инвариант [S2]:** `cursorStart == lastReceivedSeq + 1`.
+
+## 10.5. Коалесцирование
+
+Батч покрывает весь диапазон `[acked+1 .. currentSeq]`.
+
+## 10.6. Резолв authorNodeId
+
+Compact mode: `origin` → `authorNodeId` через `ALIAS_MAP`. Unknown → reject `UNKNOWN_ALIAS`.
+
+---
+
+# 11. Membership и GC
+
+## 11.1. Membership
+
+Приоритет: `LEFT > SUSPENDED > ACTIVE`.
+
+## 11.2. Watermark
+
+```
+safeOutboxSeq = min(lastAckedSeq активных с initialSyncComplete)
+```
+
+## 11.3–11.4. Новый/ушедший член
+
+Новый не блокирует GC. Ушедший исключается из min.
+
+## 11.5. Tombstone GC
+
+`TOMBSTONE_MIN_TTL` (7 дней дефолт).
+
+## 11.8. Карантин долгих узлов (Tombstone Cutoff Policy)
+
+`lastSeen < minTombstoneHLC.wall` → `QUARANTINE_RESYNC`.
+
+**Инвариант [D6]:** Узел не может применить дельту, если tombstone был GC'нут.
+
+---
+
+# 12. Wire-формат
+
+## 12.1. Магическая сигнатура
+
+`0x42 0x53` ("BS").
+
+## 12.2. Frame (25 байт заголовка)
+
+```
+Frame {
+    magic      : u16 = 0x4253     // 2 bytes
+    version    : u8  = 0x00       // 1 byte
+    frameType  : u8               // 1 byte
+    flags      : u8               // 1 byte
+    streamId   : u32              // 4 bytes
+    frameSeq   : u64              // 8 bytes
+    payloadLen : u32              // 4 bytes
+    crc32c     : u32              // 4 bytes
+    payload    : bytes
+}
+```
+
+### 12.2.1. Контроль целостности кадра
+
+- `magic != 0x4253` → silent drop.
+- `payloadLen > MAX_PAYLOAD_SIZE` → `PAYLOAD_TOO_LARGE`, сессия разрывается.
+- `CRC32C` mismatch → `CORRUPTED_FRAME` (0x0015), сессия сохраняется.
+
+### Флаги
+
+```
+bit 0: COMPRESSED (zstd)
+bit 1: SIGNED (Ed25519)
+bit 2: FRAGMENT
+bit 3: ENCRYPTED (E2EE)
+```
+
+## 12.3. Системные лимиты (Hard Limits)
+
+```
+HEADER_SIZE          : 25 байт
+MAX_FRAME_SIZE       : 16 MB
+MAX_PAYLOAD_SIZE     : 16 MB - 25 bytes
+MAX_FIELD_VALUE_SIZE : 4 MB
+MAX_RECORDS_PER_BATCH: 10 000
+MAX_WINDOW_SIZE      : 16 MB
+MAX_LOGICAL_MESSAGE  : 256 MB
+```
+
+## 12.4. Zstd Bomb Guard
+
+`uncompressedLen` в первых 4 байтах payload. Reject при `> MAX_FRAME_SIZE`.
+
+## 12.5. Фрагментация
+
+```
+FragmentEnvelope {
+    messageId       : b128
+    fragmentIndex   : u32 LE
+    fragmentCount   : u32 LE
+    totalMessageLen : u64 LE
+    fragmentLen     : u32 LE
+    fragmentBytes   : bytes
+}
+```
+
+## 12.6. Типы кадров
+
+0x01–0x13 (HELLO, HELLO_ACK, ALIAS_MAP, SCHEMA_MAP, MEMBERSHIP, STATE_DIGEST, NEED_RANGE, NEED_KEYS, DELTA_BATCH, SNAPSHOT_CHUNK, ACK, GC_NOTICE, ERROR, WINDOW_UPDATE, PING, PONG, KEY_ROTATION, IBLT_REQUEST, IBLT_RESPONSE).
+
+## 12.7–12.16. HELLO, HELLO_ACK, ALIAS_MAP, SCHEMA_MAP, MEMBERSHIP, STATE_DIGEST, NEED_RANGE, NEED_KEYS, IBLT, KEY_ROTATION
+
+Стандартные LE-раскладки.
+
+## 12.17. DELTA_BATCH
+
+```
+DELTA_BATCH {
+    namespaceId     : u16 LE
+    schemaId        : u16 LE
+    schemaVersion   : u16 LE
+    mergePolicy     : u8
+    flags           : u8
+    issuerNodeId    : b128
+    issuerEpoch     : u32 LE
+    cursorStart     : u64 LE
+    cursorEnd       : u64 LE
+    recordCount     : varint
+    batchId         : b128
+    prevBatchDigest : b128
+    recordsRoot     : b128
+    batchDigest     : b128
+    records         : bytes
+}
+```
+
+### 12.17.1. Атомарность
+
+[T1] Батч либо применяется целиком, либо не применяется.
+
+### 12.17.2. Batch digest chain
+
+```
+chain = (issuerNodeId, namespaceId, issuerEpoch)
+first: prevBatchDigest = 0x00...00
+batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
+```
+
+## 12.18. SNAPSHOT_CHUNK
+
+Последний чанк содержит `SnapshotTail` (80 байт): `snapshotDigest`, `snapshotStateDigest`, `outboxCheckpointDigest`.
+
+## 12.19. ACK
+
+Содержит `batchId` подтверждаемой транзакции.
+
+## 12.20–12.22. GC_NOTICE, WINDOW_UPDATE, PING/PONG
+
+Стандартные LE-раскладки.
+
+## 12.23. ERROR
+
+Коды ошибок: `UNKNOWN_ALIAS` (0x0001), `EPOCH_REGRESSION` (0x0002), `CLOCK_DRIFT` (0x0003), `INVALID_VARINT` (0x0004), `INVALID_FLOAT` (0x0005), `SCHEMA_MISMATCH` (0x0006), `SEQ_GAP` (0x0007), `DUPLICATE_BATCH` (0x0008), `NAMESPACE_FORBIDDEN` (0x0009), `INTERNAL` (0x000A), `OUTDATED_WATERMARK` (0x000B), `DECOMPRESSION_LIMIT_EXCEEDED` (0x000C), `BATCH_TRANSACTION_FAILED` (0x000D), `PAYLOAD_TOO_LARGE` (0x000E), `FLOW_CONTROL_VIOLATION` (0x000F), `UNKNOWN_KEY_EPOCH` (0x0010), `SCHEMA_PENDING` (0x0011), `CAUSAL_DEP_MISSING` (0x0012), `SIGNATURE_INVALID` (0x0013), `TRUST_REVOKED` (0x0014), `CORRUPTED_FRAME` (0x0015), `FRAME_REJECTED` (0x0016).
+
+## 12.24. Байтовая раскладка операций
+
+### 12.24.1. ASCII-диаграмма FieldWrite
+
+```
+Offset  Size   Field           Description
+------  ----   -----           -----------
+0       1      tag             = 0x01 (FieldWrite)
+1-2     2      fieldId         u16 LE (идентификатор поля)
+3-4     2      keyEpoch        u16 LE (эпоха ключа, 0 если не шифровано)
+5-12    8      hlc.wall        u64 LE (микросекунды)
+13-16   4      hlc.logical     u32 LE (логический счётчик)
+17-18   2      origin          u16 LE (сессионный псевдоним)  ◄── originOffset = 17
+19+     var    valLen          varint ULEB128 (длина значения)
+19+n    var    value           bytes (значение поля)
+
+Итого заголовок: 19 байт (без значения)
+```
+
+### 12.24.2. ASCII-диаграмма FieldTomb
+
+```
+Offset  Size   Field           Description
+------  ----   -----           -----------
+0       1      tag             = 0x02 (FieldTomb)
+1-2     2      fieldId         u16 LE
+3-4     2      keyEpoch        u16 LE (0)
+5-12    8      hlc.wall        u64 LE
+13-16   4      hlc.logical     u32 LE
+17-18   2      origin          u16 LE                        ◄── originOffset = 17
+
+Итого: 19 байт (фиксированно)
+```
+
+### 12.24.3. ASCII-диаграмма RecordTombstone
+
+```
+Offset  Size   Field           Description
+------  ----   -----           -----------
+0       1      tag             = 0x03 (RecordTombstone)
+1-16    16     recordId        b128
+17-24   8      hlc.wall        u64 LE
+25-28   4      hlc.logical     u32 LE
+29-30   2      origin          u16 LE                        ◄── originOffset = 29
+
+Итого: 31 байт (фиксированно)
+```
+
+**Инвариант [C11]:** Поле `origin` в `FieldWrite` и `FieldTomb` находится на фиксированном смещении **17** (байты 17–18). Запись по смещению 15 перезаписывает старшие 16 бит `hlc.logical`, превращая значение 1 в 65537 (0x00010001), что ломает детерминизм.
+
+### 12.24.4. Full author mode
+
+При `capabilities & FULL_AUTHOR_ID` поле `origin: u16` заменяется на `authorNodeId: b128` (16 байт вместо 2).
+
+---
+
+# 13. Протокол синхронизации
+
+## 13.1. Лестница reconcile
+
+```
+cursor → prefix buckets → range split → IBLT → snapshot + tail
+```
+
+## 13.2. Фазы сессии
+
+Handshake → Discovery → Reconcile → Transfer → GC.
+
+## 13.3. Алгоритм выбора стратегии
+
+Стандартный дифф по дайджестам, фолбэк на `NEED_RANGE` или `SNAPSHOT + tail`.
+
+## 13.4. Применение изменений (критический порядок проверок)
+
+**КРИТИЧНО:** Проверка идемпотентности выполняется **ДО** проверки `prevBatchDigest`. Это исключает ложные отказы при повторной доставке после потерянного ACK.
+
+```
+applyBatch(batch):
+    // ШАГ 1: Проверка идемпотентности (ПЕРЕД проверкой цепочки!)
+    if inbox.contains(batch.issuerNodeId, batch.namespaceId, 
+                      batch.issuerEpoch, batch.batchId):
+        // Повторная доставка — no-op, но ACK обязателен
+        send ACK(batch.batchId, batch.cursorEnd, 0, 0)
+        return
+    
+    // ШАГ 2: Проверка курсора
+    expected = peerState[batch.issuerNodeId, batch.namespaceId].lastReceivedSeq + 1
+    if batch.cursorStart != expected:
+        send ERROR(SEQ_GAP)
+        return
+    
+    // ШАГ 3: Проверка криптографической цепочки
+    chain = (batch.issuerNodeId, batch.namespaceId, batch.issuerEpoch)
+    if not verifyBatchChain(chain, batch.prevBatchDigest, batch.batchDigest):
+        send ERROR(BATCH_CHAIN_BROKEN)
+        return
+    
+    // ШАГ 4: Атомарное применение
+    begin transaction
+    try:
+        records = decodeRecordsArray(batch.records)
+        for each mutation in records.mutations:
+            for each fieldOp in mutation.fieldOps:
+                authorNodeId = resolveAuthor(fieldOp)
+                result = applyFieldWrite(mutation.recordId, fieldOp.fieldId, fieldOp)
+                if result.changed:
+                    updateBucketDigest(...)
+        
+        inbox.add(batch.issuerNodeId, batch.namespaceId, 
+                  batch.issuerEpoch, batch.batchId)
+        peerState[...].lastReceivedSeq = batch.cursorEnd
+        lastBatchDigest[chain] = batch.batchDigest
+        commit
+        send ACK(batch.batchId, batch.cursorEnd, appliedCount, 0)
+    catch error:
+        rollback
+        send ERROR(error.code, batch.batchId)
+```
+
+**Обоснование:** Если узел B применил батч и продвинул `lastBatchDigest`, но ACK потерялся, узел A повторно шлёт тот же батч. Без проверки идемпотентности первой узел B ошибочно отвергнет легитимный повтор из-за несовпадения `prevBatchDigest`.
+
+**Инвариант [S7]:** При повторной доставке батча проверка идемпотентности выполняется **ДО** проверки `prevBatchDigest`. Это гарантирует корректную обработку потерянных ACK.
+
+## 13.5. Мульти-пространственная синхронизация
+
+Каждый `namespace` синхронизируется независимо. Координация между пространствами — ответственность приложения.
+
+## 13.6. Ретрансляция: раздельные батчи и трансляция псевдонимов
+
+### 13.6.1. Запрет коалесцирования
+
+Ретранслятор **не коалесцирует** изменения от разных авторов в один батч. Каждый автор — отдельный батч.
+
+### 13.6.2. Трансляция `origin` при ретрансляции
+
+**КРИТИЧНО:** При подготовке кадра для целевого пира ретранслятор **обязан** транслировать `origin` каждой операции в псевдоним автора, согласованный в текущей сессии с получателем.
+
+```
+createDeltaBatchPacket(targetPeerId, filterAuthorNodeId):
+    packet = DELTA_BATCH {
+        issuerNodeId = self.nodeId,
+        issuerEpoch = self.epoch,
+        records = []
+    }
+    
+    for each outboxEntry in outbox.filter(authorNodeId == filterAuthorNodeId):
+        // Трансляция псевдонима в пространство получателя
+        targetOrigin = aliasMap[targetPeerId].getAlias(filterAuthorNodeId)
+        if targetOrigin is None:
+            continue  // получатель не знает этого автора
+        
+        fieldOp = outboxEntry.payload.copy()
+        fieldOp.origin = targetOrigin  // ПЕРЕЗАПИСЬ псевдонима
+        
+        packet.records.append(fieldOp)
+    
+    return packet
+```
+
+**Обоснование:** Если ретранслятор просто скопирует байты от отправителя, получатель декодирует `origin` в чужом пространстве нумерации сессии, что приведёт к `UNKNOWN_ALIAS` или неверной идентификации автора.
+
+**Инвариант [R4]:** При ретрансляции узел обязан транслировать `origin` каждой операции в псевдоним автора, согласованный в текущей сессии с получателем. Разрешение конфликтов всегда опирается на постоянный `authorNodeId` (16 байт).
+
+---
+
+# 14. E2EE / Zero-Knowledge Sync
+
+## 14.1–14.4. Принцип и видимость
+
+Сервер видит `fieldId`, `keyEpoch`, `hlc`, `authorNodeId`, `value` (шифротекст). Не видит содержимое.
+
+## 14.5. Шифрование
+
+```
+nonce = KDF-SHA256(
+    namespaceKey, "BIN-SYNC/E2EE/nonce/v1",
+    recordId || fieldId || hlc.wall || hlc.logical || authorNodeId || keyEpoch
+)[0..11]
+
+value = ChaCha20-Poly1305(key, nonce, plaintext)
+```
+
+**Инвариант [E1]:** Одноразовый номер уникален для каждой комбинации `(запись, поле, время, автор, эпоха ключа)`.
+
+## 14.6. Слепое слияние
+
+Сервер применяет слияние по открытым `hlc` и `authorNodeId`, не расшифровывая `value`.
+
+## 14.7. Матрица поддержки
+
+- `LWW_RECORD`, `LWW_FIELD`, `BLOB_REF`, `SET_OR`: слепое слияние на сервере.
+- `COUNTER_G`, `COUNTER_PN`, `SEQ_CRDT`: **Append-Only Envelope Store** (только на клиентах).
+- `MANUAL`: сервер не детектирует конфликты.
+
+## 14.8. Подписи
+
+`Ed25519` подпись над полезной нагрузкой подписи батча.
+
+## 14.9. Ротация ключей
+
+Кадр `KEY_ROTATION` с доказательством эпохи. Клиент при отсутствии ключа сохраняет запись как нерасшифровываемую.
+
+---
+
+# 15. Безопасность
+
+## 15.1–15.5. Транспорт, аутентификация, авторизация
+
+Обязательный шифрованный транспорт. Списки контроля доступа на уровне пространства имён. Зажим перекоса для всех пиров.
+
+## 15.6. Модель доверия (три типа)
+
+- **При первом использовании (TOFU):** первый ключ запоминается навсегда.
+- **Заранее согласованные ключи:** список разрешённых ключей.
+- **Центр сертификации:** сертификат в аутентификационной нагрузке.
+
+## 15.7. Защита от атак
+
+Декомпрессионные бомбы, отравление временем, повторная передача, посредник, подмена авторства.
+
+---
+
+# 16. Контрактные инварианты
+
+## 16.1. Инварианты слияния
+
+```
+[С1] Коммутативность: слить(А, Б) == слить(Б, А)
+[С2] Идемпотентность: слить(А, А) == А
+[С3] Ассоциативность: слить(А, слить(Б, В)) == слить(слить(А, Б), В)
+[С4] Монотонность: после слияния состояние каждого поля не меньше, чем до слияния
+```
+
+## 16.2. Победа удаления
+
+```
+[У1] Томбстоун с временем Т подавляет запись поля с временем не больше Т
+[У2] Запись поля с временем больше Т остаётся призраком
+[У3] Обычная запись поля не меняет жизненный цикл
+[У4] Мёртвый жизненный цикл и все поля томбстоуны/призраки — сущность удалена
+[У5] Пустой документ не равен удалённой сущности
+[У6] Узел не может применить дельту, если томбстоун был удалён сборщиком мусора
+[У7] Призрачный статус вычисляется по автору поля против автора жизненного цикла, не по псевдониму
+```
+
+## 16.3. Независимость от идентичности
+
+```
+[И1] Слияние не зависит от сессионного псевдонима
+[И2] Разрешение конфликтов: больший автор выигрывает
+[И3] Псевдоним без резолва — отклонение
+[И4] Автор всегда сохраняется локально (независимо от формата передачи)
+[И5] При ретрансляции разрешение конфликтов по автору оригинала
+[И6] Крышка идентифицируется (автор, последовательность), псевдоним в крышку не входит
+```
+
+## 16.4. Консистентность дайджестов
+
+```
+[Д1] Одинаковые состояния дают одинаковые дайджесты записи
+[Д2] Разные версии дают разные дайджесты записи
+[Д3] Сумма, исключающее или, количество корзины — вероятностная сводка; криптографическая целостность обеспечивается дайджестом записи / корневым дайджестом состояния
+[Д4] Расхождение корзин влечёт расхождение дайджеста состояния
+[Д5] Шифрование: одинаковый шифротекст даёт идентичные дайджесты
+[Д6] Дайджест вычисляется по автору (16 байт), никогда по псевдониму (2 байта)
+[Д7] Одинаковые (стенка, логика, автор, значение) дают идентичную полезную нагрузку дайджеста поля
+[Д8] Автор жизненного цикла всегда входит в дайджест как 16-байтовый идентификатор
+```
+
+## 16.5. Инварианты последовательности
+
+```
+[П1] Последовательность монотонна на (автор, пространство имён) и не переиспользуется
+[П2] Начало курсора батча равно последнему полученному номеру плюс один
+[П3] Курсор атомарно скачет на конец курсора после применения батча
+[П4] Повторный батч с тем же идентификатором — бездействие, но подтверждение обязательно
+[П5] Последовательность исходящего журнала не переиспользуется после сбоя
+[П6] Последовательность является курсором (автор, пространство имён), а не идентификатором пира
+[П7] Идемпотентность проверяется до проверки дайджеста предыдущего батча
+```
+
+## 16.6. Безопасность сборки мусора
+
+```
+[СМ1] Безопасная последовательность — минимум подтверждённых номеров активных членов
+[СМ2] Новый член не входит в минимум до снапшота
+[СМ3] Томбстоун нельзя удалить, пока его время не ниже безопасной последовательности всех видевших
+[СМ4] Ушедший член исключается из минимума
+[СМ5] Автора счётчика можно удалить только если его максимум влит во всех активных
+[СМ6] Запись входящего журнала удаляется после подтверждения обеими сторонами
+[СМ7] Минимальный срок хранения томбстоунов не меньше удвоенного времени распространения членства
+```
+
+## 16.7. Стабильность схемы
+
+```
+[СХ1] Неизвестное пространство имён — отклонение или карантин
+[СХ2] Неизвестный идентификатор поля — сохранить как сырой тег-длина-значение, в дайджест
+[СХ3] Идентификатор поля не переиспользуется
+[СХ4] Смена типа — новый идентификатор поля
+[СХ5] Смена политики слияния — инкремент версии схемы
+[СХ6] Длина значения и тип поля согласованы
+[СХ7] Ожидающая схема не продвигает последний полученный номер
+```
+
+## 16.8. Канон
+
+```
+[К1] Два энкодера — байт-в-байт одинаковый результат
+[К2] Избыточное переменное целое — отклонение
+[К3] Не-число — отклонение
+[К4] Минус ноль нормализуется в плюс ноль
+[К5] Все массивы предваряются количеством
+[К6] Все структуры имеют фиксированную раскладку в прямом порядке байтов
+[К11] Смещение псевдонима равно семнадцать для записи поля и томбстоуна поля
+```
+
+## 16.9. Транзакционность
+
+```
+[Т1] Батч дельт либо применяется целиком, либо не применяется
+[Т2] Атомарный скачок курсора на конец курсора после применения
+[Т3] Батч с ненулевым дайджестом предыдущего батча — только при наличии контрольной точки цепочки
+```
+
+## 16.10. Доверие
+
+```
+[Д1] При первом использовании: первый ключ запоминается навсегда
+[Д2] Заранее согласованные: только из списка разрешённых
+[Д3] Центр сертификации: валидный сертификат
+[Д4] Отзыв ключа — инкремент эпохи
+```
+
+## 16.11. Авторство
+
+```
+[А1] Каждая запись хранит автора (128 бит) локально
+[А2] При компактном режиме псевдоним резолвится через карту псевдонимов
+[А3] Неизвестный псевдоним — отклонение всего батча
+[А4] Разрешение конфликтов использует автора, не сессионный псевдоним
+[А5] При ретрансляции авторство сохраняется
+[А6] Одноразовый номер шифрования однозначно связывает шифротекст с (пространство имён, запись, поле, время, автор, эпоха ключа)
+```
+
+## 16.12. Целостность кадра
+
+```
+[Ц1] Несовпадение контрольной суммы — ошибка, сессия сохраняется
+[Ц2] Неверная магия — молчаливое отбрасывание
+[Ц3] Превышение максимального размера полезной нагрузки — ошибка, сессия разрывается
+[Ц4] Повреждённый кадр не влияет на дайджест состояния и входящий журнал
+[Ц5] Последний фрагмент определяется только индексом и количеством фрагментов
+[Ц6] Каждый физический фрагмент имеет независимую контрольную сумму
+[Ц7] Логическое сообщение применяется только после полной сборки и проверки
+[Ц8] Кадр отклонён — общий код для не-фатальных нарушений фрейминга
+```
+
+## 16.13. Авторство жизненного цикла
+
+```
+[Ж1] Автор жизненного цикла — идентификатор узла, установившего текущий жизненный цикл
+[Ж2] При разрешении конфликтов жизненных циклов используется автор жизненного цикла, не псевдоним
+[Ж3] Автор жизненного цикла сохраняется локально даже при получении через псевдоним
+[Ж4] Призрачный статус определяется сравнением автора поля с автором жизненного цикла
+```
+
+## 16.14. Привязка снапшота
+
+```
+[СН1] Чанк снапшота даёт дайджест состояния, равный дайджесту состояния снапшота
+[СН2] Снапшот плюс хвост дельт даёт дайджест состояния, соответствующий дайджесту состояния
+[СН3] Дайджест контрольной точки исходящего журнала равен дайджесту батча последнего батча перед сборкой мусора
+[СН4] Дайджест чанка всегда двести пятьдесят шесть бит
+```
+
+## 16.15. Ретрансляция
+
+```
+[Р1] Автор в поле — оригинальный автор, не ретранслятор
+[Р2] Дайджест батча и цепочка формируются в цепочке ретранслятора
+[Р3] Ретранслятор не коалесцирует изменения от разных авторов в один батч
+[Р4] Ретранслятор транслирует псевдоним каждой операции в пространство получателя
+```
+
+## 16.16. Управление потоком
+
+```
+[УП1] Кредитный баланс не превышает максимальный размер окна
+[УП2] Кредитный баланс не отрицателен
+```
+
+## 16.17. Разрешение поля
+
+```
+[РП1] Время разрешения поля строго больше всех конфликтующих времён
+[РП2] Поле двести пятьдесят пять входит в дайджест, но не отображается приложению
+```
+
+## 16.18. Шифрование и эхо
+
+```
+[Ш1] Одноразовый номер уникален для каждой комбинации (запись, поле, время, автор, эпоха ключа)
+[Ш2] Идентичная операция (время, автор, значение) даёт изменено-ложно, эхо остановлено
+```
+
+## 16.19. Каузальные зависимости (экспериментально)
+
+```
+[КЗ1] Таймаут зависимости — отбрасывание записи
+[КЗ2] Цикл в графе зависимостей — отбрасывание записи
+[КЗ3] Потерянная зависимость — отбрасывание записи
+[КЗ4] Ожидающая запись не продвигает курсор
+[КЗ5] Батч с ожидающими записями не применяется частично
+```
+
+---
+
+# 17. Лабораторные сценарии
+
+## Сценарий 1. Полевой параллелизм
+Два узла независимо изменяют разные поля. После синхронизации оба поля сохранены. Инварианты С1–С4.
+
+## Сценарий 2. Удаление против поздней записи (победа удаления)
+Один узел удаляет запись, другой в офлайне изменяет поле. Запись удалена, поле — призрак. У1–У5.
+
+## Сценарий 3. Переподключение с новой картой псевдонимов
+Слияние идентично при стабильных псевдонимах. И1–И3.
+
+## Сценарий 4. Снапшот плюс хвост для нового пира
+Новый пир получает снапшот на курсоре и хвост дельт. СН1, СН2.
+
+## Сценарий 5. Счётчик с ушедшим узлом
+Ушедший узел исключён из активных авторов. СМ5.
+
+## Сценарий 6. Перекос часов
+Отклонение с ошибкой перекоса часов.
+
+## Сценарий 7. Регрессия эпохи
+Отклонение с ошибкой регрессии эпохи.
+
+## Сценарий 8. Канонический дайджест
+Два энкодера — байт-в-байт одинаковый результат. К1.
+
+## Сценарий 9. Инкрементальность дайджеста корзины
+Вставка записей в любом порядке — идентичные количество, исключающее или, сумма. Д3.
+
+## Сценарий 10. Предотвращение воскресения томбстоуна
+Томбстоун не удалён сборщиком мусора до возврата узла. СМ3.
+
+## Сценарий 11. Слепое слияние шифрования
+Сервер применяет слияние по времени, не видя открытых данных. Ш1.
+
+## Сценарий 12. Фрагментация
+Большой чанк разбивается на фрагменты, собирается по идентификатору сообщения. Ц5–Ц7.
+
+## Сценарий 13. Карантин зомби-узла
+Отставший узел получает ошибку устаревшей ватермарки и полный ресинк.
+
+## Сценарий 14. Защита от декомпрессионной бомбы
+Отклонение до вызова декомпрессора.
+
+## Сценарий 15. Обратное давление управления потоком
+Отклонение при превышении кредитного окна. УП1, УП2.
+
+## Сценарий 16. Ротация ключей
+Повторное шифрование после получения нового ключа.
+
+## Сценарий 17. Диапазонный курсор (коалесцирование)
+Последний полученный номер равен концу диапазона. П2, П3, Т2.
+
+## Сценарий 18. Потерянное подтверждение
+Повторный батч — бездействие плюс повторное подтверждение. П4, П7.
+
+## Сценарий 19. Ручной конфликт и разрешение поля
+Разрешение через поле двести пятьдесят пять. РП1.
+
+## Сценарий 20. Изоляция мульти-пространств
+Одно пространство закрыто, другое работает.
+
+## Сценарий 21. Свёртка корзин
+Динамическая свёртка до минимального общего уровня. Д10.
+
+## Сценарий 22. Доверие при первом использовании
+Попытка подмены ключа — ошибка отозванного доверия. Д1.
+
+## Сценарий 23. Разрешение конфликтов при ретрансляции (сохранение авторства)
+Побеждает больший автор оригинала, не ретранслятор. И4, И5, А1–А5.
+
+## Сценарий 24. Защита от неизвестного псевдонима [А3, Т1]
+
+**Инварианты:** А3 (Неизвестный псевдоним — отказ всего батча), Т1 (Атомарность транзакции батча / откат).
+
+**Описание:** Злоумышленник или рассинхронизированный узел передаёт батч с дельтой, где в поле псевдонима указано значение 9999, отсутствующее в локальной таблице псевдонимов принимающего узла.
+
+**Предусловия:** Узел А соединён с узлом Б. Таблица псевдонимов узла Б содержит только легитимные псевдонимы текущей сессии.
+
+**Шаги:**
+1. Узел А формирует кадр батча дельт, содержащий операцию с псевдонимом 9999.
+2. Узел Б выполняет валидацию батча при парсинге записей.
+
+**Критерий успешности:**
+- Приёмник отвергает батч с кодом ошибки «Неизвестный псевдоним».
+- Ни одна операция из этого батча не попадает в хранилище (атомарный откат).
+
+## Сценарий 25. Конкурентное удаление — разрешение по автору жизненного цикла [Ж1–Ж4, У7]
+
+**Инварианты:** Ж1–Ж4 (Детерминизм жизненного цикла), У7 (Разрешение конфликтов удаления по автору), Д1 (Идентичный дайджест состояния).
+
+**Описание:** Два узла одновременно удаляют одну и ту же запись с абсолютно идентичным физическим и логическим временем (стенка=500000, логика=0). Конфликт разрешается детерминированно по глобальному шестнадцатибайтному автору (автор узла Б больше автора узла А).
+
+**Предусловия:** Узлы А (автор-А) и Б (автор-Б) имеют общую запись.
+
+**Шаги:**
+1. Узел А локально выполняет удаление записи с временем (500000, 0, псевдоним_А).
+2. Узел Б локально выполняет удаление записи с временем (500000, 0, псевдоним_Б).
+3. Узлы выполняют взаимный обмен дельтами.
+
+**Критерий успешности:**
+- На обоих узлах запись помечена как удалённая.
+- Поле автора жизненного цикла на обоих узлах детерминированно равно автору узла Б.
+- Дайджесты записей на А и Б побайтово совпадают.
+
+## Сценарий 26. Восстановление после повреждённого кадра (контрольная сумма) [Ц1–Ц4]
+
+**Инварианты:** Ц1–Ц4 (Контрольные суммы кадра), код ошибки «Повреждённый кадр», сохранение транзакционной чистоты хранилища.
+
+**Описание:** В процессе передачи полезная нагрузка кадра повреждается (инверсия бита). Получатель обнаруживает несовпадение контрольной суммы, отбрасывает повреждённый кадр без изменения локального хранилища. При последующей повторной передаче неповреждённого кадра данные успешно применяются.
+
+**Предусловия:** Узел А генерирует валидный пакет батча дельт для узла Б.
+
+**Шаги:**
+1. В сформированном бинарном пакете инвертируется байт полезной нагрузки.
+2. Пакет передаётся узлу Б.
+3. Узел А повторно отправляет оригинальный валидный пакет.
+
+**Критерий успешности:**
+- Первый пакет отклонён с ошибкой «Повреждённый кадр».
+- До повторной отправки запись отсутствует в хранилище Б.
+- Второй пакет успешно принят, запись появляется в хранилище Б.
+
+## Сценарий 27. Консистентность дайджестов через ретрансляцию [Д6–Д8, И1–И5]
+
+**Инварианты:** Д6–Д8 (Канонический дайджест с шестнадцатибайтным автором), И1–И5 (Сохранение канонического авторства при ретрансляции).
+
+**Описание:** Узел А создаёт запись с автором А. Узел Б ретранслирует операцию узлу В. На узле В канонический дайджест записи и корзины вычисляется по оригинальному автору А, а не по промежуточному ретранслятору Б.
+
+**Предусловия:** Топология цепочки А → Б → В. В каждой сессии согласованы свои сессионные псевдонимы.
+
+**Шаги:**
+1. Узел А записывает поле и передаёт дельту узлу Б.
+2. Узел Б принимает дельту, переупаковывает её с адаптацией сессионного псевдонима и передаёт узлу В.
+3. Вычисляются контрольные дайджесты на узлах А, Б и В.
+
+**Критерий успешности:**
+- Дайджест А равен дайджесту Б равен дайджесту В с абсолютной побайтовой идентичностью.
+
+## Сценарий 28. Ретрансляция с раздельными батчами по авторам [Р1–Р3]
+
+**Инварианты:** Р1–Р3 (Сепарация дельт по авторам), изолированное формирование батчей.
+
+**Описание:** Ретранслятор Б накапливает дельты от независимых узлов А и Х. При взаимодействии с узлом В ретранслятор формирует батч с фильтром по автору А.
+
+**Предусловия:** В исходящем журнале узла Б присутствуют дельты от нескольких авторов.
+
+**Шаги:**
+1. Узел Б генерирует пакет дельт с указанием фильтра по автору А.
+2. Пакет доставляется узлу В.
+
+**Критерий успешности:**
+- Узел В получает и применяет только записи автора А.
+- Записи автора Х в хранилище В отсутствуют.
+
+## Сценарий 29. Привязка состояния снапшота и хвоста дельт [СН1–СН4]
+
+**Инварианты:** СН1–СН4 (Контрольный дайджест снапшота), монотонный накат хвоста дельт.
+
+**Описание:** Узел Б инициализируется через снапшот базы узла А (курсор Н). После применения снапшота узел А генерирует новые правки (курсоры Н+1 до М) и передаёт их как инкрементальный хвост дельт.
+
+**Предусловия:** Узел А содержит записи 1–3. Узел Б пуст.
+
+**Шаги:**
+1. Узел А передаёт снапшот состояния на курсоре 3. Узел Б применяет его.
+2. Узел А локально выполняет записи 4 и 5.
+3. Узел А формирует пакет дельт с диапазоном [4, 5] и передаёт узлу Б.
+
+**Критерий успешности:**
+- Все 5 записей на узле Б идентичны записям узла А.
+- Итоговые дайджесты записей совпадают.
+
+## Сценарий 30. Целостность цепочки батчей [Т3]
+
+**Инварианты:** Т3 (Криптографическая цепочка дайджестов предыдущих батчей), отказ при разрыве цепочки.
+
+**Описание:** Проверка невозможности внедрения или подмены батча в середине потока репликации. Каждый последующий батч обязан содержать хеш предыдущего принятого батча.
+
+**Шаги:**
+1. Узел А передаёт узлу Б легитимный Батч 1 (дайджест предыдущего = 0). Батч успешно принят.
+2. Злоумышленник пытается отправить узлу Б Батч 2 с поддельным дайджестом предыдущего батча.
+3. Узел А отправляет легитимный Батч 2 с правильным дайджестом предыдущего батча.
+
+**Критерий успешности:**
+- Поддельный батч отклоняется с ошибкой «Транзакция батча не удалась».
+- Легитимный Батч 2 успешно применяется.
+
+## Сценарий 31. Аутентификационная нагрузка в приветствии [Д5]
+
+**Инварианты:** Д5 (Аутентификация пира при рукопожатии), ошибка аутентификации.
+
+**Описание:** При установлении сессии пиры валидируют аутентификационный токен или цифровую подпись. Защита от несанкционированного подключения к закрытому пространству репликации.
+
+**Шаги:**
+1. Неавторизованный узел пытается выполнить рукопожатие с некорректным токеном.
+2. Авторизованный пир выполняет рукопожатие с валидным заранее согласованным токеном.
+
+**Критерий успешности:**
+- Попытка 1 завершается ошибкой аутентификации.
+- Попытка 2 успешно открывает сессию репликации.
+
+## Сценарий 32. Ожидающая схема [СХ7]
+
+**Инварианты:** СХ7 (Карантин пакетов при опережающей версии схемы), атомарная разблокировка после обновления схемы.
+
+**Описание:** Узел А отправляет батч, требующий версию схемы 2. Узел Б имеет зарегистрированную схему только версии 1. Приёмник не может корректно распарсить типы полей и переводит батч в состояние ожидания.
+
+**Шаги:**
+1. Узел Б получает батч с версией схемы 2 и возвращает ошибку «Схема в ожидании». Хранилище не изменяется.
+2. Узел Б регистрирует новую спецификацию схемы версии 2.
+3. Батч повторно передаётся узлу Б.
+
+**Критерий успешности:**
+- На шаге 1 возвращён код «Схема в ожидании».
+- На шаге 3 батч успешно применён.
+
+## Сценарий 33. Каузальные зависимости — таймаут [КЗ1]
+
+**Инварианты:** КЗ1 (Карантин зависимых операций), ошибка таймаута каузальной зависимости.
+
+**Описание:** Операция поступает с указанием родительской каузальной зависимости, которая отсутствует в локальном журнале. При превышении тайм-аута ожидания родителя операция переводится в статус ошибки.
+
+**Шаги:**
+1. Поступает зависимая операция, ожидающая несуществующую зависимость.
+2. Истекает тайм-аут ожидания родительской транзакции.
+
+**Критерий успешности:**
+- Фиксируется отказ применения по таймауту.
+- Неконсистентное состояние не проникает в основное дерево данных.
+
+## Сценарий 34. Каузальные зависимости — обнаружение цикла [КЗ2]
+
+**Инварианты:** КЗ2 (Ацикличность каузального графа), ошибка обнаружения цикла.
+
+**Описание:** В результате аномалии распределённой сети или вредоносных действий две операции взаимно ссылаются друг на друга. Детектор циклов обязан прервать взаимную блокировку.
+
+**Шаги:**
+1. В очередь каузального анализатора подаётся граф с циклическими зависимостями.
+2. Выполняется обход графа зависимостей.
+
+**Критерий успешности:**
+- Алгоритм детектирует цикл.
+- Цикл разрывается детерминированным отбрасыванием одной из ветвей, взаимная блокировка исключена.
+
+## Сценарий 35. Защита от зомби-реплик [У6, Д6, СМ7]
+
+**Инварианты:** У6, Д6 (Карантинный горизонт надгробий), ошибка устаревшей ватермарки, принудительный ресинк через полный снапшот.
+
+**Описание:** Узел выполнил сборку мусора надгробий до метки минимального времени надгробий. Зомби-реплика, спавшая дольше срока хранения надгробий, присылает правку с временем меньше метки. Принятие такой правки грозит воскрешением давно удалённых данных.
+
+**Шаги:**
+1. Узел фиксирует локальную ватермарку очистки.
+2. Поступает дельта от зомби-узла с временем меньше ватермарки.
+
+**Критерий успешности:**
+- Дельта категорически отвергается с ошибкой устаревшей ватермарки.
+- Узлу выставляется флаг обязательного обновления через полный снапшот.
+
+## Сценарий 36. Разделение сети (расщепление мозга) и исцеление
+
+**Инварианты:** С1 (Коммутативность), С3 (Ассоциативность), Д1 (Идентичные дайджесты при сходимости).
+
+**Описание:** Кластер из трёх узлов {А, Б, В} разделяется на партиции {А, Б} и изолированный узел {В}. В обеих изолированных частях происходят параллельные конкурирующие изменения полей. После исцеления сети запускается многораундовый обмен дельтами.
+
+**Шаги:**
+1. В партиции {А, Б} узлы изменяют поля 0х0100 и 0х0101 и синхронизируются.
+2. В изолированном узле {В} выполняется запись поля 0х0100 со старым временем и нового поля 0х0102.
+3. Восстановление связности: узлы выполняют три раунда полного попарного обмена дельтами.
+
+**Критерий успешности:**
+- Конкурентное поле 0х0100 принимает значение из партиции {А, Б} по правилу победы последней записи.
+- Поле 0х0102 успешно добавляется на все узлы.
+- Дайджесты записей на всех трёх узлах совпадают.
+
+## Сценарий 37. Кольцевая топология и остановка эха [Ш2]
+
+**Инварианты:** С2 (Идемпотентность), П4 (Повторные дельты — бездействие), гарантия отсутствия лавинного шторма сообщений, Ш2 (Остановка эха).
+
+**Описание:** Кольцо А → Б → В → А. Узел А инициирует изменение. Оно передаётся узлу Б, Б ретранслирует узлу В, а В ретранслирует обратно узлу А. Узел А распознаёт собственную правку, применяет её как бездействие (изменено = ложно) и не пересылает повторно.
+
+**Шаги:**
+1. Узел А создаёт запись. Размер исходящего журнала А равен одному.
+2. А передаёт Б: узел Б применяет дельту и помещает её в исходящий журнал Б для В.
+3. Б передаёт В: узел В применяет дельту и помещает её в исходящий журнал В для А.
+4. В передаёт А: узел В отправляет дельту обратно узлу А (замыкание кольца).
+
+**Критерий успешности:**
+- Пакет успешно обработан на узле А.
+- Размер исходящего журнала А остался строго равен одному (эхо остановлено, лавинное зацикливание предотвращено).
+
+## Сценарий 38. Полный цикл жизненного цикла
+
+**Инварианты:** У1 (Томбстоун подавляет меньшее время), У2 (Поля-призраки), У4 (Жизненный цикл ноль воскрешает поля-призраки), У5 (Итоговая победа удаления).
+
+**Описание:** Комплексная проверка жизненного цикла записи: удаление → запоздалая запись в офлайне → перевод в призрак → воскрешение с восстановлением полей → финальное удаление.
+
+**Шаги:**
+1. Узел А удаляет запись с временем 500.
+2. Узел Б в офлайне выполняет запись поля с меньшим временем 400.
+3. Синхронизация А передаёт Б: на Б запись мертва, а поле помечено как призрак.
+4. Узел А выполняет воскрешение записи с временем 600. Синхронизация А передаёт Б: запись оживает, поле теряет статус призрака.
+5. Узел Б повторно удаляет запись с временем 700.
+
+**Критерий успешности:**
+- На всех этапах корректно переключаются флаги «мертва» и «призрак».
+- В финале на обоих узлах запись окончательно удалена.
+
+## Сценарий 39. Мульти-полевой атомарный батч [Т1]
+
+**Инварианты:** Т1 (Атомарность пакета дельт), С4 (Полевой гранулярный победа последней записи).
+
+**Описание:** Батч содержит обновления трёх полей одной записи. На принимающем узле одно поле уже было изменено локально более свежим временем. При приёме батча это поле сохраняет локальное значение, а остальные поля применяются.
+
+**Шаги:**
+1. Узел Б локально пишет первое поле с временем 3000.
+2. Узел А отправляет батч с тремя полями с временем 2000.
+3. Узел Б обрабатывает входящий батч.
+
+**Критерий успешности:**
+- Первое поле на Б сохранило локальное значение (локальная победа последней записи выиграла).
+- Остальные поля обновились значениями из батча.
+
+## Сценарий 40. Каноническое кодирование чисел переменной длины [К2]
+
+**Инварианты:** К2 (Минимальная длина переменного целого), каноничность без избыточных нулей.
+
+**Описание:** Проверка кодирования и декодирования граничных числовых значений переменной длины: 0, 1, 127 (один байт), 128, 16383 (два байта), 16384 (три байта), два в степени тридцать один минус один (пять байт).
+
+**Шаги:**
+1. Числа сериализуются через кодирование переменного целого.
+2. Выполняется десериализация через декодирование переменного целого.
+
+**Критерий успешности:**
+- Декодированное значение строго совпадает с исходным.
+- Количество прочитанных байт строго равно фактической длине закодированного буфера (отсутствуют хвостовые нули).
+
+## Сценарий 41. Коммутативность дайджеста корзины при перестановках [Д3]
+
+**Инварианты:** Д3 (Коммутативность хеша корзины), инвариантность к порядку вставки.
+
+**Описание:** Набор из ста хешей записей добавляется в три независимых аккумулятора корзин в трёх совершенно разных порядках: прямой, обратный и перемешанный (чётные/нечётные).
+
+**Шаги:**
+1. Аккумулятор один: вставка хешей в прямом порядке.
+2. Аккумулятор два: вставка в обратном порядке.
+3. Аккумулятор три: вставка в псевдослучайном перемешанном порядке.
+
+**Критерий успешности:**
+- Количество всех трёх аккумуляторов равно ста.
+- Исключающее или всех трёх аккумуляторов одинаково.
+- Сумма всех трёх аккумуляторов одинакова.
+
+## Сценарий 42. Стресс-тест / хаос-рандомизация трёх узлов [С1–С4, Д1–Д5]
+
+**Инварианты:** С1–С4 (Всеобщая сходимость), Д1–Д5 (Идентичные хеши корзин при хаотической доставке).
+
+**Описание:** Три реплики (альфа, бета, гамма) параллельно выполняют двадцать пять случайных чередующихся операций (добавление, модификация, удаление и воскрешение полей) над пятью общими записями. Затем запускается четыре раунда случайного ячеистого обмена дельтами.
+
+**Шаги:**
+1. Псевдослучайная генерация двадцати пяти операций с чередованием авторов и записей.
+2. Четыре раунда полного ячеистого обмена дельтами между всеми парами узлов.
+3. Сверка состояний всех пяти записей на всех трёх узлах.
+
+**Критерий успешности:**
+- Ни один узел не падает с ошибкой рассинхронизации.
+- Состояние всех записей на узлах альфа, бета, гамма сходится байт-в-байт.
+- Дайджесты записей на всех трёх узлах идентичны для каждой из пяти записей.
+
+---
+
+# 18. Эволюция схемы
+
+## 18.1. Правила
+
+Идентификатор поля не переиспользуется. Смена типа — новый идентификатор поля.
+
+## 18.2. Изменение политики слияния
+
+Требует инкремента версии схемы. Старые записи остаются со старой политикой.
+
+## 18.3. Неизвестная схема
+
+Ожидающая схема → запрос карты схем → применение после получения.
+
+## 18.4–18.6. Совместимость
+
+Неизвестные поля — сырой тег-длина-значение, в дайджест. Обратная и прямая совместимость.
+
+---
+
+# 19. Сводная формула
+
+```
+ЯДРО БИНАРНОЙ СИНХРОНИЗАЦИИ версия 2.3.6 ФИНАЛЬНАЯ =
+
+идентичность:
+    сто двадцать восемь бит идентификатор записи, идентификатор узла
+    сессионный псевдоним (шестнадцать бит, только на проводе)
+    автор (сто двадцать восемь бит, всегда локально)
+    автор жизненного цикла (сто двадцать восемь бит)
+    крышка = (автор, последовательность)
+    эпоха узла (тридцать два бита)
+
+кодек:
+    каноническое переменное целое + тег-длина-значение + прямой порядок байтов
+    числовой идентификатор поля, осведомлённый о схеме
+    неизвестные поля сохраняются (сырой тег-длина-значение)
+    колоночные батчи + сжатие
+    структуры фиксированного размера
+
+время:
+    гибридные логические часы (шестьдесят четыре бита микросекунд + тридцать два бита логики)
+    разрешение конфликтов = (стенка, логика, автор)
+    зажим перекоса, защита от спящего режима
+    не глобальный курсор
+
+записи:
+    абсолютная запись поля / томбстоун поля
+    жизненный цикл (поле ноль) — победа удаления
+    без патча относительно базы
+    авторство сохраняется через цепочку псевдонимов или полный режим автора
+
+слияние:
+    подключаемые политики на пространство имён
+    зернистость слияния = зернистость часов
+    без сброса на уровне записи перед слиянием полей
+    ручной режим через разрешение поля со списком разрешённых веток
+    подавление кольцевого эха через проверку идентичности
+
+дайджест:
+    хэш дайджест записи (сто двадцать восемь или двести пятьдесят шесть бит)
+    шифрование: дайджест по шифротексту
+    полезная нагрузка дайджеста поля с шестнадцатибайтным автором (не псевдонимом!)
+    полезная нагрузка дайджеста жизненного цикла с автором жизненного цикла
+    корзина = количество + исключающее или + сумма (коммутативные)
+    префикс = хэш(идентификатор записи)
+    динамические биты ветвления корзин
+    свёртка корзин для разной глубины
+    разбиение диапазона внутри хэш-префикса
+
+журнал:
+    последовательность исходящего журнала на (автор, пространство имён)
+    диапазонный курсор [начало..конец]
+    входящий журнал (издатель, пространство имён, эпоха, идентификатор батча) идемпотентность
+    упорядоченность на (узел пира, пространство имён)
+    идемпотентность проверяется до проверки дайджеста предыдущего батча
+
+сравнение:
+    курсор → префиксные корзины → разбиение диапазона → инвертируемый фильтр → снапшот + хвост
+
+снапшот:
+    все живые + томбстоуны в окне сборки мусора + призраки
+    сортировка по хэш(идентификатор записи)
+    чанки по одному мегабайту, дайджест чанка + дайджест снапшота + дайджест состояния снапшота + контрольная точка
+    возобновляемость с любого индекса чанка
+
+ретрансляция:
+    раздельные батчи по авторам
+    трансляция псевдонима через карту псевдонимов получателя
+    издатель = ретранслятор
+    автор в полях = оригинальный автор
+
+членство:
+    ушёл > приостановлен > активен
+    карантин зомби-узлов
+    минимальный срок хранения томбстоунов не меньше удвоенного времени распространения членства
+
+транспорт:
+    транспортно-независимый
+    кадр: двадцать пять байт заголовка, магия, контрольная сумма
+    мультиплексирование потоков
+    фрагментация логических сообщений
+    обновление окна с аддитивными кредитами
+
+безопасность:
+    шифрованный транспорт обязательный
+    подписи батчей для ячеистой сети
+    шифрование: значение зашифровано, время открыто
+    слепое слияние на недоверенных серверах
+    хранилище конвертов для счётчиков и последовательностей в шифровании
+    ротация ключей с эпохой
+    формальная деривация одноразового номера
+    модель доверия: при первом использовании / заранее согласованные / центр сертификации
+
+транзакции:
+    батч дельт как атомарная единица
+    применение «всё или ничего»
+    атомарный скачок курсора на конец курсора
+
+инварианты:
+    все группы инвариантов от слияния до каузальных зависимостей
+    включая новые: П7, Ш2, К11, Р4
+```
+
+**Короткая формула:**
+
+```
+Канонический бинарный кодекс с фиксированными раскладками.
+Часы с защитой от спящего режима. Разрешение конфликтов по автору.
+Смещение псевдонима равно семнадцать (байты семнадцать-восемнадцать записи поля).
+Диапазонный курсор [начало..конец].
+Подавление кольцевого эха через проверку идентичности.
+Идемпотентность проверяется до проверки дайджеста предыдущего батча.
+Ретрансляция транслирует псевдоним через карту псевдонимов получателя.
+Корзины по префиксу хэша со свёрткой.
+Снапшот с привязкой к дайджесту состояния.
+Атомарные батчи, цепочка дайджестов батчей.
+Модель доверия: при первом использовании / заранее согласованные / центр сертификации.
+Сорок два лабораторных сценария покрывают все выявленные режимы отказов.
+```
+
+---
+
+# Приложение A. Примеры байтов
+
+## A.1. Магическая сигнатура
+```
+42 53   // "БС"
+```
+
+## A.2. Заголовок кадра
+```
+42 53          // магия
+00             // версия
+09             // тип кадра = батч дельт
+01             // флаги = сжато
+02 00 01 00    // поток = пространство имён два
+0A 00 00 00 00 00 00 00  // последовательность кадра = десять
+00 10 00 00    // длина полезной нагрузки = четыре тысячи девяносто шесть
+1B 22 4F A3    // контрольная сумма
+```
+
+## A.3. Переменное целое
+```
+0 → 0х00, 127 → 0х7Ф, 128 → 0х80 0х01, 300 → 0хАС 0х02, 16384 → 0х80 0х80 0х01
+```
+
+## A.4. Гибридные логические часы
+```
+Стенка=1718530000000000, логика=4:
+00 10 6C 94 2E 92 06 00   // стенка
+04 00 00 00                // логика
+```
+
+## A.5. Запись поля (компактный режим)
+```
+01                         // тег = запись поля
+00 01                      // идентификатор поля = двести пятьдесят шесть
+00 00                      // эпоха ключа = ноль
+[12 байт время: стенка+логика]
+01 00                      // псевдоним = один (на смещении семнадцать!)
+01                         // длина значения = один
+05                         // значение = пять
+```
+
+## A.6. Запись поля (полный режим автора)
+```
+01                         // тег = запись поля
+00 01                      // идентификатор поля = двести пятьдесят шесть
+00 00                      // эпоха ключа = ноль
+[12 байт время: стенка+логика]
+АА АА АА АА ... (16 байт) // автор
+01                         // длина значения = один
+05                         // значение = пять
+```
+
+## A.7. Томбстоун поля
+```
+02                         // тег = томбстоун поля
+00 02                      // идентификатор поля = пятьсот двенадцать
+00 00                      // эпоха ключа = ноль
+[12 байт время]
+01 00                      // псевдоним = один (на смещении семнадцать!)
+```
+
+## A.8. Томбстоун записи
+```
+03                         // тег = томбстоун записи
+[16 байт идентификатор записи]
+[8 байт стенка]
+[4 байта логика]
+01 00                      // псевдоним = один (на смещении двадцать девять!)
+```
+
+## A.9. Дайджест корзины (режим сто двадцать восемь бит)
+```
+АБ                         // префикс (восемь бит)
+2А 00 00 00                // количество, тридцать два бита прямой порядок
+[16 байт исключающее или]
+[16 байт сумма]
+```
+
+## A.10. Обновление окна
+```
+42 53                      // магия
+00                         // версия
+0Е                         // тип кадра = обновление окна
+00                         // флаги
+01 00 00 00                // поток = один
+05 00 00 00 00 00 00 00    // последовательность кадра = пять
+08 00 00 00                // длина полезной нагрузки = восемь
+[4 байта контрольная сумма]
+01 00 00 00                // поток = один (в полезной нагрузке)
+00 00 01 00                // кредиты += шестьдесят пять тысяч пятьсот тридцать шесть байт (аддитивно)
+```
+
+## A.11. Запись псевдонима (двадцать два байта)
+```
+01 00                      // псевдоним = один
+7Ф 3Б ... (16 байт)       // узел
+05 00 00 00                // эпоха = пять
+```
+
+## A.12. Заголовок чанка снапшота
+```
+01 00                      // пространство имён = один
+00 Б0 94 2Е 92 06 00 00    // курсор снапшота, шестьдесят четыре бита прямой порядок
+00 00 00 00                // индекс чанка = ноль
+05 00 00 00                // количество чанков = пять
+[16 байт дайджест чанка]
+... байты записей ...
+```
+
+## A.13. Полезная нагрузка дайджеста поля (пример)
+Запись: поле=двести пятьдесят шесть, эпоха ключа=ноль, стенка=тысяча, логика=ноль, автор=А, длина значения=один, значение=0х42
+
+```
+00 01                      // идентификатор поля = двести пятьдесят шесть
+00 00                      // эпоха ключа = ноль
+Е8 03 00 00 00 00 00 00    // стенка = тысяча
+00 00 00 00                // логика = ноль
+АА АА АА АА ... (16 байт) // автор = канонический сто двадцать восемь бит
+01                         // длина значения = один (переменное целое)
+42                         // значение = 0х42
+// Итого: два+два+восемь+четыре+шестнадцать+один+один = тридцать четыре байта
+```
+
+## A.14. Полезная нагрузка дайджеста жизненного цикла (пример)
+Жизненный цикл: время=(стенка=две тысячи, логика=ноль), автор=Б, значение=один (мёртв)
+
+```
+00 00                      // идентификатор поля = ноль (жизненный цикл)
+00 00                      // эпоха ключа = ноль
+Д0 07 00 00 00 00 00 00    // стенка = две тысячи
+00 00 00 00                // логика = ноль
+ББ ББ ББ ББ ... (16 байт) // автор = автор жизненного цикла, сто двадцать восемь бит
+01                         // длина значения = один (переменное целое)
+01                         // значение = один (мёртв)
+// Итого: тридцать четыре байта (фиксированно)
+```
+
+---
+
+# Приложение B. Дорожная карта реализации
+
+## Фаза один: Фундамент (минимально жизнеспособная версия)
+1. Канонический кодек + переменное целое (с отклонением избыточных форм) + раскладки в прямом порядке байтов.
+2. Гибридные логические часы + правила тика + защита от спящего режима.
+3. Разделение времени и авторства (смещение псевдонима равно семнадцать).
+4. Запись поля / томбстоун поля / жизненный цикл с автором.
+5. Слияние полей + победа удаления + разрешение конфликтов по автору.
+6. Подавление кольцевого эха через проверку идентичности.
+7. Исходящий журнал / входящий журнал + диапазонный курсор.
+8. Резолв псевдонима в автора через карту псевдонимов.
+9. Дайджест записи с полезной нагрузкой дайджеста поля и жизненного цикла.
+10. Тесты: все группы инвариантов фазы один.
+
+**Критерий:** сто тысяч случайных слияний + тысяча симуляций повреждённых кадров + тысяча тестов ретрансляции с разными псевдонимами. Все проходят инварианты.
+
+## Фаза два: Транспорт и сравнение
+1. Формат кадра (магия, двадцать пять байт заголовка, контрольная сумма).
+2. Жёсткие лимиты + защита от декомпрессионных бомб.
+3. Фрагментация больших кадров.
+4. Обновление окна управления потоком.
+5. Интерфейс транспорта.
+6. Мультиплексирование потоков.
+7. Файловая синхронизация (экспорт/импорт).
+8. Дайджест состояния / запрос диапазона / запрос ключей / батч дельт / подтверждение.
+9. Свёртка корзин для разной глубины + динамическое ветвление.
+10. Чанк снапшота с дайджестом чанка и дайджестом снапшота.
+11. Лестница курсор → корзины → разбиение диапазона.
+12. Цепочка дайджестов батчей + контрольная точка.
+13. Ретрансляция с трансляцией псевдонимов.
+14. Тесты: сценарии один-четыре, восемь-девять, двенадцать, четырнадцать, пятнадцать, семнадцать, двадцать, двадцать один, двадцать три-тридцать семь.
+
+## Фаза три: Готовность к промышленной эксплуатации
+1. Членство + сборка мусора (все правила).
+2. Карантин зомби-узлов.
+3. Зажим перекоса, регрессия эпохи.
+4. Подписи батчей.
+5. Словари сжатия.
+6. Колоночное кодирование батчей.
+7. Атомарные батчи.
+8. Сборка мусора входящего журнала + потерянные подтверждения.
+9. Тесты: сценарии пять-семь, десять, тринадцать, восемнадцать, двадцать шесть, тридцать пять.
+
+## Фаза четыре: Шифрование между концами и безопасность
+1. Шифрование значения при открытом времени.
+2. Дайджест шифрования по шифротексту.
+3. Слепое слияние на сервере.
+4. Хранилище конвертов для счётчиков и последовательностей.
+5. Ротация ключей с эпохой.
+6. Формальная деривация одноразового номера.
+7. Модель доверия (при первом использовании / заранее согласованные / центр сертификации).
+8. Аутентификационная нагрузка в приветствии.
+9. Полный режим автора для ячеистой сети.
+10. Тесты: сценарии одиннадцать, шестнадцать, двадцать два, двадцать семь, тридцать один.
+
+## Фаза пять: Расширения
+1. Счётчики роста / роста и убыли.
+2. Множества с наблюдаемым удалением.
+3. Дробные последовательности + последовательности.
+4. Ссылки на блоб + хранилище чанков.
+5. Инвертируемый фильтр сравнения (черновик).
+6. Каузальные зависимости (экспериментально).
+7. Ручной режим + разрешение поля.
+8. Тесты: сценарии девятнадцать, тридцать три, тридцать четыре, тридцать восемь-сорок два.
+
+## Фаза шесть: Экосистема
+1. Языковые привязки (Раст, Гоу, ТайпСкрипт, Свифт, Котлин).
+2. Хранилища для популярных баз данных.
+3. Интерфейс командной строки для отладки.
+4. Метрики и наблюдаемость.
+5. Сопутствующие документы: «Детали формата кадров», «Руководство по реализации», «Модель безопасности».
+
+---
+
+# Приложение C. Сравнение с альтернативами
+
+| Технология | Ядро бинарной синхронизации 2.3.6 | Фреймворк синхронизации Майкрософт | Библиотеки конфликтно-реплицируемых типов данных | Дебезиум |
+|---|---|---|---|---|
+| Универсальность | Все типы | Только структурированный язык запросов | Документы/текст | Репликация баз данных |
+| Офлайн | Полноценный | Частичный | Полноценный | Нет |
+| Транспорт | Любой + мультиплексирование | Привязан к платформе | Обычно свой | Привязан к базе данных |
+| Конфликты | Детерминированно + ручной режим | Правила / пользовательские | Автоматически | Не применимо |
+| Шифрование между концами | Встроенное (слепое слияние + хранилище конвертов) | Нет | Частично | Нет |
+| Трафик | Минимальный (диапазонный курсор, коалесцирование) | Средний | Средний | Средний |
+| Удаления | Томбстоуны + сборка мусора + карантин зомби-узлов | Таблицы отслеживания | Томбстоуны | События удаления |
+| Одноранговая сеть | Да + сохранение авторства | Нет | Да | Нет |
+| Защита от отказа в обслуживании | Жёсткие лимиты + защита от декомпрессионных бомб + управление потоком | Нет | Частично | Нет |
+| Модель доверия | При первом использовании / заранее согласованные / центр сертификации | Нет | Нет | Нет |
+| Причинность | По парам + опциональные каузальные зависимости | Нет | Векторные часы | Не применимо |
+| Подавление эха | Да (проверка идентичности) | Частично | Нет | Частично | Нет |
+| Статус | Готовая к промышленной эксплуатации спецификация | Устаревшая | Промышленная | Промышленная |
+
+---
+
+# Приложение D. История изменений
+
+| Версия | Дата | Изменения |
+|---|---|---|
+| 2.1 | 2026-09-09 | Базовая спецификация |
+| 2.2 | 2026-09-09 | Десять поправок (дайджест шифрования, карантин зомби-узлов, ротация ключей, управление потоком и так далее) |
+| 2.3 | 2026-09-09 | Двенадцать поправок (каузальный порядок, диапазонный курсор, формат снапшота, модель доверия, динамическое ветвление и так далее) |
+| 2.3.1 | 2026-09-09 | Исправлена проблема авторства при разрешении конфликтов в ячеистых топологиях (автор вместо псевдонима). Исправлена опечатка потока в приложении. Добавлены инварианты И4, И5, А1–А5 и сценарии двадцать три-двадцать четыре. |
+| 2.3.2 | 2026-09-09 | По результатам стресс-тестов: (1) явное поле автора жизненного цикла и правила разрешения конфликтов для жизненного цикла; (2) коды ошибок «Повреждённый кадр» и «Кадр отклонён» с правилами поведения при повреждении кадра; (3) точная формула полезной нагрузки дайджеста поля и жизненного цикла с явным указанием шестнадцатибайтного автора (не псевдонима). Добавлены инварианты Д6–Д8, Ц1–Ц4, Ж1–Ж4 и сценарии двадцать пять-двадцать семь. |
+| 2.3.3 | 2026-09-09 | Укрепление протокола: стабильные крышки конфликтно-реплицируемых типов данных; однозначная область видимости последовательности исходящего журнала; цепочка дайджестов батчей и контрольная точка сборки мусора; дайджесты снапшота/состояния/контрольной точки; конверт фрагмента; аддитивные кредиты управления потоком и максимальный размер окна; подтверждение с идентификатором батча; авторство членства; формальная деривация одноразового номера шифрования. |
+| 2.3.4 | 2026-09-09 | Формальная полнота: (1) каноническая раскладка массива записей, мутация записи, корень записей; (2) таблица типов значений ноль-двести пятьдесят пять; (3) раскладка хвоста чанка снапшота (хвост снапшота, восемьдесят байт); (4) ретрансляция с раздельными батчами по авторам, инварианты Р1–Р2; (5) формальный анализ безопасности сборки мусора при неконвергентном членстве, инвариант СМ7; (6) иерархия дайджестов с доменными тегами, инвариант К8; (7) унификация идемпотентности: ключ = (издатель, пространство имён, эпоха издателя, идентификатор батча); (8) контроль переполнения кредитного баланса, инварианты УП1–УП2; (9) разрешение поля логика и автор, инвариант РП1. Добавлены инварианты К7, СХ6, СН3, Р1–Р2, СМ7, К8, УП1–УП2, РП1 и сценарии двадцать восемь-тридцать. |
+| 2.3.5 | 2026-09-09 | Рецензионные исправления: разделение времени и авторства, каузальные зависимости переведены в экспериментальный статус, инвертируемый фильтр переведён в статус черновика, запрет коалесцирования ретранслятором, оптимизация дайджестов, таймауты схем, двести пятьдесят шесть битный дайджест чанка, динамическая свёртка, аутентификационная нагрузка, унификация размеров дайджестов, сквозной пример, семантика мета-разрешения. |
+| **2.3.6** | **2026-09-09** | **Укрепление реализации: (1) порядок проверок в применении батча — идемпотентность до проверки дайджеста предыдущего батча (инвариант П7); (2) трансляция псевдонима при ретрансляции через карту псевдонимов получателя (инвариант Р4); (3) побайтовые диаграммы формата кадров с явным указанием смещения псевдонима равного семнадцать (инвариант К11); (4) подавление кольцевого эха через проверку идентичности время+автор+значение (инвариант Ш2); (5) добавлены девятнадцать новых сценариев верификации (двадцать четыре-сорок два).** |
+
+---
+
+# Приложение E. Сквозной пример сессии
+
+**Топология:** А —(сессия один)— Сервер —(сессия два)— Б
+
+1. **А создаёт запись:** идентификатор записи=0х1111..., поле 0х0100=0х42, время=(тысяча, ноль), автор=0хАААА...
+2. **А передаёт Серверу: Приветствие** с идентификатором узла=0хАААА, модель доверия=при первом использовании.
+3. **Сервер передаёт А: Подтверждение приветствия** плюс идентификатор сессии.
+4. **А передаёт Серверу: Карта псевдонимов** (А=0х0001, Сервер=0х0002).
+5. **А передаёт Серверу: Батч дельт** с псевдонимом=0х0001 (псевдоним А в сессии А↔Сервер).
+6. **Сервер применяет:** резолвит псевдоним=0х0001 → автор=0хАААА.
+7. **Сервер ретранслирует Б:** создаёт новый батч, **транслирует псевдоним** в псевдоним А в сессии Сервер↔Б (например, 0х0003). Автор в метаданных остаётся 0хАААА.
+8. **Б применяет:** резолвит псевдоним=0х0003 → автор=0хАААА.
+9. **Итог:** А, Сервер, Б имеют байт-идентичное состояние. Дайджесты идентичны (Д6).
+
+---
+
+**Конец спецификации.**
+
+Документ самодостаточен и готов к промышленной реализации. В версии 2.3.6 закрыты все четыре критические проблемы, выявленные при практической реализации:
+
+1. **Порядок проверок** в применении батча предотвращает ложные отказы при потерянных подтверждениях.
+2. **Трансляция псевдонимов** гарантирует корректную идентификацию автора в ячеистых топологиях.
+3. **Диаграммы со смещением семнадцать** исключают ошибки парсинга.
+4. **Подавление кольцевого эха** предотвращает лавинный шторм сообщений в кольцевых топологиях.
+
+Сорок два лабораторных сценария покрывают все выявленные режимы отказов.
+
+**Следующий шаг — Фаза один реализации** с критерием приёма: сто тысяч случайных слияний + тысяча повреждённых кадров + тысяча тестов ретрансляции проходят все инварианты.
