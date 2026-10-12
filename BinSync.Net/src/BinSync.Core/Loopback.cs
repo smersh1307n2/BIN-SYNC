@@ -3,7 +3,7 @@ namespace BinSync;
 
 public class SessionException : Exception { }
 public class NoSessionException : Exception { public NoSessionException() : base("no session") { } }
-public class PeerRejectedException : Exception { }
+public class PeerRejectedException : Exception { public PeerRejectedException(string msg) : base(msg) { } }
 
 public class LoopbackTransport
 {
@@ -35,12 +35,10 @@ public class LoopbackTransport
         Streams.Remove((b, a));
     }
 
-    public static List<(Node From, Frame F)> ExtractFrames(List<byte[]> raws)
-    {
-        var outp = new List<(Node, Frame)>();
-        foreach (var (n, f) in raws) outp.Add((n, f));
-        return outp;
-    }
+    // BUGFIX (port): the previous signature was a broken stub — frames are captured
+    // per-node by SyncRound, so no extraction from raw bytes is needed here.
+    public static List<(Node From, Frame F)> ExtractFrames(IEnumerable<(Node From, Frame F)> frames)
+        => frames.ToList();
 
     public List<(Node From, Frame F)> Exchange(params (Node N, Frame F)[] frames)
     {
@@ -99,7 +97,7 @@ public class LoopbackTransport
         throw new NoSessionException();
     }
 
-    private static void Deliver(Node target, Frame f)
+    private void Deliver(Node target, Frame f)
     {
         switch (f.FrameType)
         {
