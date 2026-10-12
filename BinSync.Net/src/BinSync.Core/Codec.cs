@@ -29,28 +29,18 @@ public static class Codec
 
     // [К2] per-byte minimality rule (errata E-5): reject non-canonical encodings as
     // soon as redundancy appears ("\x80\x00"), keep b"\xff"*9+b"\xff" (=2^64-1) legal.
+    // BUGFIX (port): mirror the Python reference exactly — width bound applies to
+    // CONTINUATION bytes only (a canonical n-byte ULEB128 whose last byte is terminal
+    // legitimately carries up to 7n bits); the domain bound (value <= 2^64-1) applies
+    // always. Computed overflow-free: `(payload | (result >> shift)) >> width` equals
+    // bitlen(result | payload<<shift) > width without wrapping at shift >= 64.
     private static bool CandidateOverflow(ulong result, int shift, int payload, int nbytes, bool last)
     {
-        // width bound: continuation byte at position n may not push bits beyond 7n
-        if (!last)
-        {
-            // terminal byte's MSB is a flag, not a value bit; continuation must fit 7*n
-            ulong top = result | ((ulong)payload << shift);
-            int bits = BitLen(top);
-            if (bits > 7 * nbytes) return true;
-        }
-        else
-        {
-            ulong top = result | ((ulong)payload << shift);
-            if (BitLen(top) > 7 * nbytes) return true;
-        }
-        return false;
-    }
-
-    private static int BitLen(ulong v)
-    {
-        if (v == 0) return 0;
-        return 64 - System.Numerics.BitOperations.LeadingZeroCount(v);
+        int width = 7 * nbytes;
+        if (!last && ((ulong)payload | (result >> shift)) >>> width != 0UL) return true;
+        // shift >= 64: payload bits are outside the u64 domain entirely.
+        if (shift >= 64) return payload != 0;
+        return result > ulong.MaxValue - ((ulong)payload << shift);
     }
 
     public static (ulong Value, int Pos) DecodeVarint(byte[] data, int pos = 0)

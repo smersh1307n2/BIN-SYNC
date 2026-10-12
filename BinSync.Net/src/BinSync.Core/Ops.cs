@@ -42,6 +42,10 @@ public class OpRecordTombstone
 
 public static class Ops
 {
+    /// Snapshot-mode encoding: always carries the durable author (mirrors Python
+    /// build_snapshot which calls encode_op(op) with default full_author=True).
+    public static byte[] EncodeOpFull(object op) => EncodeOp(op, fullAuthor: true);
+
     /// Canonical encoding. Compact mode: u16 origin; FULL_AUTHOR_ID mode: durable b128 (§12.24.4).
     public static byte[] EncodeOp(object op, bool fullAuthor = false)
     {
@@ -120,5 +124,22 @@ public static class Ops
             return (new OpRecordTombstone { RecordId = rid, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author }, r.Pos);
         }
         throw new ArgumentException($"unknown op tag 0x{tag:x}");
+    }
+
+    /// <summary>
+    /// [R4] Relay alias translation: rewrite the session alias (origin) of an operation.
+    /// Mirrors binsync.ops.rewrite_origin from the Python reference; exposed publicly
+    /// so relays and tests can remap origin aliases without touching Node internals.
+    /// Mutates and returns the same op instance (same semantics as the Python version).
+    /// </summary>
+    public static object RewriteOrigin(object op, ushort newOrigin)
+    {
+        switch (op)
+        {
+            case OpFieldWrite x: x.Origin = newOrigin; return x;
+            case OpFieldTomb x: x.Origin = newOrigin; return x;
+            case OpRecordTombstone x: x.Origin = newOrigin; return x;
+            default: throw new ArgumentException($"unknown op type {op?.GetType().Name}");
+        }
     }
 }

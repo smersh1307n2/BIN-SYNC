@@ -582,3 +582,38 @@ public class InvariantsAndAdvanced
         Assert.Equal(Digests.RecordDigest(e2.Storage[NS][Rid(2)]), Digests.RecordDigest(b.Storage[NS][Rid(2)]));
     }
 }
+
+// ---- API parity: RewriteOrigin (§12.24 [R4]) — mirrors binsync.ops.rewrite_origin ----
+public class RewriteOriginTests
+{
+    [Fact]
+    public void RewriteOrigin_MutatesAndReturnsSameOp_ForAllThreeTags()
+    {
+        object fw = new OpFieldWrite { FieldId = 1, KeyEpoch = 0, Wall = 7, Logical = 3, Origin = 5, AuthorNodeId = null, Value = new byte[] { 9 } };
+        object ft = new OpFieldTomb { FieldId = 1, KeyEpoch = 0, Wall = 7, Logical = 3, Origin = 5, AuthorNodeId = null };
+        object rt = new OpRecordTombstone { RecordId = new byte[16], Wall = 7, Logical = 3, Origin = 5, AuthorNodeId = null };
+
+        Assert.Same(fw, Ops.RewriteOrigin(fw, 42));
+        Assert.Equal((ushort)42, ((OpFieldWrite)fw).Origin);
+        Assert.Same(ft, Ops.RewriteOrigin(ft, 42));
+        Assert.Equal((ushort)42, ((OpFieldTomb)ft).Origin);
+        Assert.Same(rt, Ops.RewriteOrigin(rt, 42));
+        Assert.Equal((ushort)42, ((OpRecordTombstone)rt).Origin);
+    }
+
+    [Fact]
+    public void RewriteOrigin_KeepsWireRoundTripConsistent()
+    {
+        var fw = new OpFieldWrite { FieldId = 2, KeyEpoch = 1, Wall = 100, Logical = 8, Origin = 3, AuthorNodeId = null, Value = new byte[] { 1, 2, 3 } };
+        Ops.RewriteOrigin(fw, 77);
+        var bytes = Ops.EncodeOp(fw);
+        var (decoded, _) = Ops.DecodeOp(bytes, fullAuthor: false);
+        Assert.Equal((ushort)77, ((OpFieldWrite)decoded).Origin);
+    }
+
+    [Fact]
+    public void RewriteOrigin_RejectsUnknownOpType()
+    {
+        Assert.Throws<ArgumentException>(() => Ops.RewriteOrigin("not-an-op", 1));
+    }
+}

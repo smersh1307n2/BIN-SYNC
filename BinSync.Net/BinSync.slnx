@@ -1,2 +1,8 @@
 <Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BinSync.Core/BinSync.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BinSync.Tests/BinSync.Tests.csproj" />
+  </Folder>
 </Solution>
