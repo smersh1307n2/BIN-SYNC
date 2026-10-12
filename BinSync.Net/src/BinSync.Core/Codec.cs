@@ -36,11 +36,24 @@ public static class Codec
     // bitlen(result | payload<<shift) > width without wrapping at shift >= 64.
     private static bool CandidateOverflow(ulong result, int shift, int payload, int nbytes, bool last)
     {
-        int width = 7 * nbytes;
-        if (!last && ((ulong)payload | (result >> shift)) >>> width != 0UL) return true;
-        // shift >= 64: payload bits are outside the u64 domain entirely.
-        if (shift >= 64) return payload != 0;
-        return result > ulong.MaxValue - ((ulong)payload << shift);
+        // Exact overflow-free mirror of the Python reference:
+        //   top = result | (payload << shift)          (arbitrary precision)
+        //   (a) if not last: bitlen(top) > 7*nbytes    -> width bound
+        //   (b) always:      top > 2**64 - 1           -> u64 domain bound
+        // `top` exceeds u64 only via payload bits shifted past index 63, i.e.
+        // payload >>> (64 - shift) != 0 for shift in [57,63], or any nonzero
+        // payload at shift >= 64. Within-domain bits are just result | payload<<shift.
+        // BUGFIX (port): `>>>` is an unsigned shift, but C#'s `int >>> 56` promotes to
+        // int and keeps the SIGN bit — payload values >= 0x40 became huge ulongs.
+        // Cast to ulong BEFORE shifting. AND: C# masks the shift count by & 63, so a
+        // shift of exactly 64 (first byte) is a NO-OP instead of yielding 0 — guard it.
+        ulong carry = shift == 0 ? 0UL
+            : shift >= 64 ? ((ulong)payload << 32 << 32)
+            : ((ulong)payload >>> (64 - shift));
+        if (carry != 0UL) return true;                       // domain bound (b)
+        ulong top = result | ((ulong)payload << shift);
+        int width = 7 * nbytes;                              // width bound (a)
+        return !last && top >>> width != 0UL;                // width <= 63 here (nbytes<=9, continuation)
     }
 
     public static (ulong Value, int Pos) DecodeVarint(byte[] data, int pos = 0)
@@ -58,7 +71,11 @@ public static class Codec
             bool last = (b & 0x80) == 0;
             if (payload == 0 && nbytes > 1 && last)
                 throw new InvalidVarintException("overlong varint");
-            if (shift >= 64 || CandidateOverflow(result, shift, payload, nbytes, last))
+            // BUGFIX (port): do NOT pre-reject shift>=64 here — Python folds the byte
+            // only after candidate_overflow, and an 11th TERMINAL zero-payload byte is
+            // already rejected by the overlong rule above; significant payloads at
+            // shift>=64 are rejected by CandidateOverflow's domain bound instead.
+            if (CandidateOverflow(result, shift, payload, nbytes, last))
                 throw new InvalidVarintException("overlong varint");
             result |= (ulong)payload << shift;
             shift += 7;
