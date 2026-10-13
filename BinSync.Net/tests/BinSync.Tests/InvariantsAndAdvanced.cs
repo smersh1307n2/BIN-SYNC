@@ -156,11 +156,23 @@ public class InvariantsAndAdvanced
         var decoded = b.DecodeBatchPayload(a.EncodeBatchPayload(batch));
         var r = b.ApplyBatch(decoded, a.NodeId);
         Assert.Equal(12, r.Applied);
+        // BUGFIX (test port): the ACK must name the RECEIVER-side resolved durable
+        // author stream (Transport.DeliverBatch sends decoded.DurableAuthor — errata E-4).
+        // `batch.DurableAuthor` on the freshly built SENDER batch is null here, so the
+        // legacy conservative gate never advanced the per-author push watermark and the
+        // next CreateDeltaBatch re-sent the drained [1..12] range instead of starting at 13.
         a.AdvanceStream(b.NodeId, NS, batch);
-        a.ProcessAck(b.NodeId, NS, batch.CursorEnd, authorStream: batch.DurableAuthor);
+        a.ProcessAck(b.NodeId, NS, batch.CursorEnd, authorStream: decoded.DurableAuthor);
         Assert.Null(a.CreateDeltaBatch(b.NodeId, NS));          // nothing pending after ACK
         // second identical delivery is a duplicate no-op with mandatory re-ACK [П4]
         b.AcksOut.Clear();
+        // BUGFIX (test port): the wire payload must be RE-ENCODED from the sender's batch
+        // AFTER its real prevBatchDigest was bound by AdvanceStream — the legacy Python
+        // harness (tests/test_invariants.py::test_out_of_order_batches) decodes the SAME
+        // payload it encoded post-handshake. Encoding straight from the fresh in-memory
+        // `batch` object carries prev=ZERO128, so the receiver's STEP 3 chain gate rejects
+        // the replay as BATCH_CHAIN_BROKEN instead of hitting the STEP 1 inbox idempotency
+        // path ([S7]: idempotency BEFORE prevBatchDigest).
         var dup = b.ApplyBatch(b.DecodeBatchPayload(a.EncodeBatchPayload(batch)), a.NodeId);
         Assert.True(dup.Duplicate);
         Assert.Equal(0, dup.Applied);
@@ -335,8 +347,14 @@ public class InvariantsAndAdvanced
         var a = Fix.MakeNode(1); var b = Fix.MakeNode(2);
         Transport.MakeSession(a, b);
         a.RegisterAlias(b.NodeId, 50, Fix.Nid(5), 1);
-        a.RegisterAlias(b.NodeId, 50, Fix.Nid(6), 1);   // collision on alias 50
+        // BUGFIX (test port): reference implementation (binsync/node.py register_alias)
+        // RAISES SyncError("UNKNOWN_ALIAS") on the colliding second registration —
+        // [А3] reuse-guard fails closed at registration time, not silently. The C# port
+        // matches this behavior; the test asserted the wrong (silent-refusal) semantics.
+        Assert.Throws<SyncException>(() =>
+            a.RegisterAlias(b.NodeId, 50, Fix.Nid(6), 1));   // collision on alias 50
         Assert.Null(a.AliasOf(b.NodeId, Fix.Nid(6)));   // colliding entry cannot bind
+        Assert.Equal(50, a.AliasOf(b.NodeId, Fix.Nid(5)));   // first binding survives
     }
 
     [Fact]

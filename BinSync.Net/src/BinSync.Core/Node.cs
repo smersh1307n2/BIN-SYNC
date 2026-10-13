@@ -216,7 +216,25 @@ public sealed class Node
     // BUGFIX (implementation finding): the HLC must start cold (§5.2) — see Python port note.
     public HlcClock Clock;
     // storage: namespaceId -> recordId -> Record
-    public Dictionary<int, Dictionary<byte[], Record>> Storage = new();
+    // BUGFIX (implementation finding): the inner recordId maps MUST use content equality
+    // (BA). Test fixtures create a fresh byte[] key on every lookup (Fix.Rid(n) allocates),
+    // so the default reference comparer made `node.Storage[ns][rid]` miss even when the
+    // record existed. Ns() created BA maps, but ApplyBatch replaced the namespace entry
+    // with a default-comparer staging dictionary — reads after any applied batch threw
+    // KeyNotFoundException / Assert.Contains failures. The setter below normalizes every
+    // assignment to a BA-keyed map; all read sites keep working unchanged.
+    private readonly Dictionary<int, Dictionary<byte[], Record>> _storage = new();
+
+    public Dictionary<int, Dictionary<byte[], Record>> Storage
+    {
+        get => _storage;
+        set
+        {
+            _storage.Clear();
+            foreach (var (ns, m) in value)
+                _storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, new BA());
+        }
+    }
     // outbox: namespaceId -> list[OutboxEntry] (per-author seq counters inside)
     public Dictionary<int, List<OutboxEntry>> Outbox = new();
     internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(new BAI2());   // (author, ns) -> seq
@@ -229,7 +247,7 @@ public sealed class Node
     public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(new BAI4B());
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
     public Dictionary<byte[], Dictionary<int, (byte[], int)>> AliasToNode = new(new BA());
-    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(new BA());
+    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(new BA());   // BUGFIX (port): inner map keyed by content-equal (nodeId, epoch) pairs — default tuple comparer used byte[] reference equality.
     // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
     // for resolution [А3].
@@ -293,10 +311,25 @@ public sealed class Node
 
     /// §4.3: ALIAS_MAP belongs to a SESSION — every new connection performs a fresh
     /// exchange, so per-peer maps must be REPLACED (not merged).
+    /// BUGFIX (implementation finding): a new session must also drop the per-session
+    /// receive-side state of the previous incarnation — stream cursors (PeerStates),
+    /// chain checkpoints (LastBatchDigest / LastStreamDigest) and the cached last
+    /// accepted stream author. Otherwise a re-handshake against the same nodeId with a
+    /// bumped epoch inherits stale cursor/chain expectations and rejects the first batch
+    /// of the new incarnation with SEQ_GAP (§4.4, errata E-2/E-3: watermark keyed per
+    /// SESSION; reconnect = fresh exchange).
     public void ResetSession(byte[] peer)
     {
         AliasToNode.Remove(peer);
         NodeToAlias.Remove(peer);
+        foreach (var k in PeerStates.Keys.Where(k => k.Item1.AsSpan().SequenceEqual(peer)).ToList())
+            PeerStates.Remove(k);
+        foreach (var k in LastBatchDigest.Keys.Where(k => k.Item1.AsSpan().SequenceEqual(peer)).ToList())
+            LastBatchDigest.Remove(k);
+        foreach (var k in LastStreamDigest.Keys.Where(k => k.Item2.AsSpan().SequenceEqual(peer)).ToList())
+            LastStreamDigest.Remove(k);
+        foreach (var k in LastStreamAuthor.Keys.Where(k => k.Item1.AsSpan().SequenceEqual(peer)).ToList())
+            LastStreamAuthor.Remove(k);
     }
 
     /// Errata E-10 (scenario 23 relay): modelled incremental ALIAS_MAP update (§4.3/§12.7):
@@ -376,7 +409,11 @@ public sealed class Node
     public void RegisterAlias(byte[] peer, int alias, byte[] nodeId, int epoch)
     {
         var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new()) ;
-        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new());
+        // BUGFIX (port): inner reverse map MUST use the BAI2 content comparer — the default
+        // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
+        // a decoded copy of the same author bytes produced fresh array instances that never
+        // matched existing keys (AliasOf misses → spurious UNKNOWN_ALIAS / stale bindings).
+        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new(new BAI2()));
         var durable = (nodeId, epoch);
         // forbid reuse of an alias for another (nodeId, epoch) within a session
         if (m.TryGetValue(alias, out var occ) && !(occ.Item1.AsSpan().SequenceEqual(nodeId) && occ.Item2 == epoch))
@@ -431,16 +468,29 @@ public sealed class Node
     /// guard of errata E-5 (see Python port docstring): ambiguous alias → None, never guess.
     public int? AliasOf(byte[] peer, byte[] nodeId, int? epoch = null)
     {
-        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(byte[], int), int>();
-        if (epoch is not null && rev.TryGetValue((nodeId, epoch.Value), out var exact)) return exact;
+        // BUGFIX (port): the fallback map MUST use the byte-content comparer too — with the
+        // default ReferenceEqualityComparer an empty miss-map behaved inconsistently.
+        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(byte[], int), int>(new BAI2());
+        // SPEC CORRECTION (errata E-1, Python port `alias_of`): the `epoch` argument is kept
+        // for API compatibility ONLY; identity per §4.6 is the bare nodeId. The previous port
+        // short-circuited on the exact (nodeId, epoch) pair, which made a stale registration
+        // Nid(6)@epoch-1 win over the live session binding Nid(6)@epoch-5 — the reference
+        // ignores `epoch` entirely and lets first-registration-wins + [А3] collision guard decide.
+        // Errata E-1/E-5 (Python port `alias_of`): first registration wins among entries
+        // sharing the nodeId; then the collision guard checks whether THAT alias belongs
+        // to a different durable author in the forward map → None (never guess [А3]).
+        // BUGFIX (port): the previous variant collected ALL candidate aliases and rejected
+        // each against the forward map, which wrongly failed closed when the wanted nodeId
+        // itself legitimately owns the colliding slot (e.g. two authors registered into
+        // the same alias — the second registration is refused upstream, so here alias 50
+        // resolves to Nid(5)'s binding, and Nid(6) has no binding at all → null).
         int? found = null;
         foreach (var (dur, a) in rev)
-            if (dur.Item1.AsSpan().SequenceEqual(nodeId)) { found ??= a; }
+            if (dur.Item1.AsSpan().SequenceEqual(nodeId) && found is null) found = a;
         if (found is null) return null;
-        // collision check: does this alias belong to a DIFFERENT author in the forward map?
         var fwd = AliasToNode.TryGetValue(peer, out var f) ? f : new Dictionary<int, (byte[], int)>();
-        if (fwd.TryGetValue(found.Value, out var owner) &&
-            !owner.Item1.AsSpan().SequenceEqual(nodeId))
+        // collision check: does this alias belong to a DIFFERENT author in the forward map?
+        if (fwd.TryGetValue(found.Value, out var owner) && !owner.Item1.AsSpan().SequenceEqual(nodeId))
             return null;      // ambiguous alias — never guess [А3]
         return found;
     }
@@ -750,11 +800,14 @@ public sealed class Node
         var chainKey = (NodeId, batch.NamespaceId, batch.IssuerEpoch);
         var streamKey = (chainKey, targetPeer);
         var ps = PeerStates[(targetPeer, batch.NamespaceId)];
-        // Errata E-4: the seq numbering is per AUTHOR STREAM — cache/determinism key
-        // must be the resolved durable author (receiver side), falling back to the
-        // issuer's nodeId on the sender side where AuthorStreamNodeId is not yet set.
-        byte[] authorStream = batch.AuthorStreamNodeId ?? batch.AuthorStream();
-        var key = (authorStream, batch.CursorStart, batch.CursorEnd);
+        // BUGFIX (port divergence): the reference port keys the id cache by the batch's
+        // OWN author stream (entries[0].AuthorNodeId) — NOT the mutable receiver-resolved
+        // AuthorStreamNodeId. Keying by the latter made a re-decoded copy of the SAME wire
+        // payload mint a fresh random batchId (the decoded entries carry the ISSUER's
+        // nodeId as placeholder author, so sender/receiver keys diverged), breaking the
+        // deterministic-replay invariant §10.2.2 [П7] and every out-of-order / lost-ACK
+        // scenario (duplicate deliveries escaped the inbox check).
+        var key = (batch.AuthorStream(), batch.CursorStart, batch.CursorEnd);
         if (!ps.Ids.TryGetValue(key, out var cached))
         {
             cached = (Guid.NewGuid().ToByteArray(),
@@ -866,10 +919,19 @@ public sealed class Node
         long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
-        // STEP 3: batch digest chain (§12.17.2, [Т3])
-        byte[] expectPrev = LastBatchDigest.TryGetValue(chain, out var ep2) ? ep2 : Zero128;
-        if (!batch.PrevBatchDigest.AsSpan().SequenceEqual(expectPrev))
-            throw new SyncException("BATCH_CHAIN_BROKEN", batch.BatchId);
+        // STEP 3: batch digest chain (§12.17.2, [Т3]).
+        // BUGFIX (port fidelity): the reference port checks prevBatchDigest UNCONDITIONALLY
+        // after the cursor gate of STEP 2 has already passed. The earlier "streamEmpty"
+        // guard was wrong in both directions: an out-of-order batch on a stream that is
+        // still EMPTY at the receiver skipped the chain check entirely (b2 delivered before
+        // b1 applied cleanly instead of raising), while a legitimate FIRST batch of a fresh
+        // per-(issuer,ns,epoch) chain could hit a stale non-zero checkpoint. With STEP 2
+        // guaranteeing cursor contiguity, an unconditional check is exactly [Т3].
+        {
+            byte[] expectPrev = LastBatchDigest.TryGetValue(chain, out var ep2) ? ep2 : Zero128;
+            if (!batch.PrevBatchDigest.AsSpan().SequenceEqual(expectPrev))
+                throw new SyncException("BATCH_CHAIN_BROKEN", batch.BatchId);
+        }
         var root = ComputeRecordsRoot(batch.Entries);
         if (!batch.RecordsRoot.AsSpan().SequenceEqual(root))
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);

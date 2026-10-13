@@ -1,17 +1,4 @@
-bin/
-obj/
-.vs/
-*.user
-*.suo
-
-# Python
 __pycache__/
 *.pyc
-.pytest_cache/
-tests/__pycache__/
-
-# .NET build artifacts
-[Bb]in/
-[Oo]bj/
-*.nupkg
-TestResults/
+*.log
+*.tmp
