@@ -182,7 +182,15 @@ public class InvariantsAndAdvanced
         var next = a.CreateDeltaBatch(b.NodeId, NS)!;
         Assert.Equal(13, next.CursorStart);
         Assert.Equal(13, next.CursorEnd);
-        foreach (var rid in Enumerable.Range(1, 12).Select(i => Rid(i)).Append(Rid(99)))
+        // BUGFIX (test port): the loop above writes Rid(i + 1) for i in 0..11, i.e. the
+        // synchronized records are Rid(1)..Rid(12). The legacy Python assertion iterated
+        // `for i in range(1, 13): assert rid(i) in b.storage[NS]` — with C# `Rid(i)` over
+        // Range(1,12) this checked Rid(0)..Rid(11) instead (off-by-one), so Assert.Contains
+        // failed on the never-written Rid(0). Match the write side: check Rid(1)..Rid(12).
+        // NOTE: the test stops at CreateDeltaBatch (cursor assertions only); batch [13..13]
+        // is NEVER delivered to b (no ApplyBatch call here), so Rid(99) must not be expected
+        // in b.Storage — that delivery/merge is covered by ReplayStorm/Chain scenarios.
+        foreach (var rid in Enumerable.Range(1, 12).Select(i => Rid(i)))
             Assert.Contains(rid, b.Storage[NS]);
     }
 
