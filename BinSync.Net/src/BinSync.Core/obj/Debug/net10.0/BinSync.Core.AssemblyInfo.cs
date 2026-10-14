@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("BinSync.Core")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e80b69e608d3bd5aee6ba5536d7ba225c3ee3169")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+4cb153ef655f454ed3b128e9ce167aaa725b41b7")]
 [assembly: System.Reflection.AssemblyProductAttribute("BinSync.Core")]
 [assembly: System.Reflection.AssemblyTitleAttribute("BinSync.Core")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

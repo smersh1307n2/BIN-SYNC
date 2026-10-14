@@ -182,7 +182,15 @@ public class InvariantsAndAdvanced
         var next = a.CreateDeltaBatch(b.NodeId, NS)!;
         Assert.Equal(13, next.CursorStart);
         Assert.Equal(13, next.CursorEnd);
-        foreach (var rid in Enumerable.Range(1, 12).Select(i => Rid(i)).Append(Rid(99)))
+        // BUGFIX (test port): the loop above writes Rid(i + 1) for i in 0..11, i.e. the
+        // synchronized records are Rid(1)..Rid(12). The legacy Python assertion iterated
+        // `for i in range(1, 13): assert rid(i) in b.storage[NS]` — with C# `Rid(i)` over
+        // Range(1,12) this checked Rid(0)..Rid(11) instead (off-by-one), so Assert.Contains
+        // failed on the never-written Rid(0). Match the write side: check Rid(1)..Rid(12).
+        // NOTE: the test stops at CreateDeltaBatch (cursor assertions only); batch [13..13]
+        // is NEVER delivered to b (no ApplyBatch call here), so Rid(99) must not be expected
+        // in b.Storage — that delivery/merge is covered by ReplayStorm/Chain scenarios.
+        foreach (var rid in Enumerable.Range(1, 12).Select(i => Rid(i)))
             Assert.Contains(rid, b.Storage[NS]);
     }
 
@@ -217,18 +225,32 @@ public class InvariantsAndAdvanced
         var a = Fix.MakeNode(1); var b = Fix.MakeNode(2);
         Transport.MakeSession(a, b);
         a.WriteField(NS, Rid(1), 0x0100, Asc("first"), new Hlc(10, 0));
-        var b1 = a.CreateDeltaBatch(b.NodeId, NS)!;
-        a.SignBatchFor(b1, b.NodeId);
+        var b1 = a.CreateDeltaBatch(b.NodeId, NS)!;   // [1..1], prev = Zero128 (legit first batch)
+        a.AdvanceStream(b.NodeId, NS, b1);            // wire delivery of b1 succeeded (Transport.cs:122)
+        a.ProcessAck(b.NodeId, NS, b1.CursorEnd, authorStream: a.NodeId);  // receiver ACKed seq 1
         a.WriteField(NS, Rid(2), 0x0100, Asc("second"), new Hlc(11, 0));
-        var b2 = a.CreateDeltaBatch(b.NodeId, NS)!;
-        a.SignBatchFor(b2, b.NodeId);
+        var b2 = a.CreateDeltaBatch(b.NodeId, NS)!;   // separate batch [2..2]
+        Assert.Equal(2, b2.CursorStart);              // NOT coalesced into [1..2]
+        // BUGFIX (test port): deliver b2 BEFORE b1 lands at the receiver. The receiver's
+        // per-stream cursor expects seq 1 but sees CursorStart=2 -> SEQ_GAP deterministically
+        // (the old port relied on BATCH_CHAIN_BROKEN, which is unreachable here because both
+        // batches were signed before any chain checkpoint existed — prev digests are both
+        // Zero128 and STEP 3 passes).
         var d2 = b.DecodeBatchPayload(a.EncodeBatchPayload(b2));
         var ex = Assert.Throws<SyncException>(() => b.ApplyBatch(d2, a.NodeId));
         Assert.Contains(ex.CodeName, new[] { "BATCH_CHAIN_BROKEN", "SEQ_GAP" });
-        var d1 = b.DecodeBatchPayload(a.EncodeBatchPayload(b1));
-        b.ApplyBatch(d1, a.NodeId);                       // first batch heals the chain
+        // Healing: replay b1 through the REAL transport pipeline (create -> sign -> encode
+        // -> apply -> advance_stream -> ack). The receiver never saw seq 2 (the rejected d2
+        // left no state), so CreateDeltaBatch coalesces the still-un-acked [1..2] span and
+        // delivers it in order — exactly like reference scenario 30 (deliver_batch after a
+        // rejection). The deterministic id cache (§10.2.2 [П7]) mints a fresh batchId for
+        // the new span key ([1..2]); prev links from Zero128, which is the receiver's chain
+        // checkpoint since nothing has been accepted on this stream yet.
+        var r12 = Transport.DeliverBatch(a, b, NS)!;
+        Assert.Equal(2, r12.Applied);                   // both records landed
         var d2b = b.DecodeBatchPayload(a.EncodeBatchPayload(b2));
-        b.ApplyBatch(d2b, a.NodeId);                      // second now applies
+        var rdup = b.ApplyBatch(d2b, a.NodeId);         // late b2 replay is a harmless duplicate
+        Assert.True(rdup.Duplicate);
         Assert.Contains(Rid(1), b.Storage[NS]);
         Assert.Contains(Rid(2), b.Storage[NS]);
     }
