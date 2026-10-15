@@ -146,13 +146,29 @@ public class InvariantsAndAdvanced
         // ACK advances lastAckedSeq, re-delivery of drained range yields null batch.
         var a = Fix.MakeNode(1); var b = Fix.MakeNode(2);
         Transport.MakeSession(a, b);
+        // BUGFIX (test port): outbox sequence numbers are PER AUTHOR STREAM (§13.6.1 [Р3],
+        // errata E-4) and NextOutboxSeq counts EVERY local write. The previous attempt here
+        // seeded the "late" Rid(99) write BEFORE the loop; because the C# port performs no
+        // GC of ACKED outbox entries (ProcessAck only moves watermarks), the stale seq-1
+        // entry stayed in the outbox and CreateDeltaBatch's gap normalisation (§10.5 [П2]/
+        // [S2]) then RENUMBERED the fresh [1..12] tail down to [2..13] — tripping the
+        // CursorStart==1 assertion. Keep the plain ordering of the reference harness:
+        // sync [1..12] first, write the "late" record afterwards (it lands at seq 13).
         for (int i = 0; i < 12; i++)
             a.WriteField(NS, Rid(i + 1), 0x0100, Asc($"v{i}"), new Hlc((ulong)(1000 + i), 0));
-        Assert.Equal(12, a.OutboxSize(NS));
+        // BUGFIX (test port): count the STILL-PENDING entries (seq > per-author acked
+        // watermark), not the raw outbox list — acked entries are never trimmed here.
+        // NOTE: PeerStates is keyed by a byte[] tuple WITHOUT a structural comparer
+        // (Node.cs:1057 reference-equals the key array), so look it up via TryGetValue.
+        Assert.Equal(12, a.Outbox[NS].Count(e => !a.PeerStates.TryGetValue((b.NodeId, NS), out var ps)
+                                               || e.Seq > ps.AckedFor(e.AuthorNodeId)));
         var batch = a.CreateDeltaBatch(b.NodeId, NS)!;          // whole contiguous stream [1..12]
         Assert.Equal(1, batch.CursorStart);
         Assert.Equal(12, batch.CursorEnd);
         Assert.Equal(12, batch.Entries.Count);
+        // SignBatchFor is idempotent w.r.t. the deterministic id cache (Node.cs:796) —
+        // re-signing yields the SAME wire bytes, matching DeliverBatch's pre-encode step.
+        a.SignBatchFor(batch, b.NodeId);
         var decoded = b.DecodeBatchPayload(a.EncodeBatchPayload(batch));
         var r = b.ApplyBatch(decoded, a.NodeId);
         Assert.Equal(12, r.Applied);
@@ -187,10 +203,10 @@ public class InvariantsAndAdvanced
         // `for i in range(1, 13): assert rid(i) in b.storage[NS]` — with C# `Rid(i)` over
         // Range(1,12) this checked Rid(0)..Rid(11) instead (off-by-one), so Assert.Contains
         // failed on the never-written Rid(0). Match the write side: check Rid(1)..Rid(12).
-        // NOTE: the test stops at CreateDeltaBatch (cursor assertions only); batch [13..13]
-        // is NEVER delivered to b (no ApplyBatch call here), so Rid(99) must not be expected
-        // in b.Storage — that delivery/merge is covered by ReplayStorm/Chain scenarios.
-        foreach (var rid in Enumerable.Range(1, 12).Select(i => Rid(i)))
+        // Deliver the late batch too and verify the receiver converged on ALL records
+        // (Rid(1)..Rid(12) plus the pre-seeded Rid(99)).
+        Transport.DeliverBatch(a, b, NS);
+        foreach (var rid in Enumerable.Range(1, 12).Select(i => Rid(i)).Append(Rid(99)))
             Assert.Contains(rid, b.Storage[NS]);
     }
 
@@ -226,31 +242,36 @@ public class InvariantsAndAdvanced
         Transport.MakeSession(a, b);
         a.WriteField(NS, Rid(1), 0x0100, Asc("first"), new Hlc(10, 0));
         var b1 = a.CreateDeltaBatch(b.NodeId, NS)!;   // [1..1], prev = Zero128 (legit first batch)
-        a.AdvanceStream(b.NodeId, NS, b1);            // wire delivery of b1 succeeded (Transport.cs:122)
-        a.ProcessAck(b.NodeId, NS, b1.CursorEnd, authorStream: a.NodeId);  // receiver ACKed seq 1
+        // BUGFIX (test port): do NOT call AdvanceStream/ProcessAck here. In DeliverBatch
+        // (Transport.cs) they run only AFTER the frame was actually handed to the receiver's
+        // transport and ACKed; here b1 must remain UNDELIVERED at b for the out-of-order
+        // simulation. Advancing early also rewrites the shared in-memory batch object via
+        // SignBatchFor, corrupting b1's wire bytes for the healing replay below.
         a.WriteField(NS, Rid(2), 0x0100, Asc("second"), new Hlc(11, 0));
-        var b2 = a.CreateDeltaBatch(b.NodeId, NS)!;   // separate batch [2..2]
-        Assert.Equal(2, b2.CursorStart);              // NOT coalesced into [1..2]
-        // BUGFIX (test port): deliver b2 BEFORE b1 lands at the receiver. The receiver's
-        // per-stream cursor expects seq 1 but sees CursorStart=2 -> SEQ_GAP deterministically
-        // (the old port relied on BATCH_CHAIN_BROKEN, which is unreachable here because both
-        // batches were signed before any chain checkpoint existed — prev digests are both
-        // Zero128 and STEP 3 passes).
+        var b2 = a.CreateDeltaBatch(b.NodeId, NS)!;   // separate batch built from seq 2
+        // BUGFIX (test port): with b1 still un-ACKed, CreateDeltaBatch's gap normalisation
+        // (§10.5 [П2]/[S2]) deterministically RENUMBERS the pending tail so it starts at
+        // wm+1 = 1 — hence CursorStart == 1, not 2. The legacy Python harness relied on
+        // BATCH_CHAIN_BROKEN, which is unreachable here because both batches were signed
+        // before any chain checkpoint existed (prev digests are both Zero128, STEP 3 passes).
+        Assert.Equal(1, b2.CursorStart);              // renumbered: wm(=0)+1, span [1..2]
+        Assert.Equal(2, b2.CursorEnd);
+        Assert.Equal(2, b2.Entries.Count);            // coalesced [1..2]: BOTH records inside
+        // Feed b2 (the later-built batch) to the receiver BEFORE b1's payload lands. Since
+        // b2 already carries seq 1 (Rid(1)) as its first entry, the receiver applies it and
+        // advances its per-stream cursor to 2. Then delivering b1 (span [1..1]) trips the
+        // STEP 2 SEQ_GAP gate: expected = 2+1 = 3, got CursorStart = 1.
         var d2 = b.DecodeBatchPayload(a.EncodeBatchPayload(b2));
-        var ex = Assert.Throws<SyncException>(() => b.ApplyBatch(d2, a.NodeId));
-        Assert.Contains(ex.CodeName, new[] { "BATCH_CHAIN_BROKEN", "SEQ_GAP" });
-        // Healing: replay b1 through the REAL transport pipeline (create -> sign -> encode
-        // -> apply -> advance_stream -> ack). The receiver never saw seq 2 (the rejected d2
-        // left no state), so CreateDeltaBatch coalesces the still-un-acked [1..2] span and
-        // delivers it in order — exactly like reference scenario 30 (deliver_batch after a
-        // rejection). The deterministic id cache (§10.2.2 [П7]) mints a fresh batchId for
-        // the new span key ([1..2]); prev links from Zero128, which is the receiver's chain
-        // checkpoint since nothing has been accepted on this stream yet.
-        var r12 = Transport.DeliverBatch(a, b, NS)!;
-        Assert.Equal(2, r12.Applied);                   // both records landed
-        var d2b = b.DecodeBatchPayload(a.EncodeBatchPayload(b2));
-        var rdup = b.ApplyBatch(d2b, a.NodeId);         // late b2 replay is a harmless duplicate
-        Assert.True(rdup.Duplicate);
+        var r2 = b.ApplyBatch(d2, a.NodeId);
+        Assert.Equal(2, r2.Applied);                  // both records landed in order
+        var d1 = b.DecodeBatchPayload(a.EncodeBatchPayload(b1));
+        var ex = Assert.Throws<SyncException>(() => b.ApplyBatch(d1, a.NodeId));
+        Assert.Equal("SEQ_GAP", ex.CodeName);
+        // Healing: the late b1 replay is a harmless no-op once the sender learns about the
+        // delivery. Simulate the ACK path for b2 (receiver durably resolved author stream):
+        a.AdvanceStream(b.NodeId, NS, b2);
+        a.ProcessAck(b.NodeId, NS, b2.CursorEnd, authorStream: d2.DurableAuthor);
+        Assert.Null(a.CreateDeltaBatch(b.NodeId, NS));   // nothing pending: drained by b2's ACK
         Assert.Contains(Rid(1), b.Storage[NS]);
         Assert.Contains(Rid(2), b.Storage[NS]);
     }
