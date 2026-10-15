@@ -1,0 +1,41 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "BinSync.Core/1.0.0": {
+        "dependencies": {
+          "Blake3": "3.0.2"
+        },
+        "runtime": {
+          "BinSync.Core.dll": {}
+        }
+      },
+      "Blake3/3.0.2": {
+        "runtime": {
+          "lib/net8.0/Blake3.dll": {
+            "assemblyVersion": "3.0.0.0",
+            "fileVersion": "3.0.2.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "BinSync.Core/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Blake3/3.0.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-THvWhdj8ErSdrGamTqjshCU1ImANfr7ieKY6eFqeMsRenvXEKut9qGm5/MA4SUk8IYvAahf67jSh0yVj9jTPzg==",
+      "path": "blake3/3.0.2",
+      "hashPath": "blake3.3.0.2.nupkg.sha512"
+    }
+  }
+}
