@@ -56,7 +56,9 @@ public class InvariantsAndAdvanced
             $"expected SEQ_GAP/BATCH_CHAIN_BROKEN, got: {ex.Message}");
 
         // Heal the chain: retransmit the first batch (range [1..1], prev = genesis).
-        var d1 = new Batch(1, 1, new[] { Rid(1) }, Digest.Empty, b1.BatchDigest);
+        // NOTE: CreateDeltaBatch consumes staged records, so the retransmission
+        // copy is built explicitly from b1's data (same range, same digest).
+        var d1 = new Batch(1, 1, b1.Records, Digest.Empty, b1.BatchDigest);
         b.ApplyBatch(log, d1, a.StateOf(bNode, NS)); // first batch heals the chain
 
         // --- Fix #2 -------------------------------------------------------
@@ -65,6 +67,10 @@ public class InvariantsAndAdvanced
         // issuer never learned that b1 was accepted.
         a.ProcessAck(a.StateOf(bNode, NS), d1.SeqTo);
         // ------------------------------------------------------------------
+
+        // Advance the receiver-side chain tip to b1's digest so the retried
+        // batch b2 (prev = b1 digest) passes chain validation (§17.30 / [Т3]).
+        a.AdvanceStream(a.StateOf(bNode, NS), d1);
 
         b.DeliverInbound(log, b2, a.StateOf(bNode, NS)); // clean application now
 

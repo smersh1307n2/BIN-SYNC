@@ -1,10 +1,12 @@
 {
   "version": 2,
-  "dgSpecHash": "K8uOy4/GU9U=",
+  "dgSpecHash": "t9Xs6ByMBtQ=",
   "success": true,
   "projectFilePath": "/workspace/BinSync.Net/src/BinSync.Core/BinSync.Core.csproj",
   "expectedPackageFiles": [
-    "/root/.nuget/packages/blake3/3.0.2/blake3.3.0.2.nupkg.sha512"
+    "/root/.nuget/packages/blake3/3.0.2/blake3.3.0.2.nupkg.sha512",
+    "/root/.nuget/packages/microsoft.aspnetcore.app.ref/8.0.32/microsoft.aspnetcore.app.ref.8.0.32.nupkg.sha512",
+    "/root/.nuget/packages/microsoft.netcore.app.ref/8.0.32/microsoft.netcore.app.ref.8.0.32.nupkg.sha512"
   ],
   "logs": []
 }

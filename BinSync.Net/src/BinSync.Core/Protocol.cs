@@ -84,10 +84,13 @@ public sealed class DeltaSyncEngine
         if (from > to) throw new InvalidOperationException("BATCH_EMPTY");
         var take = Math.Min(maxRecords, to - from + 1);
         var actualTo = from + take - 1;
-        var recs = st.Pending.Skip((int)(from - 1)).Take((int)take).ToList();
+        // Pending holds exactly the records with seq > CheckpointedWatermark.
+        var recs = st.Pending.Take((int)take).ToList();
         var prev = st.ChainTip;
         var digest = Digest.Of(recs);
-        return new Batch(from, actualTo, recs, prev, digest);
+        var b = new Batch(from, actualTo, recs, prev, digest);
+        st.Pending.RemoveRange(0, recs.Count);
+        return b;
     }
 
     public Batch SignBatchFor(Batch b, NodeId peer) => b with { };
