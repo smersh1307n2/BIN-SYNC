@@ -45,6 +45,12 @@ public static class AsyncTransport
     /// <see cref="Transport.SyncRound"/>). The two directions are strictly sequential,
     /// so the gates of A and B never overlap in time; the token is honored between
     /// individual batches.
+    /// PRODUCTION FIX: DeliverBatch returns null both when the sender has nothing
+    /// pending AND when the produced batch contains zero NEW ops (Applied == 0 —
+    /// e.g. an echo/replay round-trip). The drain loop must therefore keep going
+    /// while the outbox still holds unacknowledged entries; stopping on the first
+    /// Applied==0 result silently strands data (a fresh receiver answers every push
+    /// with Applied==0 because it already saw the ops via the reverse direction).
     /// </summary>
     public static Task<SyncRoundResult> SyncRoundAsync(
         Node a, Node b, int namespaceId, int schemaVersion = 1,
@@ -52,23 +58,22 @@ public static class AsyncTransport
     {
         return Task.Run(() =>
         {
-            int ab = 0, ba = 0;
-            while (true)
-            {
-                ct.ThrowIfCancellationRequested();
-                var r = Transport.DeliverBatch(a, b, namespaceId, schemaVersion: schemaVersion);
-                if (r is null) break;
-                ab++;
-            }
-            while (true)
-            {
-                ct.ThrowIfCancellationRequested();
-                var r = Transport.DeliverBatch(b, a, namespaceId, schemaVersion: schemaVersion);
-                if (r is null) break;
-                ba++;
-            }
+            int ab = DrainDirection(a, b, namespaceId, schemaVersion, ct);
+            int ba = DrainDirection(b, a, namespaceId, schemaVersion, ct);
             return new SyncRoundResult(ab, ba);
         }, ct);
+    }
+
+    private static int DrainDirection(Node src, Node dst, int ns, int schemaVersion, CancellationToken ct)
+    {
+        int n = 0;
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var r = Transport.DeliverBatch(src, dst, ns, schemaVersion: schemaVersion);
+            if (r is null) return n;   // sender has nothing pending for this peer (§10.2)
+            n++;
+        }
     }
 
     /// <summary>

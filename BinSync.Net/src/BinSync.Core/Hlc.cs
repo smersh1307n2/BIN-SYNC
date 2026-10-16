@@ -45,6 +45,9 @@ public class HlcClock
     public long MaxSkewUs;
     public ulong LastWall = 0;   // BUGFIX: never tick at construction (§5.2 cold boot)
     public uint LastLogical = 0;
+    // Production hardening: the clock is shared mutable state — concurrent writers inside
+    // one node (and background clocks) must not interleave read-modify-write on Last*.
+    private readonly object _tickGate = new();
 
     public HlcClock(Func<long>? nowFn = null, long maxSkewUs = 60_000_000)
     {
@@ -56,30 +59,36 @@ public class HlcClock
 
     public Hlc SendTick()
     {
-        long now = Now();
-        ulong wall; uint logical;
-        if (now > (long)LastWall) { wall = (ulong)now; logical = 0; }
-        else if (now == (long)LastWall) { wall = LastWall; logical = LastLogical + 1; }
-        else { wall = LastWall; logical = LastLogical + 1; }  // clock backwards: bump logical
-        if (logical >= LogicalMax) throw new InvalidOperationException("Logical clock overflow");
-        LastWall = wall; LastLogical = logical;
-        return new Hlc(wall, logical);
+        lock (_tickGate)
+        {
+            long now = Now();
+            ulong wall; uint logical;
+            if (now > (long)LastWall) { wall = (ulong)now; logical = 0; }
+            else if (now == (long)LastWall) { wall = LastWall; logical = LastLogical + 1; }
+            else { wall = LastWall; logical = LastLogical + 1; }  // clock backwards: bump logical
+            if (logical >= LogicalMax) throw new InvalidOperationException("Logical clock overflow");
+            LastWall = wall; LastLogical = logical;
+            return new Hlc(wall, logical);
+        }
     }
 
     public Hlc ReceiveTick(Hlc remote)
     {
-        long now = Now();
-        if (remote.Wall > (ulong)(now + MaxSkewUs))
-            throw new ClockDriftException($"remote.wall {remote.Wall} beyond now+{MaxSkewUs}");
-        ulong wall = Math.Max((ulong)now, Math.Max(LastWall, remote.Wall));
-        uint logical;
-        if (wall == (ulong)now && wall == LastWall && wall == remote.Wall)
-            logical = Math.Max(LastLogical, remote.Logical) + 1;
-        else if (wall == LastWall) logical = LastLogical + 1;
-        else if (wall == remote.Wall) logical = remote.Logical + 1;
-        else logical = 0;
-        if (logical >= LogicalMax) throw new InvalidOperationException("Logical clock overflow");
-        LastWall = wall; LastLogical = logical;
-        return new Hlc(wall, logical);
+        lock (_tickGate)
+        {
+            long now = Now();
+            if (remote.Wall > (ulong)(now + MaxSkewUs))
+                throw new ClockDriftException($"remote.wall {remote.Wall} beyond now+{MaxSkewUs}");
+            ulong wall = Math.Max((ulong)now, Math.Max(LastWall, remote.Wall));
+            uint logical;
+            if (wall == (ulong)now && wall == LastWall && wall == remote.Wall)
+                logical = Math.Max(LastLogical, remote.Logical) + 1;
+            else if (wall == LastWall) logical = LastLogical + 1;
+            else if (wall == remote.Wall) logical = remote.Logical + 1;
+            else logical = 0;
+            if (logical >= LogicalMax) throw new InvalidOperationException("Logical clock overflow");
+            LastWall = wall; LastLogical = logical;
+            return new Hlc(wall, logical);
+        }
     }
 }

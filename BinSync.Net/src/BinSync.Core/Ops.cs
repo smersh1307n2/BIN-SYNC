@@ -20,6 +20,16 @@ public class OpFieldWrite
     public byte[]? AuthorNodeId;
     public byte[] Value = Array.Empty<byte>();
     public byte Tag => OpsConst.TagFieldWrite;
+    /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
+    public bool FullAuthorMode { get; internal set; }
+    /// <summary>When decoded from a truncated payload: position of the value-length varint
+    /// inside the source buffer (persistence byte-stability). -1 = not applicable.</summary>
+    internal int ValueLenPos = -1;
+
+    // Production hardening: payload-length variant of the auto-detect heuristic in
+    // Ops.DecodeOp (single source of truth for both encode & decode).
+    internal int CompactPayloadLen => 19 + Codec.VarintLength((ulong)Value.Length) + Value.Length;
+    internal int FullAuthorPayloadLen => 33 + Codec.VarintLength((ulong)Value.Length) + Value.Length;
 }
 
 public class OpFieldTomb
@@ -29,6 +39,11 @@ public class OpFieldTomb
     public ushort Origin;
     public byte[]? AuthorNodeId;
     public byte Tag => OpsConst.TagFieldTomb;
+    /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
+    public bool FullAuthorMode { get; internal set; }
+
+    internal const int CompactPayloadLen = 19;
+    internal const int FullAuthorPayloadLen = 33;
 }
 
 public class OpRecordTombstone
@@ -38,6 +53,11 @@ public class OpRecordTombstone
     public ushort Origin;
     public byte[]? AuthorNodeId;
     public byte Tag => OpsConst.TagRecordTomb;
+    /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
+    public bool FullAuthorMode { get; internal set; }
+
+    internal const int CompactPayloadLen = 31;
+    internal const int FullAuthorPayloadLen = 45;
 }
 
 public static class Ops
@@ -47,34 +67,53 @@ public static class Ops
     public static byte[] EncodeOpFull(object op) => EncodeOp(op, fullAuthor: true);
 
     /// Canonical encoding. Compact mode: u16 origin; FULL_AUTHOR_ID mode: durable b128 (§12.24.4).
-    public static byte[] EncodeOp(object op, bool fullAuthor = false)
+    /// When <paramref name="fullAuthor"/> is null the mode is taken from the op itself
+    /// (<c>FullAuthorMode</c>, i.e. how it was decoded) — this keeps outbox payloads
+    /// byte-stable across persistence round-trips (production hardening).
+    public static byte[] EncodeOp(object op, bool? fullAuthor = null, int? valueLenOverride = null)
     {
         var w = new Writer();
         if (op is OpFieldWrite fw)
         {
+            bool full = fullAuthor ?? fw.FullAuthorMode;
             w.U8(OpsConst.TagFieldWrite).U16(fw.FieldId).U16(fw.KeyEpoch).U64(fw.Wall).U32(fw.Logical);
             if (w.Value().Length != OpsConst.OriginOffset)
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
-            if (fullAuthor) w.B128(fw.AuthorNodeId!);
+            if (full) w.B128(fw.AuthorNodeId!);
             else w.U16(fw.Origin);
-            w.Varint((ulong)fw.Value.Length).Raw(fw.Value);
+            int vlen = fw.Value.Length;
+            if (valueLenOverride is null && fw.ValueLenPos >= 0)
+            {
+                // Payload stores ONLY the varint width (value bytes live elsewhere, e.g. in the
+                // record's FieldState after a persistence round-trip): re-emit the same-width
+                // zero-length varint so the payload stays byte-stable across save/load.
+                w.Raw(new byte[fw.ValueLenPos + 1]);
+            }
+            else
+            {
+                if (valueLenOverride is not null) vlen = valueLenOverride.Value;
+                w.Varint((ulong)vlen);
+            }
+            w.Raw(fw.Value);
             return w.Value();
         }
         if (op is OpFieldTomb ft)
         {
+            bool full = fullAuthor ?? ft.FullAuthorMode;
             w.U8(OpsConst.TagFieldTomb).U16(ft.FieldId).U16(ft.KeyEpoch).U64(ft.Wall).U32(ft.Logical);
             if (w.Value().Length != OpsConst.OriginOffset)
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
-            if (fullAuthor) w.B128(ft.AuthorNodeId!);
+            if (full) w.B128(ft.AuthorNodeId!);
             else w.U16(ft.Origin);
             return w.Value();
         }
         if (op is OpRecordTombstone rt)
         {
+            bool full = fullAuthor ?? rt.FullAuthorMode;
             w.U8(OpsConst.TagRecordTomb).B128(rt.RecordId).U64(rt.Wall).U32(rt.Logical);
             if (w.Value().Length != OpsConst.OriginOffsetRecordTomb)
                 throw new InvalidOperationException("origin at offset 29");
-            if (fullAuthor) w.B128(rt.AuthorNodeId!);
+            if (full) w.B128(rt.AuthorNodeId!);
             else w.U16(rt.Origin);
             return w.Value();
         }
@@ -82,6 +121,10 @@ public static class Ops
     }
 
     /// fullAuthor=null → AUTO-DETECT the mode from payload length (BUGFIX note in Python port).
+    /// The second tuple element is the reader position after the op; for FieldWrite decoded
+    /// from a TRUNCATED payload it points at the end of the fixed header, and
+    /// <see cref="FieldValueLenPos"/> carries the position of the value-length varint so
+    /// re-encoding can preserve its original byte width (persistence byte-stability).
     public static (object Op, int Pos) DecodeOp(byte[] data, int pos = 0, bool? fullAuthor = null)
     {
         var r = new Reader(data, pos);
@@ -96,8 +139,21 @@ public static class Ops
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffset + (full ? 16 : 2))
                 throw new InvalidOperationException("[C11] author slot at fixed offset");
-            var value = r.Bytes();
-            return (new OpFieldWrite { FieldId = fid, KeyEpoch = ke, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, Value = value }, r.Pos);
+            int vlenPos = r.Pos;
+            byte[] value;
+            int endPos;
+            try { value = r.Bytes(); endPos = r.Pos; }
+            catch (EndOfStreamException)
+            {
+                // Truncated payload (outbox entries store only the fixed header): return the
+                // op with an empty tail and remember where the value-length varint lives so
+                // EncodeOp can reproduce the original byte width (persistence byte-stability).
+                value = Array.Empty<byte>();
+                endPos = vlenPos;
+            }
+            var opw = new OpFieldWrite { FieldId = fid, KeyEpoch = ke, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, Value = value, FullAuthorMode = full };
+            if (endPos != r.Pos) { opw.ValueLenPos = vlenPos; }
+            return (opw, endPos);
         }
         if (tag == OpsConst.TagFieldTomb)
         {
@@ -109,7 +165,7 @@ public static class Ops
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffset + (full ? 16 : 2))
                 throw new InvalidOperationException();
-            return (new OpFieldTomb { FieldId = fid, KeyEpoch = ke, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author }, r.Pos);
+            return (new OpFieldTomb { FieldId = fid, KeyEpoch = ke, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, FullAuthorMode = full }, r.Pos);
         }
         if (tag == OpsConst.TagRecordTomb)
         {
@@ -121,7 +177,7 @@ public static class Ops
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffsetRecordTomb + (full ? 16 : 2))
                 throw new InvalidOperationException();
-            return (new OpRecordTombstone { RecordId = rid, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author }, r.Pos);
+            return (new OpRecordTombstone { RecordId = rid, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, FullAuthorMode = full }, r.Pos);
         }
         throw new ArgumentException($"unknown op tag 0x{tag:x}");
     }

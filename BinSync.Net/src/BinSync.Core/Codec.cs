@@ -27,6 +27,14 @@ public static class Codec
         return outBuf.ToArray();
     }
 
+    /// <summary>Number of bytes EncodeVarint would emit for <paramref name="value"/>.</summary>
+    public static int VarintLength(ulong value)
+    {
+        int n = 1;
+        while ((value >>= 7) != 0) n++;
+        return n;
+    }
+
     // [К2] per-byte minimality rule (errata E-5): reject non-canonical encodings as
     // soon as redundancy appears ("\x80\x00"), keep b"\xff"*9+b"\xff" (=2^64-1) legal.
     // BUGFIX (port): mirror the Python reference exactly — width bound applies to

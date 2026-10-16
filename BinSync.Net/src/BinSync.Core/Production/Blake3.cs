@@ -31,7 +31,7 @@ public static class Blake3Core
     /// <summary>BLAKE3-256 of arbitrary data.</summary>
     public static byte[] Hash256(ReadOnlySpan<byte> data) => Hash(data, key: null);
 
-    /// <summary>Tagged hash with domain separation: key = H(tag || u64le(len(tag)) || tag).</summary>
+    /// <summary>Tagged hash with domain separation: key = H_256(tag || u64le(len(tag)) || tag).</summary>
     public static byte[] TaggedHash(string tag, ReadOnlySpan<byte> data)
     {
         var tagBytes = System.Text.Encoding.UTF8.GetBytes(tag);
@@ -39,7 +39,20 @@ public static class Blake3Core
         tagBytes.CopyTo(keyInput, 0);
         BinaryPrimitives.WriteUInt64LittleEndian(keyInput.AsSpan(tagBytes.Length), (ulong)tagBytes.Length);
         tagBytes.CopyTo(keyInput, tagBytes.Length + 8);
-        return Hash(data, key: ToWordsLE(Hash(keyInput, key: null)));
+        // The key is the FULL 8-word CV of the tag prehash (words 4..7 matter for keyed hashing).
+        return Hash(data, key: ToWordsLE(HashFullCv(keyInput)));
+    }
+
+    /// <summary>Returns all 8 chaining-value words of a keyless hash (64 bytes), not truncated to 32.</summary>
+    private static byte[] HashFullCv(ReadOnlySpan<byte> input)
+    {
+        const int ChunkLenLocal = 1024;
+        if (input.Length <= ChunkLenLocal)
+            return CvToBytes(ChunkCv(input, Iv, chunkCounter: 0, extraRootFlags: Root));
+        int mid = LargestPow2LessThan(input.Length);
+        var cvL = InputToCv(input.Slice(0, mid), Iv, rightSiblingExists: true);
+        var cvR = InputToCv(input.Slice(mid), Iv, rightSiblingExists: false);
+        return CvToBytes(ParentCv(cvL, cvR, root: true));
     }
 
     /// <summary>Hex (lowercase) of <see cref="Hash256"/>.</summary>
@@ -89,7 +102,12 @@ public static class Blake3Core
             uint f = ChunkStart | ChunkEnd | extraRootFlags;
             if (i != 0) f &= ~ChunkStart;
             if (i != blocks - 1) f &= ~ChunkEnd;
-            cv = Compress(cv, block, chunkCounter, f, OutLenWords);
+            // Reference BLAKE3: state[15] = number of BYTES OF INPUT that contribute to
+            // this block. For a padded final block that is min(64, remaining) — except for
+            // an EMPTY chunk, where the reference still compresses one all-zero block with
+            // t = 64 (see blake3-scalar.rs: input == [] => block_len = BLOCK_LEN).
+            int t = chunk.Length == 0 ? 64 : len;
+            cv = Compress(cv, block, chunkCounter, f, OutLenWords, t);
         }
         return cv;
     }
@@ -109,7 +127,7 @@ public static class Blake3Core
         return p;
     }
 
-    private static uint[] Compress(uint[] cv, byte[] block, ulong counter, uint flags, ulong outLen)
+    private static uint[] Compress(uint[] cv, byte[] block, ulong counter, uint flags, ulong outLen, int blockLen = 64)
     {
         var m = ToWordsLE(block);
         var st = new uint[16];
@@ -118,7 +136,7 @@ public static class Blake3Core
         st[12] = unchecked((uint)counter);
         st[13] = unchecked((uint)(counter >> 32));
         st[14] = flags;
-        st[15] = unchecked((uint)outLen);
+        st[15] = unchecked((uint)blockLen);   // §BLAKE3: state[15] = BYTES_HASHED_OF_LAST_BLOCK, not output length
 
         // Reference BLAKE3: round r uses word order perm^r(i), i.e. mm[i] = m[PERM^r[i]].
         var order = new int[16];

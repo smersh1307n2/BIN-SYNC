@@ -893,11 +893,30 @@ internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
                     int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
                     alias = EnsureAlias(peerNode, e.AuthorNodeId, epTry);
                 }
+                else if (peerNode is null)
+                {
+                    // Resumed node: the registry already holds an alias for this author in the
+                    // target session (persisted), but there is no live Node handle to negotiate
+                    // ALIAS_MAP with. Reuse the durable mapping instead of failing closed.
+                    if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
+                        foreach (var (a_, (nid_, _)) in existingMap)
+                            if (nid_.AsSpan().SequenceEqual(e.AuthorNodeId)) { alias = a_; break; }
+                }
             }
             if (alias is null)
                 throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
             var op = Ops.DecodeOp(e.Payload).Op;
             SetOrigin(op, (ushort)alias.Value);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
+            // Persistence byte-stability: an outbox FieldWrite payload may be truncated to its
+            // fixed header (the value bytes live in the record's FieldState after a save/load
+            // round-trip). Restore the current stored value so retransmission carries real data.
+            if (op is OpFieldWrite fw && fw.ValueLenPos >= 0 && fw.Value.Length == 0 &&
+                Ns(e.NamespaceId).TryGetValue(e.RecordId, out var wrec) &&
+                wrec.State.TryGetValue(fw.FieldId, out var wfld))
+            {
+                fw.Value = wfld.Value ?? Array.Empty<byte>();
+                fw.ValueLenPos = -1;   // we now have the bytes — encode a normal varint
+            }
             var newPayload = Ops.EncodeOp(op, fullAuthor: false);
             translated.Add(new OutboxEntry
             {

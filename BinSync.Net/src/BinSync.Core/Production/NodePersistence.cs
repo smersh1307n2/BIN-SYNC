@@ -424,14 +424,22 @@ public static class NodePersistence
         // --- session peer ids: rebuild the E-11 registry KEYS. The Node objects themselves
         // are live handles and cannot be deserialized; a resumed application re-registers
         // peers via Transport.MakeSession / AttachPeer, which merge into this map.
+        // PRODUCTION FIX: placeholder entries must NOT shadow live handles — TryAdd kept a
+        // null value for a peer that MakeSession registers later, so ResolveAlias's errata
+        // E-12 "consult the peer's copy of the session" path silently died after restart
+        // (UNKNOWN_ALIAS on the first post-restart SyncRound). AttachPeer-style semantics:
+        // only fill slots that are absent or currently null.
         int peerCount = (int)r.Varint();
         var peerIds = new List<byte[]>(peerCount);
         for (int i = 0; i < peerCount; i++) peerIds.Add(r.B128());
         if (peerIds.Count > 0 || n.AliasToNode.Count > 0)
         {
             n.PeersByNid ??= new(new ByteArrEq());
-            foreach (var p in peerIds) n.PeersByNid.TryAdd(p, null!);
-            foreach (var p in n.AliasToNode.Keys) n.PeersByNid.TryAdd(p, null!);
+            // NOTE: `existing is null` must be a plain reference check — Node derives from
+            // MarshalByRefObject so its == operator does NOT test for null.
+            foreach (var p in peerIds.Concat(n.AliasToNode.Keys))
+                if (!n.PeersByNid.TryGetValue(p, out var existing) || ReferenceEquals(existing, null))
+                    n.PeersByNid[p] = null!;
         }
 
         if (!r.Eof())
