@@ -147,6 +147,10 @@ public sealed class DeltaBatch
     public string Peer = "";
     public long Seq;                       // per-author stream sequence number
     public long DepSeq;                    // highest seq of `Peer` this batch depends on
+    /// <summary>Highest seq of stream <see cref="RelayAuthor"/> whose evidence this batch carries (0 = none).</summary>
+    public long RelaySeq;
+    /// <summary>Which author's stream is relayed inside this batch ("" = pure local batch).</summary>
+    public string RelayAuthor = "";
     public List<FieldOp> Ops = new();
     public List<TombOp> Tombs = new();
     public List<(string RecId, string Alias)> AliasRenames = new();
@@ -162,6 +166,8 @@ public sealed class DeltaBatch
         WriteStr(w, Peer);
         w.Write(Seq);
         w.Write(DepSeq);
+        w.Write(RelaySeq);
+        WriteStr(w, RelayAuthor);
         w.Write(Ops.Count);
         foreach (var o in Ops)
         {

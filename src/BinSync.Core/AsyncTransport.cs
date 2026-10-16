@@ -34,6 +34,10 @@ public static class AsyncTransport
             if (batch is null) return ApplyResult.Duplicate; // nothing to send
             ct.ThrowIfCancellationRequested();
 
+            // Stamp the wire batch with the SENDER's stream id so the receiver keys its inbox
+            // cursor by the true stream owner (re-stamped copy keeps digest consistent).
+            batch = Restamp(batch, from.Id);
+
             // Sender's gate is released here — now we may touch the receiver's gate.
             // Hop 2: take ONLY the receiver's gate.
             var res = to.ApplyBatch(batch);
@@ -64,6 +68,7 @@ public static class AsyncTransport
                 var batch = a.CreateDeltaBatch(b.Id);          // lock a, copy, unlock
                 if (batch is null) break;
                 nAb++;
+                batch = Restamp(batch, a.Id);                 // sender stream id on the wire
                 var r = b.ApplyBatch(batch);                  // lock b, unlock
                 if (r == ApplyResult.Applied) a.ProcessAck(b.Id, batch.Seq);
                 ab = r;                                       // single-node locks only — never both
@@ -80,6 +85,7 @@ public static class AsyncTransport
                 var batch = b.CreateDeltaBatch(a.Id);
                 if (batch is null) break;
                 nBa++;
+                batch = Restamp(batch, b.Id);
                 var r = a.ApplyBatch(batch);
                 if (r == ApplyResult.Applied) b.ProcessAck(a.Id, batch.Seq);
                 ba = r;
@@ -89,6 +95,32 @@ public static class AsyncTransport
             return new SyncRoundResult(nAb, ab, nBa, ba);
         }, ct);
     }
+
+    /// <summary>Copy of a batch re-stamped with the delivering node's stream id (Peer),
+    /// with BatchId/Digest recomputed over the new canonical bytes.</summary>
+    private static DeltaBatch Restamp(DeltaBatch b, string senderId)
+    {
+        if (b.Peer == senderId) return b;
+        var copy = new DeltaBatch
+        {
+            Peer = senderId,
+            Seq = b.Seq,
+            DepSeq = b.DepSeq,
+            RelaySeq = b.RelaySeq,
+            RelayAuthor = b.RelayAuthor,
+            Ops = b.Ops,
+            Tombs = b.Tombs,
+            AliasRenames = b.AliasRenames,
+            HlcTs = b.HlcTs,
+            HlcLog = b.HlcLog,
+            HlcNode = b.HlcNode,
+        };
+        copy.ComputeDigest();
+        copy.BatchId = $"{senderId}:{copy.Seq}:{copy.Digest[..16]}";
+        return copy;
+    }
+
+    /// <summary>Cap on batches shipped per direction in one round (keeps rounds bounded).</summary>
 
     /// <summary>Cap on batches shipped per direction in one round (keeps rounds bounded).</summary>
     public const int MaxBatchesPerRound = 1024;

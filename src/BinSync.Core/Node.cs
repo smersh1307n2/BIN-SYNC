@@ -26,7 +26,9 @@ public sealed class Node
     private readonly Dictionary<string, string> _aliasMap = new();          // alias -> canonical id
     private readonly Dictionary<string, Queue<DeltaBatch>> _outbox = new(); // per-author pending batches
     private readonly Dictionary<string, long> _outboxSeq = new();           // per-author stream sequence
-    private readonly Dictionary<string, long> _inboxCursors = new();        // last applied seq per peer
+    private readonly Dictionary<string, long> _inboxCursors = new();        // last applied seq per sender-stream
+    /// <summary>Ack watermarks: (peer, authorStream) -> highest seq of that stream the peer confirmed.</summary>
+    private readonly Dictionary<(string Peer, string Author), long> _deliveredTo = new();
     private readonly HashSet<string> _appliedBatchIds = new();              // replay cache (batchId level)
     private readonly Dictionary<string, string> _replayDigestCache = new(); // batchId -> digest (checkpoint)
     private readonly List<(long Seq, string BatchId, string Digest)> _checkpoints = new(); // batch digests
@@ -280,6 +282,8 @@ public sealed class Node
             Peer = Id,
             Ops = new List<FieldOp> { new(id, field, fv) },
             HlcTs = ts, HlcLog = log, HlcNode = node,
+            // pure local batch: no relayed streams
+            RelaySeq = 0, RelayAuthor = "",
         };
         PushOutboxLocal(batch);
         return fv;
@@ -346,43 +350,91 @@ public sealed class Node
 
     private DeltaBatch? CreateDeltaBatchImpl(string peer)
     {
-        // Aggregate everything still in our outbox that the peer hasn't been given yet.
+        // Our own outbound stream (authoritative, per-author seq).
         if (!_outbox.TryGetValue(Id, out var q) || q.Count == 0) return null;
-        // The delta aggregates every still-pending batch newer than the peer's inbox cursor.
-        long since = _inboxCursors.TryGetValue(peer, out var ic0) ? ic0 : 0;
+
+        long myCursor = DeliveredTo(peer, Id);   // how far MY stream reached this peer (ack watermark)
+        bool myPending = q.Any(b => b.Seq > myCursor);
+
+        // Relay coverage: remote author streams whose evidence we hold but which has NOT yet
+        // fully reached this peer. The newest local batch covering such a stream carries the data.
+        var relayLatest = new Dictionary<string, DeltaBatch>();
+        foreach (var b in q)
+        {
+            if (b.RelayAuthor.Length == 0) continue;
+            foreach (var author in b.RelayAuthor.Split('|', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (author == Id) continue;                    // our own stream handled via myCursor
+                if (b.Seq <= myCursor) continue;               // already covered by a delivered batch
+                long covered = b.RelaySeq;                     // highest seq of `author` embedded in b
+                if (covered <= DeliveredTo(peer, author)) continue; // peer already saw that much
+                if (!relayLatest.TryGetValue(author, out var prev) || b.Seq > prev.Seq)
+                    relayLatest[author] = b;
+            }
+        }
+
+        if (!myPending && relayLatest.Count == 0) return null;
+
         var ops = new List<FieldOp>();
         var tombs = new List<TombOp>();
         var aliases = new List<(string, string)>();
-        foreach (var b in q)
+
+        // 1) our own pending evidence (seq > ack watermark for this peer)
+        if (myPending)
+            foreach (var b in q)
+            {
+                if (b.Seq <= myCursor) continue;
+                ops.AddRange(b.Ops);
+                tombs.AddRange(b.Tombs);
+                aliases.AddRange(b.AliasRenames);
+            }
+
+        // 2) relayed remote streams not yet fully delivered to this peer
+        var relaySet = new SortedSet<string>(StringComparer.Ordinal);
+        long relaySeqMax = 0;
+        foreach (var (author, latest) in relayLatest)
         {
-            if (b.Seq <= since) continue;
-            ops.AddRange(b.Ops);
-            tombs.AddRange(b.Tombs);
-            aliases.AddRange(b.AliasRenames);
+            ops.AddRange(latest.Ops);
+            tombs.AddRange(latest.Tombs);
+            aliases.AddRange(latest.AliasRenames);
+            relaySet.Add(author);
+            relaySeqMax = Math.Max(relaySeqMax, latest.RelaySeq);
         }
+
         if (ops.Count == 0 && tombs.Count == 0 && aliases.Count == 0) return null;
+
         var (ts, log, node) = _clock.New();
         var batch = new DeltaBatch
         {
-            Peer = Id,
-            DepSeq = _inboxCursors.TryGetValue(peer, out var ic) ? ic : 0,
+            Peer = Id,                                   // stream owner = us
+            DepSeq = _inboxCursors.TryGetValue(peer, out var ic2) ? ic2 : 0,
             Ops = ops,
             Tombs = tombs,
             AliasRenames = aliases,
             HlcTs = ts, HlcLog = log, HlcNode = node,
+            // Coverage marker: which streams' evidence is embedded in this batch.
+            RelaySeq = myPending ? q.Max(b => b.Seq) : relaySeqMax,
+            RelayAuthor = myPending ? Id : string.Join("|", relaySet),
         };
         return PushOutboxImpl(batch);
     }
 
+    /// <summary>Highest seq of <paramref name="author"/>'s stream that <paramref name="peer"/>
+    /// has acknowledged receiving (tracked via ack watermarks recorded on delivery).</summary>
+    private long DeliveredTo(string peer, string author) =>
+        _deliveredTo.TryGetValue((peer, author), out var s) ? s : 0;
+
     private ApplyResult ApplyBatchImpl(DeltaBatch batch)
     {
-        var peer = batch.Peer;
+        // The sender stamps the wire batch with ITS stream id (Peer); that is the cursor key here.
+        var streamId = batch.Peer;
+
         _clock.Observe(batch.HlcTs, batch.HlcLog);
 
         // Replay cache: exact batch already applied.
         if (_appliedBatchIds.Contains(batch.BatchId)) return ApplyResult.Duplicate;
 
-        long cursor = _inboxCursors.TryGetValue(peer, out var c) ? c : 0;
+        long cursor = _inboxCursors.TryGetValue(streamId, out var c) ? c : 0;
         if (batch.Seq <= cursor) return ApplyResult.Duplicate;   // stale / already covered
         if (batch.Seq > cursor + 1) return ApplyResult.OutOfOrder; // gap → caller must resync
 
@@ -417,19 +469,51 @@ public sealed class Node
                 : RecordStatus.Live;
         }
 
-        _inboxCursors[peer] = batch.Seq;
+        _inboxCursors[streamId] = batch.Seq;
         _appliedBatchIds.Add(batch.BatchId);
         _replayDigestCache[batch.BatchId] = batch.Digest;
         _checkpoints.Add((batch.Seq, batch.BatchId, batch.Digest));
+
+        // Relay: re-queue the evidence into OUR OWN outbound stream so it can reach peers that
+        // never met the original author (transitive convergence). The coverage marker merges the
+        // incoming stream (up to batch.Seq) with whatever the batch itself already relayed.
+        bool hasPayload = batch.Ops.Count > 0 || batch.Tombs.Count > 0 || batch.AliasRenames.Count > 0;
+        if (hasPayload)
+        {
+            var authors = new SortedSet<string>(StringComparer.Ordinal) { streamId };
+            foreach (var a in batch.RelayAuthor.Split('|', StringSplitOptions.RemoveEmptyEntries))
+                if (a != streamId) authors.Add(a);
+            long cover = Math.Max(batch.Seq, batch.RelaySeq);
+
+            var (ts, log, node) = _clock.New();
+            var relay = new DeltaBatch
+            {
+                Peer = Id,                      // our own stream owner
+                Ops = batch.Ops.Select(o => o with { Value = o.Value.Clone() }).ToList(),
+                Tombs = new List<TombOp>(batch.Tombs),
+                AliasRenames = new List<(string, string)>(batch.AliasRenames),
+                HlcTs = ts, HlcLog = log, HlcNode = node,
+                RelaySeq = cover,               // covers these streams up to this seq
+                RelayAuthor = string.Join("|", authors),
+            };
+            PushOutboxImpl(relay);
+        }
         return ApplyResult.Applied;
     }
 
     private int ProcessAckImpl(string peer, long ackSeq)
     {
-        if (!_outbox.TryGetValue(peer, out var q))
-            if (!_outbox.TryGetValue(Id, out q)) return 0;
+        // We deliver batches from OUR OWN stream (_outbox[Id]); the ack advances its watermark.
+        if (!_outbox.TryGetValue(Id, out var q)) return 0;
         int dropped = 0;
-        while (q.Count > 0 && q.Peek().Seq <= ackSeq) { q.Dequeue(); dropped++; }
+        while (q.Count > 0 && q.Peek().Seq <= ackSeq)
+        {
+            var b = q.Dequeue(); dropped++;
+            // Record how far each stream's evidence actually reached this peer.
+            _deliveredTo[(peer, b.Peer)] = Math.Max(_deliveredTo.GetValueOrDefault((peer, b.Peer)), b.Seq);
+            foreach (var a in b.RelayAuthor.Split('|', StringSplitOptions.RemoveEmptyEntries))
+                _deliveredTo[(peer, a)] = Math.Max(_deliveredTo.GetValueOrDefault((peer, a)), b.RelaySeq);
+        }
         // keep the replay-cache bounded but retain digests for idempotency
         return dropped;
     }
