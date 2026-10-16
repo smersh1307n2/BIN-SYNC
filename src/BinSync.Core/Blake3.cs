@@ -64,7 +64,7 @@ public static class Blake3
     private static uint[] SubtreeCv(ReadOnlySpan<byte> input, uint[] key)
     {
         if (input.Length <= 1024)
-            return ChunkCv(input, key, chunkCounter: 0, flags: ChunkStart | ChunkEnd);
+            return ChunkCv(input, Iv, chunkCounter: 0, flags: ChunkStart | ChunkEnd);
 
         int mid = LargestPow2LessThan(input.Length);
         var cvL = SubtreeCv(input.Slice(0, mid), key);
@@ -112,10 +112,15 @@ public static class Blake3
         st[14] = flags;
         st[15] = unchecked((uint)outLen);
 
+        // Reference BLAKE3: round r uses word order perm^r(i), i.e. mm[i] = m[PERM^r[i]].
+        var order = new int[16];
+        for (int i = 0; i < 16; i++) order[i] = i;
         for (int r = 0; r < 7; r++)
         {
-            MixRound(st, m);
-            if (r < 6) PermuteMsg(m);
+            MixRound(st, m, order);
+            var next = new int[16];
+            for (int i = 0; i < 16; i++) next[i] = MsgPerm[order[i]];
+            order = next;
         }
 
         var result = new uint[KeyWords];
@@ -123,25 +128,18 @@ public static class Blake3
         return result;
     }
 
-    private static void MixRound(uint[] s, uint[] m)
-    {
-        G(s, 0, 4, 8, 12, m[0], m[1]);
-        G(s, 1, 5, 9, 13, m[2], m[3]);
-        G(s, 2, 6, 10, 14, m[4], m[5]);
-        G(s, 3, 7, 11, 15, m[6], m[7]);
-        G(s, 0, 5, 10, 15, m[8], m[9]);
-        G(s, 1, 6, 11, 12, m[10], m[11]);
-        G(s, 2, 7, 8, 13, m[12], m[13]);
-        G(s, 3, 4, 9, 14, m[14], m[15]);
-    }
+    private static readonly int[] MsgPerm = { 2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8 };
 
-    private static void PermuteMsg(uint[] m)
+    private static void MixRound(uint[] s, uint[] m, int[] order)
     {
-        // Reference BLAKE3 MSG_PERMUTATION: new[m[i]] = old[i].
-        var t = new uint[16];
-        int[] P = { 2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8 };
-        for (int i = 0; i < 16; i++) t[P[i]] = m[i];
-        Array.Copy(t, m, 16);
+        G(s, 0, 4, 8, 12, m[order[0]], m[order[1]]);
+        G(s, 1, 5, 9, 13, m[order[2]], m[order[3]]);
+        G(s, 2, 6, 10, 14, m[order[4]], m[order[5]]);
+        G(s, 3, 7, 11, 15, m[order[6]], m[order[7]]);
+        G(s, 0, 5, 10, 15, m[order[8]], m[order[9]]);
+        G(s, 1, 6, 11, 12, m[order[10]], m[order[11]]);
+        G(s, 2, 7, 8, 13, m[order[12]], m[order[13]]);
+        G(s, 3, 4, 9, 14, m[order[14]], m[order[15]]);
     }
 
     private static void G(uint[] s, int a, int b, int c, int d, uint mx, uint my)
