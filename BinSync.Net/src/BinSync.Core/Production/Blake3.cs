@@ -88,27 +88,27 @@ public static class Blake3Core
         return ParentCv(cvL, cvR, root: !rightSiblingExists);
     }
 
-    private static uint[] ChunkCv(ReadOnlySpan<byte> chunk, uint[] key, ulong chunkCounter, uint extraRootFlags)
+    private static uint[] ChunkCv(ReadOnlySpan<byte> input, uint[] key, ulong chunkCounter, uint extraRootFlags)
     {
+        // Reference BLAKE3 chunk state: compress full 64-byte blocks; the final (possibly
+        // partial) block is zero-padded and its byte length goes into state[15]. An empty
+        // input still compresses exactly one all-zero padded block with bytesHashed = 0.
         var cv = Arrays.CopyOf(key, KeyWords);
-        // Reference BLAKE3: an empty chunk is compressed as one zero-padded block.
-        int blocks = chunk.Length == 0 ? 1 : (chunk.Length + 63) / 64;
-        for (int i = 0; i < blocks; i++)
+        int n = input.Length;
+        int fullBlocks = n / 64;
+        int totalBlocks = Math.Max(1, (n + 63) / 64);
+        for (int i = 0; i < totalBlocks; i++)
         {
             var block = new byte[64];
             int off = i * 64;
-            int len = Math.Min(64, chunk.Length - off);
-            if (len > 0) chunk.Slice(off, len).CopyTo(block);
+            int len = Math.Min(64, n - off);   // 0 for the padded block of an empty chunk
+            if (len > 0) input.Slice(off, len).CopyTo(block);
             uint f = ChunkStart | ChunkEnd | extraRootFlags;
             if (i != 0) f &= ~ChunkStart;
-            if (i != blocks - 1) f &= ~ChunkEnd;
-            // Reference BLAKE3: state[15] = number of BYTES OF INPUT that contribute to
-            // this block. For a padded final block that is min(64, remaining) — except for
-            // an EMPTY chunk, where the reference still compresses one all-zero block with
-            // t = 64 (see blake3-scalar.rs: input == [] => block_len = BLOCK_LEN).
-            int t = chunk.Length == 0 ? 64 : len;
-            cv = Compress(cv, block, chunkCounter, f, OutLenWords, t);
+            if (i != totalBlocks - 1) f &= ~ChunkEnd;
+            cv = Compress(cv, block, chunkCounter + (ulong)i, f, OutLenWords, len);
         }
+        _ = fullBlocks;
         return cv;
     }
 

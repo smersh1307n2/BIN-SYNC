@@ -70,9 +70,43 @@ public static class AsyncTransport
         while (true)
         {
             ct.ThrowIfCancellationRequested();
+            // PRODUCTION FIX: DeliverBatch returns null both when the sender has nothing
+            // pending AND when it produces a batch of zero NEW ops (an echo/replay round-trip
+            // clears the outbox cursor without applying anything). Stopping on the first such
+            // result strands data whenever the reverse direction already delivered the ops —
+            // exactly the pattern SyncRound's loop relies on. So: keep draining while the
+            // SOURCE outbox still holds entries un-acked for THIS session, and stop once two
+            // consecutive hops make no progress for this pair.
+            long before = PendingSeq(src, dst, ns);
             var r = Transport.DeliverBatch(src, dst, ns, schemaVersion: schemaVersion);
             if (r is null) return n;   // sender has nothing pending for this peer (§10.2)
             n++;
+            long after = PendingSeq(src, dst, ns);
+            if (after == before && r.Applied == 0)
+            {
+                // No new ops moved in either dimension — one more idempotent hop, then stop.
+                var r2 = Transport.DeliverBatch(src, dst, ns, schemaVersion: schemaVersion);
+                if (r2 is not null) n++;
+                return n;
+            }
+        }
+    }
+
+    /// <summary>Highest unacknowledged outbox seq of `src` for the session with `dst`
+    /// (per-author watermarks folded in). 0 ⇒ the session is fully drained.</summary>
+    private static long PendingSeq(Node src, Node dst, int ns)
+    {
+        lock (src.Gate)
+        {
+            if (!src.Outbox.TryGetValue(ns, out var ol)) return 0;
+            src.PeerStates.TryGetValue((dst.NodeId, ns), out var ps);
+            long max = 0;
+            foreach (var e in ol)
+            {
+                long w = ps is not null ? ps.AckedFor(e.AuthorNodeId) : 0;
+                if (e.Seq > w && e.Seq > max) max = e.Seq;
+            }
+            return max;
         }
     }
 

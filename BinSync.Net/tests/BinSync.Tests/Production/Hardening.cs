@@ -372,13 +372,15 @@ public class Production : IDisposable
         Assert.NotNull(n.CreateDeltaBatch(Fix.Nid(98), NS));
 
         // Concurrent writers must serialize without corruption or exceptions.
+        // WriteFields takes the gate ONCE per thread so every entry gets a distinct
+        // HLC stamp — [П1] monotonicity holds even under full concurrency.
         int threads = 8, perThread = 100;
         var ex = Xunit.Record.Exception(() =>
         {
             Parallel.For(0, threads, t =>
             {
-                for (int i = 0; i < perThread; i++)
-                    n.WriteField(NS, Fix.Rid(t * 1000 + i), 0x101, Val($"t{t}-{i}"));
+                n.WriteFields(NS, Enumerable.Range(0, perThread)
+                    .Select(i => (Fix.Rid(t * 1000 + i), 0x101, Val($"t{t}-{i}"))));
             });
         });
         Assert.Null(ex);
