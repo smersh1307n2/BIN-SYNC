@@ -3,10 +3,11 @@ using System.Buffers.Binary;
 namespace BinSync.Core;
 
 /// <summary>
-/// Dependency-free BLAKE3-256 implementation following the Rust reference core
+/// Dependency-free BLAKE3-256 implementation following the reference core
 /// (chunk tree, 7-round compression function). Used for record/batch content hashes
 /// and for the tagged node-state digest in <see cref="NodePersistence"/>.
-/// Verified against the official BLAKE3 test vectors.
+/// Verified against the official BLAKE3 test vectors (input pattern byte i = i % 251,
+/// lengths 0..64, 1024, 1025, 2048, 3072, ...).
 /// </summary>
 public static class Blake3
 {
@@ -16,6 +17,7 @@ public static class Blake3
     private const uint Root       = 1 << 3;
     private const int KeyWords = 8;
     private const ulong OutLenWords = 8; // 256-bit output
+    private const int ChunkLen = 1024;
 
     private static readonly uint[] Iv =
     {
@@ -26,13 +28,14 @@ public static class Blake3
     /// <summary>BLAKE3-256 of arbitrary data.</summary>
     public static byte[] Hash256(ReadOnlySpan<byte> data) => Hash(data, key: null);
 
-    /// <summary>Tagged hash: BLAKE3 with key = H("BIN-SYNC..." || len(tag) || tag) style domain separation.</summary>
+    /// <summary>Tagged hash with domain separation: key = H(tag || u64le(len(tag)) || tag).</summary>
     public static byte[] TaggedHash(string tag, ReadOnlySpan<byte> data)
     {
         var tagBytes = System.Text.Encoding.UTF8.GetBytes(tag);
-        var keyInput = new byte[tagBytes.Length + 8];
+        var keyInput = new byte[tagBytes.Length * 2 + 8];
         tagBytes.CopyTo(keyInput, 0);
         BinaryPrimitives.WriteUInt64LittleEndian(keyInput.AsSpan(tagBytes.Length), (ulong)tagBytes.Length);
+        tagBytes.CopyTo(keyInput, tagBytes.Length + 8);
         return Hash(data, key: ToWordsLE(Hash(keyInput, key: null)));
     }
 
@@ -48,42 +51,28 @@ public static class Blake3
     private static byte[] Hash(ReadOnlySpan<byte> input, uint[]? key)
     {
         var k = key ?? Iv;
-        if (input.Length <= 1024)
-            return CvToBytes(ChunkCv(input, k, chunkCounter: 0, root: true))[..32];
+        if (input.Length <= ChunkLen)
+            return CvToBytes(ChunkCv(input, k, chunkCounter: 0, extraRootFlags: Root))[..32];
 
         int mid = LargestPow2LessThan(input.Length);
-        var cvL = SubtreeCv(input.Slice(0, mid), k);
-        var cvR = SubtreeCv(input.Slice(mid), k);
-
-        var block = new byte[64];
-        CvToBytes(cvL).CopyTo(block, 0);
-        CvToBytes(cvR).CopyTo(block, 32);
-        return CvToBytes(Compress(k, block, counter: 0, flags: Parent | Root, outLen: OutLenWords))[..32];
+        var cvL = InputToCv(input.Slice(0, mid), k, rightSiblingExists: true);
+        var cvR = InputToCv(input.Slice(mid), k, rightSiblingExists: false);
+        return CvToBytes(ParentCv(cvL, cvR, root: true))[..32];
     }
 
-    /// <summary>CV of a subtree of length &gt; 1024 (reference Rust: parent nodes always use the IV).</summary>
-    private static uint[] SubtreeCv(ReadOnlySpan<byte> input, uint[] key)
+    /// <summary>CV of a subtree that has a right sibling somewhere above it (never the root flags).</summary>
+    private static uint[] InputToCv(ReadOnlySpan<byte> input, uint[] key, bool rightSiblingExists)
     {
-        DebugAssert(input.Length > 1024);
+        if (input.Length <= ChunkLen)
+            return ChunkCv(input, key, chunkCounter: 0, extraRootFlags: 0);
+
         int mid = LargestPow2LessThan(input.Length);
-        var cvL = InputToRootCvOrCv(input.Slice(0, mid), key, hasRightChild: true);
-        var cvR = InputToRootCvOrCv(input.Slice(mid), key, hasRightChild: false);
-
-        var block = new byte[64];
-        CvToBytes(cvL).CopyTo(block, 0);
-        CvToBytes(cvR).CopyTo(block, 32);
-        return Compress(Iv, block, counter: 0, flags: Parent, outLen: OutLenWords);
+        var cvL = InputToCv(input.Slice(0, mid), key, rightSiblingExists: true);
+        var cvR = InputToCv(input.Slice(mid), key, rightSiblingExists: false);
+        return ParentCv(cvL, cvR, root: !rightSiblingExists);
     }
 
-    /// <summary>Reference Rust: input_to_root_cv_or_cv — chunks ≤1024 get KEY from the caller's context.</summary>
-    private static uint[] InputToRootCvOrCv(ReadOnlySpan<byte> input, uint[] key, bool hasRightChild)
-    {
-        if (input.Length <= 1024)
-            return ChunkCv(input, key, chunkCounter: 0, root: !hasRightChild);
-        return SubtreeCv(input, key);
-    }
-
-    private static uint[] ChunkCv(ReadOnlySpan<byte> chunk, uint[] key, ulong chunkCounter, bool root)
+    private static uint[] ChunkCv(ReadOnlySpan<byte> chunk, uint[] key, ulong chunkCounter, uint extraRootFlags)
     {
         var cv = Arrays.CopyOf(key, KeyWords);
         int blocks = Math.Max(1, (chunk.Length + 63) / 64);
@@ -91,20 +80,22 @@ public static class Blake3
         {
             var block = new byte[64];
             int off = i * 64;
-            int len = Math.Min(64, Math.Max(0, chunk.Length - off));
+            int len = Math.Min(64, chunk.Length - off);
             if (len > 0) chunk.Slice(off, len).CopyTo(block);
-            uint f = ChunkStart | ChunkEnd;
+            uint f = ChunkStart | ChunkEnd | extraRootFlags;
             if (i != 0) f &= ~ChunkStart;
             if (i != blocks - 1) f &= ~ChunkEnd;
-            if (root && i == blocks - 1) f |= Root;
-            cv = Compress(cv, block, chunkCounter, f, outLen: OutLenWords);
+            cv = Compress(cv, block, chunkCounter, f, OutLenWords);
         }
         return cv;
     }
 
-    internal static void DebugAssert(bool cond)
+    private static uint[] ParentCv(uint[] left, uint[] right, bool root)
     {
-        if (!cond) throw new InvalidOperationException("blake3 invariant violated");
+        var block = new byte[64];
+        CvToBytes(left).CopyTo(block, 0);
+        CvToBytes(right).CopyTo(block, 32);
+        return Compress(Iv, block, counter: 0, flags: Parent | (root ? Root : 0u), outLen: OutLenWords);
     }
 
     private static int LargestPow2LessThan(int len)
@@ -170,11 +161,11 @@ public static class Blake3
     private static uint RoR(uint x, int n) => (x >> n) | (x << (32 - n));
     private static uint WrapAdd(uint a, uint b) => unchecked(a + b);
 
-    private static uint[] ToWordsLE(byte[] bytes)
+    private static uint[] ToWordsLE(ReadOnlySpan<byte> bytes)
     {
         var w = new uint[16];
         for (int i = 0; i < 16 && i * 4 + 4 <= bytes.Length; i++)
-            w[i] = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(i * 4));
+            w[i] = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(i * 4));
         return w;
     }
 

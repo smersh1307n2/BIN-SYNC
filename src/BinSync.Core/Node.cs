@@ -56,6 +56,34 @@ public sealed class Node
         lock (_gate) return DeleteRecordImpl(recId, author ?? Id);
     }
 
+    /// <summary>Current visible value of one field (alias-resolved), or null when absent.</summary>
+    public byte[]? ReadField(string recId, string field)
+    {
+        lock (_gate)
+        {
+            var id = ResolveAliasImpl(recId);
+            if (!_records.TryGetValue(id, out var rec)) return null;
+            if (!rec.Fields.TryGetValue(field, out var cell)) return null;
+            return cell.Current?.Value;
+        }
+    }
+
+    /// <summary>True when the node holds any trace of the record (fields, tombstones, status).</summary>
+    public bool HasRecord(string recId)
+    {
+        lock (_gate) return _records.ContainsKey(ResolveAliasImpl(recId));
+    }
+
+    /// <summary>Lifecycle status of a record (alias-resolved), or null when the record is unknown.</summary>
+    public RecordStatus? StatusOf(string recId)
+    {
+        lock (_gate)
+        {
+            var id = ResolveAliasImpl(recId);
+            return _records.TryGetValue(id, out var r) ? r.Status : null;
+        }
+    }
+
     /// <summary>Queue a locally-built batch into the per-author outbox stream.</summary>
     public DeltaBatch PushOutbox(DeltaBatch batch)
     {
@@ -158,6 +186,12 @@ public sealed class Node
     internal (long phys, long log) ClockRaw()
     {
         lock (_gate) return (_clock.PhysicalUs, _clock.Logical);
+    }
+
+    /// <summary>Test hook: shift the clock's physical component (used to fabricate old tombstones for GC tests).</summary>
+    internal void SetClockPhysicalForTests(long physUs, uint log = 0)
+    {
+        lock (_gate) { _clock.PhysicalUs = physUs; _clock.Logical = log; }
     }
 
     /// <summary>True when the record is Dead and every known author tombstoned it.</summary>
@@ -402,7 +436,12 @@ public sealed class Node
 
     private void SetAliasImpl(string alias, string recId)
     {
-        var id = ResolveAliasImpl(recId);
+        // Registering an alias for a not-yet-existing record materializes it (empty Live record),
+        // so the alias target always exists locally and survives persistence/sync.
+        var raw = ResolveAliasImpl(recId);
+        if (!_records.ContainsKey(raw))
+            _records[raw] = new Record { Id = raw };
+        var id = raw;
         _aliasMap[alias] = id;
         var batch = new DeltaBatch
         {

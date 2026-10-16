@@ -1,9 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <!-- Test hooks: allow the unit-test assembly to use internal-for-testing APIs. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="BinSync.Tests" />
+  </ItemGroup>
 
 </Project>
