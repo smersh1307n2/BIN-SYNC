@@ -2,7 +2,6 @@
 // relay with alias translation (§13.6), snapshots (§12.18), echo suppression [E2],
 // idempotency-before-chain-check [S7].
 // Port of binsync/node.py — all SPEC HARDENING / errata notes preserved.
-using Blake3;
 
 namespace BinSync;
 
@@ -72,7 +71,7 @@ public sealed class Batch
     public byte[] DurableAuthor => AuthorStreamNodeId ?? AuthorStream();
 }
 
-public sealed class PeerState
+public sealed partial class PeerState
 {
     public byte[] PeerNodeId;
     public int NamespaceId;
@@ -207,9 +206,25 @@ public sealed class SeenKeyComparer : IEqualityComparer<(byte[], int, byte[])>
         HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, new BA().GetHashCode(t.Item3));
 }
 
-public sealed class Node
+public sealed partial class Node
 {
     public static readonly byte[] Zero128 = new byte[16];
+
+    // ---- production hardening (Шаг 2): thread safety -------------------------------
+    /// <summary>
+    /// Re-entrant gate serializing ALL public state mutations/reads. The public surface
+    /// only takes the lock and delegates to *Internal methods holding the actual engine
+    /// logic (the synchronous §13 core, port of binsync/node.py). Re-entrancy lets
+    /// internal helpers (CreateDeltaBatch → PushOutbox → NextOutboxSeq …) run under one
+    /// acquisition. Deadlock prevention (§12.18): transport code must NEVER hold the
+    /// gates of two nodes simultaneously — see <c>AsyncTransport</c>: each hop copies out
+    /// of one node, releases its gate, and only then takes the other node's gate.
+    /// </summary>
+    private readonly object _gate = new();
+
+    /// <summary>The synchronization gate. External collaborators (<see cref="NodePersistence"/>,
+    /// <see cref="AsyncTransport"/>) may take it to obtain a consistent point-in-time image.</summary>
+    public object Gate => _gate;
 
     public byte[] NodeId;
     public int Epoch;
@@ -282,7 +297,14 @@ public sealed class Node
     /// §4.4 HELLO carries the sender's incarnation epoch; the receiver stores it as the
     /// per-session watermark used by STEP 0.5 (errata E-2/E-3). A NEW session resets the
     /// peer's watermark first (§4.3: reconnect = fresh exchange), then raises it.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="_gate"/>.</summary>
     public void RegisterSessionEpoch(byte[] peer, int epoch)
+    {
+        lock (_gate) RegisterSessionEpochInternal(peer, epoch);
+    }
+
+internal void RegisterSessionEpochInternal(byte[] peer, int epoch)
     {
         foreach (var k in KnownEpochs.Keys.Where(k => k.Item1.AsSpan().SequenceEqual(peer)).ToList())
             KnownEpochs.Remove(k);
@@ -291,7 +313,14 @@ public sealed class Node
 
     /// Durable observation of an author's incarnation epoch (§4.4). Used only as fallback
     /// metadata (_author_epoch) — never as a regression gate (errata E-2).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>LearnAuthorEpochInternal</c>. See <see cref="_gate"/>.</summary>
     public void LearnAuthorEpoch(byte[] author, int epoch)
+    {
+        lock (_gate) LearnAuthorEpochInternal(author, epoch);
+    }
+
+internal void LearnAuthorEpochInternal(byte[] author, int epoch)
     {
         if (author.Length != 16) return;
         if (!KnownEpochs.TryGetValue((author, -1), out var cur) || epoch > cur)
@@ -318,7 +347,14 @@ public sealed class Node
     /// bumped epoch inherits stale cursor/chain expectations and rejects the first batch
     /// of the new incarnation with SEQ_GAP (§4.4, errata E-2/E-3: watermark keyed per
     /// SESSION; reconnect = fresh exchange).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>ResetSessionInternal</c>. See <see cref="_gate"/>.</summary>
     public void ResetSession(byte[] peer)
+    {
+        lock (_gate) ResetSessionInternal(peer);
+    }
+
+internal void ResetSessionInternal(byte[] peer)
     {
         AliasToNode.Remove(peer);
         NodeToAlias.Remove(peer);
@@ -336,7 +372,14 @@ public sealed class Node
     /// register one entry in BOTH peers' copies of the session map under the SAME alias
     /// when possible. Returns the alias valid on both ends, or None when no collision-free
     /// number exists — caller then fails closed with UNKNOWN_ALIAS [А3] instead of guessing.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>EnsureAliasInternal</c>. See <see cref="_gate"/>.</summary>
     public int? EnsureAlias(Node peer, byte[] nodeId, int epoch)
+    {
+        lock (_gate) return EnsureAliasInternal(peer, nodeId, epoch);
+    }
+
+internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
     {
         var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (byte[], int)>();
         var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>();
@@ -406,7 +449,14 @@ public sealed class Node
     /// ALIAS_MAP entry for session with `peer` (§4.3). Alias exists only in session.
     /// BUGFIX (errata, Python port): reverse map keyed by the DURABLE pair (nodeId, epoch)
     /// — §4.4 lets a post-crash node keep its nodeId and bump only the epoch.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>RegisterAliasInternal</c>. See <see cref="_gate"/>.</summary>
     public void RegisterAlias(byte[] peer, int alias, byte[] nodeId, int epoch)
+    {
+        lock (_gate) RegisterAliasInternal(peer, alias, nodeId, epoch);
+    }
+
+internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int epoch)
     {
         var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new()) ;
         // BUGFIX (port): inner reverse map MUST use the BAI2 content comparer — the default
@@ -431,7 +481,14 @@ public sealed class Node
     /// SPEC CORRECTION (errata E-1): the durable author is the bare b128 nodeId (§4.6/§5.4).
     /// Errata E-12: on a miss, consult the peer's copy of THIS session and adopt its
     /// binding iff collision-free; an identity neither copy knows still fails closed [А3].
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="_gate"/>.</summary>
     public byte[] ResolveAlias(byte[] peer, int alias)
+    {
+        lock (_gate) return ResolveAliasInternal(peer, alias);
+    }
+
+internal byte[] ResolveAliasInternal(byte[] peer, int alias)
     {
         var entry = AliasToNode.TryGetValue(peer, out var m) && m.TryGetValue(alias, out var e) ? e : ((byte[])null!, int.MinValue);
         bool have = !(entry.Item1 is null) || entry.Item2 != int.MinValue;
@@ -453,7 +510,14 @@ public sealed class Node
     }
 
     /// Canonical durable author identity: nodeId || epoch(u32 LE), 20 bytes.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>DurableIdInternal</c>. See <see cref="_gate"/>.</summary>
     public byte[] DurableId(byte[]? nodeId = null, int? epoch = null)
+    {
+        lock (_gate) return DurableIdInternal(nodeId, epoch);
+    }
+
+internal byte[] DurableIdInternal(byte[]? nodeId = null, int? epoch = null)
     {
         var n = nodeId ?? NodeId;
         var e = epoch ?? Epoch;
@@ -466,7 +530,14 @@ public sealed class Node
 
     /// Reverse lookup keyed by the bare durable nodeId (errata E-1), with the collision
     /// guard of errata E-5 (see Python port docstring): ambiguous alias → None, never guess.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>AliasOfInternal</c>. See <see cref="_gate"/>.</summary>
     public int? AliasOf(byte[] peer, byte[] nodeId, int? epoch = null)
+    {
+        lock (_gate) return AliasOfInternal(peer, nodeId, epoch);
+    }
+
+internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     {
         // BUGFIX (port): the fallback map MUST use the byte-content comparer too — with the
         // default ReferenceEqualityComparer an empty miss-map behaved inconsistently.
@@ -499,11 +570,25 @@ public sealed class Node
     // BUGFIX (port): inner record maps MUST use byte-content equality (BA). The default
     // ReferenceEqualityComparer made every recordId lookup a reference miss — the exact
     // cause of the KeyNotFoundException storm in tests that read node.Storage[ns][rid].
-    public Dictionary<byte[], Record> Ns(int namespaceId) =>
-        Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(new BA()));
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>NsInternal</c>. See <see cref="_gate"/>.</summary>
+    public Dictionary<byte[], Record> Ns(int namespaceId)
+    {
+        lock (_gate) return NsInternal(namespaceId);
+    }
+
+internal Dictionary<byte[], Record> NsInternal(int namespaceId)
+    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(new BA())); }
 
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>NextOutboxSeqInternal</c>. See <see cref="_gate"/>.</summary>
     public long NextOutboxSeq(byte[] author, int namespaceId)
+    {
+        lock (_gate) return NextOutboxSeqInternal(author, namespaceId);
+    }
+
+internal long NextOutboxSeqInternal(byte[] author, int namespaceId)
     {
         var key = (author, namespaceId);
         long s = (_outboxSeq.TryGetValue(key, out var v) ? v : 0) + 1;
@@ -512,7 +597,14 @@ public sealed class Node
     }
 
     /// Current durable (wall, logical, author, value|"TOMB") of one field, straight from storage.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>SeenStateInternal</c>. See <see cref="_gate"/>.</summary>
     public (ulong Wall, uint Logical, byte[] Author, object Val)? SeenState(int ns, byte[] recordId, int fieldId)
+    {
+        lock (_gate) return SeenStateInternal(ns, recordId, fieldId);
+    }
+
+internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, byte[] recordId, int fieldId)
     {
         if (!Storage.TryGetValue(ns, out var store)) return null;
         if (!store.TryGetValue(recordId, out var rec)) return null;
@@ -525,7 +617,14 @@ public sealed class Node
 
     /// Append a LOCAL write to outbox ONLY if merge reported changed (echo [E2]).
     /// Errata E-13 (scenario 37): restored-echo suppression — see Python port docstring.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>PushOutboxInternal</c>. See <see cref="_gate"/>.</summary>
     public OutboxEntry? PushOutbox(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
+    {
+        lock (_gate) return PushOutboxInternal(ns, recordId, op, author, peer);
+    }
+
+internal OutboxEntry? PushOutboxInternal(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
     {
         if (!author.AsSpan().SequenceEqual(NodeId))
             throw new InvalidOperationException("local push only; relay path enqueues raw payloads");
@@ -610,7 +709,14 @@ public sealed class Node
     }
 
     /// Local FieldWrite. Returns true if state changed (and outbox grew).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>WriteFieldInternal</c>. See <see cref="_gate"/>.</summary>
     public bool WriteField(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
+    {
+        lock (_gate) return WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
+    }
+
+internal bool WriteFieldInternal(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -624,7 +730,14 @@ public sealed class Node
         return changed;
     }
 
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>TombFieldInternal</c>. See <see cref="_gate"/>.</summary>
     public bool TombField(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
+    {
+        lock (_gate) return TombFieldInternal(namespaceId, recordId, fieldId, hlc);
+    }
+
+internal bool TombFieldInternal(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -637,7 +750,14 @@ public sealed class Node
     }
 
     /// Lifecycle → dead (delete-wins).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>DeleteRecordInternal</c>. See <see cref="_gate"/>.</summary>
     public bool DeleteRecord(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    {
+        lock (_gate) return DeleteRecordInternal(namespaceId, recordId, hlc);
+    }
+
+internal bool DeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -649,7 +769,14 @@ public sealed class Node
     }
 
     /// Undelete only via explicit lifecycle write value=0x00 (§7.4).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>UndeleteRecordInternal</c>. See <see cref="_gate"/>.</summary>
     public bool UndeleteRecord(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    {
+        lock (_gate) return UndeleteRecordInternal(namespaceId, recordId, hlc);
+    }
+
+internal bool UndeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -667,7 +794,14 @@ public sealed class Node
     // --------------------------------------------------------------------- batching
     /// BUGFIX (scenario 23): a relay must stamp ops of a THIRD-PARTY author with that
     /// author's own epoch, not the relay's self.epoch (see Python port docstring).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>AuthorEpochInternal</c>. See <see cref="_gate"/>.</summary>
     public int AuthorEpoch(byte[] author)
+    {
+        lock (_gate) return AuthorEpochInternal(author);
+    }
+
+internal int AuthorEpochInternal(byte[] author)
     {
         foreach (var m in AliasToNode.Values)
             foreach (var (nid, ep) in m.Values)
@@ -681,7 +815,16 @@ public sealed class Node
     /// §13.6.2 [R4]: translate each op's `origin` into the alias agreed for THIS session.
     /// SPEC HARDENING: unknown author ⇒ deterministic UNKNOWN_ALIAS rejection (never a
     /// silent skip that would hole the seq stream). Full rationale in the Python port.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>CreateDeltaBatchInternal</c>. See <see cref="_gate"/>.</summary>
     public Batch? CreateDeltaBatch(byte[] targetPeer, int namespaceId,
+                                   byte[]? filterAuthorNodeId = null,
+                                   int schemaId = 0, int schemaVersion = 1)
+    {
+        lock (_gate) return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
+    }
+
+internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
                                    byte[]? filterAuthorNodeId = null,
                                    int schemaId = 0, int schemaVersion = 1)
     {
@@ -742,6 +885,8 @@ public sealed class Node
             if (alias is null)
             {
                 // Errata E-11 (scenario 23): try incremental ALIAS_MAP negotiation before failing closed.
+                // NOTE: a resumed node (NodePersistence.Load) has registry KEYS but no live Node
+                // handles; TryGetValue then yields a null value — treat it as "peer not attached".
                 var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
                 if (peerNode is not null && !e.AuthorNodeId.AsSpan().SequenceEqual(NodeId))
                 {
@@ -793,7 +938,14 @@ public sealed class Node
     /// SPEC HARDENING (§12.17.2 / [Т3]): the chain is PER STREAM ((issuer, ns, epoch), targetPeer).
     /// Deterministic replay: the SAME (stream, cursor span) always yields the SAME batchId
     /// and byte-identical digest (§10.2.2 step 3, [П7]).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>SignBatchForInternal</c>. See <see cref="_gate"/>.</summary>
     public Batch SignBatchFor(Batch batch, byte[] targetPeer)
+    {
+        lock (_gate) return SignBatchForInternal(batch, targetPeer);
+    }
+
+internal Batch SignBatchForInternal(Batch batch, byte[] targetPeer)
     {
         // SPEC CORRECTION (errata E-2 follow-up): the stream chain is keyed by the ACTUAL
         // stamped issuerEpoch of this batch (author's epoch when relaying).
@@ -824,11 +976,27 @@ public sealed class Node
 
     /// Called after the frame was successfully handed to targetPeer's transport: the
     /// stream chain checkpoint moves to this batch's digest.
-    public void AdvanceStream(byte[] targetPeer, int namespaceId, Batch batch) =>
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>AdvanceStreamInternal</c>. See <see cref="_gate"/>.</summary>
+    public void AdvanceStream(byte[] targetPeer, int namespaceId, Batch batch)
+    {
+        lock (_gate) AdvanceStreamInternal(targetPeer, namespaceId, batch);
+    }
+
+internal void AdvanceStreamInternal(byte[] targetPeer, int namespaceId, Batch batch)
+    {
         LastStreamDigest[((NodeId, namespaceId, batch.IssuerEpoch), targetPeer)] = batch.BatchDigest;
+    }
 
     /// DELTA_BATCH wire layout (§12.17).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>EncodeBatchPayloadInternal</c>. See <see cref="_gate"/>.</summary>
     public byte[] EncodeBatchPayload(Batch batch)
+    {
+        lock (_gate) return EncodeBatchPayloadInternal(batch);
+    }
+
+internal byte[] EncodeBatchPayloadInternal(Batch batch)
     {
         var records = batch.EncodeRecords();
         var w = new Writer();
@@ -843,7 +1011,14 @@ public sealed class Node
         return w.Value();
     }
 
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>DecodeBatchPayloadInternal</c>. See <see cref="_gate"/>.</summary>
     public Batch DecodeBatchPayload(byte[] data)
+    {
+        lock (_gate) return DecodeBatchPayloadInternal(data);
+    }
+
+internal Batch DecodeBatchPayloadInternal(byte[] data)
     {
         var r = new Reader(data);
         int ns = r.U16();
@@ -874,7 +1049,14 @@ public sealed class Node
                          cstart, cend, batchId, prev, root, digest, entries);
     }
 
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>ApplyBatchInternal</c>. See <see cref="_gate"/>.</summary>
     public BatchResult ApplyBatch(Batch batch, byte[] senderPeer)
+    {
+        lock (_gate) return ApplyBatchInternal(batch, senderPeer);
+    }
+
+internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
     {
         var result = new BatchResult(batch.BatchId);
         // STEP 0: namespace isolation (§3.7) — forbidden ns kills only that stream
@@ -1076,7 +1258,14 @@ public sealed class Node
 
     /// Apply one resolved op to a staged record. Echo suppression happens inside
     /// MergeField: identical (hlc, author, value) → changed=False → nothing queued.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>ApplyOpInternal</c>. See <see cref="_gate"/>.</summary>
     public bool ApplyOp(Record rec, object op, byte[] author)
+    {
+        lock (_gate) return ApplyOpInternal(rec, op, author);
+    }
+
+internal bool ApplyOpInternal(Record rec, object op, byte[] author)
     {
         if (op is OpFieldWrite fw)
         {
@@ -1100,7 +1289,14 @@ public sealed class Node
 
     /// Receiver ACK advances our push watermark; GC of outbox up to min acked.
     /// SPEC CORRECTION (errata E-4): the ACK names the acknowledged AUTHOR STREAM.
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>ProcessAckInternal</c>. See <see cref="_gate"/>.</summary>
     public void ProcessAck(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
+    {
+        lock (_gate) ProcessAckInternal(peerNode, namespaceId, ackedSeq, authorStream);
+    }
+
+internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
     {
         if (!PeerStates.TryGetValue((peerNode, namespaceId), out var ps)) return;
         if (authorStream is not null)
@@ -1122,7 +1318,14 @@ public sealed class Node
     }
 
     /// Snapshot = all live records + tombstones + ghosts (§ summary 'снапшот').
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>BuildSnapshotInternal</c>. See <see cref="_gate"/>.</summary>
     public List<Batch> BuildSnapshot(int namespaceId)
+    {
+        lock (_gate) return BuildSnapshotInternal(namespaceId);
+    }
+
+internal List<Batch> BuildSnapshotInternal(int namespaceId)
     {
         var batches = new List<Batch>();
         var nsStore = Ns(namespaceId);
@@ -1165,7 +1368,14 @@ public sealed class Node
     }
 
     /// Apply snapshot ops directly (not through cursor machinery).
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>ApplySnapshotInternal</c>. See <see cref="_gate"/>.</summary>
     public int ApplySnapshot(Batch batch, byte[] senderPeer)
+    {
+        lock (_gate) return ApplySnapshotInternal(batch, senderPeer);
+    }
+
+internal int ApplySnapshotInternal(Batch batch, byte[] senderPeer)
     {
         int applied = 0;
         foreach (var e in batch.Entries)
@@ -1180,10 +1390,24 @@ public sealed class Node
     }
 
     // ---------------------------------------------------------------------- helpers
-    public byte[]? RecordDigestOf(int namespaceId, byte[] recordId) =>
-        Storage.TryGetValue(namespaceId, out var s) && s.TryGetValue(recordId, out var rec) ? Digests.RecordDigest(rec) : null;
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>RecordDigestOfInternal</c>. See <see cref="_gate"/>.</summary>
+    public byte[]? RecordDigestOf(int namespaceId, byte[] recordId)
+    {
+        lock (_gate) return RecordDigestOfInternal(namespaceId, recordId);
+    }
 
+internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
+    { return Storage.TryGetValue(namespaceId, out var s) && s.TryGetValue(recordId, out var rec) ? Digests.RecordDigest(rec) : null; }
+
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>AllRecordDigestsInternal</c>. See <see cref="_gate"/>.</summary>
     public Dictionary<byte[], byte[]> AllRecordDigests(int namespaceId)
+    {
+        lock (_gate) return AllRecordDigestsInternal(namespaceId);
+    }
+
+internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
     {
         var d = new Dictionary<byte[], byte[]>(new BA());
         if (Storage.TryGetValue(namespaceId, out var s))
@@ -1191,7 +1415,15 @@ public sealed class Node
         return d;
     }
 
-    public int OutboxSize(int namespaceId) => Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0;
+/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// and delegates to <c>OutboxSizeInternal</c>. See <see cref="_gate"/>.</summary>
+    public int OutboxSize(int namespaceId)
+    {
+        lock (_gate) return OutboxSizeInternal(namespaceId);
+    }
+
+internal int OutboxSizeInternal(int namespaceId)
+    { return Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0; }
 
     internal static Record Clone(Record rec)
     {

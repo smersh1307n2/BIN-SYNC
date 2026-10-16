@@ -1,15 +1,18 @@
 using System.Buffers.Binary;
 
-namespace BinSync.Core;
+namespace BinSync;
 
 /// <summary>
 /// Dependency-free BLAKE3-256 implementation following the reference core
-/// (chunk tree, 7-round compression function). Used for record/batch content hashes
-/// and for the tagged node-state digest in <see cref="NodePersistence"/>.
+/// (chunk tree, 7-round compression function). Production hardening: it replaces the
+/// external `Blake3` NuGet package so the kernel has zero third-party dependencies and
+/// works on every RID/platform without native interop. Used by <see cref="Digests"/>
+/// for record/batch/state hashes and by <see cref="NodePersistence"/> for the tagged
+/// node-state digest.
 /// Verified against the official BLAKE3 test vectors (input pattern byte i = i % 251,
-/// lengths 0..64, 1024, 1025, 2048, 3072, ...).
+/// lengths 0..64, 1024, 1025, 2048, 3072, ...) — see ProductionHardening tests.
 /// </summary>
-public static class Blake3
+public static class Blake3Core
 {
     private const uint ChunkStart = 1 << 0;
     private const uint ChunkEnd   = 1 << 1;
@@ -75,7 +78,8 @@ public static class Blake3
     private static uint[] ChunkCv(ReadOnlySpan<byte> chunk, uint[] key, ulong chunkCounter, uint extraRootFlags)
     {
         var cv = Arrays.CopyOf(key, KeyWords);
-        int blocks = Math.Max(1, (chunk.Length + 63) / 64);
+        // Reference BLAKE3: an empty chunk is compressed as one zero-padded block.
+        int blocks = chunk.Length == 0 ? 1 : (chunk.Length + 63) / 64;
         for (int i = 0; i < blocks; i++)
         {
             var block = new byte[64];

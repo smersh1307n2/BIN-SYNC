@@ -1,7 +1,7 @@
 // Digests (§9): record digest, field/lifecycle payloads, bucket accumulators, StateRoot.
-// BLAKE3 via the Blake3 package; domain tags per [К8].
+// BLAKE3 via the in-tree dependency-free implementation (Production/Blake3.cs —
+// production hardening: zero third-party packages); domain tags per [К8].
 using System.Numerics;
-using Blake3;
 
 namespace BinSync;
 
@@ -26,11 +26,23 @@ public static class Domains
 
 public static class Digests
 {
+    /// <summary>BLAKE3-256 truncated to `len` bytes (in-tree implementation).</summary>
     public static byte[] Blake3(byte[] data, int len = 32)
     {
-        var full = Hasher.Hash(data).AsSpan().ToArray();
+        var full = Blake3Core.Hash256(data);
+        if (len >= full.Length) return full;
         var r = new byte[len];
-        Array.Copy(full, r, Math.Min(len, full.Length));
+        Array.Copy(full, r, len);
+        return r;
+    }
+
+    /// <summary>Domain-tagged BLAKE3-256 (keyed-hash mode), truncated to `len` bytes.</summary>
+    public static byte[] TaggedBlake3(string tag, byte[] data, int len = 32)
+    {
+        var full = Blake3Core.TaggedHash(tag, data);
+        if (len >= full.Length) return full;
+        var r = new byte[len];
+        Array.Copy(full, r, len);
         return r;
     }
 

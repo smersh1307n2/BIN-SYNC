@@ -1,7 +1,7 @@
 // Canonical binary codec (§6): ULEB128 varint (overlong rejected), LE fixed ints, b128.
 // Port of binsync/codec.py — all SPEC HARDENING / errata notes preserved.
 using System.Buffers.Binary;
-using Blake3;
+
 
 namespace BinSync;
 
@@ -97,7 +97,7 @@ public static class Codec
         var pre = new byte["BIN-SYNC/AUTHID/v1".Length + v.Length];
         System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/AUTHID/v1").CopyTo(pre, 0);
         v.CopyTo(pre, "BIN-SYNC/AUTHID/v1".Length);
-        return Hasher.Hash(pre).AsSpan().ToArray();
+        return Blake3Core.Hash256(pre);
     }
 }
 
