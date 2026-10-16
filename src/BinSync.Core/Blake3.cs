@@ -49,7 +49,7 @@ public static class Blake3
     {
         var k = key ?? Iv;
         if (input.Length <= 1024)
-            return CvToBytes(ChunkCv(input, k, chunkCounter: 0, flags: ChunkStart | ChunkEnd | Root))[..32];
+            return CvToBytes(ChunkCv(input, k, chunkCounter: 0, root: true))[..32];
 
         int mid = LargestPow2LessThan(input.Length);
         var cvL = SubtreeCv(input.Slice(0, mid), k);
@@ -61,14 +61,13 @@ public static class Blake3
         return CvToBytes(Compress(k, block, counter: 0, flags: Parent | Root, outLen: OutLenWords))[..32];
     }
 
+    /// <summary>CV of a subtree of length &gt; 1024 (reference Rust: parent nodes always use the IV).</summary>
     private static uint[] SubtreeCv(ReadOnlySpan<byte> input, uint[] key)
     {
-        if (input.Length <= 1024)
-            return ChunkCv(input, Iv, chunkCounter: 0, flags: ChunkStart | ChunkEnd);
-
+        DebugAssert(input.Length > 1024);
         int mid = LargestPow2LessThan(input.Length);
-        var cvL = SubtreeCv(input.Slice(0, mid), key);
-        var cvR = SubtreeCv(input.Slice(mid), key);
+        var cvL = InputToRootCvOrCv(input.Slice(0, mid), key, hasRightChild: true);
+        var cvR = InputToRootCvOrCv(input.Slice(mid), key, hasRightChild: false);
 
         var block = new byte[64];
         CvToBytes(cvL).CopyTo(block, 0);
@@ -76,7 +75,15 @@ public static class Blake3
         return Compress(Iv, block, counter: 0, flags: Parent, outLen: OutLenWords);
     }
 
-    private static uint[] ChunkCv(ReadOnlySpan<byte> chunk, uint[] key, ulong chunkCounter, uint flags)
+    /// <summary>Reference Rust: input_to_root_cv_or_cv — chunks ≤1024 get KEY from the caller's context.</summary>
+    private static uint[] InputToRootCvOrCv(ReadOnlySpan<byte> input, uint[] key, bool hasRightChild)
+    {
+        if (input.Length <= 1024)
+            return ChunkCv(input, key, chunkCounter: 0, root: !hasRightChild);
+        return SubtreeCv(input, key);
+    }
+
+    private static uint[] ChunkCv(ReadOnlySpan<byte> chunk, uint[] key, ulong chunkCounter, bool root)
     {
         var cv = Arrays.CopyOf(key, KeyWords);
         int blocks = Math.Max(1, (chunk.Length + 63) / 64);
@@ -86,12 +93,18 @@ public static class Blake3
             int off = i * 64;
             int len = Math.Min(64, Math.Max(0, chunk.Length - off));
             if (len > 0) chunk.Slice(off, len).CopyTo(block);
-            uint f = flags;
+            uint f = ChunkStart | ChunkEnd;
             if (i != 0) f &= ~ChunkStart;
             if (i != blocks - 1) f &= ~ChunkEnd;
+            if (root && i == blocks - 1) f |= Root;
             cv = Compress(cv, block, chunkCounter, f, outLen: OutLenWords);
         }
         return cv;
+    }
+
+    internal static void DebugAssert(bool cond)
+    {
+        if (!cond) throw new InvalidOperationException("blake3 invariant violated");
     }
 
     private static int LargestPow2LessThan(int len)
