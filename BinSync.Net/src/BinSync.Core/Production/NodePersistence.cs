@@ -444,8 +444,67 @@ public static class NodePersistence
 
         if (!r.Eof())
             throw new InvalidDataException("Trailing bytes in node-state body.");
+
+        // PRODUCTION FIX: every byte[]-keyed collection on a fresh Node is constructed with
+        // a CONTENT comparer (BA/BAI2/BAI4/BAI5/BAT/SeenKeyComparer), but Load() filled the
+        // outer dictionaries through their default constructors — reference equality on
+        // freshly decoded 16-byte arrays. The round-trip test only compared via TryGetValue
+        // against the same instances it had just inserted, so it passed; the moment a resumed
+        // node was matched against EXTERNALLY decoded keys (SyncRound → ResolveAlias /
+        // CreateDeltaBatch over PeersByNid & PeerStates), every lookup missed ⇒ UNKNOWN_ALIAS.
+        // Rebuild all affected maps/sets with the engine's own comparers before returning.
+        // Storage setter already re-wraps every inner record map under BA.
+        n.DurableAuthors = Rebuild(n.DurableAuthors, new BA());
+        n.AliasToNode = Rebuild(n.AliasToNode, new BA());
+        n.NodeToAlias = Rebuild(n.NodeToAlias, new BA());
+        foreach (var (peer, map) in n.NodeToAlias.ToList())
+            n.NodeToAlias[peer] = Rebuild(map, new BAI2());   // inner key (byte[],int)
+        n.PeerStates = Rebuild(n.PeerStates, new BAI2());
+        n.KnownEpochs = Rebuild(n.KnownEpochs, new BAI2());
+        Refill(n.LastStreamAuthor);      // readonly fields: refill in place — their ctors
+        Refill(n.Quarantined);           // already carry the right comparer (BA/BAI2),
+        Refill(n.Inbox);                 // so Refill is a no-op unless Load() somehow left
+        Refill(n.SeenChanges);           // a default comparer behind
+        Refill(n.LastBatchDigest);
+        Refill(n.LastStreamDigest);
+        foreach (var ps in n.PeerStates.Values)                 // PeerState fields are readonly:
+        {                                                       // refill in place, preserving BAT/BA
+            Refill(ps.ReceivedStreams);
+            Refill(ps.StreamAcked);
+            Refill(ps.IdsRef);
+        }
+        n.PeersByNid = Rebuild(n.PeersByNid, new BA());         // LAST: null placeholders survive
+
         return n;
     }
+
+    /// <summary>Re-create a mutable dictionary with an explicit (content) comparer.</summary>
+    private static Dictionary<K, V> Rebuild<K, V>(Dictionary<K, V>? src, IEqualityComparer<K> cmp) where K : notnull
+    {
+        if (src is null) return new Dictionary<K, V>(cmp);
+        return src.Count == 0 ? src : new Dictionary<K, V>(src, cmp);
+    }
+
+    /// <summary>Replace a dictionary/set's DEFAULT (reference-on-byte[]) comparer with the
+    /// engine's content comparer by refilling it in place (works for readonly fields too).
+    /// Collections whose ctor already received an explicit comparer are left untouched.</summary>
+    private static void Refill<K, V>(Dictionary<K, V> d) where K : notnull
+    {
+        if (!HasDefaultComparer(d.Comparer) || d.Count == 0) return;
+        var snapshot = d.ToList(); d.Clear();
+        foreach (var (k, v) in snapshot) d[k] = v;
+    }
+    private static void Refill<K>(HashSet<K> s) where K : notnull
+    {
+        if (!HasDefaultComparer(s.Comparer) || s.Count == 0) return;
+        var snapshot = s.ToList(); s.Clear();
+        foreach (var k in snapshot) s.Add(k);
+    }
+
+    // Generic collections built with `new()` carry the shared EqualityComparer<K>.Default
+    // instance; anything else (BA/BAI2/…) was constructed deliberately — leave it alone.
+    private static bool HasDefaultComparer<T>(IEqualityComparer<T>? c) =>
+        c is null || ReferenceEquals(c, EqualityComparer<T>.Default);
 
     // ----------------------------------------------------------- record helpers
 

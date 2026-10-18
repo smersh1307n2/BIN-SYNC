@@ -495,7 +495,12 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
         if (!have)
         {
             var other = PeersByNid is not null && PeersByNid.TryGetValue(peer, out var o) ? o : null;
-            if (other is not null)
+            // PRODUCTION FIX: a resumed node (NodePersistence.Load) keeps the registry KEYS
+            // but has no live Node handles — TryGetValue yields a null placeholder value.
+            // Treat it as "peer not attached": the E-12 adoption path below dereferences the
+            // handle, and without this guard the first post-restart SyncRound died with
+            // UNKNOWN_ALIAS even though both sides still hold identical persisted session maps.
+            if (!ReferenceEquals(other, null))
             {
                 var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (byte[], int)>();
                 if (theirFwd.TryGetValue(alias, out var durThere))
