@@ -176,6 +176,10 @@ public class Production : IDisposable
         Assert.False(h1.AsSpan().SequenceEqual(plain));
         // Deterministic: same tag+input ⇒ same digest.
         Assert.Equal(Convert.ToHexString(h1), Convert.ToHexString(Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v1", data)));
+        // Exact reference values, cross-checked with the official Python `blake3` package
+        // (derive-key mode == the standard BLAKE3 tagged-hash construction).
+        Assert.Equal("9ead3bde1c7f2413d7bed620c90b18af78dd5b1fcc18ae4dfe41eb04687c7490",
+                     Convert.ToHexString(h1).ToLowerInvariant());
     }
 
     [Fact]
