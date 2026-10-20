@@ -5,10 +5,13 @@ namespace BinSync.Core;
 
 /// <summary>
 /// BLAKE3 facade over the managed NuGet package <c>Blake3.Managed</c> (zero native deps,
-/// SIMD-accelerated). Provides the three primitives the kernel uses:
-/// plain 256-bit digest (<see cref="Hash256"/>/<see cref="Hex256"/>) and the
-/// domain-separated tagged hash (<see cref="TaggedHash"/>), whose key construction follows
-/// the reference rule: key = H_256(tag || u64le(len(tag)) || tag).
+/// SIMD-accelerated). Provides the primitives the kernel uses: plain 256-bit digest
+/// (<see cref="Hash256"/>/<see cref="Hex256"/>) and domain-separated tagged hash
+/// (<see cref="TaggedHash"/>).
+///
+/// Tagged-hash construction follows the BLAKE3 reference "key from context" recipe:
+///   key = H_256(tag || u64le(len(tag)) || tag), then data is hashed in keyed mode.
+/// Hash256 is verified against the official BLAKE3 test vectors (tests/Hardening).
 /// </summary>
 public static class Blake3
 {
@@ -24,8 +27,8 @@ public static class Blake3
     public static string Hex256(ReadOnlySpan<byte> data) => Convert.ToHexString(Hash256(data)).ToLowerInvariant();
 
     /// <summary>
-    /// Tagged hash with domain separation (RFC-style): the hashing key is the full 8-word CV of
-    /// "tag || u64le(len(tag)) || tag", then data is hashed in keyed mode.
+    /// Tagged hash with domain separation: key = H_256(tag || u64le(len(tag)) || tag),
+    /// payload hashed in keyed mode with that key.
     /// </summary>
     public static byte[] TaggedHash(string tag, ReadOnlySpan<byte> data)
     {
@@ -33,15 +36,12 @@ public static class Blake3
         var keyInput = new byte[tagBytes.Length * 2 + 8];
         tagBytes.CopyTo(keyInput, 0);
         BinaryPrimitives.WriteUInt64LittleEndian(keyInput.AsSpan(tagBytes.Length), (ulong)tagBytes.Length);
-        tagBytes.CopyTo(keyInput, tagBytes.Length + 8);
+        tagBytes.CopyTo(keyInput.AsSpan(tagBytes.Length + 8));
 
-        // Blake3.Managed.NewKeyed takes the standard 32-byte key. The reference tagged-hash key is
-        // the full 8-word CV of "tag || u64le(len(tag)) || tag"; we feed its first half here and
-        // recover the second half via the XOF API (Hasher.HashOneChunkXof) whenever it is needed.
-        var keyMaterial = new byte[32];
-        Blake3Managed.Hasher.Hash(keyInput, keyMaterial);
+        var key = new byte[32];
+        Blake3Managed.Hasher.Hash(keyInput, key);
 
-        using var hasher = Blake3Managed.Hasher.NewKeyed(keyMaterial);
+        using var hasher = Blake3Managed.Hasher.NewKeyed(key);
         hasher.Update(data);
         var output = new byte[32];
         hasher.Finalize(output);

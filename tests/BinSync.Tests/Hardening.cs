@@ -57,20 +57,20 @@ public class Hardening : IDisposable
         // Official BLAKE3 test vectors (hash_test.json), input[i] = i % 251, first 24 hex chars.
         var vectors = new (int Len, string Prefix)[]
         {
-            (0,     "af1349b9f5f9a1a6a04044a5"),
-            (1,     "969de78dd931f8d5b46384f5"),
-            (2,     "adafa50ae8dcb544bb6c148b"),
-            (5,     "de9ec3f661bece4db8ad2036"),
-            (10,    "00484ae68da8a913f6c9f885"),
-            (1023,  "12a793ebbf8fc205ad0fa61e"),
-            (1024,  "47998f7ece3ec4ad4e4ff24b"),
-            (1025,  "ab855b9dcf50a8089f66d1f8"),
-            (2048,  "a8125ac67f525436fc5c60fd"),
-            (2080,  "bd3a3aa54cc996f2b6cca334"),
-            (3072,  "bd3fc13530283382bcc65377"),
-            (4096,  "015094013f57a5275eadbd94"),
-            (5000,  "749d399d744a516633f6858c"),
-            (31774, "a6b46461c2a7b95dbdb91f80"),
+            (0,     "af1349b9f5f9a1a6a0404dea"),
+            (1,     "2d3adedff11b61f14c886e35"),
+            (2,     "7b7015bb92cf0b318037702a"),
+            (5,     "b40b44dfd97e7a84a996a91a"),
+            (10,    "87fcf07cac5be3c91735b34e"),
+            (1023,  "10108970eeda3eb932baac14"),
+            (1024,  "42214739f095a406f3fc83de"),
+            (1025,  "d00278ae47eb27b34faecf67"),
+            (2048,  "e776b6028c7cd22a4d0ba160"),
+            (2080,  "f28b7ca0b5de51703019b072"),
+            (3072,  "b98cb0ff3623be03326b37db"),
+            (4096,  "015094013f57a5277b59d844"),
+            (5000,  "ee78d92070de3df1c57c3741"),
+            (31774, "fdba8afea01e015596a42899"),
         };
         foreach (var (len, prefix) in vectors)
         {
