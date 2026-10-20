@@ -10,5 +10,8 @@
   <ItemGroup>
     <InternalsVisibleTo Include="BinSync.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Blake3.Managed" Version="1.10.0" />
+  </ItemGroup>
 
 </Project>

@@ -76,7 +76,7 @@ public class Hardening : IDisposable
         {
             var data = new byte[len];
             for (int i = 0; i < len; i++) data[i] = (byte)(i % 251);
-            var got = Convert.ToHexString(Blake3.Hash256(data)).ToLowerInvariant();
+            var got = Convert.ToHexString(BinSync.Core.Blake3.Hash256(data)).ToLowerInvariant();
             Assert.True(got.StartsWith(prefix, StringComparison.Ordinal),
                 $"BLAKE3 mismatch at len={len}: got {got[..Math.Min(24, got.Length)]}…, expected {prefix}…");
         }
