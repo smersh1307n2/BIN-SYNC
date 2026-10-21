@@ -382,7 +382,7 @@ internal void ResetSessionInternal(byte[] peer)
 internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
     {
         var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (byte[], int)>();
-        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>();
+        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>(new BAI2());
         var durable = (nodeId, epoch);
         if (revA.TryGetValue(durable, out var existing)) return existing;
         // is the peer's copy already bound to this author?
@@ -437,6 +437,31 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
         if (fwdB is not null) foreach (var k in fwdB.Keys) used.Add(k);
         int nxt = 1;
         while (used.Contains(nxt)) nxt++;
+        // BUGFIX (persistence resume): a resumed node (NodePersistence.Load) keeps the E-11
+        // registry KEYS but its PeersByNid values are null placeholders — there is no live
+        // handle to negotiate with. The two endpoints of the session still hold their OWN
+        // durable copies of the shared ALIAS_MAP (§4.3), so before allocating a brand-new
+        // number, adopt an existing binding for this author from either copy iff it is
+        // collision-free on BOTH ends ([А3] never guess). Without this, every post-restart
+        // re-handshake wiped the persisted maps and reallocated aliases 1/2, which broke
+        // wire-stability of already-signed outbox batches whose ops carry origin=2
+        // (ApplyBatch then failed closed with UNKNOWN_ALIAS).
+        if (peer.PeersByNid is null || !peer.PeersByNid.TryGetValue(NodeId, out var liveHandle) || liveHandle is null)
+        {
+            foreach (var cand in EnumerateCandidateAliases(fwdA, fwdB, nodeId))
+            {
+                bool freeA = !fwdA.TryGetValue(cand, out var occA) || occA.Item1.AsSpan().SequenceEqual(nodeId);
+                bool freeB = fwdB is null || !fwdB.TryGetValue(cand, out var occB) || occB.Item1.AsSpan().SequenceEqual(nodeId);
+                if (!freeA || !freeB) continue;   // occupied by another author — [А3] skip
+                try
+                {
+                    RegisterAlias(peer.NodeId, cand, nodeId, epoch);
+                    peer.RegisterAlias(NodeId, cand, nodeId, epoch);
+                    return cand;
+                }
+                catch (SyncException) { /* reverse-map conflict — fall through to fresh allocation */ }
+            }
+        }
         try
         {
             RegisterAlias(peer.NodeId, nxt, nodeId, epoch);
@@ -444,6 +469,17 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
         }
         catch (SyncException) { return null; }
         return nxt;
+    }
+
+    private static IEnumerable<int> EnumerateCandidateAliases(
+        Dictionary<int, (byte[], int)> fwdA, Dictionary<int, (byte[], int)>? fwdB, byte[] nodeId)
+    {
+        var seen = new HashSet<int>();
+        foreach (var (al, dur) in fwdA)
+            if (dur.Item1.AsSpan().SequenceEqual(nodeId) && seen.Add(al)) yield return al;
+        if (fwdB is not null)
+            foreach (var (al, dur) in fwdB)
+                if (dur.Item1.AsSpan().SequenceEqual(nodeId) && seen.Add(al)) yield return al;
     }
 
     /// ALIAS_MAP entry for session with `peer` (§4.3). Alias exists only in session.
@@ -494,7 +530,13 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
         bool have = !(entry.Item1 is null) || entry.Item2 != int.MinValue;
         if (!have)
         {
-            var other = PeersByNid is not null && PeersByNid.TryGetValue(peer, out var o) ? o : null;
+            Node? other = null;
+            bool attached = false;
+            if (PeersByNid is not null && PeersByNid.TryGetValue(peer, out var o))
+            {
+                other = o;
+                attached = o is not null;
+            }
             if (other is not null)
             {
                 var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (byte[], int)>();
@@ -502,6 +544,22 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
                 {
                     try { RegisterAlias(peer, alias, durThere.Item1, durThere.Item2); return durThere.Item1; } // E-1: bare nodeId
                     catch (SyncException) { throw new SyncException("UNKNOWN_ALIAS"); } // genuine conflict — never guess
+                }
+                // BUGFIX (persistence resume, symmetric E-12): the wire alias is missing from
+                // OUR copy of the session map (a resumed node can lose per-peer maps while
+                // already-signed outbox batches still carry those aliases). The sender just
+                // resolved the SAME alias successfully in ITS own copy — consult the sender's
+                // forward map for this session and adopt its binding iff collision-free.
+                // §4.3 makes both copies of a session table identical, so this is knowledge
+                // exchange, not guessing [А3]; an alias unknown on BOTH ends still fails closed.
+                if (attached)
+                {
+                    var theirMapForUs = other.AliasToNode.TryGetValue(NodeId, out var tm) ? tm : null;
+                    if (theirMapForUs is not null && theirMapForUs.TryGetValue(alias, out var durTheir))
+                    {
+                        try { RegisterAlias(peer, alias, durTheir.Item1, durTheir.Item2); return durTheir.Item1; }
+                        catch (SyncException) { /* real conflict — fail closed below */ }
+                    }
                 }
             }
             throw new SyncException("UNKNOWN_ALIAS");  // [А3]/[И3] never guess
@@ -1107,11 +1165,23 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(batch.IssuerNodeId, batch.NamespaceId);
         // Errata E-4: resolve the batch's AUTHOR STREAM durably and key the receive cursor
         // per stream — §13.6.1 [Р3] makes seq numbering per-author.
+        // BUGFIX (persistence resume): restored ops carry Origin=0 as a stale sentinel but
+        // embed the TRUE author in full-author mode (§13.6). Author resolution helper:
+        // full-author ops resolve via their embedded nodeId; otherwise fall back to the
+        // session alias map, fail-closed on UNKNOWN_ALIAS [А2]/[А3].
+        byte[] ResolveAuthor(object op)
+        {
+            bool full = op switch { OpFieldWrite x => x.FullAuthorMode, OpFieldTomb x => x.FullAuthorMode, OpRecordTombstone x => x.FullAuthorMode, _ => false };
+            var emb = GetAuthor(op);
+            if (full && emb is not null && emb.Length == 16) return emb;
+            try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
+            catch (SyncException) when (full && emb is not null && emb.Length == 16) { return emb; }
+        }
         byte[] streamAuthor;
         try
         {
             object? op0 = batch.Entries.Count > 0 ? Ops.DecodeOp(batch.Entries[0].Payload).Op : null;
-            streamAuthor = op0 is not null ? ResolveAlias(senderPeer, GetOrigin(op0)) : batch.IssuerNodeId;
+            streamAuthor = op0 is not null ? ResolveAuthor(op0) : batch.IssuerNodeId;
         }
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
@@ -1150,7 +1220,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
         {
             var e = batch.Entries[idx];
             var op = Ops.DecodeOp(e.Payload).Op;
-            var opAuthor = ResolveAlias(senderPeer, GetOrigin(op));   // [А2]; unknown → raise
+            var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
             // clock skew clamp on incoming HLC wall (§5.3)
             long now = Clock.Now();
             if ((long)WallOf(op) > now + Clock.MaxSkewUs)
@@ -1194,7 +1264,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
                     if (rfid is not null)
                     {
                         byte[]? rAuthor = null;
-                        try { rAuthor = ResolveAlias(senderPeer, GetOrigin(rop)); }
+                        try { rAuthor = ResolveAuthor(rop); }
                         catch (SyncException) { }
                         if (rAuthor is not null && rAuthor.AsSpan().SequenceEqual(NodeId) &&
                             SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null &&
@@ -1209,7 +1279,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
                 var e = batch.Entries[idx];
                 var op = batchOps[idx];
                 if (GetAuthor(op) is not null) continue;   // full-author mode keeps durable author
-                var resolved = ResolveAlias(senderPeer, GetOrigin(op));
+                var resolved = ResolveAuthor(op);
                 // BUGFIX (scenario 23): the relay keeps the op payload VERBATIM (§13.5 [Р1]/[И4]).
                 var entry = new OutboxEntry
                 {

@@ -35,8 +35,25 @@ public static class Transport
         // BUGFIX (implementation finding): §4.3 ties ALIAS_MAP to a SESSION — reconnecting
         // with a NEW session must REPLACE the old per-peer map, not merge into it
         // (scenario 7: same nodeId, rotated epoch).
-        a.ResetSession(b.NodeId);
-        b.ResetSession(a.NodeId);
+        // BUGFIX (persistence resume): when one endpoint is a RESUMED node (loaded from
+        // NodePersistence — its PeersByNid values are null placeholders because there is no
+        // live handle yet), the two sides still hold their OWN durable copies of the shared
+        // session ALIAS_MAP plus the stream-chain checkpoints (PeerStates, LastBatchDigest,
+        // LastStreamDigest, LastStreamAuthor — §12.17.2 [Т3], §10.2.2 lost-ACK replay [П7]).
+        // A full ResetSession wipe here would (a) destroy wire-stable aliases baked into
+        // already-signed outbox batches → UNKNOWN_ALIAS on apply, and (b) erase persisted
+        // cursors so the peer REPLAYS batches the resumed node already holds → SEQ_GAP /
+        // BATCH_CHAIN_BROKEN instead of an idempotent no-op + ACK. Re-attaching a resumed
+        // peer therefore PRESERVES all session state and merely tops up the maps below;
+        // a genuine live-session re-handshake keeps the full ResetSession wipe (§4.3,
+        // scenario 7: same nodeId, rotated epoch ⇒ REPLACE, never merge).
+        bool resumedPeer = (b.PeersByNid is not null && b.PeersByNid.TryGetValue(a.NodeId, out var bh) && bh is null)
+                        || (a.PeersByNid is not null && a.PeersByNid.TryGetValue(b.NodeId, out var ah) && ah is null);
+        if (!resumedPeer)
+        {
+            a.ResetSession(b.NodeId);
+            b.ResetSession(a.NodeId);
+        }
         // Full-table exchange: every author already known durably to either side joins the
         // session map on BOTH ends with the SAME alias numbers (deterministic ordering:
         // ascending nodeId; the two endpoints always land on aliases aa/ab).
