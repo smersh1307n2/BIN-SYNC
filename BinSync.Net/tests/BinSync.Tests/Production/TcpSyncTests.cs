@@ -1,4 +1,5 @@
-// TCP loopback: handshake + one DELTA_BATCH over a real socket.
+// TCP / TLS loopback: handshake + one DELTA_BATCH over a real socket.
+using System.Security.Cryptography.X509Certificates;
 using BinSync;
 using Xunit;
 
@@ -19,6 +20,8 @@ public class TcpSyncTests
         await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
+        Assert.False(client.IsTls);
+        Assert.False(server.IsTls);
         Assert.True(Fix.Eq(b.NodeId, client.PeerNodeId));
         Assert.True(Fix.Eq(a.NodeId, server.PeerNodeId));
         Assert.Equal(1, a.AliasOf(b.NodeId, a.NodeId));
@@ -34,5 +37,31 @@ public class TcpSyncTests
         var result = await recv;
         Assert.True(result.Applied >= 1);
         Assert.True(b.Storage[1].ContainsKey(Fix.Rid(10)));
+    }
+
+    [Fact]
+    public async Task Tls_Loopback_Handshake_Then_One_Delta()
+    {
+        using var cert = TlsTestCert.CreateEphemeral();
+        var a = Fix.MakeNode(21);
+        var b = Fix.MakeNode(22);
+
+        await using var listener = TcpSyncListener.Start();
+        var accept = listener.AcceptAsync(b, serverCertificate: cert);
+        var ssl = TlsTestCert.ClientOptions("localhost", cert.GetCertHashString());
+        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port, sslOptions: ssl);
+        await using var server = await accept;
+
+        Assert.True(client.IsTls);
+        Assert.True(server.IsTls);
+        Assert.True(Fix.Eq(b.NodeId, client.PeerNodeId));
+        Assert.True(Fix.Eq(a.NodeId, server.PeerNodeId));
+
+        a.WriteField(1, Fix.Rid(7), 0x100, new byte[] { 1, 2, 3 });
+        var recv = server.ReceiveBatchAsync(b);
+        Assert.True(await client.PushBatchAsync(a, 1));
+        var result = await recv;
+        Assert.True(result.Applied >= 1);
+        Assert.True(b.Storage[1].ContainsKey(Fix.Rid(7)));
     }
 }

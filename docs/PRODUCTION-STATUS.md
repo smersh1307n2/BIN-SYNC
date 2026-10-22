@@ -18,14 +18,14 @@ Legend: **done** · **partial** · **missing**
 | Outbox / inbox / cursors | §10 | done | E-3, E-4 stream keys |
 | Membership / GC / quarantine | §11 | missing | |
 | Wire frames (codec) | §12 | partial | Generic codec + session control payloads |
-| HELLO / ALIAS_MAP on wire | §12.7+ | partial | `SessionWire` + `TcpSyncListener` / `TcpSyncSession` |
+| HELLO / ALIAS_MAP on wire | §12.7+ | partial | `SessionWire` + TCP/TLS host |
 | Reconcile ladder | §13.1–13.3 | missing | STATE_DIGEST, NEED_*, IBLT |
 | Apply order [S7] | §13.4 | done | |
 | Relay [R3][R4] | §13.6 | done | |
 | E2EE | §14 | missing | |
-| Security model | §15 | partial | Error codes; no auth layer |
+| Security model | §15 | partial | Transport TLS; no app-level auth |
 | Causal deps | §16.19 | missing | |
-| Lab scenarios 1–42 | §17 | partial | In-memory unit tests + TCP loopback |
+| Lab scenarios 1–42 | §17 | partial | In-memory + TCP/TLS loopback |
 | Schema evolution | §18 | missing | |
 
 ## Engine / product readiness
@@ -33,7 +33,7 @@ Legend: **done** · **partial** · **missing**
 | Concern | Status | Notes |
 |---|---|---|
 | Public API surface | partial | `ISyncTransport`, `SessionWire`, `TcpSyncSession`, `BoundedNode` |
-| Network transports | partial | TCP loopback host (no TLS yet) |
+| Network transports | partial | TCP + optional TLS (`SslStream`); no mutual TLS yet |
 | Persistence | partial | Snapshot OK; no WAL |
 | Memory bounds | partial | `ResourceLimits` / `BoundedNode` (opt-in) |
 | Flow control | partial | Class exists; not fully on send path |
@@ -49,7 +49,8 @@ Legend: **done** · **partial** · **missing**
 3. ~~ResourceLimits (opt-in)~~
 4. ~~Package metadata 0.1.0-alpha.1~~
 5. ~~TCP accept/connect + handshake + one delta~~
-6. **Next:** fold errata into normative spec text, TLS wrapper, freeze public API.
+6. ~~TLS wrapper (optional `SslStream`, lab cert helper)~~
+7. **Next:** fold errata into normative spec text, freeze public API.
 
 ### P1
 STATE_DIGEST / NEED_* / SNAPSHOT, membership, extra merge policies.
@@ -59,4 +60,4 @@ E2EE, IBLT, causalDeps, fuzz/load.
 
 ## Current tip
 
-Branch `installing-.net-10-ea6be`. Suite: **102** tests (.NET 10).
+Branch `installing-.net-10-ea6be`. Suite: **103** tests (.NET 10).
