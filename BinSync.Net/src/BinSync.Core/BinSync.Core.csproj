@@ -4,9 +4,16 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageId>BinSync.Core</PackageId>
+    <Version>0.1.0-alpha.1</Version>
+    <Authors>BYN-SYNC</Authors>
+    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches).</Description>
+    <PackageTags>sync;crdt;offline-first;binsync</PackageTags>
+    <RepositoryUrl>https://github.com/smersh1307n2/BYN-SYNC</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
-  <ItemGroup>
-  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />
   </ItemGroup>
