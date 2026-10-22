@@ -58,8 +58,20 @@ public static class AsyncTransport
     {
         return Task.Run(() =>
         {
-            int ab = DrainDirection(a, b, namespaceId, schemaVersion, ct);
-            int ba = DrainDirection(b, a, namespaceId, schemaVersion, ct);
+            // One pass of each direction is not convergence: applying B→A relays B's
+            // ops into A's outbox (§8.3). Those must be delivered back (and any
+            // further echo suppressed) before the round can claim the pair is idle.
+            // Otherwise the next SyncRoundAsync still has exactly one pending batch.
+            int ab = 0, ba = 0;
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                int nAb = DrainDirection(a, b, namespaceId, schemaVersion, ct);
+                int nBa = DrainDirection(b, a, namespaceId, schemaVersion, ct);
+                ab += nAb;
+                ba += nBa;
+                if (nAb == 0 && nBa == 0) break;
+            }
             return new SyncRoundResult(ab, ba);
         }, ct);
     }

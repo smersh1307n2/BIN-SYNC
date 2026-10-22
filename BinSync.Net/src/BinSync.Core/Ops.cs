@@ -133,7 +133,7 @@ public static class Ops
         {
             ushort fid = r.U16(), ke = r.U16();
             ulong wall = r.U64(); uint logical = r.U32();
-            bool full = fullAuthor ?? (r.Remaining >= 17);
+            bool full = fullAuthor ?? DetectFieldWriteFullAuthor(data, r.Pos);
             byte[]? author; ushort origin = 0;
             if (full) { author = r.B128(); }
             else { origin = r.U16(); author = null; }
@@ -180,6 +180,50 @@ public static class Ops
             return (new OpRecordTombstone { RecordId = rid, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, FullAuthorMode = full }, r.Pos);
         }
         throw new ArgumentException($"unknown op tag 0x{tag:x}");
+    }
+
+    /// Compact FieldWrite is `u16 origin + varint len + value`. Full-author is
+    /// `b128 author + varint len + value` (§12.24.4). A remaining-length threshold
+    /// (`>= 17`) treats any compact op whose value is longer than ~14 bytes as
+    /// full-author and steals the value bytes as a node id — the receiver then
+    /// keys the seq cursor on a garbage author and raises SEQ_GAP. Pick the mode
+    /// whose framing consumes the buffer exactly; if both do (rare), prefer full
+    /// so snapshot encodings win. Truncated outbox headers fall back to the
+    /// length heuristic so persistence can still recover ValueLenPos.
+    private static bool DetectFieldWriteFullAuthor(byte[] data, int pos)
+    {
+        bool compact = FieldWriteConsumesExact(data, pos, full: false);
+        bool full = FieldWriteConsumesExact(data, pos, full: true);
+        if (compact && !full) return false;
+        if (full && !compact) return true;
+        if (full && compact) return true;
+        return data.Length - pos >= 17;
+    }
+
+    private static bool FieldWriteConsumesExact(byte[] data, int pos, bool full)
+    {
+        try
+        {
+            var r = new Reader(data, pos);
+            if (full)
+            {
+                if (r.Remaining < 16) return false;
+                r.B128();
+            }
+            else
+            {
+                if (r.Remaining < 2) return false;
+                r.U16();
+            }
+            int len = checked((int)r.Varint());
+            if (len < 0 || r.Remaining < len) return false;
+            if (len > 0) r.Raw(len);
+            return r.Remaining == 0;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

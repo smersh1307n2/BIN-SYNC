@@ -387,8 +387,11 @@ public class Production : IDisposable
         Assert.Equal(threads * perThread, n.Storage[NS].Count);
 
         // Every durable op got a unique monotonically increasing seq ([П1]).
+        // Smoke write above is also a durable op, so the counter is 1 + the
+        // concurrent batch. Rid(1) is overwritten by thread 0, hence storage
+        // count stays at threads*perThread while the seq counter does not.
         var seqMap = n.OutboxSeqRef;
-        Assert.Equal((long)(threads * perThread), seqMap[(n.NodeId, NS)]);
+        Assert.Equal(1L + threads * perThread, seqMap[(n.NodeId, NS)]);
         var seqs = n.Outbox[NS].Select(e => e.Seq).ToList();
         Assert.Equal(seqs.Count, seqs.Distinct().Count());
         Assert.True(seqs.SequenceEqual(seqs.Order()));
