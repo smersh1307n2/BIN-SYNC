@@ -62,7 +62,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
 }
 
 /// <summary>One accepted or connected TCP (optionally TLS) session after HELLO / ALIAS_MAP.</summary>
-public sealed class TcpSyncSession : IAsyncDisposable
+public sealed partial class TcpSyncSession : IAsyncDisposable
 {
     private readonly TcpClient _client;
     private readonly StreamSyncTransport _transport;
