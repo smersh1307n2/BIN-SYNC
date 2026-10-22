@@ -2,7 +2,8 @@
 
 **Status:** Normative for implementors of **BYN-SYNC-SPECIFICATION.txt v2.3.6**.  
 **Date:** 2026-10-22  
-**Source of truth in code:** comments marked `SPEC CORRECTION (errata E-n)` / `Errata E-n` in `BinSync.Net` (port of the Python reference).
+**Russian short addendum:** [`BYN-SYNC-v2.3.7-ADDENDUM.txt`](../BYN-SYNC-v2.3.7-ADDENDUM.txt)  
+**Source of truth in code:** comments marked `SPEC CORRECTION (errata E-n)` / `Errata E-n` in `BinSync.Net`.
 
 These amendments supersede the corresponding prose in v2.3.6 where they conflict.  
 Lab scenarios that already encode the corrected behaviour (§17.23, §17.37, scenario 23, etc.) remain valid.
@@ -101,5 +102,7 @@ Lab scenarios that already encode the corrected behaviour (§17.23, §17.37, sce
 
 - [x] BinSync.Net engine comments and behaviour aligned with E-1…E-13  
 - [x] Unit / production tests cover the scenarios above  
-- [ ] Full merge of this text into the Russian normative body of `BYN-SYNC-SPECIFICATION.txt` (editorial pass; no behaviour change)  
-- [ ] Bump printed version line to **2.3.7** once the body merge lands  
+- [x] Russian short addendum (`BYN-SYNC-v2.3.7-ADDENDUM.txt`)  
+- [x] Public API freeze (`docs/PUBLIC-API.md`, package 0.1.0-alpha.2)  
+- [ ] Full merge of this text into the Russian body of `BYN-SYNC-SPECIFICATION.txt` (editorial; no behaviour change)  
+- [ ] Bump printed version line inside the main spec to **2.3.7** after body merge  
