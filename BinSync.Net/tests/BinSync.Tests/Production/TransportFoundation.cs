@@ -2,9 +2,9 @@
 using BinSync;
 using Xunit;
 
-namespace BinSync.Tests.Production;
+namespace BinSync.Tests;
 
-public class TransportFoundation
+public class TransportFoundationTests
 {
     [Fact]
     public void SessionWire_Hello_Roundtrips()
