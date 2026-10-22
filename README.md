@@ -10,7 +10,7 @@ Compact binary sync protocol (BIN-SYNC CORE) and a .NET 10 reference implementat
 
 ## What works today
 
-In-process engine suitable for embedding when peers are trusted and you supply the byte pipe:
+In-process engine suitable for embedding when peers are trusted, plus a TCP session host:
 
 - LWW_FIELD + lifecycle delete-wins, HLC, durable `authorNodeId`
 - Outbox/inbox, per-author `seq`, `DELTA_BATCH` chain digests, ACK (incl. author-stream trailer)
@@ -18,8 +18,9 @@ In-process engine suitable for embedding when peers are trusted and you supply t
 - Frame codec (25-byte header, CRC32C), sneakernet export/import
 - Atomic node snapshot persistence (BLAKE3-tagged `NODESTATE/v1`)
 - Async pairwise drain (`AsyncTransport`)
+- TCP accept/connect: HELLO / HELLO_ACK / ALIAS_MAP, then one delta + ACK (`TcpSyncListener`, `TcpSyncSession`)
 
-**Not production-complete vs the full spec:** real network session state machine, STATE_DIGEST / NEED_* / IBLT, membership & GC, extra merge policies, E2EE. See the status matrix.
+**Not production-complete vs the full spec:** TLS, STATE_DIGEST / NEED_* / IBLT, membership & GC, extra merge policies, E2EE. See the status matrix.
 
 ## Requirements
 
@@ -45,7 +46,21 @@ NodePersistence.Save(a, "/path/a.bin");
 var a2 = NodePersistence.Load("/path/a.bin");
 ```
 
-`Transport.MakeSession` / `DeliverBatch` / `SyncRound` are in-process helpers. A production host must implement the §3 transport interface and drive HELLO → ALIAS_MAP → DELTA_BATCH → ACK over the wire.
+`Transport.MakeSession` / `DeliverBatch` / `SyncRound` are in-process helpers.
+
+TCP (initiator is alias 1, acceptor is alias 2; acceptor-only durable authors are appended):
+
+```csharp
+await using var listener = TcpSyncListener.Start(port: 9250);
+var accepted = listener.AcceptAsync(serverNode);          // HELLO + ALIAS_MAP
+await using var client = await TcpSyncSession.ConnectAsync(clientNode, "127.0.0.1", listener.Port);
+await using var server = await accepted;
+
+clientNode.WriteField(1, recordId, fieldId, valueBytes);
+var incoming = server.ReceiveBatchAsync(serverNode);
+await client.PushBatchAsync(clientNode, namespaceId: 1);   // DELTA_BATCH + ACK
+await incoming;
+```
 
 ## Branch notes
 
