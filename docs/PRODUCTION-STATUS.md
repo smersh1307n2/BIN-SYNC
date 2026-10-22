@@ -1,6 +1,6 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
-Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6** and **normative errata v2.3.7** ([`docs/ERRATA-v2.3.7.md`](ERRATA-v2.3.7.md); code comments `SPEC CORRECTION (errata E-n)`).
+Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6**, **addendum v2.3.7** ([`BYN-SYNC-v2.3.7-ADDENDUM.txt`](../BYN-SYNC-v2.3.7-ADDENDUM.txt), [`docs/ERRATA-v2.3.7.md`](ERRATA-v2.3.7.md)), and **public API freeze** ([`docs/PUBLIC-API.md`](PUBLIC-API.md)).
 
 Legend: **done** · **partial** · **missing**
 
@@ -27,32 +27,34 @@ Legend: **done** · **partial** · **missing**
 | Causal deps | §16.19 | missing | |
 | Lab scenarios 1–42 | §17 | partial | In-memory + TCP/TLS loopback |
 | Schema evolution | §18 | missing | |
-| Normative errata E-1…E-13 | v2.3.7 | done | `docs/ERRATA-v2.3.7.md` |
+| Normative errata E-1…E-13 | v2.3.7 | done | Addendum + ERRATA doc |
+| Public API freeze | — | done | `docs/PUBLIC-API.md`, package `0.1.0-alpha.2` |
 
 ## Engine / product readiness
 
 | Concern | Status | Notes |
 |---|---|---|
-| Public API surface | partial | `ISyncTransport`, `SessionWire`, `TcpSyncSession`, `BoundedNode` |
-| Network transports | partial | TCP + optional TLS (`SslStream`); no mutual TLS yet |
+| Public API surface | done (alpha freeze) | See `docs/PUBLIC-API.md` |
+| Network transports | partial | TCP + optional TLS; no mutual TLS |
 | Persistence | partial | Snapshot OK; no WAL |
 | Memory bounds | partial | `ResourceLimits` / `BoundedNode` (opt-in) |
 | Flow control | partial | Class exists; not fully on send path |
-| Packaging | partial | NuGet metadata on `BinSync.Core` |
+| Packaging | partial | NuGet `0.1.0-alpha.2` |
 | CI | done | `.github/workflows/dotnet.yml` |
-| Docs | partial | README + status matrix + errata |
+| Docs | partial | README + status + errata + public API |
 
 ## Delivery order
 
-### P0 (in progress)
+### P0
 1. ~~Docs / CI / status matrix~~
 2. ~~ISyncTransport + session wire + stream adapter~~
 3. ~~ResourceLimits (opt-in)~~
-4. ~~Package metadata 0.1.0-alpha.1~~
+4. ~~Package metadata~~
 5. ~~TCP accept/connect + handshake + one delta~~
-6. ~~TLS wrapper (optional `SslStream`, lab cert helper)~~
-7. ~~Normative errata document (E-1…E-13)~~
-8. **Next:** freeze public API surface + editorial merge of errata into Russian spec body.
+6. ~~TLS wrapper~~
+7. ~~Normative errata (E-1…E-13)~~
+8. ~~Public API freeze + v2.3.7 addendum~~
+9. **Next (P0 tail / P1 start):** editorial in-body merge of errata into Russian `BYN-SYNC-SPECIFICATION.txt`; then P1 reconcile ladder.
 
 ### P1
 STATE_DIGEST / NEED_* / SNAPSHOT, membership, extra merge policies.
@@ -62,4 +64,4 @@ E2EE, IBLT, causalDeps, fuzz/load.
 
 ## Current tip
 
-Branch `installing-.net-10-ea6be`. Suite: **103** tests (.NET 10).
+Branch `installing-.net-10-ea6be`. Suite: **103** tests (.NET 10). Package **0.1.0-alpha.2**.
