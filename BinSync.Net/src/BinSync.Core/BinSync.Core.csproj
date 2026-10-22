@@ -5,9 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>BinSync.Core</PackageId>
-    <Version>0.1.0-alpha.1</Version>
+    <Version>0.1.0-alpha.2</Version>
     <Authors>BYN-SYNC</Authors>
-    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches).</Description>
+    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches). Public API freeze: docs/PUBLIC-API.md.</Description>
     <PackageTags>sync;crdt;offline-first;binsync</PackageTags>
     <RepositoryUrl>https://github.com/smersh1307n2/BYN-SYNC</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
