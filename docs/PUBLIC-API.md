@@ -32,6 +32,7 @@ Anything not listed under **Supported** is either internal, or **lab/unstable** 
 - `SignBatchFor` / `AdvanceStream` / `ProcessAck`
 - `AliasOf` / `RegisterSessionEpoch` / durable-author registry access used by session wire
 - Snapshot: `NodePersistence.Save` / `Load`
+- `RepublishUnderPrefix` (reconcile republish helper)
 
 ### Wire & codecs
 
@@ -42,7 +43,18 @@ Anything not listed under **Supported** is either internal, or **lab/unstable** 
 | `Ops`, `OpsConst`, `OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone` | Op encode/decode |
 | `HlcClock`, `HlcOps`, `ClockDriftException` | Hybrid logical clocks |
 | `Merge`, `Model`, `Record` | LWW / lifecycle merge |
-| `Digests`, `Domains`, `BucketAccumulator`, `StateHash` | Digest helpers (partial vs full ladder) |
+| `Digests`, `Domains`, `BucketAccumulator`, `StateHash` | Digest helpers + state root |
+
+### Reconcile ladder (§13)
+
+| Type | Role |
+|------|------|
+| `ReconcileFrames` | Wire type constants `0x06`…`0x0B` |
+| `Reconcile` | `BuildStateDigest`, encode/decode NEED_*, `DivergentPrefixes`, `LocalKeysUnderPrefix`, snapshot build/encode |
+| `StateDigestMessage`, `DigestBucket`, `NeedRangeMessage`, `NeedKeysMessage` | Ladder payloads |
+| `Iblt`, `IbltCell` | Invertible Bloom table; `BuildFromNode` / `Peel` / `Encode` |
+| `GcNotice`, `GcNoticeMessage`, `GcQuarantineEntry` | GC_NOTICE codec + `Apply` / `PurgeBelowCutoff` |
+| `MembershipRoster`, `MembershipDelta` | Membership set + delta encode/apply |
 
 ### Session / transport
 
@@ -56,6 +68,17 @@ Anything not listed under **Supported** is either internal, or **lab/unstable** 
 | `Transport` | In-process `MakeSession` / `SyncRound` / ACK helpers |
 | `TcpSyncListener`, `TcpSyncSession` | TCP host; optional TLS via `SslStream` parameters |
 | `LoopbackTransport` | Lab mesh / multi-node in-process |
+
+**`TcpSyncSession` operations (must remain callable):**
+
+- Delta: `PushBatchAsync` / `ReceiveBatchAsync`
+- Digest: `ExchangeStateDigestAsync`
+- Need: `SendNeedRangeAsync` / `ReceiveNeedRangeAsync` / `FulfillNeedRangeAsync` / `SendNeedKeysAsync` / `ReceiveNeedKeysAsync` / `ReplyNeedKeysAsync`
+- Snapshot: `SendSnapshotAsync` / `ReceiveSnapshotAsync`
+- IBLT: `ExchangeIbltAsync` / `ReconcileViaIbltAsync` / `FulfillMissingKeysAsync`
+- Membership: `ExchangeMembershipAsync`
+- GC: `ExchangeGcNoticeAsync` / `SendGcNoticeAsync` / `ReceiveGcNoticeAsync`
+- Orchestration: `AutoReconcileAsync` / `BilateralReconcileAsync`
 
 ### Persistence
 
@@ -79,11 +102,12 @@ Future 0.2 may move lab helpers to a separate `BinSync.Lab` package.
 
 ## Explicitly out of scope (not public promises yet)
 
-- Membership, GC, quarantine APIs (§11)
-- Full reconcile ladder: `STATE_DIGEST`, `NEED_*`, IBLT (§13.1–13.3)
 - E2EE / app-level auth (§14–15)
+- Causal dependency tracking (§16.19)
 - Additional merge policies beyond LWW_FIELD + lifecycle (§8)
-- Stable binary layout versioning beyond current frame + batch codecs
+- WAL / incremental persistence (only full snapshot today)
+- Schema evolution (§18)
+- Stable binary layout versioning beyond current frame + batch + ladder codecs (capability bit required for layout changes)
 
 ---
 
@@ -107,10 +131,21 @@ var accept = listener.AcceptAsync(serverNode /*, serverCertificate: cert */);
 await using var client = await TcpSyncSession.ConnectAsync(clientNode, "127.0.0.1", listener.Port);
 await using var server = await accept;
 
+// Delta path
 clientNode.WriteField(1, recordId, fieldId, value);
 var recv = server.ReceiveBatchAsync(serverNode);
 await client.PushBatchAsync(clientNode, namespaceId: 1);
 await recv;
+
+// Reconcile ladder (when digests diverge)
+var serverReco = server.BilateralReconcileAsync(serverNode, 1, initiate: false);
+await client.BilateralReconcileAsync(clientNode, 1, initiate: true);
+await serverReco;
+
+// Optional: IBLT-driven set-diff, membership, GC_NOTICE
+// await client.ReconcileViaIbltAsync(clientNode, 1, initiate: true);
+// await client.ExchangeMembershipAsync(clientNode, initiate: true);
+// await client.ExchangeGcNoticeAsync(clientNode, 1, initiate: true);
 
 NodePersistence.Save(node, path);
 ```

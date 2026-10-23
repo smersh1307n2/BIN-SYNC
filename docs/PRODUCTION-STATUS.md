@@ -16,45 +16,68 @@ Legend: **done** · **partial** · **missing**
 | Merge policies | §8 | partial | LWW_FIELD + lifecycle; E-8/E-13 |
 | Digests / buckets | §9 | done | Record/bucket/StateRoot + wire STATE_DIGEST |
 | Outbox / inbox / cursors | §10 | done | E-3, E-4 |
-| Membership / GC / quarantine | §11 | missing | |
-| Wire frames (codec) | §12 | partial | + STATE_DIGEST / NEED_* payloads |
-| HELLO / ALIAS_MAP on wire | §12.7+ | partial | SessionWire + TCP/TLS |
-| Reconcile ladder | §13.1–13.3 | partial | `Reconcile` build/diff/NEED_*; no IBLT/SNAPSHOT yet |
+| Membership | §11 | done | MEMBERSHIP_DELTA wire + `MembershipRoster` / `ExchangeMembershipAsync` |
+| GC / quarantine | §11 | done | GC_NOTICE `0x0B`, `GcNotice.Apply`, `PurgeBelowCutoff` |
+| Wire frames (codec) | §12 | done | DELTA_BATCH + HELLO/ALIAS + reconcile ladder + GC |
+| HELLO / ALIAS_MAP on wire | §12.7+ | done | SessionWire + TCP/TLS |
+| Reconcile ladder | §13.1–13.3 | done | STATE_DIGEST `0x06`, NEED_RANGE `0x07`, NEED_KEYS `0x08`, IBLT `0x09`, SNAPSHOT `0x0A` |
+| Auto / bilateral reconcile | §13 | done | `AutoReconcileAsync`, `BilateralReconcileAsync`, `ReconcileViaIbltAsync` |
 | Apply order [S7] | §13.4 | done | |
 | Relay [R3][R4] | §13.6 | done | |
 | E2EE | §14 | missing | |
-| Security model | §15 | partial | Transport TLS |
+| Security model | §15 | partial | Transport TLS (opt-in) |
 | Causal deps | §16.19 | missing | |
-| Lab scenarios 1–42 | §17 | partial | + reconcile unit tests |
+| Lab scenarios 1–42 | §17 | partial | + production suite (reconcile / IBLT / GC / membership) |
 | Schema evolution | §18 | missing | |
 | Normative errata E-1…E-13 | v2.3.7 | done | |
-| Public API freeze | — | done | 0.1.0-alpha.2 |
+| Public API freeze | — | done | 0.1.0-alpha.2 (surface extended; see PUBLIC-API.md) |
 
 ## Engine / product readiness
 
 | Concern | Status | Notes |
 |---|---|---|
-| Public API surface | done (alpha freeze) | `docs/PUBLIC-API.md` |
-| Network transports | partial | TCP + optional TLS |
-| Persistence | partial | Snapshot OK; no WAL |
+| Public API surface | done (alpha freeze) | `docs/PUBLIC-API.md` — reconcile/membership/GC promoted |
+| Network transports | done | TCP + optional TLS (`SslStream`) |
+| Persistence | partial | Snapshot OK; no WAL / incremental log |
 | Memory bounds | partial | ResourceLimits opt-in |
-| Flow control | partial | |
+| Flow control | partial | Present; not on every send path |
 | Packaging | partial | 0.1.0-alpha.2 |
-| CI | done | |
-| Docs | partial | |
+| CI | partial | Local green; GitHub Actions workflow still to land |
+| Docs | partial | This file + PUBLIC-API + ERRATA; Russian body-merge of errata pending |
+
+## Frame type map (implemented)
+
+| Type | Hex | API |
+|---|---|---|
+| DELTA_BATCH | (core) | `PushBatchAsync` / `ReceiveBatchAsync` |
+| STATE_DIGEST | `0x06` | `ExchangeStateDigestAsync` |
+| NEED_RANGE | `0x07` | `SendNeedRangeAsync` / `FulfillNeedRangeAsync` |
+| NEED_KEYS | `0x08` | `SendNeedKeysAsync` / `ReplyNeedKeysAsync` |
+| IBLT | `0x09` | `ExchangeIbltAsync` / `ReconcileViaIbltAsync` |
+| SNAPSHOT_CHUNK | `0x0A` | `SendSnapshotAsync` / `ReceiveSnapshotAsync` |
+| GC_NOTICE | `0x0B` | `ExchangeGcNoticeAsync` |
+| MEMBERSHIP | (SessionWire) | `ExchangeMembershipAsync` |
 
 ## Delivery order
 
-### P0 — complete (except editorial body-merge of errata into Russian spec)
+### P0 — complete
+Transport foundation, TLS loopback, HELLO/ALIAS, resource limits, public API freeze, errata E-1…E-13.
 
-### P1 (in progress)
-1. ~~STATE_DIGEST build + encode/decode + DivergentPrefixes + NEED_* codecs~~
-2. **Next:** wire STATE_DIGEST exchange on `TcpSyncSession` / `AsyncTransport`; SNAPSHOT_CHUNK; membership
-3. Extra merge policies
+### P1 — complete (this branch)
+1. STATE_DIGEST build + encode/decode + DivergentPrefixes + NEED_* codecs  
+2. Wire exchange on `TcpSyncSession` + SNAPSHOT_CHUNK + FulfillNeedRange  
+3. AutoReconcile / BilateralReconcile  
+4. MEMBERSHIP_DELTA  
+5. IBLT set-diff + ReconcileViaIblt  
+6. GC_NOTICE + quarantine merge + PurgeBelowCutoff  
 
-### P2
-E2EE, IBLT, causalDeps, fuzz/load.
+### P2 — next
+1. GitHub Actions CI on tip  
+2. Bilateral IBLT (both peers fetch missing keys in one session)  
+3. WAL / incremental persistence  
+4. Extra merge policies  
+5. E2EE, causalDeps, fuzz/load  
 
 ## Current tip
 
-Branch `installing-.net-10-ea6be`. Suite: **108** tests (.NET 10). Package **0.1.0-alpha.2**.
+Branch `installing-.net-10-ea6be`. Suite: **130** tests (.NET 10). Package **0.1.0-alpha.2**.
