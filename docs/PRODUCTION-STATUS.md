@@ -42,7 +42,7 @@ Legend: **done** · **partial** · **missing**
 | Memory bounds | partial | ResourceLimits opt-in |
 | Flow control | partial | Present; not on every send path |
 | Packaging | partial | 0.1.0-alpha.2 |
-| CI | partial | Local green; GitHub Actions workflow still to land |
+| CI | done | `.github/workflows/dotnet.yml` — restore/build/test on .NET 10, TRX artifact |
 | Docs | partial | This file + PUBLIC-API + ERRATA; Russian body-merge of errata pending |
 
 ## Frame type map (implemented)
@@ -63,16 +63,14 @@ Legend: **done** · **partial** · **missing**
 ### P0 — complete
 Transport foundation, TLS loopback, HELLO/ALIAS, resource limits, public API freeze, errata E-1…E-13.
 
-### P1 — complete (this branch)
-1. STATE_DIGEST build + encode/decode + DivergentPrefixes + NEED_* codecs  
-2. Wire exchange on `TcpSyncSession` + SNAPSHOT_CHUNK + FulfillNeedRange  
-3. AutoReconcile / BilateralReconcile  
-4. MEMBERSHIP_DELTA  
-5. IBLT set-diff + ReconcileViaIblt  
-6. GC_NOTICE + quarantine merge + PurgeBelowCutoff  
+### P1 — complete
+1. STATE_DIGEST + NEED_* + SNAPSHOT + Auto/Bilateral  
+2. MEMBERSHIP_DELTA  
+3. IBLT + ReconcileViaIblt  
+4. GC_NOTICE + quarantine + PurgeBelowCutoff  
 
-### P2 — next
-1. GitHub Actions CI on tip  
+### P2 — in progress
+1. ~~GitHub Actions CI on tip~~ (**done** — `dotnet.yml`)  
 2. Bilateral IBLT (both peers fetch missing keys in one session)  
 3. WAL / incremental persistence  
 4. Extra merge policies  
@@ -80,4 +78,4 @@ Transport foundation, TLS loopback, HELLO/ALIAS, resource limits, public API fre
 
 ## Current tip
 
-Branch `installing-.net-10-ea6be`. Suite: **130** tests (.NET 10). Package **0.1.0-alpha.2**.
+Branch `installing-.net-10-ea6be`. Suite: **130** tests (.NET 10). Package **0.1.0-alpha.2**. CI: `.github/workflows/dotnet.yml`.
