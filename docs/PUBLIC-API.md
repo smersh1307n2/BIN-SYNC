@@ -25,146 +25,104 @@ Gap matrix: **[PRODUCTION-STATUS.md](PRODUCTION-STATUS.md)**.
 | `Node` | Primary replica: write fields, outbox/inbox, apply batches, alias maps |
 | `BoundedNode` | `Node` + opt-in `ResourceLimits` |
 | `ResourceLimits` | Memory / queue bounds (opt-in) |
-| `OutboxEntry`, `Batch`, `PeerState` | Batch / peer state models used by apply + ACK |
+| `OutboxEntry`, `Batch`, `PeerState` | Batch / peer state models |
 | `BatchResult` | Result of `ApplyBatch` |
-| `SyncException` and subclasses as thrown | Protocol / engine errors (`CodeName`) |
+| `SyncException` and subclasses | Protocol / engine errors (`CodeName`) |
 
-**Core operations (must remain callable):**
-
-- `WriteField` / `WriteFields` (atomic multi-write under the node gate)
-- `CreateDeltaBatch` / `EncodeBatchPayload` / `DecodeBatchPayload` / `ApplyBatch`
-- `SignBatchFor` / `AdvanceStream` / `ProcessAck`
-- `AliasOf` / `RegisterSessionEpoch` / durable-author registry access used by session wire
-- `RepublishUnderPrefix` (reconcile republish helper)
-- `ApplyRemoteField` (snapshot / WAL path: LWW with original author/HLC, no outbox push)
+**Core operations:** `WriteField` / `WriteFields`, `CreateDeltaBatch` / encode-decode / `ApplyBatch`, `SignBatchFor` / `AdvanceStream` / `ProcessAck`, alias / durable-author registry, `RepublishUnderPrefix`, `ApplyRemoteField`.
 
 ### Wire & codecs
 
-| Type | Role |
-|------|------|
-| `FrameCodec`, `Frames`, `FrameException` | 25-byte frame header + CRC32C |
-| `Codec`, `Writer`, `Reader`, `InvalidVarintException` | Binary primitives (`B128` = fixed 16-byte identity; `Bytes` = varint length + payload) |
-| `Ops`, `OpsConst`, `OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone` | Op encode/decode |
-| `HlcClock`, `HlcOps`, `Hlc`, `ClockDriftException` | Hybrid logical clocks |
-| `Merge`, `MergePolicy`, `MergePolicyRegistry`, `Model`, `Record`, `FieldState` | Field / lifecycle merge |
-| `Digests`, `Domains`, `BucketAccumulator`, `StateHash` | Digest helpers + state root |
+`FrameCodec`, `Frames`, `Codec` / `Writer` / `Reader`, `Ops`, `HlcClock` / `Hlc`, `Merge` / `MergePolicy` / `MergePolicyRegistry`, `Digests` / `StateHash`.
+
+**Codec note:** `B128` = fixed 16-byte identity; `Bytes()` = varint length + payload (used by WAL field values).
 
 ### Merge policies (§8)
 
 | Policy | Semantics |
 |--------|-----------|
-| `MergePolicy.LwwField` | Default: higher HLC wins; author tie-break (spec LWW_FIELD) |
-| `MergePolicy.MaxBytes` / `MinBytes` | Lexicographic value order; equal values fall back to LWW |
-| `MergePolicy.MaxU64` / `MinU64` | Little-endian uint64 numeric max/min; equal values fall back to LWW |
+| `LwwField` | Default: higher HLC wins; author tie-break |
+| `MaxBytes` / `MinBytes` | Lexicographic; equal → LWW |
+| `MaxU64` / `MinU64` | LE uint64; equal → LWW |
 
-**API:**
-
-- `Merge.MergeField` — LWW only (backward compatible)
-- `Merge.MergeFieldWithPolicy(local, remote, policy)`
-- `Merge.ApplyFieldWrite(record, fieldId, op, policy = LwwField)`
-- `MergePolicyRegistry` — optional per-`(namespaceId, fieldId)` map; missing keys → LWW
-
-Echo suppression [E2] applies to **all** policies (identical wall/logical/author/value → `changed=false`).
-
-Lifecycle remains delete-wins via `Merge.ApplyLifecycle` / `MergeLifecycle` (unchanged).
-
-> **Note:** `Node.WriteField` still applies **LWW** only. Embedders that need Max/Min must call `Merge.ApplyFieldWrite` / `ApplyRemoteField` with an explicit policy (or wire the registry themselves). Hooking the registry into `WriteField` is planned, not frozen yet.
+API: `Merge.MergeField`, `Merge.MergeFieldWithPolicy`, `Merge.ApplyFieldWrite(..., policy)`.  
+Echo suppression [E2] applies to all policies.  
+`Node.WriteField` remains **LWW only**; Max/Min are opt-in.
 
 ### Reconcile ladder (§13)
 
-| Type | Role |
-|------|------|
-| `ReconcileFrames` | Wire type constants `0x06`…`0x0B` |
-| `Reconcile` | `BuildStateDigest`, encode/decode NEED_*, `DivergentPrefixes`, `LocalKeysUnderPrefix`, snapshot build/encode |
-| `StateDigestMessage`, `DigestBucket`, `NeedRangeMessage`, `NeedKeysMessage` | Ladder payloads |
-| `Iblt`, `IbltCell` | Invertible Bloom table; `BuildFromNode` / `Peel` / `Encode` |
-| `GcNotice`, `GcNoticeMessage`, `GcQuarantineEntry` | GC_NOTICE codec + `Apply` / `PurgeBelowCutoff` |
-| `MembershipRoster`, `MembershipDelta` | Membership set + delta encode/apply |
-| `Snapshot` helpers | Build / Encode / Decode / ApplySnapshot |
+`ReconcileFrames` (`0x06`…`0x0B`), `Reconcile` (digest / NEED_* / divergent prefixes), `Iblt`, `GcNotice`, `MembershipRoster`, snapshot helpers.
 
 ### Session / transport
 
-| Type | Role |
-|------|------|
-| `ISyncTransport` | Byte send/receive contract (§3.2) |
-| `SessionWire`, `SessionCapabilities`, `HelloPayload`, `AliasMapEntry` | HELLO / HELLO_ACK / ALIAS_MAP |
-| `StreamSyncTransport`, `FrameStream` | Length-prefixed frame stream adapter |
-| `PipeTransport` | In-process duplex for tests and local pairs |
-| `AsyncTransport`, `SyncRoundResult` | Async pairwise drain loop |
-| `Transport` | In-process `MakeSession` / `SyncRound` / ACK helpers |
-| `TcpSyncListener`, `TcpSyncSession` | TCP host; optional TLS via `SslStream` parameters |
-| `LoopbackTransport` | Lab mesh / multi-node in-process |
+`ISyncTransport`, `SessionWire`, `StreamSyncTransport` / `FrameStream`, `PipeTransport`, `AsyncTransport`, `TcpSyncListener` / `TcpSyncSession`, `LoopbackTransport`.
 
-**`TcpSyncSession` operations (must remain callable):**
-
-- Delta: `PushBatchAsync` / `ReceiveBatchAsync`
-- Digest: `ExchangeStateDigestAsync`
-- Need: `SendNeedRangeAsync` / `ReceiveNeedRangeAsync` / `FulfillNeedRangeAsync` / `SendNeedKeysAsync` / `ReceiveNeedKeysAsync` / `ReplyNeedKeysAsync`
-- Snapshot: `SendSnapshotAsync` / `ReceiveSnapshotAsync`
-- IBLT: `ExchangeIbltAsync` / `ReconcileViaIbltAsync` / `BilateralReconcileViaIbltAsync` / `FulfillMissingKeysAsync`
-- Membership: `ExchangeMembershipAsync`
-- GC: `ExchangeGcNoticeAsync` / `SendGcNoticeAsync` / `ReceiveGcNoticeAsync`
-- Orchestration: `AutoReconcileAsync` / `BilateralAutoReconcileAsync` / `BilateralReconcileAsync`
+**`TcpSyncSession` (callable):** delta push/receive; digest exchange; NEED_RANGE/KEYS fulfill; snapshot; `ExchangeIbltAsync` / `ReconcileViaIbltAsync` / **`BilateralReconcileViaIbltAsync`** / `FulfillMissingKeysAsync`; membership; GC; **`AutoReconcileAsync`** / **`BilateralAutoReconcileAsync`**.
 
 ### Persistence
 
 | Type | Role |
 |------|------|
-| `NodePersistence` | Atomic full snapshot `BIN-SYNC/NODESTATE/v1` (BLAKE3-tagged, temp+fsync+rename) |
+| `NodePersistence` | Atomic full snapshot `BIN-SYNC/NODESTATE/v1` |
 | `Wal`, `WalRecordType` | Append-only WAL between checkpoints |
 
-**WAL contract:**
+WAL: `Open`, `AppendFieldWrite`, `AppendCheckpoint`, `Replay` / `ReplayFile`, `Truncate`, `Checkpoint`.  
+**Not** auto-attached to `WriteField`.
 
-| Method | Behaviour |
-|--------|-----------|
-| `Wal.Open(path)` | Create/open append handle; recovers sequence from existing records |
-| `AppendFieldWrite(ns, rid, fid, value, hlc, author)` | Record type `FieldWrite`; value via `Bytes()` (not B128) |
-| `AppendCheckpoint()` | Marker after a successful full snapshot |
-| `Replay` / `ReplayFile` | Apply `FieldWrite` via `ApplyRemoteField` |
-| `Truncate()` | Keep header only (after checkpoint) |
-| `Checkpoint(node, snapshotPath)` | `NodePersistence.Save` → checkpoint → truncate |
+### Causal dependencies (§16.19 experimental)
 
-**Recovery pattern:**
+| Type | Role |
+|------|------|
+| `CausalTracker` | Known changeIds, quarantine, cycle detect, timeout, batch gate |
+| `CausalOutcome` | `Ready` / `Pending` / `TimedOut` / `Cycle` / `LostDep` |
+| `PendingCausalOp` | Queued op waiting on parents |
+| `CausalError.CausalDepMissing` | Wire code `0x0012` |
+
+**Invariants covered by tracker:**
+
+- **KЗ1** — `DepTimeout` → `TimedOut` (not added to known set)
+- **KЗ2** — cycle / self-dep → `Cycle`
+- **KЗ3** — `MarkLost(parent)` drops dependents
+- **KЗ4** — pending must not advance cursors (caller contract)
+- **KЗ5** — `EvaluateBatch` all-or-nothing
+
+**Not** auto-wired into `ApplyBatch` / `WriteField`. Embedders call `Evaluate` → `EnqueuePending` / `NoteApplied` / `Drain` explicitly.
 
 ```csharp
-var node = File.Exists(snap) ? NodePersistence.Load(snap) : new Node(id, epoch);
-Wal.ReplayFile(walPath, node);   // apply deltas since last checkpoint
+var tracker = new CausalTracker { DepTimeout = TimeSpan.FromSeconds(30) };
+var outcome = tracker.Evaluate(changeId, deps, out _);
+if (outcome == CausalOutcome.Pending)
+    tracker.EnqueuePending(changeId, deps, payload);
+// after parent applied:
+tracker.NoteApplied(parentId);
+foreach (var (op, o) in tracker.Drain())
+    if (o == CausalOutcome.Ready) { /* apply op.Payload */ }
 ```
-
-> **Note:** WAL is **not** auto-attached to `WriteField`. Embedders append explicitly (or call `Checkpoint` on a schedule).
 
 ---
 
-## Lab / unstable (may move or narrow)
+## Lab / unstable
 
-| Type | Notes |
-|------|------|
-| `TlsTestCert` | Ephemeral self-signed certs for loopback tests only — **not** a production CA API |
-| `FlowControl` | Present; not fully wired on every send path |
-| `Blake3Core` | Thin wrapper; prefer digest APIs on `Digests` / persistence |
-
-Future 0.2 may move lab helpers to a separate `BinSync.Lab` package.
+`TlsTestCert`, `FlowControl` (partial), `Blake3Core` wrapper.
 
 ---
 
 ## Explicitly out of scope (not public promises yet)
 
-- E2EE / app-level auth (§14–15) — TLS transport only today
-- Causal dependency tracking (§16.19)
-- MANUAL resolve field (`Model.FieldResolveId = 0x00FF`) wire path
-- Auto-hook of `MergePolicyRegistry` into `Node.WriteField`
-- Auto-WAL on every write
+- E2EE / app-level auth (§14–15) — TLS transport only
+- Auto-hook of causal tracker into `ApplyBatch`
+- Auto-WAL / auto-`MergePolicyRegistry` on `WriteField`
+- MANUAL resolve field (`0x00FF`) wire path
 - Schema evolution (§18)
-- Stable binary layout versioning beyond current frame + batch + ladder codecs (capability bit required for layout changes)
 
 ---
 
 ## Compatibility policy (0.1.x-alpha)
 
-1. **Supported** types and the listed operations will not be removed without a note in `docs/PRODUCTION-STATUS.md` and a package minor bump within alpha (or 0.2).
-2. Adding optional parameters with defaults is allowed.
-3. Changing wire layouts requires a protocol version / capability bit, not a silent change.
-4. Normative behaviour follows **BYN-SYNC-SPECIFICATION.txt v2.3.6** + **[ERRATA-v2.3.7](ERRATA-v2.3.7.md)**.
+1. **Supported** types/ops not removed without a note in PRODUCTION-STATUS and a package bump.
+2. Optional parameters with defaults are allowed.
+3. Wire layout changes require protocol version / capability bit.
+4. Normative behaviour: spec v2.3.6 + ERRATA-v2.3.7.
 
 ---
 
@@ -172,32 +130,22 @@ Future 0.2 may move lab helpers to a separate `BinSync.Lab` package.
 
 ```csharp
 var node = new Node(nodeId, epoch: 1);
-// or: var node = new BoundedNode(nodeId, 1, ResourceLimits.Default);
-
 await using var listener = TcpSyncListener.Start();
-var accept = listener.AcceptAsync(serverNode /*, serverCertificate: cert */);
+var accept = listener.AcceptAsync(serverNode);
 await using var client = await TcpSyncSession.ConnectAsync(clientNode, "127.0.0.1", listener.Port);
 await using var server = await accept;
 
-// Delta path
 clientNode.WriteField(1, recordId, fieldId, value);
 var recv = server.ReceiveBatchAsync(serverNode);
 await client.PushBatchAsync(clientNode, namespaceId: 1);
 await recv;
 
-// Reconcile ladder (when digests diverge)
 var serverReco = server.BilateralAutoReconcileAsync(serverNode, 1, initiate: false);
 await client.BilateralAutoReconcileAsync(clientNode, 1, initiate: true);
 await serverReco;
 
-// Optional: IBLT set-diff, membership, GC_NOTICE
-// await client.BilateralReconcileViaIbltAsync(clientNode, 1);
-// await client.ExchangeMembershipAsync(clientNode, initiate: true);
-// await client.ExchangeGcNoticeAsync(clientNode, 1, initiate: true);
-
-// Persistence: full snapshot + optional WAL
 NodePersistence.Save(node, "node.state");
 using var wal = Wal.Open("node.wal");
-// after local writes: wal.AppendFieldWrite(...);
-// periodic: wal.Checkpoint(node, "node.state");
+// optional: tracker for causal-gated app logic
+var tracker = new CausalTracker();
 ```
