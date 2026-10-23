@@ -27,6 +27,23 @@ public sealed partial class Node
                 WriteFieldInternal(namespaceId, rid, fid, val);
         }
     }
+
+    /// <summary>
+    /// Apply a remote field state (snapshot path): LWW merge with original author/HLC.
+    /// Does not push outbox — peer already holds the op; local anti-entropy republishes separately.
+    /// </summary>
+    public bool ApplyRemoteField(int namespaceId, byte[] recordId, ushort fieldId,
+        byte[] value, Hlc hlc, byte[] authorNodeId, ushort keyEpoch = 0)
+    {
+        lock (_gate)
+        {
+            var store = Ns(namespaceId);
+            if (!store.TryGetValue(recordId, out var rec))
+                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            var fs = new FieldState(value, hlc, authorNodeId, keyEpoch);
+            return Merge.ApplyFieldWrite(rec, fieldId, fs);
+        }
+    }
 }
 
 public sealed partial class PeerState
