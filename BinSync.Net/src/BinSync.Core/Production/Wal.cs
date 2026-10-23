@@ -1,20 +1,17 @@
 // Append-only write-ahead log for incremental durability between full snapshots.
 // Format: magic + version, then length-prefixed records (type + payload).
 // Crash recovery: Load snapshot (optional) then Wal.Replay onto the node.
+// Note: B128 is fixed 16-byte identity; field values use varint-length Bytes().
 namespace BinSync;
 
-/// <summary>Record types stored in the WAL.</summary>
 public enum WalRecordType : byte
 {
-    /// <summary>Field write with original author/HLC (same as ApplyRemoteField).</summary>
     FieldWrite = 0x01,
-    /// <summary>Marks that a full NodePersistence snapshot was taken; safe to truncate before this.</summary>
     Checkpoint = 0x02,
 }
 
 /// <summary>
-/// Simple durable WAL. Not a full database journal — enough to survive process crash
-/// between periodic <see cref="NodePersistence.Save"/> checkpoints.
+/// Simple durable WAL between periodic <see cref="NodePersistence.Save"/> checkpoints.
 /// </summary>
 public sealed class Wal : IDisposable
 {
@@ -37,7 +34,6 @@ public sealed class Wal : IDisposable
         _sequence = sequence;
     }
 
-    /// <summary>Create or open a WAL file for append.</summary>
     public static Wal Open(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
@@ -75,7 +71,6 @@ public sealed class Wal : IDisposable
         return new Wal(path, fs, seq);
     }
 
-    /// <summary>Append a field write (author/HLC preserved for LWW).</summary>
     public long AppendFieldWrite(
         int namespaceId, byte[] recordId, ushort fieldId, byte[] value,
         Hlc hlc, byte[] authorNodeId)
@@ -85,14 +80,13 @@ public sealed class Wal : IDisposable
         w.Varint((ulong)namespaceId);
         w.B128(Codec.CanonicalB128(recordId));
         w.U16(fieldId);
-        w.B128(value ?? Array.Empty<byte>());
+        w.Bytes(value ?? Array.Empty<byte>()); // variable-length payload, not B128
         w.U64(hlc.Wall);
         w.U32(hlc.Logical);
         w.B128(Codec.CanonicalB128(authorNodeId));
         return AppendRaw(w.Value());
     }
 
-    /// <summary>Append checkpoint marker after a successful full snapshot.</summary>
     public long AppendCheckpoint()
     {
         var w = new Writer();
@@ -116,7 +110,6 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Replay all records onto node. Returns field writes applied.</summary>
     public int Replay(Node node)
     {
         lock (_lock)
@@ -141,7 +134,6 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Read-only replay from a closed file path.</summary>
     public static int ReplayFile(string path, Node node)
     {
         if (!File.Exists(path)) return 0;
@@ -162,7 +154,6 @@ public sealed class Wal : IDisposable
         return applied;
     }
 
-    /// <summary>Truncate WAL after checkpoint (keeps header only).</summary>
     public void Truncate()
     {
         lock (_lock)
@@ -175,7 +166,6 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Save full snapshot, append checkpoint, truncate WAL.</summary>
     public void Checkpoint(Node node, string snapshotPath)
     {
         NodePersistence.Save(node, snapshotPath);
@@ -194,7 +184,7 @@ public sealed class Wal : IDisposable
                 int ns = (int)r.Varint();
                 var rid = r.B128();
                 ushort fid = r.U16();
-                var value = r.B128();
+                var value = r.Bytes();
                 ulong wall = r.U64();
                 uint logical = r.U32();
                 var author = r.B128();
