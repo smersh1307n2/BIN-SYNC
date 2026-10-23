@@ -28,8 +28,7 @@ public sealed partial class TcpSyncSession
 
     /// <summary>
     /// Pairwise IBLT exchange: initiate sends first then receives; acceptor reverse.
-    /// Returns peeled symmetric difference from the initiator's perspective
-    /// (local − remote after subtract).
+    /// Returns peeled symmetric difference (local − remote after subtract).
     /// </summary>
     public async Task<(List<byte[]> OnlyLocal, List<byte[]> OnlyRemote)> ExchangeIbltAsync(
         Node local, int namespaceId, bool initiate,
@@ -66,7 +65,7 @@ public sealed partial class TcpSyncSession
     }
 
     /// <summary>
-    /// After IBLT peel: request missing keys via NEED_KEYS and fulfill with SNAPSHOT.
+    /// One direction: request missing keys via NEED_KEYS and fulfill with SNAPSHOT.
     /// </summary>
     public async Task<int> FulfillMissingKeysAsync(
         Node local, int namespaceId, bool initiate,
@@ -104,7 +103,8 @@ public sealed partial class TcpSyncSession
     }
 
     /// <summary>
-    /// IBLT-driven reconcile: exchange tables → peel → NEED_KEYS + SNAPSHOT for missing keys.
+    /// One-way IBLT reconcile: initiator pulls onlyRemote; acceptor only serves.
+    /// Prefer <see cref="BilateralReconcileViaIbltAsync"/> for mutual convergence.
     /// </summary>
     public async Task<(int OnlyLocal, int OnlyRemote, int FieldsApplied)> ReconcileViaIbltAsync(
         Node local, int namespaceId, bool initiate,
@@ -125,5 +125,47 @@ public sealed partial class TcpSyncSession
                 .ConfigureAwait(false);
         }
         return (onlyLocal.Count, onlyRemote.Count, fields);
+    }
+
+    /// <summary>
+    /// Bilateral IBLT reconcile: both peers pull their missing keys in one session.
+    /// Phase 1 — initiator requests <c>onlyRemote</c>, acceptor serves.
+    /// Phase 2 — roles reverse: acceptor requests its <c>onlyRemote</c>, initiator serves.
+    /// Returns (onlyLocal, onlyRemote, fieldsAppliedOnThisNode).
+    /// </summary>
+    public async Task<(int OnlyLocal, int OnlyRemote, int FieldsApplied)> BilateralReconcileViaIbltAsync(
+        Node local, int namespaceId, bool initiate,
+        byte[]? prefix = null, int cellCount = 64, CancellationToken ct = default)
+    {
+        var (onlyLocal, onlyRemote) = await ExchangeIbltAsync(
+            local, namespaceId, initiate, prefix, cellCount, ct).ConfigureAwait(false);
+
+        int fieldsApplied = 0;
+
+        // Phase 1: initiator pulls keys only on remote
+        if (initiate)
+        {
+            fieldsApplied += await FulfillMissingKeysAsync(
+                local, namespaceId, initiate: true, onlyRemote, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            await FulfillMissingKeysAsync(
+                local, namespaceId, initiate: false, onlyLocal, ct).ConfigureAwait(false);
+        }
+
+        // Phase 2: acceptor pulls keys only on initiator (roles swapped)
+        if (initiate)
+        {
+            await FulfillMissingKeysAsync(
+                local, namespaceId, initiate: false, onlyLocal, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            fieldsApplied += await FulfillMissingKeysAsync(
+                local, namespaceId, initiate: true, onlyRemote, ct).ConfigureAwait(false);
+        }
+
+        return (onlyLocal.Count, onlyRemote.Count, fieldsApplied);
     }
 }
