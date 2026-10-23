@@ -1,25 +1,100 @@
-// Merge policies (§8): LWW_FIELD with echo suppression [E2], lifecycle delete-wins.
+// Merge policies (§8): LWW_FIELD with echo suppression [E2], lifecycle delete-wins,
+// plus optional MAX/MIN (bytes lexicographic or little-endian u64).
 namespace BinSync;
+
+/// <summary>§8 field merge strategies. Default is <see cref="LwwField"/>.</summary>
+public enum MergePolicy : byte
+{
+    /// <summary>Last-writer-wins by HLC then author (spec default).</summary>
+    LwwField = 0,
+    /// <summary>Lexicographically greater value wins; HLC+author on ties.</summary>
+    MaxBytes = 1,
+    /// <summary>Lexicographically lesser value wins; HLC+author on ties.</summary>
+    MinBytes = 2,
+    /// <summary>Little-endian u64 numeric max (short/empty → 0); HLC+author on ties.</summary>
+    MaxU64 = 3,
+    /// <summary>Little-endian u64 numeric min; HLC+author on ties.</summary>
+    MinU64 = 4,
+}
 
 public static class Merge
 {
     /// §8.3 including echo suppression [E2]/[Ш2]: identical (wall, logical, author, value)
     /// → no-op, changed=false. Returns (winner, changed).
     public static (FieldState Winner, bool Changed) MergeField(FieldState? local, FieldState remote)
+        => MergeFieldWithPolicy(local, remote, MergePolicy.LwwField);
+
+    /// <summary>Merge with an explicit <see cref="MergePolicy"/>.</summary>
+    public static (FieldState Winner, bool Changed) MergeFieldWithPolicy(
+        FieldState? local, FieldState remote, MergePolicy policy)
     {
-        if (local is not null)
-        {
-            if (local.Timestamp.Wall == remote.Timestamp.Wall &&
-                local.Timestamp.Logical == remote.Timestamp.Logical &&
-                BytesEq(local.AuthorNodeId, remote.AuthorNodeId) &&
-                BytesEq(local.Value, remote.Value))
-                return (local, false);
-            if (HlcOps.CompareHlc(remote.Timestamp, remote.AuthorNodeId,
-                                  local.Timestamp, local.AuthorNodeId) > 0)
-                return (remote, true);
+        if (local is null)
+            return (remote, true);
+
+        // Echo suppression [E2]: identical metadata + value → no-op
+        if (local.Timestamp.Wall == remote.Timestamp.Wall &&
+            local.Timestamp.Logical == remote.Timestamp.Logical &&
+            BytesEq(local.AuthorNodeId, remote.AuthorNodeId) &&
+            BytesEq(local.Value, remote.Value))
             return (local, false);
+
+        return policy switch
+        {
+            MergePolicy.MaxBytes => PickByValue(local, remote, preferGreater: true, numeric: false),
+            MergePolicy.MinBytes => PickByValue(local, remote, preferGreater: false, numeric: false),
+            MergePolicy.MaxU64 => PickByValue(local, remote, preferGreater: true, numeric: true),
+            MergePolicy.MinU64 => PickByValue(local, remote, preferGreater: false, numeric: true),
+            _ => PickLww(local, remote),
+        };
+    }
+
+    private static (FieldState Winner, bool Changed) PickLww(FieldState local, FieldState remote)
+    {
+        if (HlcOps.CompareHlc(remote.Timestamp, remote.AuthorNodeId,
+                              local.Timestamp, local.AuthorNodeId) > 0)
+            return (remote, true);
+        return (local, false);
+    }
+
+    /// <summary>
+    /// Value-primary merge: compare values; on equality fall back to LWW (HLC+author).
+    /// </summary>
+    private static (FieldState Winner, bool Changed) PickByValue(
+        FieldState local, FieldState remote, bool preferGreater, bool numeric)
+    {
+        int cmp = numeric
+            ? AsU64(local.Value).CompareTo(AsU64(remote.Value))
+            : CompareBytes(local.Value, remote.Value);
+
+        if (cmp == 0)
+            return PickLww(local, remote);
+
+        bool remoteWins = preferGreater ? cmp < 0 : cmp > 0;
+        return remoteWins ? (remote, true) : (local, false);
+    }
+
+    /// <summary>Unsigned LE interpretation; missing/short bytes pad as zero.</summary>
+    public static ulong AsU64(byte[] v)
+    {
+        if (v is null || v.Length == 0) return 0;
+        ulong r = 0;
+        int n = Math.Min(8, v.Length);
+        for (int i = 0; i < n; i++)
+            r |= (ulong)v[i] << (8 * i);
+        return r;
+    }
+
+    public static int CompareBytes(byte[] a, byte[] b)
+    {
+        a ??= Array.Empty<byte>();
+        b ??= Array.Empty<byte>();
+        int n = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < n; i++)
+        {
+            int d = a[i].CompareTo(b[i]);
+            if (d != 0) return d;
         }
-        return (remote, true);
+        return a.Length.CompareTo(b.Length);
     }
 
     /// Lifecycle conflict resolution by full order [Ж1–Ж2].
@@ -34,17 +109,17 @@ public static class Merge
             return (remoteHlc, remoteAuthor, remoteValue, true);
         if (cmp == 0 && localValue != remoteValue)
         {
-            // same time & author but different value — deterministic: dead wins (§7.4)
             byte mx = Math.Max(localValue, remoteValue);
             return (localHlc!, localAuthor!, mx, localValue != mx);
         }
         return (localHlc!, localAuthor!, localValue, false);
     }
 
-    public static bool ApplyFieldWrite(Record record, ushort fieldId, FieldState op)
+    public static bool ApplyFieldWrite(Record record, ushort fieldId, FieldState op,
+        MergePolicy policy = MergePolicy.LwwField)
     {
         var local = record.State.TryGetValue(fieldId, out var l) ? l : null;
-        var (winner, changed) = MergeField(local, op);
+        var (winner, changed) = MergeFieldWithPolicy(local, op, policy);
         if (changed) record.State[fieldId] = winner;
         return changed;
     }
@@ -76,7 +151,7 @@ public static class Merge
                                    local.Timestamp, local.AuthorNodeId) >= 0 &&
                  tombLocal.Value.Length == 0))
             {
-                record.State.Remove(fieldId);   // tomb wins or ties → hidden, kept as tomb
+                record.State.Remove(fieldId);
                 changed = true;
             }
         }
@@ -92,4 +167,30 @@ public static class Merge
     }
 
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
+}
+
+/// <summary>
+/// Optional per-(namespace, fieldId) policy map. Missing keys → <see cref="MergePolicy.LwwField"/>.
+/// Thread-safe for concurrent lookups; mutations should be rare (schema time).
+/// </summary>
+public sealed class MergePolicyRegistry
+{
+    private readonly Dictionary<(int Ns, ushort FieldId), MergePolicy> _map = new();
+    private readonly object _lock = new();
+
+    public void Set(int namespaceId, ushort fieldId, MergePolicy policy)
+    {
+        lock (_lock) _map[(namespaceId, fieldId)] = policy;
+    }
+
+    public MergePolicy Get(int namespaceId, ushort fieldId)
+    {
+        lock (_lock)
+            return _map.TryGetValue((namespaceId, fieldId), out var p) ? p : MergePolicy.LwwField;
+    }
+
+    public bool Remove(int namespaceId, ushort fieldId)
+    {
+        lock (_lock) return _map.Remove((namespaceId, fieldId));
+    }
 }
