@@ -13,49 +13,43 @@ Legend: **done** · **partial** · **missing**
 | HLC | §5 | done | |
 | Codec primitives | §6 | partial | Core types; schema evolution limited |
 | Data model, lifecycle | §7 | done | LWW field + record tomb + field tomb |
-| Merge policies | §8 | partial | LWW_FIELD + lifecycle; E-8/E-13 |
-| Digests / buckets | §9 | done | Record/bucket/StateRoot + wire STATE_DIGEST |
-| Outbox / inbox / cursors | §10 | done | E-3, E-4 |
-| Membership | §11 | done | MEMBERSHIP_DELTA + `ExchangeMembershipAsync` |
-| GC / quarantine | §11 | done | GC_NOTICE `0x0B`, `PurgeBelowCutoff` |
-| Wire frames (codec) | §12 | done | DELTA + HELLO/ALIAS + ladder + GC |
-| HELLO / ALIAS_MAP on wire | §12.7+ | done | SessionWire + TCP/TLS |
-| Reconcile ladder | §13.1–13.3 | done | STATE_DIGEST … SNAPSHOT + IBLT |
-| Auto / bilateral reconcile | §13 | done | Digest + **bilateral IBLT** |
-| Apply order [S7] | §13.4 | done | |
-| Relay [R3][R4] | §13.6 | done | |
+| Merge policies | §8 | partial | LWW_FIELD + lifecycle |
+| Digests / buckets | §9 | done | |
+| Outbox / inbox / cursors | §10 | done | |
+| Membership / GC | §11 | done | MEMBERSHIP + GC_NOTICE |
+| Wire frames | §12 | done | ladder `0x06`…`0x0B` |
+| Reconcile ladder | §13 | done | + bilateral IBLT |
 | E2EE | §14 | missing | |
-| Security model | §15 | partial | Transport TLS (opt-in) |
+| Security | §15 | partial | TLS opt-in |
 | Causal deps | §16.19 | missing | |
-| Lab scenarios 1–42 | §17 | partial | + production suite |
+| Lab scenarios | §17 | partial | |
 | Schema evolution | §18 | missing | |
-| Normative errata E-1…E-13 | v2.3.7 | done | |
-| Public API freeze | — | done | 0.1.0-alpha.2 |
+| Errata E-1…E-13 | v2.3.7 | done | |
 
 ## Engine / product readiness
 
 | Concern | Status | Notes |
 |---|---|---|
-| Public API surface | done (alpha freeze) | `docs/PUBLIC-API.md` |
-| Network transports | done | TCP + optional TLS |
-| Persistence | partial | Snapshot OK; no WAL |
-| Memory bounds | partial | ResourceLimits opt-in |
-| Flow control | partial | Not on every send path |
+| Public API | done (alpha) | `docs/PUBLIC-API.md` |
+| Network | done | TCP + TLS |
+| Persistence | partial | Full snapshot + **WAL** (FieldWrite/Checkpoint); no auto-hook on WriteField yet |
+| Memory bounds | partial | ResourceLimits |
+| Flow control | partial | |
 | Packaging | partial | 0.1.0-alpha.2 |
-| CI | done | `.github/workflows/dotnet.yml` |
-| Docs | partial | STATUS + PUBLIC-API + ERRATA |
+| CI | done | `dotnet.yml` |
+| Docs | partial | |
 
 ## Delivery order
 
 ### P0 + P1 — complete
 
 ### P2 — in progress
-1. ~~GitHub Actions CI~~  
-2. ~~Bilateral IBLT~~ (`BilateralReconcileViaIbltAsync`)  
-3. WAL / incremental persistence  
+1. ~~CI~~  
+2. ~~Bilateral IBLT~~  
+3. ~~WAL / incremental persistence~~ (`Wal` class)  
 4. Extra merge policies  
 5. E2EE, causalDeps, fuzz/load  
 
 ## Current tip
 
-Branch `installing-.net-10-ea6be`. Suite: **132** tests (.NET 10). Package **0.1.0-alpha.2**.
+Branch `installing-.net-10-ea6be`. Suite: **135** tests (.NET 10).
