@@ -144,9 +144,8 @@ public static partial class Reconcile
     }
 
     /// <summary>
-    /// Apply a snapshot into <paramref name="node"/> using LWW field writes with the
-    /// original HLC timestamps (so offline peers converge without re-authoring).
-    /// Returns number of field writes applied.
+    /// Apply a snapshot into <paramref name="node"/> using LWW with the original
+    /// author + HLC (§5.4). Does not push outbox.
     /// </summary>
     public static int ApplySnapshot(Node node, SnapshotChunkMessage chunk)
     {
@@ -156,7 +155,9 @@ public static partial class Reconcile
             foreach (var f in rec.Fields)
             {
                 var hlc = new Hlc(f.Wall, f.Logical);
-                if (node.WriteField(chunk.NamespaceId, rec.RecordId, f.FieldId, f.Value, hlc))
+                if (node.ApplyRemoteField(
+                        chunk.NamespaceId, rec.RecordId, f.FieldId,
+                        f.Value, hlc, f.AuthorNodeId, f.KeyEpoch))
                     applied++;
             }
         }
