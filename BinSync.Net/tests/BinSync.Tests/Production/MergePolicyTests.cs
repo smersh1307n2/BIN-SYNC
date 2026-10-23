@@ -18,9 +18,15 @@ public class MergePolicyTests
     {
         var olderBigger = Fs(new byte[] { 0x10 }, wall: 1, logical: 0, authorTail: 1);
         var newerSmaller = Fs(new byte[] { 0x01 }, wall: 99, logical: 0, authorTail: 2);
+        // local already holds the greater value → winner stays local, changed=false
         var (w, changed) = Merge.MergeFieldWithPolicy(olderBigger, newerSmaller, MergePolicy.MaxBytes);
-        Assert.True(changed);
+        Assert.False(changed);
         Assert.Equal(new byte[] { 0x10 }, w.Value);
+
+        // reverse order: remote is greater → changed=true
+        var (w2, changed2) = Merge.MergeFieldWithPolicy(newerSmaller, olderBigger, MergePolicy.MaxBytes);
+        Assert.True(changed2);
+        Assert.Equal(new byte[] { 0x10 }, w2.Value);
     }
 
     [Fact]
@@ -35,7 +41,6 @@ public class MergePolicyTests
     [Fact]
     public void MaxU64_numeric_compare()
     {
-        // LE: 100 vs 200
         var low = Fs(BitConverter.GetBytes(100UL), wall: 5, logical: 0, authorTail: 1);
         var high = Fs(BitConverter.GetBytes(200UL), wall: 1, logical: 0, authorTail: 2);
         var (w, changed) = Merge.MergeFieldWithPolicy(low, high, MergePolicy.MaxU64);
