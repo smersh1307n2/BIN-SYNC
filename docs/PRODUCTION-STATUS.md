@@ -13,10 +13,10 @@ Legend: **done** · **partial** · **missing**
 | HLC | §5 | done | |
 | Codec primitives | §6 | partial | Core types; schema evolution limited |
 | Data model, lifecycle | §7 | done | LWW field + record tomb + field tomb |
-| Merge policies | §8 | partial | LWW_FIELD + lifecycle |
+| Merge policies | §8 | partial | LWW_FIELD + **Max/Min bytes & u64** + registry; MANUAL resolve field not wired |
 | Digests / buckets | §9 | done | |
 | Outbox / inbox / cursors | §10 | done | |
-| Membership / GC | §11 | done | MEMBERSHIP + GC_NOTICE |
+| Membership / GC | §11 | done | |
 | Wire frames | §12 | done | ladder `0x06`…`0x0B` |
 | Reconcile ladder | §13 | done | + bilateral IBLT |
 | E2EE | §14 | missing | |
@@ -30,14 +30,13 @@ Legend: **done** · **partial** · **missing**
 
 | Concern | Status | Notes |
 |---|---|---|
-| Public API | done (alpha) | `docs/PUBLIC-API.md` |
+| Public API | done (alpha) | |
 | Network | done | TCP + TLS |
-| Persistence | partial | Full snapshot + **WAL** (FieldWrite/Checkpoint); no auto-hook on WriteField yet |
+| Persistence | partial | Snapshot + WAL |
+| Merge policies | partial | LWW + Max/Min; registry not hooked into Node.WriteField yet |
 | Memory bounds | partial | ResourceLimits |
-| Flow control | partial | |
+| CI | done | |
 | Packaging | partial | 0.1.0-alpha.2 |
-| CI | done | `dotnet.yml` |
-| Docs | partial | |
 
 ## Delivery order
 
@@ -46,10 +45,10 @@ Legend: **done** · **partial** · **missing**
 ### P2 — in progress
 1. ~~CI~~  
 2. ~~Bilateral IBLT~~  
-3. ~~WAL / incremental persistence~~ (`Wal` class)  
-4. Extra merge policies  
+3. ~~WAL~~  
+4. ~~Extra merge policies (Max/Min)~~  
 5. E2EE, causalDeps, fuzz/load  
 
 ## Current tip
 
-Branch `installing-.net-10-ea6be`. Suite: **135** tests (.NET 10).
+Branch `installing-.net-10-ea6be`. Suite: **144** tests (.NET 10).
