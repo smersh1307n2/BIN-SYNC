@@ -3,7 +3,7 @@
 namespace BinSync;
 
 /// <summary>Wire frame type bytes for the reconcile ladder (§12.6).</summary>
-public static class ReconcileFrames
+public static partial class ReconcileFrames
 {
     public const byte StateDigest = 0x06;
     public const byte NeedRange = 0x07;
@@ -180,10 +180,6 @@ public static partial class Reconcile
         return m;
     }
 
-    /// <summary>
-    /// Compare two digests. Empty list + equal roots ⇒ converged.
-    /// Otherwise returns prefixes whose rollup/count/xor/sum differ (candidates for NEED_RANGE).
-    /// </summary>
     public static List<byte[]> DivergentPrefixes(StateDigestMessage local, StateDigestMessage remote)
     {
         var result = new List<byte[]>();
@@ -211,7 +207,6 @@ public static partial class Reconcile
         return result;
     }
 
-    /// <summary>RecordIds under a bucket prefix (local storage scan).</summary>
     public static List<byte[]> LocalKeysUnderPrefix(Node node, int namespaceId, byte[] prefix)
     {
         var list = new List<byte[]>();
@@ -258,7 +253,6 @@ public static partial class Reconcile
     }
 }
 
-/// <summary>Content equality for byte[] dictionary keys used in reconcile scans.</summary>
 internal sealed class ByteArrayComparer : IEqualityComparer<byte[]>
 {
     public bool Equals(byte[]? x, byte[]? y)
