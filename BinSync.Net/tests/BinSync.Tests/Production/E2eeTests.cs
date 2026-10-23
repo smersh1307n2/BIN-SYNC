@@ -97,8 +97,8 @@ public class E2eeTests
         var a = Author(1);
         var b = Author(2);
         var rid = Rid(1);
-        var c1 = E2ee.SealField(key, rid, 1, wall: 10, logical: 0, a, 0, new byte[] { 1 });
-        var c2 = E2ee.SealField(key, rid, 1, wall: 20, logical: 0, b, 0, new byte[] { 2 });
+        var c1 = E2ee.SealField(key, rid, 1, hlcWall: 10, hlcLogical: 0, a, 0, new byte[] { 1 });
+        var c2 = E2ee.SealField(key, rid, 1, hlcWall: 20, hlcLogical: 0, b, 0, new byte[] { 2 });
 
         var fs1 = new FieldState(c1, new Hlc(10, 0), a);
         var fs2 = new FieldState(c2, new Hlc(20, 0), b);
