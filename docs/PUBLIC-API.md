@@ -27,8 +27,18 @@ Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md).
 `NodePersistence` (full snapshot), `Wal` (manual append / replay / checkpoint).
 
 ### Causal deps (§16.19 experimental)
-`CausalTracker`, `CausalOutcome`, `PendingCausalOp`, `CausalError.CausalDepMissing` (`0x0012`).  
-KЗ1–KЗ5; **not** auto-wired into `ApplyBatch`.
+
+| Type / API | Role |
+|------------|------|
+| `CausalTracker` | Known set, pending quarantine, cycle / timeout / lost (KЗ1–KЗ5) |
+| `Node.Causal` | Optional tracker attached to a node |
+| `Node.ApplyBatchCausal` | Gate on `OutboxEntry.CausalDeps` before `ApplyBatchInternal` |
+| `Node.DrainCausal` | Release ready pending ops after parents arrive |
+| `CausalError.CausalDepMissing` | `0x0012` |
+
+- **`ApplyBatch`** — unchanged; ignores `Causal` and deps.
+- **`ApplyBatchCausal`** — if `Causal` is set: EvaluateBatch; on Pending → EnqueuePending + throw `CAUSAL_DEP_MISSING` (no cursor advance, KЗ4); on Ready → apply + `NoteApplied` each changeId.
+- Embedder re-delivers held batches after `DrainCausal` reports Ready.
 
 ### E2EE (§14.5 foundation)
 
@@ -42,14 +52,6 @@ KЗ1–KЗ5; **not** auto-wired into `ApplyBatch`.
 **Blind merge:** server/peer LWW compares **ciphertext bytes** with open HLC + `authorNodeId` (spec §14.6).  
 **Not** auto-wired into `WriteField`. Embedder seals before write and opens after read.
 
-```csharp
-var nsKey = E2ee.GenerateNamespaceKey();
-var sealedVal = E2ee.SealField(nsKey, recordId, fieldId, hlc.Wall, hlc.Logical, author, keyEpoch: 1, plaintext);
-node.WriteField(ns, recordId, fieldId, sealedVal); // stores opaque ciphertext
-// later:
-var plain = E2ee.OpenField(nsKey, recordId, fieldId, wall, logical, author, 1, storedCiphertext);
-```
-
 **Still out of scope:** `KEY_ROTATION` frame (§14.9), Ed25519 batch signatures (§14.8), SHREDDED marker / crypto-shredding UX, capability bit plumbing for ENCRYPTED.
 
 ---
@@ -58,4 +60,4 @@ var plain = E2ee.OpenField(nsKey, recordId, fieldId, wall, logical, author, 1, s
 `TlsTestCert`, partial `FlowControl`.
 
 ## Explicitly out of scope
-Full E2EE product path, schema evolution (§18), auto-WAL / auto-causal / auto-merge-registry on `WriteField`.
+Full E2EE product path, schema evolution (§18), auto-WAL on `WriteField`, forcing causal on every `ApplyBatch`.
