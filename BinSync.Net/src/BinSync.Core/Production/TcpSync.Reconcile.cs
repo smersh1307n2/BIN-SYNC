@@ -1,4 +1,4 @@
-// STATE_DIGEST / NEED_RANGE session helpers (§13.1 discovery phase).
+// STATE_DIGEST / NEED_RANGE session helpers (§13.1 discovery + fulfill).
 namespace BinSync;
 
 public sealed partial class TcpSyncSession
@@ -58,5 +58,48 @@ public sealed partial class TcpSyncSession
         if (frame.FrameType != ReconcileFrames.NeedRange)
             throw new FrameException("FRAME_REJECTED");
         return Reconcile.DecodeNeedRange(frame.Payload);
+    }
+
+    /// <summary>
+    /// Reply to a NEED_RANGE with NEED_KEYS listing local recordIds under the prefix
+    /// (discovery only — no payload transfer).
+    /// </summary>
+    public async Task SendNeedKeysAsync(NeedKeysMessage keys, CancellationToken ct = default)
+    {
+        uint streamId = 0x0001_0000u | (uint)keys.NamespaceId;
+        await _transport.SendAsync(
+            FrameCodec.BuildFrame(ReconcileFrames.NeedKeys, streamId, 12, Reconcile.EncodeNeedKeys(keys)),
+            ct).ConfigureAwait(false);
+    }
+
+    public async Task<NeedKeysMessage> ReceiveNeedKeysAsync(CancellationToken ct = default)
+    {
+        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
+            ?? throw new IOException("peer closed during NEED_KEYS");
+        var (frame, _) = FrameCodec.ParseFrame(raw);
+        if (frame.FrameType != ReconcileFrames.NeedKeys)
+            throw new FrameException("FRAME_REJECTED");
+        return Reconcile.DecodeNeedKeys(frame.Payload);
+    }
+
+    /// <summary>
+    /// Fulfill a NEED_RANGE: re-publish local fields under the prefix into the outbox
+    /// and push DELTA_BATCH frames until the outbox for this peer is drained (or one
+    /// empty push). Returns the number of batches successfully pushed and ACKed.
+    /// Peer must run <see cref="ReceiveBatchAsync"/> in parallel for each batch.
+    /// </summary>
+    public async Task<int> FulfillNeedRangeAsync(
+        Node local, NeedRangeMessage need, CancellationToken ct = default)
+    {
+        local.RepublishUnderPrefix(need.NamespaceId, need.Prefix);
+        int pushed = 0;
+        // Cap batches to avoid runaway if peer never ACKs; normal case is 1–few.
+        for (int i = 0; i < 64; i++)
+        {
+            if (!await PushBatchAsync(local, need.NamespaceId, ct: ct).ConfigureAwait(false))
+                break;
+            pushed++;
+        }
+        return pushed;
     }
 }
