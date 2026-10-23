@@ -1,5 +1,5 @@
 // Reconcile ladder (§13.1–13.3): STATE_DIGEST / NEED_RANGE / NEED_KEYS (first slice).
-// Uses existing Digests / BucketAccumulator / StateHash (§9). Full IBLT + SNAPSHOT_CHUNK are P1/P2.
+// Uses existing Digests / BucketAccumulator / StateHash (§9). SNAPSHOT in Snapshot.cs.
 namespace BinSync;
 
 /// <summary>Wire frame type bytes for the reconcile ladder (§12.6).</summary>
@@ -48,7 +48,7 @@ public sealed class NeedKeysMessage
 /// <summary>
 /// Build / encode / compare state digests. Diff result drives NEED_RANGE requests.
 /// </summary>
-public static class Reconcile
+public static partial class Reconcile
 {
     public const int DefaultRadixBits = 8;
 
@@ -58,7 +58,6 @@ public static class Reconcile
         if (!node.Storage.TryGetValue(namespaceId, out var records))
             records = new Dictionary<byte[], Record>(new ByteArrayComparer());
 
-        // Storage keys are recordId; BuildBuckets expects Dictionary<recordId, Record>.
         var dict = new Dictionary<byte[], Record>(new ByteArrayComparer());
         foreach (var (rid, rec) in records)
             dict[rid] = rec;
@@ -77,11 +76,9 @@ public static class Reconcile
         foreach (var b in buckets.OrderBy(x => Convert.ToHexString(x.Prefix), StringComparer.Ordinal))
         {
             var enc = b.CanonicalEncoding();
-            // CanonicalEncoding = prefix || count u32 || xor16 || sum16
             var xor = new byte[16];
             var sum = new byte[16];
             int off = b.Prefix.Length;
-            // count is next 4 bytes LE; then xor; then sum
             if (enc.Length >= off + 4 + 16 + 16)
             {
                 Array.Copy(enc, off + 4, xor, 0, 16);
@@ -236,7 +233,6 @@ public static class Reconcile
 
     private static ulong OutboxHighWater(Node node, int namespaceId)
     {
-        // Best-effort: max per-author seq for this namespace from outbox counters.
         long max = 0;
         foreach (var ((author, ns), seq) in node.OutboxSeqRef)
         {
