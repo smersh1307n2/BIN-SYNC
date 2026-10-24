@@ -5,15 +5,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>BinSync.Core</PackageId>
-    <Version>0.1.0-alpha.2</Version>
+    <Version>0.1.0-alpha.3</Version>
     <Authors>BYN-SYNC</Authors>
-    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches). Public API freeze: docs/PUBLIC-API.md.</Description>
+    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches). Public API freeze: docs/PUBLIC-API.md. Crypto: vendored RFC 8032 Ed25519 (MIT subset via ZtSharp); no BouncyCastle.Cryptography package.</Description>
     <PackageTags>sync;crdt;offline-first;binsync</PackageTags>
     <RepositoryUrl>https://github.com/smersh1307n2/BYN-SYNC</RepositoryUrl>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
+  <!-- Crypto: Ed25519 from scripts/vendor-ed25519-from-ztsharp.sh (CI runs before build). -->
+  <!-- Do NOT add PackageReference Include="BouncyCastle.Cryptography". -->
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />
   </ItemGroup>
