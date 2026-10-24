@@ -6,15 +6,16 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>BinSync.Core</PackageId>
     <Version>0.1.0-alpha.5</Version>
-    <Authors>BYN-SYNC</Authors>
-    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches, CRDT merge, E2EE opt-in). Public API: docs/PUBLIC-API.md. Crypto: vendored RFC 8032 Ed25519 (MIT via ZtSharp); no BouncyCastle.Cryptography.</Description>
+    <Authors>Smersh; BYN-SYNC</Authors>
+    <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches, CRDT merge, E2EE opt-in). Dual license: AGPL-3.0-or-later + commercial (see LICENSE.md). Vendored Ed25519 remains MIT third-party.</Description>
     <PackageTags>sync;crdt;offline-first;binsync;lww;hlc</PackageTags>
     <RepositoryUrl>https://github.com/smersh1307n2/BYN-SYNC</RepositoryUrl>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
-  <!-- Crypto: Ed25519 from scripts/vendor-ed25519-from-ztsharp.sh (CI runs before build). -->
+  <!-- Crypto: Ed25519 from scripts/vendor-ed25519-from-ztsharp.sh (CI runs before build). MIT third-party. -->
   <!-- Do NOT add PackageReference Include="BouncyCastle.Cryptography". -->
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />

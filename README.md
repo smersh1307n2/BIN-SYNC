@@ -9,12 +9,14 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
 | Public API freeze | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
 | Changelog | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
+| License | [`LICENSE.md`](LICENSE.md) |
 | Crypto notice | [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md) |
+| Third-party | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) |
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 
 **Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0`  
 **Branch:** `installing-.net-10-ea6be` · **Tests:** 273 passed (CI)  
-**Crypto:** vendored RFC 8032 Ed25519 (MIT subset from ZtSharp) — **no** `BouncyCastle.Cryptography` NuGet.
+**Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
 ---
 
@@ -105,31 +107,20 @@ await client.PushBatchAsync(clientNode, namespaceId: 1);
 await server.ReceiveBatchAsync(serverNode);
 ```
 
-TLS (lab):
-
-```csharp
-using var cert = TlsTestCert.CreateEphemeral();
-var accept = listener.AcceptAsync(serverNode, serverCertificate: cert);
-var ssl = TlsTestCert.ClientOptions("localhost", cert.GetCertHashString());
-await using var client = await TcpSyncSession.ConnectAsync(
-    clientNode, "127.0.0.1", listener.Port, sslOptions: ssl);
-```
-
----
-
-## Tag / release
-
-```bash
-git fetch origin installing-.net-10-ea6be
-git tag -a v0.1.0-alpha.5 a12bc30bd1747ab8c607087a8128160c8efc4665 \
-  -m "BinSync.Core 0.1.0-alpha.5"
-git push origin v0.1.0-alpha.5
-```
-
-Or create a GitHub Release from that tag.
-
 ---
 
 ## License
 
-MIT (engine). Vendored Ed25519: MIT (ZtSharp / Bouncy Castle subset) — see [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md).
+Same dual-license model as [ZtSharp](https://github.com/smersh1307n2/ZtSharp):
+
+| Component | License |
+|-----------|---------|
+| **Original BYN-SYNC / BinSync code** | **AGPL-3.0-or-later** + **commercial** option |
+| Vendored Ed25519 (Bouncy Castle subset) | **MIT** (not owned by BYN-SYNC; not dual-licensed) |
+| Blake3.Managed | Apache-2.0 (upstream) |
+
+Commercial inquiries: **smersh@bk.ru**
+
+Details: [`LICENSE.md`](LICENSE.md) · [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) · [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md)
+
+> A commercial license covers only original BYN-SYNC code. MIT crypto and other third-party packages stay under their own terms.
