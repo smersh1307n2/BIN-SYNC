@@ -6,9 +6,9 @@ Bouncy Castle C# crypto library (**MIT**), as vendored by ZtSharp
 
 Original copyright: The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
 
-**These files are not original BYN-SYNC code.** They remain under MIT and are
+**These files are not original BIN-SYNC code.** They remain under MIT and are
 **not** covered by the AGPL-3.0-or-later / commercial dual license that applies
-to the rest of BYN-SYNC. See root [`LICENSE.md`](../LICENSE.md) and
+to the rest of BIN-SYNC. See root [`LICENSE.md`](../LICENSE.md) and
 [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md).
 
 ## How sources are produced

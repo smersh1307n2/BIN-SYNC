@@ -1,9 +1,11 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
-Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6**, **addendum v2.3.7**, and **public API freeze** ([PUBLIC-API.md](PUBLIC-API.md)).
+Tracked against **BIN-SYNC-SPECIFICATION.txt v2.3.6** (legacy filename `BYN-SYNC-SPECIFICATION.txt` until renamed), **addendum v2.3.7**, and **public API freeze** ([PUBLIC-API.md](PUBLIC-API.md)).
+
+**Product name:** **BIN-SYNC** (not BYN-SYNC) — see [NAME.md](NAME.md).
 
 **Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
-**Tip:** `e60e1cc` (docs) / engine tip `a12bc30` · **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
+**Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
 **Tests:** **273** passed (CI)
 
 **Spec parity:** **~95%+** — reference engine production-hardened.
@@ -43,14 +45,10 @@ Legend: **done** · **partial** · **missing**
 - [x] Merge §8 complete set
 - [x] Lab edge S4/S12/S13
 - [x] TrustStore §15.6
-- [x] README + PUBLIC-API aligned to alpha.5
+- [x] License AGPL + commercial (crypto MIT)
+- [x] Branding BIN-SYNC (docs); repo slug rename optional on GitHub
 - [x] 273 tests green
-- [x] `scripts/pack-nupkg.sh`
-- [ ] Git tag `v0.1.0-alpha.5` (GitHub Releases UI — requires write access)
-- [ ] nuget.org push (requires API key)
-
-```bash
-git tag -a v0.1.0-alpha.5 a12bc30bd1747ab8c607087a8128160c8efc4665 -m "BinSync.Core 0.1.0-alpha.5"
-git push origin v0.1.0-alpha.5
-bash scripts/pack-nupkg.sh
-```
+- [ ] Git tag `v0.1.0-alpha.5`
+- [ ] nuget.org push
+- [ ] Rename GitHub repository `BYN-SYNC` → `BIN-SYNC`
+- [ ] Rename `BYN-SYNC-SPECIFICATION.txt` → `BIN-SYNC-SPECIFICATION.txt` (large file)

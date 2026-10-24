@@ -1,4 +1,4 @@
-# Third-party notices — BYN-SYNC / BinSync.Core
+# Third-party notices — BIN-SYNC / BinSync.Core
 
 ## Bouncy Castle Ed25519 subset (MIT)
 

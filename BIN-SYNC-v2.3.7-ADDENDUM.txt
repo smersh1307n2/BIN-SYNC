@@ -1,0 +1,42 @@
+# BIN-SYNC CORE — нормативное дополнение v2.3.7
+
+**Статус:** нормативное (перекрывает конфликтующие формулировки v2.3.6)  
+**Базовый документ:** BIN-SYNC-SPECIFICATION.txt (v2.3.6 FINAL, 2026-09-09)  
+**Полный текст поправок (EN):** docs/ERRATA-v2.3.7.md  
+**Дата:** 2026-10-22  
+**Имя:** BIN-SYNC (не BYN-SYNC)
+
+Это дополнение **обязательно** для реализаций, претендующих на совместимость с эталонным
+движком BinSync.Net на ветке hardening. Полный построчный merge в русский корпус v2.3.6
+планируется отдельным редакционным проходом; до его завершения действует настоящий addendum.
+
+---
+
+## Кратко по errata E-1…E-13
+
+| ID | Разделы v2.3.6 | Суть |
+|----|----------------|------|
+| E-1 | §4.3, §4.6, §5.4 | Durable-автор — голый `nodeId` (16 байт); tie-break только по нему |
+| E-2 | §4.4, §12.17 | Watermark эпох ключуется **сессией** `(peer, ns)`, не автором op |
+| E-3 | §10.4 | Приёмный курсор: `(senderPeer, senderEpoch, ns, authorStream)` |
+| E-4 | §10.2.2, §13.6.1 | Push/ACK watermark и ACK на проводе именуют **author stream** |
+| E-5 | §4.3 | Коллизия alias → `UNKNOWN_ALIAS`, без угадывания |
+| E-6 | §13.6.1 | Один durable author stream на один `DELTA_BATCH` |
+| E-7 | §13.6.2 [R4] | Relay: payload verbatim; `authorNodeId` не подменяется |
+| E-8 | §8.3 [E2], §17.23 | Relay по provenance (первое наблюдение), не по исходу merge |
+| E-9 | §4.3 | Durable-реестр авторов только для сборки таблиц сессий |
+| E-10 | §12.7, §8.3 | Seen-set `(senderPeer, ns, changeId)`; инкрементальный `ALIAS_MAP` |
+| E-11 | §4.3 | Симметрия alias-таблиц у обеих сторон сессии |
+| E-12 | §12.17.2 | Цепочка `prevBatchDigest` per-stream; recovery alias после restart |
+| E-13 | §8.3 [E2], §17.37 | Подавление restored-echo / avalanche |
+
+Детали, инварианты и привязка к lab-сценариям — в `docs/ERRATA-v2.3.7.md`.
+
+---
+
+## Версия протокола
+
+Пока корпус v2.3.6 не переписан целиком, печатная строка версии в
+`BIN-SYNC-SPECIFICATION.txt` (legacy path may still be `BYN-SYNC-SPECIFICATION.txt`
+until the file is renamed) остаётся **2.3.6**. Совместимость реализации
+обозначается как **2.3.6 + addendum 2.3.7** (или коротко **2.3.7-implementors**).

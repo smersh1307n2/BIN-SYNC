@@ -1,11 +1,13 @@
-# BYN-SYNC / BinSync.Net
+# BIN-SYNC / BinSync.Net
 
 Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference implementation.
 
+> **Name:** **BIN-SYNC** (binary sync). Not “BYN-SYNC” — that was a typo / old repo slug. See [`docs/NAME.md`](docs/NAME.md).
+
 | Artifact | Path |
 |---|---|
-| Spec (v2.3.6) | [`BYN-SYNC-SPECIFICATION.txt`](BYN-SYNC-SPECIFICATION.txt) |
-| Addendum / errata (v2.3.7) | [`BYN-SYNC-v2.3.7-ADDENDUM.txt`](BYN-SYNC-v2.3.7-ADDENDUM.txt) |
+| Spec (v2.3.6) | [`BYN-SYNC-SPECIFICATION.txt`](BYN-SYNC-SPECIFICATION.txt) *(legacy filename; content is BIN-SYNC CORE)* |
+| Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
 | Public API freeze | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
 | Changelog | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
@@ -47,80 +49,23 @@ Production-hardened reference engine (~95%+ of the normative spec):
 - [.NET SDK 10](https://dotnet.microsoft.com/download) (`net10.0`)
 
 ```bash
-# CI also runs scripts/vendor-ed25519-from-ztsharp.sh before build
-cd BinSync.Net
-dotnet test
-```
-
-Pack NuGet locally:
-
-```bash
-bash scripts/pack-nupkg.sh
-```
-
----
-
-## Minimal usage
-
-```csharp
-var a = new Node(nodeIdA, epoch: 1);
-var b = new Node(nodeIdB, epoch: 1);
-Transport.MakeSession(a, b);
-
-a.WriteField(ns: 1, recordId, fieldId: 1, valueBytes);
-Transport.SyncRound(a, b, namespaceId: 1);
-
-NodePersistence.Save(a, "/path/a.bin");
-var a2 = NodePersistence.Load("/path/a.bin");
-```
-
-### Opt-in surfaces
-
-```csharp
-// E2EE
-a.EnsureE2ee().InstallNamespaceKey(1, E2ee.GenerateNamespaceKey());
-a.WriteFieldSealed(1, recordId, fieldId, plaintext);
-
-// Trust (TOFU / PreShared)
-b.EnsureTrust(TrustMode.Tofu);
-b.TrustPeer(a.NodeId, aPublicKey, TrustMode.PreShared);
-b.VerifyAndApplyBatch(batch, sender, signature, candidatePublicKey);
-
-// Causal
-a.Causal = new CausalTracker();
-a.ApplyBatchCausal(batch, senderPeer);
-
-// Schema gate
-a.Schemas.Register(descriptor);
-a.ApplyBatchWithSchema(batch, senderPeer);
-```
-
-### TCP
-
-```csharp
-await using var listener = TcpSyncListener.Start(port: 9250);
-var accepted = listener.AcceptAsync(serverNode);
-await using var client = await TcpSyncSession.ConnectAsync(clientNode, "127.0.0.1", listener.Port);
-await using var server = await accepted;
-
-await client.PushBatchAsync(clientNode, namespaceId: 1);
-await server.ReceiveBatchAsync(serverNode);
+cd BinSync.Net && dotnet test
 ```
 
 ---
 
 ## License
 
-Same dual-license model as [ZtSharp](https://github.com/smersh1307n2/ZtSharp):
-
 | Component | License |
 |-----------|---------|
-| **Original BYN-SYNC / BinSync code** | **AGPL-3.0-or-later** + **commercial** option |
-| Vendored Ed25519 (Bouncy Castle subset) | **MIT** (not owned by BYN-SYNC; not dual-licensed) |
-| Blake3.Managed | Apache-2.0 (upstream) |
+| **Original BIN-SYNC / BinSync code** | **AGPL-3.0-or-later** + **commercial** |
+| Vendored Ed25519 (Bouncy Castle subset) | **MIT** |
+| Blake3.Managed | Apache-2.0 |
 
-Commercial inquiries: **smersh@bk.ru**
+Commercial: **smersh@bk.ru** · Details: [`LICENSE.md`](LICENSE.md)
 
-Details: [`LICENSE.md`](LICENSE.md) · [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) · [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md)
+---
 
-> A commercial license covers only original BYN-SYNC code. MIT crypto and other third-party packages stay under their own terms.
+## GitHub repository name
+
+Clone URL may still use `smersh1307n2/BYN-SYNC` until you rename the repository to **BIN-SYNC** in GitHub → Settings → General → Repository name.

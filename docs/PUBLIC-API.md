@@ -1,8 +1,9 @@
 # BinSync.Core — Public API surface (freeze for 0.1.x-alpha)
 
 **Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0`  
-Normative: **BYN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
-Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md).
+**Protocol:** **BIN-SYNC CORE** (not BYN-SYNC)  
+Normative: **BIN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
+Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
 
 ---
 

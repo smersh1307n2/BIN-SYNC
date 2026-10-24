@@ -6,9 +6,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>BinSync.Core</PackageId>
     <Version>0.1.0-alpha.5</Version>
-    <Authors>Smersh; BYN-SYNC</Authors>
+    <Authors>Smersh; BIN-SYNC</Authors>
     <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches, CRDT merge, E2EE opt-in). Dual license: AGPL-3.0-or-later + commercial (see LICENSE.md). Vendored Ed25519 remains MIT third-party.</Description>
-    <PackageTags>sync;crdt;offline-first;binsync;lww;hlc</PackageTags>
+    <PackageTags>sync;crdt;offline-first;binsync;lww;hlc;bin-sync</PackageTags>
     <RepositoryUrl>https://github.com/smersh1307n2/BYN-SYNC</RepositoryUrl>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
