@@ -1,8 +1,8 @@
 # BinSync.Core — Public API surface (freeze for 0.1.x-alpha)
 
-**Package:** `BinSync.Core` `0.1.0-alpha.2` · **Target:** `net10.0`  
-Normative: **BYN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md).  
-Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md).
+**Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0`  
+Normative: **BYN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
+Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -11,53 +11,76 @@ Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md).
 ### Engine
 `Node`, `BoundedNode`, `ResourceLimits`, batch/outbox models, `WriteField` / `ApplyBatch` / alias registry, `ApplyRemoteField`, `RepublishUnderPrefix`.
 
-### Wire & codecs
-`FrameCodec`, `Codec`/`Writer`/`Reader` (`B128` vs `Bytes()`), `Ops`, `Hlc`, `Merge`/`MergePolicy`/`MergePolicyRegistry`, digests.
+### Wire & codecs (§6, §12)
+`FrameCodec`, `Codec` / `Writer` / `Reader`, `Ops`, `Hlc`, digests, `FragmentCodec` / `FragmentReassembler` (FLAG_FRAGMENT).
 
 ### Merge (§8)
-`LwwField` (default on `WriteField`), `MaxBytes`/`MinBytes`/`MaxU64`/`MinU64` via `MergeFieldWithPolicy`.
+| Policy | Code | API |
+|--------|------|-----|
+| LWW_FIELD | 0 / default | `WriteField`, `MergeField` |
+| COUNTER_G | 0x03 | `CounterG` + `MergePolicy.CounterG` |
+| COUNTER_PN | 0x04 | `CounterPn` |
+| SET_OR | 0x05 | `SetOr` |
+| SEQ_FRACTIONAL | 0x06 | `SeqFractional` |
+| BLOB_REF | 0x08 | `BlobRef` |
+| MANUAL | 0x09 | `MergePolicy.Manual` + FieldResolve 0x00FF |
+| Max/Min bytes/u64 | 0x81–0x84 | engine extensions |
+
+`MergePolicyRegistry` maps `(ns, fieldId)` → policy.
 
 ### Reconcile (§13)
-`Reconcile` ladder, `Iblt`, `GcNotice`, `MembershipRoster`, bilateral AutoReconcile / IBLT.
+`Reconcile` ladder, `Iblt`, `GcNotice`, `MembershipRoster`, `BuildSnapshot` / `ApplySnapshot`, AutoReconcile / IBLT over TCP.
 
 ### Session / transport
-`ISyncTransport`, TCP (+ TLS opt-in), pipe, loopback, `TcpSyncSession` orchestration APIs.
+`ISyncTransport`, TCP (+ TLS opt-in), pipe, loopback, `TcpSyncSession` / `TcpSyncListener`.
 
 ### Persistence
-`NodePersistence` (full snapshot), `Wal` (manual append / replay / checkpoint).
+`NodePersistence` (full snapshot), `Wal` (append / replay / checkpoint).
 
-### Causal deps (§16.19 experimental)
+### Schema (§18, opt-in)
+`SchemaDescriptor`, `SchemaRegistry`, `Node.Schemas`, `ApplyBatchWithSchema`, SCHEMA_MAP frame 0x04.
 
-| Type / API | Role |
-|------------|------|
-| `CausalTracker` | Known set, pending quarantine, cycle / timeout / lost (KЗ1–KЗ5) |
-| `Node.Causal` | Optional tracker attached to a node |
-| `Node.ApplyBatchCausal` | Gate on `OutboxEntry.CausalDeps` before `ApplyBatchInternal` |
-| `Node.DrainCausal` | Release ready pending ops after parents arrive |
-| `CausalError.CausalDepMissing` | `0x0012` |
+### Causal deps (§16.19, opt-in)
 
-- **`ApplyBatch`** — unchanged; ignores `Causal` and deps.
-- **`ApplyBatchCausal`** — if `Causal` is set: EvaluateBatch; on Pending → EnqueuePending + throw `CAUSAL_DEP_MISSING` (no cursor advance, KЗ4); on Ready → apply + `NoteApplied` each changeId.
-- Embedder re-delivers held batches after `DrainCausal` reports Ready.
+| API | Role |
+|-----|------|
+| `CausalTracker` | Known set, pending, KЗ1–KЗ5 |
+| `Node.Causal` | Optional tracker |
+| `Node.ApplyBatchCausal` / `DrainCausal` | Gate before apply |
+| `CausalWire` | CCD1 trailer encode/decode |
+| `CAUSAL_DEP_MISSING` | 0x0012 |
 
-### E2EE (§14.5 foundation)
+`ApplyBatch` ignores causal; use `ApplyBatchCausal` when enabled.
 
-| Type / API | Role |
-|------------|------|
-| `E2ee.DeriveNonce(...)` | KDF-SHA256 → 12-byte nonce [E1] |
-| `E2ee.Encrypt` / `Decrypt` | ChaCha20-Poly1305 (ciphertext \|\| tag) |
-| `E2ee.SealField` / `OpenField` | nonce from field context + seal/open |
-| `E2ee.GenerateNamespaceKey` | random 32-byte key |
+### E2EE (§14, opt-in)
 
-**Blind merge:** server/peer LWW compares **ciphertext bytes** with open HLC + `authorNodeId` (spec §14.6).  
-**Not** auto-wired into `WriteField`. Embedder seals before write and opens after read.
+| API | Role |
+|-----|------|
+| `E2ee.SealField` / `OpenField` | ChaCha20-Poly1305 |
+| `E2eeKeyRing` / `Node.EnsureE2ee` | Per-namespace keys + epochs |
+| `WriteFieldSealed` / `ReadFieldOpen` | Convenience |
+| `KeyRotation` | Frame 0x11 + proof |
 
-**Still out of scope:** `KEY_ROTATION` frame (§14.9), Ed25519 batch signatures (§14.8), SHREDDED marker / crypto-shredding UX, capability bit plumbing for ENCRYPTED.
+Blind merge compares ciphertext with open HLC + author.
+
+### Signatures & trust (§14.8, §15.6)
+
+| API | Role |
+|-----|------|
+| `BatchSignature` | Ed25519 sign/verify (vendored) |
+| `TrustStore` | TOFU / PreShared / CA roots / revoke |
+| `Node.TrustPeer` / `RevokeTrust` | Pin keys |
+| `VerifyAndApplyBatch` | Signature gate then apply |
+| `SIGNATURE_INVALID` / `TRUST_REVOKED` | 0x0013 / 0x0014 |
+
+### Lab
+`LabFuzzTests` scenarios, `TlsTestCert`, flow-control hooks.
 
 ---
 
-## Lab / unstable
-`TlsTestCert`, partial `FlowControl`.
+## Explicitly out of scope (0.1.x-alpha)
 
-## Explicitly out of scope
-Full E2EE product path, schema evolution (§18), auto-WAL on `WriteField`, forcing causal on every `ApplyBatch`.
+- Full X.509 certificate path validation (CA roots are id allow-list only)
+- Auto-WAL on every `WriteField`
+- Forcing causal / E2EE / trust on every `ApplyBatch` (all opt-in)
+- NuGet.org publish automation (use `scripts/pack-nupkg.sh`)
