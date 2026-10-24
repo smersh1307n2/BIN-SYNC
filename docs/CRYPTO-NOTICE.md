@@ -1,45 +1,24 @@
 # Crypto / Ed25519
 
-## Current state (`installing-.net-10-ea6be`)
-
-### In-tree under `BinSync.Net/src/BinSync.Core/Crypto/`
-
-| Path | Notes |
-|------|--------|
-| `LICENSE.txt` | Bouncy Castle MIT |
-| `Base/IDigest.cs` | ✅ |
-| `Utilities/{IMemoable,Times,Integers}.cs` | ✅ |
-| `Raw/{Bits,Interleave}.cs` | ✅ |
-| `Digests/Sha512Digest.cs` | ✅ |
-| `Digests/LongDigest.Part{00,01,02}.cs` | ✅ partial class |
-| `Ed25519/`, `X25519/`, `Raw/{Nat,Nat256,Mod}`, `Utilities/{Pack,Arrays}` | **via script** |
-
-### Still on NuGet
-
-`BouncyCastle.Cryptography` 2.6.2 in `BinSync.Core.csproj` — keeps tests green until full vendor lands.
-
-## One-shot full vendor
+## Vendor from ZtSharp (preferred)
 
 ```bash
 bash scripts/vendor-ed25519-from-ztsharp.sh
-# removes need for partial LongDigest files — delete Digests/LongDigest.Part*.cs after script
-rm -f BinSync.Net/src/BinSync.Core/Crypto/Digests/LongDigest.Part*.cs
-# then drop NuGet + switch BatchSignature (see below)
 ```
 
-Script downloads 16 files from
-[ZtSharp/Crypto/External](https://github.com/smersh1307n2/ZtSharp/tree/main/ZtSharp/Crypto/External),
-rewrites `ZeroTierNet.Crypto.External` → `BinSync.Crypto`, and patches:
+The script:
 
-- `Arrays` / `Nat` / `Nat256`: strip BigInteger helpers
-- `Mod` / `Ed25519.GeneratePrivateKey`: BCL `RandomNumberGenerator` (no SecureRandom tree)
+1. Downloads **one** ZIP: `https://codeload.github.com/smersh1307n2/ZtSharp/zip/refs/heads/main`
+2. Copies only the RFC 8032 subset from `ZtSharp/Crypto/External/`
+3. Rewrites `ZeroTierNet.Crypto.External` → `BinSync.Crypto`
+4. Patches out SecureRandom / BigInteger dependencies (BCL `RandomNumberGenerator`)
 
-**Do not copy** ZtSharp `C25519KeyPair` (96-byte ZT sigs).
+**Do not** copy ZtSharp `C25519KeyPair` (96-byte ZT signatures).
 
-## After full vendor: switch API
+## After vendor
 
-1. Remove `PackageReference` `BouncyCastle.Cryptography` from `BinSync.Core.csproj`.
-2. `BatchSignature`:
+1. Remove `BouncyCastle.Cryptography` from `BinSync.Core.csproj`.
+2. Switch `BatchSignature` to:
 
 ```csharp
 using BinSync.Crypto.Ed25519;
@@ -48,4 +27,15 @@ Ed25519.Sign(seed, 0, pub, 0, msg, 0, msg.Length, sig, 0);
 Ed25519.Verify(sig, 0, pub, 0, msg, 0, msg.Length);
 ```
 
-3. `dotnet test` → commit `Crypto/` + csproj.
+3. `dotnet test` and commit `Crypto/`.
+
+## Already in-tree (partial)
+
+`Base/IDigest`, `Utilities/{IMemoable,Times,Integers}`, `Raw/{Bits,Interleave}`,
+`Digests/{Sha512Digest,LongDigest.Part*}`, `LICENSE.txt`.
+
+Full tree (incl. `Ed25519.cs`, `Nat*`, `X25519Field`, `Pack`, `Arrays`, `Mod`) comes from the script.
+
+## Current NuGet
+
+`BouncyCastle.Cryptography` 2.6.2 remains until the script is run and `BatchSignature` is switched — keeps CI green.

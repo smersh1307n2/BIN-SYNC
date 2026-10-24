@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
-# Vendor minimal RFC 8032 Ed25519 stack from ZtSharp (Bouncy Castle MIT subset).
+# Vendor minimal RFC 8032 Ed25519 from ZtSharp archive (Bouncy Castle MIT subset).
 # Usage (from repo root):
 #   bash scripts/vendor-ed25519-from-ztsharp.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$ROOT/BinSync.Net/src/BinSync.Core/Crypto"
-BASE_URL="https://raw.githubusercontent.com/smersh1307n2/ZtSharp/main/ZtSharp/Crypto/External"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+ZIP_URL="https://codeload.github.com/smersh1307n2/ZtSharp/zip/refs/heads/main"
+echo "Downloading ZtSharp archive..."
+curl -fsSL --max-time 120 -o "$TMP/ztsharp.zip" "$ZIP_URL"
+unzip -q "$TMP/ztsharp.zip" -d "$TMP"
+SRC=$(find "$TMP" -type d -path '*/ZtSharp/Crypto/External' | head -1)
+if [[ -z "$SRC" || ! -d "$SRC" ]]; then
+  echo "ERROR: Crypto/External not found in archive" >&2
+  exit 1
+fi
+echo "Source: $SRC"
 
 FILES=(
   "LICENSE.txt"
@@ -27,20 +39,18 @@ FILES=(
   "Ed25519/Ed25519.cs"
 )
 
-echo "Vendor dest: $DEST"
+echo "Copying into $DEST"
 mkdir -p "$DEST"
-
 for f in "${FILES[@]}"; do
-  dir=$(dirname "$f")
-  mkdir -p "$DEST/$dir"
-  echo "  GET $f"
-  curl -fsSL "$BASE_URL/$f" -o "$DEST/$f"
+  mkdir -p "$DEST/$(dirname "$f")"
+  cp "$SRC/$f" "$DEST/$f"
+  echo "  $f"
 done
 
-# Remove interim partial LongDigest if present (script installs monolithic LongDigest.cs)
+# Drop interim partial LongDigest if present
 rm -f "$DEST"/Digests/LongDigest.Part*.cs
 
-echo "Rewriting namespaces..."
+echo "Rewriting namespaces ZeroTierNet.Crypto.External -> BinSync.Crypto ..."
 find "$DEST" -name '*.cs' -print0 | xargs -0 sed -i \
   -e 's/ZeroTierNet\.Crypto\.External/BinSync.Crypto/g'
 
@@ -73,7 +83,7 @@ for p in root.rglob("*.cs"):
         t = t.replace("using BinSync.Crypto.Security;\n", "using System.Security.Cryptography;\n")
         t = t.replace(
             "private static readonly SecureRandom RandomSource = new SecureRandom();",
-            "// BinSync: BCL RNG (no SecureRandom vendor)",
+            "// BinSync: BCL RNG",
         )
         t = t.replace("RandomSource.NextBytes(bytes);", "RandomNumberGenerator.Fill(bytes);")
     if p.name == "Ed25519.cs":
@@ -83,10 +93,21 @@ for p in root.rglob("*.cs"):
             "public static void GeneratePrivateKey(byte[] k)\n        {\n            RandomNumberGenerator.Fill(k);\n        }",
         )
     p.write_text(t, encoding="utf-8")
-print("Patched", sum(1 for _ in root.rglob("*.cs")), "cs files under", root)
+
+bad = []
+for p in root.rglob("*.cs"):
+    t = p.read_text()
+    if "SecureRandom" in t or "BigInteger" in t or "ZeroTierNet" in t:
+        bad.append(str(p.relative_to(root)))
+if bad:
+    raise SystemExit("patch incomplete: " + ", ".join(bad))
+print("Patched", sum(1 for _ in root.rglob("*.cs")), "cs files")
 PY
 
-echo "Done. Next:"
+echo "Done. Files:"
+find "$DEST" -type f | sort
+echo ""
+echo "Next:"
 echo "  1) Remove PackageReference BouncyCastle.Cryptography from BinSync.Core.csproj"
-echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519.Ed25519 (docs/CRYPTO-NOTICE.md)"
+echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519 (docs/CRYPTO-NOTICE.md)"
 echo "  3) dotnet test && git add BinSync.Net/src/BinSync.Core/Crypto"
