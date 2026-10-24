@@ -64,9 +64,16 @@ for p in root.rglob("*.cs"):
         t = t[1:]
     t = t.replace("\ufeff", "")
     if p.name == "Arrays.cs":
+        # Remove only the two BigInteger overloads (keep brace balance)
         t = re.sub(
-            r"\n\s*public static BigInteger\[\].*?(?=\n\s*public static|\n\s*})",
-            "\n",
+            r"\n\s*public static BigInteger\[\] CopyOf\(BigInteger\[\] data, int newLength\)\s*\{[^}]*\}",
+            "",
+            t,
+            flags=re.S,
+        )
+        t = re.sub(
+            r"\n\s*public static BigInteger\[\] CopyOfRange\(BigInteger\[\] data, int from, int to\)\s*\{[^}]*\}",
+            "",
             t,
             flags=re.S,
         )
@@ -101,13 +108,12 @@ for p in root.rglob("*.cs"):
         bad.append(str(p.relative_to(root)))
 if bad:
     raise SystemExit("patch incomplete: " + ", ".join(bad))
+# Sanity: Arrays brace balance
+arr = (root / "Utilities" / "Arrays.cs").read_text()
+if arr.count("{") != arr.count("}"):
+    raise SystemExit("Arrays.cs brace imbalance after patch")
 print("Patched", sum(1 for _ in root.rglob("*.cs")), "cs files")
 PY
 
 echo "Done. Files:"
 find "$DEST" -type f | sort
-echo ""
-echo "Next:"
-echo "  1) Remove PackageReference BouncyCastle.Cryptography from BinSync.Core.csproj"
-echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519 (docs/CRYPTO-NOTICE.md)"
-echo "  3) dotnet test && git add BinSync.Net/src/BinSync.Core/Crypto"
