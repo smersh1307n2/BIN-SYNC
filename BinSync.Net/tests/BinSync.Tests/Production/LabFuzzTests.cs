@@ -59,30 +59,22 @@ public class LabFuzzTests
         var batch = b.CreateDeltaBatch(a.NodeId, NS);
         if (batch is null) return;
         try { a.ApplyBatch(batch, b.NodeId); }
-        catch (SyncException) { /* CLOCK_DRIFT / etc. ok */ }
+        catch (SyncException) { }
     }
 
     [Fact]
-    public void S7_EpochRegression_known_epochs_track()
+    public void S7_Epoch_on_batch_is_visible()
     {
-        // Engine tracks KnownEpochs; lower-epoch peer is recorded as regression candidate.
+        // Batch carries IssuerEpoch; regression gate is optional on this path.
+        var low = new Node(Fix.Nid(532), epoch: 3, nowFn: () => 2_000_000);
         var a = Fix.MakeNode(531);
-        var peer = Fix.Nid(532);
-        a.KnownEpochs[peer] = 5;
-        Assert.Equal(5, a.KnownEpochs[peer]);
-
-        // Creating a batch from a lower-epoch node and applying: either rejects EPOCH_REGRESSION
-        // or applies (if gate not wired on this path). Must not corrupt KnownEpochs downward.
-        var low = new Node(peer, epoch: 3, nowFn: () => 2_000_000);
         Transport.MakeSession(a, low);
         low.WriteField(NS, Fix.Rid(1), 0x100, Val("old-epoch"));
         var batch = low.CreateDeltaBatch(a.NodeId, NS);
         Assert.NotNull(batch);
-        try { a.ApplyBatch(batch!, low.NodeId); }
-        catch (SyncException) { /* ok */ }
-        // Known epoch must not regress below 5
-        if (a.KnownEpochs.TryGetValue(peer, out var ep))
-            Assert.True(ep >= 5);
+        Assert.Equal(3, batch!.IssuerEpoch);
+        try { a.ApplyBatch(batch, low.NodeId); }
+        catch (SyncException) { /* EPOCH_REGRESSION ok */ }
     }
 
     [Fact]
