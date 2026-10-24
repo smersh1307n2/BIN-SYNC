@@ -1,5 +1,6 @@
 // Canonical binary codec (§6): ULEB128 varint (overlong rejected), LE fixed ints, b128.
 // Port of binsync/codec.py — all SPEC HARDENING / errata notes preserved.
+// Extended surface (TLV, strings, floats, signed, b256): Codec.Extended.cs.
 using System.Buffers.Binary;
 
 
@@ -10,7 +11,7 @@ public class InvalidVarintException : Exception
     public InvalidVarintException(string msg) : base(msg) { }
 }
 
-public static class Codec
+public static partial class Codec
 {
     public const ulong VarintMaxValue = ulong.MaxValue;
 
@@ -109,7 +110,7 @@ public static class Codec
     }
 }
 
-public class Writer
+public partial class Writer
 {
     private readonly MemoryStream _buf = new();
 
@@ -132,7 +133,7 @@ public class Writer
     public byte[] Value() => _buf.ToArray();
 }
 
-public class Reader
+public partial class Reader
 {
     private readonly byte[] _data;
     public int Pos;
