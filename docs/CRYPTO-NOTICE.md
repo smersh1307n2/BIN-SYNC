@@ -1,31 +1,44 @@
 # Crypto / Ed25519
 
-## Current
+## Current (branch tip)
 
-`BatchSignature` and `KeyRotation` use **NuGet `BouncyCastle.Cryptography` 2.6.2** for RFC 8032 Ed25519.
-.NET 10 BCL still has no `Ed25519` type.
+- **NuGet:** `BouncyCastle.Cryptography` 2.6.2 — used by `BatchSignature` / `KeyRotation`.
+- **Partial in-tree vendor:** `BinSync.Net/src/BinSync.Core/Crypto/` already contains
+  `Base/IDigest.cs`, `Utilities/{IMemoable,Times,Integers}.cs`, `Raw/Bits.cs`, `LICENSE.txt`.
+- **Full vendor:** run from repo root:
 
-## Planned: vendor from ZtSharp (no NuGet)
+```bash
+bash scripts/vendor-ed25519-from-ztsharp.sh
+```
 
-ZtSharp already vendors a **minimal MIT subset** of Bouncy Castle under:
+This downloads the **minimal MIT subset** from
+[`ZtSharp/Crypto/External`](https://github.com/smersh1307n2/ZtSharp/tree/main/ZtSharp/Crypto/External),
+rewrites `ZeroTierNet.Crypto.External` → `BinSync.Crypto`, and applies BinSync patches:
 
-`https://github.com/smersh1307n2/ZtSharp/tree/main/ZtSharp/Crypto/External`
+| Patch | Why |
+|-------|-----|
+| Drop `BigInteger` helpers in `Arrays.cs` | Avoid vendoring 100KB+ BigInteger |
+| `Mod` / `Ed25519.GeneratePrivateKey` use BCL `RandomNumberGenerator` | Skip SecureRandom/Prng/Sha256 tree |
 
-Relevant paths:
+**Do not copy** ZtSharp `C25519KeyPair` (96-byte ZT signatures). BIN-SYNC needs standard **64-byte** Ed25519.
 
-| Path | Role |
-|------|------|
-| `Ed25519/` | `Ed25519.cs`, parameters, signer |
-| `X25519/X25519Field.cs` | field arithmetic used by Ed25519 |
-| `Raw/` | Nat, Nat256, Mod, Interleave, **Bits** |
-| `Digests/` | Sha512 (+ LongDigest) |
-| `Utilities/` | Arrays, Pack, Integers, IMemoable |
-| `Base/IDigest.cs` | digest interface |
+## After full vendor
 
-**Do not copy** ZtSharp `C25519KeyPair` (96-byte ZT signature layout + hash-prefix) — BIN-SYNC needs standard **64-byte** Ed25519 over the canonical batch payload.
+1. Remove `BouncyCastle.Cryptography` from `BinSync.Core.csproj`.
+2. Change `BatchSignature` to call:
 
-Namespace in ZtSharp: `ZeroTierNet.Crypto.External.*` → rewrite to `BinSync.Crypto.*`.
+```csharp
+using BinSync.Crypto.Ed25519;
+// seed 32 bytes, pub 32, sig 64
+Ed25519.GeneratePublicKey(seed, 0, pub, 0);
+Ed25519.Sign(seed, 0, pub, 0, msg, 0, msg.Length, sig, 0);
+Ed25519.Verify(sig, 0, pub, 0, msg, 0, msg.Length);
+```
 
-Local staging (agent workspace): `/home/workdir/artifacts/ed25519-vendor/` with namespaces already rewritten and `Mod.cs` using BCL `RandomNumberGenerator` (no SecureRandom/Prng tree).
+3. `dotnet test` then commit `Crypto/`.
 
-After full vendor lands under `BinSync.Net/src/BinSync.Core/Crypto/`, remove the BouncyCastle PackageReference and point `BatchSignature` at `BinSync.Crypto.Ed25519.Ed25519` static `Sign`/`Verify`/`GeneratePublicKey`.
+## File list (16)
+
+`LICENSE.txt`, `Base/IDigest.cs`, `Utilities/{IMemoable,Times,Integers,Pack,Arrays}.cs`,
+`Raw/{Bits,Interleave,Nat,Nat256,Mod}.cs`, `Digests/{LongDigest,Sha512Digest}.cs`,
+`X25519/X25519Field.cs`, `Ed25519/Ed25519.cs`.
