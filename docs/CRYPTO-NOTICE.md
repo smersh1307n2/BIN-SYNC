@@ -1,14 +1,31 @@
-# Third-party crypto (Ed25519)
+# Crypto / Ed25519
 
-Files under `BinSync.Net/src/BinSync.Core/Crypto/` are a **minimal subset** of the
-Bouncy Castle C# crypto library (MIT), as vendored by ZtSharp
-(`smersh1307n2/ZtSharp`, path `ZtSharp/Crypto/External/`).
+## Current
 
-Original copyright: The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
-License: MIT — see `BinSync.Net/src/BinSync.Core/Crypto/LICENSE.txt`.
+`BatchSignature` and `KeyRotation` use **NuGet `BouncyCastle.Cryptography` 2.6.2** for RFC 8032 Ed25519.
+.NET 10 BCL still has no `Ed25519` type.
 
-Namespace rewritten from `ZeroTierNet.Crypto.External` → `BinSync.Crypto`.
-Unused BigInteger helpers were stripped from `Arrays`.
+## Planned: vendor from ZtSharp (no NuGet)
 
-Used only for RFC 8032 Ed25519 batch signatures and KEY_ROTATION proofs (§14.8–14.9).
-**No** `BouncyCastle.Cryptography` NuGet package is referenced.
+ZtSharp already vendors a **minimal MIT subset** of Bouncy Castle under:
+
+`https://github.com/smersh1307n2/ZtSharp/tree/main/ZtSharp/Crypto/External`
+
+Relevant paths:
+
+| Path | Role |
+|------|------|
+| `Ed25519/` | `Ed25519.cs`, parameters, signer |
+| `X25519/X25519Field.cs` | field arithmetic used by Ed25519 |
+| `Raw/` | Nat, Nat256, Mod, Interleave, **Bits** |
+| `Digests/` | Sha512 (+ LongDigest) |
+| `Utilities/` | Arrays, Pack, Integers, IMemoable |
+| `Base/IDigest.cs` | digest interface |
+
+**Do not copy** ZtSharp `C25519KeyPair` (96-byte ZT signature layout + hash-prefix) — BIN-SYNC needs standard **64-byte** Ed25519 over the canonical batch payload.
+
+Namespace in ZtSharp: `ZeroTierNet.Crypto.External.*` → rewrite to `BinSync.Crypto.*`.
+
+Local staging (agent workspace): `/home/workdir/artifacts/ed25519-vendor/` with namespaces already rewritten and `Mod.cs` using BCL `RandomNumberGenerator` (no SecureRandom/Prng tree).
+
+After full vendor lands under `BinSync.Net/src/BinSync.Core/Crypto/`, remove the BouncyCastle PackageReference and point `BatchSignature` at `BinSync.Crypto.Ed25519.Ed25519` static `Sign`/`Verify`/`GeneratePublicKey`.

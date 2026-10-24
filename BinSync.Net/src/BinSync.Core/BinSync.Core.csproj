@@ -16,5 +16,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />
+    <!-- Temporary: Ed25519 not in BCL (.NET 10). Planned vendor: ZtSharp Crypto/External (MIT subset). -->
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
 </Project>

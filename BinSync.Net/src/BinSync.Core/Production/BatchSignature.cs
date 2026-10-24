@@ -1,9 +1,13 @@
 // Batch authenticity §14.8: Ed25519 over canonical batch sign payload.
-// Uses vendored RFC 8032 implementation (ZtSharp/Bouncy Castle MIT subset) — no NuGet.
+// FLAG_SIGNED (0x02) on the wire is set by the embedder when attaching a signature.
+// Crypto backend: BouncyCastle.Cryptography (temporary). Same API as ZtSharp's
+// Crypto/External/Ed25519 (MIT BC subset) — swap planned without changing this surface.
 using System.Buffers.Binary;
-using System.Security.Cryptography;
 using System.Text;
-using BinSync.Crypto.Ed25519;
+using Org.BouncyCastle.Crypto.Generators;
+using Org.BouncyCastle.Crypto.Parameters;
+using Org.BouncyCastle.Crypto.Signers;
+using Org.BouncyCastle.Security;
 
 namespace BinSync;
 
@@ -15,20 +19,16 @@ public static class BatchSignature
     public const int SeedSize = 32;
     public const int SignatureSize = 64;
 
-    /// <summary>Generate a fresh Ed25519 key pair (32-byte seed + 32-byte public key).</summary>
     public static (byte[] Seed, byte[] PublicKey) GenerateKeyPair()
     {
-        var seed = new byte[SeedSize];
-        RandomNumberGenerator.Fill(seed);
-        var pub = new byte[PublicKeySize];
-        Ed25519.GeneratePublicKey(seed, 0, pub, 0);
-        return (seed, pub);
+        var gen = new Ed25519KeyPairGenerator();
+        gen.Init(new Ed25519KeyGenerationParameters(new SecureRandom()));
+        var kp = gen.GenerateKeyPair();
+        var priv = (Ed25519PrivateKeyParameters)kp.Private;
+        var pub = (Ed25519PublicKeyParameters)kp.Public;
+        return (priv.GetEncoded(), pub.GetEncoded());
     }
 
-    /// <summary>
-    /// Canonical message for batch authenticity:
-    /// domain || namespaceId LE32 || issuerEpoch LE32 || issuerNodeId || batchId || batchDigest.
-    /// </summary>
     public static byte[] BuildSignPayload(
         int namespaceId,
         int issuerEpoch,
@@ -52,31 +52,28 @@ public static class BatchSignature
     public static byte[] BuildSignPayload(Batch batch) =>
         BuildSignPayload(batch.NamespaceId, batch.IssuerEpoch, batch.IssuerNodeId, batch.BatchId, batch.BatchDigest);
 
-    /// <summary>Sign message with Ed25519 private seed (32 bytes). Returns 64-byte signature.</summary>
     public static byte[] Sign(ReadOnlySpan<byte> privateSeed, ReadOnlySpan<byte> message)
     {
         if (privateSeed.Length != SeedSize)
             throw new ArgumentException($"Ed25519 seed must be {SeedSize} bytes", nameof(privateSeed));
-        var sk = privateSeed.ToArray();
-        var pk = new byte[PublicKeySize];
-        Ed25519.GeneratePublicKey(sk, 0, pk, 0);
-        var msg = message.ToArray();
-        var sig = new byte[SignatureSize];
-        Ed25519.Sign(sk, 0, pk, 0, msg, 0, msg.Length, sig, 0);
-        return sig;
+        var priv = new Ed25519PrivateKeyParameters(privateSeed.ToArray(), 0);
+        var signer = new Ed25519Signer();
+        signer.Init(true, priv);
+        signer.BlockUpdate(message.ToArray(), 0, message.Length);
+        return signer.GenerateSignature();
     }
 
-    /// <summary>Verify Ed25519 signature. Returns false on length mismatch or invalid signature.</summary>
     public static bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
     {
         if (publicKey.Length != PublicKeySize || signature.Length != SignatureSize)
             return false;
         try
         {
-            var pk = publicKey.ToArray();
-            var msg = message.ToArray();
-            var sig = signature.ToArray();
-            return Ed25519.Verify(sig, 0, pk, 0, msg, 0, msg.Length);
+            var pub = new Ed25519PublicKeyParameters(publicKey.ToArray(), 0);
+            var verifier = new Ed25519Signer();
+            verifier.Init(false, pub);
+            verifier.BlockUpdate(message.ToArray(), 0, message.Length);
+            return verifier.VerifySignature(signature.ToArray());
         }
         catch (Exception)
         {
