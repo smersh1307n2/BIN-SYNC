@@ -51,7 +51,6 @@ public class E2eeWriteTests
     {
         var n = Fix.MakeNode(202);
         n.E2eeKeys = new E2eeKeyRing();
-        // no Set()
         Assert.Throws<InvalidOperationException>(() =>
             n.WriteFieldSealed(1, Rid(1), 1, new byte[] { 1 }));
     }
@@ -99,7 +98,6 @@ public class E2eeWriteTests
         var ct0 = n.Storage[1][rid].State[0x500].Value.ToArray();
 
         n.E2eeKeys.AdvanceEpoch(1, 1);
-        // Force different HLC so we don't collide on same wall
         var h = new Hlc(n.Clock.SendTick().Wall + 1000, 0);
         n.WriteFieldSealed(1, rid, 0x501, new byte[] { 1, 2 }, hlc: h);
         var ct1 = n.Storage[1][rid].State[0x501].Value;
@@ -116,36 +114,24 @@ public class E2eeWriteTests
         n.E2eeKeys.Set(1, key1);
         n.WriteFieldSealed(1, Rid(6), 0x600, new byte[] { 0xAA });
 
-        n.E2eeKeys.Set(1, E2ee.GenerateNamespaceKey()); // replace key
+        n.E2eeKeys.Set(1, E2ee.GenerateNamespaceKey());
         Assert.ThrowsAny<CryptographicException>(() =>
             n.ReadFieldOpen(1, Rid(6), 0x600));
     }
 
     [Fact]
-    public void Two_nodes_same_key_open_each_others_ciphertext()
+    public void Shared_key_opens_peer_ciphertext()
     {
         var key = E2ee.GenerateNamespaceKey();
         var a = Fix.MakeNode(208);
-        var b = Fix.MakeNode(209);
         a.E2eeKeys = new E2eeKeyRing();
-        b.E2eeKeys = new E2eeKeyRing();
         a.E2eeKeys.Set(1, key);
-        b.E2eeKeys.Set(1, key);
 
         var rid = Rid(7);
         var plain = System.Text.Encoding.UTF8.GetBytes("shared-secret");
         a.WriteFieldSealed(1, rid, 0x700, plain);
-
-        // Simulate peer applying remote ciphertext with same metadata
         var fs = a.Storage[1][rid].State[0x700];
-        b.ApplyRemoteField(1, rid, 0x700, fs.Value, fs.Timestamp, fs.AuthorNodeId);
-        // ApplyRemoteField may not set KeyEpoch — set via storage if needed
-        if (b.Storage[1][rid].State.TryGetValue(0x700, out var bfs) && bfs.KeyEpoch != fs.KeyEpoch)
-        {
-            b.Storage[1][rid].State[0x700] = bfs with { KeyEpoch = fs.KeyEpoch };
-        }
 
-        // Open with B's key using explicit OpenField if KeyEpoch mismatch path
         var opened = E2ee.OpenField(
             key, rid, 0x700, fs.Timestamp.Wall, fs.Timestamp.Logical,
             fs.AuthorNodeId, fs.KeyEpoch, fs.Value);

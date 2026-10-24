@@ -33,7 +33,7 @@ public sealed partial class Node
             var sealedValue = E2ee.SealField(
                 key, recordId, (ushort)fieldId, h.Wall, h.Logical, NodeId, epoch, plaintext);
 
-            var fs = new FieldState(sealedValue, h, NodeId, keyEpoch: epoch);
+            var fs = new FieldState(sealedValue, h, NodeId, KeyEpoch: epoch);
             var op = new OpFieldWrite
             {
                 FieldId = (ushort)fieldId,
@@ -80,8 +80,7 @@ public sealed partial class Node
     }
 
     /// <summary>
-    /// True when the stored field value looks like AEAD ciphertext (len ≥ tag) and opens
-    /// successfully under the configured key. Useful for tests / diagnostics.
+    /// True when the stored field opens successfully under the configured key.
     /// </summary>
     public bool TryOpenField(
         int namespaceId, byte[] recordId, int fieldId, out byte[]? plaintext)
