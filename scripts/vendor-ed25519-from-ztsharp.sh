@@ -2,8 +2,6 @@
 # Vendor minimal RFC 8032 Ed25519 stack from ZtSharp (Bouncy Castle MIT subset).
 # Usage (from repo root):
 #   bash scripts/vendor-ed25519-from-ztsharp.sh
-# Then remove BouncyCastle.Cryptography from BinSync.Core.csproj and switch
-# BatchSignature to BinSync.Crypto.Ed25519 (see docs/CRYPTO-NOTICE.md).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -39,62 +37,45 @@ for f in "${FILES[@]}"; do
   curl -fsSL "$BASE_URL/$f" -o "$DEST/$f"
 done
 
-echo "Rewriting namespaces ZeroTierNet.Crypto.External -> BinSync.Crypto ..."
+echo "Rewriting namespaces..."
 find "$DEST" -name '*.cs' -print0 | xargs -0 sed -i \
-  -e 's/ZeroTierNet\.Crypto\.External/BinSync.Crypto/g' \
-  -e 's/\xEF\xBB\xBF//g'
+  -e 's/ZeroTierNet\.Crypto\.External/BinSync.Crypto/g'
 
-# Strip UTF-8 BOM / U+FEFF if any remain
-python3 - <<'PY'
-from pathlib import Path
-root = Path(r"'''"$DEST"'''".replace("'''",""))
-# DEST injected below
-PY
 python3 - "$DEST" <<'PY'
 from pathlib import Path
 import sys, re
 root = Path(sys.argv[1])
-for p in root.rglob('*.cs'):
-    t = p.read_text(encoding='utf-8')
-    if t.startswith('\ufeff'):
+for p in root.rglob("*.cs"):
+    t = p.read_text(encoding="utf-8")
+    if t.startswith("\ufeff"):
         t = t[1:]
-    t = t.replace('\ufeff', '')
-    # Arrays: drop BigInteger helpers (unused by Ed25519; avoids vendoring BigInteger.cs)
-    if p.name == 'Arrays.cs':
+    t = t.replace("\ufeff", "")
+    if p.name == "Arrays.cs":
         t = re.sub(
-            r'\n\s*public static BigInteger\[\].*?(?=\n\s*public static|\n\s*})',
-            '\n',
+            r"\n\s*public static BigInteger\[\].*?(?=\n\s*public static|\n\s*})",
+            "\n",
             t,
             flags=re.S,
         )
-        t = t.replace('using BinSync.Crypto.Raw;\n', '')
-    # Mod: use BCL RNG instead of SecureRandom/Prng tree
-    if p.name == 'Mod.cs':
-        t = t.replace('using BinSync.Crypto.Security;\n', 'using System.Security.Cryptography;\n')
+        t = t.replace("using BinSync.Crypto.Raw;\n", "")
+    if p.name == "Mod.cs":
+        t = t.replace("using BinSync.Crypto.Security;\n", "using System.Security.Cryptography;\n")
         t = t.replace(
-            'private static readonly SecureRandom RandomSource = new SecureRandom();',
-            '// BinSync: BCL RNG (no SecureRandom vendor)',
+            "private static readonly SecureRandom RandomSource = new SecureRandom();",
+            "// BinSync: BCL RNG (no SecureRandom vendor)",
         )
-        t = t.replace('RandomSource.NextBytes(bytes);', 'RandomNumberGenerator.Fill(bytes);')
-    # Ed25519: GeneratePrivateKey without SecureRandom
-    if p.name == 'Ed25519.cs':
-        t = t.replace('using BinSync.Crypto.Security;\n', 'using System.Security.Cryptography;\n')
+        t = t.replace("RandomSource.NextBytes(bytes);", "RandomNumberGenerator.Fill(bytes);")
+    if p.name == "Ed25519.cs":
+        t = t.replace("using BinSync.Crypto.Security;\n", "using System.Security.Cryptography;\n")
         t = t.replace(
-            '''public static void GeneratePrivateKey(SecureRandom random, byte[] k)
-        {
-            random.NextBytes(k);
-        }''',
-            '''public static void GeneratePrivateKey(byte[] k)
-        {
-            RandomNumberGenerator.Fill(k);
-        }''',
+            "public static void GeneratePrivateKey(SecureRandom random, byte[] k)\n        {\n            random.NextBytes(k);\n        }",
+            "public static void GeneratePrivateKey(byte[] k)\n        {\n            RandomNumberGenerator.Fill(k);\n        }",
         )
-    p.write_text(t, encoding='utf-8')
-print('Patched', sum(1 for _ in root.rglob('*.cs')), 'cs files')
+    p.write_text(t, encoding="utf-8")
+print("Patched", sum(1 for _ in root.rglob("*.cs")), "cs files under", root)
 PY
 
 echo "Done. Next:"
 echo "  1) Remove PackageReference BouncyCastle.Cryptography from BinSync.Core.csproj"
-echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519.Ed25519"
-echo "  3) dotnet test"
-echo "  4) git add BinSync.Net/src/BinSync.Core/Crypto && git commit"
+echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519.Ed25519 (see docs/CRYPTO-NOTICE.md)"
+echo "  3) dotnet test && git add BinSync.Net/src/BinSync.Core/Crypto"
