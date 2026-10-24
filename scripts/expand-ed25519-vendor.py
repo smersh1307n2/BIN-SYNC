@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Expand zlib+base64 vendor blobs into BinSync.Net/src/BinSync.Core/Crypto/."""
+"""Offline expand of zlib+base64 vendor blobs into Crypto/.
+
+PRIMARY path for CI and local is:
+  bash scripts/vendor-ed25519-from-ztsharp.sh
+
+This script is a fallback when the ZtSharp zip is unavailable. It expands
+whatever blobs exist under third_party/ed25519-zlib/. Ed25519.cs.zlib.b64 may
+be absent — prefer the shell vendor script for a complete tree.
+"""
 from pathlib import Path
 import base64, zlib, sys
 
@@ -29,12 +37,14 @@ MAP = {
 def main():
     if not BLOB_DIR.is_dir():
         print("No blob dir", BLOB_DIR, file=sys.stderr)
+        print("Use: bash scripts/vendor-ed25519-from-ztsharp.sh", file=sys.stderr)
         return 1
     n = 0
+    missing = []
     for blob_name, rel in MAP.items():
         src = BLOB_DIR / blob_name
         if not src.is_file():
-            print("skip missing", blob_name)
+            missing.append(blob_name)
             continue
         data = zlib.decompress(base64.b64decode(src.read_text().strip().encode("ascii")))
         out = DEST / rel
@@ -47,8 +57,12 @@ def main():
         for p in digests.glob("LongDigest.Part*.cs"):
             p.unlink()
             print("removed", p.name)
+    if missing:
+        print("skip missing:", ", ".join(missing), file=sys.stderr)
+        print("For a complete Crypto/ tree run:", file=sys.stderr)
+        print("  bash scripts/vendor-ed25519-from-ztsharp.sh", file=sys.stderr)
     print("expanded", n, "files")
-    return 0
+    return 0 if n else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())
