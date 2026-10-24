@@ -1,41 +1,28 @@
-# Crypto / Ed25519
+# Third-party crypto (Ed25519)
 
-## Vendor from ZtSharp (preferred)
+Files under `BinSync.Net/src/BinSync.Core/Crypto/` are a **minimal subset** of the
+Bouncy Castle C# crypto library (MIT), as vendored by ZtSharp
+(`smersh1307n2/ZtSharp`, path `ZtSharp/Crypto/External/`).
+
+Original copyright: The Legion of the Bouncy Castle Inc. (https://www.bouncycastle.org)
+License: MIT — see `Crypto/LICENSE.txt`.
+
+## How sources are produced
 
 ```bash
 bash scripts/vendor-ed25519-from-ztsharp.sh
 ```
 
-The script:
+This downloads the ZtSharp archive from GitHub, copies the 16 required files,
+rewrites namespaces `ZeroTierNet.Crypto.External` → `BinSync.Crypto`, strips
+unused BigInteger helpers from Arrays/Nat, and replaces SecureRandom with
+`System.Security.Cryptography.RandomNumberGenerator`.
 
-1. Downloads **one** ZIP: `https://codeload.github.com/smersh1307n2/ZtSharp/zip/refs/heads/main`
-2. Copies only the RFC 8032 subset from `ZtSharp/Crypto/External/`
-3. Rewrites `ZeroTierNet.Crypto.External` → `BinSync.Crypto`
-4. Patches out SecureRandom / BigInteger dependencies (BCL `RandomNumberGenerator`)
+CI runs the same script before `dotnet build` so Crypto/ is always present
+even if the expanded sources are not committed.
 
-**Do not** copy ZtSharp `C25519KeyPair` (96-byte ZT signatures).
+Optional offline path: `third_party/ed25519-zlib/*.zlib.b64` + 
+`scripts/expand-ed25519-vendor.py` (zlib+base64 blobs of the already-patched sources).
 
-## After vendor
-
-1. Remove `BouncyCastle.Cryptography` from `BinSync.Core.csproj`.
-2. Switch `BatchSignature` to:
-
-```csharp
-using BinSync.Crypto.Ed25519;
-Ed25519.GeneratePublicKey(seed, 0, pub, 0);
-Ed25519.Sign(seed, 0, pub, 0, msg, 0, msg.Length, sig, 0);
-Ed25519.Verify(sig, 0, pub, 0, msg, 0, msg.Length);
-```
-
-3. `dotnet test` and commit `Crypto/`.
-
-## Already in-tree (partial)
-
-`Base/IDigest`, `Utilities/{IMemoable,Times,Integers}`, `Raw/{Bits,Interleave}`,
-`Digests/{Sha512Digest,LongDigest.Part*}`, `LICENSE.txt`.
-
-Full tree (incl. `Ed25519.cs`, `Nat*`, `X25519Field`, `Pack`, `Arrays`, `Mod`) comes from the script.
-
-## Current NuGet
-
-`BouncyCastle.Cryptography` 2.6.2 remains until the script is run and `BatchSignature` is switched — keeps CI green.
+Used only for RFC 8032 Ed25519 batch signatures and KEY_ROTATION proofs (§14.8–14.9).
+**No BouncyCastle.Cryptography NuGet package is referenced.**

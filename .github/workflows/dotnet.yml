@@ -7,10 +7,13 @@ on:
       - "BinSync.Net/**"
       - ".github/workflows/dotnet.yml"
       - "docs/PRODUCTION-STATUS.md"
+      - "scripts/vendor-ed25519-from-ztsharp.sh"
+      - "third_party/ed25519-zlib/**"
   pull_request:
     paths:
       - "BinSync.Net/**"
       - ".github/workflows/dotnet.yml"
+      - "scripts/vendor-ed25519-from-ztsharp.sh"
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +33,9 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
       - name: Restore
         working-directory: BinSync.Net
