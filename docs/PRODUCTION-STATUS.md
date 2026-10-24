@@ -4,9 +4,9 @@ Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6**, **addendum v2.3.7**, and 
 
 **Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset from ZtSharp) — **no `BouncyCastle.Cryptography` NuGet**.  
-**Test suite:** **249+** (CI) + lab edge §17
+**Tests:** **250+** (CI)
 
-**Estimated remaining to full spec parity:** **~8–12%**.
+**Estimated remaining to full spec parity:** **~5–8%** (trust UX, NuGet publish, tag).
 
 Legend: **done** · **partial** · **missing**
 
@@ -22,31 +22,38 @@ Legend: **done** · **partial** · **missing**
 | HLC | §5 | done | |
 | Codec | §6 | **done** | |
 | Data model / lifecycle | §7 | done | |
-| Merge policies | §8 | **done** | SEQ/BLOB optional |
+| Merge policies | §8 | **done** | LWW, CRDT, SEQ_FRACTIONAL, BLOB_REF, MANUAL |
 | Digests | §9 | done | |
 | Outbox / inbox | §10 | done | |
 | Membership / GC | §11 | done | |
-| Wire frames | §12 | done | + FLAG_FRAGMENT reassembly |
+| Wire frames | §12 | done | + FLAG_FRAGMENT |
 | Reconcile ladder | §13 | done | |
 | E2EE | §14 | **done** (opt-in) | |
-| Security | §15 | partial | |
+| Security | §15 | partial | TLS + E2EE + Ed25519 |
 | Causal deps | §16.19 | **done** (opt-in) | |
-| Lab / fuzz | §17 | **done** (core + edge) | S4/S12/S13 covered |
+| Lab / fuzz | §17 | **done** (core + edge) | |
 | Schema evolution | §18 | **done** (opt-in) | |
 | Errata E-1…E-13 | v2.3.7 | done | |
 
 ---
 
-## Lab §17 edge (this cut)
+## Merge §8 complete set
 
-- **S4** snapshot + delta tail for new peer
-- **S12** FLAG_FRAGMENT split / out-of-order reassembly
-- **S13** GC_NOTICE quarantine + purge below cutoff + OUTDATED_WATERMARK code
+| Code | Policy |
+|------|--------|
+| 0x02 / 0 | LWW_FIELD |
+| 0x03 | COUNTER_G |
+| 0x04 | COUNTER_PN |
+| 0x05 | SET_OR |
+| 0x06 | SEQ_FRACTIONAL |
+| 0x08 | BLOB_REF |
+| 0x09 | MANUAL |
+| 0x81–0x84 | Max/Min bytes/u64 |
 
 ---
 
 ## Remaining backlog
 
-1. SEQ_FRACTIONAL / BLOB_REF (if product needs)
-2. Trust / TOFU polish (§15)
-3. Git tag `v0.1.0-alpha.5` + NuGet publish
+1. Trust / TOFU polish (§15)
+2. Git tag `v0.1.0-alpha.5` (create via `git tag` locally or GitHub Releases UI)
+3. NuGet.org publish

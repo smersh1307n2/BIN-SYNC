@@ -1,5 +1,5 @@
 // Merge policies (§8): LWW_FIELD with echo suppression [E2], lifecycle delete-wins,
-// MAX/MIN, COUNTER_G / COUNTER_PN / SET_OR / MANUAL.
+// MAX/MIN, COUNTER_G / COUNTER_PN / SET_OR / MANUAL / SEQ_FRACTIONAL / BLOB_REF.
 namespace BinSync;
 
 /// <summary>§8 field merge strategies. Default is <see cref="LwwField"/>.</summary>
@@ -15,6 +15,10 @@ public enum MergePolicy : byte
     CounterPn = 0x04,
     /// <summary>§8.6 Observed-Remove set.</summary>
     SetOr = 0x05,
+    /// <summary>§8.7 Fractional sequence total order.</summary>
+    SeqFractional = 0x06,
+    /// <summary>§8.8 Immutable blob reference.</summary>
+    BlobRef = 0x08,
     /// <summary>§8.9 Manual — no auto-overwrite; app resolves via FieldResolve 0x00FF.</summary>
     Manual = 0x09,
 
@@ -31,19 +35,15 @@ public enum MergePolicy : byte
 
 public static class Merge
 {
-    /// §8.3 including echo suppression [E2]/[Ш2]: identical (wall, logical, author, value)
-    /// → no-op, changed=false. Returns (winner, changed).
     public static (FieldState Winner, bool Changed) MergeField(FieldState? local, FieldState remote)
         => MergeFieldWithPolicy(local, remote, MergePolicy.LwwField);
 
-    /// <summary>Merge with an explicit <see cref="MergePolicy"/>.</summary>
     public static (FieldState Winner, bool Changed) MergeFieldWithPolicy(
         FieldState? local, FieldState remote, MergePolicy policy)
     {
         if (local is null)
             return (remote, true);
 
-        // Echo suppression [E2]: identical metadata + value → no-op
         if (local.Timestamp.Wall == remote.Timestamp.Wall &&
             local.Timestamp.Logical == remote.Timestamp.Logical &&
             BytesEq(local.AuthorNodeId, remote.AuthorNodeId) &&
@@ -59,14 +59,13 @@ public static class Merge
             MergePolicy.CounterG => MergeCrdtPayload(local, remote, CounterG.Merge),
             MergePolicy.CounterPn => MergeCrdtPayload(local, remote, CounterPn.Merge),
             MergePolicy.SetOr => MergeCrdtPayload(local, remote, SetOr.Merge),
+            MergePolicy.SeqFractional => MergeCrdtPayload(local, remote, SeqFractional.Merge),
+            MergePolicy.BlobRef => MergeCrdtPayload(local, remote, BlobRef.Merge),
             MergePolicy.Manual => MergeManual(local, remote),
             _ => PickLww(local, remote),
         };
     }
 
-    /// <summary>
-    /// CRDT payload merge: merge value bytes; HLC becomes max(local, remote) for metadata.
-    /// </summary>
     private static (FieldState Winner, bool Changed) MergeCrdtPayload(
         FieldState local, FieldState remote, Func<byte[]?, byte[], byte[]> mergeFn)
     {
@@ -85,11 +84,6 @@ public static class Merge
         return (winner, true);
     }
 
-    /// <summary>
-    /// §8.9 MANUAL: never auto-overwrite divergent values.
-    /// Only echo (already handled) or identical value under newer metadata updates HLC.
-    /// Divergent remote is ignored (app must write FieldResolve 0x00FF).
-    /// </summary>
     private static (FieldState Winner, bool Changed) MergeManual(FieldState local, FieldState remote)
     {
         if (BytesEq(local.Value, remote.Value))
@@ -213,9 +207,6 @@ public static class Merge
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
 }
 
-/// <summary>
-/// Optional per-(namespace, fieldId) policy map. Missing keys → <see cref="MergePolicy.LwwField"/>.
-/// </summary>
 public sealed class MergePolicyRegistry
 {
     private readonly Dictionary<(int Ns, ushort FieldId), MergePolicy> _map = new();
