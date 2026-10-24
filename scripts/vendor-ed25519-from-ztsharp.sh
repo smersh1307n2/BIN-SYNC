@@ -37,6 +37,9 @@ for f in "${FILES[@]}"; do
   curl -fsSL "$BASE_URL/$f" -o "$DEST/$f"
 done
 
+# Remove interim partial LongDigest if present (script installs monolithic LongDigest.cs)
+rm -f "$DEST"/Digests/LongDigest.Part*.cs
+
 echo "Rewriting namespaces..."
 find "$DEST" -name '*.cs' -print0 | xargs -0 sed -i \
   -e 's/ZeroTierNet\.Crypto\.External/BinSync.Crypto/g'
@@ -58,6 +61,14 @@ for p in root.rglob("*.cs"):
             flags=re.S,
         )
         t = t.replace("using BinSync.Crypto.Raw;\n", "")
+    if p.name in ("Nat.cs", "Nat256.cs"):
+        for pattern in [
+            r"public static uint\[\] FromBigInteger\(.*?\n        }",
+            r"public static ulong\[\] FromBigInteger64\(.*?\n        }",
+            r"public static BigInteger ToBigInteger\(.*?\n        }",
+            r"public static BigInteger ToBigInteger64\(.*?\n        }",
+        ]:
+            t = re.sub(pattern, "", t, flags=re.S)
     if p.name == "Mod.cs":
         t = t.replace("using BinSync.Crypto.Security;\n", "using System.Security.Cryptography;\n")
         t = t.replace(
@@ -77,5 +88,5 @@ PY
 
 echo "Done. Next:"
 echo "  1) Remove PackageReference BouncyCastle.Cryptography from BinSync.Core.csproj"
-echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519.Ed25519 (see docs/CRYPTO-NOTICE.md)"
+echo "  2) Point BatchSignature at BinSync.Crypto.Ed25519.Ed25519 (docs/CRYPTO-NOTICE.md)"
 echo "  3) dotnet test && git add BinSync.Net/src/BinSync.Core/Crypto"
