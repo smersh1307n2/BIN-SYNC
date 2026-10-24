@@ -2,8 +2,9 @@
 
 Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6**, **addendum v2.3.7** ([ERRATA-v2.3.7.md](ERRATA-v2.3.7.md)), and **public API freeze** ([PUBLIC-API.md](PUBLIC-API.md)).
 
-**Package:** `BinSync.Core` `0.1.0-alpha.2` · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
-**Test suite:** **159+** (prior tip) + E2ee unit tests (see CI)
+**Package:** `BinSync.Core` **`0.1.0-alpha.3`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
+**Crypto:** vendored RFC 8032 Ed25519 (MIT subset from ZtSharp `Crypto/External`) — **no `BouncyCastle.Cryptography` NuGet**.  
+**Test suite:** **159+** + E2ee / BatchSignature (see CI)
 
 Legend: **done** · **partial** · **missing**
 
@@ -25,8 +26,8 @@ Legend: **done** · **partial** · **missing**
 | Membership / GC | §11 | done | |
 | Wire frames | §12 | done | |
 | Reconcile ladder | §13 | done | |
-| E2EE | §14 | partial | **`E2ee`**: nonce KDF [E1] + ChaCha20-Poly1305 seal/open; blind LWW on ciphertext; **no** KEY_ROTATION frame, no auto-hook on WriteField, no Ed25519 batch sign path yet |
-| Security | §15 | partial | TLS + E2EE primitives |
+| E2EE | §14 | partial | ChaCha20-Poly1305 + batch Ed25519 (`BatchSignature` → `BinSync.Crypto.Ed25519`) |
+| Security | §15 | partial | TLS + E2EE + Ed25519 |
 | Causal deps | §16.19 | partial | CausalTracker KЗ1–5 |
 | Lab / fuzz | §17 | partial | |
 | Schema evolution | §18 | missing | |
@@ -45,10 +46,19 @@ Legend: **done** · **partial** · **missing**
 | 1–5 | CI, bilateral IBLT, WAL, merge, fuzz | **done** |
 | 6 | Causal deps | **partial** |
 | 7 | E2EE | **partial** (crypto foundation §14.5) |
-| 8 | KEY_ROTATION / batch Ed25519 / auto-hooks | missing |
+| 8 | KEY_ROTATION / batch Ed25519 | **partial** — `BatchSignature` + vendored Ed25519; KEY_ROTATION frame hooks still open |
+
+---
+
+## Crypto (no BouncyCastle package)
+
+- **Source:** `bash scripts/vendor-ed25519-from-ztsharp.sh` (CI runs before build)
+- **API:** `BinSync.Crypto.Ed25519` (`GeneratePublicKey` / `Sign` / `Verify`)
+- **Consumer:** `BinSync.Production.BatchSignature`
+- **Only NuGet crypto dep:** `Blake3.Managed`
 
 ---
 
 ## Current tip
 
-Branch **`installing-.net-10-ea6be`**. .NET **10.0.x**.
+Branch **`installing-.net-10-ea6be`**. .NET **10.0.x**. Package **0.1.0-alpha.3**.
