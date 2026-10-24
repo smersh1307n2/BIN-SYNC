@@ -1,11 +1,11 @@
 // Merge policies (§8): LWW_FIELD with echo suppression [E2], lifecycle delete-wins,
-// plus optional MAX/MIN (bytes lexicographic or little-endian u64).
+// MAX/MIN, COUNTER_G / COUNTER_PN / SET_OR / MANUAL.
 namespace BinSync;
 
 /// <summary>§8 field merge strategies. Default is <see cref="LwwField"/>.</summary>
 public enum MergePolicy : byte
 {
-    /// <summary>Last-writer-wins by HLC then author (spec default).</summary>
+    /// <summary>Last-writer-wins by HLC then author (engine default).</summary>
     LwwField = 0,
     /// <summary>Lexicographically greater value wins; HLC+author on ties.</summary>
     MaxBytes = 1,
@@ -15,6 +15,16 @@ public enum MergePolicy : byte
     MaxU64 = 3,
     /// <summary>Little-endian u64 numeric min; HLC+author on ties.</summary>
     MinU64 = 4,
+
+    // Spec §8.1 wire codes (stable):
+    /// <summary>§8.4 grow-only counter — per-author max.</summary>
+    CounterG = 0x03,
+    /// <summary>§8.5 PN-counter — component-wise max; value = Σpos − Σneg.</summary>
+    CounterPn = 0x04,
+    /// <summary>§8.6 Observed-Remove set.</summary>
+    SetOr = 0x05,
+    /// <summary>§8.9 Manual — no auto-overwrite; app resolves via FieldResolve 0x00FF.</summary>
+    Manual = 0x09,
 }
 
 public static class Merge
@@ -44,8 +54,46 @@ public static class Merge
             MergePolicy.MinBytes => PickByValue(local, remote, preferGreater: false, numeric: false),
             MergePolicy.MaxU64 => PickByValue(local, remote, preferGreater: true, numeric: true),
             MergePolicy.MinU64 => PickByValue(local, remote, preferGreater: false, numeric: true),
+            MergePolicy.CounterG => MergeCrdtPayload(local, remote, CounterG.Merge),
+            MergePolicy.CounterPn => MergeCrdtPayload(local, remote, CounterPn.Merge),
+            MergePolicy.SetOr => MergeCrdtPayload(local, remote, SetOr.Merge),
+            MergePolicy.Manual => MergeManual(local, remote),
             _ => PickLww(local, remote),
         };
+    }
+
+    /// <summary>
+    /// CRDT payload merge: merge value bytes; HLC becomes max(local, remote) for metadata.
+    /// </summary>
+    private static (FieldState Winner, bool Changed) MergeCrdtPayload(
+        FieldState local, FieldState remote, Func<byte[]?, byte[], byte[]> mergeFn)
+    {
+        var mergedVal = mergeFn(local.Value, remote.Value);
+        bool valChanged = !BytesEq(mergedVal, local.Value);
+        // Metadata: take the dominating HLC so digests stay monotonic
+        FieldState metaWinner;
+        bool metaChanged;
+        (metaWinner, metaChanged) = PickLww(local, remote);
+        if (!valChanged && !metaChanged)
+            return (local, false);
+        var winner = new FieldState(
+            mergedVal,
+            metaWinner.Timestamp,
+            metaWinner.AuthorNodeId,
+            KeyEpoch: metaWinner.KeyEpoch);
+        return (winner, true);
+    }
+
+    /// <summary>
+    /// §8.9 MANUAL: never auto-overwrite divergent values.
+    /// Only echo (already handled) or identical value under newer metadata updates HLC.
+    /// Divergent remote is ignored (app must write FieldResolve 0x00FF).
+    /// </summary>
+    private static (FieldState Winner, bool Changed) MergeManual(FieldState local, FieldState remote)
+    {
+        if (BytesEq(local.Value, remote.Value))
+            return PickLww(local, remote); // same payload — advance metadata if remote newer
+        return (local, false);
     }
 
     private static (FieldState Winner, bool Changed) PickLww(FieldState local, FieldState remote)
