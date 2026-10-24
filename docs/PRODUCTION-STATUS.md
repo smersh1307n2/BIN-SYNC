@@ -2,9 +2,9 @@
 
 Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6**, **addendum v2.3.7** ([ERRATA-v2.3.7.md](ERRATA-v2.3.7.md)), and **public API freeze** ([PUBLIC-API.md](PUBLIC-API.md)).
 
-**Package:** `BinSync.Core` **`0.1.0-alpha.3`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
+**Package:** `BinSync.Core` **`0.1.0-alpha.4`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset from ZtSharp) — **no `BouncyCastle.Cryptography` NuGet**.  
-**Test suite:** **200+** (CI) + schema evolution
+**Test suite:** **212+** (CI) + codec extensions
 
 Legend: **done** · **partial** · **missing**
 
@@ -18,7 +18,7 @@ Legend: **done** · **partial** · **missing**
 | Transport | §3 | done | |
 | Identity, alias, epoch | §4 | done | |
 | HLC | §5 | done | |
-| Codec | §6 | partial | |
+| Codec | §6 | **done** | varint, TLV, UTF-8, f64 (NaN/−0), signed, b256, field sort |
 | Data model, lifecycle | §7 | done | |
 | Merge policies | §8 | partial | LWW + Max/Min |
 | Digests | §9 | done | |
@@ -30,28 +30,24 @@ Legend: **done** · **partial** · **missing**
 | Security | §15 | partial | TLS + E2EE + Ed25519 |
 | Causal deps | §16.19 | **done** (opt-in) | |
 | Lab / fuzz | §17 | partial | |
-| Schema evolution | §18 | **done** (opt-in) | Registry + SCHEMA_MAP + apply gate |
+| Schema evolution | §18 | **done** (opt-in) | |
 | Errata E-1…E-13 | v2.3.7 | done | |
 
 ---
 
-## Delivery order
+## Release **0.1.0-alpha.4**
 
-### P0 + P1 + P2 — complete (opt-in surfaces where noted)
-
-### Schema (§18)
-
-- `SchemaRegistry` — versioned descriptors, field-id non-reuse, policy binding
-- `SchemaMap` — frame 0x04 encode/decode
-- `Node.ApplyBatchWithSchema` / `RegisterSchema` / `LearnSchemaMap`
-- `TcpSync.ExchangeSchemaMapAsync`
+- No BouncyCastle.Cryptography NuGet; Ed25519 vendored from ZtSharp
+- P0–P2 production hardening complete
+- Opt-in: E2EE sealed write, causal deps, schema gate, KEY_ROTATION
+- Codec §6 extensions: TLV / strings / floats / signed / b256
 
 ---
 
 ## Current tip
 
-Branch **`installing-.net-10-ea6be`**. .NET **10.0.x**. Package **0.1.0-alpha.3**.
+Branch **`installing-.net-10-ea6be`**. .NET **10.0.x**. Package **0.1.0-alpha.4**.
 
 ### Next candidates
-1. Codec completeness (§6)
-2. Package release cut (alpha.4)
+1. Merge policies §8 (COUNTER / SET / MANUAL)
+2. Lab / fuzz expansion §17

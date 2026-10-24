@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>BinSync.Core</PackageId>
-    <Version>0.1.0-alpha.3</Version>
+    <Version>0.1.0-alpha.4</Version>
     <Authors>BYN-SYNC</Authors>
     <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches). Public API freeze: docs/PUBLIC-API.md. Crypto: vendored RFC 8032 Ed25519 (MIT subset via ZtSharp); no BouncyCastle.Cryptography package.</Description>
     <PackageTags>sync;crdt;offline-first;binsync</PackageTags>
