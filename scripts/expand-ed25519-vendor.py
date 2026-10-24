@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Expand zlib+base64 vendor blobs into BinSync.Core/Crypto/."""
+"""Expand zlib+base64 vendor blobs into BinSync.Net/src/BinSync.Core/Crypto/."""
 from pathlib import Path
 import base64, zlib, sys
 
@@ -7,7 +7,6 @@ ROOT = Path(__file__).resolve().parents[1]
 BLOB_DIR = ROOT / "third_party" / "ed25519-zlib"
 DEST = ROOT / "BinSync.Net" / "src" / "BinSync.Core" / "Crypto"
 
-# Map blob name -> relative path under Crypto/
 MAP = {
     "LICENSE.txt.zlib.b64": "LICENSE.txt",
     "IDigest.cs.zlib.b64": "Base/IDigest.cs",
@@ -37,16 +36,17 @@ def main():
         if not src.is_file():
             print("skip missing", blob_name)
             continue
-        data = zlib.decompress(base64.b64decode(src.read_text().strip()))
+        data = zlib.decompress(base64.b64decode(src.read_text().strip().encode("ascii")))
         out = DEST / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(data)
         print("wrote", out.relative_to(ROOT), len(data))
         n += 1
-    # remove interim partials
-    for p in (DEST / "Digests").glob("LongDigest.Part*.cs"):
-        p.unlink()
-        print("removed", p.name)
+    digests = DEST / "Digests"
+    if digests.is_dir():
+        for p in digests.glob("LongDigest.Part*.cs"):
+            p.unlink()
+            print("removed", p.name)
     print("expanded", n, "files")
     return 0
 
