@@ -3,13 +3,11 @@ using System;
 
 namespace BinSync.Crypto.Utilities
 {
-    public sealed class Times
+    public static class Times
     {
-        private static long NanosecondsPerTick = 100L;
-
         public static long NanoTime()
         {
-            return DateTime.UtcNow.Ticks * NanosecondsPerTick;
+            return System.Diagnostics.Stopwatch.GetTimestamp() * 1000000000L / System.Diagnostics.Stopwatch.Frequency;
         }
     }
 }
