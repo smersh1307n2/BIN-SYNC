@@ -4,7 +4,7 @@ Tracked against **BYN-SYNC-SPECIFICATION.txt v2.3.6**, **addendum v2.3.7** ([ERR
 
 **Package:** `BinSync.Core` **`0.1.0-alpha.4`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset from ZtSharp) — **no `BouncyCastle.Cryptography` NuGet**.  
-**Test suite:** **212+** (CI) + codec extensions
+**Test suite:** **224+** (CI) + CRDT merge policies
 
 Legend: **done** · **partial** · **missing**
 
@@ -18,13 +18,13 @@ Legend: **done** · **partial** · **missing**
 | Transport | §3 | done | |
 | Identity, alias, epoch | §4 | done | |
 | HLC | §5 | done | |
-| Codec | §6 | **done** | varint, TLV, UTF-8, f64 (NaN/−0), signed, b256, field sort |
+| Codec | §6 | **done** | |
 | Data model, lifecycle | §7 | done | |
-| Merge policies | §8 | partial | LWW + Max/Min |
+| Merge policies | §8 | **done** | LWW, Max/Min, COUNTER_G/PN, SET_OR, MANUAL |
 | Digests | §9 | done | |
 | Outbox / inbox | §10 | done | |
 | Membership / GC | §11 | done | |
-| Wire frames | §12 | done | SCHEMA_MAP 0x04 |
+| Wire frames | §12 | done | |
 | Reconcile ladder | §13 | done | |
 | E2EE | §14 | **done** (opt-in) | |
 | Security | §15 | partial | TLS + E2EE + Ed25519 |
@@ -35,12 +35,11 @@ Legend: **done** · **partial** · **missing**
 
 ---
 
-## Release **0.1.0-alpha.4**
+## Merge (§8)
 
-- No BouncyCastle.Cryptography NuGet; Ed25519 vendored from ZtSharp
-- P0–P2 production hardening complete
-- Opt-in: E2EE sealed write, causal deps, schema gate, KEY_ROTATION
-- Codec §6 extensions: TLV / strings / floats / signed / b256
+- LWW_FIELD + echo suppression [E2]
+- MaxBytes / MinBytes / MaxU64 / MinU64 (engine 0x81–0x84)
+- **COUNTER_G** (0x03) · **COUNTER_PN** (0x04) · **SET_OR** (0x05) · **MANUAL** (0x09)
 
 ---
 
@@ -49,5 +48,5 @@ Legend: **done** · **partial** · **missing**
 Branch **`installing-.net-10-ea6be`**. .NET **10.0.x**. Package **0.1.0-alpha.4**.
 
 ### Next candidates
-1. Merge policies §8 (COUNTER / SET / MANUAL)
-2. Lab / fuzz expansion §17
+1. Lab / fuzz expansion §17
+2. SEQ_FRACTIONAL / BLOB_REF if needed

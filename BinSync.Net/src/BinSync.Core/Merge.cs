@@ -7,16 +7,8 @@ public enum MergePolicy : byte
 {
     /// <summary>Last-writer-wins by HLC then author (engine default).</summary>
     LwwField = 0,
-    /// <summary>Lexicographically greater value wins; HLC+author on ties.</summary>
-    MaxBytes = 1,
-    /// <summary>Lexicographically lesser value wins; HLC+author on ties.</summary>
-    MinBytes = 2,
-    /// <summary>Little-endian u64 numeric max (short/empty → 0); HLC+author on ties.</summary>
-    MaxU64 = 3,
-    /// <summary>Little-endian u64 numeric min; HLC+author on ties.</summary>
-    MinU64 = 4,
 
-    // Spec §8.1 wire codes (stable):
+    // Spec §8.1 wire codes:
     /// <summary>§8.4 grow-only counter — per-author max.</summary>
     CounterG = 0x03,
     /// <summary>§8.5 PN-counter — component-wise max; value = Σpos − Σneg.</summary>
@@ -25,6 +17,16 @@ public enum MergePolicy : byte
     SetOr = 0x05,
     /// <summary>§8.9 Manual — no auto-overwrite; app resolves via FieldResolve 0x00FF.</summary>
     Manual = 0x09,
+
+    // Engine extensions (not in §8.1 table; high range to avoid clashes):
+    /// <summary>Lexicographically greater value wins; HLC+author on ties.</summary>
+    MaxBytes = 0x81,
+    /// <summary>Lexicographically lesser value wins; HLC+author on ties.</summary>
+    MinBytes = 0x82,
+    /// <summary>Little-endian u64 numeric max (short/empty → 0); HLC+author on ties.</summary>
+    MaxU64 = 0x83,
+    /// <summary>Little-endian u64 numeric min; HLC+author on ties.</summary>
+    MinU64 = 0x84,
 }
 
 public static class Merge
@@ -70,7 +72,6 @@ public static class Merge
     {
         var mergedVal = mergeFn(local.Value, remote.Value);
         bool valChanged = !BytesEq(mergedVal, local.Value);
-        // Metadata: take the dominating HLC so digests stay monotonic
         FieldState metaWinner;
         bool metaChanged;
         (metaWinner, metaChanged) = PickLww(local, remote);
@@ -92,7 +93,7 @@ public static class Merge
     private static (FieldState Winner, bool Changed) MergeManual(FieldState local, FieldState remote)
     {
         if (BytesEq(local.Value, remote.Value))
-            return PickLww(local, remote); // same payload — advance metadata if remote newer
+            return PickLww(local, remote);
         return (local, false);
     }
 
@@ -104,9 +105,6 @@ public static class Merge
         return (local, false);
     }
 
-    /// <summary>
-    /// Value-primary merge: compare values; on equality fall back to LWW (HLC+author).
-    /// </summary>
     private static (FieldState Winner, bool Changed) PickByValue(
         FieldState local, FieldState remote, bool preferGreater, bool numeric)
     {
@@ -121,7 +119,6 @@ public static class Merge
         return remoteWins ? (remote, true) : (local, false);
     }
 
-    /// <summary>Unsigned LE interpretation; missing/short bytes pad as zero.</summary>
     public static ulong AsU64(byte[] v)
     {
         if (v is null || v.Length == 0) return 0;
@@ -145,7 +142,6 @@ public static class Merge
         return a.Length.CompareTo(b.Length);
     }
 
-    /// Lifecycle conflict resolution by full order [Ж1–Ж2].
     public static (Hlc Hlc, byte[] Author, byte Value, bool Changed) MergeLifecycle(
         Hlc? localHlc, byte[]? localAuthor, byte localValue,
         Hlc remoteHlc, byte[] remoteAuthor, byte remoteValue)
@@ -219,7 +215,6 @@ public static class Merge
 
 /// <summary>
 /// Optional per-(namespace, fieldId) policy map. Missing keys → <see cref="MergePolicy.LwwField"/>.
-/// Thread-safe for concurrent lookups; mutations should be rare (schema time).
 /// </summary>
 public sealed class MergePolicyRegistry
 {
