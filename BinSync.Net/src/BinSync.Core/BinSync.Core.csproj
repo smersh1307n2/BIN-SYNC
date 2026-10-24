@@ -16,7 +16,5 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />
-    <!-- Ed25519 is not in System.Security.Cryptography as of .NET 10; pure-managed RFC 8032. -->
-    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
   </ItemGroup>
 </Project>
