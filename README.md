@@ -2,10 +2,9 @@
 
 Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference implementation.
 
-> **Name:** **BIN-SYNC** (binary sync). Not “BYN-SYNC” — that was a typo / old repo slug. See [`docs/NAME.md`](docs/NAME.md).
-
 | Artifact | Path |
 |---|---|
+| Spec (v2.3.6) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
 | Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
 | Public API freeze | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
@@ -13,10 +12,11 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | License | [`LICENSE.md`](LICENSE.md) |
 | Crypto notice | [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md) |
 | Third-party | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) |
+| Naming | [`docs/NAME.md`](docs/NAME.md) |
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 
 **Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0`  
-**Branch:** `installing-.net-10-ea6be` · **Tests:** 273 passed (CI)  
+**Branch:** `main` · **Tests:** 273 passed (CI)  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
 ---
@@ -62,8 +62,3 @@ cd BinSync.Net && dotnet test
 | Blake3.Managed | Apache-2.0 |
 
 Commercial: **smersh@bk.ru** · Details: [`LICENSE.md`](LICENSE.md)
-
----
-
-## GitHub repository name
-
