@@ -41,20 +41,33 @@ public static class SeqFractional
     }
 
     /// <summary>
-    /// Compare two items by (parentId hex, orderKey, author hex, seq).
+    /// Compare two items by (parentId bytes lexicographic, orderKey ordinal, author bytes
+    /// lexicographic, seq). Byte-lexicographic comparison is exactly what Python's
+    /// <c>bytes.hex()</c> ordinal comparison encodes (fixed-width lowercase hex preserves
+    /// byte order and length), but without allocating hex strings on the hot path.
     /// Returns &gt;0 if a ranks after b (a is "greater" in total order).
     /// </summary>
     public static int Compare(Item a, Item b)
     {
-        int c = string.CompareOrdinal(
-            Convert.ToHexString(a.ParentId), Convert.ToHexString(b.ParentId));
+        int c = CompareBytesLex(a.ParentId, b.ParentId);
         if (c != 0) return c;
         c = string.CompareOrdinal(a.OrderKey ?? "", b.OrderKey ?? "");
         if (c != 0) return c;
-        c = string.CompareOrdinal(
-            Convert.ToHexString(a.AuthorNodeId), Convert.ToHexString(b.AuthorNodeId));
+        c = CompareBytesLex(a.AuthorNodeId, b.AuthorNodeId);
         if (c != 0) return c;
         return a.Seq.CompareTo(b.Seq);
+    }
+
+    /// <summary>Python-compatible byte ordering: memcmp first, then length.</summary>
+    internal static int CompareBytesLex(byte[]? x, byte[]? y)
+    {
+        ReadOnlySpan<byte> a = x ?? Array.Empty<byte>(), b = y ?? Array.Empty<byte>();
+        int n = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < n; i++)
+        {
+            if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+        }
+        return a.Length.CompareTo(b.Length);
     }
 
     /// <summary>Winner is the item that ranks higher in the total order (or equal → keep either).</summary>
@@ -115,8 +128,7 @@ public static class BlobRef
         if (local is null || local.Length == 0) return remote;
         var a = Decode(local);
         var b = Decode(remote);
-        int cmp = string.CompareOrdinal(
-            Convert.ToHexString(a.BlobId), Convert.ToHexString(b.BlobId));
+        int cmp = SeqFractional.CompareBytesLex(a.BlobId, b.BlobId);
         if (cmp == 0)
             return local; // identical identity — no rewrite
         return cmp < 0 ? remote : local;

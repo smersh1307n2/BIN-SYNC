@@ -21,8 +21,8 @@ public class MergeCrdtTests
     {
         var a = Author(1);
         var b = Author(2);
-        var left = CounterG.Encode(new Dictionary<byte[], ulong>(new BA()) { [a] = 3, [b] = 1 });
-        var right = CounterG.Encode(new Dictionary<byte[], ulong>(new BA()) { [a] = 2, [b] = 5 });
+        var left = CounterG.Encode(new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 3, [b] = 1 });
+        var right = CounterG.Encode(new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 2, [b] = 5 });
         var merged = CounterG.Merge(left, right);
         var map = CounterG.Decode(merged);
         Assert.Equal(3UL, map[a]);
@@ -34,8 +34,8 @@ public class MergeCrdtTests
     public void CounterG_field_merge_policy()
     {
         var a = Author(1);
-        var local = Fs(CounterG.Encode(new Dictionary<byte[], ulong>(new BA()) { [a] = 1 }), wall: 1, authorTail: 1);
-        var remote = Fs(CounterG.Encode(new Dictionary<byte[], ulong>(new BA()) { [a] = 4 }), wall: 2, authorTail: 2);
+        var local = Fs(CounterG.Encode(new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 1 }), wall: 1, authorTail: 1);
+        var remote = Fs(CounterG.Encode(new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 4 }), wall: 2, authorTail: 2);
         var (w, changed) = Merge.MergeFieldWithPolicy(local, remote, MergePolicy.CounterG);
         Assert.True(changed);
         Assert.Equal(4UL, CounterG.Total(w.Value));
@@ -47,8 +47,8 @@ public class MergeCrdtTests
         var a = Author(1);
         var b = Author(2);
         var payload = CounterPn.Encode(
-            new Dictionary<byte[], ulong>(new BA()) { [a] = 10, [b] = 3 },
-            new Dictionary<byte[], ulong>(new BA()) { [a] = 2 });
+            new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 10, [b] = 3 },
+            new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 2 });
         Assert.Equal(11L, CounterPn.Value(payload)); // 10+3-2
     }
 
@@ -57,11 +57,11 @@ public class MergeCrdtTests
     {
         var a = Author(1);
         var left = CounterPn.Encode(
-            new Dictionary<byte[], ulong>(new BA()) { [a] = 5 },
-            new Dictionary<byte[], ulong>(new BA()) { [a] = 1 });
+            new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 5 },
+            new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 1 });
         var right = CounterPn.Encode(
-            new Dictionary<byte[], ulong>(new BA()) { [a] = 3 },
-            new Dictionary<byte[], ulong>(new BA()) { [a] = 4 });
+            new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 3 },
+            new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a] = 4 });
         var merged = CounterPn.Merge(left, right);
         // pos max=5, neg max=4 → value 1
         Assert.Equal(1L, CounterPn.Value(merged));

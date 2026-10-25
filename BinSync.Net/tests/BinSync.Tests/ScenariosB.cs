@@ -14,12 +14,12 @@ public class ScenariosB
     public void Scenario21_BucketRollup()
     {
         // §17.21 / Д10 — buckets roll up to a single StateRootDigest deterministically.
-        var recs = new Dictionary<byte[], Record>(new ByteArrayComparer());
+        var recs = new Dictionary<byte[], Record>(ByteArrayComparer.Instance);
         for (int i = 0; i < 20; i++)
             recs[Rid(i)] = new Record(Rid(i), NS) { State = { [0x0100] = new FieldState(Asc($"v{i}"), new Hlc((ulong)i, 0), Fix.Nid(1)) } };
         var b1 = StateHash.BuildBuckets(recs, 8);
         var root1 = StateHash.StateRootDigest(NS, 0, b1);
-        var rev = new Dictionary<byte[], Record>(new ByteArrayComparer());
+        var rev = new Dictionary<byte[], Record>(ByteArrayComparer.Instance);
         foreach (var kv in recs.Reverse()) rev[kv.Key] = kv.Value;
         var root2 = StateHash.StateRootDigest(NS, 0, StateHash.BuildBuckets(rev, 8));
         Assert.Equal(root1, root2);
@@ -29,7 +29,7 @@ public class ScenariosB
     public void Scenario22_TrustOnFirstUse()
     {
         // §17.22 / Д1 — TOFU: second handshake with different key → TRUST_REVOKED.
-        var pins = new Dictionary<byte[], byte[]>(new ByteArrayComparer());
+        var pins = new Dictionary<byte[], byte[]>(ByteArrayComparer.Instance);
         void Verify(byte[] peer, byte[] key)
         {
             if (pins.TryGetValue(peer, out var pinned) && !pinned.AsSpan().SequenceEqual(key))
@@ -492,9 +492,5 @@ public class ScenariosB
     }
 }
 
-/// Byte-array equality comparer for test-local dictionaries keyed by ids.
-public sealed class ByteArrayComparer : IEqualityComparer<byte[]>
-{
-    public bool Equals(byte[]? x, byte[]? y) => x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
-    public int GetHashCode(byte[] t) { unchecked { int h = 17; foreach (byte b in t) h = h * 31 + b; return h; } }
-}
+// Test-local byte[]-keyed dictionaries now use the engine's canonical
+// BinSync.ByteArrayComparer (see src/BinSync.Core/ByteKeys.cs) — no duplicate comparers.

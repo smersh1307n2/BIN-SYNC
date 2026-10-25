@@ -15,17 +15,26 @@ public sealed record class FieldState(
 
 public class Record
 {
-    public byte[] RecordId;
-    public ushort NamespaceId;
-    public Dictionary<ushort, FieldState> State = new();
+    /// <summary>
+    /// Identity of the record. Keyed dictionaries compare by CONTENT
+    /// (<see cref="ByteArrayComparer"/>), so this array must be treated as immutable:
+    /// mutating its bytes in place would corrupt every index that holds this record.
+    /// </summary>
+    public byte[] RecordId { get; }
+    public ushort NamespaceId { get; }
+    public Dictionary<ushort, FieldState> State { get; } = new();
     public Hlc? LifecycleHlc;
     public byte[]? LifecycleAuthor;
     public byte LifecycleValue = Model.Alive;
-    public Dictionary<ushort, FieldState> FieldTombs = new();
+    public Dictionary<ushort, FieldState> FieldTombs { get; } = new();
 
     public Record(byte[] recordId, ushort namespaceId)
     {
-        RecordId = recordId; NamespaceId = namespaceId;
+        ArgumentNullException.ThrowIfNull(recordId);
+        // Defensive copy: the engine never aliases caller-owned id buffers (a mutated
+        // key elsewhere cannot silently re-hash this record out of its bucket).
+        RecordId = (byte[])recordId.Clone();
+        NamespaceId = namespaceId;
     }
 
     public bool IsDead => LifecycleValue == Model.Dead;

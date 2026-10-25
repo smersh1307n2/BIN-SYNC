@@ -151,7 +151,7 @@ public partial class Writer
     {
         Span<byte> s = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(s, v);
-        _buf.Write(s);
+        WriteScratch(s, 4);
         return this;
     }
 
@@ -159,7 +159,7 @@ public partial class Writer
     {
         Span<byte> s = stackalloc byte[8];
         BinaryPrimitives.WriteInt64LittleEndian(s, v);
-        _buf.Write(s);
+        WriteScratch(s, 8);
         return this;
     }
 

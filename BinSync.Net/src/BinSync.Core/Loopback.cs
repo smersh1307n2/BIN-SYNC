@@ -8,9 +8,9 @@ public class PeerRejectedException : Exception { public PeerRejectedException(st
 public class LoopbackTransport
 {
     public Dictionary<byte[], Node>? Nodes = null;
-    private readonly Dictionary<(byte[], byte[]), (FlowControl Send, FlowControl Recv)> _sessions = new(new TT());
+    private readonly Dictionary<(byte[], byte[]), (FlowControl Send, FlowControl Recv)> _sessions = new(ByteArrayPairComparer.Instance);
     private int _streamCounter = 0;
-    public Dictionary<(byte[], byte[]), int> Streams = new(new TT());
+    public Dictionary<(byte[], byte[]), int> Streams = new(ByteArrayPairComparer.Instance);
 
     public void Register(Node node) => (Nodes ??= new())[node.NodeId] = node;
 
@@ -118,12 +118,5 @@ public class LoopbackTransport
         foreach (var ((a, b), sid) in Streams)
             if (b.AsSpan().SequenceEqual(target.NodeId) && sid == f.StreamId) return a;
         throw new NoSessionException();
-    }
-
-    internal sealed class TT : IEqualityComparer<(byte[], byte[])>
-    {
-        static readonly ByteArrEq B = new();
-        public bool Equals((byte[], byte[]) x, (byte[], byte[]) y) => B.Equals(x.Item1, y.Item1) && B.Equals(x.Item2, y.Item2);
-        public int GetHashCode((byte[], byte[]) t) => HashCode.Combine(B.GetHashCode(t.Item1), B.GetHashCode(t.Item2));
     }
 }
