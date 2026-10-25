@@ -26,11 +26,11 @@ public sealed class TrustedPeer
 /// Thread-safe trust database for Ed25519 peer keys (§15.6).
 /// Opt-in: attach to <see cref="Node.Trust"/> and call <see cref="VerifyBatchOrThrow"/>.
 /// </summary>
-public sealed class TrustStore
+public sealed partial class TrustStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TrustedPeer> _peers = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _caRoots = new(StringComparer.Ordinal); // nodeId hex of CA roots
+    private readonly HashSet<string> _caRoots = new(StringComparer.Ordinal);
 
     public TrustMode DefaultMode { get; set; } = TrustMode.Tofu;
 
@@ -67,7 +67,7 @@ public sealed class TrustStore
 
     public bool IsCaRoot(byte[] nodeId)
     {
-        lock (_gate) return _caRoots.Contains(Key(nodeId));
+        lock (_gate) return _caRoots.Contains(Key(caNodeId));
     }
 
     public void Revoke(byte[] nodeId)
@@ -85,12 +85,6 @@ public sealed class TrustStore
             return _peers.TryGetValue(Key(nodeId), out peer);
     }
 
-    /// <summary>
-    /// Resolve key for <paramref name="nodeId"/>.
-    /// TOFU: first observed <paramref name="candidatePublicKey"/> is pinned.
-    /// PreShared: must already be in store.
-    /// Returns null if untrusted / revoked.
-    /// </summary>
     public byte[]? ResolvePublicKey(byte[] nodeId, byte[]? candidatePublicKey = null)
     {
         lock (_gate)
@@ -99,10 +93,9 @@ public sealed class TrustStore
             if (_peers.TryGetValue(k, out var existing))
             {
                 if (existing.Revoked) return null;
-                // Key substitution attempt under TOFU / pin
                 if (candidatePublicKey is { Length: BatchSignature.PublicKeySize } &&
                     !existing.PublicKey.AsSpan().SequenceEqual(candidatePublicKey))
-                    return null; // TRUST_REVOKED / pin mismatch
+                    return null;
                 return existing.PublicKey;
             }
 
@@ -125,10 +118,6 @@ public sealed class TrustStore
         }
     }
 
-    /// <summary>
-    /// Verify a batch signature under this trust store.
-    /// Throws <see cref="SyncException"/> with TRUST_REVOKED or SIGNATURE_INVALID.
-    /// </summary>
     public void VerifyBatchOrThrow(
         Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
@@ -139,7 +128,6 @@ public sealed class TrustStore
             throw new SyncException("SIGNATURE_INVALID", batch.BatchId);
     }
 
-    /// <summary>Non-throwing verify.</summary>
     public bool TryVerifyBatch(Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
         try
