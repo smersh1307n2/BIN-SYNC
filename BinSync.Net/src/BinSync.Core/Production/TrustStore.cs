@@ -1,18 +1,13 @@
 // Trust model §15.6: TOFU, pre-shared allow-list, simple CA allow-list, revoke.
 namespace BinSync;
 
-/// <summary>How a peer identity key was established.</summary>
 public enum TrustMode : byte
 {
-    /// <summary>First-use: first observed key is pinned forever.</summary>
     Tofu = 1,
-    /// <summary>Only keys explicitly added via <see cref="TrustStore.Allow"/>.</summary>
     PreShared = 2,
-    /// <summary>Keys signed / listed under a trusted root id (allow-list of CA node ids).</summary>
     CertificateAuthority = 3,
 }
 
-/// <summary>One pinned peer public key.</summary>
 public sealed class TrustedPeer
 {
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
@@ -22,10 +17,6 @@ public sealed class TrustedPeer
     public long PinnedAtUnixMs { get; init; }
 }
 
-/// <summary>
-/// Thread-safe trust database for Ed25519 peer keys (§15.6).
-/// Opt-in: attach to <see cref="Node.Trust"/> and call <see cref="VerifyBatchOrThrow"/>.
-/// </summary>
 public sealed partial class TrustStore
 {
     private readonly object _gate = new();
@@ -41,7 +32,6 @@ public sealed partial class TrustStore
 
     static string Key(byte[] nodeId) => Convert.ToHexString(Codec.CanonicalB128(nodeId));
 
-    /// <summary>Pre-share or CA-enrol a peer key (also used after TOFU pin).</summary>
     public void Allow(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
@@ -67,7 +57,7 @@ public sealed partial class TrustStore
 
     public bool IsCaRoot(byte[] nodeId)
     {
-        lock (_gate) return _caRoots.Contains(Key(caNodeId));
+        lock (_gate) return _caRoots.Contains(Key(nodeId));
     }
 
     public void Revoke(byte[] nodeId)
