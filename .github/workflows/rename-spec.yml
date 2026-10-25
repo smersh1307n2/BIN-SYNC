@@ -1,0 +1,49 @@
+name: Rename specification file
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/rename-spec.yml'
+permissions:
+  contents: write
+jobs:
+  rename:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rename and fix links
+        run: |
+          set -euo pipefail
+          if [[ -f BYN-SYNC-SPECIFICATION.txt ]]; then
+            # Content already uses BIN-SYNC; only filename was wrong
+            git mv BYN-SYNC-SPECIFICATION.txt BIN-SYNC-SPECIFICATION.txt
+          fi
+          # Ensure canonical file exists and is full size (prefer BYN source if placeholder present)
+          if [[ -f BIN-SYNC-SPECIFICATION.txt ]] && [[ $(wc -c < BIN-SYNC-SPECIFICATION.txt) -lt 1000 ]] && [[ -f BYN-SYNC-SPECIFICATION.txt ]]; then
+            cp BYN-SYNC-SPECIFICATION.txt BIN-SYNC-SPECIFICATION.txt
+            git add BIN-SYNC-SPECIFICATION.txt
+            git rm -f BYN-SYNC-SPECIFICATION.txt || true
+          fi
+          # Update README / docs references
+          for f in README.md docs/PRODUCTION-STATUS.md docs/PUBLIC-API.md docs/NAME.md BIN-SYNC-v2.3.7-ADDENDUM.txt; do
+            [[ -f "$f" ]] || continue
+            sed -i 's/BYN-SYNC-SPECIFICATION\.txt/BIN-SYNC-SPECIFICATION.txt/g' "$f"
+            sed -i 's|BYN-SYNC-SPECIFICATION|BIN-SYNC-SPECIFICATION|g' "$f"
+            # Clean legacy naming notes about repo rename
+            sed -i 's/smersh1307n2\/BYN-SYNC/smersh1307n2\/BIN-SYNC/g' "$f" || true
+          done
+          # Remove placeholder-sized file if both exist wrongly
+          if [[ -f BYN-SYNC-SPECIFICATION.txt ]]; then
+            git rm -f BYN-SYNC-SPECIFICATION.txt || rm -f BYN-SYNC-SPECIFICATION.txt
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit"
+            exit 0
+          fi
+          git commit -m "branding: rename specification to BIN-SYNC-SPECIFICATION.txt"
+          git push
