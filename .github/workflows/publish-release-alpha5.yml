@@ -1,72 +1,65 @@
 name: Publish v0.1.0-alpha.5
+
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
       - '.github/workflows/publish-release-alpha5.yml'
+
 permissions:
   contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Create tag and GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag
         run: |
           set -euo pipefail
           TAG=v0.1.0-alpha.5
-          # Prefer engine tip if present; else HEAD of main
-          TARGET=$(git rev-parse HEAD)
-
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists"
+            echo "Tag exists"
           else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" "$TARGET" -m "BinSync.Core 0.1.0-alpha.5 — BIN-SYNC CORE reference"
+            git tag -a "$TAG" -m "BinSync.Core 0.1.0-alpha.5"
             git push origin "$TAG"
           fi
 
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists"
-            exit 0
-          fi
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.0-alpha.5
+          name: BinSync.Core 0.1.0-alpha.5
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            ## BinSync.Core 0.1.0-alpha.5
 
-          gh release create "$TAG" \
-            --title "BinSync.Core 0.1.0-alpha.5" \
-            --prerelease \
-            --target "$TARGET" \
-            --notes "## BinSync.Core 0.1.0-alpha.5
+            **Protocol:** BIN-SYNC CORE
+            **Target:** net10.0
+            **License:** AGPL-3.0-or-later + commercial (Ed25519 vendored MIT)
 
-**Protocol:** BIN-SYNC CORE  
-**Repo:** https://github.com/smersh1307n2/BIN-SYNC  
-**Target framework:** net10.0  
-**License:** AGPL-3.0-or-later + commercial option (vendored Ed25519 remains MIT)
+            ### Highlights
+            - No BouncyCastle.Cryptography NuGet — Ed25519 vendored (MIT)
+            - Codec §6, Merge §8 full set, Schema §18, Lab §17
+            - Opt-in: E2EE, causal, KEY_ROTATION, TrustStore TOFU/PreShared
+            - ~273 tests green on CI
 
-### Highlights
-- No \\`BouncyCastle.Cryptography\\` NuGet — Ed25519 vendored (MIT subset)
-- Codec §6, Merge §8 (COUNTER / SET_OR / SEQ_FRACTIONAL / BLOB_REF / MANUAL)
-- Schema §18, Lab §17 (core + edge)
-- Opt-in: E2EE, causal deps, KEY_ROTATION, TrustStore (TOFU / PreShared / revoke)
-- FLAG_FRAGMENT reassembly, TCP + optional TLS
-- ~273 tests green on CI
+            ### Docs
+            - docs/CHANGELOG.md
+            - docs/PRODUCTION-STATUS.md
+            - BIN-SYNC-SPECIFICATION.txt
+            - LICENSE.md
 
-### Package
-\\`BinSync.Core\\` **0.1.0-alpha.5** — single dependency: Blake3.Managed 1.10.0
-
-### Docs
-- [CHANGELOG](docs/CHANGELOG.md)
-- [PRODUCTION-STATUS](docs/PRODUCTION-STATUS.md)
-- [PUBLIC-API](docs/PUBLIC-API.md)
-- [LICENSE](LICENSE.md)
-- Spec: [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt)
-
-### Not in this cut
-- Full X.509 CA path validation
-- NuGet.org publish (run \\`scripts/pack-nupkg.sh\\` locally)
-- Production LTS / security audit
-"
+            ### Not in this cut
+            - NuGet.org publish (scripts/pack-nupkg.sh)
+            - Full X.509 CA path / LTS audit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
