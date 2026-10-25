@@ -49,4 +49,22 @@ public sealed partial class Node
     {
         lock (_gate) Trust?.Revoke(nodeId);
     }
+
+    /// <summary>Persist <see cref="Trust"/> (creating a TOFU store if missing).</summary>
+    public void SaveTrust(string path)
+    {
+        lock (_gate)
+            TrustPersistence.Save(EnsureTrust(), path);
+    }
+
+    /// <summary>Replace <see cref="Trust"/> with a file previously written by <see cref="SaveTrust"/>.</summary>
+    public TrustStore LoadTrust(string path)
+    {
+        var loaded = TrustPersistence.Load(path);
+        lock (_gate)
+        {
+            Trust = loaded;
+            return Trust;
+        }
+    }
 }
