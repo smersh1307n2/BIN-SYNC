@@ -5,6 +5,18 @@ using BinSync.Crypto.Utilities;
 
 namespace BinSync.Crypto.Digests
 {
+    /**
+     * Draft FIPS 180-2 implementation of SHA-512. <b>Note:</b> As this is
+     * based on a draft this implementation is subject to change.
+     *
+     * <pre>
+     *         block  word  digest
+     * SHA-1   512    32    160
+     * SHA-256 512    32    256
+     * SHA-384 1024   64    384
+     * SHA-512 1024   64    512
+     * </pre>
+     */
     public class Sha512Digest
         : LongDigest
     {
@@ -14,7 +26,12 @@ namespace BinSync.Crypto.Digests
         {
         }
 
-        public Sha512Digest(Sha512Digest t)
+        /**
+         * Copy constructor.  This will copy the state of the provided
+         * message digest.
+         */
+        public Sha512Digest(
+            Sha512Digest t)
             : base(t)
         {
         }
@@ -29,7 +46,9 @@ namespace BinSync.Crypto.Digests
             return DigestLength;
         }
 
-        public override int DoFinal(byte[] output, int outOff)
+        public override int DoFinal(
+            byte[]  output,
+            int     outOff)
         {
             Finish();
 
@@ -45,6 +64,7 @@ namespace BinSync.Crypto.Digests
             Reset();
 
             return DigestLength;
+
         }
 
 #if NETCOREAPP2_1_OR_GREATER || NETSTANDARD2_1_OR_GREATER
@@ -67,10 +87,17 @@ namespace BinSync.Crypto.Digests
         }
 #endif
 
+        /**
+        * reset the chaining variables
+        */
         public override void Reset()
         {
             base.Reset();
 
+            /* SHA-512 initial hash value
+             * The first 64 bits of the fractional parts of the square roots
+             * of the first eight prime numbers
+             */
             H1 = 0x6a09e667f3bcc908;
             H2 = 0xbb67ae8584caa73b;
             H3 = 0x3c6ef372fe94f82b;
@@ -80,7 +107,7 @@ namespace BinSync.Crypto.Digests
             H7 = 0x1f83d9abfb41bd6b;
             H8 = 0x5be0cd19137e2179;
         }
-
+		
 		public override IMemoable Copy()
 		{
 			return new Sha512Digest(this);
@@ -89,6 +116,7 @@ namespace BinSync.Crypto.Digests
 		public override void Reset(IMemoable other)
 		{
 			Sha512Digest d = (Sha512Digest)other;
+
 			CopyIn(d);
 		}
     }

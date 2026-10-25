@@ -40,10 +40,13 @@ namespace BinSync.Crypto.Raw
                     |         Bmi2.ParallelBitDeposit(x      , 0x55555555U);
             }
 #endif
+
+            // "shuffle" low half to even bits and high half to odd bits
             x = Bits.BitPermuteStep(x, 0x0000FF00U, 8);
             x = Bits.BitPermuteStep(x, 0x00F000F0U, 4);
             x = Bits.BitPermuteStep(x, 0x0C0C0C0CU, 2);
             x = Bits.BitPermuteStep(x, 0x22222222U, 1);
+
             return ((x >> 1) & M32) << 32 | (x & M32);
         }
 
@@ -57,11 +60,14 @@ namespace BinSync.Crypto.Raw
                 return;
             }
 #endif
+
+            // "shuffle" low half to even bits and high half to odd bits
             x = Bits.BitPermuteStep(x, 0x00000000FFFF0000UL, 16);
             x = Bits.BitPermuteStep(x, 0x0000FF000000FF00UL, 8);
             x = Bits.BitPermuteStep(x, 0x00F000F000F000F0UL, 4);
             x = Bits.BitPermuteStep(x, 0x0C0C0C0C0C0C0C0CUL, 2);
             x = Bits.BitPermuteStep(x, 0x2222222222222222UL, 1);
+
             z[zOff    ] = (x     ) & M64;
             z[zOff + 1] = (x >> 1) & M64;
         }
@@ -94,17 +100,21 @@ namespace BinSync.Crypto.Raw
                 return Bmi2.X64.ParallelBitDeposit(x      , 0xAAAAAAAAAAAAAAAAUL);
             }
 #endif
+
+            // "shuffle" low half to even bits and high half to odd bits
             x = Bits.BitPermuteStep(x, 0x00000000FFFF0000UL, 16);
             x = Bits.BitPermuteStep(x, 0x0000FF000000FF00UL, 8);
             x = Bits.BitPermuteStep(x, 0x00F000F000F000F0UL, 4);
             x = Bits.BitPermuteStep(x, 0x0C0C0C0C0C0C0C0CUL, 2);
             x = Bits.BitPermuteStep(x, 0x2222222222222222UL, 1);
+
             low  = (x     ) & M64R;
             return (x << 1) & M64R;
         }
 
         internal static uint Shuffle(uint x)
         {
+            // "shuffle" low half to even bits and high half to odd bits
             x = Bits.BitPermuteStep(x, 0x0000FF00U, 8);
             x = Bits.BitPermuteStep(x, 0x00F000F0U, 4);
             x = Bits.BitPermuteStep(x, 0x0C0C0C0CU, 2);
@@ -114,6 +124,7 @@ namespace BinSync.Crypto.Raw
 
         internal static ulong Shuffle(ulong x)
         {
+            // "shuffle" low half to even bits and high half to odd bits
             x = Bits.BitPermuteStep(x, 0x00000000FFFF0000UL, 16);
             x = Bits.BitPermuteStep(x, 0x0000FF000000FF00UL, 8);
             x = Bits.BitPermuteStep(x, 0x00F000F000F000F0UL, 4);
@@ -124,6 +135,7 @@ namespace BinSync.Crypto.Raw
 
         internal static uint Shuffle2(uint x)
         {
+            // "shuffle" (twice) low half to even bits and high half to odd bits
             x = Bits.BitPermuteStep(x, 0x00AA00AAU, 7);
             x = Bits.BitPermuteStep(x, 0x0000CCCCU, 14);
             x = Bits.BitPermuteStep(x, 0x00F000F0U, 4);
@@ -133,6 +145,7 @@ namespace BinSync.Crypto.Raw
 
         internal static uint Unshuffle(uint x)
         {
+            // "unshuffle" even bits to low half and odd bits to high half
             x = Bits.BitPermuteStep(x, 0x22222222U, 1);
             x = Bits.BitPermuteStep(x, 0x0C0C0C0CU, 2);
             x = Bits.BitPermuteStep(x, 0x00F000F0U, 4);
@@ -149,6 +162,8 @@ namespace BinSync.Crypto.Raw
                     |  Bmi2.X64.ParallelBitExtract(x, 0x5555555555555555UL);
             }
 #endif
+
+            // "unshuffle" even bits to low half and odd bits to high half
             x = Bits.BitPermuteStep(x, 0x2222222222222222UL, 1);
             x = Bits.BitPermuteStep(x, 0x0C0C0C0C0C0C0C0CUL, 2);
             x = Bits.BitPermuteStep(x, 0x00F000F000F000F0UL, 4);
@@ -166,6 +181,7 @@ namespace BinSync.Crypto.Raw
                 return Bmi2.X64.ParallelBitExtract(x, 0xAAAAAAAAAAAAAAAAUL);
             }
 #endif
+
             ulong u0 = Unshuffle(x);
             even = u0 & 0x00000000FFFFFFFFUL;
             return u0 >> 32;
@@ -182,6 +198,7 @@ namespace BinSync.Crypto.Raw
                     |  Bmi2.X64.ParallelBitExtract(x1, 0xAAAAAAAAAAAAAAAAUL) << 32;
             }
 #endif
+
             ulong u0 = Unshuffle(x0);
             ulong u1 = Unshuffle(x1);
             even = (u1 << 32) | (u0 & 0x00000000FFFFFFFFUL);
@@ -190,6 +207,7 @@ namespace BinSync.Crypto.Raw
 
         internal static uint Unshuffle2(uint x)
         {
+            // "unshuffle" (twice) even bits to low half and odd bits to high half
             x = Bits.BitPermuteStep(x, 0x0000FF00U, 8);
             x = Bits.BitPermuteStep(x, 0x00F000F0U, 4);
             x = Bits.BitPermuteStep(x, 0x0000CCCCU, 14);
