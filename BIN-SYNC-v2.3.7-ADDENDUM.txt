@@ -37,6 +37,6 @@
 ## Версия протокола
 
 Пока корпус v2.3.6 не переписан целиком, печатная строка версии в
-`BIN-SYNC-SPECIFICATION.txt` (legacy path may still be `BYN-SYNC-SPECIFICATION.txt`
+`BIN-SYNC-SPECIFICATION.txt` (legacy path may still be `BIN-SYNC-SPECIFICATION.txt`
 until the file is renamed) остаётся **2.3.6**. Совместимость реализации
 обозначается как **2.3.6 + addendum 2.3.7** (или коротко **2.3.7-implementors**).

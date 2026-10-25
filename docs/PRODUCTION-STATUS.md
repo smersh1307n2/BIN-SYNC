@@ -1,6 +1,5 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
-Tracked against **BIN-SYNC-SPECIFICATION.txt v2.3.6** (legacy filename `BYN-SYNC-SPECIFICATION.txt` until renamed), **addendum v2.3.7**, and **public API freeze** ([PUBLIC-API.md](PUBLIC-API.md)).
 
 **Product name:** **BIN-SYNC** (not BYN-SYNC) — see [NAME.md](NAME.md).
 
@@ -51,4 +50,4 @@ Legend: **done** · **partial** · **missing**
 - [ ] Git tag `v0.1.0-alpha.5`
 - [ ] nuget.org push
 - [ ] Rename GitHub repository `BYN-SYNC` → `BIN-SYNC`
-- [ ] Rename `BYN-SYNC-SPECIFICATION.txt` → `BIN-SYNC-SPECIFICATION.txt` (large file)
+- [ ] Rename `BIN-SYNC-SPECIFICATION.txt` → `BIN-SYNC-SPECIFICATION.txt` (large file)

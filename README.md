@@ -6,7 +6,6 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 
 | Artifact | Path |
 |---|---|
-| Spec (v2.3.6) | [`BYN-SYNC-SPECIFICATION.txt`](BYN-SYNC-SPECIFICATION.txt) *(legacy filename; content is BIN-SYNC CORE)* |
 | Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
 | Public API freeze | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
@@ -68,4 +67,3 @@ Commercial: **smersh@bk.ru** · Details: [`LICENSE.md`](LICENSE.md)
 
 ## GitHub repository name
 
-Clone URL may still use `smersh1307n2/BYN-SYNC` until you rename the repository to **BIN-SYNC** in GitHub → Settings → General → Repository name.
