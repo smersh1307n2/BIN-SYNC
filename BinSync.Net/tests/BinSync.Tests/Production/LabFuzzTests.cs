@@ -214,8 +214,8 @@ public class LabFuzzTests
         var a = Fix.MakeNode(701);
         var b = Fix.MakeNode(702);
         var rid = Fix.Rid(70);
-        var payloadA = CounterG.Encode(new Dictionary<byte[], ulong>(new BA()) { [a.NodeId] = 3 });
-        var payloadB = CounterG.Encode(new Dictionary<byte[], ulong>(new BA()) { [b.NodeId] = 5 });
+        var payloadA = CounterG.Encode(new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [a.NodeId] = 3 });
+        var payloadB = CounterG.Encode(new Dictionary<byte[], ulong>(ByteArrayComparer.Instance) { [b.NodeId] = 5 });
 
         var recA = new Record(rid, NS);
         Merge.ApplyFieldWrite(recA, 0x100, new FieldState(payloadA, new Hlc(1, 0), a.NodeId), MergePolicy.CounterG);

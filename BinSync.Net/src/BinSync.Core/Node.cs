@@ -80,130 +80,17 @@ public sealed partial class PeerState
     // SPEC CORRECTION (errata E-3): receive cursor keyed per SESSION stream
     // (senderPeer, senderEpoch, ns, authorStream) — see Python port for full rationale.
     public long LastAckedSeq = 0;
-    public readonly Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams = new(new BA4());
+    public readonly Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams = new(ByteArrayIIBComparer.Instance);
     // SPEC CORRECTION (errata E-4): push watermark keyed by the AUTHOR STREAM.
-    public readonly Dictionary<byte[], long> StreamAcked = new(new BA());
+    public readonly Dictionary<byte[], long> StreamAcked = new(ByteArrayComparer.Instance);
     public bool InitialSyncComplete = false;
     public int MembershipEpoch = 0;
     public long LastSeen = 0;
     // Deterministic batchId cache keyed by (stream, cursorStart, cursorEnd) (§10.2.2 replay).
-    internal readonly Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids = new(new BAT());
+    internal readonly Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids = new(ByteArrayLLComparer.Instance);
 
     public PeerState(byte[] peer, int ns) { PeerNodeId = peer; NamespaceId = ns; }
     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
-}
-
-internal sealed class BA : IEqualityComparer<byte[]>
-{
-    public bool Equals(byte[]? x, byte[]? y) => x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
-    public int GetHashCode(byte[] t) { unchecked { int h = 17; foreach (byte b in t) h = h * 31 + b; return h; } }
-}
-
-internal sealed class BAT : IEqualityComparer<(byte[], long, long)>
-{
-    public bool Equals((byte[], long, long) x, (byte[], long, long) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
-    public int GetHashCode((byte[], long, long) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2.GetHashCode(), t.Item3.GetHashCode());
-}
-
-internal sealed class BA4 : IEqualityComparer<(byte[], int, int, byte[])>
-{
-    public bool Equals((byte[], int, int, byte[]) x, (byte[], int, int, byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3 && new BA().Equals(x.Item4, y.Item4);
-    public int GetHashCode((byte[], int, int, byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3, new BA().GetHashCode(t.Item4));
-}
-
-internal sealed class BA2 : IEqualityComparer<(byte[], byte[])>
-{
-    public bool Equals((byte[], byte[]) x, (byte[], byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2);
-    public int GetHashCode((byte[], byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2));
-}
-
-// Mixed-key comparers for KnownEpochs: keys are (peer|author, ns|-1|0) — the second
-// component is an INT discriminator, so the tuple comparer must be (bytes, int).
-internal sealed class BAI2 : IEqualityComparer<(byte[], int)>
-{
-    public bool Equals((byte[], int) x, (byte[], int) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2;
-    public int GetHashCode((byte[], int) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2);
-}
-
-internal sealed class BAI3 : IEqualityComparer<(byte[], int, int)>
-{
-    public bool Equals((byte[], int, int) x, (byte[], int, int) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
-    public int GetHashCode((byte[], int, int) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3);
-}
-
-internal sealed class BA2I2 : IEqualityComparer<((byte[], int), (byte[], int))>
-{
-    static readonly BAI2 C = new();
-    public bool Equals(((byte[], int), (byte[], int)) x, ((byte[], int), (byte[], int)) y) =>
-        C.Equals(x.Item1, y.Item1) && C.Equals(x.Item2, y.Item2);
-    public int GetHashCode(((byte[], int), (byte[], int)) t) =>
-        HashCode.Combine(C.GetHashCode(t.Item1), C.GetHashCode(t.Item2));
-}
-
-internal sealed class BA3 : IEqualityComparer<(byte[], byte[], byte[])>
-{
-    public bool Equals((byte[], byte[], byte[]) x, (byte[], byte[], byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2) && new BA().Equals(x.Item3, y.Item3);
-    public int GetHashCode((byte[], byte[], byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2), new BA().GetHashCode(t.Item3));
-}
-
-internal sealed class BAI4 : IEqualityComparer<(byte[], int, int)>
-{
-    public bool Equals((byte[], int, int) x, (byte[], int, int) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
-    public int GetHashCode((byte[], int, int) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3);
-}
-
-internal sealed class BAI4B : IEqualityComparer<((byte[], int, int), byte[])>
-{
-    public bool Equals(((byte[], int, int), byte[]) x, ((byte[], int, int), byte[]) y) =>
-        new BAI4().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2);
-    public int GetHashCode(((byte[], int, int), byte[]) t) =>
-        HashCode.Combine(new BAI4().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2));
-}
-
-internal sealed class BAI5 : IEqualityComparer<(byte[], int, int, byte[])>
-{
-    public bool Equals((byte[], int, int, byte[]) x, (byte[], int, int, byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3 && new BA().Equals(x.Item4, y.Item4);
-    public int GetHashCode((byte[], int, int, byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3, new BA().GetHashCode(t.Item4));
-}
-
-internal sealed class BAPairBytes : IEqualityComparer<(byte[], byte[])>
-{
-    public bool Equals((byte[], byte[]) x, (byte[], byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2);
-    public int GetHashCode((byte[], byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2));
-}
-
-internal sealed class BAIntBytesInt : IEqualityComparer<(int, byte[], int)>
-{
-    public bool Equals((int, byte[], int) x, (int, byte[], int) y) =>
-        x.Item1 == y.Item1 && new BA().Equals(x.Item2, y.Item2) && x.Item3 == y.Item3;
-    public int GetHashCode((int, byte[], int) t) =>
-        HashCode.Combine(t.Item1, new BA().GetHashCode(t.Item2), t.Item3);
-}
-
-public sealed class SeenKeyComparer : IEqualityComparer<(byte[], int, byte[])>
-{
-    public bool Equals((byte[], int, byte[]) x, (byte[], int, byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && new BA().Equals(x.Item3, y.Item3);
-    public int GetHashCode((byte[], int, byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, new BA().GetHashCode(t.Item3));
 }
 
 public sealed partial class Node
@@ -247,36 +134,36 @@ public sealed partial class Node
         {
             _storage.Clear();
             foreach (var (ns, m) in value)
-                _storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, new BA());
+                _storage[ns] = m.Comparer is ByteArrayComparer ? m : new Dictionary<byte[], Record>(m, ByteArrayComparer.Instance);
         }
     }
     // outbox: namespaceId -> list[OutboxEntry] (per-author seq counters inside)
     public Dictionary<int, List<OutboxEntry>> Outbox = new();
-    internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(new BAI2());   // (author, ns) -> seq
+    internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(ByteArrayIntComparer.Instance);   // (author, ns) -> seq
     // inbox idempotency: set of (issuerNodeId, ns, issuerEpoch, batchId)
-    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(new BAI5());
+    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(ByteArrayIIBComparer.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
-    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(new BAI4());
+    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(ByteArrayIIComparer.Instance);
     // BUGFIX: per-STREAM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
-    public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(new BAI4B());
+    public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(ByteArrayIIBNestedComparer.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
-    public Dictionary<byte[], Dictionary<int, (byte[], int)>> AliasToNode = new(new BA());
-    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(new BA());   // BUGFIX (port): inner map keyed by content-equal (nodeId, epoch) pairs — default tuple comparer used byte[] reference equality.
+    public Dictionary<byte[], Dictionary<int, (byte[], int)>> AliasToNode = new(ByteArrayComparer.Instance);
+    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(ByteArrayComparer.Instance);   // BUGFIX (port): inner map keyed by content-equal (nodeId, epoch) pairs — default tuple comparer used byte[] reference equality.
     // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
     // for resolution [А3].
-    public Dictionary<byte[], int> DurableAuthors = new(new BA());   // nodeId -> max known epoch
-    public Dictionary<(byte[], int), PeerState> PeerStates = new(new BAI2());
+    public Dictionary<byte[], int> DurableAuthors = new(ByteArrayComparer.Instance);   // nodeId -> max known epoch
+    public Dictionary<(byte[], int), PeerState> PeerStates = new(ByteArrayIntComparer.Instance);
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     // (E-13 follow-up 2: channel-scoped). Relay eligibility decided by FIRST sighting.
-    public readonly HashSet<(byte[], int, byte[])> SeenChanges = new(new SeenKeyComparer());
+    public readonly HashSet<(byte[], int, byte[])> SeenChanges = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
-    public readonly Dictionary<(byte[], int), byte[]> LastStreamAuthor = new(new BAI2());
+    public readonly Dictionary<(byte[], int), byte[]> LastStreamAuthor = new(ByteArrayIntComparer.Instance);
     // known_epochs: mixed keys — (peer, ns) session watermarks, (author, -1) durable
     // author epochs, (peer, 0) HELLO epoch. See register_session_epoch / learn_author_epoch.
-    public Dictionary<(byte[], int), int> KnownEpochs = new(new BAI2());
-    public readonly HashSet<byte[]> Quarantined = new(new BA());       // zombie nodes requiring resync
+    public Dictionary<(byte[], int), int> KnownEpochs = new(ByteArrayIntComparer.Instance);
+    public readonly HashSet<byte[]> Quarantined = new(ByteArrayComparer.Instance);       // zombie nodes requiring resync
     public List<string> ErrorsOut = new();            // observable error log for tests
     public List<byte[]> AcksOut = new();              // ACKed batchIds
     public readonly HashSet<int> ForbiddenNamespaces = new();
@@ -382,7 +269,7 @@ internal void ResetSessionInternal(byte[] peer)
 internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
     {
         var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (byte[], int)>();
-        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>(new BAI2());
+        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>(ByteArrayIntComparer.Instance);
         var durable = (nodeId, epoch);
         if (revA.TryGetValue(durable, out var existing)) return existing;
         // is the peer's copy already bound to this author?
@@ -499,7 +386,7 @@ internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int e
         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
         // a decoded copy of the same author bytes produced fresh array instances that never
         // matched existing keys (AliasOf misses → spurious UNKNOWN_ALIAS / stale bindings).
-        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new(new BAI2()));
+        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new(ByteArrayIntComparer.Instance));
         var durable = (nodeId, epoch);
         // forbid reuse of an alias for another (nodeId, epoch) within a session
         if (m.TryGetValue(alias, out var occ) && !(occ.Item1.AsSpan().SequenceEqual(nodeId) && occ.Item2 == epoch))
@@ -599,7 +486,7 @@ internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     {
         // BUGFIX (port): the fallback map MUST use the byte-content comparer too — with the
         // default ReferenceEqualityComparer an empty miss-map behaved inconsistently.
-        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(byte[], int), int>(new BAI2());
+        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(byte[], int), int>(ByteArrayIntComparer.Instance);
         // SPEC CORRECTION (errata E-1, Python port `alias_of`): the `epoch` argument is kept
         // for API compatibility ONLY; identity per §4.6 is the bare nodeId. The previous port
         // short-circuited on the exact (nodeId, epoch) pair, which made a stale registration
@@ -636,7 +523,7 @@ internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     }
 
 internal Dictionary<byte[], Record> NsInternal(int namespaceId)
-    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(new BA())); }
+    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(ByteArrayComparer.Instance)); }
 
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
 /// <summary>Thread-safe entry point (production hardening): takes the node gate
@@ -909,7 +796,7 @@ internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
             // pick the CONTIGUOUS stream first (first un-acked seq == acked+1), earliest
             // outbox position; gapped stream as fallback (tail renumbered). BUGFIX/HARDENING
             // (scenario 42 livelock) — see Python port comment.
-            var firstPending = new Dictionary<byte[], long>(new BA());
+            var firstPending = new Dictionary<byte[], long>(ByteArrayComparer.Instance);
             foreach (var e in all)
             {
                 long w = ps.AckedFor(e.AuthorNodeId);   // Errata E-4: per-author watermark
@@ -1212,7 +1099,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
         var nsStore = Ns(batch.NamespaceId);
-        var staged = new Dictionary<byte[], Record>(new BA());
+        var staged = new Dictionary<byte[], Record>(ByteArrayComparer.Instance);
         foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
         int applied = 0;
         var changedIdx = new List<int>();   // indices of entries that actually changed state
@@ -1393,7 +1280,7 @@ internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq
         else
         {
             var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : new List<OutboxEntry>();
-            var heads = new Dictionary<byte[], long>(new BA());
+            var heads = new Dictionary<byte[], long>(ByteArrayComparer.Instance);
             foreach (var e in entries)
                 if (!heads.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur)
                     heads[e.AuthorNodeId] = e.Seq;
@@ -1498,7 +1385,7 @@ internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
 
 internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
     {
-        var d = new Dictionary<byte[], byte[]>(new BA());
+        var d = new Dictionary<byte[], byte[]>(ByteArrayComparer.Instance);
         if (Storage.TryGetValue(namespaceId, out var s))
             foreach (var (rid, rec) in s) d[rid] = Digests.RecordDigest(rec);
         return d;
@@ -1511,19 +1398,19 @@ internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
         lock (_gate) return OutboxSizeInternal(namespaceId);
     }
 
-internal int OutboxSizeInternal(int namespaceId)
+    internal int OutboxSizeInternal(int namespaceId)
     { return Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0; }
 
     internal static Record Clone(Record rec)
     {
         var r = new Record(rec.RecordId, rec.NamespaceId)
         {
-            State = new(rec.State),
             LifecycleHlc = rec.LifecycleHlc,
             LifecycleAuthor = rec.LifecycleAuthor,
             LifecycleValue = rec.LifecycleValue,
-            FieldTombs = new(rec.FieldTombs),
         };
+        foreach (var (fid, fs) in rec.State) r.State[fid] = fs;
+        foreach (var (fid, fs) in rec.FieldTombs) r.FieldTombs[fid] = fs;
         return r;
     }
 

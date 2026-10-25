@@ -1,18 +1,89 @@
 // CRDT-style merge payloads for COUNTER_G / COUNTER_PN / SET_OR (§8.4–8.6).
 namespace BinSync;
 
+/// <summary>
+/// Deterministic ordering helpers mirroring the Python reference's
+/// <c>bytes.hex()</c> ordinal sorts. Byte-lexicographic comparison (memcmp, then
+/// length) is order-isomorphic to lowercase hex string comparison, but allocates
+/// nothing on the hot path.
+/// </summary>
+internal static class ByteOrder
+{
+    public static int CompareBytesLex(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+    {
+        int n = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < n; i++)
+        {
+            if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1;
+        }
+        return a.Length.CompareTo(b.Length);
+    }
+
+    /// <summary>Byte-lexicographic comparer for keys used in LINQ OrderBy lambdas.</summary>
+    public sealed class ByteLexComparer : IComparer<byte[]>
+    {
+        public static readonly ByteLexComparer Instance = new();
+        private ByteLexComparer() { }
+        public int Compare(byte[]? x, byte[]? y) =>
+            CompareBytesLex(x ?? Array.Empty<byte>(), y ?? Array.Empty<byte>());
+    }
+
+    /// <summary>Stable key comparer: bytes lexicographic, then ulong ascending.</summary>
+    private sealed class BytesThenULongComparer : IComparer<(byte[] Key, ulong Secondary)>
+    {
+        public static readonly BytesThenULongComparer Instance = new();
+        public int Compare((byte[] Key, ulong Secondary) x, (byte[] Key, ulong Secondary) y)
+        {
+            int c = CompareBytesLex(x.Key, y.Key);
+            return c != 0 ? c : x.Secondary.CompareTo(y.Secondary);
+        }
+    }
+
+    public static List<(byte[] Key, ulong Secondary)> SortBytesThenULong(
+        IEnumerable<(byte[] Key, ulong Secondary)> items)
+    {
+        var list = items.ToList();
+        list.Sort(BytesThenULongComparer.Instance);
+        return list;
+    }
+
+    /// <summary>Content equality for (bytes, ulong) tuples — replaces hex-string set keys.</summary>
+    public sealed class PairComparer : IEqualityComparer<(byte[] Actor, ulong Seq)>
+    {
+        public static readonly PairComparer Instance = new();
+        private PairComparer() { }
+        public bool Equals((byte[] Actor, ulong Seq) x, (byte[] Actor, ulong Seq) y) =>
+            x.Seq == y.Seq && ByteArrayComparer.Instance.Equals(x.Actor, y.Actor);
+        public int GetHashCode((byte[] Actor, ulong Seq) t) =>
+            HashCode.Combine(ByteArrayComparer.Instance.GetHashCode(t.Actor), t.Seq);
+    }
+
+    /// <summary>Content equality for (bytes, ulong, bytes) tuples.</summary>
+    public sealed class TripleComparer : IEqualityComparer<(byte[] Actor, ulong Seq, byte[] Element)>
+    {
+        public static readonly TripleComparer Instance = new();
+        private TripleComparer() { }
+        public bool Equals((byte[] Actor, ulong Seq, byte[] Element) x,
+                           (byte[] Actor, ulong Seq, byte[] Element) y) =>
+            x.Seq == y.Seq &&
+            ByteArrayComparer.Instance.Equals(x.Actor, y.Actor) &&
+            ByteArrayComparer.Instance.Equals(x.Element, y.Element);
+        public int GetHashCode((byte[] Actor, ulong Seq, byte[] Element) t) =>
+            HashCode.Combine(ByteArrayComparer.Instance.GetHashCode(t.Actor), t.Seq,
+                             ByteArrayComparer.Instance.GetHashCode(t.Element));
+    }
+}
+
 /// <summary>Per-author G-counter component (grow-only).</summary>
 public static class CounterG
 {
     /// <summary>
-    /// Wire: count varint | (author b128 | value u64 LE)* sorted by author hex.
+    /// Wire: count varint | (author b128 | value u64 LE)* sorted by author bytes.
     /// </summary>
     public static byte[] Encode(IReadOnlyDictionary<byte[], ulong> byAuthor)
     {
-        var items = byAuthor
-            .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value))
-            .OrderBy(x => Convert.ToHexString(x.Author), StringComparer.Ordinal)
-            .ToList();
+        var items = ByteOrder.SortBytesThenULong(byAuthor
+            .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value)));
         var w = new Writer();
         w.Varint((ulong)items.Count);
         foreach (var (a, v) in items)
@@ -24,7 +95,7 @@ public static class CounterG
     {
         var r = new Reader(data);
         int n = (int)r.Varint();
-        var map = new Dictionary<byte[], ulong>(new BA());
+        var map = new Dictionary<byte[], ulong>(ByteArrayComparer.Instance);
         for (int i = 0; i < n; i++)
         {
             var a = r.B128();
@@ -38,7 +109,7 @@ public static class CounterG
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var a = local is null || local.Length == 0
-            ? new Dictionary<byte[], ulong>(new BA())
+            ? new Dictionary<byte[], ulong>(ByteArrayComparer.Instance)
             : Decode(local);
         var b = Decode(remote);
         foreach (var (author, val) in b)
@@ -75,10 +146,8 @@ public static class CounterPn
 
     static void WriteMap(Writer w, IReadOnlyDictionary<byte[], ulong> map)
     {
-        var items = map
-            .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value))
-            .OrderBy(x => Convert.ToHexString(x.Author), StringComparer.Ordinal)
-            .ToList();
+        var items = ByteOrder.SortBytesThenULong(map
+            .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value)));
         w.Varint((ulong)items.Count);
         foreach (var (a, v) in items)
             w.B128(a).U64(v);
@@ -95,7 +164,7 @@ public static class CounterPn
     static Dictionary<byte[], ulong> ReadMap(Reader r)
     {
         int n = (int)r.Varint();
-        var map = new Dictionary<byte[], ulong>(new BA());
+        var map = new Dictionary<byte[], ulong>(ByteArrayComparer.Instance);
         for (int i = 0; i < n; i++)
             map[r.B128()] = r.U64();
         return map;
@@ -104,7 +173,7 @@ public static class CounterPn
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var (lp, ln) = local is null || local.Length == 0
-            ? (new Dictionary<byte[], ulong>(new BA()), new Dictionary<byte[], ulong>(new BA()))
+            ? (new Dictionary<byte[], ulong>(ByteArrayComparer.Instance), new Dictionary<byte[], ulong>(ByteArrayComparer.Instance))
             : Decode(local);
         var (rp, rn) = Decode(remote);
         MergeMax(lp, rp);
@@ -150,7 +219,7 @@ public static class SetOr
     /// <summary>
     /// Wire: addCount | (elemLen varint | elem | actor b128 | seq u64)* |
     ///        remCount | (actor b128 | seq u64)*
-    /// Adds sorted by (elem hex, actor hex, seq); removes by (actor hex, seq).
+    /// Adds sorted by (elem bytes, actor bytes, seq); removes by (actor bytes, seq).
     /// </summary>
     public static byte[] Encode(IReadOnlyList<Add> adds, IReadOnlyList<Dot> removes)
     {
@@ -161,13 +230,13 @@ public static class SetOr
                 Actor = Codec.CanonicalB128(a.Actor),
                 Seq = a.Seq,
             })
-            .OrderBy(a => Convert.ToHexString(a.Element), StringComparer.Ordinal)
-            .ThenBy(a => Convert.ToHexString(a.Actor), StringComparer.Ordinal)
+            .OrderBy(a => a.Element, ByteOrder.ByteLexComparer.Instance)
+            .ThenBy(a => a.Actor, ByteOrder.ByteLexComparer.Instance)
             .ThenBy(a => a.Seq)
             .ToList();
         var remSorted = removes
             .Select(d => new Dot { Actor = Codec.CanonicalB128(d.Actor), Seq = d.Seq })
-            .OrderBy(d => Convert.ToHexString(d.Actor), StringComparer.Ordinal)
+            .OrderBy(d => d.Actor, ByteOrder.ByteLexComparer.Instance)
             .ThenBy(d => d.Seq)
             .ToList();
 
@@ -202,23 +271,23 @@ public static class SetOr
             : Decode(local);
         var (ra, rr) = Decode(remote);
 
-        // Union of adds (dedupe by actor+seq+elem) and removes (by actor+seq)
-        var addKey = new HashSet<string>(StringComparer.Ordinal);
+        // Union of adds (dedupe by actor+seq+elem) and removes (by actor+seq).
+        // Structural hash-set keys — no hex-string materialization.
+        var addKey = new HashSet<(byte[] Actor, ulong Seq, byte[] Element)>(
+            ByteOrder.TripleComparer.Instance);
         var mergedAdds = new List<Add>();
         void AddOne(Add a)
         {
-            var k = Convert.ToHexString(a.Actor) + ":" + a.Seq + ":" + Convert.ToHexString(a.Element);
-            if (addKey.Add(k)) mergedAdds.Add(a);
+            if (addKey.Add((a.Actor, a.Seq, a.Element))) mergedAdds.Add(a);
         }
         foreach (var a in la) AddOne(a);
         foreach (var a in ra) AddOne(a);
 
-        var remKey = new HashSet<string>(StringComparer.Ordinal);
+        var remKey = new HashSet<(byte[] Actor, ulong Seq)>(ByteOrder.PairComparer.Instance);
         var mergedRem = new List<Dot>();
         void RemOne(Dot d)
         {
-            var k = Convert.ToHexString(d.Actor) + ":" + d.Seq;
-            if (remKey.Add(k)) mergedRem.Add(d);
+            if (remKey.Add((d.Actor, d.Seq))) mergedRem.Add(d);
         }
         foreach (var d in lr) RemOne(d);
         foreach (var d in rr) RemOne(d);
@@ -230,17 +299,14 @@ public static class SetOr
     public static List<byte[]> Visible(byte[] data)
     {
         var (adds, rems) = Decode(data);
-        var removed = new HashSet<string>(
-            rems.Select(d => Convert.ToHexString(d.Actor) + ":" + d.Seq),
-            StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var removed = new HashSet<(byte[] Actor, ulong Seq)>(
+            rems.Select(d => (d.Actor, d.Seq)), ByteOrder.PairComparer.Instance);
+        var seen = new HashSet<byte[]>(ByteArrayComparer.Instance);
         var result = new List<byte[]>();
         foreach (var a in adds)
         {
-            var dot = Convert.ToHexString(a.Actor) + ":" + a.Seq;
-            if (removed.Contains(dot)) continue;
-            var eh = Convert.ToHexString(a.Element);
-            if (seen.Add(eh))
+            if (removed.Contains((a.Actor, a.Seq))) continue;
+            if (seen.Add(a.Element))
                 result.Add(a.Element);
         }
         return result;

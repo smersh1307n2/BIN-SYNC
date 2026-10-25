@@ -3,12 +3,6 @@
 // Port of binsync/transport.py — all SPEC HARDENING / errata notes preserved.
 namespace BinSync;
 
-internal sealed class ByteArrEq : IEqualityComparer<byte[]>
-{
-    public bool Equals(byte[]? x, byte[]? y) => x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
-    public int GetHashCode(byte[] t) { unchecked { int h = 17; foreach (byte b in t) h = h * 31 + b; return h; } }
-}
-
 public static class Transport
 {
     /// HELLO + ALIAS_MAP exchange for a session between two nodes (§4.3).
@@ -28,8 +22,8 @@ public static class Transport
         // Errata E-11 (scenario 23): keep a nodeId -> Node registry so CreateDeltaBatch's
         // lazy ALIAS_MAP negotiation can reach the peer's copy of the session table.
         // In a real stack this is the live connection handle.
-        a.PeersByNid ??= new(new ByteArrEq());
-        b.PeersByNid ??= new(new ByteArrEq());
+        a.PeersByNid ??= new(ByteArrayComparer.Instance);
+        b.PeersByNid ??= new(ByteArrayComparer.Instance);
         a.PeersByNid[b.NodeId] = b;
         b.PeersByNid[a.NodeId] = a;
         // BUGFIX (implementation finding): §4.3 ties ALIAS_MAP to a SESSION — reconnecting
@@ -58,7 +52,7 @@ public static class Transport
         // session map on BOTH ends with the SAME alias numbers (deterministic ordering:
         // ascending nodeId; the two endpoints always land on aliases aa/ab).
         // BUGFIX (errata E-6): keyed by DURABLE NODE ID, never by alias number.
-        var authors = new Dictionary<byte[], (int? Alias, int Epoch)>(new ByteArrEq())
+        var authors = new Dictionary<byte[], (int? Alias, int Epoch)>(ByteArrayComparer.Instance)
         {
             [a.NodeId] = ((int?)aa, a.Epoch),
             [b.NodeId] = ((int?)ab, b.Epoch),
@@ -79,7 +73,7 @@ public static class Transport
         var ordered = authors.OrderBy(kv => Convert.ToHexString(kv.Key)).ToList();
         var used = new HashSet<int> { aa, ab };
         int nextFree = 1;
-        var assigned = new Dictionary<byte[], int>(new ByteArrEq()) { [a.NodeId] = aa, [b.NodeId] = ab };
+        var assigned = new Dictionary<byte[], int>(ByteArrayComparer.Instance) { [a.NodeId] = aa, [b.NodeId] = ab };
         foreach (var kv in ordered)
         {
             if (assigned.ContainsKey(kv.Key)) continue;

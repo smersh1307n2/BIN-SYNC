@@ -56,9 +56,9 @@ public static partial class Reconcile
     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
     {
         if (!node.Storage.TryGetValue(namespaceId, out var records))
-            records = new Dictionary<byte[], Record>(new ByteArrayComparer());
+            records = new Dictionary<byte[], Record>(ByteArrayComparer.Instance);
 
-        var dict = new Dictionary<byte[], Record>(new ByteArrayComparer());
+        var dict = new Dictionary<byte[], Record>(ByteArrayComparer.Instance);
         foreach (var (rid, rec) in records)
             dict[rid] = rec;
 
@@ -253,21 +253,4 @@ public static partial class Reconcile
     }
 }
 
-internal sealed class ByteArrayComparer : IEqualityComparer<byte[]>
-{
-    public bool Equals(byte[]? x, byte[]? y)
-    {
-        if (ReferenceEquals(x, y)) return true;
-        if (x is null || y is null) return false;
-        return x.AsSpan().SequenceEqual(y);
-    }
-    public int GetHashCode(byte[] obj)
-    {
-        unchecked
-        {
-            int h = 17;
-            foreach (byte b in obj) h = h * 31 + b;
-            return h;
-        }
-    }
-}
+// Content-equality for byte[] keys: see BinSync/ByteKeys.cs (ByteArrayComparer).
