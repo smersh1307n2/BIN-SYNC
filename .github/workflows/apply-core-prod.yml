@@ -1,7 +1,8 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/core-prod.patch]
+    paths: [scripts/core-prod.patch.part0]
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
@@ -9,13 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Apply
+      - name: Apply production core patch
         run: |
           set -euo pipefail
+          cat scripts/core-prod.patch.part0 scripts/core-prod.patch.part1 scripts/core-prod.patch.part2 > scripts/core-prod.patch
           git apply scripts/core-prod.patch
-          git rm -f scripts/core-prod.patch .github/workflows/apply-core-prod.yml
+          git rm -f scripts/core-prod.patch scripts/core-prod.patch.part0 scripts/core-prod.patch.part1 scripts/core-prod.patch.part2 .github/workflows/apply-core-prod.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add BinSync.Net/src/BinSync.Core/Hlc.cs BinSync.Net/src/BinSync.Core/Node.cs BinSync.Net/src/BinSync.Core/Merge.Counters.cs BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs
-          git commit -m "perf: shared byte comparers and microsecond HLC wall"
+          git add -u BinSync.Net/src/BinSync.Core
+          git commit -m "perf: shared byte comparers (HashCode.AddBytes), zero-alloc codec/frame"
           git push
