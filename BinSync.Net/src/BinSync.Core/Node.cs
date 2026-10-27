@@ -95,8 +95,15 @@ public sealed partial class PeerState
 
 internal sealed class BA : IEqualityComparer<byte[]>
 {
-    public bool Equals(byte[]? x, byte[]? y) => x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
-    public int GetHashCode(byte[] t) { unchecked { int h = 17; foreach (byte b in t) h = h * 31 + b; return h; } }
+    public static readonly BA Instance = new();
+    public bool Equals(byte[]? x, byte[]? y) =>
+        x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
+    public int GetHashCode(byte[] t)
+    {
+        var h = new HashCode();
+        h.AddBytes(t);
+        return h.ToHashCode();
+    }
 }
 
 internal sealed class BAT : IEqualityComparer<(byte[], long, long)>
