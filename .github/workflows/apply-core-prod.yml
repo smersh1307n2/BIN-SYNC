@@ -1,7 +1,7 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/core-prod.patch]
+    paths: [scripts/pparts/3]
   workflow_dispatch:
 permissions:
   contents: write
@@ -13,14 +13,13 @@ jobs:
       - name: Apply patch and commit
         run: |
           set -euo pipefail
-          if [ ! -f scripts/core-prod.patch ]; then echo "no patch"; exit 0; fi
-          git apply --check scripts/core-prod.patch
-          git apply scripts/core-prod.patch
-          git rm -f scripts/core-prod.patch .github/workflows/apply-core-prod.yml 2>/dev/null || true
+          cat scripts/pparts/0 scripts/pparts/1 scripts/pparts/2 scripts/pparts/3 > /tmp/p.patch
+          git apply --check /tmp/p.patch
+          git apply /tmp/p.patch
+          git rm -rf scripts/pparts .github/workflows/apply-core-prod.yml 2>/dev/null || true
           git add BinSync.Net/src/BinSync.Core/Node.cs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git status
-          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
           git commit -m "perf(core): Node.cs shared BA.Instance + HashCode.AddBytes"
           git push
