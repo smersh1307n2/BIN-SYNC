@@ -165,34 +165,40 @@ internal sealed class BA2I2 : IEqualityComparer<((byte[], int), (byte[], int))>
 
 internal sealed class BA3 : IEqualityComparer<(byte[], byte[], byte[])>
 {
+    public static readonly BA3 Instance = new();
     public bool Equals((byte[], byte[], byte[]) x, (byte[], byte[], byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2) && new BA().Equals(x.Item3, y.Item3);
+        BA.Instance.Equals(x.Item1, y.Item1) && BA.Instance.Equals(x.Item2, y.Item2)
+        && BA.Instance.Equals(x.Item3, y.Item3);
     public int GetHashCode((byte[], byte[], byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2), new BA().GetHashCode(t.Item3));
+        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), BA.Instance.GetHashCode(t.Item2), BA.Instance.GetHashCode(t.Item3));
 }
 
 internal sealed class BAI4 : IEqualityComparer<(byte[], int, int)>
 {
+    public static readonly BAI4 Instance = new();
     public bool Equals((byte[], int, int) x, (byte[], int, int) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
+        BA.Instance.Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
     public int GetHashCode((byte[], int, int) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3);
+        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), t.Item2, t.Item3);
 }
 
 internal sealed class BAI4B : IEqualityComparer<((byte[], int, int), byte[])>
 {
+    public static readonly BAI4B Instance = new();
     public bool Equals(((byte[], int, int), byte[]) x, ((byte[], int, int), byte[]) y) =>
-        new BAI4().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2);
+        BAI4.Instance.Equals(x.Item1, y.Item1) && BA.Instance.Equals(x.Item2, y.Item2);
     public int GetHashCode(((byte[], int, int), byte[]) t) =>
-        HashCode.Combine(new BAI4().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2));
+        HashCode.Combine(BAI4.Instance.GetHashCode(t.Item1), BA.Instance.GetHashCode(t.Item2));
 }
 
 internal sealed class BAI5 : IEqualityComparer<(byte[], int, int, byte[])>
 {
+    public static readonly BAI5 Instance = new();
     public bool Equals((byte[], int, int, byte[]) x, (byte[], int, int, byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3 && new BA().Equals(x.Item4, y.Item4);
+        BA.Instance.Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3
+        && BA.Instance.Equals(x.Item4, y.Item4);
     public int GetHashCode((byte[], int, int, byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3, new BA().GetHashCode(t.Item4));
+        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), t.Item2, t.Item3, BA.Instance.GetHashCode(t.Item4));
 }
 
 internal sealed class BAPairBytes : IEqualityComparer<(byte[], byte[])>
