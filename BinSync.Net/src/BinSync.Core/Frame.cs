@@ -55,12 +55,13 @@ public static class Frames
         return t;
     }
 
-    public static uint Crc32C(byte[] data)
+    public static uint Crc32C(ReadOnlySpan<byte> data)
     {
         uint crc = 0xFFFFFFFFu;
         foreach (byte b in data) crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
         return crc ^ 0xFFFFFFFFu;
     }
+    public static uint Crc32C(byte[] data) => Crc32C(data.AsSpan());
 }
 
 public sealed record class Frame(byte FrameType, byte Flags, uint StreamId, ulong FrameSeq, byte[] Payload)
@@ -86,14 +87,15 @@ public static class FrameCodec
         if (payload.Length > Frames.MAX_PAYLOAD_SIZE)
             throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         uint crc = Frames.Crc32C(payload);
-        var header = new byte[Frames.HEADER_SIZE];
-        BinaryPrimitives.WriteUInt16LittleEndian(header.AsSpan(0), Frames.MAGIC);
-        header[2] = Frames.VERSION; header[3] = frameType; header[4] = flags;
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(5), streamId);
-        BinaryPrimitives.WriteUInt64LittleEndian(header.AsSpan(9), frameSeq);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(17), (uint)payload.Length);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(21), crc);
-        return header.Concat(payload).ToArray();
+        var frame = new byte[Frames.HEADER_SIZE + payload.Length];
+        BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(0), Frames.MAGIC);
+        frame[2] = Frames.VERSION; frame[3] = frameType; frame[4] = flags;
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(5), streamId);
+        BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(9), frameSeq);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(17), (uint)payload.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(21), crc);
+        payload.AsSpan().CopyTo(frame.AsSpan(Frames.HEADER_SIZE));
+        return frame;
     }
 
     public static (Frame Frame, int Consumed) ParseFrame(byte[] data)
@@ -114,9 +116,10 @@ public static class FrameCodec
             throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         if (data.Length < Frames.HEADER_SIZE + (int)payloadLen)
             throw new FrameException("FRAME_REJECTED");   // incomplete
-        var payload = data[Frames.HEADER_SIZE..(Frames.HEADER_SIZE + (int)payloadLen)];
-        if (Frames.Crc32C(payload) != crc)
+        var payloadSpan = data.AsSpan(Frames.HEADER_SIZE, (int)payloadLen);
+        if (Frames.Crc32C(payloadSpan) != crc)
             throw new FrameException("CORRUPTED_FRAME");  // [Ц1] session preserved
+        var payload = payloadSpan.ToArray();
         return (new Frame(ftype, flags, streamId, frameSeq, payload), Frames.HEADER_SIZE + (int)payloadLen);
     }
 }
