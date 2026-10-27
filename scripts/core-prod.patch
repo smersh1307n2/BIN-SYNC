@@ -1,0 +1,22 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Node.cs b/BinSync.Net/src/BinSync.Core/Node.cs
+index dfd6414..b4faede 100644
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -80,14 +80,14 @@ public sealed partial class PeerState
+     // SPEC CORRECTION (errata E-3): receive cursor keyed per SESSION stream
+     // (senderPeer, senderEpoch, ns, authorStream) — see Python port for full rationale.
+     public long LastAckedSeq = 0;
+-    public readonly Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams = new(new BA4());
++    public readonly Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams = new(BA4.Instance);
+     // SPEC CORRECTION (errata E-4): push watermark keyed by the AUTHOR STREAM.
+-    public readonly Dictionary<byte[], long> StreamAcked = new(new BA());
++    public readonly Dictionary<byte[], long> StreamAcked = new(BA.Instance);
+     public bool InitialSyncComplete = false;
+     public int MembershipEpoch = 0;
+     public long LastSeen = 0;
+     // Deterministic batchId cache keyed by (stream, cursorStart, cursorEnd) (§10.2.2 replay).
+-    internal readonly Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids = new(new BAT());
++    internal readonly Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids = new(BAT.Instance);
+ 
+     public PeerState(byte[] peer, int ns) { PeerNodeId = peer; NamespaceId = ns; }
+     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
