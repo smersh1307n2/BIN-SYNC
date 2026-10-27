@@ -1,7 +1,7 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/b64/25]
+    paths: [scripts/b64/38]
   workflow_dispatch:
 permissions:
   contents: write
@@ -10,17 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Decode patch, apply, commit
+      - name: Decode, apply, commit
         run: |
           set -euo pipefail
-          cat scripts/b64/00 scripts/b64/01 scripts/b64/02 scripts/b64/03 scripts/b64/04 \
-              scripts/b64/05 scripts/b64/06 scripts/b64/07 scripts/b64/08 scripts/b64/09 \
-              scripts/b64/10 scripts/b64/11 scripts/b64/12 scripts/b64/13 scripts/b64/14 \
-              scripts/b64/15 scripts/b64/16 scripts/b64/17 scripts/b64/18 scripts/b64/19 \
-              scripts/b64/20 scripts/b64/21 scripts/b64/22 scripts/b64/23 scripts/b64/24 \
-              scripts/b64/25 | base64 -d > /tmp/core-prod.patch
-          git apply /tmp/core-prod.patch
-          git rm -rf scripts/b64 .github/workflows/apply-core-prod.yml scripts/.prod-core-pending || true
+          python3 - <<'PY'
+          from pathlib import Path
+          parts = [Path(f'scripts/b64/{i:02d}').read_text() for i in range(39)]
+          import base64
+          Path('/tmp/p.patch').write_bytes(base64.b64decode(''.join(parts)))
+          PY
+          git apply /tmp/p.patch
+          git rm -rf scripts/b64 .github/workflows/apply-core-prod.yml scripts/.prod-core-pending 2>/dev/null || true
           git add -u BinSync.Net/src/BinSync.Core
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
