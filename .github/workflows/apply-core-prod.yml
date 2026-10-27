@@ -1,7 +1,7 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/fb/1]
+    paths: [scripts/.prod-core-pending]
   workflow_dispatch:
 permissions:
   contents: write
@@ -10,20 +10,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Decode apply commit
+      - name: Sed Instance replacements
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import base64
-          b = Path('scripts/fb/0').read_text() + Path('scripts/fb/1').read_text()
-          Path('/tmp/p.patch').write_bytes(base64.b64decode(b))
-          PY
-          git apply --check /tmp/p.patch
-          git apply /tmp/p.patch
-          git rm -rf scripts/fb .github/workflows/apply-core-prod.yml 2>/dev/null || true
-          git add BinSync.Net/src/BinSync.Core/Node.cs
+          F=BinSync.Net/src/BinSync.Core/Node.cs
+          # order matters: longer names first
+          sed -i \
+            -e 's/new SeenKeyComparer()/SeenKeyComparer.Instance/g' \
+            -e 's/new BAI4B()/BAI4B.Instance/g' \
+            -e 's/new BAI5()/BAI5.Instance/g' \
+            -e 's/new BAI4()/BAI4.Instance/g' \
+            -e 's/new BAI3()/BAI3.Instance/g' \
+            -e 's/new BAI2()/BAI2.Instance/g' \
+            -e 's/new BA4()/BA4.Instance/g' \
+            -e 's/new BA3()/BA3.Instance/g' \
+            -e 's/new BA2()/BA2.Instance/g' \
+            -e 's/new BAT()/BAT.Instance/g' \
+            -e 's/new BA()/BA.Instance/g' \
+            "$F"
+          # verify no remaining
+          if grep -nE 'new BA[A-Z0-9]*\(\)|new SeenKeyComparer\(\)' "$F"; then
+            echo "still have new Xxx()" >&2
+            exit 1
+          fi
+          git add "$F"
+          git rm -f scripts/.prod-core-pending .github/workflows/apply-core-prod.yml 2>/dev/null || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "perf(core): Node.cs field initializers BA.Instance"
+          git status
+          git commit -m "perf(core): Node.cs remaining new Xxx() -> Xxx.Instance"
           git push
