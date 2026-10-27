@@ -1,0 +1,110 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Codec.cs b/BinSync.Net/src/BinSync.Core/Codec.cs
+index 9add816..0032d8c 100644
+--- a/BinSync.Net/src/BinSync.Core/Codec.cs
++++ b/BinSync.Net/src/BinSync.Core/Codec.cs
+@@ -15,17 +15,25 @@ public static partial class Codec
+ {
+     public const ulong VarintMaxValue = ulong.MaxValue;
+ 
+-    public static byte[] EncodeVarint(ulong value)
++    /// <summary>Write ULEB128 into <paramref name="dest"/>; returns bytes written (1..10).</summary>
++    public static int WriteVarint(Span<byte> dest, ulong value)
+     {
+-        var outBuf = new List<byte>();
++        int i = 0;
+         while (true)
+         {
+             byte b = (byte)(value & 0x7F);
+             value >>= 7;
+-            if (value != 0) outBuf.Add((byte)(b | 0x80));
+-            else { outBuf.Add(b); break; }
++            if (value != 0) dest[i++] = (byte)(b | 0x80);
++            else { dest[i++] = b; break; }
+         }
+-        return outBuf.ToArray();
++        return i;
++    }
++
++    public static byte[] EncodeVarint(ulong value)
++    {
++        Span<byte> tmp = stackalloc byte[10];
++        int n = WriteVarint(tmp, value);
++        return tmp[..n].ToArray();
+     }
+ 
+     /// <summary>Number of bytes EncodeVarint would emit for <paramref name="value"/>.</summary>
+@@ -94,18 +102,20 @@ public static partial class Codec
+     }
+ 
+     /// Deterministic widening/narrowing of an identity to exactly 16 bytes (§6.2 hardening).
++    private static readonly byte[] AuthIdPrefix = "BIN-SYNC/AUTHID/v1"u8.ToArray();
++
+     public static byte[] CanonicalB128(byte[] v)
+     {
+         if (v.Length == 16) return v;
+         if (v.Length < 16)
+         {
+             var r = new byte[16];
+-            Array.Copy(v, r, v.Length);
++            v.CopyTo(r, 0);
+             return r;
+         }
+-        var pre = new byte["BIN-SYNC/AUTHID/v1".Length + v.Length];
+-        System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/AUTHID/v1").CopyTo(pre, 0);
+-        v.CopyTo(pre, "BIN-SYNC/AUTHID/v1".Length);
++        var pre = new byte[AuthIdPrefix.Length + v.Length];
++        AuthIdPrefix.CopyTo(pre, 0);
++        v.CopyTo(pre, AuthIdPrefix.Length);
+         return Blake3Core.Hash256(pre);
+     }
+ }
+@@ -126,7 +136,13 @@ public partial class Writer
+         return this;
+     }
+ 
+-    public Writer Varint(ulong v) { _buf.Write(Codec.EncodeVarint(v)); return this; }
++    public Writer Varint(ulong v)
++    {
++        Span<byte> tmp = stackalloc byte[10];
++        int n = Codec.WriteVarint(tmp, v);
++        _buf.Write(tmp[..n]);
++        return this;
++    }
+ 
+     public Writer Bytes(byte[] b) { Varint((ulong)b.Length); _buf.Write(b); return this; }
+     public Writer Raw(byte[] b) { _buf.Write(b); return this; }
+@@ -148,10 +164,32 @@ public partial class Reader
+         return v;
+     }
+ 
+-    public byte U8() => Take(1)[0];
+-    public ushort U16() => BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
+-    public uint U32() => BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
+-    public ulong U64() => BinaryPrimitives.ReadUInt64LittleEndian(Take(8));
++    public byte U8()
++    {
++        if (Pos >= _data.Length) throw new EndOfStreamException("truncated");
++        return _data[Pos++];
++    }
++    public ushort U16()
++    {
++        if ((uint)Pos + 2u > (uint)_data.Length) throw new EndOfStreamException("truncated");
++        ushort v = BinaryPrimitives.ReadUInt16LittleEndian(_data.AsSpan(Pos, 2));
++        Pos += 2;
++        return v;
++    }
++    public uint U32()
++    {
++        if ((uint)Pos + 4u > (uint)_data.Length) throw new EndOfStreamException("truncated");
++        uint v = BinaryPrimitives.ReadUInt32LittleEndian(_data.AsSpan(Pos, 4));
++        Pos += 4;
++        return v;
++    }
++    public ulong U64()
++    {
++        if ((uint)Pos + 8u > (uint)_data.Length) throw new EndOfStreamException("truncated");
++        ulong v = BinaryPrimitives.ReadUInt64LittleEndian(_data.AsSpan(Pos, 8));
++        Pos += 8;
++        return v;
++    }
+     public byte[] B128() 
