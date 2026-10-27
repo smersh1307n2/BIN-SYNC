@@ -13,24 +13,15 @@ public static class HlcOps
     // author — deterministic total order independent of arrival order.
     public static int CompareHlc(Hlc a, byte[]? aAuthor, Hlc b, byte[]? bAuthor)
     {
-        if (aAuthor is null && bAuthor is not null) aAuthor = Array.Empty<byte>();
-        else if (bAuthor is null && aAuthor is not null) bAuthor = Array.Empty<byte>();
+        // Unknown (null) author sorts as empty bytes — before every non-empty author,
+        // and equal to another unknown. Total order does not depend on arrival.
         if (a.Wall != b.Wall) return a.Wall < b.Wall ? -1 : 1;
         if (a.Logical != b.Logical) return a.Logical < b.Logical ? -1 : 1;
-        int c = BytesCompare(aAuthor!, bAuthor!);
-        return c;
+        return BytesCompare(aAuthor, bAuthor);
     }
 
-    public static int BytesCompare(byte[] x, byte[] y)
-    {
-        int n = Math.Min(x.Length, y.Length);
-        for (int i = 0; i < n; i++)
-        {
-            if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1;
-        }
-        if (x.Length == y.Length) return 0;
-        return x.Length < y.Length ? -1 : 1;
-    }
+    public static int BytesCompare(byte[]? x, byte[]? y) =>
+        x.AsSpan().SequenceCompareTo(y);
 }
 
 public class ClockDriftException : Exception
@@ -51,9 +42,13 @@ public class HlcClock
 
     public HlcClock(Func<long>? nowFn = null, long maxSkewUs = 60_000_000)
     {
-        NowFn = nowFn ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000);
+        NowFn = nowFn ?? UnixTimeMicroseconds;
         MaxSkewUs = maxSkewUs;
     }
+
+    /// <summary>Wall clock in microseconds since Unix epoch (§5). Not milliseconds scaled by 1000.</summary>
+    public static long UnixTimeMicroseconds() =>
+        (DateTimeOffset.UtcNow.UtcTicks - DateTimeOffset.UnixEpoch.Ticks) / 10;
 
     public long Now() => NowFn!();
 
