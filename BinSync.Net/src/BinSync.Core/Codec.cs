@@ -15,17 +15,25 @@ public static partial class Codec
 {
     public const ulong VarintMaxValue = ulong.MaxValue;
 
-    public static byte[] EncodeVarint(ulong value)
+    /// <summary>Write ULEB128 into <paramref name="dest"/>; returns bytes written (1..10).</summary>
+    public static int WriteVarint(Span<byte> dest, ulong value)
     {
-        var outBuf = new List<byte>();
+        int i = 0;
         while (true)
         {
             byte b = (byte)(value & 0x7F);
             value >>= 7;
-            if (value != 0) outBuf.Add((byte)(b | 0x80));
-            else { outBuf.Add(b); break; }
+            if (value != 0) dest[i++] = (byte)(b | 0x80);
+            else { dest[i++] = b; break; }
         }
-        return outBuf.ToArray();
+        return i;
+    }
+
+    public static byte[] EncodeVarint(ulong value)
+    {
+        Span<byte> tmp = stackalloc byte[10];
+        int n = WriteVarint(tmp, value);
+        return tmp[..n].ToArray();
     }
 
     /// <summary>Number of bytes EncodeVarint would emit for <paramref name="value"/>.</summary>

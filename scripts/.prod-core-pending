@@ -1,2 +1,0 @@
-pending: apply core-prod.patch from artifacts (comparers + codec/frame)
-See conversation for details. 277 tests green locally.
