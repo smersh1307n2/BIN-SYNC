@@ -1,0 +1,51 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs b/BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs
+index 9c8cec0..4d4b686 100644
+--- a/BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs
++++ b/BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs
+@@ -268,7 +268,7 @@ public static class NodePersistence
+         {
+             var ns = (int)r.Varint();
+             int recCount = (int)r.Varint();
+-            var map = new Dictionary<byte[], Record>(new BA());
++            var map = new Dictionary<byte[], Record>(BA.Instance);
+             for (int j = 0; j < recCount; j++)
+             {
+                 var (rid, rec) = ReadRecord(r);
+@@ -335,7 +335,7 @@ public static class NodePersistence
+         {
+             var peer = r.B128();
+             int cnt = (int)r.Varint();
+-            var map = new Dictionary<(byte[], int), int>(new BAI2b());
++            var map = new Dictionary<(byte[], int), int>(BAI2.Instance);
+             for (int j = 0; j < cnt; j++)
+             {
+                 var nid = r.B128(); var ep = (int)r.Varint(); var alias = (int)r.Varint();
+@@ -434,7 +434,7 @@ public static class NodePersistence
+         for (int i = 0; i < peerCount; i++) peerIds.Add(r.B128());
+         if (peerIds.Count > 0 || n.AliasToNode.Count > 0)
+         {
+-            n.PeersByNid ??= new(new ByteArrEq());
++            n.PeersByNid ??= new(BA.Instance);
+             // NOTE: `existing is null` must be a plain reference check — Node derives from
+             // MarshalByRefObject so its == operator does NOT test for null.
+             foreach (var p in peerIds.Concat(n.AliasToNode.Keys))
+@@ -575,19 +575,3 @@ public static class NodePersistence
+     private static ulong ReadBEU64(BinaryReader r)
+     { var b = r.ReadBytes(8); return System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(b); }
+ }
+-
+-/// <summary>Content-equality comparer for (byte[], int) keys used by NodeToAlias inner maps.</summary>
+-internal sealed class BAI2b : IEqualityComparer<(byte[], int)>
+-{
+-    public bool Equals((byte[], int) x, (byte[], int) y) =>
+-        x.Item2 == y.Item2 && (x.Item1 is null ? y.Item1 is null : y.Item1 is not null && x.Item1.AsSpan().SequenceEqual(y.Item1));
+-    public int GetHashCode((byte[], int) t)
+-    {
+-        unchecked
+-        {
+-            int h = 19;
+-            if (t.Item1 is not null) foreach (byte b in t.Item1) h = h * 31 + b;
+-            return h * 31 + t.Item2;
+-        }
+-    }
+-}
