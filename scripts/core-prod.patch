@@ -1,0 +1,17 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Node.cs b/BinSync.Net/src/BinSync.Core/Node.cs
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -97,4 +97,11 @@
+ {
+-    public bool Equals(byte[]? x, byte[]? y) => x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
+-    public int GetHashCode(byte[] t) { unchecked { int h = 17; foreach (byte b in t) h = h * 31 + b; return h; } }
++    public static readonly BA Instance = new();
++    public bool Equals(byte[]? x, byte[]? y) =>
++        x is null ? y is null : y is not null && x.AsSpan().SequenceEqual(y);
++    public int GetHashCode(byte[] t)
++    {
++        var h = new HashCode();
++        h.AddBytes(t);
++        return h.ToHashCode();
++    }
+ }
