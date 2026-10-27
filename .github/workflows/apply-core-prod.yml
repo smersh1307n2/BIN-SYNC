@@ -1,7 +1,7 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/p2c3.txt]
+    paths: [scripts/core-prod.patch]
   workflow_dispatch:
 permissions:
   contents: write
@@ -13,11 +13,12 @@ jobs:
       - name: Apply production core patch
         run: |
           set -euo pipefail
-          cat scripts/p0c0.txt scripts/p0c1.txt scripts/p0c2.txt scripts/p0c3.txt scripts/p1c0.txt scripts/p1c1.txt scripts/p1c2.txt scripts/p1c3.txt scripts/p2c0.txt scripts/p2c1.txt scripts/p2c2.txt scripts/p2c3.txt > scripts/core-prod.patch
           git apply scripts/core-prod.patch
-          git rm -f scripts/core-prod.patch scripts/p0c0.txt scripts/p0c1.txt scripts/p0c2.txt scripts/p0c3.txt scripts/p1c0.txt scripts/p1c1.txt scripts/p1c2.txt scripts/p1c3.txt scripts/p2c0.txt scripts/p2c1.txt scripts/p2c2.txt scripts/p2c3.txt .github/workflows/apply-core-prod.yml
+          git rm -f scripts/core-prod.patch .github/workflows/apply-core-prod.yml
+          rm -f scripts/p*.txt scripts/core-prod.patch.part* 2>/dev/null || true
+          git add -u BinSync.Net/src/BinSync.Core scripts || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -u BinSync.Net/src/BinSync.Core
+          git add -u
           git commit -m "perf: shared byte comparers (HashCode.AddBytes), zero-alloc codec/frame"
           git push
