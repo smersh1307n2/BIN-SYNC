@@ -15,15 +15,21 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          parts = [Path(f'scripts/b64/{i:02d}').read_text() for i in range(39)]
           import base64
+          parts = [Path(f'scripts/b64/{i:02d}').read_text().strip() for i in range(39)]
           Path('/tmp/p.patch').write_bytes(base64.b64decode(''.join(parts)))
           PY
+          git apply --check /tmp/p.patch || { echo "apply check failed"; exit 1; }
           git apply /tmp/p.patch
           git rm -rf scripts/b64 .github/workflows/apply-core-prod.yml scripts/.prod-core-pending 2>/dev/null || true
-          git add -u BinSync.Net/src/BinSync.Core
+          git add -u BinSync.Net/src/BinSync.Core || true
+          git add BinSync.Net/src/BinSync.Core || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git status
-          git commit -m "perf: shared byte comparers (HashCode.AddBytes), zero-alloc codec"
+          if git diff --cached --quiet; then
+            echo "No changes after apply"
+            exit 0
+          fi
+          git commit -m "perf(core): shared byte comparers (HashCode.AddBytes), zero-alloc codec/frame, HLC us"
           git push
