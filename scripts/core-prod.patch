@@ -1,0 +1,72 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Production/SessionWire.cs b/BinSync.Net/src/BinSync.Core/Production/SessionWire.cs
+index 83a56d4..d52eede 100644
+--- a/BinSync.Net/src/BinSync.Core/Production/SessionWire.cs
++++ b/BinSync.Net/src/BinSync.Core/Production/SessionWire.cs
+@@ -101,7 +101,7 @@ public static class SessionWire
+     public static List<AliasMapEntry> BuildAliasMapTable(Node local, byte[] peerNodeId, int peerEpoch,
+         int selfAlias = 1, int peerAlias = 2)
+     {
+-        var authors = new Dictionary<byte[], int>(new ByteArrEq())
++        var authors = new Dictionary<byte[], int>(BA.Instance)
+         {
+             [local.NodeId] = local.Epoch,
+             [peerNodeId] = peerEpoch,
+@@ -111,7 +111,7 @@ public static class SessionWire
+ 
+         var ordered = authors.OrderBy(kv => Convert.ToHexString(kv.Key)).ToList();
+         var used = new HashSet<int> { selfAlias, peerAlias };
+-        var assigned = new Dictionary<byte[], int>(new ByteArrEq())
++        var assigned = new Dictionary<byte[], int>(BA.Instance)
+         {
+             [local.NodeId] = selfAlias,
+             [peerNodeId] = peerAlias,
+@@ -169,8 +169,8 @@ public static class SessionWire
+         ApplyAliasMap(local, remote.NodeId, DecodeAliasMap(mapOnLocal));
+         ApplyAliasMap(remote, local.NodeId, DecodeAliasMap(mapOnRemote));
+ 
+-        local.PeersByNid ??= new(new ByteArrEq());
+-        remote.PeersByNid ??= new(new ByteArrEq());
++        local.PeersByNid ??= new(BA.Instance);
++        remote.PeersByNid ??= new(BA.Instance);
+         local.PeersByNid[remote.NodeId] = remote;
+         remote.PeersByNid[local.NodeId] = local;
+     }
+diff --git a/BinSync.Net/src/BinSync.Core/Production/Reconcile.cs b/BinSync.Net/src/BinSync.Core/Production/Reconcile.cs
+index f928480..99e4881 100644
+--- a/BinSync.Net/src/BinSync.Core/Production/Reconcile.cs
++++ b/BinSync.Net/src/BinSync.Core/Production/Reconcile.cs
+@@ -56,9 +56,9 @@ public static partial class Reconcile
+     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
+     {
+         if (!node.Storage.TryGetValue(namespaceId, out var records))
+-            records = new Dictionary<byte[], Record>(new ByteArrayComparer());
++            records = new Dictionary<byte[], Record>(BA.Instance);
+ 
+-        var dict = new Dictionary<byte[], Record>(new ByteArrayComparer());
++        var dict = new Dictionary<byte[], Record>(BA.Instance);
+         foreach (var (rid, rec) in records)
+             dict[rid] = rec;
+ 
+@@ -252,22 +252,3 @@ public static partial class Reconcile
+         return r;
+     }
+ }
+-
+-internal sealed class ByteArrayComparer : IEqualityComparer<byte[]>
+-{
+-    public bool Equals(byte[]? x, byte[]? y)
+-    {
+-        if (ReferenceEquals(x, y)) return true;
+-        if (x is null || y is null) return false;
+-        return x.AsSpan().SequenceEqual(y);
+-    }
+-    public int GetHashCode(byte[] obj)
+-    {
+-        unchecked
+-        {
+-            int h = 17;
+-            foreach (byte b in obj) h = h * 31 + b;
+-            return h;
+-        }
+-    }
+-}
