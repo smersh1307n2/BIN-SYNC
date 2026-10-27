@@ -1,0 +1,13 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Node.cs b/BinSync.Net/src/BinSync.Core/Node.cs
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -140,6 +140,7 @@
+ {
++    public static readonly BAI2 Instance = new();
+     public bool Equals((byte[], int) x, (byte[], int) y) =>
+-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2;
++        BA.Instance.Equals(x.Item1, y.Item1) && x.Item2 == y.Item2;
+     public int GetHashCode((byte[], int) t) =>
+-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2);
++        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), t.Item2);
+ }
