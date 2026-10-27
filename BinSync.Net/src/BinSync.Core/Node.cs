@@ -658,7 +658,7 @@ internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     }
 
 internal Dictionary<byte[], Record> NsInternal(int namespaceId)
-    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(new BA())); }
+    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(BA.Instance)); }
 
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
 /// <summary>Thread-safe entry point (production hardening): takes the node gate
@@ -931,7 +931,7 @@ internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
             // pick the CONTIGUOUS stream first (first un-acked seq == acked+1), earliest
             // outbox position; gapped stream as fallback (tail renumbered). BUGFIX/HARDENING
             // (scenario 42 livelock) — see Python port comment.
-            var firstPending = new Dictionary<byte[], long>(new BA());
+            var firstPending = new Dictionary<byte[], long>(BA.Instance);
             foreach (var e in all)
             {
                 long w = ps.AckedFor(e.AuthorNodeId);   // Errata E-4: per-author watermark
@@ -1234,7 +1234,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
         var nsStore = Ns(batch.NamespaceId);
-        var staged = new Dictionary<byte[], Record>(new BA());
+        var staged = new Dictionary<byte[], Record>(BA.Instance);
         foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
         int applied = 0;
         var changedIdx = new List<int>();   // indices of entries that actually changed state
@@ -1415,7 +1415,7 @@ internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq
         else
         {
             var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : new List<OutboxEntry>();
-            var heads = new Dictionary<byte[], long>(new BA());
+            var heads = new Dictionary<byte[], long>(BA.Instance);
             foreach (var e in entries)
                 if (!heads.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur)
                     heads[e.AuthorNodeId] = e.Seq;
@@ -1520,7 +1520,7 @@ internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
 
 internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
     {
-        var d = new Dictionary<byte[], byte[]>(new BA());
+        var d = new Dictionary<byte[], byte[]>(BA.Instance);
         if (Storage.TryGetValue(namespaceId, out var s))
             foreach (var (rid, rec) in s) d[rid] = Digests.RecordDigest(rec);
         return d;
