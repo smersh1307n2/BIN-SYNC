@@ -1,0 +1,31 @@
+name: apply-core-prod
+on:
+  push:
+    paths: [scripts/na1.b64]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch and commit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64
+          raw = base64.b64decode(Path('scripts/na0.b64').read_text() + Path('scripts/na1.b64').read_text())
+          Path('/tmp/p.patch').write_bytes(raw)
+          PY
+          git apply --check /tmp/p.patch
+          git apply /tmp/p.patch
+          git rm -f scripts/na0.b64 scripts/na1.b64 .github/workflows/apply-core-prod.yml 2>/dev/null || true
+          git add -u BinSync.Net/src/BinSync.Core/Node.cs || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git status
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "perf(core): Node.cs BA.Instance + HashCode.AddBytes (part A)"
+          git push
