@@ -108,26 +108,30 @@ internal sealed class BA : IEqualityComparer<byte[]>
 
 internal sealed class BAT : IEqualityComparer<(byte[], long, long)>
 {
+    public static readonly BAT Instance = new();
     public bool Equals((byte[], long, long) x, (byte[], long, long) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
+        BA.Instance.Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3;
     public int GetHashCode((byte[], long, long) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2.GetHashCode(), t.Item3.GetHashCode());
+        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), t.Item2, t.Item3);
 }
 
 internal sealed class BA4 : IEqualityComparer<(byte[], int, int, byte[])>
 {
+    public static readonly BA4 Instance = new();
     public bool Equals((byte[], int, int, byte[]) x, (byte[], int, int, byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3 && new BA().Equals(x.Item4, y.Item4);
+        BA.Instance.Equals(x.Item1, y.Item1) && x.Item2 == y.Item2 && x.Item3 == y.Item3
+        && BA.Instance.Equals(x.Item4, y.Item4);
     public int GetHashCode((byte[], int, int, byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), t.Item2, t.Item3, new BA().GetHashCode(t.Item4));
+        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), t.Item2, t.Item3, BA.Instance.GetHashCode(t.Item4));
 }
 
 internal sealed class BA2 : IEqualityComparer<(byte[], byte[])>
 {
+    public static readonly BA2 Instance = new();
     public bool Equals((byte[], byte[]) x, (byte[], byte[]) y) =>
-        new BA().Equals(x.Item1, y.Item1) && new BA().Equals(x.Item2, y.Item2);
+        BA.Instance.Equals(x.Item1, y.Item1) && BA.Instance.Equals(x.Item2, y.Item2);
     public int GetHashCode((byte[], byte[]) t) =>
-        HashCode.Combine(new BA().GetHashCode(t.Item1), new BA().GetHashCode(t.Item2));
+        HashCode.Combine(BA.Instance.GetHashCode(t.Item1), BA.Instance.GetHashCode(t.Item2));
 }
 
 // Mixed-key comparers for KnownEpochs: keys are (peer|author, ns|-1|0) — the second
