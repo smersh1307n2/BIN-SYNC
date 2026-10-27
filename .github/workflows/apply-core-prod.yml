@@ -1,7 +1,7 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/core-prod.patch.b]
+    paths: [scripts/cp11.txt]
   workflow_dispatch:
 permissions:
   contents: write
@@ -13,12 +13,12 @@ jobs:
       - name: Apply production core patch
         run: |
           set -euo pipefail
-          cat scripts/core-prod.patch.a scripts/core-prod.patch.b > scripts/core-prod.patch
+          cat scripts/cp00.txt scripts/cp01.txt scripts/cp02.txt scripts/cp03.txt scripts/cp04.txt scripts/cp05.txt scripts/cp06.txt scripts/cp07.txt scripts/cp08.txt scripts/cp09.txt scripts/cp10.txt scripts/cp11.txt > scripts/core-prod.patch
           git apply scripts/core-prod.patch
-          git rm -f scripts/core-prod.patch scripts/core-prod.patch.a scripts/core-prod.patch.b .github/workflows/apply-core-prod.yml
-          rm -f scripts/p*.txt 2>/dev/null || true
+          git rm -f scripts/core-prod.patch scripts/cp*.txt scripts/p*.txt scripts/core-prod.patch.* .github/workflows/apply-core-prod.yml || true
           git add -u
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git status
           git commit -m "perf: shared byte comparers (HashCode.AddBytes), zero-alloc codec/frame"
           git push
