@@ -101,7 +101,7 @@ public static class SessionWire
     public static List<AliasMapEntry> BuildAliasMapTable(Node local, byte[] peerNodeId, int peerEpoch,
         int selfAlias = 1, int peerAlias = 2)
     {
-        var authors = new Dictionary<byte[], int>(new ByteArrEq())
+        var authors = new Dictionary<byte[], int>(BA.Instance)
         {
             [local.NodeId] = local.Epoch,
             [peerNodeId] = peerEpoch,
@@ -111,7 +111,7 @@ public static class SessionWire
 
         var ordered = authors.OrderBy(kv => Convert.ToHexString(kv.Key)).ToList();
         var used = new HashSet<int> { selfAlias, peerAlias };
-        var assigned = new Dictionary<byte[], int>(new ByteArrEq())
+        var assigned = new Dictionary<byte[], int>(BA.Instance)
         {
             [local.NodeId] = selfAlias,
             [peerNodeId] = peerAlias,
@@ -169,8 +169,8 @@ public static class SessionWire
         ApplyAliasMap(local, remote.NodeId, DecodeAliasMap(mapOnLocal));
         ApplyAliasMap(remote, local.NodeId, DecodeAliasMap(mapOnRemote));
 
-        local.PeersByNid ??= new(new ByteArrEq());
-        remote.PeersByNid ??= new(new ByteArrEq());
+        local.PeersByNid ??= new(BA.Instance);
+        remote.PeersByNid ??= new(BA.Instance);
         local.PeersByNid[remote.NodeId] = remote;
         remote.PeersByNid[local.NodeId] = local;
     }
