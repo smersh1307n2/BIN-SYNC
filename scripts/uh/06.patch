@@ -1,0 +1,10 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Node.cs b/BinSync.Net/src/BinSync.Core/Node.cs
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -1235,5 +1235,5 @@
+         // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
+         var nsStore = Ns(batch.NamespaceId);
+-        var staged = new Dictionary<byte[], Record>(new BA());
++        var staged = new Dictionary<byte[], Record>(BA.Instance);
+         foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
+         int applied = 0;

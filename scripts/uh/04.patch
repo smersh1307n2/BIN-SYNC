@@ -1,0 +1,10 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Node.cs b/BinSync.Net/src/BinSync.Core/Node.cs
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -659,5 +659,5 @@
+ 
+ internal Dictionary<byte[], Record> NsInternal(int namespaceId)
+-    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(new BA())); }
++    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(BA.Instance)); }
+ 
+     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
