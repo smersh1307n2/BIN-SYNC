@@ -269,36 +269,36 @@ public sealed partial class Node
         {
             _storage.Clear();
             foreach (var (ns, m) in value)
-                _storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, new BA());
+                _storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, BA.Instance);
         }
     }
     // outbox: namespaceId -> list[OutboxEntry] (per-author seq counters inside)
     public Dictionary<int, List<OutboxEntry>> Outbox = new();
-    internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(new BAI2());   // (author, ns) -> seq
+    internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(BAI2.Instance);   // (author, ns) -> seq
     // inbox idempotency: set of (issuerNodeId, ns, issuerEpoch, batchId)
-    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(new BAI5());
+    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(BAI5.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
-    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(new BAI4());
+    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(BAI4.Instance);
     // BUGFIX: per-STREAM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
-    public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(new BAI4B());
+    public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(BAI4B.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
-    public Dictionary<byte[], Dictionary<int, (byte[], int)>> AliasToNode = new(new BA());
-    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(new BA());   // BUGFIX (port): inner map keyed by content-equal (nodeId, epoch) pairs — default tuple comparer used byte[] reference equality.
+    public Dictionary<byte[], Dictionary<int, (byte[], int)>> AliasToNode = new(BA.Instance);
+    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(BA.Instance);   // BUGFIX (port): inner map keyed by content-equal (nodeId, epoch) pairs — default tuple comparer used byte[] reference equality.
     // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
     // for resolution [А3].
-    public Dictionary<byte[], int> DurableAuthors = new(new BA());   // nodeId -> max known epoch
-    public Dictionary<(byte[], int), PeerState> PeerStates = new(new BAI2());
+    public Dictionary<byte[], int> DurableAuthors = new(BA.Instance);   // nodeId -> max known epoch
+    public Dictionary<(byte[], int), PeerState> PeerStates = new(BAI2.Instance);
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     // (E-13 follow-up 2: channel-scoped). Relay eligibility decided by FIRST sighting.
-    public readonly HashSet<(byte[], int, byte[])> SeenChanges = new(new SeenKeyComparer());
+    public readonly HashSet<(byte[], int, byte[])> SeenChanges = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
-    public readonly Dictionary<(byte[], int), byte[]> LastStreamAuthor = new(new BAI2());
+    public readonly Dictionary<(byte[], int), byte[]> LastStreamAuthor = new(BAI2.Instance);
     // known_epochs: mixed keys — (peer, ns) session watermarks, (author, -1) durable
     // author epochs, (peer, 0) HELLO epoch. See register_session_epoch / learn_author_epoch.
-    public Dictionary<(byte[], int), int> KnownEpochs = new(new BAI2());
-    public readonly HashSet<byte[]> Quarantined = new(new BA());       // zombie nodes requiring resync
+    public Dictionary<(byte[], int), int> KnownEpochs = new(BAI2.Instance);
+    public readonly HashSet<byte[]> Quarantined = new(BA.Instance);       // zombie nodes requiring resync
     public List<string> ErrorsOut = new();            // observable error log for tests
     public List<byte[]> AcksOut = new();              // ACKed batchIds
     public readonly HashSet<int> ForbiddenNamespaces = new();
@@ -404,7 +404,7 @@ internal void ResetSessionInternal(byte[] peer)
 internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
     {
         var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (byte[], int)>();
-        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>(new BAI2());
+        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>(BAI2.Instance);
         var durable = (nodeId, epoch);
         if (revA.TryGetValue(durable, out var existing)) return existing;
         // is the peer's copy already bound to this author?
@@ -521,7 +521,7 @@ internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int e
         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
         // a decoded copy of the same author bytes produced fresh array instances that never
         // matched existing keys (AliasOf misses → spurious UNKNOWN_ALIAS / stale bindings).
-        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new(new BAI2()));
+        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new(BAI2.Instance));
         var durable = (nodeId, epoch);
         // forbid reuse of an alias for another (nodeId, epoch) within a session
         if (m.TryGetValue(alias, out var occ) && !(occ.Item1.AsSpan().SequenceEqual(nodeId) && occ.Item2 == epoch))
@@ -621,7 +621,7 @@ internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     {
         // BUGFIX (port): the fallback map MUST use the byte-content comparer too — with the
         // default ReferenceEqualityComparer an empty miss-map behaved inconsistently.
-        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(byte[], int), int>(new BAI2());
+        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(byte[], int), int>(BAI2.Instance);
         // SPEC CORRECTION (errata E-1, Python port `alias_of`): the `epoch` argument is kept
         // for API compatibility ONLY; identity per §4.6 is the bare nodeId. The previous port
         // short-circuited on the exact (nodeId, epoch) pair, which made a stale registration
