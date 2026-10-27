@@ -1,7 +1,7 @@
 name: apply-core-prod
 on:
   push:
-    paths: [scripts/pb64/05]
+    paths: [scripts/core-prod.patch]
   workflow_dispatch:
 permissions:
   contents: write
@@ -10,21 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Decode patch, apply, commit
+      - name: Apply patch and commit
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import base64
-          parts = [Path(f'scripts/pb64/{i:02d}').read_text() for i in range(6)]
-          Path('/tmp/p.patch').write_bytes(base64.b64decode(''.join(parts)))
-          PY
-          git apply --check /tmp/p.patch
-          git apply /tmp/p.patch
-          git rm -rf scripts/pb64 .github/workflows/apply-core-prod.yml 2>/dev/null || true
+          if [ ! -f scripts/core-prod.patch ]; then echo "no patch"; exit 0; fi
+          git apply --check scripts/core-prod.patch
+          git apply scripts/core-prod.patch
+          git rm -f scripts/core-prod.patch .github/workflows/apply-core-prod.yml 2>/dev/null || true
           git add BinSync.Net/src/BinSync.Core/Node.cs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git status
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
           git commit -m "perf(core): Node.cs shared BA.Instance + HashCode.AddBytes"
           git push
