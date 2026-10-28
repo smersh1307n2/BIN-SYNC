@@ -1,11 +1,11 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+**Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
 
-**Product name:** **BIN-SYNC** (not BYN-SYNC) — see [NAME.md](NAME.md).
-
-**Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0` · **Branch:** `installing-.net-10-ea6be`  
+**Package:** `BinSync.Core` **`0.1.0-alpha.6`** · **Target:** `net10.0` · **Branch:** `main`  
+**Tip:** `661666e` (2026-10-28)  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** **273** passed (CI)
+**Tests:** green on local / CI (user-confirmed for alpha.6 cut)
 
 **Spec parity:** **~95%+** — reference engine production-hardened.
 
@@ -20,8 +20,8 @@ Legend: **done** · **partial** · **missing**
 | Goals / consistency | §1 | done |
 | Transport | §3 | done |
 | Identity / alias / epoch | §4 | done |
-| HLC | §5 | done |
-| Codec | §6 | **done** |
+| HLC | §5 | done (µs wall) |
+| Codec | §6 | **done** (zero-alloc hot paths) |
 | Data model / lifecycle | §7 | done |
 | Merge policies | §8 | **done** (full) |
 | Digests | §9 | done |
@@ -38,6 +38,15 @@ Legend: **done** · **partial** · **missing**
 
 ---
 
+## alpha.6 engine notes
+
+- Shared comparer singletons (`BA.Instance`, …) on all hot maps/sets
+- `HashCode.AddBytes` for byte[] keys
+- Codec `WriteVarint` / stackalloc fixed-width writes
+- No allocation of throwaway `new BA()` on Node / Transport / Merge / Persistence paths
+
+---
+
 ## Release checklist
 
 - [x] BouncyCastle removed / Ed25519 vendored
@@ -45,9 +54,9 @@ Legend: **done** · **partial** · **missing**
 - [x] Lab edge S4/S12/S13
 - [x] TrustStore §15.6
 - [x] License AGPL + commercial (crypto MIT)
-- [x] Branding BIN-SYNC (docs); repo slug rename optional on GitHub
-- [x] 273 tests green
-- [ ] Git tag `v0.1.0-alpha.5`
+- [x] Branding BIN-SYNC; repo `smersh1307n2/BIN-SYNC`
+- [x] Production comparer / codec pass (alpha.6)
+- [x] Git tag `v0.1.0-alpha.5`
+- [ ] Git tag `v0.1.0-alpha.6`
 - [ ] nuget.org push
-- [ ] Rename GitHub repository `BYN-SYNC` → `BIN-SYNC`
-- [ ] Rename `BIN-SYNC-SPECIFICATION.txt` → `BIN-SYNC-SPECIFICATION.txt` (large file)
+- [ ] Full X.509 path + adversarial fuzz in CI (optional next)

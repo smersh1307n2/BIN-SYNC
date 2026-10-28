@@ -1,5 +1,37 @@
 # Changelog — BinSync.Core
 
+## 0.1.0-alpha.6 — 2026-10-28
+
+Production performance pass on `main` after alpha.5 protocol surface.
+**Tip SHA:** `661666e` · **Target:** `net10.0` · **Package:** `BinSync.Core` `0.1.0-alpha.6`
+
+### Engine / hot paths
+- **Comparers:** shared `BA.Instance` / `BAT` / `BA4` / `BAI*` / `SeenKeyComparer.Instance` — no per-call `new BA()` on dictionary/set construction
+- **`BA.GetHashCode`:** `HashCode.AddBytes` instead of manual foreach hash loops
+- **Codec:** `WriteVarint` into `Span<byte>`, stackalloc paths for fixed LE writes and varint encode
+- **HLC:** wall clock in **microseconds** (`UnixTimeMicroseconds`); author bytes via `SequenceCompareTo`
+- **Transport / SessionWire / Reconcile / NodePersistence:** same shared comparers; dropped duplicate `ByteArrEq` / `BAI2b` / `ByteArrayComparer`
+
+### Unchanged from alpha.5 (still in tree)
+- Vendored Ed25519 (MIT), no BouncyCastle NuGet
+- Merge §8 full set, Schema §18, E2EE / causal / KEY_ROTATION (opt-in)
+- TrustStore §15.6, FLAG_FRAGMENT, Lab §17
+- Dual license AGPL-3.0-or-later + commercial; crypto MIT
+
+### Package
+```
+PackageId: BinSync.Core
+Version:   0.1.0-alpha.6
+```
+Single external dependency: `Blake3.Managed` 1.10.0.
+
+### Tag
+```bash
+git fetch origin main
+git tag -a v0.1.0-alpha.6 661666e234bb51659ac087981aa7481e6fa9c86e -m "BinSync.Core 0.1.0-alpha.6"
+git push origin v0.1.0-alpha.6
+```
+
 ## 0.1.0-alpha.5 — 2026-10-24
 
 Production-hardening cut on branch `installing-.net-10-ea6be`.
@@ -27,14 +59,6 @@ Production-hardening cut on branch `installing-.net-10-ea6be`.
 - Target: `net10.0`
 - Single dependency: `Blake3.Managed` 1.10.0
 - Pack: `scripts/pack-nupkg.sh`
-
-### Tag (create on GitHub)
-```bash
-git fetch origin installing-.net-10-ea6be
-git tag -a v0.1.0-alpha.5 a12bc30bd1747ab8c607087a8128160c8efc4665 -m "BinSync.Core 0.1.0-alpha.5"
-git push origin v0.1.0-alpha.5
-# or: GitHub → Releases → Draft a new release → tag v0.1.0-alpha.5
-```
 
 ## 0.1.0-alpha.4
 - Codec extensions + version bump after BouncyCastle removal path
