@@ -1,0 +1,44 @@
+name: release-alpha6
+on:
+  push:
+    paths: [scripts/do-release-alpha6]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=v0.1.0-alpha.6
+          # Prefer tip of main (includes release docs)
+          SHA=$(git rev-parse HEAD)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists"
+          else
+            git tag -a "$TAG" "$SHA" -m "BinSync.Core 0.1.0-alpha.6"
+            git push origin "$TAG"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists"
+          else
+            gh release create "$TAG" \
+              --title "BinSync.Core 0.1.0-alpha.6" \
+              --prerelease \
+              --notes-file docs/RELEASE-alpha.6.md \
+              --target "$SHA"
+          fi
+          git rm -f scripts/do-release-alpha6 .github/workflows/release-alpha6.yml 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: cleanup release-alpha6 one-shot"
+            git push
+          fi
