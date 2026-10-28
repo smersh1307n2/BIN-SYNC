@@ -15,6 +15,9 @@ on:
       - ".github/workflows/dotnet.yml"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
   workflow_dispatch:
+  schedule:
+    # Nightly longer fuzz pass (UTC)
+    - cron: "17 3 * * *"
 
 concurrency:
   group: binsync-net-${{ github.workflow }}-${{ github.ref }}
@@ -61,5 +64,51 @@ jobs:
         with:
           name: test-results
           path: ${{ runner.temp }}/test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  fuzz:
+    name: fuzz + lab (§17)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Restore
+        working-directory: BinSync.Net
+        run: dotnet restore BinSync.slnx
+
+      - name: Build
+        working-directory: BinSync.Net
+        run: dotnet build BinSync.slnx --configuration Release --no-restore
+
+      - name: Fuzz + LabEdge + LabFuzz + Hardening
+        working-directory: BinSync.Net
+        env:
+          VSTEST_CONNECTION_TIMEOUT: "180"
+        run: >
+          dotnet test BinSync.slnx
+          --configuration Release
+          --no-build
+          --verbosity normal
+          --filter "FullyQualifiedName~FuzzTests|FullyQualifiedName~LabFuzzTests|FullyQualifiedName~LabEdgeTests|FullyQualifiedName~Hardening"
+          --logger "trx;LogFileName=fuzz-results.trx"
+          --results-directory "${{ runner.temp }}/fuzz-results"
+
+      - name: Upload fuzz results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-results
+          path: ${{ runner.temp }}/fuzz-results
           retention-days: 14
           if-no-files-found: ignore
