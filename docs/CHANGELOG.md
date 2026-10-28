@@ -1,5 +1,25 @@
 # Changelog — BinSync.Core
 
+## 0.1.0-alpha.7 — 2026-10-28
+
+Packaging / release hygiene cut on `main` (engine same as alpha.6 performance pass).
+**Target:** `net10.0` · **Package:** `BinSync.Core` `0.1.0-alpha.7`
+
+### Package
+- Version bump `0.1.0-alpha.6` → `0.1.0-alpha.7`
+- PRODUCTION-STATUS / release notes aligned with tagged alpha.6 engine tip
+- One-shot CI path for annotated tag + GitHub prerelease
+
+### Engine
+- No protocol changes vs alpha.6 (comparers, zero-alloc codec, HLC µs remain)
+
+### Package id
+```
+PackageId: BinSync.Core
+Version:   0.1.0-alpha.7
+```
+Single external dependency: `Blake3.Managed` 1.10.0.
+
 ## 0.1.0-alpha.6 — 2026-10-28
 
 Production performance pass on `main` after alpha.5 protocol surface.
@@ -24,13 +44,6 @@ PackageId: BinSync.Core
 Version:   0.1.0-alpha.6
 ```
 Single external dependency: `Blake3.Managed` 1.10.0.
-
-### Tag
-```bash
-git fetch origin main
-git tag -a v0.1.0-alpha.6 661666e234bb51659ac087981aa7481e6fa9c86e -m "BinSync.Core 0.1.0-alpha.6"
-git push origin v0.1.0-alpha.6
-```
 
 ## 0.1.0-alpha.5 — 2026-10-24
 
