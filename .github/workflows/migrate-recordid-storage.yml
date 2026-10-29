@@ -1,0 +1,140 @@
+name: migrate-recordid-storage
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/migrate-recordid-storage.yml]
+permissions:
+  contents: write
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Migrate
+        run: |
+          set -euo pipefail
+          python3 << 'PY'
+          from pathlib import Path
+
+          p = Path('BinSync.Net/src/BinSync.Core/Node.cs')
+          t = p.read_text()
+          reps = [
+            ('private readonly Dictionary<int, Dictionary<byte[], Record>> _storage = new();',
+             'private readonly Dictionary<int, Dictionary<RecordId, Record>> _storage = new();'),
+            ('public Dictionary<int, Dictionary<byte[], Record>> Storage',
+             'public Dictionary<int, Dictionary<RecordId, Record>> Storage'),
+            ('_storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, BA.Instance);',
+             '_storage[ns] = new Dictionary<RecordId, Record>(m);'),
+            ('public Dictionary<byte[], Record> Ns(int namespaceId)',
+             'public Dictionary<RecordId, Record> Ns(int namespaceId)'),
+            ('internal Dictionary<byte[], Record> NsInternal(int namespaceId)',
+             'internal Dictionary<RecordId, Record> NsInternal(int namespaceId)'),
+            ('(Storage[namespaceId] = new(BA.Instance))',
+             '(Storage[namespaceId] = new Dictionary<RecordId, Record>())'),
+            ('var staged = new Dictionary<byte[], Record>(BA.Instance);',
+             'var staged = new Dictionary<RecordId, Record>();'),
+            ('foreach (var (rid, rec) in nsStore.OrderBy(kv => Convert.ToHexString(kv.Key)))',
+             'foreach (var (rid, rec) in nsStore.OrderBy(kv => kv.Key.ToString()))'),
+            ('RecordId = rid, OpKind = OpsConst.TagFieldWrite',
+             'RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite'),
+            ('RecordId = rid, OpKind = OpsConst.TagFieldTomb',
+             'RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldTomb'),
+            ('var op = new OpRecordTombstone { RecordId = rid,',
+             'var op = new OpRecordTombstone { RecordId = rid.ToArray(),'),
+            ('RecordId = rid, OpKind = OpsConst.TagRecordTomb',
+             'RecordId = rid.ToArray(), OpKind = OpsConst.TagRecordTomb'),
+          ]
+          for a,b in reps:
+              if a not in t:
+                  print('WARN missing:', a[:60])
+              else:
+                  t = t.replace(a,b)
+          # staged with capacity
+          t = t.replace(
+              'var staged = new Dictionary<byte[], Record>(\n            Math.Max(4, nsStore.Count + batch.Entries.Count), BA.Instance);',
+              'var staged = new Dictionary<RecordId, Record>(\n            Math.Max(4, nsStore.Count + batch.Entries.Count));')
+          if 'd[rid] =' in t and 'd[rid.ToArray()]' not in t:
+              t = t.replace('d[rid] =', 'd[rid.ToArray()] =')
+          p.write_text(t)
+          print('Node done')
+
+          p = Path('BinSync.Net/src/BinSync.Core/Digests.cs')
+          t = p.read_text()
+          t = t.replace('Dictionary<byte[], Record> records', 'Dictionary<RecordId, Record> records')
+          if 'BucketKey(RecordId' not in t:
+              t = t.replace(
+                  'public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);',
+                  'public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);\n    public static byte[] BucketKey(RecordId recordId) => Digests.Blake3(recordId.ToArray(), 32);')
+          p.write_text(t)
+
+          p = Path('BinSync.Net/src/BinSync.Core/Production/Iblt.cs')
+          t = p.read_text()
+          if 'ridBytes' not in t and 'foreach (var rid in map.Keys)' in t:
+              t = t.replace('t.Insert(rid);', 't.Insert(rid.ToArray());')
+          p.write_text(t)
+
+          for rel, reps in [
+            ('BinSync.Net/src/BinSync.Core/Production/Reconcile.cs', [
+              ('new Dictionary<byte[], Record>(BA.Instance)', 'new Dictionary<RecordId, Record>()'),
+              ('Dictionary<byte[], Record>', 'Dictionary<RecordId, Record>'),
+              ('list.Add(rid);', 'list.Add(rid.ToArray());'),
+            ]),
+            ('BinSync.Net/src/BinSync.Core/Production/Snapshot.cs', [
+              ('RecordId = rid,', 'RecordId = rid.ToArray(),'),
+            ]),
+            ('BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs', [
+              ('new Dictionary<byte[], Record>(BA.Instance)', 'new Dictionary<RecordId, Record>()'),
+              ('Dictionary<byte[], Record>', 'Dictionary<RecordId, Record>'),
+              ('foreach (var (rid, rec) in recs.OrderBy(kv => kv.Key, BytesOrd))',
+               'foreach (var (rid, rec) in recs.OrderBy(kv => kv.Key.ToString()))'),
+              ('WriteRecord(w, rid, rec)', 'WriteRecord(w, rid.ToArray(), rec)'),
+            ]),
+            ('BinSync.Net/src/BinSync.Core/Production/Node.Republish.cs', [
+              ('WriteFieldInternal(namespaceId, rid, fid, fs.Value);',
+               'WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);'),
+            ]),
+          ]:
+              p = Path(rel)
+              t = p.read_text()
+              for a,b in reps:
+                  t = t.replace(a,b)
+              p.write_text(t)
+              print(rel, 'ok')
+
+          for rel, reps in [
+            ('BinSync.Net/tests/BinSync.Tests/ScenariosB.cs', [
+              ('new Dictionary<byte[], Record>(new ByteArrayComparer())', 'new Dictionary<RecordId, Record>()'),
+              ('st0.Keys.Select(Convert.ToHexString)', 'st0.Keys.Select(k => k.ToString())'),
+              ('st1.Keys.Select(Convert.ToHexString)', 'st1.Keys.Select(k => k.ToString())'),
+              ('Keys.Select(k => k[15].ToString())', 'Keys.Select(k => k.ToArray()[15].ToString())'),
+            ]),
+            ('BinSync.Net/tests/BinSync.Tests/ScenariosA.cs', [
+              ('Keys.Select(k => k[15].ToString())', 'Keys.Select(k => k.ToArray()[15].ToString())'),
+            ]),
+            ('BinSync.Net/tests/BinSync.Tests/InvariantsAndAdvanced.cs', [
+              ('Keys.Select(Convert.ToHexString)', 'Keys.Select(k => k.ToString())'),
+            ]),
+            ('BinSync.Net/tests/BinSync.Tests/Production/LabFuzzTests.cs', [
+              ('Convert.ToHexString(rid) + ":" + fid.ToString("X4")',
+               'rid.ToString() + ":" + fid.ToString("X4")'),
+            ]),
+          ]:
+              p = Path(rel)
+              if not p.exists():
+                  continue
+              t = p.read_text()
+              for a,b in reps:
+                  t = t.replace(a,b)
+              p.write_text(t)
+              print(rel, 'tests ok')
+          print('ALL DONE')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(ids): Storage/Ns keyed by RecordId (IEquatable struct)"
+          git push origin HEAD:main
+          git rm -f .github/workflows/migrate-recordid-storage.yml
+          git commit -m "ci: cleanup migrate-recordid-storage"
+          git push origin HEAD:main
