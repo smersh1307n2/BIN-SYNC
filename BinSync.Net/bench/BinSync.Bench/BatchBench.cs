@@ -44,12 +44,10 @@ public class BatchBench
     [Benchmark(Description = "CreateDeltaBatch")]
     public int CreateDeltaBatch()
     {
-        // Fresh receiver cursor each time would change semantics; measure encode of
-        // already-staged outbox by re-creating from a clone-like second sender setup
-        // is expensive. Here we re-call on same sender (idempotent empty after first).
-        // Prefer ApplyBatch + Encode as primary; this still exercises batch assembly.
+        // After GlobalSetup the outbox cursor is advanced; subsequent CreateDeltaBatch
+        // often returns null/empty. Still useful as a baseline of the empty-delta path.
         var b = _sender.CreateDeltaBatch(_receiver.NodeId, BenchFix.NS);
-        return b?.Ops.Count ?? 0;
+        return b?.Entries.Count ?? 0;
     }
 
     [Benchmark(Description = "EncodeBatchPayload")]
@@ -58,14 +56,12 @@ public class BatchBench
 
     [Benchmark(Description = "DecodeBatchPayload")]
     public int DecodeBatchPayload()
-        => _receiver.DecodeBatchPayload(_payload).Ops.Count;
+        => _receiver.DecodeBatchPayload(_payload).Entries.Count;
 
     [Benchmark(Description = "ApplyBatch (idempotent replay)")]
     public int ApplyBatch_Replay()
     {
-        // Same batch id → idempotent path after first apply in setup-less cold receiver.
-        // Use a fresh receiver per iteration via [IterationSetup] would dominate cost;
-        // measure steady-state idempotent ApplyBatch (duplicate detection).
+        // Steady-state duplicate detection after first apply in setup/earlier iterations.
         var r = _receiver.ApplyBatch(_batch, _sender.NodeId);
         return r.AppliedCount;
     }

@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using BenchmarkDotNet.Attributes;
 using BinSync;
 
