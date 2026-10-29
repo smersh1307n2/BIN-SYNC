@@ -17,15 +17,24 @@ public class Record
 {
     public byte[] RecordId;
     public ushort NamespaceId;
-    public Dictionary<ushort, FieldState> State = new();
+    public Dictionary<ushort, FieldState> State;
     public Hlc? LifecycleHlc;
     public byte[]? LifecycleAuthor;
     public byte LifecycleValue = Model.Alive;
-    public Dictionary<ushort, FieldState> FieldTombs = new();
-
-    public Record(byte[] recordId, ushort namespaceId)
+    // Lazy: most records never carry field tombs — avoid empty Dictionary per record.
+    private Dictionary<ushort, FieldState>? _fieldTombs;
+    public Dictionary<ushort, FieldState> FieldTombs
     {
-        RecordId = recordId; NamespaceId = namespaceId;
+        get => _fieldTombs ??= new Dictionary<ushort, FieldState>();
+        set => _fieldTombs = value;
+    }
+    internal bool HasFieldTombs => _fieldTombs is { Count: > 0 };
+
+    public Record(byte[] recordId, ushort namespaceId, int fieldCapacity = 1)
+    {
+        RecordId = recordId;
+        NamespaceId = namespaceId;
+        State = new Dictionary<ushort, FieldState>(Math.Max(1, fieldCapacity));
     }
 
     public bool IsDead => LifecycleValue == Model.Dead;
