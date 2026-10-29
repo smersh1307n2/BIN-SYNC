@@ -586,7 +586,7 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
             }
             throw new SyncException("UNKNOWN_ALIAS");  // [А3]/[И3] never guess
         }
-        return entry.Item1;   // SPEC CORRECTION (errata E-1): bare nodeId
+        return entry.Item1 ?? throw new SyncException("UNKNOWN_ALIAS"); // E-1: bare nodeId
     }
 
     /// Canonical durable author identity: nodeId || epoch(u32 LE), 20 bytes.
