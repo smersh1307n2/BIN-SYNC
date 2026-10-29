@@ -34,7 +34,7 @@ public class Diag : IDisposable
             Console.WriteLine(tag + ": NodeToAlias peers=" + n.NodeToAlias.Count + " counts: " +
                 string.Join(",", n.NodeToAlias.Select(kv => Convert.ToHexString(kv.Key)[..8] + ":" + kv.Value.Count)));
             Console.WriteLine(tag + ": PeersByNid keys=" + string.Join(",",
-                (n.PeersByNid?.Keys ?? Enumerable.Empty<byte[]>()).Select(k => Convert.ToHexString(k)[..8])));
+                (n.PeersByNid?.Keys.Select(k => k.ToArray()) ?? Enumerable.Empty<byte[]>()).Select(k => Convert.ToHexString(k)[..8])));
         }
         Dump(a, "A-live");
         Dump(b, "B-live");

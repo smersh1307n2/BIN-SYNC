@@ -10,6 +10,7 @@ public class Diag2
     private const int NS = 7;
     private static byte[] Val(string s) => System.Text.Encoding.UTF8.GetBytes(s);
     private static string H(byte[] b) => Convert.ToHexString(b).ToLowerInvariant();
+    private static string H(NodeId n) => n.ToString().ToLowerInvariant();
 
     [Fact]
     public void Diag_SeqGap()

@@ -101,7 +101,7 @@ public static class SessionWire
     public static List<AliasMapEntry> BuildAliasMapTable(Node local, byte[] peerNodeId, int peerEpoch,
         int selfAlias = 1, int peerAlias = 2)
     {
-        var authors = new Dictionary<byte[], int>(BA.Instance)
+        var authors = new Dictionary<NodeId, int>()
         {
             [local.NodeId] = local.Epoch,
             [peerNodeId] = peerEpoch,
@@ -109,9 +109,9 @@ public static class SessionWire
         foreach (var (nid, ep) in local.DurableAuthors)
             if (!authors.ContainsKey(nid)) authors[nid] = ep;
 
-        var ordered = authors.OrderBy(kv => Convert.ToHexString(kv.Key)).ToList();
+        var ordered = authors.OrderBy(kv => kv.Key.ToString()).ToList();
         var used = new HashSet<int> { selfAlias, peerAlias };
-        var assigned = new Dictionary<byte[], int>(BA.Instance)
+        var assigned = new Dictionary<NodeId, int>()
         {
             [local.NodeId] = selfAlias,
             [peerNodeId] = peerAlias,
@@ -127,7 +127,7 @@ public static class SessionWire
 
         var result = new List<AliasMapEntry>(ordered.Count);
         foreach (var kv in ordered)
-            result.Add(new AliasMapEntry((ushort)assigned[kv.Key], kv.Key, kv.Value));
+            result.Add(new AliasMapEntry((ushort)assigned[kv.Key], kv.Key.ToArray(), kv.Value));
         return result;
     }
 
@@ -169,8 +169,8 @@ public static class SessionWire
         ApplyAliasMap(local, remote.NodeId, DecodeAliasMap(mapOnLocal));
         ApplyAliasMap(remote, local.NodeId, DecodeAliasMap(mapOnRemote));
 
-        local.PeersByNid ??= new(BA.Instance);
-        remote.PeersByNid ??= new(BA.Instance);
+        local.PeersByNid ??= new Dictionary<NodeId, Node>();
+        remote.PeersByNid ??= new Dictionary<NodeId, Node>();
         local.PeersByNid[remote.NodeId] = remote;
         remote.PeersByNid[local.NodeId] = local;
     }

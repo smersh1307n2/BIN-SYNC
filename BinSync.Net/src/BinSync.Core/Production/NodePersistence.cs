@@ -191,8 +191,8 @@ public static class NodePersistence
 
             // --- durable authors (Errata E-9)
             w.Varint((ulong)n.DurableAuthors.Count);
-            foreach (var (nid, ep) in n.DurableAuthors.OrderBy(k => k.Key, BytesOrd))
-            { w.B128(nid); w.Varint((ulong)ep); }
+            foreach (var (nid, ep) in n.DurableAuthors.OrderBy(k => k.Key.ToString()))
+            { w.B128(nid.ToArray()); w.Varint((ulong)ep); }
 
             // --- peer states
             w.Varint((ulong)n.PeerStates.Count);
@@ -208,8 +208,8 @@ public static class NodePersistence
                            .ThenBy(k => k.Key.Item4, BytesOrd))
                 { w.B128(issuer); w.Varint((ulong)rns); w.Varint((ulong)rep); w.B128(bid); w.U64((ulong)seq); }
                 w.Varint((ulong)ps.StreamAcked.Count);
-                foreach (var (author, seq) in ps.StreamAcked.OrderBy(k => k.Key, BytesOrd))
-                { w.B128(author); w.U64((ulong)seq); }
+                foreach (var (author, seq) in ps.StreamAcked.OrderBy(k => k.Key.ToString()))
+                { w.B128(author.ToArray()); w.U64((ulong)seq); }
                 w.Varint((ulong)ps.Ids.Count);
                 foreach (var ((author, start, end), (id, prev)) in ps.Ids
                            .OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2).ThenBy(k => k.Key.Item3))
@@ -234,7 +234,7 @@ public static class NodePersistence
 
             // --- quarantine / policy sets
             w.Varint((ulong)n.Quarantined.Count);
-            foreach (var nid in n.Quarantined.OrderBy(k => k, BytesOrd)) w.B128(nid);
+            foreach (var nid in n.Quarantined.OrderBy(k => k.ToString())) w.B128(nid.ToArray());
             w.Varint((ulong)n.ForbiddenNamespaces.Count);
             foreach (var fns in n.ForbiddenNamespaces.OrderBy(v => v)) w.Varint((ulong)fns);
             w.Varint((ulong)n.SchemaVersions.Count);
@@ -244,9 +244,9 @@ public static class NodePersistence
             // --- session peer ids (E-11 registry). Only the KEY (peer nodeId) is serialized;
             // Node.PeersByNid maps nodeId -> live Node object and is not part of the durable
             // state image. Load() rebuilds the registry keys from these ids + AliasToNode keys.
-            var peers = n.PeersByNid is null ? new List<byte[]>() : n.PeersByNid.Keys.ToList();
+            var peers = n.PeersByNid is null ? new List<NodeId>() : n.PeersByNid.Keys.ToList();
             w.Varint((ulong)peers.Count);
-            foreach (var p in peers.OrderBy(k => k, BytesOrd)) w.B128(p);
+            foreach (var p in peers.OrderBy(k => k.ToString())) w.B128(p.ToArray());
 
             return w.Value();
         }
@@ -434,7 +434,7 @@ public static class NodePersistence
         for (int i = 0; i < peerCount; i++) peerIds.Add(r.B128());
         if (peerIds.Count > 0 || n.AliasToNode.Count > 0)
         {
-            n.PeersByNid ??= new(BA.Instance);
+            n.PeersByNid ??= new Dictionary<NodeId, Node>();
             // NOTE: `existing is null` must be a plain reference check — Node derives from
             // MarshalByRefObject so its == operator does NOT test for null.
             foreach (var p in peerIds.Concat(n.AliasToNode.Keys))

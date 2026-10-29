@@ -261,7 +261,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         Consider(local.NodeId, local.Epoch);
         Consider(peerNodeId, peerEpoch);
         foreach (var (nid, ep) in local.DurableAuthors)
-            Consider(nid, ep);
+            Consider(nid.ToArray(), ep);
         extras.Sort((a, b) => string.CompareOrdinal(Convert.ToHexString(a.Id), Convert.ToHexString(b.Id)));
         int next = 1;
         foreach (var extra in extras)

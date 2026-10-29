@@ -22,8 +22,8 @@ public static class Transport
         // Errata E-11 (scenario 23): keep a nodeId -> Node registry so CreateDeltaBatch's
         // lazy ALIAS_MAP negotiation can reach the peer's copy of the session table.
         // In a real stack this is the live connection handle.
-        a.PeersByNid ??= new(BA.Instance);
-        b.PeersByNid ??= new(BA.Instance);
+        a.PeersByNid ??= new Dictionary<NodeId, Node>();
+        b.PeersByNid ??= new Dictionary<NodeId, Node>();
         a.PeersByNid[b.NodeId] = b;
         b.PeersByNid[a.NodeId] = a;
         // BUGFIX (implementation finding): §4.3 ties ALIAS_MAP to a SESSION — reconnecting
@@ -52,7 +52,7 @@ public static class Transport
         // session map on BOTH ends with the SAME alias numbers (deterministic ordering:
         // ascending nodeId; the two endpoints always land on aliases aa/ab).
         // BUGFIX (errata E-6): keyed by DURABLE NODE ID, never by alias number.
-        var authors = new Dictionary<byte[], (int? Alias, int Epoch)>(BA.Instance)
+        var authors = new Dictionary<NodeId, (int? Alias, int Epoch)>()
         {
             [a.NodeId] = ((int?)aa, a.Epoch),
             [b.NodeId] = ((int?)ab, b.Epoch),
@@ -66,14 +66,14 @@ public static class Transport
             foreach (var (nid2, ep) in node.DurableAuthors)
             {
                 if (authors.ContainsKey(nid2)) continue;
-                if (nid2.AsSpan().SequenceEqual(a.NodeId)) authors[nid2] = ((int?)aa, ep);
-                else if (nid2.AsSpan().SequenceEqual(b.NodeId)) authors[nid2] = ((int?)ab, ep);
+                if (nid2 == (NodeId)a.NodeId) authors[nid2] = ((int?)aa, ep);
+                else if (nid2 == (NodeId)b.NodeId) authors[nid2] = ((int?)ab, ep);
                 else authors[nid2] = ((int?)null, ep);
             }
-        var ordered = authors.OrderBy(kv => Convert.ToHexString(kv.Key)).ToList();
+        var ordered = authors.OrderBy(kv => kv.Key.ToString()).ToList();
         var used = new HashSet<int> { aa, ab };
         int nextFree = 1;
-        var assigned = new Dictionary<byte[], int>(BA.Instance) { [a.NodeId] = aa, [b.NodeId] = ab };
+        var assigned = new Dictionary<NodeId, int> { [(NodeId)a.NodeId] = aa, [(NodeId)b.NodeId] = ab };
         foreach (var kv in ordered)
         {
             if (assigned.ContainsKey(kv.Key)) continue;
@@ -85,8 +85,8 @@ public static class Transport
         {
             int alias = assigned[kv.Key];
             int ep = kv.Value.Epoch;
-            a.RegisterAlias(b.NodeId, alias, kv.Key, ep);
-            b.RegisterAlias(a.NodeId, alias, kv.Key, ep);
+            a.RegisterAlias(b.NodeId, alias, kv.Key.ToArray(), ep);
+            b.RegisterAlias(a.NodeId, alias, kv.Key.ToArray(), ep);
         }
     }
 

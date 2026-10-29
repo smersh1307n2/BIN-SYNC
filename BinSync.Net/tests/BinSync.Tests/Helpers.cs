@@ -23,8 +23,16 @@ public static class Fix
     public static bool Eq(byte[]? a, byte[]? b) =>
         a is null ? b is null : b is not null && a.AsSpan().SequenceEqual(b);
 
+    public static bool Eq(NodeId a, byte[]? b) => Eq(a.ToArray(), b);
+    public static bool Eq(byte[]? a, NodeId b) => Eq(a, b.ToArray());
+    public static bool Eq(NodeId a, NodeId b) => a == b;
+    public static bool Eq(RecordId a, byte[]? b) => Eq(a.ToArray(), b);
+    public static bool Eq(byte[]? a, RecordId b) => Eq(a, b.ToArray());
+
     public static string Hex(byte[] a) => Convert.ToHexString(a);
+    public static string Hex(NodeId a) => a.ToString();
 }
+
 
 /// Controllable µs clock (same semantics as conftest.FakeClock): returns exactly
 /// what was set; explicit advancement via Set()/Advance().

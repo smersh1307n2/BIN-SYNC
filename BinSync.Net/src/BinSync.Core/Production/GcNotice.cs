@@ -36,7 +36,7 @@ public static class GcNotice
             int ep = node.DurableAuthors.TryGetValue(nid, out var e) ? e : 0;
             msg.Quarantined.Add(new GcQuarantineEntry
             {
-                NodeId = Codec.CanonicalB128(nid),
+                NodeId = Codec.CanonicalB128(nid.ToArray()),
                 Epoch = ep,
             });
         }

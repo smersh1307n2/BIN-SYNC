@@ -52,10 +52,10 @@ public static class Membership
         Add(node.NodeId, node.Epoch, FlagActive);
         foreach (var (nid, ep) in node.DurableAuthors)
         {
-            if (nid.AsSpan().SequenceEqual(node.NodeId)) continue;
+            if (nid == (NodeId)node.NodeId) continue;
             byte flags = FlagActive;
             if (node.Quarantined.Contains(nid)) flags = FlagQuarantined;
-            Add(nid, ep, flags);
+            Add(nid.ToArray(), ep, flags);
         }
         msg.Members.Sort((a, b) =>
             string.CompareOrdinal(Convert.ToHexString(a.NodeId), Convert.ToHexString(b.NodeId)));

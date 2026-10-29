@@ -82,7 +82,7 @@ public sealed partial class PeerState
     public long LastAckedSeq = 0;
     public readonly Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams = new(BA4.Instance);
     // SPEC CORRECTION (errata E-4): push watermark keyed by the AUTHOR STREAM.
-    public readonly Dictionary<byte[], long> StreamAcked = new(BA.Instance);
+    public readonly Dictionary<NodeId, long> StreamAcked = new();
     public bool InitialSyncComplete = false;
     public int MembershipEpoch = 0;
     public long LastSeen = 0;
@@ -288,7 +288,7 @@ public sealed partial class Node
     // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
     // for resolution [А3].
-    public Dictionary<byte[], int> DurableAuthors = new(BA.Instance);   // nodeId -> max known epoch
+    public Dictionary<NodeId, int> DurableAuthors = new();   // nodeId -> max known epoch
     public Dictionary<(byte[], int), PeerState> PeerStates = new(BAI2.Instance);
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     // (E-13 follow-up 2: channel-scoped). Relay eligibility decided by FIRST sighting.
@@ -298,13 +298,13 @@ public sealed partial class Node
     // known_epochs: mixed keys — (peer, ns) session watermarks, (author, -1) durable
     // author epochs, (peer, 0) HELLO epoch. See register_session_epoch / learn_author_epoch.
     public Dictionary<(byte[], int), int> KnownEpochs = new(BAI2.Instance);
-    public readonly HashSet<byte[]> Quarantined = new(BA.Instance);       // zombie nodes requiring resync
+    public readonly HashSet<NodeId> Quarantined = new();       // zombie nodes requiring resync
     public List<string> ErrorsOut = new();            // observable error log for tests
     public List<byte[]> AcksOut = new();              // ACKed batchIds
     public readonly HashSet<int> ForbiddenNamespaces = new();
     public Dictionary<int, int> SchemaVersions = new();  // namespaceId -> supported schemaVersion
     // Harness handle to peer Node objects (live connection handles in a real stack).
-    public Dictionary<byte[], Node>? PeersByNid = null;
+    public Dictionary<NodeId, Node>? PeersByNid = null;
 
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000)
