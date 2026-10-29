@@ -7,7 +7,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Spec (v2.3.6) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
 | Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
-| Public API freeze | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
+| Public API freeze (1.0) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
 | Changelog | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | License | [`LICENSE.md`](LICENSE.md) |
 | Crypto notice | [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md) |
@@ -15,8 +15,8 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Naming | [`docs/NAME.md`](docs/NAME.md) |
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 
-**Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0`  
-**Branch:** `main` · **Tests:** 273 passed (CI)  
+**Package:** `BinSync.Core` **`1.0.0-rc.1`** · **Target:** `net10.0`  
+**Branch:** `main` · **Tests:** 277 (CI)  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
 ---
@@ -38,27 +38,26 @@ Production-hardened reference engine (~95%+ of the normative spec):
 | Ed25519 batch signatures + KEY_ROTATION | done |
 | Causal deps (opt-in) | done |
 | TrustStore TOFU / PreShared / revoke (§15.6) | done |
-| TCP + optional TLS | done |
-| Lab §17 core + edge | done |
+| Lab / adversarial fuzz in CI | done |
+| Hot-path encode/decode/apply optimisations | done (on `main`) |
 
 ---
 
-## Requirements
-
-- [.NET SDK 10](https://dotnet.microsoft.com/download) (`net10.0`)
+## Quick start
 
 ```bash
-cd BinSync.Net && dotnet test
+# restore + test
+cd BinSync.Net
+dotnet test tests/BinSync.Tests -c Release
+
+# pack
+dotnet pack src/BinSync.Core -c Release
 ```
+
+Embedder contract and SemVer rules: **[docs/PUBLIC-API.md](docs/PUBLIC-API.md)**.
 
 ---
 
 ## License
 
-| Component | License |
-|-----------|---------|
-| **Original BIN-SYNC / BinSync code** | **AGPL-3.0-or-later** + **commercial** |
-| Vendored Ed25519 (Bouncy Castle subset) | **MIT** |
-| Blake3.Managed | Apache-2.0 |
-
-Commercial: **smersh@bk.ru** · Details: [`LICENSE.md`](LICENSE.md)
+Dual: **AGPL-3.0-or-later** + commercial (see `LICENSE.md`). Vendored Ed25519 remains MIT.

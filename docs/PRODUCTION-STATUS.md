@@ -2,12 +2,13 @@
 
 **Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
 
-**Package:** `BinSync.Core` **`0.1.0-alpha.7`** · **Target:** `net10.0` · **Branch:** `main`  
-**Tag:** `v0.1.0-alpha.7` (see GitHub Releases)  
+**Package:** `BinSync.Core` **`1.0.0-rc.1`** · **Target:** `net10.0` · **Branch:** `main`  
+**Tag:** `v1.0.0-rc.1` (see GitHub Releases)  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** green (user-confirmed) · **CI:** `test` + dedicated `fuzz + lab (§17)` job
+**Tests:** 277 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
 
-**Spec parity:** **~95%+** — reference engine production-hardened.
+**Spec parity:** **~95%+** — reference engine production-hardened.  
+**Path:** alpha.7 → **1.0.0-rc.1** (API freeze) → **1.0.0** after soak.
 
 Legend: **done** · **partial** · **missing**
 
@@ -21,10 +22,10 @@ Legend: **done** · **partial** · **missing**
 | Transport | §3 | done |
 | Identity / alias / epoch | §4 | done |
 | HLC | §5 | done (µs wall) |
-| Codec | §6 | **done** (zero-alloc hot paths) |
-| Data model / lifecycle | §7 | done |
+| Codec | §6 | **done** (capacity Writer, zero-alloc Reader fixed-width / Varint write) |
+| Data model / lifecycle | §7 | done (lazy FieldTombs) |
 | Merge policies | §8 | **done** (full) |
-| Digests | §9 | done |
+| Digests | §9 | done (span Blake3 truncate path) |
 | Outbox / inbox | §10 | done |
 | Membership / GC | §11 | done |
 | Wire frames | §12 | done (+ fragments) |
@@ -38,27 +39,23 @@ Legend: **done** · **partial** · **missing**
 
 ---
 
-## Engine notes (alpha.6 → alpha.7)
+## Hot-path notes (on main since post-alpha.7)
 
-- Shared comparer singletons (`BA.Instance`, …) on all hot maps/sets
-- `HashCode.AddBytes` for byte[] keys
-- Codec `WriteVarint` / stackalloc fixed-width writes
-- No throwaway `new BA()` on Node / Transport / Merge / Persistence paths
-- alpha.7 = package version + release hygiene; protocol unchanged from alpha.6
+- EncodeBatchPayload: single-pass records, Writer capacity
+- DecodeBatchPayload: in-place records parse
+- ApplyBatch: decode-once, O(1) changed flags, ComputeRecordsRoot single buffer
+- Reader U8/U16/U32/U64 without per-read heap Take
+- Ops FieldWrite framing probe zero-alloc
 
 ---
 
 ## Trust model (§15.6) vs “X.509”
 
-Spec defines **three** trust modes:
+1. **TOFU** — first seen Ed25519 pubkey for `nodeId` is pinned  
+2. **PreShared** — explicit allow-list of `(nodeId → pubkey)`  
+3. **CertificateAuthority** — lightweight CA allow-list (`TrustStore.AddCaRoot(nodeId)`): **node IDs**, not X.509 DER/chain  
 
-1. **TOFU** — first seen Ed25519 pubkey for `nodeId` is pinned
-2. **PreShared** — explicit allow-list of `(nodeId → pubkey)`
-3. **CertificateAuthority** — “центр сертификации”
-
-In code today, mode 3 is a **lightweight CA allow-list** (`TrustStore.AddCaRoot(nodeId)`): roots are **node IDs**, not parsed X.509 certificates. There is **no** DER/PEM certificate parse, chain building, or RFC 5280 path validation.
-
-**“Full X.509 path”** (optional next) would mean: accept a peer’s X.509 leaf (or cert chain) in the auth payload, verify it against configured CA roots (true X.509), and bind the verified identity to the Ed25519 signing key used for `BatchSignature`. That is enterprise PKI interop — not required for TOFU/PreShared deployments.
+Full X.509 path validation remains **out of scope for 1.0**.
 
 ---
 
@@ -66,14 +63,15 @@ In code today, mode 3 is a **lightweight CA allow-list** (`TrustStore.AddCaRoot(
 
 - [x] BouncyCastle removed / Ed25519 vendored
 - [x] Merge §8 complete set
-- [x] Lab edge S4/S12/S13
-- [x] TrustStore §15.6 (TOFU / PreShared / CA-as-nodeId-root / revoke)
+- [x] Lab / fuzz in CI
+- [x] TrustStore §15.6 (TOFU / PreShared / CA-as-nodeId / revoke)
 - [x] License AGPL + commercial (crypto MIT)
-- [x] Branding BIN-SYNC; repo `smersh1307n2/BIN-SYNC`
-- [x] Production comparer / codec pass
-- [x] Git tag `v0.1.0-alpha.5`
-- [x] Git tag `v0.1.0-alpha.6` + GitHub prerelease
-- [x] Git tag `v0.1.0-alpha.7` + GitHub prerelease
-- [x] Adversarial / lab fuzz surface in CI (`fuzz` job + nightly schedule)
-- [ ] nuget.org push
-- [ ] Full X.509 certificate path (optional; see above)
+- [x] Branding BIN-SYNC
+- [x] Production comparer / codec / apply-decode hot paths on `main`
+- [x] Public API freeze doc for 1.0 (`PUBLIC-API.md`)
+- [x] Package version `1.0.0-rc.1`
+- [ ] Tag `v1.0.0-rc.1` + GitHub prerelease
+- [ ] Soak / embedder feedback on rc.1
+- [ ] Tag `v1.0.0` (stable)
+- [ ] nuget.org push (optional)
+- [ ] Full X.509 (post-1.0, optional)

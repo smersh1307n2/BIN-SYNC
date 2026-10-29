@@ -1,9 +1,22 @@
-# BinSync.Core — Public API surface (freeze for 0.1.x-alpha)
+# BinSync.Core — Public API surface (freeze for 1.0)
 
-**Package:** `BinSync.Core` **`0.1.0-alpha.5`** · **Target:** `net10.0`  
-**Protocol:** **BIN-SYNC CORE** (not BYN-SYNC)  
+**Package:** `BinSync.Core` **`1.0.0-rc.1`** · **Target:** `net10.0`  
+**Protocol:** **BIN-SYNC CORE**  
 Normative: **BIN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
-Gaps: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
+Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
+
+## SemVer policy (1.x)
+
+| Change | Version impact |
+|--------|----------------|
+| Wire/protocol break, remove/rename public type or member | **major** (2.0) |
+| New public API, additive frame/op support, perf-only | **minor** (1.1) |
+| Bugfix, docs, internal optimisations | **patch** (1.0.1) |
+
+**Public** = types and members documented below and in XML docs shipped with the package.  
+Everything under `internal`, `*.Tests`, `bench/`, and unmarked helpers is **not** a compatibility contract.
+
+Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them is configuration, not a silent default change.
 
 ---
 
@@ -79,9 +92,10 @@ Blind merge compares ciphertext with open HLC + author.
 
 ---
 
-## Explicitly out of scope (0.1.x-alpha)
+## Explicitly out of scope (1.0)
 
-- Full X.509 certificate path validation (CA roots are id allow-list only)
+- Full X.509 certificate path validation (CA roots are **node-id** allow-list only)
 - Auto-WAL on every `WriteField`
 - Forcing causal / E2EE / trust on every `ApplyBatch` (all opt-in)
+- Guaranteed allocation-free paths under all policies (hot paths optimised; domain objects still allocate)
 - NuGet.org publish automation (use `scripts/pack-nupkg.sh`)
