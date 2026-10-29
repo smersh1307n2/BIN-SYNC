@@ -1,5 +1,32 @@
 # Changelog — BinSync.Core
 
+## 1.0.0-rc.1 — 2026-10-29
+
+**First release candidate toward 1.0.** API surface frozen as documented in [PUBLIC-API.md](PUBLIC-API.md).
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.0-rc.1` · **Branch:** `main`
+
+### Product
+- SemVer policy and public API freeze for the 1.x line
+- Docs aligned: PRODUCTION-STATUS, PUBLIC-API, README, this changelog
+
+### Engine (carried from post-alpha.7 main)
+- EncodeBatchPayload single-pass + Writer capacity / zero-alloc Varint write
+- DecodeBatchPayload in-place records; Reader fixed-width zero-alloc reads
+- ApplyBatch decode-once + O(1) change flags; ComputeRecordsRoot single buffer
+- Lazy `FieldTombs`; State capacity hint; Blake3 truncated digest without extra 32-byte heap hop
+- Zero-alloc FieldWrite framing probe in `Ops`
+
+### Unchanged contract
+- Protocol wire compatible with alpha.6/alpha.7
+- Trust CA mode remains node-id allow-list (not full X.509)
+- Causal / E2EE / schema / signature gates remain **opt-in**
+
+### Next
+- Soak as `v1.0.0-rc.1` → promote to **`1.0.0`** without further API breaks
+
+---
+
 ## 0.1.0-alpha.7 — 2026-10-28
 
 Packaging / release hygiene cut on `main` (engine same as alpha.6 performance pass).
@@ -23,58 +50,11 @@ Single external dependency: `Blake3.Managed` 1.10.0.
 ## 0.1.0-alpha.6 — 2026-10-28
 
 Production performance pass on `main` after alpha.5 protocol surface.
-**Tip SHA:** `661666e` · **Target:** `net10.0` · **Package:** `BinSync.Core` `0.1.0-alpha.6`
+**Target:** `net10.0` · **Package:** `BinSync.Core` `0.1.0-alpha.6`
 
 ### Engine / hot paths
-- **Comparers:** shared `BA.Instance` / `BAT` / `BA4` / `BAI*` / `SeenKeyComparer.Instance` — no per-call `new BA()` on dictionary/set construction
-- **`BA.GetHashCode`:** `HashCode.AddBytes` instead of manual foreach hash loops
-- **Codec:** `WriteVarint` into `Span<byte>`, stackalloc paths for fixed LE writes and varint encode
-- **HLC:** wall clock in **microseconds** (`UnixTimeMicroseconds`); author bytes via `SequenceCompareTo`
-- **Transport / SessionWire / Reconcile / NodePersistence:** same shared comparers; dropped duplicate `ByteArrEq` / `BAI2b` / `ByteArrayComparer`
-
-### Unchanged from alpha.5 (still in tree)
-- Vendored Ed25519 (MIT), no BouncyCastle NuGet
-- Merge §8 full set, Schema §18, E2EE / causal / KEY_ROTATION (opt-in)
-- TrustStore §15.6, FLAG_FRAGMENT, Lab §17
-- Dual license AGPL-3.0-or-later + commercial; crypto MIT
-
-### Package
-```
-PackageId: BinSync.Core
-Version:   0.1.0-alpha.6
-```
-Single external dependency: `Blake3.Managed` 1.10.0.
+- Shared comparer singletons; `HashCode.AddBytes`; Codec WriteVarint / stackalloc; HLC µs
 
 ## 0.1.0-alpha.5 — 2026-10-24
 
-Production-hardening cut on branch `installing-.net-10-ea6be`.
-**Tip SHA:** `a12bc30` (TrustStore) · **CI:** 273 tests passed.
-
-### Crypto
-- **Removed** NuGet dependency on `BouncyCastle.Cryptography`
-- Vendored RFC 8032 Ed25519 (MIT subset from ZtSharp) via CI `vendor-ed25519-from-ztsharp.sh`
-- Batch signatures, E2EE (ChaCha20-Poly1305), KEY_ROTATION
-
-### Protocol / engine
-- **Codec §6:** TLV, UTF-8, f64 (NaN reject, −0→+0), signed ints, b256, canonical fields
-- **Merge §8 complete:** LWW, COUNTER_G/PN, SET_OR, SEQ_FRACTIONAL (0x06), BLOB_REF (0x08), MANUAL (0x09), Max/Min 0x81–0x84
-- **Schema §18:** SchemaRegistry, SCHEMA_MAP (0x04), ApplyBatchWithSchema
-- **Causal deps** (opt-in): CausalWire CCD1, quarantine + drain
-- **E2EE** (opt-in): WriteFieldSealed / ReadFieldOpen
-- **KEY_ROTATION** + KeyEpochStore
-- **FLAG_FRAGMENT** split / out-of-order reassembly
-- **Security §15.6:** TrustStore TOFU / PreShared / CA roots / revoke; VerifyAndApplyBatch
-
-### Lab §17
-- Core fuzz + edge: S4 snapshot+tail, S12 fragmentation, S13 quarantine/cutoff
-
-### Package
-- Target: `net10.0`
-- Single dependency: `Blake3.Managed` 1.10.0
-- Pack: `scripts/pack-nupkg.sh`
-
-## 0.1.0-alpha.4
-- Codec extensions + version bump after BouncyCastle removal path
-
-## 0.1.0-alpha.3
-- Initial net10.0 packaging, public API freeze notes
+Production-hardening cut. See prior release notes under `docs/RELEASE-alpha.5.md`.
