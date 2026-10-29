@@ -63,7 +63,7 @@ public class BatchBench
     {
         // Steady-state duplicate detection after first apply in setup/earlier iterations.
         var r = _receiver.ApplyBatch(_batch, _sender.NodeId);
-        return r.AppliedCount;
+        return r.Applied;
     }
 }
 
@@ -108,6 +108,6 @@ public class BatchApplyColdBench
         var recv = BenchFix.MakeNode(2002, () => 3_000_000);
         Transport.MakeSession(_sender, recv);
         var r = recv.ApplyBatch(_batch, _sender.NodeId);
-        return r.AppliedCount;
+        return r.Applied;
     }
 }
