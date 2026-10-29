@@ -23,7 +23,7 @@ public sealed partial class Node
                 if (rec.IsDead) continue;
                 foreach (var (fid, fs) in rec.State)
                 {
-                    WriteFieldInternal(namespaceId, rid, fid, fs.Value);
+                    WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);
                     n++;
                 }
             }
@@ -43,7 +43,7 @@ public sealed partial class Node
                 if (!map.TryGetValue(rid, out var rec) || rec.IsDead) continue;
                 foreach (var (fid, fs) in rec.State)
                 {
-                    WriteFieldInternal(namespaceId, rid, fid, fs.Value);
+                    WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);
                     n++;
                 }
             }

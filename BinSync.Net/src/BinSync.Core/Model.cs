@@ -39,7 +39,7 @@ public class Record
 
     public bool IsDead => LifecycleValue == Model.Dead;
 
-    /// Ghost semantics (§7.4): dead records hide fields ordered <= lifecycle.
+    /// <summary>Ghost semantics (§7.4): dead records hide fields ordered ≤ lifecycle.</summary>
     public Dictionary<ushort, FieldState> VisibleFields()
     {
         var outp = new Dictionary<ushort, FieldState>();

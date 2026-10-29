@@ -14,12 +14,12 @@ public class ScenariosB
     public void Scenario21_BucketRollup()
     {
         // §17.21 / Д10 — buckets roll up to a single StateRootDigest deterministically.
-        var recs = new Dictionary<byte[], Record>(new ByteArrayComparer());
+        var recs = new Dictionary<RecordId, Record>();
         for (int i = 0; i < 20; i++)
             recs[Rid(i)] = new Record(Rid(i), NS) { State = { [0x0100] = new FieldState(Asc($"v{i}"), new Hlc((ulong)i, 0), Fix.Nid(1)) } };
         var b1 = StateHash.BuildBuckets(recs, 8);
         var root1 = StateHash.StateRootDigest(NS, 0, b1);
-        var rev = new Dictionary<byte[], Record>(new ByteArrayComparer());
+        var rev = new Dictionary<RecordId, Record>();
         foreach (var kv in recs.Reverse()) rev[kv.Key] = kv.Value;
         var root2 = StateHash.StateRootDigest(NS, 0, StateHash.BuildBuckets(rev, 8));
         Assert.Equal(root1, root2);
@@ -98,10 +98,10 @@ public class ScenariosB
             batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
             batch.RecordsRoot, batch.PrevBatchDigest);
         var decoded = b.DecodeBatchPayload(a.EncodeBatchPayload(batch));
-        var beforeKeys = new HashSet<string>(b.Storage.TryGetValue(NS, out var st0) ? st0.Keys.Select(Convert.ToHexString) : Array.Empty<string>());
+        var beforeKeys = new HashSet<string>(b.Storage.TryGetValue(NS, out var st0) ? st0.Keys.Select(k => k.ToString()) : Array.Empty<string>());
         var ex = Assert.Throws<SyncException>(() => b.ApplyBatch(decoded, a.NodeId));
         Assert.Equal("UNKNOWN_ALIAS", ex.CodeName);
-        var afterKeys = new HashSet<string>(b.Storage.TryGetValue(NS, out var st1) ? st1.Keys.Select(Convert.ToHexString) : Array.Empty<string>());
+        var afterKeys = new HashSet<string>(b.Storage.TryGetValue(NS, out var st1) ? st1.Keys.Select(k => k.ToString()) : Array.Empty<string>());
         Assert.Equal(beforeKeys, afterKeys);   // atomic rollback [Т1]
     }
 

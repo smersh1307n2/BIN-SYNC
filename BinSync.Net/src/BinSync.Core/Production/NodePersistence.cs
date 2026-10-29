@@ -132,8 +132,8 @@ public static class NodePersistence
             {
                 w.Varint((ulong)ns);
                 w.Varint((ulong)recs.Count);
-                foreach (var (rid, rec) in recs.OrderBy(kv => kv.Key, BytesOrd))
-                    WriteRecord(w, rid, rec);
+                foreach (var (rid, rec) in recs.OrderBy(kv => kv.Key.ToString()))
+                    WriteRecord(w, rid.ToArray(), rec);
             }
 
             // --- outbox: ns -> entries
@@ -268,7 +268,7 @@ public static class NodePersistence
         {
             var ns = (int)r.Varint();
             int recCount = (int)r.Varint();
-            var map = new Dictionary<byte[], Record>(BA.Instance);
+            var map = new Dictionary<RecordId, Record>();
             for (int j = 0; j < recCount; j++)
             {
                 var (rid, rec) = ReadRecord(r);

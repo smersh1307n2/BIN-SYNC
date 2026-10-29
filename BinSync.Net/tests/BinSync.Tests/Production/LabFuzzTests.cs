@@ -201,7 +201,7 @@ public class LabFuzzTests
             if (rec.IsDead) continue;
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
-                var key = Convert.ToHexString(rid) + ":" + fid.ToString("X4");
+                var key = rid.ToString() + ":" + fid.ToString("X4");
                 d[key] = Convert.ToHexString(fs.Value);
             }
         }

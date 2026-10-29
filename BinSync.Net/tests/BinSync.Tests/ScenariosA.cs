@@ -76,7 +76,7 @@ public class ScenariosA
         a.WriteField(NS, Rid(4), 0x0100, System.Text.Encoding.ASCII.GetBytes("v4"), new Hlc(110, 0));
         Transport.DeliverBatch(a, b, NS);
         Assert.Equal(new HashSet<string> { "1", "2", "3", "4" },
-                     new HashSet<string>(b.Storage[NS].Keys.Select(k => k[15].ToString())));
+                     new HashSet<string>(b.Storage[NS].Keys.Select(k => k.ToArray()[15].ToString())));
         foreach (var rid in new[] { Rid(1), Rid(4) })
             Assert.Equal(Digests.RecordDigest(a.Storage[NS][rid]), Digests.RecordDigest(b.Storage[NS][rid]));
     }

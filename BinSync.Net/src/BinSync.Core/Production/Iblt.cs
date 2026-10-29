@@ -155,13 +155,14 @@ public sealed class Iblt
         if (!node.Storage.TryGetValue(namespaceId, out var map)) return t;
         foreach (var rid in map.Keys)
         {
+            byte[] ridBytes = rid.ToArray();
             if (prefix is { Length: > 0 })
             {
                 var key = BucketAccumulator.BucketKey(rid);
                 if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
                     continue;
             }
-            t.Insert(rid);
+            t.Insert(ridBytes);
         }
         return t;
     }

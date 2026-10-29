@@ -95,6 +95,7 @@ public class BucketAccumulator
     public BucketAccumulator(byte[]? prefix = null) => Prefix = prefix ?? Array.Empty<byte>();
 
     public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);
+    public static byte[] BucketKey(RecordId recordId) => Digests.Blake3(recordId.ToArray(), 32);
 
     private static UInt128 ToNum(byte[] digest)
     {
@@ -142,7 +143,7 @@ public static class StateHash
         return Digests.Blake3(w.Value(), 32);
     }
 
-    public static List<BucketAccumulator> BuildBuckets(Dictionary<byte[], Record> records, int radixBits = 8)
+    public static List<BucketAccumulator> BuildBuckets(Dictionary<RecordId, Record> records, int radixBits = 8)
     {
         var buckets = new Dictionary<string, BucketAccumulator>();
         foreach (var (rid, rec) in records)

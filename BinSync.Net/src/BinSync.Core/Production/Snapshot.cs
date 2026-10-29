@@ -56,7 +56,7 @@ public static partial class Reconcile
             }
             var sr = new SnapshotRecord
             {
-                RecordId = rid,
+                RecordId = rid.ToArray(),
                 LifecycleValue = rec.LifecycleValue,
                 LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
                 LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,

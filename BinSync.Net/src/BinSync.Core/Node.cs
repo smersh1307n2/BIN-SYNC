@@ -260,16 +260,16 @@ public sealed partial class Node
     // with a default-comparer staging dictionary — reads after any applied batch threw
     // KeyNotFoundException / Assert.Contains failures. The setter below normalizes every
     // assignment to a BA-keyed map; all read sites keep working unchanged.
-    private readonly Dictionary<int, Dictionary<byte[], Record>> _storage = new();
+    private readonly Dictionary<int, Dictionary<RecordId, Record>> _storage = new();
 
-    public Dictionary<int, Dictionary<byte[], Record>> Storage
+    public Dictionary<int, Dictionary<RecordId, Record>> Storage
     {
         get => _storage;
         set
         {
             _storage.Clear();
             foreach (var (ns, m) in value)
-                _storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, BA.Instance);
+                _storage[ns] = new Dictionary<RecordId, Record>(m);
         }
     }
     // outbox: namespaceId -> list[OutboxEntry] (per-author seq counters inside)
@@ -652,13 +652,13 @@ internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     // cause of the KeyNotFoundException storm in tests that read node.Storage[ns][rid].
 /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>NsInternal</c>. See <see cref="_gate"/>.</summary>
-    public Dictionary<byte[], Record> Ns(int namespaceId)
+    public Dictionary<RecordId, Record> Ns(int namespaceId)
     {
         lock (_gate) return NsInternal(namespaceId);
     }
 
-internal Dictionary<byte[], Record> NsInternal(int namespaceId)
-    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new(BA.Instance)); }
+internal Dictionary<RecordId, Record> NsInternal(int namespaceId)
+    { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new Dictionary<RecordId, Record>()); }
 
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
 /// <summary>Thread-safe entry point (production hardening): takes the node gate
@@ -1240,8 +1240,8 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
         var nsStore = Ns(batch.NamespaceId);
-        var staged = new Dictionary<byte[], Record>(BA.Instance);
-        foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
+        var staged = new Dictionary<RecordId, Record>();
+        foreach (var (rid, rec) in nsStore) staged[rid.ToArray()] = Clone(rec);
         int applied = 0;
         var changedIdx = new List<int>();   // indices of entries that actually changed state
         for (int idx = 0; idx < batch.Entries.Count; idx++)
@@ -1446,32 +1446,32 @@ internal List<Batch> BuildSnapshotInternal(int namespaceId)
     {
         var batches = new List<Batch>();
         var nsStore = Ns(namespaceId);
-        foreach (var (rid, rec) in nsStore.OrderBy(kv => Convert.ToHexString(kv.Key)))
+        foreach (var (rid, rec) in nsStore.OrderBy(kv => kv.Key.ToString()))
         {
             var entries = new List<OutboxEntry>();
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId, Value = fs.Value };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             foreach (var (fid, fs) in rec.FieldTombs.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldTomb { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid, OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             if (rec.LifecycleHlc is not null)
             {
                 var lcAuthor = rec.LifecycleAuthor ?? NodeId;
-                var op = new OpRecordTombstone { RecordId = rid, Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor };
+                var op = new OpRecordTombstone { RecordId = rid.ToArray(), Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor };
                 if (rec.LifecycleValue == Model.Alive)
                 {
                     // SPEC HARDENING: snapshots must carry an explicit REVIVE lifecycle op
                     // so the receiver un-ghosts historical fields (§7.4 У4).
                     var opw = new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor, Value = new[] { Model.Alive } };
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
                 }
                 else
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
             }
             if (entries.Count > 0)
                 batches.Add(new Batch(namespaceId, 0, 1, 0x02, 0, NodeId, Epoch, 0, 0,
@@ -1528,7 +1528,7 @@ internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
     {
         var d = new Dictionary<byte[], byte[]>(BA.Instance);
         if (Storage.TryGetValue(namespaceId, out var s))
-            foreach (var (rid, rec) in s) d[rid] = Digests.RecordDigest(rec);
+            foreach (var (rid, rec) in s) d[rid.ToArray()] = Digests.RecordDigest(rec);
         return d;
     }
 

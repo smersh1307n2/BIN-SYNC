@@ -56,9 +56,9 @@ public static partial class Reconcile
     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
     {
         if (!node.Storage.TryGetValue(namespaceId, out var records))
-            records = new Dictionary<byte[], Record>(BA.Instance);
+            records = new Dictionary<RecordId, Record>();
 
-        var dict = new Dictionary<byte[], Record>(BA.Instance);
+        var dict = new Dictionary<RecordId, Record>();
         foreach (var (rid, rec) in records)
             dict[rid] = rec;
 
@@ -215,7 +215,7 @@ public static partial class Reconcile
         {
             var key = BucketAccumulator.BucketKey(rid);
             if (key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
-                list.Add(rid);
+                list.Add(rid.ToArray());
         }
         return list;
     }

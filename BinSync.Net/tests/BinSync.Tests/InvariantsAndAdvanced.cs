@@ -616,8 +616,8 @@ public class InvariantsAndAdvanced
         for (int round = 0; round < 8; round++)
             Transport.SyncRound(a, b, NS);
         Assert.Equal(
-            new HashSet<string>(a.Storage[NS].Keys.Select(Convert.ToHexString)),
-            new HashSet<string>(b.Storage[NS].Keys.Select(Convert.ToHexString)));
+            new HashSet<string>(a.Storage[NS].Keys.Select(k => k.ToString())),
+            new HashSet<string>(b.Storage[NS].Keys.Select(k => k.ToString())));
         foreach (var k in a.Storage[NS].Keys)
             Assert.Equal(Digests.RecordDigest(a.Storage[NS][k]), Digests.RecordDigest(b.Storage[NS][k]));
     }
