@@ -160,19 +160,51 @@ public partial class Reader
     public int Pos;
     public Reader(byte[] data, int pos = 0) { _data = data; Pos = pos; }
 
-    private byte[] Take(int n)
+    private void Ensure(int n)
     {
         if (Pos + n > _data.Length) throw new EndOfStreamException("truncated");
+    }
+
+    private byte[] Take(int n)
+    {
+        Ensure(n);
         var v = new byte[n];
         Array.Copy(_data, Pos, v, 0, n);
         Pos += n;
         return v;
     }
 
-    public byte U8() => Take(1)[0];
-    public ushort U16() => BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
-    public uint U32() => BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
-    public ulong U64() => BinaryPrimitives.ReadUInt64LittleEndian(Take(8));
+    /// <summary>Zero-alloc fixed-width reads (hot path).</summary>
+    public byte U8()
+    {
+        Ensure(1);
+        return _data[Pos++];
+    }
+
+    public ushort U16()
+    {
+        Ensure(2);
+        ushort v = BinaryPrimitives.ReadUInt16LittleEndian(_data.AsSpan(Pos, 2));
+        Pos += 2;
+        return v;
+    }
+
+    public uint U32()
+    {
+        Ensure(4);
+        uint v = BinaryPrimitives.ReadUInt32LittleEndian(_data.AsSpan(Pos, 4));
+        Pos += 4;
+        return v;
+    }
+
+    public ulong U64()
+    {
+        Ensure(8);
+        ulong v = BinaryPrimitives.ReadUInt64LittleEndian(_data.AsSpan(Pos, 8));
+        Pos += 8;
+        return v;
+    }
+
     public byte[] B128() => Take(16);
     public ulong Varint() { var (v, p) = Codec.DecodeVarint(_data, Pos); Pos = p; return v; }
     public byte[] Bytes() => Take((int)Varint());
