@@ -111,6 +111,8 @@ public sealed class Iblt
             if (IsPure(Cells[i])) queue.Enqueue(i);
 
         int iter = 0;
+        // CA2014: stackalloc once outside the peel loop (HashCount is fixed).
+        Span<int> idx = stackalloc int[HashCount];
         while (queue.Count > 0 && iter++ < maxIter)
         {
             int i = queue.Dequeue();
@@ -120,7 +122,6 @@ public sealed class Iblt
             int sign = c.Count;
             if (sign > 0) onlyLocal.Add(key);
             else onlyRemote.Add(key);
-            Span<int> idx = stackalloc int[HashCount];
             Indices(key, idx);
             ulong hh = KeyHash(key);
             for (int t = 0; t < HashCount; t++)
