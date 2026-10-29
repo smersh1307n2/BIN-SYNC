@@ -14,6 +14,10 @@
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Hygiene: CA2014 and friends must not regress on the engine. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
   </PropertyGroup>
   <!-- Crypto: Ed25519 from scripts/vendor-ed25519-from-ztsharp.sh (CI runs before build). MIT third-party. -->
   <!-- Do NOT add PackageReference Include="BouncyCastle.Cryptography". -->

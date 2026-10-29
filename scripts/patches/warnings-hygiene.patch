@@ -1,0 +1,97 @@
+--- a/BinSync.Net/src/BinSync.Core/Production/Iblt.cs
++++ b/BinSync.Net/src/BinSync.Core/Production/Iblt.cs
+@@ -110,6 +110,8 @@ public (List<byte[]> OnlyLocal, List<byte[]> OnlyRemote) Peel(int maxIter = 10_0
+             if (IsPure(Cells[i])) queue.Enqueue(i);
+ 
+         int iter = 0;
++        // CA2014: stackalloc once outside the peel loop (HashCount is fixed).
++        Span<int> idx = stackalloc int[HashCount];
+         while (queue.Count > 0 && iter++ < maxIter)
+         {
+             int i = queue.Dequeue();
+@@ -119,7 +121,6 @@ public (List<byte[]> OnlyLocal, List<byte[]> OnlyRemote) Peel(int maxIter = 10_0
+             int sign = c.Count;
+             if (sign > 0) onlyLocal.Add(key);
+             else onlyRemote.Add(key);
+-            Span<int> idx = stackalloc int[HashCount];
+             Indices(key, idx);
+             ulong hh = KeyHash(key);
+             for (int t = 0; t < HashCount; t++)
+
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -586,7 +586,7 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
+             }
+             throw new SyncException("UNKNOWN_ALIAS");  // [А3]/[И3] never guess
+         }
+-        return entry.Item1;   // SPEC CORRECTION (errata E-1): bare nodeId
++        return entry.Item1 ?? throw new SyncException("UNKNOWN_ALIAS"); // E-1: bare nodeId
+     }
+
+--- a/BinSync.Net/src/BinSync.Core/Model.cs
++++ b/BinSync.Net/src/BinSync.Core/Model.cs
+@@ -39,7 +39,7 @@ public Record(byte[] recordId, ushort namespaceId, int fieldCapacity = 1)
+ 
+     public bool IsDead => LifecycleValue == Model.Dead;
+ 
+-    /// Ghost semantics (§7.4): dead records hide fields ordered <= lifecycle.
++    /// <summary>Ghost semantics (§7.4): dead records hide fields ordered ≤ lifecycle.</summary>
+     public Dictionary<ushort, FieldState> VisibleFields()
+
+--- a/BinSync.Net/src/BinSync.Core/Ops.cs
++++ b/BinSync.Net/src/BinSync.Core/Ops.cs
+@@ -123,7 +123,7 @@ public static byte[] EncodeOp(object op, bool? fullAuthor = null, int? valueLenO
+     /// fullAuthor=null → AUTO-DETECT the mode from payload length (BUGFIX note in Python port).
+     /// The second tuple element is the reader position after the op; for FieldWrite decoded
+     /// from a TRUNCATED payload it points at the end of the fixed header, and
+-    /// <see cref="FieldValueLenPos"/> carries the position of the value-length varint so
++    /// <see cref="OpFieldWrite.ValueLenPos"/> carries the position of the value-length varint so
+     /// re-encoding can preserve its original byte width (persistence byte-stability).
+
+--- a/BinSync.Net/src/BinSync.Core/Digests.cs
++++ b/BinSync.Net/src/BinSync.Core/Digests.cs
+@@ -85,8 +85,10 @@ public static byte[] RecordDigest(Record rec)
+     }
+ }
+ 
+-/// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.
+-/// Commutative & incremental [Д3]. Sum/xor are 128-bit LE numbers → UInt128.
++/// <summary>
++/// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.
++/// Commutative and incremental [Д3]. Sum/xor are 128-bit LE numbers (UInt128).
++/// </summary>
+ public class BucketAccumulator
+
+--- a/BinSync.Net/src/BinSync.Core/Production/StreamSyncTransport.cs
++++ b/BinSync.Net/src/BinSync.Core/Production/StreamSyncTransport.cs
+@@ -4,8 +4,8 @@ namespace BinSync;
+ /// <summary>
+ /// Adapts any bidirectional <see cref="Stream"/> to <see cref="ISyncTransport"/>
+ /// using self-describing frames (§3.4). Dispose does not close the stream unless
+-/// <paramref name="ownsStream"/> is true.
++/// constructor was given ownsStream=true.
+ /// </summary>
+
+--- a/BinSync.Net/src/BinSync.Core/Production/Blake3.cs
++++ b/BinSync.Net/src/BinSync.Core/Production/Blake3.cs
+@@ -5,9 +5,8 @@ namespace BinSync;
+ /// BLAKE3-256 facade over the `Blake3.Managed` NuGet package. The previous hand-written
+ /// in-tree implementation was broken (it failed the official BLAKE3 test vectors, e.g.
+ /// the empty input), so it was replaced by this wrapper. The public API surface
+-/// (<see cref="Hash256"/>, <see cref="TaggedHash"/>, <see cref="Hex256"/>,
+-/// <see cref="TaggedHex"/>) is unchanged, so <see cref="Digests"/>, <see cref="Codec"/>
++/// (Hash256 / TaggedHash / Hex256 / TaggedHex) is unchanged, so <see cref="Digests"/>, <see cref="Codec"/>
+ /// and <see cref="NodePersistence"/> keep working as before. Tagged hashing uses BLAKE3
+@@ -40,10 +39,10 @@ public static void Hash256(ReadOnlySpan<byte> data, Span<byte> destination32)
+         return outBytes.ToArray();
+     }
+ 
+-    /// <summary>Hex (lowercase) of <see cref="Hash256"/>.</summary>
++    /// <summary>Hex (lowercase) of Hash256.</summary>
+     public static string Hex256(ReadOnlySpan<byte> data) => Convert.ToHexString(Hash256(data)).ToLowerInvariant();
+ 
+-    /// <summary>Hex (lowercase) of <see cref="TaggedHash"/>.</summary>
++    /// <summary>Hex (lowercase) of TaggedHash.</summary>
+     public static string TaggedHex(string tag, ReadOnlySpan<byte> data)
+         => Convert.ToHexString(TaggedHash(tag, data)).ToLowerInvariant();
+ }
