@@ -1,0 +1,30 @@
+name: apply-perf-round4
+on:
+  push:
+    paths: [scripts/patches/perf-round4.patch, .github/workflows/apply-perf-round4.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/hotpath-baseline
+      - name: Apply patch
+        run: |
+          set -euo pipefail
+          git apply --whitespace=nowarn scripts/patches/perf-round4.patch || git apply --3way scripts/patches/perf-round4.patch || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "perf: zero-alloc DecodeOp probe, Blake3 span, lazy tombs in Clone"
+            git push origin HEAD:perf/hotpath-baseline
+          fi
+          git rm -f .github/workflows/apply-perf-round4.yml || true
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: cleanup apply-perf-round4" || true
+            git push origin HEAD:perf/hotpath-baseline || true
+          fi
