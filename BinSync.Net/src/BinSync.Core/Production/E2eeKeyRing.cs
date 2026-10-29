@@ -1,4 +1,6 @@
 // Per-namespace E2EE keys + current key epoch (§14.5 / §14.9).
+using System.Security.Cryptography;
+
 namespace BinSync;
 
 /// <summary>
@@ -18,8 +20,23 @@ public sealed class E2eeKeyRing
             throw new ArgumentException($"E2EE key must be {E2ee.KeySize} bytes", nameof(key));
         lock (_gate)
         {
+            if (_keys.TryGetValue(namespaceId, out var old))
+                CryptographicOperations.ZeroMemory(old);
             _keys[namespaceId] = key.ToArray();
             _epochs[namespaceId] = keyEpoch;
+        }
+    }
+
+    /// <summary>Remove key material for a namespace (ZeroMemory before drop).</summary>
+    public bool Remove(int namespaceId)
+    {
+        lock (_gate)
+        {
+            if (!_keys.TryGetValue(namespaceId, out var old)) return false;
+            CryptographicOperations.ZeroMemory(old);
+            _keys.Remove(namespaceId);
+            _epochs.Remove(namespaceId);
+            return true;
         }
     }
 
