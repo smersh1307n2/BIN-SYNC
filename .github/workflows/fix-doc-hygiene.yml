@@ -1,0 +1,64 @@
+name: fix-doc-hygiene
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/fix-doc-hygiene.yml]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: Fix XML docs
+        run: |
+          set -euo pipefail
+          python3 << 'PY'
+          from pathlib import Path
+
+          p = Path('BinSync.Net/src/BinSync.Core/Digests.cs')
+          t = p.read_text()
+          old = '''/// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.\n/// Commutative & incremental [Д3]. Sum/xor are 128-bit LE numbers → UInt128.\npublic class BucketAccumulator'''
+          new = '''/// <summary>\n/// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.\n/// Commutative and incremental [Д3]. Sum/xor are 128-bit LE numbers (UInt128).\n/// </summary>\npublic class BucketAccumulator'''
+          if old in t:
+              t = t.replace(old, new)
+          elif '/// <summary>' not in t[t.find('BucketAccumulator')-200:t.find('BucketAccumulator')+1]:
+              t = t.replace(
+                  '/// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.',
+                  '/// <summary>\n/// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.')
+              t = t.replace(
+                  '/// Commutative & incremental [Д3]. Sum/xor are 128-bit LE numbers → UInt128.\npublic class BucketAccumulator',
+                  '/// Commutative and incremental [Д3]. Sum/xor are 128-bit LE numbers (UInt128).\n/// </summary>\npublic class BucketAccumulator')
+          p.write_text(t)
+
+          p = Path('BinSync.Net/src/BinSync.Core/Ops.cs')
+          t = p.read_text()
+          t = t.replace('cref="FieldValueLenPos"', 'cref="OpFieldWrite.ValueLenPos"')
+          p.write_text(t)
+
+          p = Path('BinSync.Net/src/BinSync.Core/Production/Node.Trust.cs')
+          t = p.read_text()
+          t = t.replace('VerifySignedBatch', 'VerifyAndApplyBatch')
+          p.write_text(t)
+
+          p = Path('BinSync.Net/src/BinSync.Core/Production/StreamSyncTransport.cs')
+          t = p.read_text()
+          t = t.replace(
+              '/// using self-describing frames (§3.4). Dispose does not close the stream unless\n/// <paramref name="ownsStream"/> is true.\n/// </summary>',
+              '/// using self-describing frames (§3.4). Dispose closes the stream only when the\n/// constructor was given ownsStream=true.\n/// </summary>')
+          p.write_text(t)
+
+          # remove one-shot workflows if present
+          for wf in ['.github/workflows/migrate-recordid-storage.yml',
+                     '.github/workflows/fix-doc-hygiene.yml']:
+              Path(wf).unlink(missing_ok=True)
+          print('done')
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: XML doc hygiene so TreatWarningsAsErrors stays green"
+            git push origin HEAD:main
+          fi
