@@ -1,0 +1,26 @@
+name: cleanup-merge-workflow
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/cleanup-merge-workflow.yml]
+permissions:
+  contents: write
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Remove one-shot workflows
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/merge-perf-to-main.yml
+          rm -f .github/workflows/cleanup-merge-workflow.yml
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: drop one-shot merge/cleanup workflows from main"
+            git push origin HEAD:main
+          fi
