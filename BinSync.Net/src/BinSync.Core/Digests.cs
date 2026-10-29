@@ -83,8 +83,10 @@ public static class Digests
     }
 }
 
+/// <summary>
 /// §9.2 / A.9: count + xor + sum over record digests keyed by BLAKE3(recordId) prefix.
-/// Commutative & incremental [Д3]. Sum/xor are 128-bit LE numbers → UInt128.
+/// Commutative and incremental [Д3]. Sum/xor are 128-bit LE numbers (UInt128).
+/// </summary>
 public class BucketAccumulator
 {
     public byte[] Prefix;

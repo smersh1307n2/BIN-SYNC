@@ -4,7 +4,7 @@ namespace BinSync;
 public sealed partial class Node
 {
     /// <summary>
-    /// When set, callers may use <see cref="VerifySignedBatch"/> before apply.
+    /// When set, callers may use <see cref="VerifyAndApplyBatch"/> before apply.
     /// Plain <see cref="ApplyBatch"/> does not consult trust (backward compatible).
     /// </summary>
     public TrustStore? Trust { get; set; }

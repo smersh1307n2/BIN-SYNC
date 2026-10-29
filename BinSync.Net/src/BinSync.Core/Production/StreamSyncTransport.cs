@@ -3,8 +3,8 @@ namespace BinSync;
 
 /// <summary>
 /// Adapts a bidirectional <see cref="Stream"/> to <see cref="ISyncTransport"/>
-/// using self-describing frames (§3.4). Dispose does not close the stream unless
-/// <paramref name="ownsStream"/> is true.
+/// using self-describing frames (§3.4). Dispose closes the stream only when the
+/// constructor was given ownsStream=true.
 /// </summary>
 public sealed class StreamSyncTransport : ISyncTransport
 {
