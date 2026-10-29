@@ -1,0 +1,149 @@
+name: apply-typed-ids
+on:
+  workflow_dispatch:
+  push:
+    paths: [.github/workflows/apply-typed-ids.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feat/typed-ids
+      - name: Download and apply patch from gist-like inline
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Inline minimal migration (Ids.cs already on branch)
+          python3 << 'PY'
+          from pathlib import Path
+
+          # Node.cs
+          p = Path('BinSync.Net/src/BinSync.Core/Node.cs')
+          t = p.read_text()
+          t = t.replace('private readonly Dictionary<int, Dictionary<byte[], Record>> _storage = new();',
+                        'private readonly Dictionary<int, Dictionary<RecordId, Record>> _storage = new();')
+          t = t.replace('public Dictionary<int, Dictionary<byte[], Record>> Storage',
+                        'public Dictionary<int, Dictionary<RecordId, Record>> Storage')
+          t = t.replace('_storage[ns] = m.Comparer is BA ? m : new Dictionary<byte[], Record>(m, BA.Instance);',
+                        '_storage[ns] = new Dictionary<RecordId, Record>(m);')
+          t = t.replace('public Dictionary<byte[], Record> Ns(int namespaceId)',
+                        'public Dictionary<RecordId, Record> Ns(int namespaceId)')
+          t = t.replace('internal Dictionary<byte[], Record> NsInternal(int namespaceId)',
+                        'internal Dictionary<RecordId, Record> NsInternal(int namespaceId)')
+          t = t.replace('(Storage[namespaceId] = new(BA.Instance))',
+                        '(Storage[namespaceId] = new Dictionary<RecordId, Record>())')
+          t = t.replace('var staged = new Dictionary<byte[], Record>(\n            Math.Max(4, nsStore.Count + batch.Entries.Count), BA.Instance);',
+                        'var staged = new Dictionary<RecordId, Record>(\n            Math.Max(4, nsStore.Count + batch.Entries.Count));')
+          t = t.replace('var staged = new Dictionary<byte[], Record>(BA.Instance);',
+                        'var staged = new Dictionary<RecordId, Record>();')
+          t = t.replace('foreach (var (rid, rec) in nsStore.OrderBy(kv => Convert.ToHexString(kv.Key)))',
+                        'foreach (var (rid, rec) in nsStore.OrderBy(kv => kv.Key.ToString()))')
+          t = t.replace('RecordId = rid, OpKind = OpsConst.TagFieldWrite',
+                        'RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite')
+          t = t.replace('RecordId = rid, OpKind = OpsConst.TagFieldTomb',
+                        'RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldTomb')
+          t = t.replace('var op = new OpRecordTombstone { RecordId = rid,',
+                        'var op = new OpRecordTombstone { RecordId = rid.ToArray(),')
+          t = t.replace('RecordId = rid, OpKind = OpsConst.TagRecordTomb',
+                        'RecordId = rid.ToArray(), OpKind = OpsConst.TagRecordTomb')
+          t = t.replace('d[rid] =', 'd[rid.ToArray()] =')
+          p.write_text(t)
+
+          # Digests
+          p = Path('BinSync.Net/src/BinSync.Core/Digests.cs')
+          t = p.read_text()
+          t = t.replace('Dictionary<byte[], Record> records', 'Dictionary<RecordId, Record> records')
+          if 'BucketKey(RecordId' not in t:
+              t = t.replace(
+                  'public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);',
+                  'public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);\n    public static byte[] BucketKey(RecordId recordId) => Digests.Blake3(recordId.ToArray(), 32);')
+          p.write_text(t)
+
+          # Iblt
+          p = Path('BinSync.Net/src/BinSync.Core/Production/Iblt.cs')
+          t = p.read_text()
+          if 'byte[] ridBytes = rid.ToArray()' not in t:
+              t = t.replace(
+                  '''        foreach (var rid in map.Keys)\n        {\n            if (prefix is { Length: > 0 })\n            {\n                var key = BucketAccumulator.BucketKey(rid);\n                if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))\n                    continue;\n            }\n            t.Insert(rid);\n        }''',
+                  '''        foreach (var rid in map.Keys)\n        {\n            byte[] ridBytes = rid.ToArray();\n            if (prefix is { Length: > 0 })\n            {\n                var key = BucketAccumulator.BucketKey(rid);\n                if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))\n                    continue;\n            }\n            t.Insert(ridBytes);\n        }''')
+          p.write_text(t)
+
+          # Reconcile / Snapshot / Persistence / Republish
+          for rel, reps in [
+            ('BinSync.Net/src/BinSync.Core/Production/Reconcile.cs', [
+              ('Dictionary<byte[], Record>(BA.Instance)', 'Dictionary<RecordId, Record>()'),
+              ('Dictionary<byte[], Record>', 'Dictionary<RecordId, Record>'),
+              ('list.Add(rid);', 'list.Add(rid.ToArray());'),
+            ]),
+            ('BinSync.Net/src/BinSync.Core/Production/Snapshot.cs', [
+              ('RecordId = rid,', 'RecordId = rid.ToArray(),'),
+            ]),
+            ('BinSync.Net/src/BinSync.Core/Production/NodePersistence.cs', [
+              ('new Dictionary<byte[], Record>(BA.Instance)', 'new Dictionary<RecordId, Record>()'),
+              ('Dictionary<byte[], Record>', 'Dictionary<RecordId, Record>'),
+              ('foreach (var (rid, rec) in recs.OrderBy(kv => kv.Key, BytesOrd))', 'foreach (var (rid, rec) in recs.OrderBy(kv => kv.Key.ToString()))'),
+              ('WriteRecord(w, rid, rec)', 'WriteRecord(w, rid.ToArray(), rec)'),
+            ]),
+            ('BinSync.Net/src/BinSync.Core/Production/Node.Republish.cs', [
+              ('WriteFieldInternal(namespaceId, rid, fid, fs.Value);', 'WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);'),
+            ]),
+          ]:
+              p = Path(rel)
+              t = p.read_text()
+              for a,b in reps:
+                  t = t.replace(a,b)
+              p.write_text(t)
+
+          # Model summary fix if needed
+          p = Path('BinSync.Net/src/BinSync.Core/Model.cs')
+          t = p.read_text()
+          t = t.replace('/// Ghost semantics (§7.4): dead records hide fields ordered <= lifecycle.',
+                        '/// <summary>Ghost semantics (§7.4): dead records hide fields ordered ≤ lifecycle.</summary>')
+          p.write_text(t)
+
+          # Tests
+          for rel, reps in [
+            ('BinSync.Net/tests/BinSync.Tests/ScenariosB.cs', [
+              ('new Dictionary<byte[], Record>(new ByteArrayComparer())', 'new Dictionary<RecordId, Record>()'),
+              ('st0.Keys.Select(Convert.ToHexString)', 'st0.Keys.Select(k => k.ToString())'),
+              ('st1.Keys.Select(Convert.ToHexString)', 'st1.Keys.Select(k => k.ToString())'),
+              ('b.Storage[NS].Keys.Select(k => k[15].ToString())', 'b.Storage[NS].Keys.Select(k => k.ToArray()[15].ToString())'),
+            ]),
+            ('BinSync.Net/tests/BinSync.Tests/ScenariosA.cs', [
+              ('b.Storage[NS].Keys.Select(k => k[15].ToString())', 'b.Storage[NS].Keys.Select(k => k.ToArray()[15].ToString())'),
+            ]),
+            ('BinSync.Net/tests/BinSync.Tests/InvariantsAndAdvanced.cs', [
+              ('a.Storage[NS].Keys.Select(Convert.ToHexString)', 'a.Storage[NS].Keys.Select(k => k.ToString())'),
+              ('b.Storage[NS].Keys.Select(Convert.ToHexString)', 'b.Storage[NS].Keys.Select(k => k.ToString())'),
+            ]),
+            ('BinSync.Net/tests/BinSync.Tests/Production/LabFuzzTests.cs', [
+              ('Convert.ToHexString(rid) + ":" + fid.ToString("X4")', 'rid.ToString() + ":" + fid.ToString("X4")'),
+            ]),
+          ]:
+              p = Path(rel)
+              if p.exists():
+                  t = p.read_text()
+                  for a,b in reps:
+                      t = t.replace(a,b)
+                  p.write_text(t)
+          print('migration script done')
+          PY
+          git add -A
+          git status
+          git commit -m "feat(ids): migrate Storage to RecordId keys" || echo "nothing to commit"
+          git push origin HEAD:feat/typed-ids
+          git fetch origin main
+          git checkout -B main origin/main
+          git merge -m "merge: feat/typed-ids (NodeId/RecordId + Storage)" origin/feat/typed-ids
+          git push origin HEAD:main
+          git rm -f .github/workflows/apply-typed-ids.yml || true
+          if ! git diff --cached --quiet; then
+            git commit -m "ci: cleanup apply-typed-ids"
+            git push origin HEAD:main
+          fi
