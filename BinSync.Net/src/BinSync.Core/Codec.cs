@@ -120,7 +120,12 @@ public static partial class Codec
 
 public partial class Writer
 {
-    private readonly MemoryStream _buf = new();
+    private readonly MemoryStream _buf;
+
+    public Writer() : this(256) { }
+    public Writer(int capacity) => _buf = new MemoryStream(Math.Max(16, capacity));
+
+    public int Length => (int)_buf.Length;
 
     public Writer U8(byte v) { _buf.WriteByte(v); return this; }
     public Writer U16(ushort v) { Span<byte> s = stackalloc byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(s, v); _buf.Write(s); return this; }
@@ -134,10 +139,18 @@ public partial class Writer
         return this;
     }
 
-    public Writer Varint(ulong v) { _buf.Write(Codec.EncodeVarint(v)); return this; }
+    /// <summary>Zero-alloc varint encode into a stack buffer, then write.</summary>
+    public Writer Varint(ulong v)
+    {
+        Span<byte> tmp = stackalloc byte[10];
+        int n = Codec.WriteVarint(tmp, v);
+        _buf.Write(tmp[..n]);
+        return this;
+    }
 
     public Writer Bytes(byte[] b) { Varint((ulong)b.Length); _buf.Write(b); return this; }
     public Writer Raw(byte[] b) { _buf.Write(b); return this; }
+    public Writer Raw(ReadOnlySpan<byte> b) { _buf.Write(b); return this; }
     public byte[] Value() => _buf.ToArray();
 }
 
