@@ -1,0 +1,126 @@
+diff --git a/BinSync.Net/src/BinSync.Core/Node.cs b/BinSync.Net/src/BinSync.Core/Node.cs
+index 57d6967..99d2fb5 100644
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -234,19 +234,29 @@ public sealed partial class Node
+ 
+     // ---- production hardening (Шаг 2): thread safety -------------------------------
+     /// <summary>
+-    /// Re-entrant gate serializing ALL public state mutations/reads. The public surface
+-    /// only takes the lock and delegates to *Internal methods holding the actual engine
+-    /// logic (the synchronous §13 core, port of binsync/node.py). Re-entrancy lets
+-    /// internal helpers (CreateDeltaBatch → PushOutbox → NextOutboxSeq …) run under one
+-    /// acquisition. Deadlock prevention (§12.18): transport code must NEVER hold the
+-    /// gates of two nodes simultaneously — see <c>AsyncTransport</c>: each hop copies out
+-    /// of one node, releases its gate, and only then takes the other node's gate.
++    /// Domain sub-gates (production). Acquisition order is fixed to avoid deadlocks:
++    /// <c>Storage → Outbox → Meta</c>. Public entry points take only the domains they
++    /// need; multi-domain ops nest in that order. Internal helpers assume the caller
++    /// already holds the required locks (re-entrant Monitor).
++    /// Deadlock prevention (§12.18): transport must NEVER hold gates of two nodes at once.
+     /// </summary>
+-    private readonly object _gate = new();
++    private readonly object _lockStorage = new();
++    private readonly object _lockOutbox = new();
++    private readonly object _lockMeta = new();
++
++    /// <summary>
++    /// Acquire all domain locks (Storage → Outbox → Meta). Prefer this over the legacy
++    /// <see cref="Gate"/> object when taking a point-in-time snapshot.
++    /// </summary>
++    public AllGateScope EnterAllGates() => new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
++
++    /// <summary>
++    /// Legacy coarse gate object (locks Meta only). Prefer <see cref="EnterAllGates"/> for
++    /// full exclusion. Kept so existing <c>lock (node.Gate)</c> still compiles; hosts that
++    /// need storage consistency should migrate to <see cref="EnterAllGates"/>.
++    /// </summary>
++    public object Gate => _lockMeta;
+ 
+-    /// <summary>The synchronization gate. External collaborators (<see cref="NodePersistence"/>,
+-    /// <see cref="AsyncTransport"/>) may take it to obtain a consistent point-in-time image.</summary>
+-    public object Gate => _gate;
+ 
+     public byte[] NodeId;
+     public int Epoch;
+@@ -283,8 +293,8 @@ public sealed partial class Node
+     // -> last sent batchDigest (§12.17.2 hardening).
+     public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(BAI4B.Instance);
+     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
+-    public Dictionary<byte[], Dictionary<int, (byte[], int)>> AliasToNode = new(BA.Instance);
+-    public Dictionary<byte[], Dictionary<(byte[], int), int>> NodeToAlias = new(BA.Instance);   // BUGFIX (port): inner map keyed by content-equal (nodeId, epoch) pairs — default tuple comparer used byte[] reference equality.
++    public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode = new();
++    public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias = new();   // peer → (durableNodeId, epoch) → alias
+     // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
+     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
+     // for resolution [А3].
+@@ -320,10 +330,10 @@ public sealed partial class Node
+     /// per-session watermark used by STEP 0.5 (errata E-2/E-3). A NEW session resets the
+     /// peer's watermark first (§4.3: reconnect = fresh exchange), then raises it.
+ /// <summary>Thread-safe entry point (production hardening): takes the node gate
+-    /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="_gate"/>.</summary>
++    /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+     public void RegisterSessionEpoch(byte[] peer, int epoch)
+     {
+-        lock (_gate) RegisterSessionEpochInternal(peer, epoch);
++        lock (_lockMeta) RegisterSessionEpochInternal(peer, epoch);
+     }
+ 
+ internal void RegisterSessionEpochInternal(byte[] peer, int epoch)
+@@ -336,10 +346,10 @@ internal void RegisterSessionEpochInternal(byte[] peer, int epoch)
+     /// Durable observation of an author's incarnation epoch (§4.4). Used only as fallback
+     /// metadata (_author_epoch) — never as a regression gate (errata E-2).
+ /// <summary>Thread-safe entry point (production hardening): takes the node gate
+-    /// and delegates to <c>LearnAuthorEpochInternal</c>. See <see cref="_gate"/>.</summary>
++    /// and delegates to <c>LearnAuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+     public void LearnAuthorEpoch(byte[] author, int epoch)
+     {
+-        lock (_gate) LearnAuthorEpochInternal(author, epoch);
++        lock (_lockMeta) LearnAuthorEpochInternal(author, epoch);
+     }
+ 
+ internal void LearnAuthorEpochInternal(byte[] author, int epoch)
+@@ -370,10 +380,10 @@ internal void LearnAuthorEpochInternal(byte[] author, int epoch)
+     /// of the new incarnation with SEQ_GAP (§4.4, errata E-2/E-3: watermark keyed per
+     /// SESSION; reconnect = fresh exchange).
+ /// <summary>Thread-safe entry point (production hardening): takes the node gate
+-    /// and delegates to <c>ResetSessionInternal</c>. See <see cref="_gate"/>.</summary>
++    /// and delegates to <c>ResetSessionInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+     public void ResetSession(byte[] peer)
+     {
+-        lock (_gate) ResetSessionInternal(peer);
++        lock (_lockMeta) ResetSessionInternal(peer);
+     }
+ 
+ internal void ResetSessionInternal(byte[] peer)
+@@ -395,25 +405,25 @@ internal void ResetSessionInternal(byte[] peer)
+     /// when possible. Returns the alias valid on both ends, or None when no collision-free
+     /// number exists — caller then fails closed with UNKNOWN_ALIAS [А3] instead of guessing.
+ /// <summary>Thread-safe entry point (production hardening): takes the node gate
+-    /// and delegates to <c>EnsureAliasInternal</c>. See <see cref="_gate"/>.</summary>
++    /// and delegates to <c>EnsureAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+     public int? EnsureAlias(Node peer, byte[] nodeId, int epoch)
+     {
+-        lock (_gate) return EnsureAliasInternal(peer, nodeId, epoch);
++        lock (_lockMeta) return EnsureAliasInternal(peer, nodeId, epoch);
+     }
+ 
+ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
+     {
+-        var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (byte[], int)>();
+-        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(byte[], int), int>(BAI2.Instance);
+-        var durable = (nodeId, epoch);
++        var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (NodeId Id, int Epoch)>();
++        var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(NodeId Id, int Epoch), int>();
++        var durable = ((NodeId)nodeId, epoch);
+         if (revA.TryGetValue(durable, out var existing)) return existing;
+         // is the peer's copy already bound to this author?
+-        Dictionary<int, (byte[], int)>? fwdB = peer.AliasToNode.TryGetValue(NodeId, out var ob) ? ob : null;
++        Dictionary<int, (NodeId Id, int Epoch)>? fwdB = peer.AliasToNode.TryGetValue(NodeId, out var ob) ? ob : null;
+         if (fwdB is not null)
+         {
+             foreach (var (al, dur) in fwdB)
+             {
+-                if (dur.Item1.AsSpan().SequenceEqual(nodeId) && dur.Item2 == epoch)
++                if (dur.Id == (NodeId)nodeId && dur.Item2 == epoch)
+                 {
