@@ -15,7 +15,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Naming | [`docs/NAME.md`](docs/NAME.md) |
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 
-**Package:** `BinSync.Core` **`1.0.0-rc.1`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`1.0.0-rc.2`** · **Target:** `net10.0`  
 **Branch:** `main` · **Tests:** 277 (CI)  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 

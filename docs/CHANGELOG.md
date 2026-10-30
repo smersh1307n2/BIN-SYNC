@@ -1,5 +1,26 @@
 # Changelog — BinSync.Core
 
+## 1.0.0-rc.2 — 2026-10-30
+
+**Second release candidate.** Same API freeze as rc.1; engine hardening only.
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.0-rc.2` · **Branch:** `main`
+
+### Engine
+- Domain sub-gates (`_lockStorage` → `_lockOutbox` → `_lockMeta`) + `EnterAllGates` / `AllGateScope`
+- Alias maps migrated to `NodeId` keys and `(NodeId Id, int Epoch)` values
+- Persistence snapshots under `EnterAllGates`; Diag/Hardening updated
+- 277 tests green; batch hot-path benches show no regression vs pre-migration tip
+
+### Unchanged contract
+- Public API same as `1.0.0-rc.1` / `PUBLIC-API.md`
+- Wire-compatible with alpha.6/alpha.7 and rc.1
+
+### Next
+- Soak as `v1.0.0-rc.2` → promote to **`1.0.0`** without further API breaks
+
+---
+
 ## 1.0.0-rc.1 — 2026-10-29
 
 **First release candidate toward 1.0.** API surface frozen as documented in [PUBLIC-API.md](PUBLIC-API.md).
