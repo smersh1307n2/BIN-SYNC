@@ -11,7 +11,7 @@ public sealed partial class Node
     /// </summary>
     public int RepublishUnderPrefix(int namespaceId, byte[] prefix)
     {
-        lock (_gate)
+        lock (_lockStorage) lock (_lockOutbox)
         {
             int n = 0;
             if (!_storage.TryGetValue(namespaceId, out var map)) return 0;
@@ -34,7 +34,7 @@ public sealed partial class Node
     /// <summary>Re-publish specific recordIds (NEED_KEYS path).</summary>
     public int RepublishRecords(int namespaceId, IEnumerable<byte[]> recordIds)
     {
-        lock (_gate)
+        lock (_lockStorage) lock (_lockOutbox)
         {
             int n = 0;
             if (!_storage.TryGetValue(namespaceId, out var map)) return 0;
