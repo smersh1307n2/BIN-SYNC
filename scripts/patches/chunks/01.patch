@@ -1,0 +1,119 @@
+                     // peer knows it under `al`; can we mirror the same number?
+                     if (!fwdA.ContainsKey(al))
+@@ -422,7 +432,7 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
+                         return al;
+                     }
+                     var cur = fwdA[al];
+-                    if (cur.Item1.AsSpan().SequenceEqual(nodeId)) return al;  // same author, older epoch → rotate
++                    if (cur.Id == (NodeId)nodeId) return al;  // same author, older epoch → rotate
+                     return null;                                              // collision — fail closed
+                 }
+             }
+@@ -434,11 +444,11 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
+         {
+             foreach (var (al, dur) in fwdB)
+             {
+-                if (dur.Item1.AsSpan().SequenceEqual(nodeId) && !(dur.Item2 == epoch))
++                if (dur.Id == (NodeId)nodeId && !(dur.Item2 == epoch))
+                 {
+                     int? ownAl = null;
+                     foreach (var (d2, a2) in revA)
+-                        if (d2.Item1.AsSpan().SequenceEqual(nodeId)) { ownAl = a2; break; }
++                        if (d2.Id == (NodeId)nodeId) { ownAl = a2; break; }
+                     int canon = ownAl is not null ? Math.Min(al, ownAl.Value) : al;
+                     // rotate our older binding to the canonical number when free
+                     if (ownAl is not null && ownAl.Value != canon && !fwdA.ContainsKey(canon))
+@@ -472,8 +482,8 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
+         {
+             foreach (var cand in EnumerateCandidateAliases(fwdA, fwdB, nodeId))
+             {
+-                bool freeA = !fwdA.TryGetValue(cand, out var occA) || occA.Item1.AsSpan().SequenceEqual(nodeId);
+-                bool freeB = fwdB is null || !fwdB.TryGetValue(cand, out var occB) || occB.Item1.AsSpan().SequenceEqual(nodeId);
++                bool freeA = !fwdA.TryGetValue(cand, out var occA) || occA.Id == (NodeId)nodeId;
++                bool freeB = fwdB is null || !fwdB.TryGetValue(cand, out var occB) || occB.Id == (NodeId)nodeId;
+                 if (!freeA || !freeB) continue;   // occupied by another author — [А3] skip
+                 try
+                 {
+@@ -494,24 +504,24 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
+     }
+ 
+     private static IEnumerable<int> EnumerateCandidateAliases(
+-        Dictionary<int, (byte[], int)> fwdA, Dictionary<int, (byte[], int)>? fwdB, byte[] nodeId)
++        Dictionary<int, (NodeId Id, int Epoch)> fwdA, Dictionary<int, (NodeId Id, int Epoch)>? fwdB, byte[] nodeId)
+     {
+         var seen = new HashSet<int>();
+         foreach (var (al, dur) in fwdA)
+-            if (dur.Item1.AsSpan().SequenceEqual(nodeId) && seen.Add(al)) yield return al;
++            if (dur.Id == (NodeId)nodeId && seen.Add(al)) yield return al;
+         if (fwdB is not null)
+             foreach (var (al, dur) in fwdB)
+-                if (dur.Item1.AsSpan().SequenceEqual(nodeId) && seen.Add(al)) yield return al;
++                if (dur.Id == (NodeId)nodeId && seen.Add(al)) yield return al;
+     }
+ 
+     /// ALIAS_MAP entry for session with `peer` (§4.3). Alias exists only in session.
+     /// BUGFIX (errata, Python port): reverse map keyed by the DURABLE pair (nodeId, epoch)
+     /// — §4.4 lets a post-crash node keep its nodeId and bump only the epoch.
+ /// <summary>Thread-safe entry point (production hardening): takes the node gate
+-    /// and delegates to <c>RegisterAliasInternal</c>. See <see cref="_gate"/>.</summary>
++    /// and delegates to <c>RegisterAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+     public void RegisterAlias(byte[] peer, int alias, byte[] nodeId, int epoch)
+     {
+-        lock (_gate) RegisterAliasInternal(peer, alias, nodeId, epoch);
++        lock (_lockMeta) RegisterAliasInternal(peer, alias, nodeId, epoch);
+     }
+ 
+ internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int epoch)
+@@ -521,10 +531,10 @@ internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int e
+         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
+         // a decoded copy of the same author bytes produced fresh array instances that never
+         // matched existing keys (AliasOf misses → spurious UNKNOWN_ALIAS / stale bindings).
+-        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new(BAI2.Instance));
+-        var durable = (nodeId, epoch);
++        var rev = NodeToAlias.TryGetValue(peer, out var rr) ? rr : (NodeToAlias[peer] = new());
++        var durable = ((NodeId)nodeId, epoch);
+         // forbid reuse of an alias for another (nodeId, epoch) within a session
+-        if (m.TryGetValue(alias, out var occ) && !(occ.Item1.AsSpan().SequenceEqual(nodeId) && occ.Item2 == epoch))
++        if (m.TryGetValue(alias, out var occ) && !(occ.Id == (NodeId)nodeId && occ.Item2 == epoch))
+             throw new SyncException("UNKNOWN_ALIAS");
+         if (rev.TryGetValue(durable, out var occAl) && occAl != alias)
+             throw new SyncException("UNKNOWN_ALIAS");
+@@ -540,16 +550,16 @@ internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int e
+     /// Errata E-12: on a miss, consult the peer's copy of THIS session and adopt its
+     /// binding iff collision-free; an identity neither copy knows still fails closed [А3].
+ /// <summary>Thread-safe entry point (production hardening): takes the node gate
+-    /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="_gate"/>.</summary>
++    /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+     public void ResolveAlias(byte[] peer, int alias)
+     {
+-        lock (_gate) return ResolveAliasInternal(peer, alias);
++        lock (_lockMeta) return ResolveAliasInternal(peer, alias);
+     }
+ 
+ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
+     {
+-        var entry = AliasToNode.TryGetValue(peer, out var m) && m.TryGetValue(alias, out var e) ? e : ((byte[])null!, int.MinValue);
+-        bool have = !(entry.Item1 is null) || entry.Item2 != int.MinValue;
++        var entry = AliasToNode.TryGetValue(peer, out var m) && m.TryGetValue(alias, out var e) ? e : (default, int.MinValue);
++        bool have = entry.Item2 != int.MinValue;
+         if (!have)
+         {
+             Node? other = null;
+@@ -561,10 +571,10 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
+             }
+             if (other is not null)
+             {
+-                var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (byte[], int)>();
++                var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (NodeId Id, int Epoch)>();
+                 if (theirFwd.TryGetValue(alias, out var durThere))
+                 {
+-                    try { RegisterAlias(peer, alias, durThere.Item1, durThere.Item2); return durThere.Item1; } // E-1: bare nodeId
++                    try { RegisterAlias(peer, alias, durThere.Id.ToArray(), durThere.Epoch); return durThere.Id.ToArray(); } // E-1: bare nodeId
+                     catch (SyncException) { throw new SyncException("UNKNOWN_ALIAS"); } // genuine conflict — never guess
+                 }
+                 // BUGFIX (persistence resume, symmetric E-12): the wire alias is missing from
+@@ -579,22 +589,22 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
+                     var theirMapForUs = other.AliasToNode.TryGetValue(NodeId, out var tm) ? tm : null;
+                     if (theirMapForUs is not null && theirMapForUs.TryGetValue(alias, out var durTheir))
+                     {
+-                        try { RegisterAlias(peer, alias, durTheir.Item1, durTheir.Item2); return durTheir.Item1; }
