@@ -15,7 +15,7 @@ public sealed partial class Node
     /// </summary>
     public BatchResult ApplyBatchWithSchema(Batch batch, byte[] senderPeer)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             var reg = Schemas;
             if (reg is not null)
@@ -41,7 +41,7 @@ public sealed partial class Node
     /// <summary>Publish local schemas into the registry (convenience).</summary>
     public void RegisterSchema(SchemaDescriptor desc)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             Schemas ??= new SchemaRegistry();
             Schemas.Register(desc);
@@ -55,7 +55,7 @@ public sealed partial class Node
     /// <summary>Learn schemas from a decoded SCHEMA_MAP payload.</summary>
     public int LearnSchemaMap(byte[] payload)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             Schemas ??= new SchemaRegistry();
             var list = SchemaMap.Decode(payload);
@@ -66,7 +66,7 @@ public sealed partial class Node
     /// <summary>Encode current registry as SCHEMA_MAP payload (empty if none).</summary>
     public byte[] ExportSchemaMap()
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             var list = Schemas?.Snapshot() ?? new List<SchemaDescriptor>();
             return SchemaMap.Encode(list);
