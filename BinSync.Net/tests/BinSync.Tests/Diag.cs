@@ -29,10 +29,10 @@ public class Diag : IDisposable
         {
             foreach (var (peer, m) in n.AliasToNode)
                 foreach (var (al, tup) in m)
-                    Console.WriteLine(tag + ": peer=" + Convert.ToHexString(peer)[..8] + " alias=" + al +
-                        " -> nid=" + Convert.ToHexString(tup.Item1)[..8] + " ep=" + tup.Item2);
+                    Console.WriteLine(tag + ": peer=" + peer.ToString()[..8] + " alias=" + al +
+                        " -> nid=" + tup.Id.ToString()[..8] + " ep=" + tup.Epoch);
             Console.WriteLine(tag + ": NodeToAlias peers=" + n.NodeToAlias.Count + " counts: " +
-                string.Join(",", n.NodeToAlias.Select(kv => Convert.ToHexString(kv.Key)[..8] + ":" + kv.Value.Count)));
+                string.Join(",", n.NodeToAlias.Select(kv => kv.Key.ToString()[..8] + ":" + kv.Value.Count)));
             Console.WriteLine(tag + ": PeersByNid keys=" + string.Join(",",
                 (n.PeersByNid?.Keys.Select(k => k.ToArray()) ?? Enumerable.Empty<byte[]>()).Select(k => Convert.ToHexString(k)[..8])));
         }
@@ -48,8 +48,8 @@ public class Diag : IDisposable
         var revMap = a2.NodeToAlias[b.NodeId];
         foreach (var (al, tup) in fwd)
         {
-            bool hit = revMap.TryGetValue((tup.Item1, tup.Item2), out var got);
-            Console.WriteLine("rev-lookup alias=" + al + " nid=" + Convert.ToHexString(tup.Item1)[..8] +
+            bool hit = revMap.TryGetValue((tup.Id, tup.Epoch), out var got);
+            Console.WriteLine("rev-lookup alias=" + al + " nid=" + tup.Id.ToString()[..8] +
                 " hit=" + hit + " got=" + got);
         }
 
@@ -66,8 +66,8 @@ public class Diag : IDisposable
         Console.WriteLine("--- loaded ha2 alias maps:");
         foreach (var (peer, m) in ha2.AliasToNode)
             foreach (var (al, tup) in m)
-                Console.WriteLine("ha2: peer=" + Convert.ToHexString(peer)[..8] + " alias=" + al +
-                    " -> nid=" + Convert.ToHexString(tup.Item1)[..8] + " ep=" + tup.Item2);
+                Console.WriteLine("ha2: peer=" + peer.ToString()[..8] + " alias=" + al +
+                    " -> nid=" + tup.Id.ToString()[..8] + " ep=" + tup.Epoch);
         hb.WriteField(NS, Fix.Rid(400), 0x101, Val("after-a-restart"));
         Exception? ex2 = null;
         try { Transport.SyncRound(hb, ha2, NS); } catch (Exception e) { ex2 = e; }
@@ -102,8 +102,8 @@ public class Diag : IDisposable
         foreach (var n in new[] { ("a", a), ("b", b), ("a2", a2) })
             foreach (var (peer, m) in n.Item2.AliasToNode)
                 foreach (var (al, tup) in m)
-                    Console.WriteLine(n.Item1 + ": peer=" + Convert.ToHexString(peer)[..8] + " alias=" + al +
-                        " -> nid=" + Convert.ToHexString(tup.Item1)[..8] + " ep=" + tup.Item2);
+                    Console.WriteLine(n.Item1 + ": peer=" + peer.ToString()[..8] + " alias=" + al +
+                        " -> nid=" + tup.Id.ToString()[..8] + " ep=" + tup.Epoch);
 
         Console.WriteLine("=== b outbox (author, seq, acked-for-a2) ===");
         var psBA = b.PeerStates.TryGetValue((a2.NodeId, NS), out var p1) ? p1 : null;

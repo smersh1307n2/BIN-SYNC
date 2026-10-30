@@ -116,7 +116,7 @@ public static class NodePersistence
 
     private static byte[] SerializeBody(Node n)
     {
-        lock (n.Gate) // point-in-time image under the re-entrant gate
+        using (n.EnterAllGates()) // point-in-time image under all domain gates
         {
             var w = new Writer();
             w.B128(n.NodeId);
@@ -173,20 +173,20 @@ public static class NodePersistence
 
             // --- aliases per session peer
             w.Varint((ulong)n.AliasToNode.Count);
-            foreach (var (peer, map) in n.AliasToNode.OrderBy(k => k.Key, BytesOrd))
+            foreach (var (peer, map) in n.AliasToNode.OrderBy(k => k.Key.ToString()))
             {
-                w.B128(peer);
+                w.B128(peer.ToArray());
                 w.Varint((ulong)map.Count);
                 foreach (var (alias, (nid, ep)) in map.OrderBy(k => k.Key))
-                { w.Varint((ulong)alias); w.B128(nid); w.Varint((ulong)ep); }
+                { w.Varint((ulong)alias); w.B128(nid.ToArray()); w.Varint((ulong)ep); }
             }
             w.Varint((ulong)n.NodeToAlias.Count);
-            foreach (var (peer, map) in n.NodeToAlias.OrderBy(k => k.Key, BytesOrd))
+            foreach (var (peer, map) in n.NodeToAlias.OrderBy(k => k.Key.ToString()))
             {
-                w.B128(peer);
+                w.B128(peer.ToArray());
                 w.Varint((ulong)map.Count);
-                foreach (var ((nid, ep), alias) in map.OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2))
-                { w.B128(nid); w.Varint((ulong)ep); w.Varint((ulong)alias); }
+                foreach (var ((nid, ep), alias) in map.OrderBy(k => k.Key.Id.ToString()).ThenBy(k => k.Key.Epoch))
+                { w.B128(nid.ToArray()); w.Varint((ulong)ep); w.Varint((ulong)alias); }
             }
 
             // --- durable authors (Errata E-9)
@@ -322,26 +322,26 @@ public static class NodePersistence
         {
             var peer = r.B128();
             int cnt = (int)r.Varint();
-            var map = new Dictionary<int, (byte[], int)>();
+            var map = new Dictionary<int, (NodeId Id, int Epoch)>();
             for (int j = 0; j < cnt; j++)
             {
                 var alias = (int)r.Varint(); var nid = r.B128(); var ep = (int)r.Varint();
-                map[alias] = (nid, ep);
+                map[alias] = ((NodeId)nid, ep);
             }
-            n.AliasToNode[peer] = map;
+            n.AliasToNode[(NodeId)peer] = map;
         }
         int n2aCount = (int)r.Varint();
         for (int i = 0; i < n2aCount; i++)
         {
             var peer = r.B128();
             int cnt = (int)r.Varint();
-            var map = new Dictionary<(byte[], int), int>(BAI2.Instance);
+            var map = new Dictionary<(NodeId Id, int Epoch), int>();
             for (int j = 0; j < cnt; j++)
             {
                 var nid = r.B128(); var ep = (int)r.Varint(); var alias = (int)r.Varint();
-                map[(nid, ep)] = alias;
+                map[((NodeId)nid, ep)] = alias;
             }
-            n.NodeToAlias[peer] = map;
+            n.NodeToAlias[(NodeId)peer] = map;
         }
 
         int daCount = (int)r.Varint();
@@ -437,7 +437,7 @@ public static class NodePersistence
             n.PeersByNid ??= new Dictionary<NodeId, Node>();
             // NOTE: `existing is null` must be a plain reference check — Node derives from
             // MarshalByRefObject so its == operator does NOT test for null.
-            foreach (var p in peerIds.Concat(n.AliasToNode.Keys))
+            foreach (var p in peerIds.Select(x => (NodeId)x).Concat(n.AliasToNode.Keys))
                 if (!n.PeersByNid.TryGetValue(p, out var existing) || ReferenceEquals(existing, null))
                     n.PeersByNid[p] = null!;
         }

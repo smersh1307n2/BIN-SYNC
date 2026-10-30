@@ -96,7 +96,7 @@ public class Production : IDisposable
             foreach (var (alias, (nid, ep)) in map)
             {
                 if (!om.TryGetValue(alias, out var onidEp)) return false;
-                if (!nid.AsSpan().SequenceEqual(onidEp.Item1) || ep != onidEp.Item2) return false;
+                if (nid != onidEp.Id || ep != onidEp.Epoch) return false;
             }
         }
         if (x.PeerStates.Count != y.PeerStates.Count) return false;
