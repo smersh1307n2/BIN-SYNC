@@ -21,7 +21,7 @@ public sealed partial class Node
     /// </summary>
     public void WriteFields(int namespaceId, IEnumerable<(byte[] RecordId, int FieldId, byte[] Value)> writes)
     {
-        lock (_gate)
+        lock (_lockStorage) lock (_lockOutbox)
         {
             foreach (var (rid, fid, val) in writes)
                 WriteFieldInternal(namespaceId, rid, fid, val);
@@ -35,9 +35,9 @@ public sealed partial class Node
     public bool ApplyRemoteField(int namespaceId, byte[] recordId, ushort fieldId,
         byte[] value, Hlc hlc, byte[] authorNodeId, ushort keyEpoch = 0)
     {
-        lock (_gate)
+        lock (_lockStorage)
         {
-            var store = Ns(namespaceId);
+            var store = NsInternal(namespaceId);
             if (!store.TryGetValue(recordId, out var rec))
                 store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
             var fs = new FieldState(value, hlc, authorNodeId, keyEpoch);
