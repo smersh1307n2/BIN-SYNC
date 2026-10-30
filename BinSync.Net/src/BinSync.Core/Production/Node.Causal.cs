@@ -25,7 +25,7 @@ public sealed partial class Node
     /// </summary>
     public BatchResult ApplyBatchCausal(Batch batch, byte[] senderPeer)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             var tracker = Causal;
             if (tracker is not null && batch.Entries.Count > 0)
@@ -68,7 +68,7 @@ public sealed partial class Node
     /// </summary>
     public List<(PendingCausalOp Op, CausalOutcome Outcome)> DrainCausal()
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             return Causal?.Drain() ?? new List<(PendingCausalOp, CausalOutcome)>();
         }
@@ -80,7 +80,7 @@ public sealed partial class Node
     /// </summary>
     public int DrainAndRetryCausal()
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             if (Causal is null) return 0;
             int applied = 0;
@@ -113,7 +113,7 @@ public sealed partial class Node
     /// </summary>
     public void NoteCausalApplied(byte[] changeId)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             Causal?.NoteApplied(changeId);
         }
@@ -125,7 +125,7 @@ public sealed partial class Node
     /// </summary>
     public byte[] EncodeBatchPayloadCausal(Batch batch)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             if (CausalWire.HasDeps(batch.Entries))
                 batch.Flags |= CausalWire.FlagHasCausalTrailer;
@@ -139,7 +139,7 @@ public sealed partial class Node
     /// </summary>
     public Batch DecodeBatchPayloadCausal(byte[] data)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             // First decode as standard (Reader stops at records end via known lengths).
             // Standard decoder reads exactly the declared structure — trailing bytes may confuse it.

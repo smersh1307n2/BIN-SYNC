@@ -18,7 +18,7 @@ public sealed partial class Node
     public bool WriteFieldSealed(
         int namespaceId, byte[] recordId, int fieldId, byte[] plaintext, Hlc? hlc = null)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
@@ -58,7 +58,7 @@ public sealed partial class Node
     /// </summary>
     public byte[]? ReadFieldOpen(int namespaceId, byte[] recordId, int fieldId)
     {
-        lock (_gate)
+        lock (_lockMeta)
         {
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
