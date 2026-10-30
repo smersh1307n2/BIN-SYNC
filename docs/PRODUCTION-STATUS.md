@@ -41,6 +41,7 @@ Legend: **done** · **partial** · **missing**
 
 ## Hot-path notes (on main since post-alpha.7)
 
+- Domain sub-gates (`Storage` → `Outbox` → `Meta`) + `EnterAllGates`; alias maps keyed by `NodeId`
 - EncodeBatchPayload: single-pass records, Writer capacity
 - DecodeBatchPayload: in-place records parse
 - ApplyBatch: decode-once, O(1) changed flags, ComputeRecordsRoot single buffer

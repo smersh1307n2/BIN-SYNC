@@ -11,6 +11,7 @@
 - Docs aligned: PRODUCTION-STATUS, PUBLIC-API, README, this changelog
 
 ### Engine (carried from post-alpha.7 main)
+- Domain sub-gates (`_lockStorage` → `_lockOutbox` → `_lockMeta`) + `EnterAllGates`; alias maps on `NodeId`
 - EncodeBatchPayload single-pass + Writer capacity / zero-alloc Varint write
 - DecodeBatchPayload in-place records; Reader fixed-width zero-alloc reads
 - ApplyBatch decode-once + O(1) change flags; ComputeRecordsRoot single buffer
