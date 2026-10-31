@@ -9,8 +9,8 @@ public static class MembershipFrames
 /// <summary>One member row in a MEMBERSHIP payload.</summary>
 public sealed class MembershipEntry
 {
-    public byte[] NodeId = Array.Empty<byte>();
-    public int Epoch = 1;
+    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
     public byte Flags;
     public bool IsActive => (Flags & 0x01) != 0;

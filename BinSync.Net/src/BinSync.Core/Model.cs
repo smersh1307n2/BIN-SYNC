@@ -15,12 +15,12 @@ public sealed record class FieldState(
 
 public class Record
 {
-    public byte[] RecordId;
-    public ushort NamespaceId;
-    public Dictionary<ushort, FieldState> State;
-    public Hlc? LifecycleHlc;
-    public byte[]? LifecycleAuthor;
-    public byte LifecycleValue = Model.Alive;
+    public byte[] RecordId { get; set; }
+    public ushort NamespaceId { get; set; }
+    public Dictionary<ushort, FieldState> State { get; set; }
+    public Hlc? LifecycleHlc { get; set; }
+    public byte[]? LifecycleAuthor { get; set; }
+    public byte LifecycleValue { get; set; } = Model.Alive;
     // Lazy: most records never carry field tombs — avoid empty Dictionary per record.
     private Dictionary<ushort, FieldState>? _fieldTombs;
     public Dictionary<ushort, FieldState> FieldTombs

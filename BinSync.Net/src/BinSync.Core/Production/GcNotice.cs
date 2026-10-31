@@ -9,8 +9,8 @@ public static partial class ReconcileFrames
 /// <summary>One quarantined author advertised in GC_NOTICE.</summary>
 public sealed class GcQuarantineEntry
 {
-    public byte[] NodeId = Array.Empty<byte>();
-    public int Epoch;
+    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public int Epoch { get; set; }
 }
 
 /// <summary>Decoded GC_NOTICE payload.</summary>

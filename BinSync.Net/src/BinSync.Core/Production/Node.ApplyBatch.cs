@@ -6,13 +6,14 @@ public sealed partial class Node
 {
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ApplyBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public BatchResult ApplyBatch(Batch batch, byte[] senderPeer)
+    public BatchResult ApplyBatch(Batch batch, NodeId senderPeer)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyBatchInternal(batch, senderPeer);
     }
 
-    internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
+    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer)
     {
+        byte[] senderPeerBytes = senderPeer.ToArray();
         var result = new BatchResult(batch.BatchId);
         // STEP 0: namespace isolation (§3.7) — forbidden ns kills only that stream
         if (ForbiddenNamespaces.Contains(batch.NamespaceId))
@@ -21,8 +22,8 @@ public sealed partial class Node
         // the watermark is keyed by the RECEIVING SESSION ((sender_peer, ns)) and compares
         // against the sender's CURRENT session incarnation epoch learned from HELLO/ALIAS_MAP.
         var chain = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
-        var sesKey = (senderPeer, batch.NamespaceId);
-        var curKnown = SessionEpoch(senderPeer, batch.NamespaceId);
+        var sesKey = (senderPeerBytes, batch.NamespaceId);
+        var curKnown = SessionEpoch(senderPeerBytes, batch.NamespaceId);
         if (curKnown is not null && batch.IssuerEpoch < curKnown.Value)
             throw new SyncException("EPOCH_REGRESSION", batch.BatchId);
         // STEP 0.6: schema pending (§18.3 / [СХ7]) — do NOT advance lastReceivedSeq
@@ -52,7 +53,7 @@ public sealed partial class Node
             bool full = op switch { OpFieldWrite x => x.FullAuthorMode, OpFieldTomb x => x.FullAuthorMode, OpRecordTombstone x => x.FullAuthorMode, _ => false };
             var emb = GetAuthor(op);
             if (full && emb is not null && emb.Length == 16) return emb;
-            try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
+            try { return ResolveAliasInternal(senderPeerBytes, GetOrigin(op)); }
             catch (SyncException) when (full && emb is not null && emb.Length == 16) { return emb; }
         }
         // Decode ops once — reused for stream author, apply loop, and relay (no batch.Ops()).
@@ -67,8 +68,8 @@ public sealed partial class Node
         }
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
-        LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
+        LastStreamAuthor[(senderPeerBytes, batch.NamespaceId)] = streamAuthor;   // E-11
+        var streamKey = (senderPeerBytes, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
         long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
@@ -145,7 +146,7 @@ public sealed partial class Node
             {
                 var e = batch.Entries[idx];
                 byte[] cid = e.ChangeId.AsSpan().SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId;
-                var ck = (senderPeer, batch.NamespaceId, cid);
+                var ck = (senderPeerBytes, batch.NamespaceId, cid);
                 bool known = SeenChanges.Contains(ck);
                 SeenChanges.Add(ck);
                 if (!known && !changedFlags[idx])

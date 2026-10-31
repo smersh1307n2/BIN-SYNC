@@ -35,10 +35,10 @@ public sealed partial class Node
     public object Gate => _lockMeta;
 
 
-    public byte[] NodeId;
-    public int Epoch;
+    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public int Epoch { get; set; }
     // BUGFIX (implementation finding): the HLC must start cold (§5.2) — see Python port note.
-    public HlcClock Clock;
+    public HlcClock Clock { get; set; } = null!;
     // storage: namespaceId -> recordId -> Record
     // BUGFIX (implementation finding): the inner recordId maps MUST use content equality
     // (BytesEq). Test fixtures create a fresh byte[] key on every lookup (Fix.Rid(n) allocates),
@@ -55,43 +55,40 @@ public sealed partial class Node
         set
         {
             _storage.Clear();
-            foreach (var (ns, m) in value)
-                _storage[ns] = new Dictionary<RecordId, Record>(m);
+            if (value is null) return;
+            foreach (var (ns, inner) in value)
+                _storage[ns] = new Dictionary<RecordId, Record>(inner);
         }
     }
-    // outbox: namespaceId -> list[OutboxEntry] (per-author seq counters inside)
-    public Dictionary<int, List<OutboxEntry>> Outbox = new();
+
+    public Dictionary<int, List<OutboxEntry>> Outbox { get; set; } = new();
     internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(BytesIntEq.Instance);   // (author, ns) -> seq
-    // inbox idempotency: set of (issuerNodeId, ns, issuerEpoch, batchId)
-    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(BytesIntIntBytesEq.Instance);
+    // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
+    public HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
-    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(BytesIntIntEq.Instance);
-    // BUGFIX: per-STREAM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
+    public Dictionary<(byte[], int, int), byte[]> LastBatchDigest { get; } = new(BytesIntIntEq.Instance);
+    // per-stream prevBatchDigest: AM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
-    public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(BytesIntIntBytesKeyEq.Instance);
+    public Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
-    public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode = new();
-    public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias = new();   // peer → (durableNodeId, epoch) → alias
+    public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; set; } = new();
+    public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; set; } = new();
     // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
     // for resolution [А3].
-    public Dictionary<NodeId, int> DurableAuthors = new();   // nodeId -> max known epoch
-    public Dictionary<(byte[], int), PeerState> PeerStates = new(BytesIntEq.Instance);
+    public Dictionary<NodeId, int> DurableAuthors { get; set; } = new();
+    public Dictionary<(byte[], int), PeerState> PeerStates { get; set; } = new(BytesIntEq.Instance);
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
-    // (E-13 follow-up 2: channel-scoped). Relay eligibility decided by FIRST sighting.
-    public readonly HashSet<(byte[], int, byte[])> SeenChanges = new(SeenKeyComparer.Instance);
+    public HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
-    public readonly Dictionary<(byte[], int), byte[]> LastStreamAuthor = new(BytesIntEq.Instance);
-    // known_epochs: mixed keys — (peer, ns) session watermarks, (author, -1) durable
-    // author epochs, (peer, 0) HELLO epoch. See register_session_epoch / learn_author_epoch.
-    public Dictionary<(byte[], int), int> KnownEpochs = new(BytesIntEq.Instance);
-    public readonly HashSet<NodeId> Quarantined = new();       // zombie nodes requiring resync
-    public List<string> ErrorsOut = new();            // observable error log for tests
-    public List<byte[]> AcksOut = new();              // ACKed batchIds
-    public readonly HashSet<int> ForbiddenNamespaces = new();
-    public Dictionary<int, int> SchemaVersions = new();  // namespaceId -> supported schemaVersion
-    // Harness handle to peer Node objects (live connection handles in a real stack).
-    public Dictionary<NodeId, Node>? PeersByNid = null;
+    public Dictionary<(byte[], int), byte[]> LastStreamAuthor { get; } = new(BytesIntEq.Instance);
+    public Dictionary<(byte[], int), int> KnownEpochs { get; set; } = new(BytesIntEq.Instance);
+    public HashSet<NodeId> Quarantined { get; } = new();
+    public List<string> ErrorsOut { get; set; } = new();
+    public List<byte[]> AcksOut { get; set; } = new();
+    public HashSet<int> ForbiddenNamespaces { get; } = new();
+    public Dictionary<int, int> SchemaVersions { get; set; } = new();
+    public Dictionary<NodeId, Node>? PeersByNid { get; set; }
 
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000)

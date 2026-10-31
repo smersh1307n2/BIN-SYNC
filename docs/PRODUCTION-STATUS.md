@@ -2,13 +2,13 @@
 
 **Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
 
-**Package:** `BinSync.Core` **`1.0.1`** · **Target:** `net10.0` · **Branch:** `main`  
-**Tag:** `v1.0.1` (see GitHub Releases)  
+**Package:** `BinSync.Core` **`2.0.0`** · **Target:** `net10.0` · **Branch:** `main`  
+**Tag:** `v2.0.0` (see GitHub Releases)  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
 **Tests:** 274 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
 
 **Spec parity:** **~95%+** — reference engine production-hardened.  
-**Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** → **1.0.1** (patch).
+**Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** → **1.0.1** → **2.0.0** (API shape major).
 
 Legend: **done** · **partial** · **missing**
 
@@ -78,11 +78,11 @@ Full X.509 path validation remains **out of scope for 1.0**.
 - [x] Branding BIN-SYNC
 - [x] Production comparer / codec / apply-decode hot paths on `main`
 - [x] Public API freeze doc for 1.0 (`PUBLIC-API.md`)
-- [x] Package version `1.0.0` (superseded by 1.0.1 on main)
+- [x] Package version `1.0.0` (superseded by 2.0.0 on main)
 - [x] Tag `v1.0.0-rc.1` + GitHub prerelease
 - [x] Tag `v1.0.0-rc.2` + GitHub prerelease (domain gates + NodeId aliases)
 - [x] Soak / embedder feedback on rc.2 (274 tests + CI BinSync.Net green)
 - [x] Tag `v1.0.0` (stable)
-- [x] Package version `1.0.1` + tag `v1.0.1` (patch: hygiene + CI coverage + sample)
+- [x] Package version `2.0.0` + tag `v2.0.0` (patch: hygiene + CI coverage + sample)
 - [ ] nuget.org push (optional)
 - [ ] Full X.509 (post-1.0, optional)

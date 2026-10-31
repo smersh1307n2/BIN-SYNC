@@ -1,17 +1,26 @@
 # BinSync.Core — Public API surface (freeze for 1.0)
 
-**Package:** `BinSync.Core` **`1.0.0`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`2.0.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
 Normative: **BIN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
 
-## SemVer policy (1.x)
+## SemVer policy (2.x)
 
 | Change | Version impact |
 |--------|----------------|
 | Wire/protocol break, remove/rename public type or member | **major** (2.0) |
 | New public API, additive frame/op support, perf-only | **minor** (1.1) |
 | Bugfix, docs, internal optimisations | **patch** (1.0.1) |
+
+
+## Public API shape (2.0)
+
+Breaking hygiene vs 1.0.x (no wire/protocol change):
+
+- DTO / engine **public fields → properties** (`OutboxEntry`, `Batch`, `PeerState`, `BatchResult`, `Record`, `Node` surface maps, …).
+- Typed ids: `NodeId`, `RecordId`, `BatchId` (value equality). `WriteField` / `TombField` / `DeleteRecord` / … take `RecordId`; `ApplyBatch` takes `NodeId` sender (implicit conversion from `byte[]` remains).
+- Wire remains b128 `byte[]` on batch payloads and digests.
 
 **Public** = types and members documented below and in XML docs shipped with the package.  
 Everything under `internal`, `*.Tests`, `bench/`, and unmarked helpers is **not** a compatibility contract.

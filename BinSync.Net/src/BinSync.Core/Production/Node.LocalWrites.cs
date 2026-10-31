@@ -23,12 +23,12 @@ public sealed partial class Node
     /// Current durable (wall, logical, author, value|"TOMB") of one field, straight from storage.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>SeenStateInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public (ulong Wall, uint Logical, byte[] Author, object Val)? SeenState(int ns, byte[] recordId, int fieldId)
+    public (ulong Wall, uint Logical, byte[] Author, object Val)? SeenState(int ns, RecordId recordId, int fieldId)
     {
         lock (_lockStorage) return SeenStateInternal(ns, recordId, fieldId);
     }
 
-    internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, byte[] recordId, int fieldId)
+    internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, RecordId recordId, int fieldId)
     {
         if (!Storage.TryGetValue(ns, out var store)) return null;
         if (!store.TryGetValue(recordId, out var rec)) return null;
@@ -43,12 +43,12 @@ public sealed partial class Node
     /// Errata E-13 (scenario 37): restored-echo suppression — see Python port docstring.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>PushOutboxInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public OutboxEntry? PushOutbox(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return PushOutboxInternal(ns, recordId, op, author, peer);
     }
 
-    internal OutboxEntry? PushOutboxInternal(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
+    internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {
         if (!author.AsSpan().SequenceEqual(NodeId))
             throw new InvalidOperationException("local push only; relay path enqueues raw payloads");
@@ -77,7 +77,7 @@ public sealed partial class Node
                         for (int i = list.Count - 1; i >= 0; i--)
                         {
                             var q = list[i];
-                            if (!q.RecordId.AsSpan().SequenceEqual(recordId) ||
+                            if (!q.RecordId.AsSpan().SequenceEqual(recordId.ToArray()) ||
                                 !q.AuthorNodeId.AsSpan().SequenceEqual(NodeId)) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
@@ -101,7 +101,7 @@ public sealed partial class Node
             NamespaceId = ns,
             Seq = NextOutboxSeq(author, ns),
             ChangeId = Guid.NewGuid().ToByteArray(),
-            RecordId = recordId,
+            RecordId = recordId.ToArray(),
             OpKind = TagOf(op),
             Payload = payload,
             AuthorNodeId = author,
@@ -135,15 +135,15 @@ public sealed partial class Node
     /// Local FieldWrite. Returns true if state changed (and outbox grew).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>WriteFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public bool WriteField(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
+    public bool WriteField(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
     }
 
-    internal bool WriteFieldInternal(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
+    internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(value, h, NodeId);
         // BUGFIX (implementation finding): `origin` is overwritten per target session in
@@ -156,15 +156,15 @@ public sealed partial class Node
 
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>TombFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public bool TombField(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
+    public bool TombField(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return TombFieldInternal(namespaceId, recordId, fieldId, hlc);
     }
 
-    internal bool TombFieldInternal(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
+    internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(Array.Empty<byte>(), h, NodeId);
         var op = new OpFieldTomb { FieldId = (ushort)fieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
@@ -176,18 +176,18 @@ public sealed partial class Node
     /// Lifecycle → dead (delete-wins).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>DeleteRecordInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public bool DeleteRecord(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    public bool DeleteRecord(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return DeleteRecordInternal(namespaceId, recordId, hlc);
     }
 
-    internal bool DeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         bool changed = Merge.ApplyLifecycle(rec, h, NodeId, Model.Dead);
-        var op = new OpRecordTombstone { RecordId = recordId, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
+        var op = new OpRecordTombstone { RecordId = recordId.ToArray(), Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
         if (changed) PushOutbox(namespaceId, recordId, op, NodeId);
         return changed;
     }
@@ -195,15 +195,15 @@ public sealed partial class Node
     /// Undelete only via explicit lifecycle write value=0x00 (§7.4).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>UndeleteRecordInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public bool UndeleteRecord(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    public bool UndeleteRecord(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return UndeleteRecordInternal(namespaceId, recordId, hlc);
     }
 
-    internal bool UndeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         bool changed = Merge.ApplyLifecycle(rec, h, NodeId, Model.Alive);
         // encode as FieldWrite on reserved field 0x0000 with value 0x00

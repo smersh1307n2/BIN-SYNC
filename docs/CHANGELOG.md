@@ -1,5 +1,26 @@
 # Changelog — BinSync.Core
 
+## 2.0.0 — 2026-10-31
+
+**Major (API shape only).** Wire protocol unchanged vs 1.0.1.
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `2.0.0` · **Tag:** `v2.0.0`
+
+### Breaking (source)
+- Public **fields → properties** on DTOs and `Node` maps (`OutboxEntry`, `Batch`, `PeerState`, `BatchResult`, `Record`, …)
+- `WriteField` / related local-write APIs take **`RecordId`** (implicit from `byte[]`)
+- `ApplyBatch` sender parameter is **`NodeId`** (implicit from `byte[]`)
+- New **`BatchId`** struct (alongside `NodeId` / `RecordId`); `Writer.B128` overloads for typed ids
+
+### Non-breaking
+- Same batch wire layout; 274 tests green; samples still work via implicit conversions
+
+### Migration
+- Recompile consumers; replace field initializers only if using reflection on fields
+- Prefer `RecordId` / `NodeId` at call sites; `byte[16]` still accepted via implicit conversion
+
+---
+
 ## 1.0.1 — 2026-10-31
 
 **Patch release** on top of `1.0.0`. **No public API breaks.**

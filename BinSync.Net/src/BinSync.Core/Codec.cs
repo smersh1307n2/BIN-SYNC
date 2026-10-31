@@ -147,6 +147,30 @@ public partial class Writer
         return this;
     }
 
+    public Writer B128(NodeId id)
+    {
+        Span<byte> s = stackalloc byte[16];
+        id.WriteTo(s);
+        _buf.Write(s);
+        return this;
+    }
+
+    public Writer B128(RecordId id)
+    {
+        Span<byte> s = stackalloc byte[16];
+        id.WriteTo(s);
+        _buf.Write(s);
+        return this;
+    }
+
+    public Writer B128(BatchId id)
+    {
+        Span<byte> s = stackalloc byte[16];
+        id.WriteTo(s);
+        _buf.Write(s);
+        return this;
+    }
+
     /// <summary>Zero-alloc varint encode into a stack buffer, then write.</summary>
     public Writer Varint(ulong v)
     {
