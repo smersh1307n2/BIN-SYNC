@@ -1,12 +1,10 @@
-# CI coverage (pending `workflow` scope)
+# CI coverage
 
-Local change to `.github/workflows/dotnet.yml` (not pushed: token without `workflow` scope):
+Enabled on `main` (commit with XPlat Code Coverage collect + `coverage` artifact).
 
-1. On the **Test** step, add:
-   - `--collect:"XPlat Code Coverage"`
-   - results already go to `${{ runner.temp }}/test-results`
-2. Upload artifact `coverage` from `**/coverage.cobertura.xml`
+- Collector: `coverlet.collector` in `BinSync.Tests`
+- Format: cobertura
+- Artifact name: **coverage** (`**/coverage.cobertura.xml`)
+- No coverage % gate yet (soft collect only)
 
-`coverlet.collector` is already referenced in `BinSync.Tests.csproj`.
-
-Apply when a PAT / GitHub App with **workflow** scope is available, then push the workflow diff.
+Download from the Actions run → Artifacts → `coverage`.
