@@ -88,28 +88,39 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
             batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, batch.PrevBatchDigest);
         if (!batch.BatchDigest.AsSpan().SequenceEqual(recomputed))
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
-        // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
+        // STEP 4: atomic application [T1] — copy-on-write only for touched records.
+        // Untouched records stay as shared references in nsStore; overlays discard on throw.
         var nsStore = Ns(batch.NamespaceId);
-        var staged = new Dictionary<RecordId, Record>();
-        foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
+        var overlays = new Dictionary<RecordId, Record>();
         int applied = 0;
-        var changedIdx = new List<int>();   // indices of entries that actually changed state
-        for (int idx = 0; idx < batch.Entries.Count; idx++)
+        int nEnt = batch.Entries.Count;
+        var changedFlags = new bool[nEnt];
+        // One wall sample for the whole batch (skew window is large vs apply latency).
+        long nowWall = Clock.Now();
+        long maxSkew = Clock.MaxSkewUs;
+        for (int idx = 0; idx < nEnt; idx++)
         {
             var e = batch.Entries[idx];
             var op = Ops.DecodeOp(e.Payload).Op;
             var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
             // clock skew clamp on incoming HLC wall (§5.3)
-            long now = Clock.Now();
-            if ((long)WallOf(op) > now + Clock.MaxSkewUs)
+            if ((long)WallOf(op) > nowWall + maxSkew)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
             byte[] recId = op is OpRecordTombstone rt ? rt.RecordId : e.RecordId;
-            if (!staged.TryGetValue(recId, out var rec)) staged[recId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
+            if (!overlays.TryGetValue(recId, out var rec))
+            {
+                if (nsStore.TryGetValue(recId, out var existing))
+                    rec = Clone(existing);
+                else
+                    rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
+                overlays[recId] = rec;
+            }
             bool changed = ApplyOp(rec, op, opAuthor);
-            if (changed) { applied++; changedIdx.Add(idx); }
+            if (changed) { applied++; changedFlags[idx] = true; }
         }
         // commit atomically (rollback path: exceptions above leave storage untouched [Т1])
-        Storage[batch.NamespaceId] = staged;
+        foreach (var (rid, rec) in overlays)
+            nsStore[rid] = rec;
         Inbox.Add(key);
         ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
@@ -134,7 +145,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
                 var ck = (senderPeer, batch.NamespaceId, cid);
                 bool known = SeenChanges.Contains(ck);
                 SeenChanges.Add(ck);
-                if (!known && !changedIdx.Contains(idx))
+                if (!known && !changedFlags[idx])
                 {
                     bool relayOk = true;
                     var rop = batchOps[idx];
@@ -149,11 +160,12 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
                             OwnQueueHolds(batch.NamespaceId, e.RecordId, rop))
                             relayOk = false;   // own durable state echoed back [E2]/[Ш2]
                     }
-                    if (relayOk) changedIdx.Add(idx);     // new provenance ⇒ relay even as loser
+                    if (relayOk) changedFlags[idx] = true; // new provenance ⇒ relay even as loser
                 }
             }
-            foreach (var idx in changedIdx)
+            for (int idx = 0; idx < nEnt; idx++)
             {
+                if (!changedFlags[idx]) continue;
                 var e = batch.Entries[idx];
                 var op = batchOps[idx];
                 if (GetAuthor(op) is not null) continue;   // full-author mode keeps durable author

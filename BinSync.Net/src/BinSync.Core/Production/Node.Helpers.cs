@@ -42,14 +42,16 @@ internal int OutboxSizeInternal(int namespaceId)
 
     internal static Record Clone(Record rec)
     {
-        var r = new Record(rec.RecordId, rec.NamespaceId)
+        // Shallow-copy field maps; do NOT touch FieldTombs getter (it would allocate empty).
+        var r = new Record(rec.RecordId, rec.NamespaceId, fieldCapacity: Math.Max(1, rec.State.Count))
         {
-            State = new(rec.State),
+            State = new Dictionary<ushort, FieldState>(rec.State),
             LifecycleHlc = rec.LifecycleHlc,
             LifecycleAuthor = rec.LifecycleAuthor,
             LifecycleValue = rec.LifecycleValue,
-            FieldTombs = new(rec.FieldTombs),
         };
+        if (rec.HasFieldTombs)
+            r.FieldTombs = new Dictionary<ushort, FieldState>(rec.FieldTombs);
         return r;
     }
 
