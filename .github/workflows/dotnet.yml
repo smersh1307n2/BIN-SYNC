@@ -55,8 +55,11 @@ jobs:
           --configuration Release
           --no-build
           --verbosity minimal
-          --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
           --results-directory "${{ runner.temp }}/test-results"
+          --logger "trx;LogFileName=test-results.trx"
+          --
+          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
       - name: Upload test results
         if: always()
@@ -66,6 +69,15 @@ jobs:
           path: ${{ runner.temp }}/test-results
           retention-days: 14
           if-no-files-found: ignore
+
+      - name: Upload coverage (cobertura)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ${{ runner.temp }}/test-results/**/coverage.cobertura.xml
+          retention-days: 14
+          if-no-files-found: warn
 
   fuzz:
     name: fuzz + lab (§17)
