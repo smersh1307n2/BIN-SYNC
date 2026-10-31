@@ -8,8 +8,11 @@ namespace BinSync;
 
 public sealed partial class Node
 {
-    /// <summary>Internal per-(author, namespace) durable sequence counters [П1].</summary>
-    internal Dictionary<(byte[], int), long> OutboxSeqRef => _outboxSeq;
+    /// <summary>
+    /// Read-only view of per-(author, namespace) durable sequence counters [П1].
+    /// Mutation only via engine APIs (tests must not write through this).
+    /// </summary>
+    internal IReadOnlyDictionary<(byte[], int), long> OutboxSeqRef => _outboxSeq;
 
     /// <summary>
     /// Atomic multi-entry write (production hardening): the whole batch of field writes
@@ -48,6 +51,6 @@ public sealed partial class Node
 
 public sealed partial class PeerState
 {
-    /// <summary>Internal per-stream cached (batchId, prevDigest) triples.</summary>
-    internal Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> IdsRef => Ids;
+    /// <summary>Read-only view of cached (batchId, prevDigest) triples (tests).</summary>
+    internal IReadOnlyDictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> IdsRef => Ids;
 }
