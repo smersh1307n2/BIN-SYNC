@@ -31,6 +31,9 @@ public readonly struct NodeId : IEquatable<NodeId>
 
     public static implicit operator NodeId(byte[]? bytes) => From(bytes);
 
+    /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
+    public static implicit operator byte[](NodeId id) => id.ToArray();
+
     public void WriteTo(Span<byte> dest)
     {
         if (dest.Length < 16) throw new ArgumentException("need 16 bytes", nameof(dest));
@@ -46,6 +49,15 @@ public readonly struct NodeId : IEquatable<NodeId>
     }
 
     public bool IsZero => Lo == 0 && Hi == 0;
+
+    /// <summary>Compare to a 16-byte wire id without allocating.</summary>
+    public bool EqualsBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 16) return false;
+        Span<byte> tmp = stackalloc byte[16];
+        WriteTo(tmp);
+        return tmp.SequenceEqual(bytes);
+    }
 
     public bool Equals(NodeId other) => Lo == other.Lo && Hi == other.Hi;
     public override bool Equals(object? obj) => obj is NodeId n && Equals(n);
@@ -83,6 +95,9 @@ public readonly struct RecordId : IEquatable<RecordId>
 
     public static implicit operator RecordId(byte[]? bytes) => From(bytes);
 
+    /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
+    public static implicit operator byte[](RecordId id) => id.ToArray();
+
     public void WriteTo(Span<byte> dest)
     {
         if (dest.Length < 16) throw new ArgumentException("need 16 bytes", nameof(dest));
@@ -98,6 +113,14 @@ public readonly struct RecordId : IEquatable<RecordId>
     }
 
     public bool IsZero => Lo == 0 && Hi == 0;
+
+    public bool EqualsBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 16) return false;
+        Span<byte> tmp = stackalloc byte[16];
+        WriteTo(tmp);
+        return tmp.SequenceEqual(bytes);
+    }
 
     public bool Equals(RecordId other) => Lo == other.Lo && Hi == other.Hi;
     public override bool Equals(object? obj) => obj is RecordId r && Equals(r);
@@ -135,6 +158,9 @@ public readonly struct BatchId : IEquatable<BatchId>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
     public static implicit operator BatchId(byte[]? bytes) => From(bytes);
+
+    /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
+    public static implicit operator byte[](BatchId id) => id.ToArray();
 
     public void WriteTo(Span<byte> dest)
     {

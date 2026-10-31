@@ -9,17 +9,17 @@ public sealed partial class Node
     /// author's own epoch, not the relay's self.epoch (see Python port docstring).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public int AuthorEpoch(byte[] author)
+    public int AuthorEpoch(NodeId author)
     {
         lock (_lockMeta) return AuthorEpochInternal(author);
     }
 
-    internal int AuthorEpochInternal(byte[] author)
+    internal int AuthorEpochInternal(NodeId author)
     {
         foreach (var m in AliasToNode.Values)
             foreach (var (nid, ep) in m.Values)
                 if (nid == (NodeId)author) return ep;
-        if (author.AsSpan().SequenceEqual(NodeId)) return Epoch;
+        if (NodeId.EqualsBytes(author)) return Epoch;
         return KnownEpochs.TryGetValue((author, -1), out var ke) ? ke : Epoch;
     }
 
@@ -30,14 +30,14 @@ public sealed partial class Node
     /// silent skip that would hole the seq stream). Full rationale in the Python port.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>CreateDeltaBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public Batch? CreateDeltaBatch(byte[] targetPeer, int namespaceId,
+    public Batch? CreateDeltaBatch(NodeId targetPeer, int namespaceId,
                                    byte[]? filterAuthorNodeId = null,
                                    int schemaId = 0, int schemaVersion = 1)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
     }
 
-    internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
+    internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,
                                        byte[]? filterAuthorNodeId = null,
                                        int schemaId = 0, int schemaVersion = 1)
     {
@@ -92,8 +92,8 @@ public sealed partial class Node
         var translated = new List<OutboxEntry>();
         foreach (var e in pending)
         {
-            int? alias = AliasOf(targetPeer, e.AuthorNodeId, Epoch);
-            if (alias is null && e.AuthorNodeId.AsSpan().SequenceEqual(NodeId))
+            int? alias = AliasOf(targetPeer, (NodeId)e.AuthorNodeId, Epoch);
+            if (alias is null && NodeId.EqualsBytes(e.AuthorNodeId))
                 alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
             if (alias is null)
             {
@@ -101,10 +101,10 @@ public sealed partial class Node
                 // NOTE: a resumed node (NodePersistence.Load) has registry KEYS but no live Node
                 // handles; TryGetValue then yields a null value — treat it as "peer not attached".
                 var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
-                if (peerNode is not null && !e.AuthorNodeId.AsSpan().SequenceEqual(NodeId))
+                if (peerNode is not null && !NodeId.EqualsBytes(e.AuthorNodeId))
                 {
-                    int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAlias(peerNode, e.AuthorNodeId, epTry);
+                    int epTry = KnownAuthorEpoch((NodeId)e.AuthorNodeId) ?? Epoch;
+                    alias = EnsureAlias(peerNode, (NodeId)e.AuthorNodeId, epTry);
                 }
                 else if (peerNode is null)
                 {
@@ -150,7 +150,7 @@ public sealed partial class Node
         // BUGFIX (errata E-6 follow-up): stream key is `stream`, not a stale loop variable.
         int ep = Epoch;
         byte[] author = stream;
-        if (!author.AsSpan().SequenceEqual(NodeId))
+        if (!NodeId.EqualsBytes(author))
         {
             var m = AliasToNode.TryGetValue(targetPeer, out var am) ? am : new Dictionary<int, (NodeId Id, int Epoch)>();
             bool hit = false;
@@ -158,7 +158,7 @@ public sealed partial class Node
                 if (nid2 == (NodeId)author) { ep = ep2; hit = true; break; }
             if (!hit)
                 foreach (var kv in KnownEpochs)
-                    if (kv.Key.Item2 >= 0 && kv.Key.Item1.AsSpan().SequenceEqual(targetPeer))
+                    if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
                         ep = Math.Max(ep, kv.Value);
         }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
@@ -177,17 +177,17 @@ public sealed partial class Node
     /// and byte-identical digest (§10.2.2 step 3, [П7]).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>SignBatchForInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public Batch SignBatchFor(Batch batch, byte[] targetPeer)
+    public Batch SignBatchFor(Batch batch, NodeId targetPeer)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return SignBatchForInternal(batch, targetPeer);
     }
 
-    internal Batch SignBatchForInternal(Batch batch, byte[] targetPeer)
+    internal Batch SignBatchForInternal(Batch batch, NodeId targetPeer)
     {
         // SPEC CORRECTION (errata E-2 follow-up): the stream chain is keyed by the ACTUAL
         // stamped issuerEpoch of this batch (author's epoch when relaying).
         var chainKey = (NodeId, batch.NamespaceId, batch.IssuerEpoch);
-        var streamKey = (chainKey, targetPeer);
+        var streamKey = (chainKey, targetPeer.ToArray());
         var ps = PeerStates[(targetPeer, batch.NamespaceId)];
         // BUGFIX (port divergence): the reference port keys the id cache by the batch's
         // OWN author stream (entries[0].AuthorNodeId) — NOT the mutable receiver-resolved
@@ -215,12 +215,12 @@ public sealed partial class Node
     /// stream chain checkpoint moves to this batch's digest.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AdvanceStreamInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public void AdvanceStream(byte[] targetPeer, int namespaceId, Batch batch)
+    public void AdvanceStream(NodeId targetPeer, int namespaceId, Batch batch)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) AdvanceStreamInternal(targetPeer, namespaceId, batch);
     }
 
-    internal void AdvanceStreamInternal(byte[] targetPeer, int namespaceId, Batch batch)
+    internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch)
     {
         LastStreamDigest[((NodeId, namespaceId, batch.IssuerEpoch), targetPeer)] = batch.BatchDigest;
     }

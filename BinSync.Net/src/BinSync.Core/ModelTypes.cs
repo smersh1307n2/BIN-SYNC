@@ -108,13 +108,16 @@ public sealed partial class PeerState
     internal Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids { get; } =
         new(BytesLongLongEq.Instance);
 
-    public PeerState(byte[] peer, int ns)
+    public PeerState(NodeId peer, int ns)
     {
-        PeerNodeId = peer;
+        PeerNodeId = peer.ToArray();
         NamespaceId = ns;
     }
 
+    public PeerState(byte[] peer, int ns) : this((NodeId)peer, ns) { }
+
     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
+    public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 
 public sealed class BatchResult

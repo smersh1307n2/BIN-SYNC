@@ -146,9 +146,9 @@ public static class NodePersistence
             }
 
             // --- per-(author, ns) outbox seq counters [П1]
-            var seqMap = GetField<Dictionary<(byte[], int), long>>(n, "_outboxSeq");
+            var seqMap = n.OutboxSeqRef;
             w.Varint((ulong)seqMap.Count);
-            foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1, BytesOrd).ThenBy(kv => kv.Key.Item2))
+            foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1.ToString()).ThenBy(kv => kv.Key.Item2))
             { w.B128(author); w.Varint((ulong)ns); w.U64((ulong)seq); }
 
             // --- inbox idempotency set (issuer, ns, epoch, batchId)
@@ -196,7 +196,7 @@ public static class NodePersistence
 
             // --- peer states
             w.Varint((ulong)n.PeerStates.Count);
-            foreach (var ((peer, ns), ps) in n.PeerStates.OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2))
+            foreach (var ((peer, ns), ps) in n.PeerStates.OrderBy(k => k.Key.Item1.ToString()).ThenBy(k => k.Key.Item2))
             {
                 w.B128(peer); w.Varint((ulong)ns);
                 w.U64((ulong)ps.LastPushedSeq); w.U64((ulong)ps.LastReceivedSeq); w.U64((ulong)ps.LastAckedSeq);
@@ -224,12 +224,12 @@ public static class NodePersistence
 
             // --- last accepted stream author (Errata E-11)
             w.Varint((ulong)n.LastStreamAuthor.Count);
-            foreach (var ((peer, ns), author) in n.LastStreamAuthor.OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2))
+            foreach (var ((peer, ns), author) in n.LastStreamAuthor.OrderBy(k => k.Key.Item1.ToString()).ThenBy(k => k.Key.Item2))
             { w.B128(peer); w.Varint((ulong)ns); w.B128(author); }
 
             // --- known epochs (mixed-key watermarks)
             w.Varint((ulong)n.KnownEpochs.Count);
-            foreach (var ((key, ns), ep) in n.KnownEpochs.OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2))
+            foreach (var ((key, ns), ep) in n.KnownEpochs.OrderBy(k => k.Key.Item1.ToString()).ThenBy(k => k.Key.Item2))
             { w.B128(key); w.Varint((ulong)(ns - int.MinValue)); w.Varint((ulong)ep); }
 
             // --- quarantine / policy sets
@@ -287,12 +287,12 @@ public static class NodePersistence
             n.Outbox[ns] = list;
         }
 
-        var seqMap = GetField<Dictionary<(byte[], int), long>>(n, "_outboxSeq");
+        var seqMap = GetField<Dictionary<(NodeId, int), long>>(n, "_outboxSeq");
         int seqCount = (int)r.Varint();
         for (int i = 0; i < seqCount; i++)
         {
             var author = r.B128(); var ns = (int)r.Varint(); var seq = (long)r.U64();
-            seqMap[(author, ns)] = seq;
+            seqMap[((NodeId)author, ns)] = seq;
         }
 
         int inboxCount = (int)r.Varint();
@@ -348,7 +348,7 @@ public static class NodePersistence
         for (int i = 0; i < daCount; i++)
         {
             var nid = r.B128(); var ep = (int)r.Varint();
-            n.DurableAuthors[nid] = ep;
+            n.DurableAuthors[(NodeId)nid] = ep;
         }
 
         int psCount = (int)r.Varint();
@@ -375,7 +375,7 @@ public static class NodePersistence
             for (int j = 0; j < saCount; j++)
             {
                 var author = r.B128(); var seq = (long)r.U64();
-                ps.StreamAcked[author] = seq;
+                ps.StreamAcked[(NodeId)author] = seq;
             }
             int idsCount = (int)r.Varint();
             for (int j = 0; j < idsCount; j++)
@@ -384,7 +384,7 @@ public static class NodePersistence
                 var id = r.B128(); var prev = r.B128();
                 ps.Ids[(author, start, end)] = (id, prev);
             }
-            n.PeerStates[(peer, ns)] = ps;
+            n.PeerStates[((NodeId)peer, ns)] = ps;
         }
 
         int seenCount = (int)r.Varint();
@@ -398,7 +398,7 @@ public static class NodePersistence
         for (int i = 0; i < lsaCount; i++)
         {
             var peer = r.B128(); var ns = (int)r.Varint(); var author = r.B128();
-            n.LastStreamAuthor[(peer, ns)] = author;
+            n.LastStreamAuthor[((NodeId)peer, ns)] = author;
         }
 
         int keCount = (int)r.Varint();
@@ -407,11 +407,11 @@ public static class NodePersistence
             var key = r.B128();
             var ns = (int)((long)r.Varint() + int.MinValue);   // zig: stored as ns - int.MinValue
             var ep = (int)r.Varint();
-            n.KnownEpochs[(key, ns)] = ep;
+            n.KnownEpochs[((NodeId)key, ns)] = ep;
         }
 
         int qCount = (int)r.Varint();
-        for (int i = 0; i < qCount; i++) n.Quarantined.Add(r.B128());
+        for (int i = 0; i < qCount; i++) n.Quarantined.Add((NodeId)r.B128());
         int fCount = (int)r.Varint();
         for (int i = 0; i < fCount; i++) n.ForbiddenNamespaces.Add((int)r.Varint());
         int svCount = (int)r.Varint();

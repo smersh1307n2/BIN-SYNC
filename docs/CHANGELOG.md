@@ -1,5 +1,23 @@
 # Changelog — BinSync.Core
 
+## 2.1.0 — 2026-10-31
+
+Completes the **2.0 API-shape** migration (still wire-compatible with 1.x).
+
+### Breaking (source vs 2.0.0)
+- `Node.NodeId` is **`NodeId`** (not `byte[]`)
+- Session/maps: `PeerStates`, `KnownEpochs`, `LastStreamAuthor`, `_outboxSeq` keyed by **`NodeId`**
+- `CreateDeltaBatch` / `SignBatchFor` / `AdvanceStream` / `AuthorEpoch` / `NextOutboxSeq` take **`NodeId`**
+- Alias APIs already on `NodeId` (full path)
+
+### Helpers
+- `NodeId.EqualsBytes` / `RecordId.EqualsBytes` for wire compares without alloc
+
+### Tests
+- **274** green
+
+---
+
 ## 2.0.0 — 2026-10-31
 
 **Major (API shape only).** Wire protocol unchanged vs 1.0.1.

@@ -35,7 +35,7 @@ public sealed partial class Node
     public object Gate => _lockMeta;
 
 
-    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public NodeId NodeId { get; set; }
     public int Epoch { get; set; }
     // BUGFIX (implementation finding): the HLC must start cold (§5.2) — see Python port note.
     public HlcClock Clock { get; set; } = null!;
@@ -62,7 +62,7 @@ public sealed partial class Node
     }
 
     public Dictionary<int, List<OutboxEntry>> Outbox { get; set; } = new();
-    internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(BytesIntEq.Instance);   // (author, ns) -> seq
+    internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
     public HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
@@ -77,12 +77,12 @@ public sealed partial class Node
     // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
     // for resolution [А3].
     public Dictionary<NodeId, int> DurableAuthors { get; set; } = new();
-    public Dictionary<(byte[], int), PeerState> PeerStates { get; set; } = new(BytesIntEq.Instance);
+    public Dictionary<(NodeId, int), PeerState> PeerStates { get; set; } = new();
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     public HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
-    public Dictionary<(byte[], int), byte[]> LastStreamAuthor { get; } = new(BytesIntEq.Instance);
-    public Dictionary<(byte[], int), int> KnownEpochs { get; set; } = new(BytesIntEq.Instance);
+    public Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();
+    public Dictionary<(NodeId, int), int> KnownEpochs { get; set; } = new();
     public HashSet<NodeId> Quarantined { get; } = new();
     public List<string> ErrorsOut { get; set; } = new();
     public List<byte[]> AcksOut { get; set; } = new();
@@ -93,8 +93,9 @@ public sealed partial class Node
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000)
     {
-        NodeId = nodeId ?? Guid.NewGuid().ToByteArray();
-        if (NodeId.Length != 16) throw new InvalidOperationException("nodeId must be 16 bytes");
+        var raw = nodeId ?? Guid.NewGuid().ToByteArray();
+        if (raw.Length != 16) throw new InvalidOperationException("nodeId must be 16 bytes");
+        NodeId = NodeId.From(raw);
         Epoch = epoch;
         Clock = new HlcClock(nowFn, maxSkewUs);
     }

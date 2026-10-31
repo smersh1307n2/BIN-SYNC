@@ -107,7 +107,7 @@ public static class Membership
         int learned = 0;
         foreach (var e in remote.Members)
         {
-            if (e.NodeId.AsSpan().SequenceEqual(node.NodeId)) continue;
+            if (node.NodeId.EqualsBytes(e.NodeId)) continue;
             if (e.IsQuarantined)
             {
                 node.Quarantined.Add(Codec.CanonicalB128(e.NodeId));

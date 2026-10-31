@@ -140,7 +140,7 @@ public sealed partial class Node
         // Relay [Р1, Р2]: ONLY entries that actually changed state are appended to OUR
         // outbox under the ORIGINAL authorNodeId (SPEC HARDENING §8.3 [E2] + Errata E-10:
         // provenance-based relay eligibility — FULL rationale in the Python port).
-        if (!batch.IssuerNodeId.AsSpan().SequenceEqual(NodeId))
+        if (!NodeId.EqualsBytes(batch.IssuerNodeId))
         {
             for (int idx = 0; idx < nEnt; idx++)
             {
@@ -220,7 +220,7 @@ public sealed partial class Node
         var list = Outbox.TryGetValue(ns, out var l) ? l : new List<OutboxEntry>();
         foreach (var q in list)
         {
-            if (!q.RecordId.AsSpan().SequenceEqual(rid) || !q.AuthorNodeId.AsSpan().SequenceEqual(NodeId)) continue;
+            if (!q.RecordId.AsSpan().SequenceEqual(rid) || !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
             object sOp;
             try { sOp = Ops.DecodeOp(q.Payload).Op; } catch { continue; }
             ushort? sfid = sOp switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };

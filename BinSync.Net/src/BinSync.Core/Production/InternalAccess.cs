@@ -12,7 +12,7 @@ public sealed partial class Node
     /// Read-only view of per-(author, namespace) durable sequence counters [П1].
     /// Mutation only via engine APIs (tests must not write through this).
     /// </summary>
-    internal IReadOnlyDictionary<(byte[], int), long> OutboxSeqRef => _outboxSeq;
+    internal IReadOnlyDictionary<(NodeId, int), long> OutboxSeqRef => _outboxSeq;
 
     /// <summary>
     /// Atomic multi-entry write (production hardening): the whole batch of field writes

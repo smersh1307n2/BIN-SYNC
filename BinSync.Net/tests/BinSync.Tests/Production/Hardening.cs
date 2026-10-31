@@ -47,7 +47,7 @@ public class Production : IDisposable
 
     private static bool StateEqual(Node x, Node y)
     {
-        if (!x.NodeId.AsSpan().SequenceEqual(y.NodeId)) return false;
+        if (x.NodeId != y.NodeId) return false;
         if (x.Epoch != y.Epoch) return false;
         if (x.Clock.LastWall != y.Clock.LastWall || x.Clock.LastLogical != y.Clock.LastLogical) return false;
         if (x.Storage.Count != y.Storage.Count) return false;
@@ -414,7 +414,7 @@ public class Production : IDisposable
                     a.WriteField(NS, Fix.Rid(500 + i * 100 + Random.Shared.Next(100)), 0x101, Val("r"));
                     NodePersistence.Save(a, path);
                     var snap = NodePersistence.Load(path);
-                    if (!snap.NodeId.AsSpan().SequenceEqual(a.NodeId))
+                    if (snap.NodeId != a.NodeId)
                         throw new InvalidOperationException("torn identity");
                 }
             }

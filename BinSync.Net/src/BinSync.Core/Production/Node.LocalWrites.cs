@@ -7,12 +7,12 @@ public sealed partial class Node
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>NextOutboxSeqInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public long NextOutboxSeq(byte[] author, int namespaceId)
+    public long NextOutboxSeq(NodeId author, int namespaceId)
     {
         lock (_lockOutbox) return NextOutboxSeqInternal(author, namespaceId);
     }
 
-    internal long NextOutboxSeqInternal(byte[] author, int namespaceId)
+    internal long NextOutboxSeqInternal(NodeId author, int namespaceId)
     {
         var key = (author, namespaceId);
         long s = (_outboxSeq.TryGetValue(key, out var v) ? v : 0) + 1;
@@ -50,7 +50,7 @@ public sealed partial class Node
 
     internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {
-        if (!author.AsSpan().SequenceEqual(NodeId))
+        if (!NodeId.EqualsBytes(author))
             throw new InvalidOperationException("local push only; relay path enqueues raw payloads");
         // Errata E-13 follow-up 3: suppress ONLY when OUR OWN queued rival carried
         // byte-identical durable state to what this write re-established [Ш2].
@@ -78,7 +78,7 @@ public sealed partial class Node
                         {
                             var q = list[i];
                             if (!q.RecordId.AsSpan().SequenceEqual(recordId.ToArray()) ||
-                                !q.AuthorNodeId.AsSpan().SequenceEqual(NodeId)) continue;
+                                !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
                             catch { break; }
