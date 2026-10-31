@@ -1,5 +1,30 @@
 # Changelog — BinSync.Core
 
+## 1.0.0 — 2026-10-31
+
+**First stable release.** Public API frozen as in [PUBLIC-API.md](PUBLIC-API.md).
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.0` · **Branch:** `main`
+
+### Product
+- Promoted from `1.0.0-rc.2` without API breaks
+- 277 tests green; CI `BinSync.Net` workflow green on the RC tip
+
+### Engine (from rc.2 / post-alpha.7 main)
+- Domain sub-gates + `EnterAllGates`; alias maps on `NodeId`
+- Hot-path encode/decode/apply optimisations
+- Full Merge §8, opt-in E2EE / causal / schema, TrustStore TOFU/PreShared/CA-as-nodeId
+
+### Unchanged contract
+- Wire-compatible with rc.1 / rc.2 / alpha.6 / alpha.7
+- Full X.509 path validation remains out of scope
+
+### Optional next
+- nuget.org publish
+- Post-1.0: X.509 PKI (if needed)
+
+---
+
 ## 1.0.0-rc.2 — 2026-10-30
 
 **Second release candidate.** Same API freeze as rc.1; engine hardening only.
