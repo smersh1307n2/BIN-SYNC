@@ -90,3 +90,11 @@ public sealed partial class PeerState
     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 
+public sealed class BatchResult
+{
+    public byte[] BatchId;
+    public int Applied = 0;
+    public bool Acked = false;
+    public bool Duplicate = false;
+    public BatchResult(byte[] batchId) { BatchId = batchId; }
+}
