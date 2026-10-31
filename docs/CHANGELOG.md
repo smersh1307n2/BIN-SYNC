@@ -1,5 +1,31 @@
 # Changelog — BinSync.Core
 
+## 1.0.1 — 2026-10-31
+
+**Patch release** on top of `1.0.0`. **No public API breaks.**
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.1` · **Tag:** `v1.0.1`
+
+### Hygiene / structure
+- Node engine split into partials (`Alias`, `LocalWrites`, `DeltaBatch`, `ApplyBatch`, `BatchCodec`, `Helpers`, …)
+- Dead diagnostic `Diag` harness removed; duplicate byte-array comparers unified
+- `dotnet format` on engine partials + tests; test project warnings-as-errors
+
+### Engine (internal, wire-compatible)
+- ApplyBatch: copy-on-write overlays for touched records; single `DecodeOp` pass; leaner digests
+- Fewer `ToArray` on digest / writer span paths (encode-friendly)
+
+### Repo / CI
+- CI: XPlat Code Coverage (cobertura artifact `coverage`)
+- Sample: `samples/TwoNodeLoopback` (MakeSession + SyncRound)
+- Tests: **274** green
+
+### Unchanged contract
+- Same public surface as `1.0.0` / [PUBLIC-API.md](PUBLIC-API.md)
+- Wire-compatible with 1.0.0 / rc.2 / rc.1
+
+---
+
 ## 1.0.0 — 2026-10-31
 
 **First stable release.** Public API frozen as in [PUBLIC-API.md](PUBLIC-API.md).

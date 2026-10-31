@@ -16,7 +16,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 | Two-node sample | [`samples/TwoNodeLoopback/`](samples/TwoNodeLoopback/) |
 
-**Package:** `BinSync.Core` **`1.0.0`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`1.0.1`** · **Target:** `net10.0`  
 **Branch:** `main` · **Tests:** 274 (CI)  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
