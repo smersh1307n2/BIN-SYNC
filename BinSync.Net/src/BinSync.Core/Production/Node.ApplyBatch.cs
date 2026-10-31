@@ -55,11 +55,15 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
             try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
             catch (SyncException) when (full && emb is not null && emb.Length == 16) { return emb; }
         }
+        // Decode ops once — reused for stream author, apply loop, and relay (no batch.Ops()).
+        int nEntEarly = batch.Entries.Count;
+        var decodedOps = nEntEarly > 0 ? new object[nEntEarly] : Array.Empty<object>();
+        for (int di = 0; di < nEntEarly; di++)
+            decodedOps[di] = Ops.DecodeOp(batch.Entries[di].Payload).Op;
         byte[] streamAuthor;
         try
         {
-            object? op0 = batch.Entries.Count > 0 ? Ops.DecodeOp(batch.Entries[0].Payload).Op : null;
-            streamAuthor = op0 is not null ? ResolveAuthor(op0) : batch.IssuerNodeId;
+            streamAuthor = nEntEarly > 0 ? ResolveAuthor(decodedOps[0]) : batch.IssuerNodeId;
         }
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
@@ -93,15 +97,15 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
         var nsStore = Ns(batch.NamespaceId);
         var overlays = new Dictionary<RecordId, Record>();
         int applied = 0;
-        int nEnt = batch.Entries.Count;
-        var changedFlags = new bool[nEnt];
+        int nEnt = nEntEarly;
+        var changedFlags = nEnt > 0 ? new bool[nEnt] : Array.Empty<bool>();
         // One wall sample for the whole batch (skew window is large vs apply latency).
         long nowWall = Clock.Now();
         long maxSkew = Clock.MaxSkewUs;
         for (int idx = 0; idx < nEnt; idx++)
         {
             var e = batch.Entries[idx];
-            var op = Ops.DecodeOp(e.Payload).Op;
+            var op = decodedOps[idx];
             var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
             // clock skew clamp on incoming HLC wall (§5.3)
             if ((long)WallOf(op) > nowWall + maxSkew)
@@ -137,8 +141,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
         // provenance-based relay eligibility — FULL rationale in the Python port).
         if (!batch.IssuerNodeId.AsSpan().SequenceEqual(NodeId))
         {
-            var batchOps = batch.Ops();
-            for (int idx = 0; idx < batch.Entries.Count; idx++)
+            for (int idx = 0; idx < nEnt; idx++)
             {
                 var e = batch.Entries[idx];
                 byte[] cid = e.ChangeId.AsSpan().SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId;
@@ -148,7 +151,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
                 if (!known && !changedFlags[idx])
                 {
                     bool relayOk = true;
-                    var rop = batchOps[idx];
+                    var rop = decodedOps[idx];
                     ushort? rfid = rop switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
                     if (rfid is not null)
                     {
@@ -167,7 +170,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
             {
                 if (!changedFlags[idx]) continue;
                 var e = batch.Entries[idx];
-                var op = batchOps[idx];
+                var op = decodedOps[idx];
                 if (GetAuthor(op) is not null) continue;   // full-author mode keeps durable author
                 var resolved = ResolveAuthor(op);
                 // BUGFIX (scenario 23): the relay keeps the op payload VERBATIM (§13.5 [Р1]/[И4]).
@@ -197,11 +200,11 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
                     {
                         var otherPeer = PeersByNid is not null && PeersByNid.TryGetValue(otherPeerKv, out var on) ? on : null;
                         if (otherPeer is not null && !(otherPeerKv == (NodeId)senderPeer))
-                            EnsureAlias(otherPeer, resolved.ToArray(), epm.Value);
+                            EnsureAlias(otherPeer, resolved, epm.Value);
                     }
                     var senderNode = PeersByNid is not null && PeersByNid.TryGetValue(senderPeer, out var sn) ? sn : null;
                     if (senderNode is not null && !(resolved == (NodeId)NodeId))
-                        EnsureAlias(senderNode, resolved.ToArray(), epm.Value);
+                        EnsureAlias(senderNode, resolved, epm.Value);
                 }
             }
         }

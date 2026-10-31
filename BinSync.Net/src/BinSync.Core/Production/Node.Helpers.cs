@@ -97,15 +97,24 @@ internal int OutboxSizeInternal(int namespaceId)
     public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest)
     {
-        var w = new Writer();
+        // Fixed layout upper bound: domain + 5×b128 + u16 + u32 + 2×u64 ≈ 160B.
+        var w = new Writer(192);
         w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
         w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
         w.B128(recordsRoot).B128(prevBatchDigest);
         return Digests.Blake3(w.Value(), 16);
     }
 
-    /// recordsRoot = BLAKE3-128 over the canonical records array.
-    public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries) =>
-        Digests.Blake3(Domains.Cat(Domains.DomainRecords, EncodeRecordsArray(entries)), 16);
+    /// recordsRoot = BLAKE3-128 over domainTag || canonical records array (§12.17).
+    public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)
+    {
+        int est = Domains.DomainRecords.Length + 8;
+        for (int i = 0; i < entries.Count; i++)
+            est += 24 + entries[i].Payload.Length;
+        var w = new Writer(est);
+        w.Raw(Domains.DomainRecords);
+        WriteRecordsArray(w, entries);
+        return Digests.Blake3(w.Value(), 16);
+    }
 }
 
