@@ -14,6 +14,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Third-party | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) |
 | Naming | [`docs/NAME.md`](docs/NAME.md) |
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
+| Two-node sample | [`samples/TwoNodeLoopback/`](samples/TwoNodeLoopback/) |
 
 **Package:** `BinSync.Core` **`1.0.0`** · **Target:** `net10.0`  
 **Branch:** `main` · **Tests:** 274 (CI)  
@@ -57,6 +58,14 @@ dotnet pack src/BinSync.Core -c Release
 Embedder contract and SemVer rules: **[docs/PUBLIC-API.md](docs/PUBLIC-API.md)**.
 
 ---
+
+### Minimal sample (two nodes, loopback)
+
+```bash
+bash scripts/vendor-ed25519-from-ztsharp.sh   # once
+dotnet run --project samples/TwoNodeLoopback -c Release
+```
+
 
 ## License
 

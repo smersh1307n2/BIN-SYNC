@@ -14,6 +14,14 @@ Legend: **done** · **partial** · **missing**
 
 ---
 
+## Post-1.0 hygiene (main)
+
+- Node engine split into partials (`Node.Alias` / `LocalWrites` / `DeltaBatch` / `ApplyBatch` / …)
+- Test warnings-as-errors; dead Diag harness and duplicate comparers removed
+- ApplyBatch: COW overlays + single DecodeOp pass (no public API change)
+- **CI soak:** `BinSync.Net` workflow green on recent `main` tips (`test` + `fuzz + lab`)
+
+
 ## Spec coverage
 
 | Area | Spec | Code |
