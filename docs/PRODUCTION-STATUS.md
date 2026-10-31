@@ -5,7 +5,7 @@
 **Package:** `BinSync.Core` **`1.0.0`** · **Target:** `net10.0` · **Branch:** `main`  
 **Tag:** `v1.0.0` (see GitHub Releases)  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** 277 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
+**Tests:** 274 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
 
 **Spec parity:** **~95%+** — reference engine production-hardened.  
 **Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** (stable).
@@ -73,7 +73,7 @@ Full X.509 path validation remains **out of scope for 1.0**.
 - [x] Package version `1.0.0`
 - [x] Tag `v1.0.0-rc.1` + GitHub prerelease
 - [x] Tag `v1.0.0-rc.2` + GitHub prerelease (domain gates + NodeId aliases)
-- [x] Soak / embedder feedback on rc.2 (277 tests + CI BinSync.Net green)
+- [x] Soak / embedder feedback on rc.2 (274 tests + CI BinSync.Net green)
 - [x] Tag `v1.0.0` (stable)
 - [ ] nuget.org push (optional)
 - [ ] Full X.509 (post-1.0, optional)

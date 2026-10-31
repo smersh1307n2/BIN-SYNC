@@ -63,9 +63,9 @@ public sealed partial class Node
     public Dictionary<int, List<OutboxEntry>> Outbox = new();
     internal readonly Dictionary<(byte[], int), long> _outboxSeq = new(BytesIntEq.Instance);   // (author, ns) -> seq
     // inbox idempotency: set of (issuerNodeId, ns, issuerEpoch, batchId)
-    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(BytesIntIntBytesEqB.Instance);
+    public readonly HashSet<(byte[], int, int, byte[])> Inbox = new(BytesIntIntBytesEq.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
-    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(BytesIntIntEqB.Instance);
+    public readonly Dictionary<(byte[], int, int), byte[]> LastBatchDigest = new(BytesIntIntEq.Instance);
     // BUGFIX: per-STREAM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
     public readonly Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest = new(BytesIntIntBytesKeyEq.Instance);
