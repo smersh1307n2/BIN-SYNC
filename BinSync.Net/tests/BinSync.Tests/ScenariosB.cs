@@ -300,10 +300,12 @@ public class ScenariosB
         }
         var cyc = FindCycle(g);
         Assert.NotNull(cyc);
-        Assert.Equal(new List<string> { "A", "B", "A" }, cyc);
+        // After NotNull the cycle is non-null for the rest of the test.
+        var cycle = cyc!;
+        Assert.Equal(new List<string> { "A", "B", "A" }, cycle);
         // deterministic break: drop edge from lexicographically largest node
-        string breaker = cyc.Take(cyc.Count - 1).Max();
-        g[breaker] = g[breaker].Where(d => d != cyc[^1]).ToList();
+        string breaker = cycle.Take(cycle.Count - 1).Max()!;
+        g[breaker] = g[breaker].Where(d => d != cycle[^1]).ToList();
         Assert.Null(FindCycle(g));
     }
 

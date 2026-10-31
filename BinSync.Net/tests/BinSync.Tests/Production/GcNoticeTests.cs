@@ -31,7 +31,7 @@ public class GcNoticeTests
         var msg = GcNotice.Build(b, 1);
         int n = GcNotice.Apply(a, msg);
         Assert.True(n >= 1);
-        Assert.True(a.Quarantined.Any(k => Fix.Eq(k, Fix.Nid(51))));
+        Assert.Contains(a.Quarantined, k => Fix.Eq(k, Fix.Nid(51)));
     }
 
     [Fact]
@@ -64,6 +64,6 @@ public class GcNoticeTests
         await serverTask;
 
         Assert.True(learned >= 1 || a.Quarantined.Any(k => Fix.Eq(k, Fix.Nid(52))));
-        Assert.True(a.Quarantined.Any(k => Fix.Eq(k, Fix.Nid(52))));
+        Assert.Contains(a.Quarantined, k => Fix.Eq(k, Fix.Nid(52)));
     }
 }

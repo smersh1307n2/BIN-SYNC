@@ -24,7 +24,7 @@ public static class CounterG
     {
         var r = new Reader(data);
         int n = (int)r.Varint();
-        var map = new Dictionary<byte[], ulong>(BA.Instance);
+        var map = new Dictionary<byte[], ulong>(BytesEq.Instance);
         for (int i = 0; i < n; i++)
         {
             var a = r.B128();
@@ -38,7 +38,7 @@ public static class CounterG
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var a = local is null || local.Length == 0
-            ? new Dictionary<byte[], ulong>(BA.Instance)
+            ? new Dictionary<byte[], ulong>(BytesEq.Instance)
             : Decode(local);
         var b = Decode(remote);
         foreach (var (author, val) in b)
@@ -95,7 +95,7 @@ public static class CounterPn
     static Dictionary<byte[], ulong> ReadMap(Reader r)
     {
         int n = (int)r.Varint();
-        var map = new Dictionary<byte[], ulong>(BA.Instance);
+        var map = new Dictionary<byte[], ulong>(BytesEq.Instance);
         for (int i = 0; i < n; i++)
             map[r.B128()] = r.U64();
         return map;
@@ -104,7 +104,7 @@ public static class CounterPn
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var (lp, ln) = local is null || local.Length == 0
-            ? (new Dictionary<byte[], ulong>(BA.Instance), new Dictionary<byte[], ulong>(BA.Instance))
+            ? (new Dictionary<byte[], ulong>(BytesEq.Instance), new Dictionary<byte[], ulong>(BytesEq.Instance))
             : Decode(local);
         var (rp, rn) = Decode(remote);
         MergeMax(lp, rp);

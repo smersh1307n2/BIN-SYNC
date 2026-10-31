@@ -263,9 +263,10 @@ public class Production : IDisposable
         var path = Path.Combine(_dir, "atomic.state");
         NodePersistence.Save(a, path);
         NodePersistence.Save(a, path);   // overwrite via rename must succeed
-        Assert.Single(Directory.GetFiles(_dir, "*", SearchOption.AllDirectories)
-                               .Where(f => Path.GetFileName(f).StartsWith(".atomic.state.tmp-") == false
-                                        || f == path));
+        var files = Directory.GetFiles(_dir, "*", SearchOption.AllDirectories);
+        Assert.Contains(path, files);
+        // Only the target state file should remain (no .tmp-* leftovers).
+        Assert.DoesNotContain(files, f => Path.GetFileName(f).StartsWith(".atomic.state.tmp-", StringComparison.Ordinal));
         // No leftover temp files besides the target itself.
         Assert.Empty(Directory.GetFiles(_dir, ".atomic.state.tmp-*"));
         Assert.True(File.Exists(path));
@@ -398,7 +399,7 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Node_ConcurrentReadersAndSaver_NeverTear()
+    public async Task Node_ConcurrentReadersAndSaver_NeverTear()
     {
         var (a, _) = BuildHistory();
         var path = Path.Combine(_dir, "readers.state");
@@ -419,7 +420,7 @@ public class Production : IDisposable
             }
             catch (Exception e) { Interlocked.CompareExchange(ref err, e, null); }
         })).ToArray();
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
         Assert.Null(err);
     }
 }

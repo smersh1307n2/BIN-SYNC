@@ -8,9 +8,9 @@ public class PeerRejectedException : Exception { public PeerRejectedException(st
 public class LoopbackTransport
 {
     public Dictionary<NodeId, Node>? Nodes = null;
-    private readonly Dictionary<(byte[], byte[]), (FlowControl Send, FlowControl Recv)> _sessions = new(BA2.Instance);
+    private readonly Dictionary<(byte[], byte[]), (FlowControl Send, FlowControl Recv)> _sessions = new(BytesPairEq.Instance);
     private int _streamCounter = 0;
-    public Dictionary<(byte[], byte[]), int> Streams = new(BA2.Instance);
+    public Dictionary<(byte[], byte[]), int> Streams = new(BytesPairEq.Instance);
 
     public void Register(Node node) => (Nodes ??= new())[node.NodeId] = node;
 
