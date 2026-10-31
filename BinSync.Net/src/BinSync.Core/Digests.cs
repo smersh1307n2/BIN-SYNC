@@ -18,21 +18,33 @@ public static class Domains
     private static byte[] Ascii(string s) => System.Text.Encoding.ASCII.GetBytes(s);
     public static byte[] Cat(params byte[][] parts)
     {
-        var l = new List<byte>();
-        foreach (var p in parts) l.AddRange(p);
-        return l.ToArray();
+        int n = 0;
+        for (int i = 0; i < parts.Length; i++) n += parts[i].Length;
+        var r = new byte[n];
+        int o = 0;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var p = parts[i];
+            p.AsSpan().CopyTo(r.AsSpan(o));
+            o += p.Length;
+        }
+        return r;
     }
 }
 
 public static class Digests
 {
-    /// <summary>BLAKE3-256 truncated to `len` bytes (in-tree implementation).</summary>
-    public static byte[] Blake3(byte[] data, int len = 32)
+    /// <summary>BLAKE3-256 truncated to <paramref name="len"/> bytes (in-tree implementation).</summary>
+    public static byte[] Blake3(byte[] data, int len = 32) => Blake3((ReadOnlySpan<byte>)data, len);
+
+    /// <summary>BLAKE3-256 truncated to <paramref name="len"/> bytes; zero intermediate byte[] for input.</summary>
+    public static byte[] Blake3(ReadOnlySpan<byte> data, int len = 32)
     {
-        var full = Blake3Core.Hash256(data);
-        if (len >= full.Length) return full;
+        Span<byte> full = stackalloc byte[32];
+        Blake3Core.Hash256(data, full);
+        if (len >= 32) return full.ToArray();
         var r = new byte[len];
-        Array.Copy(full, r, len);
+        full[..len].CopyTo(r);
         return r;
     }
 
@@ -52,15 +64,22 @@ public static class Digests
         uint logical, byte[] authorNodeId, byte[] value)
     {
         var w = new Writer();
-        w.U16(fieldId).U16(keyEpoch).U64(wall).U32(logical)
-         .B128(Codec.CanonicalB128(authorNodeId));
+        // B128 normalizes only when length != 16 (no double CanonicalB128).
+        w.U16(fieldId).U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
         w.Varint((ulong)value.Length).Raw(value);
         return w.Value();
     }
 
     /// §9.1.3 — fixed layout with fieldId=0, keyEpoch=0, valLen=1, value=[lifecycleValue].
     public static byte[] LifecycleDigestPayload(ulong wall, uint logical, byte[] lifecycleAuthor, byte value)
-        => FieldDigestPayload(0x0000, 0, wall, logical, lifecycleAuthor, new[] { value });
+    {
+        Span<byte> one = stackalloc byte[1];
+        one[0] = value;
+        var w = new Writer(48);
+        w.U16(0).U16(0).U64(wall).U32(logical).B128(lifecycleAuthor);
+        w.Varint(1).Raw(one);
+        return w.Value();
+    }
 
     /// recordDigest = BLAKE3-N(recordId || sorted FieldDigestPayload* || LifecyclePayload) (§9.1).
     public static byte[] RecordDigest(Record rec)
@@ -75,11 +94,13 @@ public static class Digests
         var lc = LifecycleDigestPayload(
             rec.LifecycleHlc?.Wall ?? 0, rec.LifecycleHlc?.Logical ?? 0,
             rec.LifecycleAuthor ?? new byte[16], rec.LifecycleValue);
-        var buf = new List<byte>();
-        buf.AddRange(Domains.DomainRecord); buf.AddRange(rec.RecordId);
-        foreach (var p in parts) buf.AddRange(p);
-        buf.AddRange(lc);
-        return Blake3(buf.ToArray(), 32);
+        int est = Domains.DomainRecord.Length + 16 + lc.Length;
+        for (int i = 0; i < parts.Count; i++) est += parts[i].Length;
+        var w = new Writer(est);
+        w.Raw(Domains.DomainRecord).Raw(rec.RecordId);
+        for (int i = 0; i < parts.Count; i++) w.Raw(parts[i]);
+        w.Raw(lc);
+        return Blake3(w.Value(), 32);
     }
 }
 
@@ -97,7 +118,12 @@ public class BucketAccumulator
     public BucketAccumulator(byte[]? prefix = null) => Prefix = prefix ?? Array.Empty<byte>();
 
     public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);
-    public static byte[] BucketKey(RecordId recordId) => Digests.Blake3(recordId.ToArray(), 32);
+    public static byte[] BucketKey(RecordId recordId)
+    {
+        Span<byte> id = stackalloc byte[16];
+        recordId.WriteTo(id);
+        return Digests.Blake3(id, 32);
+    }
 
     private static UInt128 ToNum(byte[] digest)
     {

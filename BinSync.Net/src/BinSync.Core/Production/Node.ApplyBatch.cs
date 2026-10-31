@@ -91,7 +91,7 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
         // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
         var nsStore = Ns(batch.NamespaceId);
         var staged = new Dictionary<RecordId, Record>();
-        foreach (var (rid, rec) in nsStore) staged[rid.ToArray()] = Clone(rec);
+        foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
         int applied = 0;
         var changedIdx = new List<int>();   // indices of entries that actually changed state
         for (int idx = 0; idx < batch.Entries.Count; idx++)
