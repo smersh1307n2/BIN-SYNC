@@ -4,14 +4,14 @@ namespace BinSync;
 
 public sealed partial class Node
 {
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ApplyBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public BatchResult ApplyBatch(Batch batch, byte[] senderPeer)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyBatchInternal(batch, senderPeer);
     }
 
-internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
+    internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
     {
         var result = new BatchResult(batch.BatchId);
         // STEP 0: namespace isolation (§3.7) — forbidden ns kills only that stream
@@ -240,14 +240,14 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
 
     /// Apply one resolved op to a staged record. Echo suppression happens inside
     /// MergeField: identical (hlc, author, value) → changed=False → nothing queued.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ApplyOpInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool ApplyOp(Record rec, object op, byte[] author)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyOpInternal(rec, op, author);
     }
 
-internal bool ApplyOpInternal(Record rec, object op, byte[] author)
+    internal bool ApplyOpInternal(Record rec, object op, byte[] author)
     {
         if (op is OpFieldWrite fw)
         {
@@ -271,14 +271,14 @@ internal bool ApplyOpInternal(Record rec, object op, byte[] author)
 
     /// Receiver ACK advances our push watermark; GC of outbox up to min acked.
     /// SPEC CORRECTION (errata E-4): the ACK names the acknowledged AUTHOR STREAM.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ProcessAckInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void ProcessAck(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) ProcessAckInternal(peerNode, namespaceId, ackedSeq, authorStream);
     }
 
-internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
+    internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
     {
         if (!PeerStates.TryGetValue((peerNode, namespaceId), out var ps)) return;
         if (authorStream is not null)
@@ -300,14 +300,14 @@ internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq
     }
 
     /// Snapshot = all live records + tombstones + ghosts (§ summary 'снапшот').
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>BuildSnapshotInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public List<Batch> BuildSnapshot(int namespaceId)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return BuildSnapshotInternal(namespaceId);
     }
 
-internal List<Batch> BuildSnapshotInternal(int namespaceId)
+    internal List<Batch> BuildSnapshotInternal(int namespaceId)
     {
         var batches = new List<Batch>();
         var nsStore = Ns(namespaceId);
@@ -350,14 +350,14 @@ internal List<Batch> BuildSnapshotInternal(int namespaceId)
     }
 
     /// Apply snapshot ops directly (not through cursor machinery).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ApplySnapshotInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int ApplySnapshot(Batch batch, byte[] senderPeer)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplySnapshotInternal(batch, senderPeer);
     }
 
-internal int ApplySnapshotInternal(Batch batch, byte[] senderPeer)
+    internal int ApplySnapshotInternal(Batch batch, byte[] senderPeer)
     {
         int applied = 0;
         foreach (var e in batch.Entries)

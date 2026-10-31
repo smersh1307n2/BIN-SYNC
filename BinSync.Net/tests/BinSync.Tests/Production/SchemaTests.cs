@@ -58,14 +58,20 @@ public class SchemaTests
         var reg = new SchemaRegistry();
         reg.Register(new SchemaDescriptor
         {
-            NamespaceId = 1, SchemaId = 0, Version = 1, MergePolicy = 0x02,
+            NamespaceId = 1,
+            SchemaId = 0,
+            Version = 1,
+            MergePolicy = 0x02,
             FieldIds = new HashSet<ushort> { 0x100 },
             RetiredFieldIds = new HashSet<ushort> { 0x0FF },
         });
         Assert.ThrowsAny<ArgumentException>(() =>
             reg.Register(new SchemaDescriptor
             {
-                NamespaceId = 1, SchemaId = 0, Version = 2, MergePolicy = 0x02,
+                NamespaceId = 1,
+                SchemaId = 0,
+                Version = 2,
+                MergePolicy = 0x02,
                 FieldIds = new HashSet<ushort> { 0x0FF }, // retired in v1
             }));
     }

@@ -6,14 +6,14 @@ public sealed partial class Node
 {
 
     /// DELTA_BATCH wire layout (§12.17).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>EncodeBatchPayloadInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[] EncodeBatchPayload(Batch batch)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return EncodeBatchPayloadInternal(batch);
     }
 
-internal byte[] EncodeBatchPayloadInternal(Batch batch)
+    internal byte[] EncodeBatchPayloadInternal(Batch batch)
     {
         // Single-pass encode: no intermediate records[] buffer.
         // Capacity ≈ fixed header (~100B) + per-entry (16+1+varint+payload).
@@ -34,14 +34,14 @@ internal byte[] EncodeBatchPayloadInternal(Batch batch)
         return w.Value();
     }
 
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>DecodeBatchPayloadInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch DecodeBatchPayload(byte[] data)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return DecodeBatchPayloadInternal(data);
     }
 
-internal Batch DecodeBatchPayloadInternal(byte[] data)
+    internal Batch DecodeBatchPayloadInternal(byte[] data)
     {
         var r = new Reader(data);
         int ns = r.U16();
@@ -65,8 +65,14 @@ internal Batch DecodeBatchPayloadInternal(byte[] data)
         foreach (var (rid, kind, payload) in rawEntries)
             entries.Add(new OutboxEntry
             {
-                NamespaceId = ns, Seq = 0, ChangeId = Zero128, RecordId = rid,
-                OpKind = kind, Payload = payload, AuthorNodeId = issuer, CreatedAt = 0,
+                NamespaceId = ns,
+                Seq = 0,
+                ChangeId = Zero128,
+                RecordId = rid,
+                OpKind = kind,
+                Payload = payload,
+                AuthorNodeId = issuer,
+                CreatedAt = 0,
             });
         return new Batch(ns, schemaId, schemaVer, policy, flags, issuer, epoch,
                          cstart, cend, batchId, prev, root, digest, entries);

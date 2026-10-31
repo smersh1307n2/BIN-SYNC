@@ -5,24 +5,24 @@ namespace BinSync;
 public sealed partial class Node
 {
     // ---------------------------------------------------------------------- helpers
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RecordDigestOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[]? RecordDigestOf(int namespaceId, byte[] recordId)
     {
         lock (_lockStorage) return RecordDigestOfInternal(namespaceId, recordId);
     }
 
-internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
+    internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
     { return Storage.TryGetValue(namespaceId, out var s) && s.TryGetValue(recordId, out var rec) ? Digests.RecordDigest(rec) : null; }
 
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AllRecordDigestsInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Dictionary<byte[], byte[]> AllRecordDigests(int namespaceId)
     {
         lock (_lockStorage) return AllRecordDigestsInternal(namespaceId);
     }
 
-internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
+    internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
     {
         var d = new Dictionary<byte[], byte[]>(BytesEq.Instance);
         if (Storage.TryGetValue(namespaceId, out var s))
@@ -30,14 +30,14 @@ internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
         return d;
     }
 
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>OutboxSizeInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int OutboxSize(int namespaceId)
     {
         lock (_lockOutbox) return OutboxSizeInternal(namespaceId);
     }
 
-internal int OutboxSizeInternal(int namespaceId)
+    internal int OutboxSizeInternal(int namespaceId)
     { return Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0; }
 
     internal static Record Clone(Record rec)

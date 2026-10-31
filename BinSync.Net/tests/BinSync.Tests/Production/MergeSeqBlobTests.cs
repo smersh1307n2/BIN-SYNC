@@ -59,14 +59,20 @@ public class MergeSeqBlobTests
         var local = new FieldState(
             SeqFractional.Encode(new SeqFractional.Item
             {
-                ParentId = Author(0), OrderKey = "m", AuthorNodeId = Author(1), Seq = 1,
+                ParentId = Author(0),
+                OrderKey = "m",
+                AuthorNodeId = Author(1),
+                Seq = 1,
                 Value = new byte[] { 9 },
             }),
             new Hlc(1, 0), Author(1));
         var remote = new FieldState(
             SeqFractional.Encode(new SeqFractional.Item
             {
-                ParentId = Author(0), OrderKey = "z", AuthorNodeId = Author(2), Seq = 1,
+                ParentId = Author(0),
+                OrderKey = "z",
+                AuthorNodeId = Author(2),
+                Seq = 1,
                 Value = new byte[] { 8 },
             }),
             new Hlc(2, 0), Author(2));
@@ -96,7 +102,9 @@ public class MergeSeqBlobTests
     {
         var payload = BlobRef.Encode(new BlobRef.Descriptor
         {
-            BlobId = Author(1), Size = 10, ContentType = "a",
+            BlobId = Author(1),
+            Size = 10,
+            ContentType = "a",
             Hash = new byte[32],
         });
         var merged = BlobRef.Merge(payload, payload);
@@ -108,11 +116,17 @@ public class MergeSeqBlobTests
     {
         var a = BlobRef.Encode(new BlobRef.Descriptor
         {
-            BlobId = Author(1), Size = 1, ContentType = "x", Hash = new byte[32],
+            BlobId = Author(1),
+            Size = 1,
+            ContentType = "x",
+            Hash = new byte[32],
         });
         var b = BlobRef.Encode(new BlobRef.Descriptor
         {
-            BlobId = Author(2), Size = 2, ContentType = "y", Hash = new byte[32],
+            BlobId = Author(2),
+            Size = 2,
+            ContentType = "y",
+            Hash = new byte[32],
         });
         var m1 = BlobRef.Merge(a, b);
         var m2 = BlobRef.Merge(b, a);

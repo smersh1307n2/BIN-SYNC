@@ -9,14 +9,14 @@ public sealed partial class Node
     /// §4.4 HELLO carries the sender's incarnation epoch; the receiver stores it as the
     /// per-session watermark used by STEP 0.5 (errata E-2/E-3). A NEW session resets the
     /// peer's watermark first (§4.3: reconnect = fresh exchange), then raises it.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterSessionEpoch(byte[] peer, int epoch)
     {
         lock (_lockMeta) RegisterSessionEpochInternal(peer, epoch);
     }
 
-internal void RegisterSessionEpochInternal(byte[] peer, int epoch)
+    internal void RegisterSessionEpochInternal(byte[] peer, int epoch)
     {
         foreach (var k in KnownEpochs.Keys.Where(k => k.Item1.AsSpan().SequenceEqual(peer)).ToList())
             KnownEpochs.Remove(k);
@@ -25,14 +25,14 @@ internal void RegisterSessionEpochInternal(byte[] peer, int epoch)
 
     /// Durable observation of an author's incarnation epoch (§4.4). Used only as fallback
     /// metadata (_author_epoch) — never as a regression gate (errata E-2).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>LearnAuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void LearnAuthorEpoch(byte[] author, int epoch)
     {
         lock (_lockMeta) LearnAuthorEpochInternal(author, epoch);
     }
 
-internal void LearnAuthorEpochInternal(byte[] author, int epoch)
+    internal void LearnAuthorEpochInternal(byte[] author, int epoch)
     {
         if (author.Length != 16) return;
         if (!KnownEpochs.TryGetValue((author, -1), out var cur) || epoch > cur)
@@ -59,14 +59,14 @@ internal void LearnAuthorEpochInternal(byte[] author, int epoch)
     /// bumped epoch inherits stale cursor/chain expectations and rejects the first batch
     /// of the new incarnation with SEQ_GAP (§4.4, errata E-2/E-3: watermark keyed per
     /// SESSION; reconnect = fresh exchange).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ResetSessionInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void ResetSession(byte[] peer)
     {
         lock (_lockMeta) ResetSessionInternal(peer);
     }
 
-internal void ResetSessionInternal(byte[] peer)
+    internal void ResetSessionInternal(byte[] peer)
     {
         AliasToNode.Remove(peer);
         NodeToAlias.Remove(peer);
@@ -84,14 +84,14 @@ internal void ResetSessionInternal(byte[] peer)
     /// register one entry in BOTH peers' copies of the session map under the SAME alias
     /// when possible. Returns the alias valid on both ends, or None when no collision-free
     /// number exists — caller then fails closed with UNKNOWN_ALIAS [А3] instead of guessing.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>EnsureAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int? EnsureAlias(Node peer, byte[] nodeId, int epoch)
     {
         lock (_lockMeta) return EnsureAliasInternal(peer, nodeId, epoch);
     }
 
-internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
+    internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
     {
         var fwdA = AliasToNode.TryGetValue(peer.NodeId, out var fa) ? fa : new Dictionary<int, (NodeId Id, int Epoch)>();
         var revA = NodeToAlias.TryGetValue(peer.NodeId, out var ra) ? ra : new Dictionary<(NodeId Id, int Epoch), int>();
@@ -197,16 +197,16 @@ internal int? EnsureAliasInternal(Node peer, byte[] nodeId, int epoch)
     /// ALIAS_MAP entry for session with `peer` (§4.3). Alias exists only in session.
     /// BUGFIX (errata, Python port): reverse map keyed by the DURABLE pair (nodeId, epoch)
     /// — §4.4 lets a post-crash node keep its nodeId and bump only the epoch.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RegisterAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterAlias(byte[] peer, int alias, byte[] nodeId, int epoch)
     {
         lock (_lockMeta) RegisterAliasInternal(peer, alias, nodeId, epoch);
     }
 
-internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int epoch)
+    internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int epoch)
     {
-        var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new()) ;
+        var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new());
         // BUGFIX (port): inner reverse map MUST use the BytesIntEq content comparer — the default
         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
         // a decoded copy of the same author bytes produced fresh array instances that never
@@ -229,14 +229,14 @@ internal void RegisterAliasInternal(byte[] peer, int alias, byte[] nodeId, int e
     /// SPEC CORRECTION (errata E-1): the durable author is the bare b128 nodeId (§4.6/§5.4).
     /// Errata E-12: on a miss, consult the peer's copy of THIS session and adopt its
     /// binding iff collision-free; an identity neither copy knows still fails closed [А3].
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[] ResolveAlias(byte[] peer, int alias)
     {
         lock (_lockMeta) return ResolveAliasInternal(peer, alias);
     }
 
-internal byte[] ResolveAliasInternal(byte[] peer, int alias)
+    internal byte[] ResolveAliasInternal(byte[] peer, int alias)
     {
         var entry = AliasToNode.TryGetValue(peer, out var m) && m.TryGetValue(alias, out var e) ? e : (default, int.MinValue);
         bool have = entry.Item2 != int.MinValue;
@@ -280,14 +280,14 @@ internal byte[] ResolveAliasInternal(byte[] peer, int alias)
     }
 
     /// Canonical durable author identity: nodeId || epoch(u32 LE), 20 bytes.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>DurableIdInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[] DurableId(byte[]? nodeId = null, int? epoch = null)
     {
         lock (_lockMeta) return DurableIdInternal(nodeId, epoch);
     }
 
-internal byte[] DurableIdInternal(byte[]? nodeId = null, int? epoch = null)
+    internal byte[] DurableIdInternal(byte[]? nodeId = null, int? epoch = null)
     {
         var n = nodeId ?? NodeId;
         var e = epoch ?? Epoch;
@@ -300,14 +300,14 @@ internal byte[] DurableIdInternal(byte[]? nodeId = null, int? epoch = null)
 
     /// Reverse lookup keyed by the bare durable nodeId (errata E-1), with the collision
     /// guard of errata E-5 (see Python port docstring): ambiguous alias → None, never guess.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AliasOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int? AliasOf(byte[] peer, byte[] nodeId, int? epoch = null)
     {
         lock (_lockMeta) return AliasOfInternal(peer, nodeId, epoch);
     }
 
-internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
+    internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     {
         // BUGFIX (port): the fallback map MUST use the byte-content comparer too — with the
         // default ReferenceEqualityComparer an empty miss-map behaved inconsistently.
@@ -340,14 +340,14 @@ internal int? AliasOfInternal(byte[] peer, byte[] nodeId, int? epoch = null)
     // BUGFIX (port): inner record maps MUST use byte-content equality (BytesEq). The default
     // ReferenceEqualityComparer made every recordId lookup a reference miss — the exact
     // cause of the KeyNotFoundException storm in tests that read node.Storage[ns][rid].
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>NsInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Dictionary<RecordId, Record> Ns(int namespaceId)
     {
         lock (_lockStorage) return NsInternal(namespaceId);
     }
 
-internal Dictionary<RecordId, Record> NsInternal(int namespaceId)
+    internal Dictionary<RecordId, Record> NsInternal(int namespaceId)
     { return Storage.TryGetValue(namespaceId, out var s) ? s : (Storage[namespaceId] = new Dictionary<RecordId, Record>()); }
 
 }

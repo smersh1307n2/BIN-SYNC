@@ -5,14 +5,14 @@ namespace BinSync;
 public sealed partial class Node
 {
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>NextOutboxSeqInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public long NextOutboxSeq(byte[] author, int namespaceId)
     {
         lock (_lockOutbox) return NextOutboxSeqInternal(author, namespaceId);
     }
 
-internal long NextOutboxSeqInternal(byte[] author, int namespaceId)
+    internal long NextOutboxSeqInternal(byte[] author, int namespaceId)
     {
         var key = (author, namespaceId);
         long s = (_outboxSeq.TryGetValue(key, out var v) ? v : 0) + 1;
@@ -21,14 +21,14 @@ internal long NextOutboxSeqInternal(byte[] author, int namespaceId)
     }
 
     /// Current durable (wall, logical, author, value|"TOMB") of one field, straight from storage.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>SeenStateInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public (ulong Wall, uint Logical, byte[] Author, object Val)? SeenState(int ns, byte[] recordId, int fieldId)
     {
         lock (_lockStorage) return SeenStateInternal(ns, recordId, fieldId);
     }
 
-internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, byte[] recordId, int fieldId)
+    internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, byte[] recordId, int fieldId)
     {
         if (!Storage.TryGetValue(ns, out var store)) return null;
         if (!store.TryGetValue(recordId, out var rec)) return null;
@@ -41,14 +41,14 @@ internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInterna
 
     /// Append a LOCAL write to outbox ONLY if merge reported changed (echo [E2]).
     /// Errata E-13 (scenario 37): restored-echo suppression — see Python port docstring.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>PushOutboxInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public OutboxEntry? PushOutbox(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return PushOutboxInternal(ns, recordId, op, author, peer);
     }
 
-internal OutboxEntry? PushOutboxInternal(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
+    internal OutboxEntry? PushOutboxInternal(int ns, byte[] recordId, object op, byte[] author, byte[]? peer = null)
     {
         if (!author.AsSpan().SequenceEqual(NodeId))
             throw new InvalidOperationException("local push only; relay path enqueues raw payloads");
@@ -133,14 +133,14 @@ internal OutboxEntry? PushOutboxInternal(int ns, byte[] recordId, object op, byt
     }
 
     /// Local FieldWrite. Returns true if state changed (and outbox grew).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>WriteFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool WriteField(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
     }
 
-internal bool WriteFieldInternal(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
+    internal bool WriteFieldInternal(int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -154,14 +154,14 @@ internal bool WriteFieldInternal(int namespaceId, byte[] recordId, int fieldId, 
         return changed;
     }
 
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>TombFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool TombField(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return TombFieldInternal(namespaceId, recordId, fieldId, hlc);
     }
 
-internal bool TombFieldInternal(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
+    internal bool TombFieldInternal(int namespaceId, byte[] recordId, int fieldId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -174,14 +174,14 @@ internal bool TombFieldInternal(int namespaceId, byte[] recordId, int fieldId, H
     }
 
     /// Lifecycle → dead (delete-wins).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>DeleteRecordInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool DeleteRecord(int namespaceId, byte[] recordId, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return DeleteRecordInternal(namespaceId, recordId, hlc);
     }
 
-internal bool DeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    internal bool DeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
@@ -193,14 +193,14 @@ internal bool DeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = 
     }
 
     /// Undelete only via explicit lifecycle write value=0x00 (§7.4).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>UndeleteRecordInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool UndeleteRecord(int namespaceId, byte[] recordId, Hlc? hlc = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return UndeleteRecordInternal(namespaceId, recordId, hlc);
     }
 
-internal bool UndeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
+    internal bool UndeleteRecordInternal(int namespaceId, byte[] recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);

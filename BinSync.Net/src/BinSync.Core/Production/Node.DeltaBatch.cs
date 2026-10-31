@@ -7,14 +7,14 @@ public sealed partial class Node
     // --------------------------------------------------------------------- batching
     /// BUGFIX (scenario 23): a relay must stamp ops of a THIRD-PARTY author with that
     /// author's own epoch, not the relay's self.epoch (see Python port docstring).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int AuthorEpoch(byte[] author)
     {
         lock (_lockMeta) return AuthorEpochInternal(author);
     }
 
-internal int AuthorEpochInternal(byte[] author)
+    internal int AuthorEpochInternal(byte[] author)
     {
         foreach (var m in AliasToNode.Values)
             foreach (var (nid, ep) in m.Values)
@@ -28,7 +28,7 @@ internal int AuthorEpochInternal(byte[] author)
     /// §13.6.2 [R4]: translate each op's `origin` into the alias agreed for THIS session.
     /// SPEC HARDENING: unknown author ⇒ deterministic UNKNOWN_ALIAS rejection (never a
     /// silent skip that would hole the seq stream). Full rationale in the Python port.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>CreateDeltaBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch? CreateDeltaBatch(byte[] targetPeer, int namespaceId,
                                    byte[]? filterAuthorNodeId = null,
@@ -37,9 +37,9 @@ internal int AuthorEpochInternal(byte[] author)
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
     }
 
-internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
-                                   byte[]? filterAuthorNodeId = null,
-                                   int schemaId = 0, int schemaVersion = 1)
+    internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
+                                       byte[]? filterAuthorNodeId = null,
+                                       int schemaId = 0, int schemaVersion = 1)
     {
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
@@ -133,9 +133,14 @@ internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
             var newPayload = Ops.EncodeOp(op, fullAuthor: false);
             translated.Add(new OutboxEntry
             {
-                NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = e.ChangeId,
-                RecordId = e.RecordId, OpKind = e.OpKind, Payload = newPayload,
-                AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt,
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                RecordId = e.RecordId,
+                OpKind = e.OpKind,
+                Payload = newPayload,
+                AuthorNodeId = e.AuthorNodeId,
+                CreatedAt = e.CreatedAt,
             });
         }
         if (translated.Count == 0) return null;
@@ -170,14 +175,14 @@ internal Batch? CreateDeltaBatchInternal(byte[] targetPeer, int namespaceId,
     /// SPEC HARDENING (§12.17.2 / [Т3]): the chain is PER STREAM ((issuer, ns, epoch), targetPeer).
     /// Deterministic replay: the SAME (stream, cursor span) always yields the SAME batchId
     /// and byte-identical digest (§10.2.2 step 3, [П7]).
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>SignBatchForInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch SignBatchFor(Batch batch, byte[] targetPeer)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return SignBatchForInternal(batch, targetPeer);
     }
 
-internal Batch SignBatchForInternal(Batch batch, byte[] targetPeer)
+    internal Batch SignBatchForInternal(Batch batch, byte[] targetPeer)
     {
         // SPEC CORRECTION (errata E-2 follow-up): the stream chain is keyed by the ACTUAL
         // stamped issuerEpoch of this batch (author's epoch when relaying).
@@ -208,14 +213,14 @@ internal Batch SignBatchForInternal(Batch batch, byte[] targetPeer)
 
     /// Called after the frame was successfully handed to targetPeer's transport: the
     /// stream chain checkpoint moves to this batch's digest.
-/// <summary>Thread-safe entry point (production hardening): takes the node gate
+    /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AdvanceStreamInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void AdvanceStream(byte[] targetPeer, int namespaceId, Batch batch)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) AdvanceStreamInternal(targetPeer, namespaceId, batch);
     }
 
-internal void AdvanceStreamInternal(byte[] targetPeer, int namespaceId, Batch batch)
+    internal void AdvanceStreamInternal(byte[] targetPeer, int namespaceId, Batch batch)
     {
         LastStreamDigest[((NodeId, namespaceId, batch.IssuerEpoch), targetPeer)] = batch.BatchDigest;
     }

@@ -180,17 +180,17 @@ public sealed class Wal : IDisposable
         switch (type)
         {
             case WalRecordType.FieldWrite:
-            {
-                int ns = (int)r.Varint();
-                var rid = r.B128();
-                ushort fid = r.U16();
-                var value = r.Bytes();
-                ulong wall = r.U64();
-                uint logical = r.U32();
-                var author = r.B128();
-                node.ApplyRemoteField(ns, rid, fid, value, new Hlc(wall, logical), author);
-                return 1;
-            }
+                {
+                    int ns = (int)r.Varint();
+                    var rid = r.B128();
+                    ushort fid = r.U16();
+                    var value = r.Bytes();
+                    ulong wall = r.U64();
+                    uint logical = r.U32();
+                    var author = r.B128();
+                    node.ApplyRemoteField(ns, rid, fid, value, new Hlc(wall, logical), author);
+                    return 1;
+                }
             case WalRecordType.Checkpoint:
                 return 0;
             default:

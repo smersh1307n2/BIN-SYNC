@@ -87,9 +87,14 @@ public class ScenariosB
             }
             tampered.Add(new OutboxEntry
             {
-                NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = e.ChangeId,
-                RecordId = e.RecordId, OpKind = e.OpKind, Payload = Ops.EncodeOp(obj),
-                AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt,
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                RecordId = e.RecordId,
+                OpKind = e.OpKind,
+                Payload = Ops.EncodeOp(obj),
+                AuthorNodeId = e.AuthorNodeId,
+                CreatedAt = e.CreatedAt,
             });
         }
         batch.Entries = tampered;

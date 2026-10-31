@@ -161,6 +161,7 @@ public class Diag : IDisposable
         {
             Console.WriteLine("CreateDeltaBatch EX: " + ex.Message);
         }
+        // Diagnostic harness: logs above are the assertion surface.
         Assert.True(true);
     }
 }
