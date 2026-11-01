@@ -94,7 +94,9 @@ public sealed partial class Node
                 }
             }
         }
-        SetOrigin(op, 0);   // neutral; CreateDeltaBatch rewrites it per target session
+        // Prefer origin=1 (self alias in MakeSession). CreateDeltaBatch still rewrites
+        // when the session alias differs; TryCloneWithOrigin then shares the buffer.
+        SetOrigin(op, 1);
         var payload = Ops.EncodeOp(op, fullAuthor: false);
         var entry = new OutboxEntry
         {
@@ -146,9 +148,10 @@ public sealed partial class Node
         if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(value, h, NodeId);
-        // BUGFIX (implementation finding): `origin` is overwritten per target session in
-        // CreateDeltaBatch (§13.6.2 [R4]); neutral slot here, like TombField/DeleteRecord.
-        var op = new OpFieldWrite { FieldId = (ushort)fieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 0, AuthorNodeId = NodeId, Value = value };
+        // Origin is rewritten per target session in CreateDeltaBatch (§13.6.2 [R4]).
+        // 1 matches the writer's own alias in the common session (MakeSession: first node = 1),
+        // so that path can share the outbox buffer instead of cloning it to patch two bytes.
+        var op = new OpFieldWrite { FieldId = (ushort)fieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId, Value = value };
         bool changed = Merge.ApplyFieldWrite(rec, (ushort)fieldId, fs);
         if (changed) PushOutbox(namespaceId, recordId, op, NodeId);
         return changed;

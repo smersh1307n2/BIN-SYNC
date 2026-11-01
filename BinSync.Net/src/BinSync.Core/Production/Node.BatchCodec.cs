@@ -58,22 +58,25 @@ public sealed partial class Node
         byte[] prev = r.B128();
         byte[] root = r.B128();
         byte[] digest = r.B128();
-        byte[] recordsData = r.Raw(data.Length - r.Pos);
-        var rawEntries = DecodeRecordsArray(recordsData);
-        if (rawEntries.Count != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
-        var entries = new List<OutboxEntry>();
-        foreach (var (rid, kind, payload) in rawEntries)
+        // Records sit in `data` after the header. Decode straight into OutboxEntry —
+        // one copy of each recordId/payload (Reader.Take), no tail clone and no tuple list.
+        int recCount = (int)r.Varint();
+        if (recCount != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
+        var entries = new List<OutboxEntry>(recCount);
+        for (int i = 0; i < recCount; i++)
+        {
             entries.Add(new OutboxEntry
             {
                 NamespaceId = ns,
                 Seq = 0,
                 ChangeId = Zero128,
-                RecordId = rid,
-                OpKind = kind,
-                Payload = payload,
+                RecordId = r.B128(),
+                OpKind = r.U8(),
+                Payload = r.Bytes(),
                 AuthorNodeId = issuer,
                 CreatedAt = 0,
             });
+        }
         return new Batch(ns, schemaId, schemaVer, policy, flags, issuer, epoch,
                          cstart, cend, batchId, prev, root, digest, entries);
     }

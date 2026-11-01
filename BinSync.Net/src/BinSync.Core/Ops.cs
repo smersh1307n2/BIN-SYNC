@@ -150,6 +150,9 @@ public static class Ops
         }
         else return null;
 
+        if (BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(off)) == origin)
+            return payload; // already stamped — share the outbox buffer
+
         var copy = new byte[payload.Length];
         payload.AsSpan().CopyTo(copy);
         BinaryPrimitives.WriteUInt16LittleEndian(copy.AsSpan(off), origin);

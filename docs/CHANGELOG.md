@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 2.1.2 — 2026-11-01
+
+**Perf (decode + CreateDeltaBatch), wire unchanged.**
+
+- `DecodeBatchPayload`: no tail `Raw` + no intermediate tuple list — one copy into `OutboxEntry`
+- `ComputeRecordsRoot`: incremental BLAKE3 (no full records buffer)
+- `TryCloneWithOrigin`: share outbox payload when origin already matches
+- Local outbox stamps `origin=1` (self alias) so the common session path avoids payload clones
+
+274 tests green.
+
+---
+
 ## 2.1.1 — 2026-11-01
 
 Performance patch. Wire format and public API unchanged. **274** tests green.
