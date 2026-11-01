@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 2.1.6 — 2026-11-01
+
+**Safe decode by default.**
+
+- Public `DecodeBatchPayload` always `MaterializeEntries()` (owned buffers; no frame lifetime)
+- `ApplyBatchPayload(byte[], NodeId)` — zero-copy decode+apply; batch does not escape
+- Transport / Loopback / TcpSync use `ApplyBatchPayload`
+- `BatchResult` carries `CursorEnd`, `NamespaceId`, `DurableAuthor` for ACK
+
+274 tests green.
+
+---
+
 ## 2.1.5 — 2026-11-01
 
 **OutboxEntry on ReadOnlyMemory — decode without per-entry copies.**

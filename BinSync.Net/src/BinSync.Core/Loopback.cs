@@ -102,9 +102,8 @@ public class LoopbackTransport
         switch (f.FrameType)
         {
             case 0x09:  // DELTA_BATCH
-                var batch = target.DecodeBatchPayload(f.Payload);
                 var sender = SenderOf(target, f);
-                target.ApplyBatch(batch, sender);
+                target.ApplyBatchPayload(f.Payload, sender);
                 break;
             case 0x0B:  // ACK
                 break;

@@ -154,6 +154,7 @@ public sealed partial class Node
             var batch = DecodeBatchPayloadInternal(body);
             if (bodyLen < data.Length)
                 CausalWire.TryApplyTrailer(data, batch.Entries);
+            batch.MaterializeEntries(); // public API — owned buffers
             return batch;
         }
     }

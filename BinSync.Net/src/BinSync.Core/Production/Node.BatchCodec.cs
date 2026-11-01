@@ -76,22 +76,48 @@ public sealed partial class Node
     }
 
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>
+    /// <remarks>
+    /// Returns a batch with <b>owned</b> entry buffers (safe to keep after the frame is recycled).
+    /// For decode+apply in one step without the copy, use <see cref="ApplyBatchPayload"/>.
+    /// </remarks>
     public Batch DecodeBatchPayload(byte[] data)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
-            return DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+        {
+            var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+            batch.MaterializeEntries();
+            return batch;
+        }
     }
 
-    /// <summary>Decode from an arbitrary memory slice (no mandatory copy of the whole buffer).</summary>
+    /// <summary>Decode from memory; entries are owned copies (safe after <paramref name="data"/> is dropped).</summary>
     public Batch DecodeBatchPayload(ReadOnlyMemory<byte> data)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
-            return DecodeBatchPayloadInternal(data);
+        {
+            var batch = DecodeBatchPayloadInternal(data);
+            batch.MaterializeEntries();
+            return batch;
+        }
+    }
+
+    /// <summary>
+    /// Decode (zero-copy into <paramref name="data"/>) and apply in one call.
+    /// The batch never escapes; safe even if <paramref name="data"/> is pooled and returned after the call.
+    /// </summary>
+    public BatchResult ApplyBatchPayload(byte[] data, NodeId senderPeer)
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+            return ApplyBatchInternal(batch, senderPeer);
+        }
     }
 
     internal Batch DecodeBatchPayloadInternal(byte[] data)
         => DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
 
+    /// <summary>Sliced decode — entry Memory views into <paramref name="data"/>. Do not return this batch to callers.</summary>
     internal Batch DecodeBatchPayloadInternal(ReadOnlyMemory<byte> data)
     {
         var r = new Reader(data);
@@ -111,8 +137,6 @@ public sealed partial class Node
         byte[] digest = r.B128();
         int recCount = (int)r.Varint();
         if (recCount != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
-        // Slice into `data` — no per-entry payload/recordId copies. Caller must keep
-        // `data` alive for as long as Batch.Entries are used (typical: Apply then drop).
         var issuerMem = (ReadOnlyMemory<byte>)issuer;
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)

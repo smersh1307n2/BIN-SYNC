@@ -126,18 +126,17 @@ public static class Transport
         uint streamId = 0x0001_0000 | (uint)namespaceId;   // §3.7 data streams
         var raw = FrameCodec.BuildFrame(0x09, streamId, 1, payload);
         var (frame, _) = FrameCodec.ParseFrame(raw);
-        var decoded = receiver.DecodeBatchPayload(frame.Payload);
-        var result = receiver.ApplyBatch(decoded, sender.NodeId);
+        var result = receiver.ApplyBatchPayload(frame.Payload, sender.NodeId);
         // Receiver's own stream-chain checkpoint for (issuer→me) advances on ACCEPT only;
         // the generic LastBatchDigest map is keyed by (issuer, ns, epoch).
         sender.AdvanceStream(receiver.NodeId, namespaceId, batch);
         // ACK frame flows back to the ISSUER: advances the issuer's lastAckedSeq [СМ6].
         // Errata E-4: the ACK names the acknowledged AUTHOR STREAM.
         var ackRaw = FrameCodec.BuildFrame(0x0B, 0x0002_0000 | (uint)namespaceId, 2,
-            EncodeAck(decoded.BatchId, decoded.CursorEnd, decoded.DurableAuthor));
+            EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor));
         var (ackFrame, _) = FrameCodec.ParseFrame(ackRaw);
         var (bid, ackSeq, ackAuthor) = DecodeAck(ackFrame.Payload);
-        if (!bid.AsSpan().SequenceEqual(decoded.BatchId))
+        if (!bid.AsSpan().SequenceEqual(result.BatchId))
             throw new InvalidOperationException("ACK batch id mismatch");
         if (!dropAck)
             // BUGFIX (implementation finding): the ACK must advance the ISSUER's push
@@ -190,8 +189,7 @@ public static class Transport
         {
             var (frame, consumed) = FrameCodec.ParseFrame(data[pos..]);
             pos += consumed;
-            var batch = node.DecodeBatchPayload(frame.Payload);
-            node.ApplyBatch(batch, issuerHint);
+            node.ApplyBatchPayload(frame.Payload, issuerHint);
             applied++;
         }
         return applied;

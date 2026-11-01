@@ -90,6 +90,22 @@ public sealed class Batch
 
     /// <summary>Errata E-4: durable author on receiver; sender uses per-author stream key.</summary>
     public byte[] DurableAuthor => AuthorStreamNodeId ?? AuthorStream();
+
+    /// <summary>
+    /// Copy all entry buffers to owned arrays so the batch outlives the decode frame.
+    /// Safe to call more than once (already-owned arrays are kept).
+    /// </summary>
+    public void MaterializeEntries()
+    {
+        for (int i = 0; i < Entries.Count; i++)
+        {
+            var e = Entries[i];
+            e.ChangeId = Mem.ToArray(e.ChangeId);
+            e.RecordId = Mem.ToArray(e.RecordId);
+            e.Payload = Mem.ToArray(e.Payload);
+            e.AuthorNodeId = Mem.ToArray(e.AuthorNodeId);
+        }
+    }
 }
 
 public sealed partial class PeerState
@@ -127,6 +143,12 @@ public sealed class BatchResult
     public int Applied { get; set; }
     public bool Acked { get; set; }
     public bool Duplicate { get; set; }
+    /// <summary>Batch cursor end (for ACK). Set by ApplyBatch.</summary>
+    public long CursorEnd { get; set; }
+    /// <summary>Namespace of the applied batch (for ACK stream id).</summary>
+    public int NamespaceId { get; set; }
+    /// <summary>Durable author stream for ACK (Errata E-4).</summary>
+    public byte[] DurableAuthor { get; set; } = Array.Empty<byte>();
 
     public BatchResult(byte[] batchId) => BatchId = batchId;
 }

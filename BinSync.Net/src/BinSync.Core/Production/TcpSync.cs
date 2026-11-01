@@ -180,11 +180,10 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != 0x09)
             throw new FrameException("FRAME_REJECTED");
-        var decoded = receiver.DecodeBatchPayload(frame.Payload);
-        var result = receiver.ApplyBatch(decoded, PeerNodeId);
+        var result = receiver.ApplyBatchPayload(frame.Payload, PeerNodeId);
         var ack = FrameCodec.BuildFrame(
-            0x0B, 0x0002_0000u | (uint)decoded.NamespaceId, 2,
-            Transport.EncodeAck(decoded.BatchId, decoded.CursorEnd, decoded.DurableAuthor));
+            0x0B, 0x0002_0000u | (uint)result.NamespaceId, 2,
+            Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor));
         await _transport.SendAsync(ack, ct).ConfigureAwait(false);
         return result;
     }

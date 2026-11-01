@@ -14,7 +14,11 @@ public sealed partial class Node
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer)
     {
         byte[] senderPeerBytes = senderPeer.ToArray();
-        var result = new BatchResult(batch.BatchId);
+        var result = new BatchResult(batch.BatchId)
+        {
+            CursorEnd = batch.CursorEnd,
+            NamespaceId = batch.NamespaceId,
+        };
         // STEP 0: namespace isolation (§3.7) — forbidden ns kills only that stream
         if (ForbiddenNamespaces.Contains(batch.NamespaceId))
             throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
@@ -68,6 +72,7 @@ public sealed partial class Node
         }
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
+        result.DurableAuthor = batch.DurableAuthor;
         LastStreamAuthor[(senderPeerBytes, batch.NamespaceId)] = streamAuthor;   // E-11
         var streamKey = (senderPeerBytes, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
         long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
