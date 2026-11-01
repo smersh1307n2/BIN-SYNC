@@ -111,6 +111,9 @@ public sealed partial class Node
         byte[] digest = r.B128();
         int recCount = (int)r.Varint();
         if (recCount != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
+        // Slice into `data` — no per-entry payload/recordId copies. Caller must keep
+        // `data` alive for as long as Batch.Entries are used (typical: Apply then drop).
+        var issuerMem = (ReadOnlyMemory<byte>)issuer;
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)
         {
@@ -119,10 +122,10 @@ public sealed partial class Node
                 NamespaceId = ns,
                 Seq = 0,
                 ChangeId = Zero128,
-                RecordId = r.B128(),
+                RecordId = r.B128Memory(),
                 OpKind = r.U8(),
-                Payload = r.Bytes(),
-                AuthorNodeId = issuer,
+                Payload = r.BytesMemory(),
+                AuthorNodeId = issuerMem,
                 CreatedAt = 0,
             });
         }

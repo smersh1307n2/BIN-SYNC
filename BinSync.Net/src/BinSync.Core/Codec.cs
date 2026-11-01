@@ -184,6 +184,8 @@ public partial class Writer
 
     public Writer B128(byte[] v) => B128((ReadOnlySpan<byte>)v);
 
+    public Writer B128(ReadOnlyMemory<byte> v) => B128(v.Span);
+
     public Writer B128(ReadOnlySpan<byte> v)
     {
         if (v.Length != 16)
@@ -232,6 +234,7 @@ public partial class Writer
     public Writer Bytes(byte[] b) => Bytes((ReadOnlySpan<byte>)b);
     public Writer Bytes(ReadOnlySpan<byte> b) { Varint((ulong)b.Length); Write(b); return this; }
     public Writer Raw(byte[] b) { Write(b); return this; }
+    public Writer Raw(ReadOnlyMemory<byte> b) { Write(b.Span); return this; }
     public Writer Raw(ReadOnlySpan<byte> b) { Write(b); return this; }
 
     /// <summary>Exact-sized writers return the backing buffer with no extra copy.</summary>
@@ -295,6 +298,15 @@ public partial class Reader
         return s;
     }
 
+    /// <summary>Advance and return a Memory slice into the underlying buffer (no alloc).</summary>
+    public ReadOnlyMemory<byte> TakeMemory(int n)
+    {
+        Ensure(n);
+        var m = _data.Slice(Pos, n);
+        Pos += n;
+        return m;
+    }
+
     /// <summary>Zero-alloc fixed-width reads (hot path).</summary>
     public byte U8()
     {
@@ -328,6 +340,7 @@ public partial class Reader
 
     public byte[] B128() => Take(16);
     public ReadOnlySpan<byte> B128Span() => TakeSpan(16);
+    public ReadOnlyMemory<byte> B128Memory() => TakeMemory(16);
     public ulong Varint() { var (v, p) = Codec.DecodeVarint(Span, Pos); Pos = p; return v; }
     public byte[] Bytes() => Take((int)Varint());
     public ReadOnlySpan<byte> BytesSpan()
@@ -335,8 +348,14 @@ public partial class Reader
         int n = (int)Varint();
         return TakeSpan(n);
     }
+    public ReadOnlyMemory<byte> BytesMemory()
+    {
+        int n = (int)Varint();
+        return TakeMemory(n);
+    }
     public byte[] Raw(int n) => Take(n);
     public ReadOnlySpan<byte> RawSpan(int n) => TakeSpan(n);
+    public ReadOnlyMemory<byte> RawMemory(int n) => TakeMemory(n);
     public bool Eof() => Pos >= _data.Length;
     public int Remaining => _data.Length - Pos;
 }

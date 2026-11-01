@@ -190,7 +190,18 @@ public static class Ops
     /// Compact ops store <c>origin</c> at a fixed offset ([C11]). Clone and patch those
     /// two bytes without decoding the value. Returns null when the payload is full-author,
     /// truncated, or ambiguous — caller must fall back to decode/encode.
+    /// When origin already matches and <paramref name="payload"/> is a full <c>byte[]</c>,
+    /// returns that same instance (no copy).
     /// </summary>
+    public static byte[]? TryCloneWithOrigin(ReadOnlyMemory<byte> payload, ushort origin)
+    {
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out ArraySegment<byte> seg)
+            && seg.Array is not null && seg.Offset == 0 && seg.Count == seg.Array.Length)
+            return TryCloneWithOrigin(seg.Array, origin);
+        if (payload.Length < 19) return null;
+        return TryCloneWithOrigin(payload.ToArray(), origin);
+    }
+
     public static byte[]? TryCloneWithOrigin(byte[] payload, ushort origin)
     {
         if (payload.Length < 19) return null;
@@ -223,11 +234,6 @@ public static class Ops
         return copy;
     }
 
-    /// fullAuthor=null → AUTO-DETECT the mode from payload length (BUGFIX note in Python port).
-    /// The second tuple element is the reader position after the op; for FieldWrite decoded
-    /// from a TRUNCATED payload it points at the end of the fixed header, and
-    /// <see cref="OpFieldWrite.ValueLenPos"/> carries the position of the value-length varint so
-    /// re-encoding can preserve its original byte width (persistence byte-stability).
     public static (object Op, int Pos) DecodeOp(byte[] data, int pos = 0, bool? fullAuthor = null)
         => DecodeOp((ReadOnlyMemory<byte>)data, pos, fullAuthor);
 

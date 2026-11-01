@@ -111,13 +111,13 @@ public sealed partial class Node
             // clock skew clamp on incoming HLC wall (§5.3)
             if ((long)WallOf(op) > nowWall + maxSkew)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
-            byte[] recId = op is OpRecordTombstone rt ? rt.RecordId : e.RecordId;
+            byte[] recId = op is OpRecordTombstone rt ? rt.RecordId : Mem.ToArray(e.RecordId);
             if (!overlays.TryGetValue(recId, out var rec))
             {
                 if (nsStore.TryGetValue(recId, out var existing))
                     rec = Clone(existing);
                 else
-                    rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
+                    rec = new Record(Mem.ToArray(e.RecordId), (ushort)batch.NamespaceId);
                 overlays[recId] = rec;
             }
             bool changed = ApplyOp(rec, op, opAuthor);
@@ -145,7 +145,7 @@ public sealed partial class Node
             for (int idx = 0; idx < nEnt; idx++)
             {
                 var e = batch.Entries[idx];
-                byte[] cid = e.ChangeId.AsSpan().SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId;
+                byte[] cid = e.ChangeId.Span.SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : Mem.ToArray(e.ChangeId);
                 var ck = (senderPeerBytes, batch.NamespaceId, cid);
                 bool known = SeenChanges.Contains(ck);
                 SeenChanges.Add(ck);
@@ -161,7 +161,7 @@ public sealed partial class Node
                         catch (SyncException) { }
                         if (rAuthor is not null && rAuthor.AsSpan().SequenceEqual(NodeId) &&
                             SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null &&
-                            OwnQueueHolds(batch.NamespaceId, e.RecordId, rop))
+                            OwnQueueHolds(batch.NamespaceId, Mem.ToArray(e.RecordId), rop))
                             relayOk = false;   // own durable state echoed back [E2]/[Ш2]
                     }
                     if (relayOk) changedFlags[idx] = true; // new provenance ⇒ relay even as loser
@@ -179,7 +179,7 @@ public sealed partial class Node
                 {
                     NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
                     Seq = NextOutboxSeq(resolved, batch.NamespaceId),
-                    ChangeId = e.ChangeId.AsSpan().SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId,
+                    ChangeId = e.ChangeId.Span.SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId,
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
                     Payload = e.Payload,
@@ -220,7 +220,7 @@ public sealed partial class Node
         var list = Outbox.TryGetValue(ns, out var l) ? l : new List<OutboxEntry>();
         foreach (var q in list)
         {
-            if (!q.RecordId.AsSpan().SequenceEqual(rid) || !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
+            if (!q.RecordId.Span.SequenceEqual(rid) || !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
             object sOp;
             try { sOp = Ops.DecodeOp(q.Payload).Op; } catch { continue; }
             ushort? sfid = sOp switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
@@ -289,8 +289,11 @@ public sealed partial class Node
             var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : new List<OutboxEntry>();
             var heads = new Dictionary<byte[], long>(BytesEq.Instance);
             foreach (var e in entries)
-                if (!heads.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur)
-                    heads[e.AuthorNodeId] = e.Seq;
+            {
+                var authorKey = Mem.ToArray(e.AuthorNodeId);
+                if (!heads.TryGetValue(authorKey, out var cur) || e.Seq < cur)
+                    heads[authorKey] = e.Seq;
+            }
             foreach (var (author, firstSeq) in heads)
                 if (firstSeq <= ackedSeq)
                     ps.StreamAcked[author] = Math.Max(ps.StreamAcked.TryGetValue(author, out var c2) ? c2 : 0, ackedSeq);
@@ -366,7 +369,7 @@ public sealed partial class Node
             var op = Ops.DecodeOp(e.Payload).Op;
             var author = GetAuthor(op)!;
             var nsStore = Ns(batch.NamespaceId);
-            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
+            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(Mem.ToArray(e.RecordId), (ushort)batch.NamespaceId);
             if (ApplyOp(rec, op, author)) applied++;
         }
         return applied;

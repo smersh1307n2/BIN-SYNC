@@ -269,7 +269,7 @@ public class ScenariosB
         var ob = a.Outbox[NS][^1];
         ob.CausalDeps = new List<byte[]> { parent };
         long now = 200; // timeout elapsed
-        bool timedOut = 100 < now && !a.Inbox.Contains((ob.ChangeId, NS, 0, parent));
+        bool timedOut = 100 < now && !a.Inbox.Contains((Mem.ToArray(ob.ChangeId), NS, 0, parent));
         Assert.True(timedOut);
         var err = new SyncException("CAUSAL_DEP_MISSING");
         Assert.Equal("CAUSAL_DEP_MISSING", err.CodeName);  // recorded, never applied to tree

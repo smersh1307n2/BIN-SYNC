@@ -77,8 +77,8 @@ public sealed partial class Node
                         for (int i = list.Count - 1; i >= 0; i--)
                         {
                             var q = list[i];
-                            if (!q.RecordId.AsSpan().SequenceEqual(recordId.ToArray()) ||
-                                !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
+                            if (!q.RecordId.Span.SequenceEqual(recordId.ToArray()) ||
+                                !NodeId.EqualsBytes(Mem.ToArray(q.AuthorNodeId))) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
                             catch { break; }
@@ -86,7 +86,7 @@ public sealed partial class Node
                             if (qfid != fid) continue;
                             bool qSame = TagOf(qop) == TagOf(op) && WallOf(qop) == WallOf(op) &&
                                          LogicalOf(qop) == LogicalOf(op) &&
-                                         ValueOf(qop).AsSpan().SequenceEqual(ValueOf(op));
+                                         ValueOf(qop).AsSpan().SequenceEqual(ValueOf(op).AsSpan());
                             if (qSame) return null;   // E-13: restored echo of a queued winner
                             break;                    // newest own queued op differs → push
                         }
@@ -113,7 +113,7 @@ public sealed partial class Node
         ol.Add(entry);
         // Errata E-13 follow-up: register our own changeId under our OWN channel key so
         // apply_batch's relay rule treats a direct echo as already-seen (see Python port).
-        SeenChanges.Add((NodeId, ns, entry.ChangeId));
+        SeenChanges.Add((NodeId, ns, Mem.ToArray(entry.ChangeId)));
         return entry;
     }
 

@@ -26,7 +26,7 @@ public static class CausalWire
         w.Varint((ulong)entries.Count);
         foreach (var e in entries)
         {
-            w.B128(e.ChangeId.Length == 16 ? e.ChangeId : Codec.CanonicalB128(e.ChangeId));
+            w.B128(e.ChangeId);
             w.Varint((ulong)e.CausalDeps.Count);
             foreach (var d in e.CausalDeps)
                 w.B128(d.Length == 16 ? d : Codec.CanonicalB128(d));

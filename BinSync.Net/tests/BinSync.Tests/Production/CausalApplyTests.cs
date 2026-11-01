@@ -86,7 +86,7 @@ public class CausalApplyTests
             RecordId = Rid(1),
             OpKind = 0x01,
             Payload = Array.Empty<byte>(),
-            AuthorNodeId = n.NodeId,
+            AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<byte[]> { parent },
         };
         var batch = new Batch(
@@ -113,7 +113,7 @@ public class CausalApplyTests
             ChangeId = changeId,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
-            AuthorNodeId = n.NodeId,
+            AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<byte[]> { changeId }, // self-dep
         };
         var batch = new Batch(
@@ -141,7 +141,7 @@ public class CausalApplyTests
             ChangeId = changeId,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
-            AuthorNodeId = n.NodeId,
+            AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<byte[]> { parent },
         };
         var batch = new Batch(

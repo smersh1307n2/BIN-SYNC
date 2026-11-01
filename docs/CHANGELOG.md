@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 2.1.5 — 2026-11-01
+
+**OutboxEntry on ReadOnlyMemory — decode without per-entry copies.**
+
+- `OutboxEntry.Payload/RecordId/ChangeId/AuthorNodeId` → `ReadOnlyMemory<byte>`
+- `DecodeBatchPayload` slices into the frame buffer (`B128Memory` / `BytesMemory`)
+- `Mem.ToArray` when ownership is required; `NodeId`/`RecordId` accept Memory
+- Lifetime: keep the frame alive while using decoded `Batch.Entries` slices
+
+274 tests green.
+
+---
+
 ## 2.1.4 — 2026-11-01
 
 **Reader / DecodeOp / EncodeOp on Span & ReadOnlyMemory (wire unchanged).**

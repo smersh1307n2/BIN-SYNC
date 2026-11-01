@@ -55,7 +55,7 @@ public sealed partial class Node
             for (int i = 0; i < all.Count; i++)
             {
                 var e = all[i];
-                if (e.AuthorNodeId.AsSpan().SequenceEqual(stream) && e.Seq > wm)
+                if (e.AuthorNodeId.Span.SequenceEqual(stream) && e.Seq > wm)
                     pending.Add(e);
             }
             // Errata E-4: gap normalisation also applies on the explicit-filter path.
@@ -74,8 +74,9 @@ public sealed partial class Node
             foreach (var e in all)
             {
                 long w = ps.AckedFor(e.AuthorNodeId);   // Errata E-4: per-author watermark
-                if (e.Seq > w && (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
-                    firstPending[e.AuthorNodeId] = e.Seq;
+                var authorKey = Mem.ToArray(e.AuthorNodeId);
+                if (e.Seq > w && (!firstPending.TryGetValue(authorKey, out var cur) || e.Seq < cur))
+                    firstPending[authorKey] = e.Seq;
             }
             stream = Array.Empty<byte>();
             bool found = false;
@@ -88,7 +89,7 @@ public sealed partial class Node
             for (int i = 0; i < all.Count; i++)
             {
                 var e = all[i];
-                if (e.Seq > wm && e.AuthorNodeId.AsSpan().SequenceEqual(stream))
+                if (e.Seq > wm && e.AuthorNodeId.Span.SequenceEqual(stream))
                     pending.Add(e);
             }
         }
@@ -107,7 +108,7 @@ public sealed partial class Node
         for (int i = 0; i < pending.Count; i++)
         {
             var e = pending[i];
-            int? alias = AliasOf(targetPeer, (NodeId)e.AuthorNodeId, Epoch);
+            int? alias = AliasOf(targetPeer, (NodeId)Mem.ToArray(e.AuthorNodeId), Epoch);
             if (alias is null && NodeId.EqualsBytes(e.AuthorNodeId))
                 alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
             if (alias is null)
@@ -118,8 +119,8 @@ public sealed partial class Node
                 var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
                 if (peerNode is not null && !NodeId.EqualsBytes(e.AuthorNodeId))
                 {
-                    int epTry = KnownAuthorEpoch((NodeId)e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAlias(peerNode, (NodeId)e.AuthorNodeId, epTry);
+                    int epTry = KnownAuthorEpoch((NodeId)Mem.ToArray(e.AuthorNodeId)) ?? Epoch;
+                    alias = EnsureAlias(peerNode, (NodeId)Mem.ToArray(e.AuthorNodeId), epTry);
                 }
                 else if (peerNode is null)
                 {
@@ -128,7 +129,7 @@ public sealed partial class Node
                     // ALIAS_MAP with. Reuse the durable mapping instead of failing closed.
                     if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
                         foreach (var (a_, (nid_, _)) in existingMap)
-                            if (nid_ == (NodeId)e.AuthorNodeId) { alias = a_; break; }
+                            if (nid_ == (NodeId)Mem.ToArray(e.AuthorNodeId)) { alias = a_; break; }
                 }
             }
             if (alias is null)
@@ -155,7 +156,11 @@ public sealed partial class Node
                 }
                 newPayload = Ops.EncodeOp(op, fullAuthor: false);
             }
-            if (ReferenceEquals(newPayload, e.Payload) && translated is null)
+            // Share when TryClone returned the same array backing e.Payload.
+            bool shared = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(e.Payload, out var paySeg)
+                && object.ReferenceEquals(paySeg.Array, newPayload)
+                && paySeg.Offset == 0 && paySeg.Count == newPayload.Length;
+            if (shared && translated is null)
                 continue; // still fully shared — keep using pending
 
             // First non-shared payload (or after a prior clone): materialize translated list.

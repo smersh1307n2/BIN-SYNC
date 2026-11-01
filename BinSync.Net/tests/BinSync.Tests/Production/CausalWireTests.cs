@@ -77,7 +77,7 @@ public class CausalWireTests
             RecordId = Rid(1),
             OpKind = 0x01,
             Payload = new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // minimal-ish
-            AuthorNodeId = n.NodeId,
+            AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<byte[]> { parent },
         };
         var batch = new Batch(
@@ -112,7 +112,7 @@ public class CausalWireTests
             ChangeId = child,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
-            AuthorNodeId = n.NodeId,
+            AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<byte[]> { parent },
         };
         var batch = new Batch(

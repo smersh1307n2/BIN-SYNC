@@ -21,12 +21,12 @@ public sealed class OutboxEntry
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
     public long Seq { get; set; }
     /// <summary>b128 idempotency key.</summary>
-    public byte[] ChangeId { get; set; } = Array.Empty<byte>();
-    public byte[] RecordId { get; set; } = Array.Empty<byte>();
+    public ReadOnlyMemory<byte> ChangeId { get; set; } = Array.Empty<byte>();
+    public ReadOnlyMemory<byte> RecordId { get; set; } = Array.Empty<byte>();
     public byte OpKind { get; set; }
-    /// <summary>Canonical encoded op (compact mode).</summary>
-    public byte[] Payload { get; set; } = Array.Empty<byte>();
-    public byte[] AuthorNodeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Canonical encoded op (compact mode). May be a slice of a frame buffer.</summary>
+    public ReadOnlyMemory<byte> Payload { get; set; } = Array.Empty<byte>();
+    public ReadOnlyMemory<byte> AuthorNodeId { get; set; } = Array.Empty<byte>();
     public long CreatedAt { get; set; }
     public List<byte[]> CausalDeps { get; set; } = new();
 }
@@ -80,13 +80,13 @@ public sealed class Batch
     {
         var outp = new List<object>();
         foreach (var e in Entries)
-            outp.Add(BinSync.Ops.DecodeOp(e.Payload).Op);
+            outp.Add(BinSync.Ops.DecodeOp(e.Payload).Op);  // ReadOnlyMemory
         return outp;
     }
 
     /// <summary>§13.6.1 [Р3]: a batch carries exactly one author — the stream key.</summary>
     public byte[] AuthorStream() =>
-        Entries.Count > 0 ? Entries[0].AuthorNodeId : Node.Zero128;
+        Entries.Count > 0 ? Entries[0].AuthorNodeId.ToArray() : Node.Zero128;
 
     /// <summary>Errata E-4: durable author on receiver; sender uses per-author stream key.</summary>
     public byte[] DurableAuthor => AuthorStreamNodeId ?? AuthorStream();
@@ -117,6 +117,7 @@ public sealed partial class PeerState
     public PeerState(byte[] peer, int ns) : this((NodeId)peer, ns) { }
 
     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
+    public long AckedFor(ReadOnlyMemory<byte> author) => StreamAcked.TryGetValue((NodeId)author, out var v) ? v : 0;
     public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 

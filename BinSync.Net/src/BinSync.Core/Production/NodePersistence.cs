@@ -518,13 +518,13 @@ public static class NodePersistence
         w.Varint((ulong)e.NamespaceId);
         w.U64((ulong)e.Seq);
         w.B128(e.ChangeId);
-        w.B128(e.RecordId);
+        w.B128(Mem.ToArray(e.RecordId));
         w.U8(e.OpKind);
         // The payload is a compact-mode op encoding; its value length is a varint, so
         // 0x00..0x7F bytes at the tail are ambiguous with an empty author-id slot. Store
         // the exact byte length explicitly and read it back raw (length-prefixed).
         w.Varint((ulong)e.Payload.Length);
-        w.Raw(e.Payload);
+        w.Raw(e.Payload.Span);
         w.B128(e.AuthorNodeId);
         w.U64((ulong)e.CreatedAt);
         w.Varint((ulong)e.CausalDeps.Count);

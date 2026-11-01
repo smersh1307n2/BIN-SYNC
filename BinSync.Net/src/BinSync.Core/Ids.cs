@@ -30,6 +30,8 @@ public readonly struct NodeId : IEquatable<NodeId>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
     public static implicit operator NodeId(byte[]? bytes) => From(bytes);
+    public static NodeId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
+    public static implicit operator NodeId(ReadOnlyMemory<byte> bytes) => From(bytes);
 
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](NodeId id) => id.ToArray();
@@ -51,6 +53,7 @@ public readonly struct NodeId : IEquatable<NodeId>
     public bool IsZero => Lo == 0 && Hi == 0;
 
     /// <summary>Compare to a 16-byte wire id without allocating.</summary>
+    public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
@@ -94,6 +97,8 @@ public readonly struct RecordId : IEquatable<RecordId>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
     public static implicit operator RecordId(byte[]? bytes) => From(bytes);
+    public static RecordId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
+    public static implicit operator RecordId(ReadOnlyMemory<byte> bytes) => From(bytes);
 
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](RecordId id) => id.ToArray();
@@ -114,6 +119,7 @@ public readonly struct RecordId : IEquatable<RecordId>
 
     public bool IsZero => Lo == 0 && Hi == 0;
 
+    public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
