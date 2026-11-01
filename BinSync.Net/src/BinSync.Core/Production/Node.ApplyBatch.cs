@@ -41,6 +41,12 @@ public sealed partial class Node
             AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
+            // ACK must name the author stream (Errata E-4). Prefer the stream we learned
+            // on the first accept; fall back to the batch's durable author.
+            if (LastStreamAuthor.TryGetValue((senderPeerBytes, batch.NamespaceId), out var priorAuthor))
+                result.DurableAuthor = priorAuthor;
+            else
+                result.DurableAuthor = batch.DurableAuthor;
             return result;
         }
         // STEP 2: cursor check [S2]/[П2] — errata E-3: keyed per SESSION stream.

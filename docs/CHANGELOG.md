@@ -1,5 +1,19 @@
 # Changelog — BinSync.Core
 
+## 2.1.7 — 2026-11-01
+
+**Fix duplicate-apply ACK author stream (hang / test host abort).**
+
+- On idempotent replay (`Inbox` hit), `BatchResult.DurableAuthor` is filled from
+  `LastStreamAuthor` (or batch durable author) so `ProcessAck` advances the correct
+  per-author watermark (Errata E-4).
+- Without this, lost-ACK replay + `SyncRound` never drained → hang → testhost crash
+  after ~257 tests (17 `InvariantsAndAdvanced` never finished).
+
+274 tests green.
+
+---
+
 ## 2.1.6 — 2026-11-01
 
 **Safe decode by default.**
