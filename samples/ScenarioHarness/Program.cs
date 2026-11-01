@@ -18,6 +18,15 @@ failed += Run("S5_Persist_Resume", S5_Persist_Resume);
 failed += Run("S6_Sneakernet_ExportImport", S6_Sneakernet_ExportImport);
 failed += Run("S7_Idempotent_Replay", S7_Idempotent_Replay);
 failed += Run("S8_Concurrent_Writers", S8_Concurrent_Writers);
+failed += Run("S9_Tcp_PushReceive", log => S9_Tcp_PushReceive(log).GetAwaiter().GetResult());
+
+if (args.Any(a => a == "--soak"))
+{
+    int sec = 15;
+    for (int i = 0; i < args.Length - 1; i++)
+        if (args[i] == "--soak" && int.TryParse(args[i + 1], out var s)) sec = s;
+    failed += Run($"S10_Soak_{sec}s", log => S10_Soak(log, sec));
+}
 
 log.Info($"DONE failed={failed}");
 return failed == 0 ? 0 : 1;
@@ -201,6 +210,47 @@ static bool S8_Concurrent_Writers(Log log)
     }
     log.Info($"missing={missing}");
     return missing == 0;
+}
+
+
+static async Task<bool> S9_Tcp_PushReceive(Log log)
+{
+    var a = N(11); var b = N(12);
+    a.WriteField(Ns, Rid(1100), 0x101, Val("tcp-a"));
+    b.WriteField(Ns, Rid(1200), 0x101, Val("tcp-b"));
+    await using var listener = TcpSyncListener.Start();
+    var accept = listener.AcceptAsync(a);
+    await using var client = await TcpSyncSession.ConnectAsync(b, "127.0.0.1", listener.Port);
+    await using var server = await accept;
+
+    var recvA = server.ReceiveBatchAsync(a);
+    bool pushB = await client.PushBatchAsync(b, Ns);
+    var ra = await recvA;
+    var recvB = client.ReceiveBatchAsync(b);
+    bool pushA = await server.PushBatchAsync(a, Ns);
+    var rb = await recvB;
+    log.Info($"tcp pushB={pushB} AppliedA={ra.Applied}; pushA={pushA} AppliedB={rb.Applied}");
+    return Has(a, Rid(1200), "tcp-b") && Has(b, Rid(1100), "tcp-a");
+}
+
+static bool S10_Soak(Log log, int seconds)
+{
+    var a = N(21); var b = N(22);
+    Transport.MakeSession(a, b);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    int iter = 0, missing = 0;
+    while (sw.Elapsed.TotalSeconds < seconds)
+    {
+        int i = iter++;
+        a.WriteField(Ns, Rid(2000 + (i % 50)), 0x101, Val($"soak-a-{i}"));
+        b.WriteField(Ns, Rid(3000 + (i % 50)), 0x101, Val($"soak-b-{i}"));
+        Transport.SyncRound(a, b, Ns);
+        if (!Has(b, Rid(2000 + (i % 50)), $"soak-a-{i}")) missing++;
+        if (!Has(a, Rid(3000 + (i % 50)), $"soak-b-{i}")) missing++;
+        if (missing > 0) break;
+    }
+    log.Info($"soak {seconds}s iters={iter} missing={missing} elapsed={sw.Elapsed.TotalSeconds:F1}s");
+    return missing == 0 && iter > 0;
 }
 
 // --- helpers ---
