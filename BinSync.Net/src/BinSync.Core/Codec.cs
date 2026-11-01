@@ -122,15 +122,49 @@ public partial class Writer
 {
     private byte[] _buf;
     private int _len;
+    private readonly bool _fixed;
+    private readonly bool _pooled;
 
     public Writer() : this(256) { }
-    public Writer(int capacity) => _buf = new byte[Math.Max(16, capacity)];
+    public Writer(int capacity)
+    {
+        _buf = new byte[Math.Max(16, capacity)];
+        _fixed = false;
+        _pooled = false;
+    }
+
+    /// <summary>Write into an existing buffer; capacity is fixed (no growth).</summary>
+    public Writer(byte[] buffer, int startLength = 0)
+    {
+        _buf = buffer ?? throw new ArgumentNullException(nameof(buffer));
+        _len = startLength;
+        _fixed = true;
+        _pooled = false;
+    }
+
+    /// <summary>ArrayPool-backed writer; call <see cref="ReturnPool"/> when done if not using <see cref="ToArrayReturn"/>.</summary>
+    public static Writer Rent(int capacity)
+    {
+        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(16, capacity));
+        return new Writer(buf, pooled: true);
+    }
+
+    private Writer(byte[] buffer, bool pooled)
+    {
+        _buf = buffer;
+        _len = 0;
+        _fixed = true;
+        _pooled = pooled;
+    }
 
     public int Length => _len;
+    public int Capacity => _buf.Length;
 
     private void Ensure(int n)
     {
         if (_len + n <= _buf.Length) return;
+        if (_fixed)
+            throw new InvalidOperationException($"Writer buffer full (need {_len + n}, cap {_buf.Length})");
         int cap = _buf.Length;
         while (cap < _len + n)
             cap = cap < 1_048_576 ? cap * 2 : cap + n + (cap >> 1);
@@ -204,9 +238,30 @@ public partial class Writer
     /// <summary>Exact-sized writers return the backing buffer with no extra copy.</summary>
     public byte[] Value()
     {
+        if (_pooled)
+            throw new InvalidOperationException("Use ToArrayReturn() for pooled writers");
         if (_len == _buf.Length) return _buf;
         return _buf.AsSpan(0, _len).ToArray();
     }
+
+    /// <summary>Copy written bytes to a new array and return the pool buffer (if any).</summary>
+    public byte[] ToArrayReturn()
+    {
+        var r = _buf.AsSpan(0, _len).ToArray();
+        ReturnPool();
+        return r;
+    }
+
+    public void ReturnPool()
+    {
+        if (!_pooled) return;
+        System.Buffers.ArrayPool<byte>.Shared.Return(_buf);
+        _buf = Array.Empty<byte>();
+        _len = 0;
+    }
+
+    /// <summary>Written span over the backing buffer (valid until next write / ReturnPool).</summary>
+    public ReadOnlySpan<byte> WrittenSpan => _buf.AsSpan(0, _len);
 }
 
 public partial class Reader

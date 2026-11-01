@@ -97,41 +97,41 @@ public sealed partial class Node
     public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest)
     {
-        // Fixed layout upper bound: domain + 5×b128 + u16 + u32 + 2×u64 ≈ 160B.
-        var w = new Writer(192);
-        w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
-        w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
-        w.B128(recordsRoot).B128(prevBatchDigest);
-        return Digests.Blake3(w.Value(), 16);
+        // Fixed layout ≤192B: rent tiny buffer (or new) — no growing Writer.
+        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(192);
+        try
+        {
+            var w = new Writer(buf);
+            w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
+            w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
+            w.B128(recordsRoot).B128(prevBatchDigest);
+            return Digests.Blake3(w.WrittenSpan, 16);
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 
     /// recordsRoot = BLAKE3-128 over domainTag || canonical records array (§12.17).
-    /// Incremental hash — does not materialize the records array.
+    /// ArrayPool buffer — no LOH growth after warmup; single BLAKE3 pass.
     public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)
     {
-        using var hasher = Blake3.Managed.Hasher.New();
-        hasher.Update(Domains.DomainRecords);
-        Span<byte> tmp = stackalloc byte[16];
-        int n = Codec.WriteVarint(tmp, (ulong)entries.Count);
-        hasher.Update(tmp[..n]);
+        int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
+            est += 17 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
+        var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
+        try
         {
-            var e = entries[i];
-            if (e.RecordId.Length == 16)
-                hasher.Update(e.RecordId);
-            else
-                hasher.Update(Codec.CanonicalB128(e.RecordId));
-            tmp[0] = e.OpKind;
-            hasher.Update(tmp[..1]);
-            n = Codec.WriteVarint(tmp, (ulong)e.Payload.Length);
-            hasher.Update(tmp[..n]);
-            hasher.Update(e.Payload);
+            var w = new Writer(buf);
+            w.Raw(Domains.DomainRecords);
+            WriteRecordsArray(w, entries);
+            return Digests.Blake3(w.WrittenSpan, 16);
         }
-        Span<byte> full = stackalloc byte[32];
-        hasher.Finalize(full);
-        var root = new byte[16];
-        full[..16].CopyTo(root);
-        return root;
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(buf);
+        }
     }
 }
 

@@ -4,7 +4,7 @@ namespace BinSync;
 
 /// <summary>
 /// Wire format for optional causal metadata carried with a DELTA_BATCH.
-/// Layout after the standard <see cref="Node.EncodeBatchPayload"/> bytes:
+/// Layout after the standard <see cref="Node.EncodeBatchPayload(Batch)"/> bytes:
 ///   magic u32 LE = 0x31444343 ("CCD1") | entryCount varint |
 ///   per entry: changeId b128 | depCount varint | dep[i] b128…
 /// Present only when at least one entry declares CausalDeps or a non-empty ChangeId

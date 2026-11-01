@@ -101,9 +101,12 @@ public sealed partial class Node
             if (gap > 0) foreach (var e in pending) e.Seq -= gap;
         }
         long start = pending[0].Seq, end = pending[^1].Seq;
-        var translated = new List<OutboxEntry>(pending.Count);
-        foreach (var e in pending)
+        // Translate origins. When every payload is already stamped (common self-alias=1 path),
+        // reuse `pending` entry objects — no second List of OutboxEntry / no payload clones.
+        List<OutboxEntry>? translated = null;
+        for (int i = 0; i < pending.Count; i++)
         {
+            var e = pending[i];
             int? alias = AliasOf(targetPeer, (NodeId)e.AuthorNodeId, Epoch);
             if (alias is null && NodeId.EqualsBytes(e.AuthorNodeId))
                 alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
@@ -138,19 +141,29 @@ public sealed partial class Node
             }
             else
             {
-            var op = Ops.DecodeOp(e.Payload).Op;
-            SetOrigin(op, (ushort)alias.Value);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
-            // Persistence byte-stability: an outbox FieldWrite payload may be truncated to its
-            // fixed header (the value bytes live in the record's FieldState after a save/load
-            // round-trip). Restore the current stored value so retransmission carries real data.
-            if (op is OpFieldWrite fw && fw.ValueLenPos >= 0 && fw.Value.Length == 0 &&
-                Ns(e.NamespaceId).TryGetValue(e.RecordId, out var wrec) &&
-                wrec.State.TryGetValue(fw.FieldId, out var wfld))
-            {
-                fw.Value = wfld.Value ?? Array.Empty<byte>();
-                fw.ValueLenPos = -1;   // we now have the bytes — encode a normal varint
+                var op = Ops.DecodeOp(e.Payload).Op;
+                SetOrigin(op, (ushort)alias.Value);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
+                // Persistence byte-stability: an outbox FieldWrite payload may be truncated to its
+                // fixed header (the value bytes live in the record's FieldState after a save/load
+                // round-trip). Restore the current stored value so retransmission carries real data.
+                if (op is OpFieldWrite fw && fw.ValueLenPos >= 0 && fw.Value.Length == 0 &&
+                    Ns(e.NamespaceId).TryGetValue(e.RecordId, out var wrec) &&
+                    wrec.State.TryGetValue(fw.FieldId, out var wfld))
+                {
+                    fw.Value = wfld.Value ?? Array.Empty<byte>();
+                    fw.ValueLenPos = -1;   // we now have the bytes — encode a normal varint
+                }
+                newPayload = Ops.EncodeOp(op, fullAuthor: false);
             }
-            newPayload = Ops.EncodeOp(op, fullAuthor: false);
+            if (ReferenceEquals(newPayload, e.Payload) && translated is null)
+                continue; // still fully shared — keep using pending
+
+            // First non-shared payload (or after a prior clone): materialize translated list.
+            if (translated is null)
+            {
+                translated = new List<OutboxEntry>(pending.Count);
+                for (int j = 0; j < i; j++)
+                    translated.Add(pending[j]); // shared payloads so far
             }
             translated.Add(new OutboxEntry
             {
@@ -164,8 +177,9 @@ public sealed partial class Node
                 CreatedAt = e.CreatedAt,
             });
         }
-        if (translated.Count == 0) return null;
-        var recordsRoot = ComputeRecordsRoot(translated);
+        var entries = translated ?? pending;
+        if (entries.Count == 0) return null;
+        var recordsRoot = ComputeRecordsRoot(entries);
         // BUGFIX (scenario 23): stamp with the epoch LEARNED for the author in the target
         // session (ALIAS_MAP entry / per-session watermark), not self.epoch.
         // BUGFIX (errata E-6 follow-up): stream key is `stream`, not a stale loop variable.
@@ -183,7 +197,7 @@ public sealed partial class Node
                         ep = Math.Max(ep, kv.Value);
         }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
-                              NodeId, ep, start, end, Zero128, Zero128, recordsRoot, Zero128, translated);
+                              NodeId, ep, start, end, Zero128, Zero128, recordsRoot, Zero128, entries);
         ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, end);
         // BUGFIX (implementation finding): a freshly built batch must be fully signed —
         // sign_batch_for is idempotent w.r.t. the id cache; the per-stream chain checkpoint

@@ -1,5 +1,19 @@
 # Changelog — BinSync.Core
 
+## 2.1.3 — 2026-11-01
+
+**Span / ArrayPool for encode + CreateDelta (wire unchanged).**
+
+- `EncodeBatchPayload(Batch, Span<byte>)` + `EstimateBatchPayloadSize`
+- `byte[] EncodeBatchPayload` writes into exact-sized buffer (fixed Writer, no growth)
+- `Writer` fixed-buffer / `ArrayPool` rent support
+- `CreateDeltaBatch` reuses outbox entries when origin already matches (no second entry list)
+- `ComputeRecordsRoot` / `ComputeBatchDigest` via ArrayPool (no steady LOH)
+
+274 tests green.
+
+---
+
 ## 2.1.2 — 2026-11-01
 
 **Perf (decode + CreateDeltaBatch), wire unchanged.**
