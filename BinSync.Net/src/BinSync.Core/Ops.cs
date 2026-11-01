@@ -1,6 +1,8 @@
 // Wire operations (§12.24): FieldWrite / FieldTomb / RecordTombstone byte layouts.
 // Invariant [C11]: origin at FIXED offset 17 (bytes 17-18) for FieldWrite/FieldTomb;
 // offsets 13-16 are hlc.logical (u32 LE).
+using System.Buffers.Binary;
+
 namespace BinSync;
 
 public static class OpsConst
@@ -77,7 +79,7 @@ public static class Ops
         {
             bool full = fullAuthor ?? fw.FullAuthorMode;
             w.U8(OpsConst.TagFieldWrite).U16(fw.FieldId).U16(fw.KeyEpoch).U64(fw.Wall).U32(fw.Logical);
-            if (w.Value().Length != OpsConst.OriginOffset)
+            if (w.Length != OpsConst.OriginOffset)
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
             if (full) w.B128(fw.AuthorNodeId!);
             else w.U16(fw.Origin);
@@ -101,7 +103,7 @@ public static class Ops
         {
             bool full = fullAuthor ?? ft.FullAuthorMode;
             w.U8(OpsConst.TagFieldTomb).U16(ft.FieldId).U16(ft.KeyEpoch).U64(ft.Wall).U32(ft.Logical);
-            if (w.Value().Length != OpsConst.OriginOffset)
+            if (w.Length != OpsConst.OriginOffset)
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
             if (full) w.B128(ft.AuthorNodeId!);
             else w.U16(ft.Origin);
@@ -111,13 +113,47 @@ public static class Ops
         {
             bool full = fullAuthor ?? rt.FullAuthorMode;
             w.U8(OpsConst.TagRecordTomb).B128(rt.RecordId).U64(rt.Wall).U32(rt.Logical);
-            if (w.Value().Length != OpsConst.OriginOffsetRecordTomb)
+            if (w.Length != OpsConst.OriginOffsetRecordTomb)
                 throw new InvalidOperationException("origin at offset 29");
             if (full) w.B128(rt.AuthorNodeId!);
             else w.U16(rt.Origin);
             return w.Value();
         }
         throw new ArgumentException($"unknown op {op}");
+    }
+
+    /// <summary>
+    /// Compact ops store <c>origin</c> at a fixed offset ([C11]). Clone and patch those
+    /// two bytes without decoding the value. Returns null when the payload is full-author,
+    /// truncated, or ambiguous — caller must fall back to decode/encode.
+    /// </summary>
+    public static byte[]? TryCloneWithOrigin(byte[] payload, ushort origin)
+    {
+        if (payload.Length < 19) return null;
+        int off;
+        byte tag = payload[0];
+        if (tag == OpsConst.TagFieldWrite)
+        {
+            if (!FieldWriteConsumesExact(payload, OpsConst.OriginOffset, full: false)) return null;
+            if (FieldWriteConsumesExact(payload, OpsConst.OriginOffset, full: true)) return null;
+            off = OpsConst.OriginOffset;
+        }
+        else if (tag == OpsConst.TagFieldTomb)
+        {
+            if (payload.Length != OpFieldTomb.CompactPayloadLen) return null;
+            off = OpsConst.OriginOffset;
+        }
+        else if (tag == OpsConst.TagRecordTomb)
+        {
+            if (payload.Length != OpRecordTombstone.CompactPayloadLen) return null;
+            off = OpsConst.OriginOffsetRecordTomb;
+        }
+        else return null;
+
+        var copy = new byte[payload.Length];
+        payload.AsSpan().CopyTo(copy);
+        BinaryPrimitives.WriteUInt16LittleEndian(copy.AsSpan(off), origin);
+        return copy;
     }
 
     /// fullAuthor=null → AUTO-DETECT the mode from payload length (BUGFIX note in Python port).

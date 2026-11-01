@@ -51,7 +51,13 @@ public sealed partial class Node
         {
             stream = filterAuthorNodeId;
             wm = ps.AckedFor(stream);
-            pending = all.Where(e => e.AuthorNodeId.AsSpan().SequenceEqual(stream) && e.Seq > wm).ToList();
+            pending = new List<OutboxEntry>();
+            for (int i = 0; i < all.Count; i++)
+            {
+                var e = all[i];
+                if (e.AuthorNodeId.AsSpan().SequenceEqual(stream) && e.Seq > wm)
+                    pending.Add(e);
+            }
             // Errata E-4: gap normalisation also applies on the explicit-filter path.
             if (pending.Count > 0)
             {
@@ -78,7 +84,13 @@ public sealed partial class Node
             if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
             if (!found) return null;
             wm = ps.AckedFor(stream);
-            pending = all.Where(e => e.AuthorNodeId.AsSpan().SequenceEqual(stream) && e.Seq > wm).ToList();
+            pending = new List<OutboxEntry>();
+            for (int i = 0; i < all.Count; i++)
+            {
+                var e = all[i];
+                if (e.Seq > wm && e.AuthorNodeId.AsSpan().SequenceEqual(stream))
+                    pending.Add(e);
+            }
         }
         if (pending.Count == 0) return null;
         // BUGFIX: cursorStart = first still-un-ACKed seq of THIS stream, not lastPushedSeq+1.
@@ -89,7 +101,7 @@ public sealed partial class Node
             if (gap > 0) foreach (var e in pending) e.Seq -= gap;
         }
         long start = pending[0].Seq, end = pending[^1].Seq;
-        var translated = new List<OutboxEntry>();
+        var translated = new List<OutboxEntry>(pending.Count);
         foreach (var e in pending)
         {
             int? alias = AliasOf(targetPeer, (NodeId)e.AuthorNodeId, Epoch);
@@ -118,6 +130,14 @@ public sealed partial class Node
             }
             if (alias is null)
                 throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
+            var stamped = Ops.TryCloneWithOrigin(e.Payload, (ushort)alias.Value);
+            byte[] newPayload;
+            if (stamped is not null)
+            {
+                newPayload = stamped;
+            }
+            else
+            {
             var op = Ops.DecodeOp(e.Payload).Op;
             SetOrigin(op, (ushort)alias.Value);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
             // Persistence byte-stability: an outbox FieldWrite payload may be truncated to its
@@ -130,7 +150,8 @@ public sealed partial class Node
                 fw.Value = wfld.Value ?? Array.Empty<byte>();
                 fw.ValueLenPos = -1;   // we now have the bytes — encode a normal varint
             }
-            var newPayload = Ops.EncodeOp(op, fullAuthor: false);
+            newPayload = Ops.EncodeOp(op, fullAuthor: false);
+            }
             translated.Add(new OutboxEntry
             {
                 NamespaceId = e.NamespaceId,

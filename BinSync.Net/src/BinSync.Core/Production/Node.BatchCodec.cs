@@ -17,10 +17,10 @@ public sealed partial class Node
     {
         // Single-pass encode: no intermediate records[] buffer.
         // Capacity ≈ fixed header (~100B) + per-entry (16+1+varint+payload).
-        int est = 128;
         var entries = batch.Entries;
+        int est = 108 + 2 * Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 24 + entries[i].Payload.Length;
+            est += 17 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
 
         var w = new Writer(est);
         w.U16((ushort)batch.NamespaceId).U16((ushort)batch.SchemaId).U16((ushort)batch.SchemaVersion);

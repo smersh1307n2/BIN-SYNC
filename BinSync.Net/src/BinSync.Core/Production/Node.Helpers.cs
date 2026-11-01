@@ -108,9 +108,9 @@ public sealed partial class Node
     /// recordsRoot = BLAKE3-128 over domainTag || canonical records array (§12.17).
     public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)
     {
-        int est = Domains.DomainRecords.Length + 8;
+        int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 24 + entries[i].Payload.Length;
+            est += 17 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
         var w = new Writer(est);
         w.Raw(Domains.DomainRecords);
         WriteRecordsArray(w, entries);

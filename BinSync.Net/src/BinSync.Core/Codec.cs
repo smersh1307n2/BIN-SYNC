@@ -120,17 +120,34 @@ public static partial class Codec
 
 public partial class Writer
 {
-    private readonly MemoryStream _buf;
+    private byte[] _buf;
+    private int _len;
 
     public Writer() : this(256) { }
-    public Writer(int capacity) => _buf = new MemoryStream(Math.Max(16, capacity));
+    public Writer(int capacity) => _buf = new byte[Math.Max(16, capacity)];
 
-    public int Length => (int)_buf.Length;
+    public int Length => _len;
 
-    public Writer U8(byte v) { _buf.WriteByte(v); return this; }
-    public Writer U16(ushort v) { Span<byte> s = stackalloc byte[2]; BinaryPrimitives.WriteUInt16LittleEndian(s, v); _buf.Write(s); return this; }
-    public Writer U32(uint v) { Span<byte> s = stackalloc byte[4]; BinaryPrimitives.WriteUInt32LittleEndian(s, v); _buf.Write(s); return this; }
-    public Writer U64(ulong v) { Span<byte> s = stackalloc byte[8]; BinaryPrimitives.WriteUInt64LittleEndian(s, v); _buf.Write(s); return this; }
+    private void Ensure(int n)
+    {
+        if (_len + n <= _buf.Length) return;
+        int cap = _buf.Length;
+        while (cap < _len + n)
+            cap = cap < 1_048_576 ? cap * 2 : cap + n + (cap >> 1);
+        Array.Resize(ref _buf, cap);
+    }
+
+    private void Write(ReadOnlySpan<byte> s)
+    {
+        Ensure(s.Length);
+        s.CopyTo(_buf.AsSpan(_len));
+        _len += s.Length;
+    }
+
+    public Writer U8(byte v) { Ensure(1); _buf[_len++] = v; return this; }
+    public Writer U16(ushort v) { Ensure(2); BinaryPrimitives.WriteUInt16LittleEndian(_buf.AsSpan(_len), v); _len += 2; return this; }
+    public Writer U32(uint v) { Ensure(4); BinaryPrimitives.WriteUInt32LittleEndian(_buf.AsSpan(_len), v); _len += 4; return this; }
+    public Writer U64(ulong v) { Ensure(8); BinaryPrimitives.WriteUInt64LittleEndian(_buf.AsSpan(_len), v); _len += 8; return this; }
 
     public Writer B128(byte[] v) => B128((ReadOnlySpan<byte>)v);
 
@@ -138,12 +155,11 @@ public partial class Writer
     {
         if (v.Length != 16)
         {
-            // Rare non-canonical path; allocate once for normalize.
             var can = Codec.CanonicalB128(v.ToArray());
-            _buf.Write(can);
+            Write(can);
         }
         else
-            _buf.Write(v);
+            Write(v);
         return this;
     }
 
@@ -151,7 +167,7 @@ public partial class Writer
     {
         Span<byte> s = stackalloc byte[16];
         id.WriteTo(s);
-        _buf.Write(s);
+        Write(s);
         return this;
     }
 
@@ -159,7 +175,7 @@ public partial class Writer
     {
         Span<byte> s = stackalloc byte[16];
         id.WriteTo(s);
-        _buf.Write(s);
+        Write(s);
         return this;
     }
 
@@ -167,7 +183,7 @@ public partial class Writer
     {
         Span<byte> s = stackalloc byte[16];
         id.WriteTo(s);
-        _buf.Write(s);
+        Write(s);
         return this;
     }
 
@@ -176,15 +192,21 @@ public partial class Writer
     {
         Span<byte> tmp = stackalloc byte[10];
         int n = Codec.WriteVarint(tmp, v);
-        _buf.Write(tmp[..n]);
+        Write(tmp[..n]);
         return this;
     }
 
     public Writer Bytes(byte[] b) => Bytes((ReadOnlySpan<byte>)b);
-    public Writer Bytes(ReadOnlySpan<byte> b) { Varint((ulong)b.Length); _buf.Write(b); return this; }
-    public Writer Raw(byte[] b) { _buf.Write(b); return this; }
-    public Writer Raw(ReadOnlySpan<byte> b) { _buf.Write(b); return this; }
-    public byte[] Value() => _buf.ToArray();
+    public Writer Bytes(ReadOnlySpan<byte> b) { Varint((ulong)b.Length); Write(b); return this; }
+    public Writer Raw(byte[] b) { Write(b); return this; }
+    public Writer Raw(ReadOnlySpan<byte> b) { Write(b); return this; }
+
+    /// <summary>Exact-sized writers return the backing buffer with no extra copy.</summary>
+    public byte[] Value()
+    {
+        if (_len == _buf.Length) return _buf;
+        return _buf.AsSpan(0, _len).ToArray();
+    }
 }
 
 public partial class Reader

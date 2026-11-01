@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.1.1 — 2026-11-01
+
+Performance patch. Wire format and public API unchanged. **274** tests green.
+
+- `CreateDeltaBatch`: stamp compact-op `origin` by cloning the payload instead of decode/encode
+- `Writer` uses a byte buffer; exact-sized encodes skip the extra copy
+- `EncodeBatchPayload` / `recordsRoot` sized exactly
+
+---
+
 ## 2.1.0 — 2026-10-31
 
 Completes the **2.0 API-shape** migration (still wire-compatible with 1.x).
