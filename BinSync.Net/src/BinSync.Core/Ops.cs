@@ -68,13 +68,67 @@ public static class Ops
     /// build_snapshot which calls encode_op(op) with default full_author=True).
     public static byte[] EncodeOpFull(object op) => EncodeOp(op, fullAuthor: true);
 
+    /// <summary>Upper bound on <see cref="EncodeOp(object, bool?, int?)"/> size.</summary>
+    public static int EstimateEncodeOpSize(object op, bool? fullAuthor = null, int? valueLenOverride = null)
+    {
+        if (op is OpFieldWrite fw)
+        {
+            bool full = fullAuthor ?? fw.FullAuthorMode;
+            int header = OpsConst.OriginOffset + (full ? 16 : 2);
+            if (valueLenOverride is null && fw.ValueLenPos >= 0)
+                return header + fw.ValueLenPos + 1 + fw.Value.Length;
+            int vlen = valueLenOverride ?? fw.Value.Length;
+            return header + Codec.VarintLength((ulong)vlen) + fw.Value.Length;
+        }
+        if (op is OpFieldTomb ft)
+        {
+            bool full = fullAuthor ?? ft.FullAuthorMode;
+            return OpsConst.OriginOffset + (full ? 16 : 2);
+        }
+        if (op is OpRecordTombstone rt)
+        {
+            bool full = fullAuthor ?? rt.FullAuthorMode;
+            return OpsConst.OriginOffsetRecordTomb + (full ? 16 : 2);
+        }
+        throw new ArgumentException($"unknown op {op}");
+    }
+
     /// Canonical encoding. Compact mode: u16 origin; FULL_AUTHOR_ID mode: durable b128 (§12.24.4).
     /// When <paramref name="fullAuthor"/> is null the mode is taken from the op itself
     /// (<c>FullAuthorMode</c>, i.e. how it was decoded) — this keeps outbox payloads
     /// byte-stable across persistence round-trips (production hardening).
     public static byte[] EncodeOp(object op, bool? fullAuthor = null, int? valueLenOverride = null)
     {
-        var w = new Writer();
+        int est = EstimateEncodeOpSize(op, fullAuthor, valueLenOverride);
+        var dest = new byte[Math.Max(est, 16)];
+        var w = new Writer(dest);
+        WriteOp(w, op, fullAuthor, valueLenOverride);
+        if (w.Length == dest.Length) return dest;
+        return dest.AsSpan(0, w.Length).ToArray();
+    }
+
+    /// <summary>Encode into <paramref name="destination"/>; returns bytes written.</summary>
+    public static int EncodeOp(object op, Span<byte> destination, bool? fullAuthor = null, int? valueLenOverride = null)
+    {
+        int est = EstimateEncodeOpSize(op, fullAuthor, valueLenOverride);
+        if (destination.Length < est)
+            throw new ArgumentException($"destination too small (need ~{est})", nameof(destination));
+        var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented);
+            WriteOp(w, op, fullAuthor, valueLenOverride);
+            w.WrittenSpan.CopyTo(destination);
+            return w.Length;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private static void WriteOp(Writer w, object op, bool? fullAuthor, int? valueLenOverride)
+    {
         if (op is OpFieldWrite fw)
         {
             bool full = fullAuthor ?? fw.FullAuthorMode;
@@ -89,7 +143,17 @@ public static class Ops
                 // Payload stores ONLY the varint width (value bytes live elsewhere, e.g. in the
                 // record's FieldState after a persistence round-trip): re-emit the same-width
                 // zero-length varint so the payload stays byte-stable across save/load.
-                w.Raw(new byte[fw.ValueLenPos + 1]);
+                Span<byte> pad = stackalloc byte[16];
+                int padLen = fw.ValueLenPos + 1;
+                if (padLen > pad.Length)
+                {
+                    w.Raw(new byte[padLen]);
+                }
+                else
+                {
+                    pad[..padLen].Clear();
+                    w.Raw(pad[..padLen]);
+                }
             }
             else
             {
@@ -97,7 +161,7 @@ public static class Ops
                 w.Varint((ulong)vlen);
             }
             w.Raw(fw.Value);
-            return w.Value();
+            return;
         }
         if (op is OpFieldTomb ft)
         {
@@ -107,7 +171,7 @@ public static class Ops
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
             if (full) w.B128(ft.AuthorNodeId!);
             else w.U16(ft.Origin);
-            return w.Value();
+            return;
         }
         if (op is OpRecordTombstone rt)
         {
@@ -117,7 +181,7 @@ public static class Ops
                 throw new InvalidOperationException("origin at offset 29");
             if (full) w.B128(rt.AuthorNodeId!);
             else w.U16(rt.Origin);
-            return w.Value();
+            return;
         }
         throw new ArgumentException($"unknown op {op}");
     }
@@ -165,6 +229,9 @@ public static class Ops
     /// <see cref="OpFieldWrite.ValueLenPos"/> carries the position of the value-length varint so
     /// re-encoding can preserve its original byte width (persistence byte-stability).
     public static (object Op, int Pos) DecodeOp(byte[] data, int pos = 0, bool? fullAuthor = null)
+        => DecodeOp((ReadOnlyMemory<byte>)data, pos, fullAuthor);
+
+    public static (object Op, int Pos) DecodeOp(ReadOnlyMemory<byte> data, int pos = 0, bool? fullAuthor = null)
     {
         var r = new Reader(data, pos);
         byte tag = r.U8();
@@ -229,7 +296,7 @@ public static class Ops
     /// whose framing consumes the buffer exactly; if both do (rare), prefer full
     /// so snapshot encodings win. Truncated outbox headers fall back to the
     /// length heuristic so persistence can still recover ValueLenPos.
-    private static bool DetectFieldWriteFullAuthor(byte[] data, int pos)
+    private static bool DetectFieldWriteFullAuthor(ReadOnlyMemory<byte> data, int pos)
     {
         bool compact = FieldWriteConsumesExact(data, pos, full: false);
         bool full = FieldWriteConsumesExact(data, pos, full: true);
@@ -240,6 +307,9 @@ public static class Ops
     }
 
     private static bool FieldWriteConsumesExact(byte[] data, int pos, bool full)
+        => FieldWriteConsumesExact((ReadOnlyMemory<byte>)data, pos, full);
+
+    private static bool FieldWriteConsumesExact(ReadOnlyMemory<byte> data, int pos, bool full)
     {
         try
         {

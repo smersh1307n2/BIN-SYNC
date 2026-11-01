@@ -1,5 +1,19 @@
 # Changelog — BinSync.Core
 
+## 2.1.4 — 2026-11-01
+
+**Reader / DecodeOp / EncodeOp on Span & ReadOnlyMemory (wire unchanged).**
+
+- `Reader` over `ReadOnlyMemory<byte>`; `TakeSpan` / `B128Span` / `BytesSpan`
+- `Codec.DecodeVarint(ReadOnlySpan<byte>)`
+- `DecodeBatchPayload(ReadOnlyMemory<byte>)`
+- `DecodeOp(ReadOnlyMemory<byte>)`
+- `EstimateEncodeOpSize` + `EncodeOp(..., Span<byte>)`; `byte[] EncodeOp` uses exact-sized buffer
+
+274 tests green.
+
+---
+
 ## 2.1.3 — 2026-11-01
 
 **Span / ArrayPool for encode + CreateDelta (wire unchanged).**

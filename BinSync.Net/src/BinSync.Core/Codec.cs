@@ -74,6 +74,9 @@ public static partial class Codec
     }
 
     public static (ulong Value, int Pos) DecodeVarint(byte[] data, int pos = 0)
+        => DecodeVarint((ReadOnlySpan<byte>)data, pos);
+
+    public static (ulong Value, int Pos) DecodeVarint(ReadOnlySpan<byte> data, int pos = 0)
     {
         ulong result = 0;
         int shift = 0;
@@ -88,10 +91,6 @@ public static partial class Codec
             bool last = (b & 0x80) == 0;
             if (payload == 0 && nbytes > 1 && last)
                 throw new InvalidVarintException("overlong varint");
-            // BUGFIX (port): do NOT pre-reject shift>=64 here — Python folds the byte
-            // only after candidate_overflow, and an 11th TERMINAL zero-payload byte is
-            // already rejected by the overlong rule above; significant payloads at
-            // shift>=64 are rejected by CandidateOverflow's domain bound instead.
             if (CandidateOverflow(result, shift, payload, nbytes, last))
                 throw new InvalidVarintException("overlong varint");
             result |= (ulong)payload << shift;
@@ -266,9 +265,12 @@ public partial class Writer
 
 public partial class Reader
 {
-    private readonly byte[] _data;
+    private readonly ReadOnlyMemory<byte> _data;
     public int Pos;
-    public Reader(byte[] data, int pos = 0) { _data = data; Pos = pos; }
+    public Reader(byte[] data, int pos = 0) { _data = data ?? Array.Empty<byte>(); Pos = pos; }
+    public Reader(ReadOnlyMemory<byte> data, int pos = 0) { _data = data; Pos = pos; }
+
+    private ReadOnlySpan<byte> Span => _data.Span;
 
     private void Ensure(int n)
     {
@@ -279,22 +281,31 @@ public partial class Reader
     {
         Ensure(n);
         var v = new byte[n];
-        Array.Copy(_data, Pos, v, 0, n);
+        Span.Slice(Pos, n).CopyTo(v);
         Pos += n;
         return v;
+    }
+
+    /// <summary>Advance and return a view into the underlying buffer (no alloc). Lifetime = buffer.</summary>
+    public ReadOnlySpan<byte> TakeSpan(int n)
+    {
+        Ensure(n);
+        var s = Span.Slice(Pos, n);
+        Pos += n;
+        return s;
     }
 
     /// <summary>Zero-alloc fixed-width reads (hot path).</summary>
     public byte U8()
     {
         Ensure(1);
-        return _data[Pos++];
+        return Span[Pos++];
     }
 
     public ushort U16()
     {
         Ensure(2);
-        ushort v = BinaryPrimitives.ReadUInt16LittleEndian(_data.AsSpan(Pos, 2));
+        ushort v = BinaryPrimitives.ReadUInt16LittleEndian(Span.Slice(Pos, 2));
         Pos += 2;
         return v;
     }
@@ -302,7 +313,7 @@ public partial class Reader
     public uint U32()
     {
         Ensure(4);
-        uint v = BinaryPrimitives.ReadUInt32LittleEndian(_data.AsSpan(Pos, 4));
+        uint v = BinaryPrimitives.ReadUInt32LittleEndian(Span.Slice(Pos, 4));
         Pos += 4;
         return v;
     }
@@ -310,15 +321,22 @@ public partial class Reader
     public ulong U64()
     {
         Ensure(8);
-        ulong v = BinaryPrimitives.ReadUInt64LittleEndian(_data.AsSpan(Pos, 8));
+        ulong v = BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos, 8));
         Pos += 8;
         return v;
     }
 
     public byte[] B128() => Take(16);
-    public ulong Varint() { var (v, p) = Codec.DecodeVarint(_data, Pos); Pos = p; return v; }
+    public ReadOnlySpan<byte> B128Span() => TakeSpan(16);
+    public ulong Varint() { var (v, p) = Codec.DecodeVarint(Span, Pos); Pos = p; return v; }
     public byte[] Bytes() => Take((int)Varint());
+    public ReadOnlySpan<byte> BytesSpan()
+    {
+        int n = (int)Varint();
+        return TakeSpan(n);
+    }
     public byte[] Raw(int n) => Take(n);
+    public ReadOnlySpan<byte> RawSpan(int n) => TakeSpan(n);
     public bool Eof() => Pos >= _data.Length;
     public int Remaining => _data.Length - Pos;
 }

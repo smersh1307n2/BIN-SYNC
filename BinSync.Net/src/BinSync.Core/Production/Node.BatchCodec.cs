@@ -78,10 +78,21 @@ public sealed partial class Node
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>
     public Batch DecodeBatchPayload(byte[] data)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return DecodeBatchPayloadInternal(data);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            return DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+    }
+
+    /// <summary>Decode from an arbitrary memory slice (no mandatory copy of the whole buffer).</summary>
+    public Batch DecodeBatchPayload(ReadOnlyMemory<byte> data)
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            return DecodeBatchPayloadInternal(data);
     }
 
     internal Batch DecodeBatchPayloadInternal(byte[] data)
+        => DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+
+    internal Batch DecodeBatchPayloadInternal(ReadOnlyMemory<byte> data)
     {
         var r = new Reader(data);
         int ns = r.U16();
