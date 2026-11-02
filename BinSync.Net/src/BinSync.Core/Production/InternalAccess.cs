@@ -3,6 +3,9 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("BinSync.Tests")]
+[assembly: InternalsVisibleTo("ScenarioHarness")]
+[assembly: InternalsVisibleTo("TwoNodeLoopback")]
+[assembly: InternalsVisibleTo("TwoNodeTcp")]
 
 namespace BinSync;
 

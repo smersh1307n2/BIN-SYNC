@@ -1,5 +1,20 @@
 # Changelog — BinSync.Core
 
+## 2.2.0 — 2026-11-02
+
+**Breaking: engine state encapsulation + limits + TCP read timeout.**
+
+- `Storage`, `Outbox`, `Inbox`, alias maps, `PeerStates`, `SeenChanges`, digests, quarantine, etc. are **`internal`** (tests/samples via `InternalsVisibleTo`)
+- Public query API: `TryGetRecord`, `TryGetField`, `GetRecordCount`, `GetOutboxCount`, `RegisterLoopbackPeer`
+- `Node.Limits` (`ResourceLimits?`) enforced on outbox enqueue / seen-set / storage writes
+- `StreamSyncTransport.ReadTimeout` + `TcpSyncSession.ReadTimeout` for idle/stuck peers
+- Bare `catch` in E-13 outbox scans documented (skip corrupt payloads)
+- `Ns()` is internal
+
+Hosts that mutated `node.Storage` / `node.Outbox` directly must use engine APIs or request InternalsVisibleTo.
+
+---
+
 ## 2.1.13 — 2026-11-02
 
 **XML-doc: finish remaining thin summaries.**

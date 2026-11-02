@@ -238,7 +238,12 @@ public sealed partial class Node
         {
             if (!q.RecordId.Span.SequenceEqual(rid) || !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
             object sOp;
-            try { sOp = Ops.DecodeOp(q.Payload).Op; } catch { continue; }
+            try { sOp = Ops.DecodeOp(q.Payload).Op; }
+            catch (Exception)
+            {
+                // Corrupt outbox payload — skip this entry for OwnQueueHolds.
+                continue;
+            }
             ushort? sfid = sOp switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
             ushort? qfid = qop switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
             if (sfid != qfid) continue;

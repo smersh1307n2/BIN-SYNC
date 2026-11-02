@@ -82,7 +82,11 @@ public sealed partial class Node
                                 !NodeId.EqualsBytes(Mem.ToArray(q.AuthorNodeId))) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
-                            catch { break; }
+                            catch (Exception)
+                            {
+                                // Corrupt queued payload — stop scanning this list; do not fail the write.
+                                break;
+                            }
                             ushort? qfid = qop switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
                             if (qfid != fid) continue;
                             bool qSame = TagOf(qop) == TagOf(op) && WallOf(qop) == WallOf(op) &&
@@ -110,6 +114,8 @@ public sealed partial class Node
             AuthorNodeId = author,
             CreatedAt = (long)Clock.SendTick().Wall,
         };
+        Limits?.EnsureCanEnqueueOutbox(this, ns);
+        Limits?.EnsureSeenChangesCapacity(this);
         if (!Outbox.TryGetValue(ns, out var ol)) Outbox[ns] = ol = new();
         ol.Add(entry);
         // Errata E-13 follow-up: register our own changeId under our OWN channel key so
@@ -140,6 +146,7 @@ public sealed partial class Node
     /// and delegates to <c>WriteFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool WriteField(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
+        Limits?.EnsureStorageCapacity(this);
         lock (_lockStorage) lock (_lockOutbox) return WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
     }
 

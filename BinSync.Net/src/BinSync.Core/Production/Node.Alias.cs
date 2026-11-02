@@ -344,7 +344,7 @@ public sealed partial class Node
     // cause of the KeyNotFoundException storm in tests that read node.Storage[ns][rid].
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>NsInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public Dictionary<RecordId, Record> Ns(int namespaceId)
+    internal Dictionary<RecordId, Record> Ns(int namespaceId)
     {
         lock (_lockStorage) return NsInternal(namespaceId);
     }

@@ -26,3 +26,14 @@ Re-enable rules incrementally by removing codes from `<NoWarn>` in the csproj.
 | `InvalidOperationException` | Internal invariant / programming error (not a wire code) |
 
 `SyncException` and `FrameException` expose standard `(code)`, `(code, message)`, `(code, message, inner)` constructors.
+
+
+## Encapsulation (2.2+)
+
+Engine collections on `Node` are **internal**. External hosts use:
+
+- `TryGetRecord` / `TryGetField` / `GetRecordCount` / `GetOutboxCount`
+- write APIs: `WriteField`, `CreateDeltaBatch`, `ApplyBatch` / `ApplyBatchPayload`
+- optional `Node.Limits = ResourceLimits.Default` (or custom caps)
+
+`EnterAllGates()` remains the supported multi-domain lock scope.

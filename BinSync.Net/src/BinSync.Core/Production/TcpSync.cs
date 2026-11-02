@@ -81,6 +81,13 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     /// <summary>True when this session transports frames over TLS.</summary>
     public bool IsTls { get; }
 
+    /// <summary>Per-frame receive timeout; null uses only the caller's CancellationToken.</summary>
+    public TimeSpan? ReadTimeout
+    {
+        get => _transport.ReadTimeout;
+        set => _transport.ReadTimeout = value;
+    }
+
     private TcpSyncSession(
         TcpClient client, StreamSyncTransport transport, HelloPayload peer,
         Stream? ownedOuter, bool isTls)

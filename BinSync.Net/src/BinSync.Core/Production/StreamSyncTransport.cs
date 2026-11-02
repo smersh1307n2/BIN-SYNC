@@ -14,6 +14,12 @@ public sealed class StreamSyncTransport : ISyncTransport
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly SemaphoreSlim _readLock = new(1, 1);
 
+    /// <summary>
+    /// Optional per-receive timeout. When set, a receive that does not complete within
+    /// this period is cancelled (linked with the caller token).
+    /// </summary>
+    public TimeSpan? ReadTimeout { get; set; }
+
     /// <summary>Length-prefixed frame transport over an arbitrary Stream.</summary>
     public StreamSyncTransport(Stream stream, bool ownsStream = false)
     {
@@ -48,6 +54,12 @@ public sealed class StreamSyncTransport : ISyncTransport
         await _readLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (ReadTimeout is { } timeout && timeout > TimeSpan.Zero)
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(timeout);
+                return await FrameStream.ReadFrameAsync(_stream, cts.Token).ConfigureAwait(false);
+            }
             return await FrameStream.ReadFrameAsync(_stream, ct).ConfigureAwait(false);
         }
         finally

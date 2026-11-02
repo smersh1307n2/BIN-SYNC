@@ -42,55 +42,63 @@ public sealed partial class Node
     public int Epoch { get; internal set; }
     /// <summary>HLC clock (starts cold §5.2). Replace is not allowed; mutate LastWall via load.</summary>
     public HlcClock Clock { get; }
+
+    /// <summary>
+    /// Optional resource caps (outbox/storage/seen-set). When set, enqueue and apply
+    /// paths enforce them; null means unlimited (tests / unconstrained hosts).
+    /// </summary>
+    public ResourceLimits? Limits { get; set; }
     // storage: namespaceId -> recordId -> Record (RecordId uses value equality).
     private readonly Dictionary<int, Dictionary<RecordId, Record>> _storage = new();
 
     /// <summary>Live record store. Mutate maps in place; wholesale replace is not supported.</summary>
-    public Dictionary<int, Dictionary<RecordId, Record>> Storage => _storage;
+    /// <summary>Live record store. Engine-internal; use TryGetRecord/TryGetField from outside.</summary>
+    internal Dictionary<int, Dictionary<RecordId, Record>> Storage => _storage;
 
     /// <summary>Pending local mutations awaiting delta batch export.</summary>
-    public Dictionary<int, List<OutboxEntry>> Outbox { get; } = new();
+    internal Dictionary<int, List<OutboxEntry>> Outbox { get; } = new();
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
     /// <summary>Set of applied batch keys for idempotent replay detection.</summary>
-    public HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
+    internal HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
     /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
-    public Dictionary<(byte[], int, int), byte[]> LastBatchDigest { get; } = new(BytesIntIntEq.Instance);
+    internal Dictionary<(byte[], int, int), byte[]> LastBatchDigest { get; } = new(BytesIntIntEq.Instance);
     // per-stream prevBatchDigest: AM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
     /// <summary>Per-stream prev-batch digest checkpoints on the issuer side.</summary>
-    public Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
+    internal Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
     /// <summary>Gets alias to node.</summary>
-    public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();
+    internal Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();
     /// <summary>Gets node to alias.</summary>
-    public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; } = new();
+    internal Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; } = new();
     // Errata E-9: durable author knowledge for session-table construction only [А3].
     /// <summary>Durable author knowledge for session-table construction (Errata E-9).</summary>
-    public Dictionary<NodeId, int> DurableAuthors { get; } = new();
+    internal Dictionary<NodeId, int> DurableAuthors { get; } = new();
     /// <summary>Per-peer session cursors and ACK watermarks keyed by (peer, namespace).</summary>
-    public Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
+    internal Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     /// <summary>Provenance seen-set of (sender, ns, changeId) for relay (Errata E-10).</summary>
-    public HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
+    internal HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
-    public Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();
+    internal Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();
     /// <summary>Highest known epoch per (author, namespace).</summary>
-    public Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
+    internal Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
     /// <summary>Peers currently quarantined from sync.</summary>
-    public HashSet<NodeId> Quarantined { get; } = new();
+    internal HashSet<NodeId> Quarantined { get; } = new();
     /// <summary>Collected error code names from the last operations (diagnostic).</summary>
-    public List<string> ErrorsOut { get; } = new();
+    internal List<string> ErrorsOut { get; } = new();
     /// <summary>Batch ids ACKed during the last apply (diagnostic).</summary>
-    public List<byte[]> AcksOut { get; } = new();
+    internal List<byte[]> AcksOut { get; } = new();
     /// <summary>Namespaces that must not be applied (NAMESPACE_FORBIDDEN).</summary>
-    public HashSet<int> ForbiddenNamespaces { get; } = new();
+    internal HashSet<int> ForbiddenNamespaces { get; } = new();
     /// <summary>Highest supported schema version per namespace.</summary>
-    public Dictionary<int, int> SchemaVersions { get; } = new();
+    internal Dictionary<int, int> SchemaVersions { get; } = new();
     /// <summary>Optional in-process peer map for loopback transport.</summary>
-    public Dictionary<NodeId, Node>? PeersByNid { get; set; }
+    /// <summary>In-process peer map for loopback. Prefer RegisterLoopbackPeer.</summary>
+    internal Dictionary<NodeId, Node>? PeersByNid { get; set; }
 
     /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
