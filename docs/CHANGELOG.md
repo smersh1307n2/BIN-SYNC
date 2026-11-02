@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 2.1.8 — 2026-11-02
+
+**API hygiene + docs/CI (code review).**
+
+- `NodeId` / `Clock` init-only; `Epoch` internal set; remove public `Storage` wholesale setter
+- Dictionary surface (`Outbox`, aliases, `PeerStates`, …) is get-only (mutate in place)
+- `Gate` marked `[Obsolete]` → use `EnterAllGates()`
+- README / PRODUCTION-STATUS → 2.1.8; DecodeAck catch documented
+- CI: test timeout 25m; optional coverage line-rate ≥50% gate
+- `AllowUnsafeBlocks` false (no unsafe outside stackalloc)
+
+---
+
 ## 2.1.7 — 2026-11-01
 
 **Fix duplicate-apply ACK author stream (hang / test host abort).**

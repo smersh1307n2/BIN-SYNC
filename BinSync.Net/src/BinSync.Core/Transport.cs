@@ -106,7 +106,10 @@ public static class Transport
         long seq = (long)r.U64();
         byte[]? author = null;
         try { author = r.B128(); }   // optional trailer (E-4); absent ⇒ legacy ACK
-        catch { }
+        catch
+        {
+            // Best-effort: truncated/legacy ACK without author stream — leave author null.
+        }
         return (batchId, seq, author);
     }
 

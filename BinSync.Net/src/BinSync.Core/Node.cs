@@ -28,40 +28,25 @@ public sealed partial class Node
     public AllGateScope EnterAllGates() => new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
 
     /// <summary>
-    /// Legacy coarse gate object (locks Meta only). Prefer <see cref="EnterAllGates"/> for
-    /// full exclusion. Kept so existing <c>lock (node.Gate)</c> still compiles; hosts that
-    /// need storage consistency should migrate to <see cref="EnterAllGates"/>.
+    /// Legacy coarse gate object (locks Meta only). Prefer <see cref="EnterAllGates"/>.
     /// </summary>
+    [Obsolete("Use EnterAllGates() for full Storage/Outbox/Meta exclusion.")]
     public object Gate => _lockMeta;
 
 
-    public NodeId NodeId { get; set; }
-    public int Epoch { get; set; }
-    // BUGFIX (implementation finding): the HLC must start cold (§5.2) — see Python port note.
-    public HlcClock Clock { get; set; } = null!;
-    // storage: namespaceId -> recordId -> Record
-    // BUGFIX (implementation finding): the inner recordId maps MUST use content equality
-    // (BytesEq). Test fixtures create a fresh byte[] key on every lookup (Fix.Rid(n) allocates),
-    // so the default reference comparer made `node.Storage[ns][rid]` miss even when the
-    // record existed. Ns() created BytesEq maps, but ApplyBatch replaced the namespace entry
-    // with a default-comparer staging dictionary — reads after any applied batch threw
-    // KeyNotFoundException / Assert.Contains failures. The setter below normalizes every
-    // assignment to a BytesEq-keyed map; all read sites keep working unchanged.
+    /// <summary>Stable node identity; set only in the constructor.</summary>
+    public NodeId NodeId { get; }
+    /// <summary>Session/epoch counter; mutated on load and epoch bump.</summary>
+    public int Epoch { get; internal set; }
+    /// <summary>HLC clock (starts cold §5.2). Replace is not allowed; mutate LastWall via load.</summary>
+    public HlcClock Clock { get; }
+    // storage: namespaceId -> recordId -> Record (RecordId uses value equality).
     private readonly Dictionary<int, Dictionary<RecordId, Record>> _storage = new();
 
-    public Dictionary<int, Dictionary<RecordId, Record>> Storage
-    {
-        get => _storage;
-        set
-        {
-            _storage.Clear();
-            if (value is null) return;
-            foreach (var (ns, inner) in value)
-                _storage[ns] = new Dictionary<RecordId, Record>(inner);
-        }
-    }
+    /// <summary>Live record store. Mutate maps in place; wholesale replace is not supported.</summary>
+    public Dictionary<int, Dictionary<RecordId, Record>> Storage => _storage;
 
-    public Dictionary<int, List<OutboxEntry>> Outbox { get; set; } = new();
+    public Dictionary<int, List<OutboxEntry>> Outbox { get; } = new();
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
     public HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
@@ -71,23 +56,21 @@ public sealed partial class Node
     // -> last sent batchDigest (§12.17.2 hardening).
     public Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
-    public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; set; } = new();
-    public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; set; } = new();
-    // Errata E-9 (transport): DURABLE author knowledge — every (nodeId, epoch) ever
-    // resolved through ANY ALIAS_MAP. Used ONLY for session-table construction, never
-    // for resolution [А3].
-    public Dictionary<NodeId, int> DurableAuthors { get; set; } = new();
-    public Dictionary<(NodeId, int), PeerState> PeerStates { get; set; } = new();
+    public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();
+    public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; } = new();
+    // Errata E-9: durable author knowledge for session-table construction only [А3].
+    public Dictionary<NodeId, int> DurableAuthors { get; } = new();
+    public Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     public HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     public Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();
-    public Dictionary<(NodeId, int), int> KnownEpochs { get; set; } = new();
+    public Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
     public HashSet<NodeId> Quarantined { get; } = new();
-    public List<string> ErrorsOut { get; set; } = new();
-    public List<byte[]> AcksOut { get; set; } = new();
+    public List<string> ErrorsOut { get; } = new();
+    public List<byte[]> AcksOut { get; } = new();
     public HashSet<int> ForbiddenNamespaces { get; } = new();
-    public Dictionary<int, int> SchemaVersions { get; set; } = new();
+    public Dictionary<int, int> SchemaVersions { get; } = new();
     public Dictionary<NodeId, Node>? PeersByNid { get; set; }
 
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,

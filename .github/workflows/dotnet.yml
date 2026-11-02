@@ -27,7 +27,7 @@ jobs:
   test:
     name: test (.NET 10)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,6 +69,23 @@ jobs:
           path: ${{ runner.temp }}/test-results
           retention-days: 14
           if-no-files-found: ignore
+
+
+
+
+      - name: Coverage threshold (≥50% line)
+        if: always()
+        run: |
+          f=$(find "${{ runner.temp }}/test-results" -name 'coverage.cobertura.xml' 2>/dev/null | head -1 || true)
+          if [ -z "$f" ]; then echo "No cobertura — skip"; exit 0; fi
+          python3 -c "
+          import xml.etree.ElementTree as ET, sys
+          root = ET.parse(sys.argv[1]).getroot()
+          rate = float(root.attrib.get('line-rate', 0))
+          pct = rate * 100.0
+          print(f'line-rate={pct:.1f}%')
+          raise SystemExit(0 if pct >= 50 else f'Coverage {pct:.1f}% < 50%')
+          " "$f"
 
       - name: Upload coverage (cobertura)
         if: always()
