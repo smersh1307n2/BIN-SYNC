@@ -154,22 +154,23 @@ public static class NodePersistence
 
             // --- inbox idempotency set (issuer, ns, epoch, batchId)
             w.Varint((ulong)n.Inbox.Count);
-            foreach (var (issuer, ns, ep, bid) in n.Inbox.OrderBy(k => k.Item1, BytesOrd)
-                                                         .ThenBy(k => k.Item2).ThenBy(k => k.Item3)
-                                                         .ThenBy(k => k.Item4, BytesOrd))
+            foreach (var (issuer, ns, ep, bid) in n.Inbox.OrderBy(k => k.Issuer.Lo).ThenBy(k => k.Issuer.Hi)
+                                                         .ThenBy(k => k.Ns).ThenBy(k => k.Epoch)
+                                                         .ThenBy(k => k.BatchId.Lo).ThenBy(k => k.BatchId.Hi))
             { w.B128(issuer); w.Varint((ulong)ns); w.Varint((ulong)ep); w.B128(bid); }
 
             // --- batch-digest chain checkpoints: (issuer, ns, epoch) -> digest
             w.Varint((ulong)n.LastBatchDigest.Count);
-            foreach (var ((issuer, ns, ep), dig) in n.LastBatchDigest.OrderBy(k => k.Key.Item1, BytesOrd)
-                                                                     .ThenBy(k => k.Key.Item2).ThenBy(k => k.Key.Item3))
+            foreach (var ((issuer, ns, ep), dig) in n.LastBatchDigest.OrderBy(k => k.Key.Issuer.Lo).ThenBy(k => k.Key.Issuer.Hi)
+                                                                     .ThenBy(k => k.Key.Ns).ThenBy(k => k.Key.Epoch))
             { w.B128(issuer); w.Varint((ulong)ns); w.Varint((ulong)ep); w.B128(dig); }
 
             // --- per-stream issuer checkpoints: ((issuer, ns, ep), peer) -> digest (§12.17.2)
             w.Varint((ulong)n.LastStreamDigest.Count);
             foreach (var (((issuer, ns, ep), peer), dig) in n.LastStreamDigest
-                       .OrderBy(k => k.Key.Item1.Item1, BytesOrd).ThenBy(k => k.Key.Item1.Item2)
-                       .ThenBy(k => k.Key.Item1.Item3).ThenBy(k => k.Key.Item2, BytesOrd))
+                       .OrderBy(k => k.Key.Item1.Issuer.Lo).ThenBy(k => k.Key.Item1.Issuer.Hi)
+                       .ThenBy(k => k.Key.Item1.Ns).ThenBy(k => k.Key.Item1.Epoch)
+                       .ThenBy(k => k.Key.Peer.Lo).ThenBy(k => k.Key.Peer.Hi))
             { w.B128(issuer); w.Varint((ulong)ns); w.Varint((ulong)ep); w.B128(peer); w.B128(dig); }
 
             // --- aliases per session peer
@@ -205,8 +206,8 @@ public static class NodePersistence
                 w.Varint((ulong)ps.MembershipEpoch); w.U64((ulong)ps.LastSeen);
                 w.Varint((ulong)ps.ReceivedStreams.Count);
                 foreach (var ((issuer, rns, rep, bid), seq) in ps.ReceivedStreams
-                           .OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2).ThenBy(k => k.Key.Item3)
-                           .ThenBy(k => k.Key.Item4, BytesOrd))
+                           .OrderBy(k => k.Key.Peer.Lo).ThenBy(k => k.Key.Peer.Hi).ThenBy(k => k.Key.Epoch).ThenBy(k => k.Key.Ns)
+                           .ThenBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi))
                 { w.B128(issuer); w.Varint((ulong)rns); w.Varint((ulong)rep); w.B128(bid); w.U64((ulong)seq); }
                 w.Varint((ulong)ps.StreamAcked.Count);
                 foreach (var (author, seq) in ps.StreamAcked.OrderBy(k => k.Key.ToString()))
@@ -219,8 +220,8 @@ public static class NodePersistence
 
             // --- provenance seen-set (Errata E-10/E-13)
             w.Varint((ulong)n.SeenChanges.Count);
-            foreach (var (peer, ns, cid) in n.SeenChanges.OrderBy(k => k.Item1, BytesOrd).ThenBy(k => k.Item2)
-                                                         .ThenBy(k => k.Item3, BytesOrd))
+            foreach (var (peer, ns, cid) in n.SeenChanges.OrderBy(k => k.Peer.Lo).ThenBy(k => k.Peer.Hi).ThenBy(k => k.Ns)
+                                                         .ThenBy(k => k.ChangeId.Lo).ThenBy(k => k.ChangeId.Hi))
             { w.B128(peer); w.Varint((ulong)ns); w.B128(cid); }
 
             // --- last accepted stream author (Errata E-11)
@@ -300,14 +301,14 @@ public static class NodePersistence
         for (int i = 0; i < inboxCount; i++)
         {
             var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint(); var bid = r.B128();
-            n.Inbox.Add((issuer, ns, ep, bid));
+            n.Inbox.Add(((NodeId)issuer, ns, ep, BatchId.From(bid)));
         }
 
         int lbdCount = (int)r.Varint();
         for (int i = 0; i < lbdCount; i++)
         {
             var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint(); var dig = r.B128();
-            n.LastBatchDigest[(issuer, ns, ep)] = dig;
+            n.LastBatchDigest[((NodeId)issuer, ns, ep)] = dig;
         }
 
         int lsCount = (int)r.Varint();
@@ -315,7 +316,7 @@ public static class NodePersistence
         {
             var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint();
             var peer = r.B128(); var dig = r.B128();
-            n.LastStreamDigest[((issuer, ns, ep), peer)] = dig;
+            n.LastStreamDigest[(((NodeId)issuer, ns, ep), (NodeId)peer)] = dig;
         }
 
         int a2nCount = (int)r.Varint();
@@ -370,7 +371,7 @@ public static class NodePersistence
             {
                 var issuer = r.B128(); var rns = (int)r.Varint(); var rep = (int)r.Varint();
                 var bid = r.B128(); var seq = (long)r.U64();
-                ps.ReceivedStreams[(issuer, rns, rep, bid)] = seq;
+                ps.ReceivedStreams[((NodeId)issuer, rns, rep, (NodeId)bid)] = seq;
             }
             int saCount = (int)r.Varint();
             for (int j = 0; j < saCount; j++)
@@ -392,7 +393,7 @@ public static class NodePersistence
         for (int i = 0; i < seenCount; i++)
         {
             var peer = r.B128(); var ns = (int)r.Varint(); var cid = r.B128();
-            n.SeenChanges.Add((peer, ns, cid));
+            n.SeenChanges.Add(((NodeId)peer, ns, BatchId.From(cid)));
         }
 
         int lsaCount = (int)r.Varint();

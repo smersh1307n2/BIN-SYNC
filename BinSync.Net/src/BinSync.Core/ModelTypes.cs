@@ -171,8 +171,7 @@ public sealed partial class PeerState
     /// <summary>Highest sequence the peer has ACKed on this stream.</summary>
     public long LastAckedSeq { get; set; }
     /// <summary>Per-author receive cursors: last contiguous seq accepted.</summary>
-    public Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams { get; } =
-        new(BytesIntIntBytesEq.Instance);
+    public Dictionary<(NodeId Peer, int Epoch, int Ns, NodeId Author), long> ReceivedStreams { get; } = new();
     /// <summary>Per-author ACK watermarks used when building the next delta.</summary>
     public Dictionary<NodeId, long> StreamAcked { get; } = new();
     /// <summary>Gets or sets initial sync complete.</summary>

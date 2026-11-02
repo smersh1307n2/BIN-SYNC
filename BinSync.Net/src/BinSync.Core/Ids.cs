@@ -207,6 +207,8 @@ public readonly partial struct BatchId : IEquatable<BatchId>
 
     /// <summary>128-bit batch identity with value equality.</summary>
     public static implicit operator BatchId(byte[]? bytes) => From(bytes);
+    public static BatchId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
+    public static implicit operator BatchId(ReadOnlyMemory<byte> bytes) => From(bytes);
 
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](BatchId id) => id.ToArray();

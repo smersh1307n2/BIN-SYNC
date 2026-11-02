@@ -228,7 +228,7 @@ public sealed partial class Node
         // SPEC CORRECTION (errata E-2 follow-up): the stream chain is keyed by the ACTUAL
         // stamped issuerEpoch of this batch (author's epoch when relaying).
         var chainKey = (NodeId, batch.NamespaceId, batch.IssuerEpoch);
-        var streamKey = (chainKey, targetPeer.ToArray());
+        var streamKey = (chainKey, targetPeer);
         var ps = PeerStates[(targetPeer, batch.NamespaceId)];
         // BUGFIX (port divergence): the reference port keys the id cache by the batch's
         // OWN author stream (entries[0].AuthorNodeId) — NOT the mutable receiver-resolved

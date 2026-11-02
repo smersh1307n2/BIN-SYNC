@@ -120,7 +120,7 @@ public sealed partial class Node
         ol.Add(entry);
         // Errata E-13 follow-up: register our own changeId under our OWN channel key so
         // apply_batch's relay rule treats a direct echo as already-seen (see Python port).
-        SeenChanges.Add((NodeId, ns, Mem.ToArray(entry.ChangeId))); // Mem.ToArray no-op when already owned array
+        SeenChanges.Add((NodeId, ns, BatchId.From(entry.ChangeId.Span)));
         return entry;
     }
 

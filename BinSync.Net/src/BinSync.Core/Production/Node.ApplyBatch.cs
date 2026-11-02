@@ -14,10 +14,6 @@ public sealed partial class Node
 
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer)
     {
-        // Allocate wire form only when a byte[]-keyed map needs it (SeenChanges / stream keys).
-        byte[]? senderPeerBytesCache = null;
-        byte[] SenderPeerBytes() => senderPeerBytesCache ??= senderPeer.ToArray();
-
         var result = new BatchResult(batch.BatchId)
         {
             CursorEnd = batch.CursorEnd,
@@ -29,7 +25,7 @@ public sealed partial class Node
         // STEP 0.5: epoch regression (§4.4) — SPEC CORRECTIONS (errata E-2/E-3):
         // the watermark is keyed by the RECEIVING SESSION ((sender_peer, ns)) and compares
         // against the sender's CURRENT session incarnation epoch learned from HELLO/ALIAS_MAP.
-        var chain = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
+        var chain = ((NodeId)batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
         var sesKey = (senderPeer, batch.NamespaceId);
         var curKnown = SessionEpoch(senderPeer, batch.NamespaceId);
         if (curKnown is not null && batch.IssuerEpoch < curKnown.Value)
@@ -39,7 +35,7 @@ public sealed partial class Node
         if (batch.SchemaVersion > supported)
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
         // STEP 1: idempotency FIRST ([S7], [П7], §10.2.2 lost-ACK replay)
-        var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
+        var key = ((NodeId)batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, BatchId.From(batch.BatchId));
         if (Inbox.Contains(key))
         {
             AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
@@ -84,7 +80,7 @@ public sealed partial class Node
         batch.AuthorStreamNodeId = streamAuthor;
         result.DurableAuthor = batch.DurableAuthor;
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        var streamKey = (SenderPeerBytes(), batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
+        var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, (NodeId)streamAuthor);
         long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
@@ -161,7 +157,7 @@ public sealed partial class Node
             {
                 var e = batch.Entries[idx];
                 byte[] cid = e.ChangeId.Span.SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : Mem.ToArray(e.ChangeId);
-                var ck = (SenderPeerBytes(), batch.NamespaceId, cid);
+                var ck = (senderPeer, batch.NamespaceId, BatchId.From(cid));
                 bool known = SeenChanges.Contains(ck);
                 SeenChanges.Add(ck);
                 if (!known && !changedFlags[idx])

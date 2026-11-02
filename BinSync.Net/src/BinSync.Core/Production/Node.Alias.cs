@@ -75,9 +75,9 @@ public sealed partial class Node
         NodeToAlias.Remove(peer);
         foreach (var k in PeerStates.Keys.Where(k => k.Item1 == peer).ToList())
             PeerStates.Remove(k);
-        foreach (var k in LastBatchDigest.Keys.Where(k => peer.EqualsBytes(k.Item1)).ToList())
+        foreach (var k in LastBatchDigest.Keys.Where(k => k.Issuer == peer).ToList())
             LastBatchDigest.Remove(k);
-        foreach (var k in LastStreamDigest.Keys.Where(k => peer.EqualsBytes(k.Item2)).ToList())
+        foreach (var k in LastStreamDigest.Keys.Where(k => k.Peer == peer || k.Item1.Issuer == peer).ToList())
             LastStreamDigest.Remove(k);
         foreach (var k in LastStreamAuthor.Keys.Where(k => k.Item1 == peer).ToList())
             LastStreamAuthor.Remove(k);

@@ -60,14 +60,14 @@ public sealed partial class Node
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
     /// <summary>Set of applied batch keys for idempotent replay detection.</summary>
-    internal HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
+    internal HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox { get; } = new();
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
     /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
-    internal Dictionary<(byte[], int, int), byte[]> LastBatchDigest { get; } = new(BytesIntIntEq.Instance);
+    internal Dictionary<(NodeId Issuer, int Ns, int Epoch), byte[]> LastBatchDigest { get; } = new();
     // per-stream prevBatchDigest: AM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
     /// <summary>Per-stream prev-batch digest checkpoints on the issuer side.</summary>
-    internal Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
+    internal Dictionary<((NodeId Issuer, int Ns, int Epoch), NodeId Peer), byte[]> LastStreamDigest { get; } = new();
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
     /// <summary>Gets alias to node.</summary>
     internal Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();
@@ -80,7 +80,7 @@ public sealed partial class Node
     internal Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     /// <summary>Provenance seen-set of (sender, ns, changeId) for relay (Errata E-10).</summary>
-    internal HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
+    internal HashSet<(NodeId Peer, int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
     internal Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();

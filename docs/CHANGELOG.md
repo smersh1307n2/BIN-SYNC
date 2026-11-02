@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.2 — 2026-11-02
+
+**Typed map keys on the apply/sync hot path (allocation cut).**
+
+- Inbox / LastBatchDigest / LastStreamDigest / SeenChanges / ReceivedStreams use NodeId/BatchId
+- ApplyBatch no longer allocates senderPeer.ToArray() for session maps
+- Persistence updated; wire still b128
+
+---
+
 ## 2.2.1 — 2026-11-02
 
 **Hot-path allocation hygiene.**
