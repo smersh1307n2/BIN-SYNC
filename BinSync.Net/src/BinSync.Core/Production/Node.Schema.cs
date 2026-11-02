@@ -1,6 +1,7 @@
 // Opt-in schema gate on ApplyBatch (§18).
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>

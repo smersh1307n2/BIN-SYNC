@@ -5,10 +5,13 @@ namespace BinSync;
 /// <summary>Held batch waiting on causal parents (KЗ4).</summary>
 public sealed class HeldCausalBatch
 {
+    /// <summary>Gets Batch.</summary>
     public required Batch Batch { get; init; }
+    /// <summary>Gets SenderPeer.</summary>
     public required byte[] SenderPeer { get; init; }
 }
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>

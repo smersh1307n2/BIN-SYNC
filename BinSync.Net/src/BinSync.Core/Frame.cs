@@ -3,21 +3,34 @@ using System.Buffers.Binary;
 
 namespace BinSync;
 
+/// <summary>Represents Frames.</summary>
 public static class Frames
 {
+    /// <summary>MAGIC.</summary>
     public const ushort MAGIC = 0x4253;
+    /// <summary>VERSION.</summary>
     public const byte VERSION = 0x00;
+    /// <summary>HEADER_SIZE.</summary>
     public const int HEADER_SIZE = 25;
+    /// <summary>MAX_FRAME_SIZE.</summary>
     public const int MAX_FRAME_SIZE = 16 * 1024 * 1024;            // §12.3
+    /// <summary>MAX_PAYLOAD_SIZE.</summary>
     public const int MAX_PAYLOAD_SIZE = MAX_FRAME_SIZE - HEADER_SIZE;
+    /// <summary>INITIAL_WINDOW.</summary>
     public const int INITIAL_WINDOW = 256 * 1024;                  // §3.6.1
+    /// <summary>MAX_WINDOW_SIZE.</summary>
     public const int MAX_WINDOW_SIZE = 16 * 1024 * 1024;
 
+    /// <summary>FLAG_COMPRESSED.</summary>
     public const byte FLAG_COMPRESSED = 0x01;
+    /// <summary>FLAG_SIGNED.</summary>
     public const byte FLAG_SIGNED = 0x02;
+    /// <summary>FLAG_FRAGMENT.</summary>
     public const byte FLAG_FRAGMENT = 0x04;
+    /// <summary>FLAG_ENCRYPTED.</summary>
     public const byte FLAG_ENCRYPTED = 0x08;
 
+    /// <summary>Dictionary.</summary>
     public static readonly Dictionary<int, string> FrameTypes = new()
     {
         [0x01] = "HELLO",
@@ -42,6 +55,7 @@ public static class Frames
     };
 
     // §12.23 error codes (canonical numeric values)
+    /// <summary>Dictionary.</summary>
     public static readonly Dictionary<string, ushort> ErrorCodes = new()
     {
         ["UNKNOWN_ALIAS"] = 0x0001,
@@ -83,17 +97,21 @@ public static class Frames
         return t;
     }
 
+    /// <summary>Crc32C.</summary>
     public static uint Crc32C(ReadOnlySpan<byte> data)
     {
         uint crc = 0xFFFFFFFFu;
         foreach (byte b in data) crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
         return crc ^ 0xFFFFFFFFu;
     }
+    /// <summary>Crc32C.</summary>
     public static uint Crc32C(byte[] data) => Crc32C(data.AsSpan());
 }
 
+/// <summary>Represents Frame.</summary>
 public sealed record class Frame(byte FrameType, byte Flags, uint StreamId, ulong FrameSeq, byte[] Payload)
 {
+    /// <summary>Gets Name.</summary>
     public string Name => Frames.FrameTypes.TryGetValue(FrameType, out var n) ? n : $"0x{FrameType:x2}";
 }
 
@@ -137,10 +155,12 @@ public class FrameException : Exception
     }
 }
 
+/// <summary>Represents FrameCodec.</summary>
 public static class FrameCodec
 {
     /// Header (§12.2 packed): magic u16 | version u8 | type u8 | flags u8 | streamId u32 |
     /// frameSeq u64 | payloadLen u32 | crc32c u32 — exactly 25 bytes (BUGFIX: no struct padding).
+    /// <summary>Build a framed packet with CRC32C header.</summary>
     public static byte[] BuildFrame(byte frameType, uint streamId, ulong frameSeq, byte[] payload, byte flags = 0)
     {
         if (payload.Length > Frames.MAX_PAYLOAD_SIZE)
@@ -157,6 +177,7 @@ public static class FrameCodec
         return frame;
     }
 
+    /// <summary>Parse and validate a framed packet.</summary>
     public static (Frame Frame, int Consumed) ParseFrame(byte[] data)
     {
         if (data.Length < Frames.HEADER_SIZE) throw new FrameException("FRAME_REJECTED");
@@ -184,17 +205,23 @@ public static class FrameCodec
 }
 
 /// §3.6 additive-credit window per streamId. Payload bytes only, not headers.
+/// <summary>Represents FlowControl.</summary>
 public class FlowControl
 {
+    /// <summary>Initial.</summary>
     public int Initial;
+    /// <summary>MaxWindow.</summary>
     public int MaxWindow;
     private readonly Dictionary<uint, long> _credit = new();
 
+    /// <summary>FlowControl.</summary>
     public FlowControl(int initial = Frames.INITIAL_WINDOW, int maxWindow = Frames.MAX_WINDOW_SIZE)
     { Initial = initial; MaxWindow = maxWindow; }
 
+    /// <summary>Balance.</summary>
     public long Balance(uint streamId) => _credit.TryGetValue(streamId, out var v) ? v : (_credit[streamId] = Initial);
 
+    /// <summary>TryConsume.</summary>
     public bool TryConsume(uint streamId, long payloadBytes)
     {
         var bal = Balance(streamId);
@@ -204,6 +231,7 @@ public class FlowControl
     }
 
     /// WINDOW_UPDATE is additive; clamp at MAX_WINDOW_SIZE [УП1].
+    /// <summary>ApplyUpdate.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
         long nv = Math.Min(Balance(streamId) + credits, MaxWindow);

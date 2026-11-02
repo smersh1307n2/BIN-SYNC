@@ -5,11 +5,16 @@ namespace BinSync;
 /// <summary>One fragment of a logical message larger than the transport MTU.</summary>
 public readonly struct FrameFragment
 {
+    /// <summary>Gets MsgId.</summary>
     public byte[] MsgId { get; }
+    /// <summary>Gets Index.</summary>
     public ushort Index { get; }
+    /// <summary>Gets Count.</summary>
     public ushort Count { get; }
+    /// <summary>Gets Body.</summary>
     public byte[] Body { get; }
 
+    /// <summary>FrameFragment.</summary>
     public FrameFragment(byte[] msgId, ushort index, ushort count, byte[] body)
     {
         MsgId = msgId;
@@ -19,6 +24,7 @@ public readonly struct FrameFragment
     }
 }
 
+/// <summary>Represents FragmentCodec.</summary>
 public static class FragmentCodec
 {
     /// <summary>Split <paramref name="logicalPayload"/> into fragments of at most <paramref name="maxBody"/> bytes.</summary>
@@ -47,6 +53,7 @@ public static class FragmentCodec
         return list;
     }
 
+    /// <summary>EncodeOne.</summary>
     public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body)
     {
         var w = new Writer();
@@ -54,6 +61,7 @@ public static class FragmentCodec
         return w.Value();
     }
 
+    /// <summary>DecodeOne.</summary>
     public static FrameFragment DecodeOne(byte[] payload)
     {
         var r = new Reader(payload);
@@ -87,13 +95,17 @@ public sealed class FragmentReassembler
 {
     private sealed class Slot
     {
+        /// <summary>Count.</summary>
         public ushort Count;
+        /// <summary>Parts.</summary>
         public byte[]?[] Parts = Array.Empty<byte[]?>();
+        /// <summary>Have.</summary>
         public int Have;
     }
 
     private readonly Dictionary<string, Slot> _pending = new(StringComparer.Ordinal);
 
+    /// <summary>Gets PendingMessages.</summary>
     public int PendingMessages => _pending.Count;
 
     /// <summary>
@@ -138,5 +150,6 @@ public sealed class FragmentReassembler
         return buf;
     }
 
+    /// <summary>Clear.</summary>
     public void Clear() => _pending.Clear();
 }

@@ -13,6 +13,7 @@ public sealed class KeyEpochStore
     /// <summary>Trusted identity public keys (32-byte Ed25519) keyed by nodeId hex.</summary>
     private readonly Dictionary<string, byte[]> _identityKeys = new();
 
+    /// <summary>TrustIdentity.</summary>
     public void TrustIdentity(ReadOnlySpan<byte> nodeId, ReadOnlySpan<byte> publicKey)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
@@ -20,6 +21,7 @@ public sealed class KeyEpochStore
         _identityKeys[Hex(nodeId)] = publicKey.ToArray();
     }
 
+    /// <summary>TryGetIdentity.</summary>
     public bool TryGetIdentity(ReadOnlySpan<byte> nodeId, out byte[] publicKey) =>
         _identityKeys.TryGetValue(Hex(nodeId), out publicKey!);
 

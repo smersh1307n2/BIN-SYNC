@@ -2,6 +2,7 @@
 
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>Thread-safe entry point (production hardening): takes the node gate

@@ -12,13 +12,16 @@ namespace BinSync;
 /// </summary>
 public static class CausalWire
 {
+    /// <summary>Magic.</summary>
     public const uint Magic = 0x31444343; // "CCD1" LE
     /// <summary>Batch.Flags bit: payload is followed by a causal trailer.</summary>
     public const int FlagHasCausalTrailer = 0x20;
 
+    /// <summary>HasDeps.</summary>
     public static bool HasDeps(IReadOnlyList<OutboxEntry> entries) =>
         entries.Any(e => e.CausalDeps.Count > 0);
 
+    /// <summary>EncodeTrailer.</summary>
     public static byte[] EncodeTrailer(IReadOnlyList<OutboxEntry> entries)
     {
         var w = new Writer();

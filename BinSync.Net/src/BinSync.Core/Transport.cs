@@ -3,6 +3,7 @@
 // Port of binsync/transport.py — all SPEC HARDENING / errata notes preserved.
 namespace BinSync;
 
+/// <summary>Represents Transport.</summary>
 public static partial class Transport
 {
     /// HELLO + ALIAS_MAP exchange for a session between two nodes (§4.3).
@@ -12,6 +13,7 @@ public static partial class Transport
     /// durably knows — so both peers hold an identical map for the session (the actual
     /// §4.3 determinism requirement; per-session allocation per errata E-7, full-table
     /// harvest from the DURABLE author registry per errata E-8/E-9 — see Python port).
+    /// <summary>Establish bidirectional session state between two nodes.</summary>
     public static void MakeSession(Node a, Node b, (int, int)? aliases = null)
     {
         var (aa, ab) = aliases ?? (1, 2);
@@ -90,6 +92,7 @@ public static partial class Transport
         }
     }
 
+    /// <summary>EncodeAck.</summary>
     public static byte[] EncodeAck(byte[] batchId, long ackedSeq, byte[]? authorStream = null)
     {
         var w = new Writer();
@@ -99,6 +102,7 @@ public static partial class Transport
         return w.Value();
     }
 
+    /// <summary>DecodeAck.</summary>
     public static (byte[] BatchId, long Seq, byte[]? Author) DecodeAck(byte[] data)
     {
         var r = new Reader(data);
@@ -117,6 +121,7 @@ public static partial class Transport
     /// Returns BatchResult or null if nothing pending. Throws SyncException on rejection.
     /// `dropAck=true` simulates a lost ACK (§10.2.2 / scenario 18): the ISSUER does NOT
     /// learn about the delivery, so a later CreateDeltaBatch replays the same batchId.
+    /// <summary>Create, encode, apply one batch and ACK (optional dropAck).</summary>
     public static BatchResult? DeliverBatch(Node sender, Node receiver, int namespaceId,
         byte[]? filterAuthor = null, int schemaVersion = 1, bool dropAck = false)
     {
@@ -149,6 +154,7 @@ public static partial class Transport
     }
 
     /// Full pairwise delta exchange A→B then B→A. Returns count of delivered batches.
+    /// <summary>Exchange pending batches A→B then B→A until drained.</summary>
     public static int SyncRound(Node a, Node b, int namespaceId, int schemaVersion = 1)
     {
         int n = 0;
@@ -164,6 +170,7 @@ public static partial class Transport
 
     // ------------------------------------------------------------------ sneakernet (§3.5)
     /// Dump DELTA_BATCH frames to a binary file (writer side of exportDelta).
+    /// <summary>ExportDelta.</summary>
     public static int ExportDelta(Node node, int namespaceId, byte[] targetHint, string path)
     {
         int count = 0;
@@ -184,6 +191,7 @@ public static partial class Transport
 
     /// Read frames from a file and apply them exactly like network delivery (§3.5):
     /// same ApplyBatch path — identity and idempotency preserved.
+    /// <summary>ImportDelta.</summary>
     public static int ImportDelta(Node node, string path, byte[] issuerHint)
     {
         var data = File.ReadAllBytes(path);

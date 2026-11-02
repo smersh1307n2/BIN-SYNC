@@ -11,10 +11,12 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace BinSync;
 
+/// <summary>Represents TcpSyncListener.</summary>
 public sealed class TcpSyncListener : IAsyncDisposable
 {
     private readonly TcpListener _listener;
 
+    /// <summary>Gets Port.</summary>
     public int Port { get; }
 
     private TcpSyncListener(TcpListener listener)
@@ -23,6 +25,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
+    /// <summary>Start.</summary>
     public static TcpSyncListener Start(int port = 0, IPAddress? address = null)
     {
         var listener = new TcpListener(address ?? IPAddress.Loopback, port);
@@ -54,6 +57,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
         }
     }
 
+    /// <summary>DisposeAsync.</summary>
     public ValueTask DisposeAsync()
     {
         _listener.Stop();
@@ -68,9 +72,13 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     private readonly StreamSyncTransport _transport;
     private readonly Stream? _ownedOuter; // SslStream when TLS; disposed after transport
 
+    /// <summary>Gets PeerNodeId.</summary>
     public byte[] PeerNodeId { get; }
+    /// <summary>Gets PeerEpoch.</summary>
     public int PeerEpoch { get; }
+    /// <summary>Gets PeerCapabilities.</summary>
     public SessionCapabilities PeerCapabilities { get; }
+    /// <summary>Gets IsTls.</summary>
     public bool IsTls { get; }
 
     private TcpSyncSession(
@@ -188,6 +196,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         return result;
     }
 
+    /// <summary>DisposeAsync.</summary>
     public async ValueTask DisposeAsync()
     {
         await _transport.DisposeAsync().ConfigureAwait(false);

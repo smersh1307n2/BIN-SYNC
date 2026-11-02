@@ -2,6 +2,7 @@
 // must not apply incremental batches — full resync (OUTDATED_WATERMARK 0x000B).
 namespace BinSync;
 
+/// <summary>Rejects peers whose HLC watermark is behind the local safe cutoff.</summary>
 public static class WatermarkGate
 {
     /// <summary>
@@ -15,6 +16,7 @@ public static class WatermarkGate
             throw new SyncException("OUTDATED_WATERMARK", batchId);
     }
 
+    /// <summary>Returns true when the peer watermark is stale relative to the local safe cutoff.</summary>
     public static bool IsStale(ulong peerWatermarkWall, ulong localSafeWatermark) =>
         localSafeWatermark != 0 && peerWatermarkWall < localSafeWatermark;
 }

@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>
@@ -49,6 +50,7 @@ public sealed partial class Node
     }
 }
 
+/// <summary>Represents PeerState.</summary>
 public sealed partial class PeerState
 {
     /// <summary>Read-only view of cached (batchId, prevDigest) triples (tests).</summary>

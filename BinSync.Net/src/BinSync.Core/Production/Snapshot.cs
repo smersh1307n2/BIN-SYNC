@@ -4,34 +4,51 @@ namespace BinSync;
 /// <summary>One field row inside a snapshot record.</summary>
 public sealed class SnapshotField
 {
+    /// <summary>FieldId.</summary>
     public ushort FieldId;
+    /// <summary>Wall.</summary>
     public ulong Wall;
+    /// <summary>Logical.</summary>
     public uint Logical;
+    /// <summary>AuthorNodeId.</summary>
     public byte[] AuthorNodeId = Array.Empty<byte>();
+    /// <summary>KeyEpoch.</summary>
     public ushort KeyEpoch;
+    /// <summary>Value.</summary>
     public byte[] Value = Array.Empty<byte>();
 }
 
 /// <summary>One record in a SNAPSHOT_CHUNK.</summary>
 public sealed class SnapshotRecord
 {
+    /// <summary>RecordId.</summary>
     public byte[] RecordId = Array.Empty<byte>();
+    /// <summary>List.</summary>
     public List<SnapshotField> Fields = new();
+    /// <summary>LifecycleValue.</summary>
     public byte LifecycleValue = Model.Alive;
+    /// <summary>LifecycleWall.</summary>
     public ulong LifecycleWall;
+    /// <summary>LifecycleLogical.</summary>
     public uint LifecycleLogical;
+    /// <summary>LifecycleAuthor.</summary>
     public byte[] LifecycleAuthor = Array.Empty<byte>();
 }
 
 /// <summary>Decoded SNAPSHOT_CHUNK payload.</summary>
 public sealed class SnapshotChunkMessage
 {
+    /// <summary>NamespaceId.</summary>
     public int NamespaceId;
+    /// <summary>ChunkIndex.</summary>
     public uint ChunkIndex;
+    /// <summary>ChunkCount.</summary>
     public uint ChunkCount = 1;
+    /// <summary>List.</summary>
     public List<SnapshotRecord> Records = new();
 }
 
+/// <summary>Represents Reconcile.</summary>
 public static partial class Reconcile
 {
     /// <summary>Build a single-chunk snapshot of records under <paramref name="prefix"/>.</summary>
@@ -80,6 +97,7 @@ public static partial class Reconcile
         return msg;
     }
 
+    /// <summary>EncodeSnapshotChunk.</summary>
     public static byte[] EncodeSnapshotChunk(SnapshotChunkMessage m)
     {
         var w = new Writer();
@@ -108,6 +126,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
+    /// <summary>DecodeSnapshotChunk.</summary>
     public static SnapshotChunkMessage DecodeSnapshotChunk(byte[] payload)
     {
         var r = new Reader(payload);

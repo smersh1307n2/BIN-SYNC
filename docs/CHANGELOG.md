@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.1.11 — 2026-11-02
+
+**Public API XML-doc coverage + exception hygiene.**
+
+- Nearly complete `/// <summary>` on non-Crypto public surface (~980 members)
+- `WatermarkGate` documented; empty `InvalidOperationException` messages filled
+- Style policy unchanged (`docs/STYLE.md`)
+
+---
+
 ## 2.1.10 — 2026-11-02
 
 **Review follow-up: exceptions, StyleCop honesty, docs.**

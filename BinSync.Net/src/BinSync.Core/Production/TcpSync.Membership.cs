@@ -1,6 +1,7 @@
 // MEMBERSHIP exchange + bilateral AutoReconcile on TcpSyncSession.
 namespace BinSync;
 
+/// <summary>Represents TcpSyncSession.</summary>
 public sealed partial class TcpSyncSession
 {
     /// <summary>Send local MEMBERSHIP roster for a namespace.</summary>

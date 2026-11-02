@@ -5,8 +5,11 @@ namespace BinSync;
 /// <summary>One published schema version for a (namespace, schemaId).</summary>
 public sealed class SchemaDescriptor
 {
+    /// <summary>Gets NamespaceId.</summary>
     public int NamespaceId { get; init; }
+    /// <summary>Gets SchemaId.</summary>
     public int SchemaId { get; init; }
+    /// <summary>Gets Version.</summary>
     public int Version { get; init; }
     /// <summary>Merge policy byte bound to this version (§18.2).</summary>
     public int MergePolicy { get; init; }
@@ -39,6 +42,7 @@ public sealed class SchemaRegistry
     // (namespaceId, schemaId) → version → descriptor
     private readonly Dictionary<(int Ns, int SchemaId), Dictionary<int, SchemaDescriptor>> _map = new();
 
+    /// <summary>Count.</summary>
     public int Count
     {
         get { lock (_gate) return _map.Sum(kv => kv.Value.Count); }
@@ -83,6 +87,7 @@ public sealed class SchemaRegistry
         }
     }
 
+    /// <summary>TryGet.</summary>
     public bool TryGet(int namespaceId, int schemaId, int version, out SchemaDescriptor? desc)
     {
         lock (_gate)
@@ -176,6 +181,7 @@ public sealed class SchemaRegistry
 /// <summary>SCHEMA_MAP frame (type 0x04) encode/decode.</summary>
 public static class SchemaMap
 {
+    /// <summary>FrameType.</summary>
     public const byte FrameType = 0x04;
 
     /// <summary>
@@ -204,6 +210,7 @@ public static class SchemaMap
         return w.Value();
     }
 
+    /// <summary>List.</summary>
     public static List<SchemaDescriptor> Decode(ReadOnlySpan<byte> payload)
     {
         var r = new Reader(payload.ToArray());
@@ -234,6 +241,7 @@ public static class SchemaMap
         return list;
     }
 
+    /// <summary>Build a framed packet with CRC32C header.</summary>
     public static byte[] BuildFrame(IReadOnlyList<SchemaDescriptor> list, ulong frameSeq, uint streamId = 0) =>
         FrameCodec.BuildFrame(FrameType, streamId, frameSeq, Encode(list));
 }

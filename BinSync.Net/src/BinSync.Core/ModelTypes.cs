@@ -58,32 +58,48 @@ public sealed class OutboxEntry
     public ReadOnlyMemory<byte> AuthorNodeId { get; set; } = Array.Empty<byte>();
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
+    /// <summary>Gets or sets List.</summary>
     public List<byte[]> CausalDeps { get; set; } = new();
 }
 
 /// <summary>DELTA_BATCH logical unit: headers, digests, and <see cref="OutboxEntry"/> list.</summary>
 public sealed partial class Batch
 {
+    /// <summary>Gets or sets NamespaceId.</summary>
     public int NamespaceId { get; set; }
+    /// <summary>Gets or sets SchemaId.</summary>
     public int SchemaId { get; set; }
+    /// <summary>Gets or sets SchemaVersion.</summary>
     public int SchemaVersion { get; set; }
+    /// <summary>Gets or sets MergePolicy.</summary>
     public int MergePolicy { get; set; }
+    /// <summary>Gets or sets Flags.</summary>
     public int Flags { get; set; }
+    /// <summary>Gets or sets IssuerNodeId.</summary>
     public byte[] IssuerNodeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Gets or sets IssuerEpoch.</summary>
     public int IssuerEpoch { get; set; }
+    /// <summary>Gets or sets CursorStart.</summary>
     public long CursorStart { get; set; }
+    /// <summary>Gets or sets CursorEnd.</summary>
     public long CursorEnd { get; set; }
+    /// <summary>Gets or sets BatchId.</summary>
     public byte[] BatchId { get; set; } = Node.Zero128;
+    /// <summary>Gets or sets PrevBatchDigest.</summary>
     public byte[] PrevBatchDigest { get; set; } = Node.Zero128;
+    /// <summary>Gets or sets RecordsRoot.</summary>
     public byte[] RecordsRoot { get; set; } = Node.Zero128;
+    /// <summary>Gets or sets BatchDigest.</summary>
     public byte[] BatchDigest { get; set; } = Node.Zero128;
     /// <summary>Decoded ops kept for retransmission/ACK.</summary>
     public List<OutboxEntry> Entries { get; set; } = new();
     /// <summary>Errata E-4: durable author of this batch, resolved on the receiver at apply time.</summary>
     public byte[]? AuthorStreamNodeId { get; set; }
 
+    /// <summary>Batch.</summary>
     public Batch() { }
 
+    /// <summary>Batch.</summary>
     public Batch(int ns, int schemaId, int schemaVer, int policy, int flags,
                  byte[] issuer, int issuerEpoch, long cstart, long cend,
                  byte[] batchId, byte[] prev, byte[] root, byte[] digest,
@@ -105,8 +121,10 @@ public sealed partial class Batch
         Entries = entries;
     }
 
+    /// <summary>EncodeRecords.</summary>
     public byte[] EncodeRecords() => Node.EncodeRecordsArray(Entries);
 
+    /// <summary>List.</summary>
     public List<object> Ops()
     {
         var outp = new List<object>();
@@ -142,39 +160,58 @@ public sealed partial class Batch
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
 public sealed partial class PeerState
 {
+    /// <summary>Gets or sets PeerNodeId.</summary>
     public byte[] PeerNodeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Gets or sets NamespaceId.</summary>
     public int NamespaceId { get; set; }
+    /// <summary>Gets or sets LastPushedSeq.</summary>
     public long LastPushedSeq { get; set; }
+    /// <summary>Gets or sets LastReceivedSeq.</summary>
     public long LastReceivedSeq { get; set; }
+    /// <summary>Gets or sets LastAckedSeq.</summary>
     public long LastAckedSeq { get; set; }
+    /// <summary>Gets Dictionary.</summary>
     public Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams { get; } =
         new(BytesIntIntBytesEq.Instance);
+    /// <summary>Gets Dictionary.</summary>
     public Dictionary<NodeId, long> StreamAcked { get; } = new();
+    /// <summary>Gets or sets InitialSyncComplete.</summary>
     public bool InitialSyncComplete { get; set; }
+    /// <summary>Gets or sets MembershipEpoch.</summary>
     public int MembershipEpoch { get; set; }
+    /// <summary>Gets or sets LastSeen.</summary>
     public long LastSeen { get; set; }
     internal Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids { get; } =
         new(BytesLongLongEq.Instance);
 
+    /// <summary>PeerState.</summary>
     public PeerState(NodeId peer, int ns)
     {
         PeerNodeId = peer.ToArray();
         NamespaceId = ns;
     }
 
+    /// <summary>PeerState.</summary>
     public PeerState(byte[] peer, int ns) : this((NodeId)peer, ns) { }
 
+    /// <summary>AckedFor.</summary>
     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
+    /// <summary>AckedFor.</summary>
     public long AckedFor(ReadOnlyMemory<byte> author) => StreamAcked.TryGetValue((NodeId)author, out var v) ? v : 0;
+    /// <summary>AckedFor.</summary>
     public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 
 /// <summary>Outcome of <see cref="Node.ApplyBatch"/> / <see cref="Node.ApplyBatchPayload"/>.</summary>
 public sealed class BatchResult
 {
+    /// <summary>Gets or sets BatchId.</summary>
     public byte[] BatchId { get; set; }
+    /// <summary>Gets or sets Applied.</summary>
     public int Applied { get; set; }
+    /// <summary>Gets or sets Acked.</summary>
     public bool Acked { get; set; }
+    /// <summary>Gets or sets Duplicate.</summary>
     public bool Duplicate { get; set; }
     /// <summary>Batch cursor end (for ACK). Set by ApplyBatch.</summary>
     public long CursorEnd { get; set; }
@@ -183,5 +220,6 @@ public sealed class BatchResult
     /// <summary>Durable author stream for ACK (Errata E-4).</summary>
     public byte[] DurableAuthor { get; set; } = Array.Empty<byte>();
 
+    /// <summary>BatchResult.</summary>
     public BatchResult(byte[] batchId) => BatchId = batchId;
 }

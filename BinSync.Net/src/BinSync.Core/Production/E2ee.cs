@@ -9,9 +9,13 @@ namespace BinSync;
 /// <summary>E2EE helpers: deterministic nonce (§14.5) and ChaCha20-Poly1305 seal/open.</summary>
 public static class E2ee
 {
+    /// <summary>NonceDomain.</summary>
     public const string NonceDomain = "BIN-SYNC/E2EE/nonce/v1";
+    /// <summary>KeySize.</summary>
     public const int KeySize = 32;
+    /// <summary>NonceSize.</summary>
     public const int NonceSize = 12;
+    /// <summary>TagSize.</summary>
     public const int TagSize = 16;
 
     /// <summary>

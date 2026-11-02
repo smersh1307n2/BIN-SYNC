@@ -5,22 +5,35 @@ using System.Buffers.Binary;
 
 namespace BinSync;
 
+/// <summary>Represents OpsConst.</summary>
 public static class OpsConst
 {
+    /// <summary>TagFieldWrite.</summary>
     public const byte TagFieldWrite = 0x01;
+    /// <summary>TagFieldTomb.</summary>
     public const byte TagFieldTomb = 0x02;
+    /// <summary>TagRecordTomb.</summary>
     public const byte TagRecordTomb = 0x03;
+    /// <summary>OriginOffset.</summary>
     public const int OriginOffset = 17;              // [C11] FieldWrite/FieldTomb
+    /// <summary>OriginOffsetRecordTomb.</summary>
     public const int OriginOffsetRecordTomb = 29;    // RecordTombstone
 }
 
+/// <summary>Represents OpFieldWrite.</summary>
 public class OpFieldWrite
 {
+    /// <summary>FieldId.</summary>
     public ushort FieldId, KeyEpoch;
+    /// <summary>Wall.</summary>
     public ulong Wall; public uint Logical;
+    /// <summary>Origin.</summary>
     public ushort Origin;
+    /// <summary>AuthorNodeId.</summary>
     public byte[]? AuthorNodeId;
+    /// <summary>Value.</summary>
     public byte[] Value = Array.Empty<byte>();
+    /// <summary>Gets Tag.</summary>
     public byte Tag => OpsConst.TagFieldWrite;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -34,12 +47,18 @@ public class OpFieldWrite
     internal int FullAuthorPayloadLen => 33 + Codec.VarintLength((ulong)Value.Length) + Value.Length;
 }
 
+/// <summary>Represents OpFieldTomb.</summary>
 public class OpFieldTomb
 {
+    /// <summary>FieldId.</summary>
     public ushort FieldId, KeyEpoch;
+    /// <summary>Wall.</summary>
     public ulong Wall; public uint Logical;
+    /// <summary>Origin.</summary>
     public ushort Origin;
+    /// <summary>AuthorNodeId.</summary>
     public byte[]? AuthorNodeId;
+    /// <summary>Gets Tag.</summary>
     public byte Tag => OpsConst.TagFieldTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -48,12 +67,18 @@ public class OpFieldTomb
     internal const int FullAuthorPayloadLen = 33;
 }
 
+/// <summary>Represents OpRecordTombstone.</summary>
 public class OpRecordTombstone
 {
+    /// <summary>RecordId.</summary>
     public byte[] RecordId = Array.Empty<byte>();
+    /// <summary>Wall.</summary>
     public ulong Wall; public uint Logical;
+    /// <summary>Origin.</summary>
     public ushort Origin;
+    /// <summary>AuthorNodeId.</summary>
     public byte[]? AuthorNodeId;
+    /// <summary>Gets Tag.</summary>
     public byte Tag => OpsConst.TagRecordTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -62,10 +87,12 @@ public class OpRecordTombstone
     internal const int FullAuthorPayloadLen = 45;
 }
 
+/// <summary>Represents Ops.</summary>
 public static partial class Ops
 {
     /// Snapshot-mode encoding: always carries the durable author (mirrors Python
     /// build_snapshot which calls encode_op(op) with default full_author=True).
+    /// <summary>EncodeOpFull.</summary>
     public static byte[] EncodeOpFull(object op) => EncodeOp(op, fullAuthor: true);
 
     /// <summary>Upper bound on <see cref="EncodeOp(object, bool?, int?)"/> size.</summary>
@@ -97,6 +124,7 @@ public static partial class Ops
     /// When <paramref name="fullAuthor"/> is null the mode is taken from the op itself
     /// (<c>FullAuthorMode</c>, i.e. how it was decoded) — this keeps outbox payloads
     /// byte-stable across persistence round-trips (production hardening).
+    /// <summary>Encode an operation object to canonical wire bytes.</summary>
     public static byte[] EncodeOp(object op, bool? fullAuthor = null, int? valueLenOverride = null)
     {
         int est = EstimateEncodeOpSize(op, fullAuthor, valueLenOverride);
@@ -202,6 +230,7 @@ public static partial class Ops
         return TryCloneWithOrigin(payload.ToArray(), origin);
     }
 
+    /// <summary>TryCloneWithOrigin.</summary>
     public static byte[]? TryCloneWithOrigin(byte[] payload, ushort origin)
     {
         if (payload.Length < 19) return null;
@@ -234,9 +263,11 @@ public static partial class Ops
         return copy;
     }
 
+    /// <summary>Decode an operation from wire bytes.</summary>
     public static (object Op, int Pos) DecodeOp(byte[] data, int pos = 0, bool? fullAuthor = null)
         => DecodeOp((ReadOnlyMemory<byte>)data, pos, fullAuthor);
 
+    /// <summary>Decode an operation from wire bytes.</summary>
     public static (object Op, int Pos) DecodeOp(ReadOnlyMemory<byte> data, int pos = 0, bool? fullAuthor = null)
     {
         var r = new Reader(data, pos);
@@ -276,7 +307,7 @@ public static partial class Ops
             if (full) { author = r.B128(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffset + (full ? 16 : 2))
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("malformed op payload");
             return (new OpFieldTomb { FieldId = fid, KeyEpoch = ke, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, FullAuthorMode = full }, r.Pos);
         }
         if (tag == OpsConst.TagRecordTomb)
@@ -288,7 +319,7 @@ public static partial class Ops
             if (full) { author = r.B128(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffsetRecordTomb + (full ? 16 : 2))
-                throw new InvalidOperationException();
+                throw new InvalidOperationException("malformed op payload");
             return (new OpRecordTombstone { RecordId = rid, Wall = wall, Logical = logical, Origin = origin, AuthorNodeId = author, FullAuthorMode = full }, r.Pos);
         }
         throw new ArgumentException($"unknown op tag 0x{tag:x}");

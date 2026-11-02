@@ -2,16 +2,21 @@
 // Wire frame type 0x09 (between NEED_KEYS 0x08 and SNAPSHOT 0x0A).
 namespace BinSync;
 
+/// <summary>Represents ReconcileFrames.</summary>
 public static partial class ReconcileFrames
 {
+    /// <summary>Iblt.</summary>
     public const byte Iblt = 0x09;
 }
 
 /// <summary>One IBLT cell: count + XOR of keys + XOR of key hashes.</summary>
 public struct IbltCell
 {
+    /// <summary>Count.</summary>
     public int Count;
+    /// <summary>KeyBytes.</summary>
     public byte[] KeyXor;   // length KeyBytes (padded)
+    /// <summary>HashXor.</summary>
     public ulong HashXor;
 }
 
@@ -21,12 +26,17 @@ public struct IbltCell
 /// </summary>
 public sealed class Iblt
 {
+    /// <summary>KeyBytes.</summary>
     public const int KeyBytes = 16;
+    /// <summary>HashCount.</summary>
     public const int HashCount = 3;
 
+    /// <summary>Gets CellCount.</summary>
     public int CellCount { get; }
+    /// <summary>Gets Cells.</summary>
     public IbltCell[] Cells { get; }
 
+    /// <summary>Iblt.</summary>
     public Iblt(int cellCount)
     {
         if (cellCount < 4) throw new ArgumentOutOfRangeException(nameof(cellCount));
@@ -36,6 +46,7 @@ public sealed class Iblt
             Cells[i] = new IbltCell { KeyXor = new byte[KeyBytes], HashXor = 0, Count = 0 };
     }
 
+    /// <summary>NormalizeKey.</summary>
     public static byte[] NormalizeKey(byte[] key)
     {
         var k = Codec.CanonicalB128(key);
@@ -45,6 +56,7 @@ public sealed class Iblt
         return r;
     }
 
+    /// <summary>KeyHash.</summary>
     public static ulong KeyHash(ReadOnlySpan<byte> key)
     {
         ulong h = 14695981039346656037UL;
@@ -69,7 +81,9 @@ public sealed class Iblt
         if (idx[2] == idx[0] || idx[2] == idx[1]) idx[2] = (idx[2] + 2) % CellCount;
     }
 
+    /// <summary>Insert.</summary>
     public void Insert(byte[] key) => Add(NormalizeKey(key), +1);
+    /// <summary>Delete.</summary>
     public void Delete(byte[] key) => Add(NormalizeKey(key), -1);
 
     private void Add(byte[] key, int delta)
@@ -167,6 +181,7 @@ public sealed class Iblt
         return t;
     }
 
+    /// <summary>Encode.</summary>
     public static byte[] Encode(Iblt t)
     {
         var w = new Writer();
@@ -180,6 +195,7 @@ public sealed class Iblt
         return w.Value();
     }
 
+    /// <summary>Decode.</summary>
     public static Iblt Decode(byte[] payload)
     {
         var r = new Reader(payload);

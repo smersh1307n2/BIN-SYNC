@@ -1,8 +1,10 @@
 // GC_NOTICE exchange on TcpSyncSession.
 namespace BinSync;
 
+/// <summary>Represents TcpSyncSession.</summary>
 public sealed partial class TcpSyncSession
 {
+    /// <summary>SendGcNoticeAsync.</summary>
     public async Task SendGcNoticeAsync(
         Node local, int namespaceId, ulong tombstoneCutoffWall = 0, CancellationToken ct = default)
     {
@@ -13,6 +15,7 @@ public sealed partial class TcpSyncSession
             ct).ConfigureAwait(false);
     }
 
+    /// <summary>Task.</summary>
     public async Task<int> ReceiveGcNoticeAsync(Node local, CancellationToken ct = default)
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
@@ -24,6 +27,7 @@ public sealed partial class TcpSyncSession
         return GcNotice.Apply(local, msg);
     }
 
+    /// <summary>Task.</summary>
     public async Task<(int LearnedLocal, int LearnedRemote)> ExchangeGcNoticeAsync(
         Node local, int namespaceId, bool initiate,
         ulong tombstoneCutoffWall = 0, CancellationToken ct = default)

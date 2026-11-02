@@ -3,6 +3,7 @@
 
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     // ------------------------------------------------------------------ aliases
@@ -39,9 +40,11 @@ public sealed partial class Node
             KnownEpochs[(author, -1)] = epoch;
     }
 
+    /// <summary>KnownAuthorEpoch.</summary>
     public int? KnownAuthorEpoch(NodeId author) =>
         KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
 
+    /// <summary>SessionEpoch.</summary>
     public int? SessionEpoch(NodeId peer, int ns)
     {
         int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;

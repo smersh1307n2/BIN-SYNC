@@ -1,6 +1,7 @@
 // Reconcile fulfill: re-emit storage fields as new outbox ops under a bucket prefix.
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>

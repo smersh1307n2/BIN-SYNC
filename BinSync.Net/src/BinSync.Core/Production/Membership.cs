@@ -1,33 +1,45 @@
 // MEMBERSHIP frame (§12.6 0x05): durable author roster + quarantine hints.
 namespace BinSync;
 
+/// <summary>Represents MembershipFrames.</summary>
 public static class MembershipFrames
 {
+    /// <summary>Membership.</summary>
     public const byte Membership = 0x05;
 }
 
 /// <summary>One member row in a MEMBERSHIP payload.</summary>
 public sealed class MembershipEntry
 {
+    /// <summary>Gets or sets NodeId.</summary>
     public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Gets or sets Epoch.</summary>
     public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
     public byte Flags;
+    /// <summary>Gets IsActive.</summary>
     public bool IsActive => (Flags & 0x01) != 0;
+    /// <summary>Gets IsQuarantined.</summary>
     public bool IsQuarantined => (Flags & 0x02) != 0;
 }
 
 /// <summary>Decoded MEMBERSHIP message for one namespace view.</summary>
 public sealed class MembershipMessage
 {
+    /// <summary>NamespaceId.</summary>
     public int NamespaceId;
+    /// <summary>MembershipEpoch.</summary>
     public uint MembershipEpoch;
+    /// <summary>List.</summary>
     public List<MembershipEntry> Members = new();
 }
 
+/// <summary>Represents Membership.</summary>
 public static class Membership
 {
+    /// <summary>FlagActive.</summary>
     public const byte FlagActive = 0x01;
+    /// <summary>FlagQuarantined.</summary>
     public const byte FlagQuarantined = 0x02;
 
     /// <summary>
@@ -62,6 +74,7 @@ public static class Membership
         return msg;
     }
 
+    /// <summary>Encode.</summary>
     public static byte[] Encode(MembershipMessage m)
     {
         var w = new Writer();
@@ -77,6 +90,7 @@ public static class Membership
         return w.Value();
     }
 
+    /// <summary>Decode.</summary>
     public static MembershipMessage Decode(byte[] payload)
     {
         var r = new Reader(payload);

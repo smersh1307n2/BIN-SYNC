@@ -1,6 +1,7 @@
 // Opt-in trust surface on Node (§15.6).
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>
@@ -45,6 +46,7 @@ public sealed partial class Node
         }
     }
 
+    /// <summary>RevokeTrust.</summary>
     public void RevokeTrust(byte[] nodeId)
     {
         lock (_lockMeta) Trust?.Revoke(nodeId);

@@ -1,6 +1,7 @@
 // Trust model §15.6: TOFU, pre-shared allow-list, simple CA allow-list, revoke.
 namespace BinSync;
 
+/// <summary>Represents TrustMode.</summary>
 public enum TrustMode : byte
 {
     Tofu = 1,
@@ -8,23 +9,32 @@ public enum TrustMode : byte
     CertificateAuthority = 3,
 }
 
+/// <summary>Represents TrustedPeer.</summary>
 public sealed class TrustedPeer
 {
+    /// <summary>Gets NodeId.</summary>
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
+    /// <summary>Gets PublicKey.</summary>
     public byte[] PublicKey { get; init; } = Array.Empty<byte>();
+    /// <summary>Gets Mode.</summary>
     public TrustMode Mode { get; init; }
+    /// <summary>Gets or sets Revoked.</summary>
     public bool Revoked { get; set; }
+    /// <summary>Gets PinnedAtUnixMs.</summary>
     public long PinnedAtUnixMs { get; init; }
 }
 
+/// <summary>Represents TrustStore.</summary>
 public sealed partial class TrustStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TrustedPeer> _peers = new(StringComparer.Ordinal);
     private readonly HashSet<string> _caRoots = new(StringComparer.Ordinal);
 
+    /// <summary>Gets or sets DefaultMode.</summary>
     public TrustMode DefaultMode { get; set; } = TrustMode.Tofu;
 
+    /// <summary>PeerCount.</summary>
     public int PeerCount
     {
         get { lock (_gate) return _peers.Count; }
@@ -32,6 +42,7 @@ public sealed partial class TrustStore
 
     static string Key(byte[] nodeId) => Convert.ToHexString(Codec.CanonicalB128(nodeId));
 
+    /// <summary>Allow.</summary>
     public void Allow(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
@@ -50,16 +61,19 @@ public sealed partial class TrustStore
         }
     }
 
+    /// <summary>AddCaRoot.</summary>
     public void AddCaRoot(byte[] caNodeId)
     {
         lock (_gate) _caRoots.Add(Key(caNodeId));
     }
 
+    /// <summary>IsCaRoot.</summary>
     public bool IsCaRoot(byte[] nodeId)
     {
         lock (_gate) return _caRoots.Contains(Key(nodeId));
     }
 
+    /// <summary>Revoke.</summary>
     public void Revoke(byte[] nodeId)
     {
         lock (_gate)
@@ -69,12 +83,14 @@ public sealed partial class TrustStore
         }
     }
 
+    /// <summary>TryGet.</summary>
     public bool TryGet(byte[] nodeId, out TrustedPeer? peer)
     {
         lock (_gate)
             return _peers.TryGetValue(Key(nodeId), out peer);
     }
 
+    /// <summary>ResolvePublicKey.</summary>
     public byte[]? ResolvePublicKey(byte[] nodeId, byte[]? candidatePublicKey = null)
     {
         lock (_gate)
@@ -108,6 +124,7 @@ public sealed partial class TrustStore
         }
     }
 
+    /// <summary>VerifyBatchOrThrow.</summary>
     public void VerifyBatchOrThrow(
         Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
@@ -118,6 +135,7 @@ public sealed partial class TrustStore
             throw new SyncException("SIGNATURE_INVALID", batch.BatchId);
     }
 
+    /// <summary>TryVerifyBatch.</summary>
     public bool TryVerifyBatch(Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
         try

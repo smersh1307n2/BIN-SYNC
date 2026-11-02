@@ -8,6 +8,7 @@ namespace BinSync;
 /// </summary>
 public sealed class ResourceLimits
 {
+    /// <summary>Gets Default.</summary>
     public static ResourceLimits Default { get; } = new();
 
     /// <summary>Max outbox entries per namespace (0 = unlimited).</summary>
@@ -19,6 +20,7 @@ public sealed class ResourceLimits
     /// <summary>Max records held in storage across all namespaces (0 = unlimited).</summary>
     public int MaxRecords { get; init; } = 0;
 
+    /// <summary>EnsureCanEnqueueOutbox.</summary>
     public void EnsureCanEnqueueOutbox(Node node, int namespaceId)
     {
         if (MaxOutboxEntriesPerNamespace <= 0) return;
@@ -27,6 +29,7 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
+    /// <summary>EnsureSeenChangesCapacity.</summary>
     public void EnsureSeenChangesCapacity(Node node)
     {
         if (MaxSeenChanges <= 0) return;
@@ -34,6 +37,7 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
+    /// <summary>EnsureStorageCapacity.</summary>
     public void EnsureStorageCapacity(Node node)
     {
         if (MaxRecords <= 0) return;
@@ -49,6 +53,7 @@ public sealed class ResourceLimits
 /// </summary>
 public static class BoundedNode
 {
+    /// <summary>Record a local field write into storage and outbox.</summary>
     public static bool WriteField(Node node, ResourceLimits limits,
         int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {

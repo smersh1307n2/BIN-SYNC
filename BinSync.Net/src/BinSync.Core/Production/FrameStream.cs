@@ -9,6 +9,7 @@ namespace BinSync;
 /// </summary>
 public static class FrameStream
 {
+    /// <summary>WriteFrameAsync.</summary>
     public static async Task WriteFrameAsync(Stream stream, byte[] frame, CancellationToken ct = default)
     {
         await stream.WriteAsync(frame, ct).ConfigureAwait(false);

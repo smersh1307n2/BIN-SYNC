@@ -11,6 +11,7 @@ public readonly struct AllGateScope : IDisposable
     private readonly object _meta;
     private readonly bool _held;
 
+    /// <summary>AllGateScope.</summary>
     public AllGateScope(object storage, object outbox, object meta)
     {
         _storage = storage;
@@ -35,6 +36,7 @@ public readonly struct AllGateScope : IDisposable
         _held = true;
     }
 
+    /// <summary>Dispose.</summary>
     public void Dispose()
     {
         if (!_held) return;

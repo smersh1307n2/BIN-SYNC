@@ -4,6 +4,7 @@ using System.Buffers;
 
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// <summary>Upper bound on encoded DELTA_BATCH payload size for <paramref name="batch"/>.</summary>

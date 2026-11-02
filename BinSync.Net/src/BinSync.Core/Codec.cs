@@ -6,13 +6,17 @@ using System.Buffers.Binary;
 
 namespace BinSync;
 
+/// <summary>Represents InvalidVarintException.</summary>
 public class InvalidVarintException : Exception
 {
+    /// <summary>InvalidVarintException for codec/protocol errors.</summary>
     public InvalidVarintException(string msg) : base(msg) { }
 }
 
+/// <summary>Represents Codec.</summary>
 public static partial class Codec
 {
+    /// <summary>VarintMaxValue.</summary>
     public const ulong VarintMaxValue = ulong.MaxValue;
 
     /// <summary>Write ULEB128 into <paramref name="dest"/>; returns bytes written (1..10).</summary>
@@ -29,6 +33,7 @@ public static partial class Codec
         return i;
     }
 
+    /// <summary>Encode an unsigned integer as canonical ULEB128.</summary>
     public static byte[] EncodeVarint(ulong value)
     {
         Span<byte> tmp = stackalloc byte[10];
@@ -73,9 +78,11 @@ public static partial class Codec
         return !last && top >>> width != 0UL;                // width <= 63 here (nbytes<=9, continuation)
     }
 
+    /// <summary>Decode a canonical ULEB128 varint; rejects overlong encodings.</summary>
     public static (ulong Value, int Pos) DecodeVarint(byte[] data, int pos = 0)
         => DecodeVarint((ReadOnlySpan<byte>)data, pos);
 
+    /// <summary>Decode a canonical ULEB128 varint; rejects overlong encodings.</summary>
     public static (ulong Value, int Pos) DecodeVarint(ReadOnlySpan<byte> data, int pos = 0)
     {
         ulong result = 0;
@@ -101,6 +108,7 @@ public static partial class Codec
     }
 
     /// Deterministic widening/narrowing of an identity to exactly 16 bytes (§6.2 hardening).
+    /// <summary>Normalize a byte array to 16-byte b128 (pad/truncate policy per codec).</summary>
     public static byte[] CanonicalB128(byte[] v)
     {
         if (v.Length == 16) return v;
@@ -117,6 +125,7 @@ public static partial class Codec
     }
 }
 
+/// <summary>Represents Writer.</summary>
 public partial class Writer
 {
     private byte[] _buf;
@@ -124,7 +133,9 @@ public partial class Writer
     private readonly bool _fixed;
     private readonly bool _pooled;
 
+    /// <summary>Writer.</summary>
     public Writer() : this(256) { }
+    /// <summary>Writer.</summary>
     public Writer(int capacity)
     {
         _buf = new byte[Math.Max(16, capacity)];
@@ -156,7 +167,9 @@ public partial class Writer
         _pooled = pooled;
     }
 
+    /// <summary>Gets Length.</summary>
     public int Length => _len;
+    /// <summary>Gets Capacity.</summary>
     public int Capacity => _buf.Length;
 
     private void Ensure(int n)
@@ -177,15 +190,22 @@ public partial class Writer
         _len += s.Length;
     }
 
+    /// <summary>U8.</summary>
     public Writer U8(byte v) { Ensure(1); _buf[_len++] = v; return this; }
+    /// <summary>U16.</summary>
     public Writer U16(ushort v) { Ensure(2); BinaryPrimitives.WriteUInt16LittleEndian(_buf.AsSpan(_len), v); _len += 2; return this; }
+    /// <summary>U32.</summary>
     public Writer U32(uint v) { Ensure(4); BinaryPrimitives.WriteUInt32LittleEndian(_buf.AsSpan(_len), v); _len += 4; return this; }
+    /// <summary>U64.</summary>
     public Writer U64(ulong v) { Ensure(8); BinaryPrimitives.WriteUInt64LittleEndian(_buf.AsSpan(_len), v); _len += 8; return this; }
 
+    /// <summary>B128.</summary>
     public Writer B128(byte[] v) => B128((ReadOnlySpan<byte>)v);
 
+    /// <summary>B128.</summary>
     public Writer B128(ReadOnlyMemory<byte> v) => B128(v.Span);
 
+    /// <summary>B128.</summary>
     public Writer B128(ReadOnlySpan<byte> v)
     {
         if (v.Length != 16)
@@ -198,6 +218,7 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>B128.</summary>
     public Writer B128(NodeId id)
     {
         Span<byte> s = stackalloc byte[16];
@@ -206,6 +227,7 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>B128.</summary>
     public Writer B128(RecordId id)
     {
         Span<byte> s = stackalloc byte[16];
@@ -214,6 +236,7 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>B128.</summary>
     public Writer B128(BatchId id)
     {
         Span<byte> s = stackalloc byte[16];
@@ -231,10 +254,15 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>Bytes.</summary>
     public Writer Bytes(byte[] b) => Bytes((ReadOnlySpan<byte>)b);
+    /// <summary>Bytes.</summary>
     public Writer Bytes(ReadOnlySpan<byte> b) { Varint((ulong)b.Length); Write(b); return this; }
+    /// <summary>Raw.</summary>
     public Writer Raw(byte[] b) { Write(b); return this; }
+    /// <summary>Raw.</summary>
     public Writer Raw(ReadOnlyMemory<byte> b) { Write(b.Span); return this; }
+    /// <summary>Raw.</summary>
     public Writer Raw(ReadOnlySpan<byte> b) { Write(b); return this; }
 
     /// <summary>Exact-sized writers return the backing buffer with no extra copy.</summary>
@@ -254,6 +282,7 @@ public partial class Writer
         return r;
     }
 
+    /// <summary>ReturnPool.</summary>
     public void ReturnPool()
     {
         if (!_pooled) return;
@@ -266,11 +295,15 @@ public partial class Writer
     public ReadOnlySpan<byte> WrittenSpan => _buf.AsSpan(0, _len);
 }
 
+/// <summary>Represents Reader.</summary>
 public partial class Reader
 {
     private readonly ReadOnlyMemory<byte> _data;
+    /// <summary>Pos.</summary>
     public int Pos;
+    /// <summary>Reader.</summary>
     public Reader(byte[] data, int pos = 0) { _data = data ?? Array.Empty<byte>(); Pos = pos; }
+    /// <summary>Reader.</summary>
     public Reader(ReadOnlyMemory<byte> data, int pos = 0) { _data = data; Pos = pos; }
 
     private ReadOnlySpan<byte> Span => _data.Span;
@@ -314,6 +347,7 @@ public partial class Reader
         return Span[Pos++];
     }
 
+    /// <summary>U16.</summary>
     public ushort U16()
     {
         Ensure(2);
@@ -322,6 +356,7 @@ public partial class Reader
         return v;
     }
 
+    /// <summary>U32.</summary>
     public uint U32()
     {
         Ensure(4);
@@ -330,6 +365,7 @@ public partial class Reader
         return v;
     }
 
+    /// <summary>U64.</summary>
     public ulong U64()
     {
         Ensure(8);
@@ -338,24 +374,36 @@ public partial class Reader
         return v;
     }
 
+    /// <summary>B128.</summary>
     public byte[] B128() => Take(16);
+    /// <summary>ReadOnlySpan.</summary>
     public ReadOnlySpan<byte> B128Span() => TakeSpan(16);
+    /// <summary>ReadOnlyMemory.</summary>
     public ReadOnlyMemory<byte> B128Memory() => TakeMemory(16);
+    /// <summary>Varint.</summary>
     public ulong Varint() { var (v, p) = Codec.DecodeVarint(Span, Pos); Pos = p; return v; }
+    /// <summary>Bytes.</summary>
     public byte[] Bytes() => Take((int)Varint());
+    /// <summary>ReadOnlySpan.</summary>
     public ReadOnlySpan<byte> BytesSpan()
     {
         int n = (int)Varint();
         return TakeSpan(n);
     }
+    /// <summary>ReadOnlyMemory.</summary>
     public ReadOnlyMemory<byte> BytesMemory()
     {
         int n = (int)Varint();
         return TakeMemory(n);
     }
+    /// <summary>Raw.</summary>
     public byte[] Raw(int n) => Take(n);
+    /// <summary>ReadOnlySpan.</summary>
     public ReadOnlySpan<byte> RawSpan(int n) => TakeSpan(n);
+    /// <summary>ReadOnlyMemory.</summary>
     public ReadOnlyMemory<byte> RawMemory(int n) => TakeMemory(n);
+    /// <summary>Eof.</summary>
     public bool Eof() => Pos >= _data.Length;
+    /// <summary>Gets Remaining.</summary>
     public int Remaining => _data.Length - Pos;
 }

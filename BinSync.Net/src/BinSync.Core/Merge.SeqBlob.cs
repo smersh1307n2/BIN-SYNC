@@ -7,15 +7,22 @@ namespace BinSync;
 /// </summary>
 public static class SeqFractional
 {
+    /// <summary>Represents Item.</summary>
     public sealed class Item
     {
+        /// <summary>ParentId.</summary>
         public byte[] ParentId = Node.Zero128;
+        /// <summary>OrderKey.</summary>
         public string OrderKey = "";
+        /// <summary>AuthorNodeId.</summary>
         public byte[] AuthorNodeId = Node.Zero128;
+        /// <summary>Seq.</summary>
         public ulong Seq;
+        /// <summary>Value.</summary>
         public byte[] Value = Array.Empty<byte>();
     }
 
+    /// <summary>Encode.</summary>
     public static byte[] Encode(Item item)
     {
         var w = new Writer();
@@ -27,6 +34,7 @@ public static class SeqFractional
         return w.Value();
     }
 
+    /// <summary>Decode.</summary>
     public static Item Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -76,14 +84,20 @@ public static class SeqFractional
 /// </summary>
 public static class BlobRef
 {
+    /// <summary>Represents Descriptor.</summary>
     public sealed class Descriptor
     {
+        /// <summary>BlobId.</summary>
         public byte[] BlobId = Node.Zero128;
+        /// <summary>Size.</summary>
         public ulong Size;
+        /// <summary>ContentType.</summary>
         public string ContentType = "";
+        /// <summary>Hash.</summary>
         public byte[] Hash = new byte[32];
     }
 
+    /// <summary>Encode.</summary>
     public static byte[] Encode(Descriptor d)
     {
         var w = new Writer();
@@ -94,6 +108,7 @@ public static class BlobRef
         return w.Value();
     }
 
+    /// <summary>Decode.</summary>
     public static Descriptor Decode(byte[] data)
     {
         var r = new Reader(data);

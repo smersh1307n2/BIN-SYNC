@@ -20,6 +20,7 @@ public static class CounterG
         return w.Value();
     }
 
+    /// <summary>Dictionary.</summary>
     public static Dictionary<byte[], ulong> Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -49,6 +50,7 @@ public static class CounterG
         return Encode(a);
     }
 
+    /// <summary>Total.</summary>
     public static ulong Total(byte[] data)
     {
         ulong sum = 0;
@@ -84,6 +86,7 @@ public static class CounterPn
             w.B128(a).U64(v);
     }
 
+    /// <summary>Dictionary.</summary>
     public static (Dictionary<byte[], ulong> Pos, Dictionary<byte[], ulong> Neg) Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -101,6 +104,7 @@ public static class CounterPn
         return map;
     }
 
+    /// <summary>Merge.</summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var (lp, ln) = local is null || local.Length == 0
@@ -121,6 +125,7 @@ public static class CounterPn
         }
     }
 
+    /// <summary>Value.</summary>
     public static long Value(byte[] data)
     {
         var (p, n) = Decode(data);
@@ -134,16 +139,23 @@ public static class CounterPn
 /// <summary>Observed-Remove set (§8.6): adds are (elem, actor, seq); removes are (actor, seq) dots.</summary>
 public static class SetOr
 {
+    /// <summary>Represents Dot.</summary>
     public sealed class Dot
     {
+        /// <summary>Actor.</summary>
         public byte[] Actor = Array.Empty<byte>();
+        /// <summary>Seq.</summary>
         public ulong Seq;
     }
 
+    /// <summary>Represents Add.</summary>
     public sealed class Add
     {
+        /// <summary>Element.</summary>
         public byte[] Element = Array.Empty<byte>();
+        /// <summary>Actor.</summary>
         public byte[] Actor = Array.Empty<byte>();
+        /// <summary>Seq.</summary>
         public ulong Seq;
     }
 
@@ -181,6 +193,7 @@ public static class SetOr
         return w.Value();
     }
 
+    /// <summary>List.</summary>
     public static (List<Add> Adds, List<Dot> Removes) Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -195,6 +208,7 @@ public static class SetOr
         return (adds, rems);
     }
 
+    /// <summary>Merge.</summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var (la, lr) = local is null || local.Length == 0

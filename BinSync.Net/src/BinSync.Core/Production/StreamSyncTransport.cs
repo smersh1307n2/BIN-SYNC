@@ -14,18 +14,21 @@ public sealed class StreamSyncTransport : ISyncTransport
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly SemaphoreSlim _readLock = new(1, 1);
 
+    /// <summary>StreamSyncTransport.</summary>
     public StreamSyncTransport(Stream stream, bool ownsStream = false)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _ownsStream = ownsStream;
     }
 
+    /// <summary>PeerNodeId.</summary>
     public byte[] PeerNodeId
     {
         get => _peerNodeId;
         set => _peerNodeId = value ?? Array.Empty<byte>();
     }
 
+    /// <summary>SendAsync.</summary>
     public async ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
     {
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
@@ -39,6 +42,7 @@ public sealed class StreamSyncTransport : ISyncTransport
         }
     }
 
+    /// <summary>ValueTask.</summary>
     public async ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default)
     {
         await _readLock.WaitAsync(ct).ConfigureAwait(false);
@@ -52,6 +56,7 @@ public sealed class StreamSyncTransport : ISyncTransport
         }
     }
 
+    /// <summary>DisposeAsync.</summary>
     public async ValueTask DisposeAsync()
     {
         _writeLock.Dispose();

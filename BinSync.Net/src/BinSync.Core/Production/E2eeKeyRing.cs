@@ -40,6 +40,7 @@ public sealed class E2eeKeyRing
         }
     }
 
+    /// <summary>TryGet.</summary>
     public bool TryGet(int namespaceId, out byte[] key, out ushort keyEpoch)
     {
         lock (_gate)
@@ -68,12 +69,14 @@ public sealed class E2eeKeyRing
         }
     }
 
+    /// <summary>GetEpoch.</summary>
     public ushort GetEpoch(int namespaceId)
     {
         lock (_gate)
             return _epochs.TryGetValue(namespaceId, out var e) ? e : (ushort)0;
     }
 
+    /// <summary>HasKey.</summary>
     public bool HasKey(int namespaceId)
     {
         lock (_gate) return _keys.ContainsKey(namespaceId);

@@ -9,9 +9,13 @@ namespace BinSync;
 /// <summary>Decoded KEY_ROTATION payload.</summary>
 public sealed class KeyRotationNotice
 {
+    /// <summary>Gets NamespaceId.</summary>
     public ushort NamespaceId { get; init; }
+    /// <summary>Gets OldKeyEpoch.</summary>
     public ushort OldKeyEpoch { get; init; }
+    /// <summary>Gets NewKeyEpoch.</summary>
     public ushort NewKeyEpoch { get; init; }
+    /// <summary>Gets NodeId.</summary>
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
     /// <summary>Ed25519 signature (64 bytes) over <see cref="KeyRotation.BuildProofMessage"/>.</summary>
     public byte[] Proof { get; init; } = Array.Empty<byte>();
@@ -20,7 +24,9 @@ public sealed class KeyRotationNotice
 /// <summary>Encode / decode KEY_ROTATION (frame type 0x11) and verify epoch proofs.</summary>
 public static class KeyRotation
 {
+    /// <summary>FrameType.</summary>
     public const byte FrameType = 0x11;
+    /// <summary>ProofDomain.</summary>
     public const string ProofDomain = "BIN-SYNC/KEY-ROTATION/v1";
 
     /// <summary>
@@ -46,6 +52,7 @@ public static class KeyRotation
         return buf;
     }
 
+    /// <summary>Decode.</summary>
     public static KeyRotationNotice Decode(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2 + 2 + 2 + 16 + 2)

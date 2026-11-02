@@ -21,9 +21,13 @@ public enum CausalOutcome
 /// <summary>One op waiting on causal parents.</summary>
 public sealed class PendingCausalOp
 {
+    /// <summary>Gets ChangeId.</summary>
     public required byte[] ChangeId { get; init; }
+    /// <summary>Gets Deps.</summary>
     public required byte[][] Deps { get; init; }
+    /// <summary>Gets EnqueuedUtcMs.</summary>
     public required long EnqueuedUtcMs { get; init; }
+    /// <summary>Gets Payload.</summary>
     public object? Payload { get; init; }
 }
 
@@ -44,9 +48,12 @@ public sealed class CausalTracker
     /// <summary>Clock for tests; defaults to UTC now.</summary>
     public Func<long> UtcNowMs { get; set; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
+    /// <summary>Gets KnownCount.</summary>
     public int KnownCount { get { lock (_gate) return _known.Count; } }
+    /// <summary>Gets PendingCount.</summary>
     public int PendingCount { get { lock (_gate) return _pending.Count; } }
 
+    /// <summary>Key.</summary>
     public static string Key(byte[] id) => Convert.ToHexString(id);
 
     /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
@@ -60,6 +67,7 @@ public sealed class CausalTracker
         }
     }
 
+    /// <summary>IsKnown.</summary>
     public bool IsKnown(byte[] changeId)
     {
         lock (_gate) return _known.Contains(Key(changeId));
@@ -251,5 +259,6 @@ public sealed class CausalTracker
 /// <summary>Protocol error code for causal dep failures (§12 error table).</summary>
 public static class CausalError
 {
+    /// <summary>CausalDepMissing.</summary>
     public const ushort CausalDepMissing = 0x0012; // CAUSAL_DEP_MISSING
 }

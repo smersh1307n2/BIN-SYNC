@@ -11,11 +11,16 @@ namespace BinSync;
 /// <summary>Ed25519 helpers for signing / verifying batch authenticity material (§14.8).</summary>
 public static class BatchSignature
 {
+    /// <summary>SignDomain.</summary>
     public const string SignDomain = "BIN-SYNC/BATCH-SIGN/v1";
+    /// <summary>PublicKeySize.</summary>
     public const int PublicKeySize = 32;
+    /// <summary>SeedSize.</summary>
     public const int SeedSize = 32;
+    /// <summary>SignatureSize.</summary>
     public const int SignatureSize = 64;
 
+    /// <summary>GenerateKeyPair.</summary>
     public static (byte[] Seed, byte[] PublicKey) GenerateKeyPair()
     {
         var seed = new byte[SeedSize];
@@ -25,6 +30,7 @@ public static class BatchSignature
         return (seed, pub);
     }
 
+    /// <summary>BuildSignPayload.</summary>
     public static byte[] BuildSignPayload(
         int namespaceId,
         int issuerEpoch,
@@ -45,9 +51,11 @@ public static class BatchSignature
         return buf;
     }
 
+    /// <summary>BuildSignPayload.</summary>
     public static byte[] BuildSignPayload(Batch batch) =>
         BuildSignPayload(batch.NamespaceId, batch.IssuerEpoch, batch.IssuerNodeId, batch.BatchId, batch.BatchDigest);
 
+    /// <summary>Sign.</summary>
     public static byte[] Sign(ReadOnlySpan<byte> privateSeed, ReadOnlySpan<byte> message)
     {
         if (privateSeed.Length != SeedSize)
@@ -61,6 +69,7 @@ public static class BatchSignature
         return sig;
     }
 
+    /// <summary>Verify.</summary>
     public static bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
     {
         if (publicKey.Length != PublicKeySize || signature.Length != SignatureSize)
@@ -78,9 +87,11 @@ public static class BatchSignature
         }
     }
 
+    /// <summary>SignBatch.</summary>
     public static byte[] SignBatch(ReadOnlySpan<byte> privateSeed, Batch batch) =>
         Sign(privateSeed, BuildSignPayload(batch));
 
+    /// <summary>VerifyBatch.</summary>
     public static bool VerifyBatch(ReadOnlySpan<byte> publicKey, Batch batch, ReadOnlySpan<byte> signature) =>
         Verify(publicKey, BuildSignPayload(batch), signature);
 }

@@ -8,14 +8,18 @@ namespace BinSync;
 /// <summary>Raised when a float is NaN (§6.3 → INVALID_FLOAT).</summary>
 public class InvalidFloatException : Exception
 {
+    /// <summary>InvalidFloatException for codec/protocol errors.</summary>
     public InvalidFloatException(string msg) : base(msg) { }
 }
 
 /// <summary>One raw TLV triple for unknown / extension fields (§6.5).</summary>
 public readonly struct Tlv
 {
+    /// <summary>Gets Tag.</summary>
     public byte Tag { get; }
+    /// <summary>Gets Value.</summary>
     public byte[] Value { get; }
+    /// <summary>Tlv.</summary>
     public Tlv(byte tag, byte[] value)
     {
         Tag = tag;
@@ -23,6 +27,7 @@ public readonly struct Tlv
     }
 }
 
+/// <summary>Represents Codec.</summary>
 public static partial class Codec
 {
     /// <summary>Canonical LE encode of a signed 64-bit integer (two's complement).</summary>
@@ -33,12 +38,14 @@ public static partial class Codec
         return b;
     }
 
+    /// <summary>DecodeI64.</summary>
     public static long DecodeI64(ReadOnlySpan<byte> data)
     {
         if (data.Length < 8) throw new EndOfStreamException("truncated i64");
         return BinaryPrimitives.ReadInt64LittleEndian(data);
     }
 
+    /// <summary>EncodeI32.</summary>
     public static byte[] EncodeI32(int v)
     {
         var b = new byte[4];
@@ -46,6 +53,7 @@ public static partial class Codec
         return b;
     }
 
+    /// <summary>DecodeI32.</summary>
     public static int DecodeI32(ReadOnlySpan<byte> data)
     {
         if (data.Length < 4) throw new EndOfStreamException("truncated i32");
@@ -74,6 +82,7 @@ public static partial class Codec
         return w.Value();
     }
 
+    /// <summary>DecodeTlv.</summary>
     public static Tlv DecodeTlv(byte[] data, int pos, out int next)
     {
         var r = new Reader(data, pos);
@@ -92,6 +101,7 @@ public static partial class Codec
         return w.Value();
     }
 
+    /// <summary>DecodeString.</summary>
     public static string DecodeString(byte[] data, int pos, out int next)
     {
         var r = new Reader(data, pos);
@@ -117,6 +127,7 @@ public static partial class Codec
         return b;
     }
 
+    /// <summary>DecodeF64.</summary>
     public static double DecodeF64(ReadOnlySpan<byte> data)
     {
         if (data.Length < 8) throw new EndOfStreamException("truncated f64");
@@ -145,8 +156,10 @@ public static partial class Codec
     }
 }
 
+/// <summary>Represents Writer.</summary>
 public partial class Writer
 {
+    /// <summary>I32.</summary>
     public Writer I32(int v)
     {
         Span<byte> s = stackalloc byte[4];
@@ -155,6 +168,7 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>I64.</summary>
     public Writer I64(long v)
     {
         Span<byte> s = stackalloc byte[8];
@@ -163,6 +177,7 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>B256.</summary>
     public Writer B256(byte[] v)
     {
         if (v.Length != 32) v = Codec.CanonicalB256(v);
@@ -170,12 +185,14 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>Tlv.</summary>
     public Writer Tlv(byte tag, byte[] value)
     {
         U8(tag).Varint((ulong)value.Length).Raw(value);
         return this;
     }
 
+    /// <summary>StringUtf8.</summary>
     public Writer StringUtf8(string s)
     {
         var utf8 = Encoding.UTF8.GetBytes(s ?? "");
@@ -183,6 +200,7 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>F64.</summary>
     public Writer F64(double v)
     {
         Raw(Codec.EncodeF64(v));
@@ -190,12 +208,17 @@ public partial class Writer
     }
 }
 
+/// <summary>Represents Reader.</summary>
 public partial class Reader
 {
+    /// <summary>I32.</summary>
     public int I32() => BinaryPrimitives.ReadInt32LittleEndian(Take(4));
+    /// <summary>I64.</summary>
     public long I64() => BinaryPrimitives.ReadInt64LittleEndian(Take(8));
+    /// <summary>B256.</summary>
     public byte[] B256() => Take(32);
 
+    /// <summary>Tlv.</summary>
     public Tlv Tlv()
     {
         byte tag = U8();
@@ -203,6 +226,7 @@ public partial class Reader
         return new Tlv(tag, value);
     }
 
+    /// <summary>StringUtf8.</summary>
     public string StringUtf8()
     {
         var bytes = Bytes();
@@ -211,5 +235,6 @@ public partial class Reader
         return Encoding.UTF8.GetString(bytes);
     }
 
+    /// <summary>F64.</summary>
     public double F64() => Codec.DecodeF64(Take(8));
 }

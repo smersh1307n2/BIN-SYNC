@@ -1,6 +1,7 @@
 // FLAG_FRAGMENT send/receive on an established TCP session (§12 / lab S12).
 namespace BinSync;
 
+/// <summary>Represents TcpSyncSession.</summary>
 public sealed partial class TcpSyncSession
 {
     /// <summary>

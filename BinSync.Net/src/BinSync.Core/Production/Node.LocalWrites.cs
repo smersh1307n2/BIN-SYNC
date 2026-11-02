@@ -2,6 +2,7 @@
 
 namespace BinSync;
 
+/// <summary>Represents Node.</summary>
 public sealed partial class Node
 {
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).

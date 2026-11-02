@@ -1,29 +1,37 @@
 // GC_NOTICE (§12.6 0x0B): advertise tombstone cutoff + quarantine set.
 namespace BinSync;
 
+/// <summary>Represents ReconcileFrames.</summary>
 public static partial class ReconcileFrames
 {
+    /// <summary>GcNotice.</summary>
     public const byte GcNotice = 0x0B;
 }
 
 /// <summary>One quarantined author advertised in GC_NOTICE.</summary>
 public sealed class GcQuarantineEntry
 {
+    /// <summary>Gets or sets NodeId.</summary>
     public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Gets or sets Epoch.</summary>
     public int Epoch { get; set; }
 }
 
 /// <summary>Decoded GC_NOTICE payload.</summary>
 public sealed class GcNoticeMessage
 {
+    /// <summary>NamespaceId.</summary>
     public int NamespaceId;
     /// <summary>Fields/records with wall strictly below this may be GC'd locally (advisory).</summary>
     public ulong TombstoneCutoffWall;
+    /// <summary>List.</summary>
     public List<GcQuarantineEntry> Quarantined = new();
 }
 
+/// <summary>Represents GcNotice.</summary>
 public static class GcNotice
 {
+    /// <summary>Build.</summary>
     public static GcNoticeMessage Build(Node node, int namespaceId, ulong tombstoneCutoffWall = 0)
     {
         var msg = new GcNoticeMessage
@@ -45,6 +53,7 @@ public static class GcNotice
         return msg;
     }
 
+    /// <summary>Encode.</summary>
     public static byte[] Encode(GcNoticeMessage m)
     {
         var w = new Writer();
@@ -59,6 +68,7 @@ public static class GcNotice
         return w.Value();
     }
 
+    /// <summary>Decode.</summary>
     public static GcNoticeMessage Decode(byte[] payload)
     {
         var r = new Reader(payload);
@@ -79,6 +89,7 @@ public static class GcNotice
         return m;
     }
 
+    /// <summary>Apply.</summary>
     public static int Apply(Node node, GcNoticeMessage remote)
     {
         int added = 0;
@@ -104,6 +115,7 @@ public static class GcNotice
         return added;
     }
 
+    /// <summary>PurgeBelowCutoff.</summary>
     public static int PurgeBelowCutoff(Node node, int namespaceId, ulong cutoffWall)
     {
         if (cutoffWall == 0) return 0;

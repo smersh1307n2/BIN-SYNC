@@ -5,43 +5,61 @@ namespace BinSync;
 /// <summary>Wire frame type bytes for the reconcile ladder (§12.6).</summary>
 public static partial class ReconcileFrames
 {
+    /// <summary>StateDigest.</summary>
     public const byte StateDigest = 0x06;
+    /// <summary>NeedRange.</summary>
     public const byte NeedRange = 0x07;
+    /// <summary>NeedKeys.</summary>
     public const byte NeedKeys = 0x08;
+    /// <summary>SnapshotChunk.</summary>
     public const byte SnapshotChunk = 0x0A;
 }
 
 /// <summary>One bucket row carried in STATE_DIGEST.</summary>
 public sealed class DigestBucket
 {
+    /// <summary>Prefix.</summary>
     public byte[] Prefix = Array.Empty<byte>();
+    /// <summary>Count.</summary>
     public long Count;
+    /// <summary>Xor16.</summary>
     public byte[] Xor16 = new byte[16];
+    /// <summary>Sum16.</summary>
     public byte[] Sum16 = new byte[16];
+    /// <summary>Rollup32.</summary>
     public byte[] Rollup32 = new byte[32];
 }
 
 /// <summary>Decoded STATE_DIGEST payload (§9.1.4 + §13.1).</summary>
 public sealed class StateDigestMessage
 {
+    /// <summary>NamespaceId.</summary>
     public int NamespaceId;
+    /// <summary>OutboxCursor.</summary>
     public ulong OutboxCursor;
+    /// <summary>RadixBits.</summary>
     public int RadixBits = 8;
+    /// <summary>RootDigest.</summary>
     public byte[] RootDigest = new byte[32];
+    /// <summary>List.</summary>
     public List<DigestBucket> Buckets = new();
 }
 
 /// <summary>NEED_RANGE: ask peer for records under a BLAKE3(recordId) prefix.</summary>
 public sealed class NeedRangeMessage
 {
+    /// <summary>NamespaceId.</summary>
     public int NamespaceId;
+    /// <summary>Prefix.</summary>
     public byte[] Prefix = Array.Empty<byte>();
 }
 
 /// <summary>NEED_KEYS: ask peer for specific recordIds.</summary>
 public sealed class NeedKeysMessage
 {
+    /// <summary>NamespaceId.</summary>
     public int NamespaceId;
+    /// <summary>List.</summary>
     public List<byte[]> RecordIds = new();
 }
 
@@ -50,6 +68,7 @@ public sealed class NeedKeysMessage
 /// </summary>
 public static partial class Reconcile
 {
+    /// <summary>DefaultRadixBits.</summary>
     public const int DefaultRadixBits = 8;
 
     /// <summary>Compute a STATE_DIGEST view of <paramref name="node"/> for one namespace.</summary>
@@ -96,6 +115,7 @@ public static partial class Reconcile
         return msg;
     }
 
+    /// <summary>EncodeStateDigest.</summary>
     public static byte[] EncodeStateDigest(StateDigestMessage m)
     {
         var w = new Writer();
@@ -116,6 +136,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
+    /// <summary>DecodeStateDigest.</summary>
     public static StateDigestMessage DecodeStateDigest(byte[] payload)
     {
         var r = new Reader(payload);
@@ -143,6 +164,7 @@ public static partial class Reconcile
         return m;
     }
 
+    /// <summary>EncodeNeedRange.</summary>
     public static byte[] EncodeNeedRange(NeedRangeMessage m)
     {
         var w = new Writer();
@@ -152,6 +174,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
+    /// <summary>DecodeNeedRange.</summary>
     public static NeedRangeMessage DecodeNeedRange(byte[] payload)
     {
         var r = new Reader(payload);
@@ -160,6 +183,7 @@ public static partial class Reconcile
         return new NeedRangeMessage { NamespaceId = ns, Prefix = r.Raw(plen) };
     }
 
+    /// <summary>EncodeNeedKeys.</summary>
     public static byte[] EncodeNeedKeys(NeedKeysMessage m)
     {
         var w = new Writer();
@@ -170,6 +194,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
+    /// <summary>DecodeNeedKeys.</summary>
     public static NeedKeysMessage DecodeNeedKeys(byte[] payload)
     {
         var r = new Reader(payload);
@@ -180,6 +205,7 @@ public static partial class Reconcile
         return m;
     }
 
+    /// <summary>List.</summary>
     public static List<byte[]> DivergentPrefixes(StateDigestMessage local, StateDigestMessage remote)
     {
         var result = new List<byte[]>();
@@ -207,6 +233,7 @@ public static partial class Reconcile
         return result;
     }
 
+    /// <summary>List.</summary>
     public static List<byte[]> LocalKeysUnderPrefix(Node node, int namespaceId, byte[] prefix)
     {
         var list = new List<byte[]>();
