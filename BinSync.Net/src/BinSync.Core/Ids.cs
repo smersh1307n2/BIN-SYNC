@@ -7,7 +7,7 @@ namespace BinSync;
 /// Fixed 16-byte node identity. Equality and hash are value-based (two UInt64 limbs)
 /// so maps do not need BA.
 /// </summary>
-public readonly struct NodeId : IEquatable<NodeId>
+public readonly partial struct NodeId : IEquatable<NodeId>
 {
     public readonly ulong Lo;
     public readonly ulong Hi;
@@ -74,7 +74,7 @@ public readonly struct NodeId : IEquatable<NodeId>
 /// <summary>
 /// Fixed 16-byte record identity. Same layout and equality rules as <see cref="NodeId"/>.
 /// </summary>
-public readonly struct RecordId : IEquatable<RecordId>
+public readonly partial struct RecordId : IEquatable<RecordId>
 {
     public readonly ulong Lo;
     public readonly ulong Hi;
@@ -141,7 +141,7 @@ public readonly struct RecordId : IEquatable<RecordId>
 /// <summary>
 /// Fixed 16-byte batch identity (batchId b128). Value equality like <see cref="NodeId"/>.
 /// </summary>
-public readonly struct BatchId : IEquatable<BatchId>
+public readonly partial struct BatchId : IEquatable<BatchId>
 {
     public readonly ulong Lo;
     public readonly ulong Hi;

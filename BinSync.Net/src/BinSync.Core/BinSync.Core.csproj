@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
     <PackageId>BinSync.Core</PackageId>
-    <Version>2.1.8</Version>
+    <Version>2.1.9</Version>
     <Authors>Smersh; BIN-SYNC</Authors>
     <Description>BIN-SYNC CORE reference engine for .NET — offline-first binary sync (LWW field, HLC, delta batches, CRDT merge, E2EE opt-in). Dual license: AGPL-3.0-or-later + commercial (see LICENSE.md). Vendored Ed25519 remains MIT third-party.</Description>
     <PackageTags>sync;crdt;offline-first;binsync;lww;hlc;bin-sync</PackageTags>
@@ -13,7 +13,8 @@
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <NoWarn>$(NoWarn);CS1591;SA1001;SA1002;SA1003;SA1005;SA1009;SA1010;SA1011;SA1012;SA1025;SA1027;SA1028;SA1101;SA1107;SA1116;SA1117;SA1118;SA1119;SA1120;SA1122;SA1128;SA1129;SA1132;SA1137;SA1142;SA1200;SA1201;SA1202;SA1203;SA1204;SA1208;SA1210;SA1214;SA1306;SA1307;SA1309;SA1310;SA1312;SA1313;SA1400;SA1401;SA1402;SA1407;SA1408;SA1413;SA1414;SA1500;SA1501;SA1502;SA1503;SA1507;SA1508;SA1509;SA1512;SA1513;SA1514;SA1515;SA1516;SA1517;SA1518;SA1519;SA1520;SA1600;SA1601;SA1602;SA1604;SA1611;SA1615;SA1623;SA1626;SA1629;SA1633;SA1642;SA1649</NoWarn>
+    <!-- CS1591 gated below -->
     <!-- Hygiene: CA2014 and friends must not regress on the engine. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest</AnalysisLevel>
@@ -23,5 +24,12 @@
   <!-- Do NOT add PackageReference Include="BouncyCastle.Cryptography". -->
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />
+    <PackageReference Include="StyleCop.Analyzers" Version="1.2.0-beta.556">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <AdditionalFiles Include="stylecop.json" Link="stylecop.json" />
   </ItemGroup>
 </Project>

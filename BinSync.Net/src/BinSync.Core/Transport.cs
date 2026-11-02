@@ -3,7 +3,7 @@
 // Port of binsync/transport.py — all SPEC HARDENING / errata notes preserved.
 namespace BinSync;
 
-public static class Transport
+public static partial class Transport
 {
     /// HELLO + ALIAS_MAP exchange for a session between two nodes (§4.3).
     /// Convention: within session (a,b), `a` gets alias aliases[0], `b` gets aliases[1].

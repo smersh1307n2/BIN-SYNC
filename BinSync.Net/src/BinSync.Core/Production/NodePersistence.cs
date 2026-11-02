@@ -563,15 +563,42 @@ public static class NodePersistence
     }
 
     private static void WriteBE(BinaryWriter w, uint v)
-    { Span<byte> s = stackalloc byte[4]; System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(s, v); w.Write(s); }
+    {
+        Span<byte> s = stackalloc byte[4];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(s, v);
+        w.Write(s);
+    }
+
     private static void WriteBE(BinaryWriter w, ushort v)
-    { Span<byte> s = stackalloc byte[2]; System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(s, v); w.Write(s); }
+    {
+        Span<byte> s = stackalloc byte[2];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(s, v);
+        w.Write(s);
+    }
+
     private static void WriteBE(BinaryWriter w, ulong v)
-    { Span<byte> s = stackalloc byte[8]; System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(s, v); w.Write(s); }
+    {
+        Span<byte> s = stackalloc byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(s, v);
+        w.Write(s);
+    }
+
     private static uint ReadBEU32(BinaryReader r)
-    { var b = r.ReadBytes(4); return System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(b); }
+    {
+        var b = r.ReadBytes(4);
+        return System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(b);
+    }
+
     private static ushort ReadBEU16(BinaryReader r)
-    { var b = r.ReadBytes(2); return System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(b); }
+    {
+        var b = r.ReadBytes(2);
+        return System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(b);
+    }
+
     private static ulong ReadBEU64(BinaryReader r)
-    { var b = r.ReadBytes(8); return System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(b); }
+    {
+        var b = r.ReadBytes(8);
+        return System.Buffers.Binary.BinaryPrimitives.ReadUInt64BigEndian(b);
+    }
 }
+

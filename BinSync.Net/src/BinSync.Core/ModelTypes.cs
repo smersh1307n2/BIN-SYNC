@@ -2,6 +2,7 @@
 
 namespace BinSync;
 
+/// <summary>Protocol/sync failure with a wire error code name (see Frames.ErrorCodes).</summary>
 public class SyncException : Exception
 {
     public string CodeName { get; }
@@ -15,6 +16,7 @@ public class SyncException : Exception
     }
 }
 
+/// <summary>One pending or decoded mutation in the outbox / batch records array.</summary>
 public sealed class OutboxEntry
 {
     public int NamespaceId { get; set; }
@@ -31,7 +33,8 @@ public sealed class OutboxEntry
     public List<byte[]> CausalDeps { get; set; } = new();
 }
 
-public sealed class Batch
+/// <summary>DELTA_BATCH logical unit: headers, digests, and <see cref="OutboxEntry"/> list.</summary>
+public sealed partial class Batch
 {
     public int NamespaceId { get; set; }
     public int SchemaId { get; set; }
@@ -108,6 +111,7 @@ public sealed class Batch
     }
 }
 
+/// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
 public sealed partial class PeerState
 {
     public byte[] PeerNodeId { get; set; } = Array.Empty<byte>();
@@ -137,6 +141,7 @@ public sealed partial class PeerState
     public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 
+/// <summary>Outcome of <see cref="Node.ApplyBatch"/> / <see cref="Node.ApplyBatchPayload"/>.</summary>
 public sealed class BatchResult
 {
     public byte[] BatchId { get; set; }

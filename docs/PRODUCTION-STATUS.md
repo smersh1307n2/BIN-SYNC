@@ -2,8 +2,8 @@
 
 **Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
 
-**Package:** `BinSync.Core` **`2.1.8`** · **Target:** `net10.0` · **Branch:** `main`  
-**Tag:** `v2.1.8` (see GitHub Releases)  
+**Package:** `BinSync.Core` **`2.1.9`** · **Target:** `net10.0` · **Branch:** `main`  
+**Tag:** `v2.1.9` (see GitHub Releases)  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
 **Tests:** 274 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
 

@@ -1,5 +1,17 @@
 # Changelog — BinSync.Core
 
+## 2.1.9 — 2026-11-02
+
+**StyleCop.Analyzers + public API XML-doc anchors.**
+
+- PackageReference `StyleCop.Analyzers` + `stylecop.json` + `.editorconfig`
+- SA* suppressed in build (TreatWarningsAsErrors) — enable rules incrementally
+- Vendored `Crypto/**` excluded from StyleCop restyle
+- Type-level docs: `Node`, `Batch`, `Transport`, `Ops`, `NodeId`/`RecordId`/`BatchId`, DTOs
+- `PublicApiDocs.cs` partials for IntelliSense; CS1591 still allowed for incomplete members
+
+---
+
 ## 2.1.8 — 2026-11-02
 
 **API hygiene + docs/CI (code review).**

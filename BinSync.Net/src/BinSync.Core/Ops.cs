@@ -62,7 +62,7 @@ public class OpRecordTombstone
     internal const int FullAuthorPayloadLen = 45;
 }
 
-public static class Ops
+public static partial class Ops
 {
     /// Snapshot-mode encoding: always carries the durable author (mirrors Python
     /// build_snapshot which calls encode_op(op) with default full_author=True).
