@@ -97,13 +97,44 @@ public sealed record class Frame(byte FrameType, byte Flags, uint StreamId, ulon
     public string Name => Frames.FrameTypes.TryGetValue(FrameType, out var n) ? n : $"0x{FrameType:x2}";
 }
 
+/// <summary>Frame parse/build failure (magic, CRC, size). Distinct from <see cref="SyncException"/>.</summary>
 public class FrameException : Exception
 {
-    public string CodeName;
+    /// <summary>Symbolic code (e.g. PAYLOAD_TOO_LARGE, BAD_MAGIC).</summary>
+    public string CodeName { get; }
+
+    /// <summary>Numeric wire code when known; otherwise 0.</summary>
     public ushort Code => Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0;
-    public bool Fatal;      // true → session must be torn down ([Ц3])
-    public bool SilentDrop; // bad magic [Ц2]
-    public FrameException(string codeName, bool fatal = false) : base(codeName) { CodeName = codeName; Fatal = fatal; }
+
+    /// <summary>True → session must be torn down ([Ц3]).</summary>
+    public bool Fatal { get; }
+
+    /// <summary>True → silent drop (bad magic [Ц2]).</summary>
+    public bool SilentDrop { get; set; }
+
+    /// <summary>Create with code name as message.</summary>
+    public FrameException(string codeName, bool fatal = false)
+        : base(codeName)
+    {
+        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        Fatal = fatal;
+    }
+
+    /// <summary>Create with a distinct message.</summary>
+    public FrameException(string codeName, string message, bool fatal = false)
+        : base(message)
+    {
+        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        Fatal = fatal;
+    }
+
+    /// <summary>Create with message and inner exception.</summary>
+    public FrameException(string codeName, string message, Exception innerException, bool fatal = false)
+        : base(message, innerException)
+    {
+        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        Fatal = fatal;
+    }
 }
 
 public static class FrameCodec

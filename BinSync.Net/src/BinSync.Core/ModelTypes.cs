@@ -2,16 +2,39 @@
 
 namespace BinSync;
 
-/// <summary>Protocol/sync failure with a wire error code name (see Frames.ErrorCodes).</summary>
+/// <summary>Protocol/sync failure with a wire error code name (see <see cref="Frames.ErrorCodes"/>).</summary>
 public class SyncException : Exception
 {
+    /// <summary>Symbolic error code (e.g. SEQ_GAP, UNKNOWN_ALIAS).</summary>
     public string CodeName { get; }
+
+    /// <summary>Numeric wire code when known; otherwise 0.</summary>
     public ushort Code => Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0;
+
     /// <summary>Optional batch id (wire b128) associated with the error.</summary>
     public byte[]? BatchId { get; }
-    public SyncException(string codeName, byte[]? batchId = null) : base(codeName)
+
+    /// <summary>Create with code name used as the exception message.</summary>
+    public SyncException(string codeName, byte[]? batchId = null)
+        : base(codeName)
     {
-        CodeName = codeName;
+        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        BatchId = batchId;
+    }
+
+    /// <summary>Create with a distinct human-readable message.</summary>
+    public SyncException(string codeName, string message, byte[]? batchId = null)
+        : base(message)
+    {
+        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        BatchId = batchId;
+    }
+
+    /// <summary>Create with message and inner exception.</summary>
+    public SyncException(string codeName, string message, Exception innerException, byte[]? batchId = null)
+        : base(message, innerException)
+    {
+        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         BatchId = batchId;
     }
 }
@@ -19,16 +42,21 @@ public class SyncException : Exception
 /// <summary>One pending or decoded mutation in the outbox / batch records array.</summary>
 public sealed class OutboxEntry
 {
+    /// <summary>Namespace id for this entry.</summary>
     public int NamespaceId { get; set; }
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
     public long Seq { get; set; }
     /// <summary>b128 idempotency key.</summary>
     public ReadOnlyMemory<byte> ChangeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Record id (b128 / 16-byte).</summary>
     public ReadOnlyMemory<byte> RecordId { get; set; } = Array.Empty<byte>();
+    /// <summary>Op tag (FieldWrite / FieldTomb / RecordTombstone).</summary>
     public byte OpKind { get; set; }
     /// <summary>Canonical encoded op (compact mode). May be a slice of a frame buffer.</summary>
     public ReadOnlyMemory<byte> Payload { get; set; } = Array.Empty<byte>();
+    /// <summary>Durable author node id when full-author mode is used.</summary>
     public ReadOnlyMemory<byte> AuthorNodeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
     public List<byte[]> CausalDeps { get; set; } = new();
 }

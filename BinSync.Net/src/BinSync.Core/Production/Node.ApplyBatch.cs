@@ -169,7 +169,11 @@ public sealed partial class Node
                     {
                         byte[]? rAuthor = null;
                         try { rAuthor = ResolveAuthor(rop); }
-                        catch (SyncException) { }
+                        catch (SyncException)
+                        {
+                            // On-purpose: unknown alias / origin during relay-eligibility
+                            // check must not fail the batch — treat as non-own, allow relay.
+                        }
                         if (rAuthor is not null && rAuthor.AsSpan().SequenceEqual(NodeId) &&
                             SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null &&
                             OwnQueueHolds(batch.NamespaceId, Mem.ToArray(e.RecordId), rop))

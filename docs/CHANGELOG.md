@@ -1,5 +1,17 @@
 # Changelog — BinSync.Core
 
+## 2.1.10 — 2026-11-02
+
+**Review follow-up: exceptions, StyleCop honesty, docs.**
+
+- `SyncException` / `FrameException`: standard `(code)`, `(code, message)`, `(code, message, inner)` constructors; properties documented
+- Empty `catch (SyncException)` in relay-eligibility: explicit comment (must not fail the batch)
+- StyleCop: high-signal rules kept live (`SA1107`); layout/order/`this.`/member-doc noise listed in `docs/STYLE.md` — no “fake strict” claim
+- XML-doc: type-level + more DTO members; CS1591 still allowed for incomplete members
+- `nodeId` length → `ArgumentException`
+
+---
+
 ## 2.1.9 — 2026-11-02
 
 **StyleCop.Analyzers + public API XML-doc anchors.**

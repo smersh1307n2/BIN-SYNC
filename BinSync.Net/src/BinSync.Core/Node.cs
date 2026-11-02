@@ -71,13 +71,14 @@ public sealed partial class Node
     public List<byte[]> AcksOut { get; } = new();
     public HashSet<int> ForbiddenNamespaces { get; } = new();
     public Dictionary<int, int> SchemaVersions { get; } = new();
+    /// <summary>Optional in-process peer map for loopback transport.</summary>
     public Dictionary<NodeId, Node>? PeersByNid { get; set; }
 
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000)
     {
         var raw = nodeId ?? Guid.NewGuid().ToByteArray();
-        if (raw.Length != 16) throw new InvalidOperationException("nodeId must be 16 bytes");
+        if (raw.Length != 16) throw new ArgumentException("nodeId must be 16 bytes", nameof(nodeId));
         NodeId = NodeId.From(raw);
         Epoch = epoch;
         Clock = new HlcClock(nowFn, maxSkewUs);

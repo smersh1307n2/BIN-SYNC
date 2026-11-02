@@ -6,7 +6,6 @@
       "documentExposedElements": true,
       "documentInternalElements": false,
       "documentInterfaces": true,
-      "documentPrivateElements": false,
       "xmlHeader": false
     },
     "orderingRules": {
