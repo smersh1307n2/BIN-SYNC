@@ -23,7 +23,7 @@
 // ordering deterministic via explicit sorting).
 namespace BinSync;
 
-/// <summary>Represents NodePersistence.</summary>
+/// <summary>NodePersistence type used by the BIN-SYNC engine.</summary>
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
@@ -555,7 +555,7 @@ public static class NodePersistence
     private static readonly Comparer<byte[]> BytesOrd = Comparer<byte[]>
         .Create((a, b) => HlcOps.BytesCompare(a, b));
 
-    /// <summary>GetField.</summary>
+    /// <summary>Read a private/public field by name via reflection (persistence helpers).</summary>
     public static T GetField<T>(object obj, string name)
     {
         var f = obj.GetType().GetField(name, System.Reflection.BindingFlags.Instance |

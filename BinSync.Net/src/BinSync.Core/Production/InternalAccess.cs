@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// <summary>
@@ -50,7 +50,7 @@ public sealed partial class Node
     }
 }
 
-/// <summary>Represents PeerState.</summary>
+/// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
 public sealed partial class PeerState
 {
     /// <summary>Read-only view of cached (batchId, prevDigest) triples (tests).</summary>

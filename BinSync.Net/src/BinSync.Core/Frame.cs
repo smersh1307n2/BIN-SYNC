@@ -3,34 +3,34 @@ using System.Buffers.Binary;
 
 namespace BinSync;
 
-/// <summary>Represents Frames.</summary>
+/// <summary>Frame constants: magic, version, header size, CRC32C, error code table.</summary>
 public static class Frames
 {
-    /// <summary>MAGIC.</summary>
+    /// <summary>Frame magic constant 0x4253 ("BS") as little-endian u16.</summary>
     public const ushort MAGIC = 0x4253;
-    /// <summary>VERSION.</summary>
+    /// <summary>Frame format version byte (currently 0x00).</summary>
     public const byte VERSION = 0x00;
-    /// <summary>HEADER_SIZE.</summary>
+    /// <summary>Fixed frame header size in bytes (25).</summary>
     public const int HEADER_SIZE = 25;
-    /// <summary>MAX_FRAME_SIZE.</summary>
+    /// <summary>Absolute maximum frame size including header (§12.3).</summary>
     public const int MAX_FRAME_SIZE = 16 * 1024 * 1024;            // §12.3
-    /// <summary>MAX_PAYLOAD_SIZE.</summary>
+    /// <summary>Fixed frame header size in bytes (25).</summary>
     public const int MAX_PAYLOAD_SIZE = MAX_FRAME_SIZE - HEADER_SIZE;
-    /// <summary>INITIAL_WINDOW.</summary>
+    /// <summary>Initial flow-control window size in bytes (§3.6.1).</summary>
     public const int INITIAL_WINDOW = 256 * 1024;                  // §3.6.1
-    /// <summary>MAX_WINDOW_SIZE.</summary>
+    /// <summary>Maximum flow-control window size in bytes.</summary>
     public const int MAX_WINDOW_SIZE = 16 * 1024 * 1024;
 
-    /// <summary>FLAG_COMPRESSED.</summary>
+    /// <summary>Header flag: payload is compressed.</summary>
     public const byte FLAG_COMPRESSED = 0x01;
-    /// <summary>FLAG_SIGNED.</summary>
+    /// <summary>Header flag: payload carries a signature.</summary>
     public const byte FLAG_SIGNED = 0x02;
-    /// <summary>FLAG_FRAGMENT.</summary>
+    /// <summary>Header flag: payload is a fragment of a larger message.</summary>
     public const byte FLAG_FRAGMENT = 0x04;
-    /// <summary>FLAG_ENCRYPTED.</summary>
+    /// <summary>Header flag: payload is encrypted.</summary>
     public const byte FLAG_ENCRYPTED = 0x08;
 
-    /// <summary>Dictionary.</summary>
+    /// <summary>Map of frame type byte to symbolic name (DELTA_BATCH, ACK, …).</summary>
     public static readonly Dictionary<int, string> FrameTypes = new()
     {
         [0x01] = "HELLO",
@@ -55,7 +55,7 @@ public static class Frames
     };
 
     // §12.23 error codes (canonical numeric values)
-    /// <summary>Dictionary.</summary>
+    /// <summary>Map of symbolic error names to numeric wire codes.</summary>
     public static readonly Dictionary<string, ushort> ErrorCodes = new()
     {
         ["UNKNOWN_ALIAS"] = 0x0001,
@@ -97,21 +97,21 @@ public static class Frames
         return t;
     }
 
-    /// <summary>Crc32C.</summary>
+    /// <summary>Compute Castagnoli CRC32C over the data.</summary>
     public static uint Crc32C(ReadOnlySpan<byte> data)
     {
         uint crc = 0xFFFFFFFFu;
         foreach (byte b in data) crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
         return crc ^ 0xFFFFFFFFu;
     }
-    /// <summary>Crc32C.</summary>
+    /// <summary>Compute Castagnoli CRC32C over the data.</summary>
     public static uint Crc32C(byte[] data) => Crc32C(data.AsSpan());
 }
 
-/// <summary>Represents Frame.</summary>
+/// <summary>class type used by the BIN-SYNC engine.</summary>
 public sealed record class Frame(byte FrameType, byte Flags, uint StreamId, ulong FrameSeq, byte[] Payload)
 {
-    /// <summary>Gets Name.</summary>
+    /// <summary>Symbolic frame type name when known.</summary>
     public string Name => Frames.FrameTypes.TryGetValue(FrameType, out var n) ? n : $"0x{FrameType:x2}";
 }
 
@@ -155,7 +155,7 @@ public class FrameException : Exception
     }
 }
 
-/// <summary>Represents FrameCodec.</summary>
+/// <summary>Build and parse framed packets with a fixed 25-byte header and CRC32C.</summary>
 public static class FrameCodec
 {
     /// Header (§12.2 packed): magic u16 | version u8 | type u8 | flags u8 | streamId u32 |
@@ -204,24 +204,23 @@ public static class FrameCodec
     }
 }
 
-/// §3.6 additive-credit window per streamId. Payload bytes only, not headers.
-/// <summary>Represents FlowControl.</summary>
+/// <summary>FlowControl type used by the BIN-SYNC engine.</summary>
 public class FlowControl
 {
-    /// <summary>Initial.</summary>
+    /// <summary>Configured initial flow-control window.</summary>
     public int Initial;
-    /// <summary>MaxWindow.</summary>
+    /// <summary>Configured maximum flow-control window.</summary>
     public int MaxWindow;
     private readonly Dictionary<uint, long> _credit = new();
 
-    /// <summary>FlowControl.</summary>
+    /// <summary>FlowControl: flow control.</summary>
     public FlowControl(int initial = Frames.INITIAL_WINDOW, int maxWindow = Frames.MAX_WINDOW_SIZE)
     { Initial = initial; MaxWindow = maxWindow; }
 
-    /// <summary>Balance.</summary>
+    /// <summary>Balance: balance.</summary>
     public long Balance(uint streamId) => _credit.TryGetValue(streamId, out var v) ? v : (_credit[streamId] = Initial);
 
-    /// <summary>TryConsume.</summary>
+    /// <summary>Try to consume; returns whether the operation succeeded.</summary>
     public bool TryConsume(uint streamId, long payloadBytes)
     {
         var bal = Balance(streamId);
@@ -230,8 +229,7 @@ public class FlowControl
         return true;
     }
 
-    /// WINDOW_UPDATE is additive; clamp at MAX_WINDOW_SIZE [УП1].
-    /// <summary>ApplyUpdate.</summary>
+    /// <summary>ApplyUpdate: apply update.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
         long nv = Math.Min(Balance(streamId) + credits, MaxWindow);

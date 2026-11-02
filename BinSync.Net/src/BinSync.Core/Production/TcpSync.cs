@@ -11,12 +11,12 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace BinSync;
 
-/// <summary>Represents TcpSyncListener.</summary>
+/// <summary>TcpSyncListener type used by the BIN-SYNC engine.</summary>
 public sealed class TcpSyncListener : IAsyncDisposable
 {
     private readonly TcpListener _listener;
 
-    /// <summary>Gets Port.</summary>
+    /// <summary>Gets the port.</summary>
     public int Port { get; }
 
     private TcpSyncListener(TcpListener listener)
@@ -25,7 +25,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    /// <summary>Start.</summary>
+    /// <summary>Start: start.</summary>
     public static TcpSyncListener Start(int port = 0, IPAddress? address = null)
     {
         var listener = new TcpListener(address ?? IPAddress.Loopback, port);
@@ -57,7 +57,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
         }
     }
 
-    /// <summary>DisposeAsync.</summary>
+    /// <summary>DisposeAsync: dispose async.</summary>
     public ValueTask DisposeAsync()
     {
         _listener.Stop();
@@ -72,13 +72,13 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     private readonly StreamSyncTransport _transport;
     private readonly Stream? _ownedOuter; // SslStream when TLS; disposed after transport
 
-    /// <summary>Gets PeerNodeId.</summary>
+    /// <summary>Gets the peer node id.</summary>
     public byte[] PeerNodeId { get; }
-    /// <summary>Gets PeerEpoch.</summary>
+    /// <summary>Gets the peer epoch.</summary>
     public int PeerEpoch { get; }
-    /// <summary>Gets PeerCapabilities.</summary>
+    /// <summary>Gets the peer capabilities.</summary>
     public SessionCapabilities PeerCapabilities { get; }
-    /// <summary>Gets IsTls.</summary>
+    /// <summary>Indicates whether tls.</summary>
     public bool IsTls { get; }
 
     private TcpSyncSession(
@@ -196,7 +196,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         return result;
     }
 
-    /// <summary>DisposeAsync.</summary>
+    /// <summary>DisposeAsync: dispose async.</summary>
     public async ValueTask DisposeAsync()
     {
         await _transport.DisposeAsync().ConfigureAwait(false);

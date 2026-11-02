@@ -5,13 +5,13 @@ namespace BinSync;
 /// <summary>Held batch waiting on causal parents (KЗ4).</summary>
 public sealed class HeldCausalBatch
 {
-    /// <summary>Gets Batch.</summary>
+    /// <summary>DELTA_BATCH logical unit: headers, digests, and list of OutboxEntry records.</summary>
     public required Batch Batch { get; init; }
-    /// <summary>Gets SenderPeer.</summary>
+    /// <summary>Peer that sent the held batch.</summary>
     public required byte[] SenderPeer { get; init; }
 }
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// <summary>

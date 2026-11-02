@@ -15,11 +15,11 @@ public class InvalidFloatException : Exception
 /// <summary>One raw TLV triple for unknown / extension fields (§6.5).</summary>
 public readonly struct Tlv
 {
-    /// <summary>Gets Tag.</summary>
+    /// <summary>TLV tag byte.</summary>
     public byte Tag { get; }
-    /// <summary>Gets Value.</summary>
+    /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public byte[] Value { get; }
-    /// <summary>Tlv.</summary>
+    /// <summary>Tag-length-value element used in extended codec payloads.</summary>
     public Tlv(byte tag, byte[] value)
     {
         Tag = tag;
@@ -27,7 +27,7 @@ public readonly struct Tlv
     }
 }
 
-/// <summary>Represents Codec.</summary>
+/// <summary>Canonical binary codec: ULEB128 varints, little-endian fixed ints, b128, TLV, strings, floats.</summary>
 public static partial class Codec
 {
     /// <summary>Canonical LE encode of a signed 64-bit integer (two's complement).</summary>
@@ -38,14 +38,14 @@ public static partial class Codec
         return b;
     }
 
-    /// <summary>DecodeI64.</summary>
+    /// <summary>Decode a little-endian signed 64-bit integer.</summary>
     public static long DecodeI64(ReadOnlySpan<byte> data)
     {
         if (data.Length < 8) throw new EndOfStreamException("truncated i64");
         return BinaryPrimitives.ReadInt64LittleEndian(data);
     }
 
-    /// <summary>EncodeI32.</summary>
+    /// <summary>Encode a signed 32-bit integer as little-endian bytes.</summary>
     public static byte[] EncodeI32(int v)
     {
         var b = new byte[4];
@@ -53,7 +53,7 @@ public static partial class Codec
         return b;
     }
 
-    /// <summary>DecodeI32.</summary>
+    /// <summary>Decode a little-endian signed 32-bit integer.</summary>
     public static int DecodeI32(ReadOnlySpan<byte> data)
     {
         if (data.Length < 4) throw new EndOfStreamException("truncated i32");
@@ -82,7 +82,7 @@ public static partial class Codec
         return w.Value();
     }
 
-    /// <summary>DecodeTlv.</summary>
+    /// <summary>Decode a TLV (tag + length-prefixed value) starting at pos; returns the element and next offset.</summary>
     public static Tlv DecodeTlv(byte[] data, int pos, out int next)
     {
         var r = new Reader(data, pos);
@@ -101,7 +101,7 @@ public static partial class Codec
         return w.Value();
     }
 
-    /// <summary>DecodeString.</summary>
+    /// <summary>Decode a length-prefixed UTF-8 string; strips a leading BOM if present.</summary>
     public static string DecodeString(byte[] data, int pos, out int next)
     {
         var r = new Reader(data, pos);
@@ -127,7 +127,7 @@ public static partial class Codec
         return b;
     }
 
-    /// <summary>DecodeF64.</summary>
+    /// <summary>Decode a little-endian IEEE-754 binary64; rejects NaN.</summary>
     public static double DecodeF64(ReadOnlySpan<byte> data)
     {
         if (data.Length < 8) throw new EndOfStreamException("truncated f64");
@@ -156,10 +156,10 @@ public static partial class Codec
     }
 }
 
-/// <summary>Represents Writer.</summary>
+/// <summary>Growable (or fixed-capacity) binary writer for canonical BIN-SYNC payloads.</summary>
 public partial class Writer
 {
-    /// <summary>I32.</summary>
+    /// <summary>Append a little-endian signed 32-bit integer.</summary>
     public Writer I32(int v)
     {
         Span<byte> s = stackalloc byte[4];
@@ -168,7 +168,7 @@ public partial class Writer
         return this;
     }
 
-    /// <summary>I64.</summary>
+    /// <summary>Append a little-endian signed 64-bit integer.</summary>
     public Writer I64(long v)
     {
         Span<byte> s = stackalloc byte[8];
@@ -177,7 +177,7 @@ public partial class Writer
         return this;
     }
 
-    /// <summary>B256.</summary>
+    /// <summary>Append a fixed 32-byte blob.</summary>
     public Writer B256(byte[] v)
     {
         if (v.Length != 32) v = Codec.CanonicalB256(v);
@@ -185,14 +185,14 @@ public partial class Writer
         return this;
     }
 
-    /// <summary>Tlv.</summary>
+    /// <summary>Tag-length-value element used in extended codec payloads.</summary>
     public Writer Tlv(byte tag, byte[] value)
     {
         U8(tag).Varint((ulong)value.Length).Raw(value);
         return this;
     }
 
-    /// <summary>StringUtf8.</summary>
+    /// <summary>Append a length-prefixed UTF-8 string.</summary>
     public Writer StringUtf8(string s)
     {
         var utf8 = Encoding.UTF8.GetBytes(s ?? "");
@@ -200,7 +200,7 @@ public partial class Writer
         return this;
     }
 
-    /// <summary>F64.</summary>
+    /// <summary>Append a little-endian IEEE-754 binary64; rejects NaN.</summary>
     public Writer F64(double v)
     {
         Raw(Codec.EncodeF64(v));
@@ -208,17 +208,17 @@ public partial class Writer
     }
 }
 
-/// <summary>Represents Reader.</summary>
+/// <summary>Sequential binary reader over a byte array or ReadOnlyMemory slice.</summary>
 public partial class Reader
 {
-    /// <summary>I32.</summary>
+    /// <summary>Append a little-endian signed 32-bit integer.</summary>
     public int I32() => BinaryPrimitives.ReadInt32LittleEndian(Take(4));
-    /// <summary>I64.</summary>
+    /// <summary>Append a little-endian signed 64-bit integer.</summary>
     public long I64() => BinaryPrimitives.ReadInt64LittleEndian(Take(8));
-    /// <summary>B256.</summary>
+    /// <summary>Append a fixed 32-byte blob.</summary>
     public byte[] B256() => Take(32);
 
-    /// <summary>Tlv.</summary>
+    /// <summary>Tag-length-value element used in extended codec payloads.</summary>
     public Tlv Tlv()
     {
         byte tag = U8();
@@ -226,7 +226,7 @@ public partial class Reader
         return new Tlv(tag, value);
     }
 
-    /// <summary>StringUtf8.</summary>
+    /// <summary>Append a length-prefixed UTF-8 string.</summary>
     public string StringUtf8()
     {
         var bytes = Bytes();
@@ -235,6 +235,6 @@ public partial class Reader
         return Encoding.UTF8.GetString(bytes);
     }
 
-    /// <summary>F64.</summary>
+    /// <summary>Append a little-endian IEEE-754 binary64; rejects NaN.</summary>
     public double F64() => Codec.DecodeF64(Take(8));
 }

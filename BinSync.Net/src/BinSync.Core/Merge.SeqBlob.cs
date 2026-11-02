@@ -7,22 +7,22 @@ namespace BinSync;
 /// </summary>
 public static class SeqFractional
 {
-    /// <summary>Represents Item.</summary>
+    /// <summary>Item type used by the BIN-SYNC engine.</summary>
     public sealed class Item
     {
-        /// <summary>ParentId.</summary>
+        /// <summary>16 zero bytes used as a sentinel identity/digest.</summary>
         public byte[] ParentId = Node.Zero128;
-        /// <summary>OrderKey.</summary>
+        /// <summary>OrderKey: order key.</summary>
         public string OrderKey = "";
-        /// <summary>AuthorNodeId.</summary>
+        /// <summary>16 zero bytes used as a sentinel identity/digest.</summary>
         public byte[] AuthorNodeId = Node.Zero128;
-        /// <summary>Seq.</summary>
+        /// <summary>Seq: seq.</summary>
         public ulong Seq;
-        /// <summary>Value.</summary>
+        /// <summary>Return a copy of the written buffer as a new byte array.</summary>
         public byte[] Value = Array.Empty<byte>();
     }
 
-    /// <summary>Encode.</summary>
+    /// <summary>Encode: encode.</summary>
     public static byte[] Encode(Item item)
     {
         var w = new Writer();
@@ -34,7 +34,7 @@ public static class SeqFractional
         return w.Value();
     }
 
-    /// <summary>Decode.</summary>
+    /// <summary>Decode: decode.</summary>
     public static Item Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -84,20 +84,20 @@ public static class SeqFractional
 /// </summary>
 public static class BlobRef
 {
-    /// <summary>Represents Descriptor.</summary>
+    /// <summary>Descriptor type used by the BIN-SYNC engine.</summary>
     public sealed class Descriptor
     {
-        /// <summary>BlobId.</summary>
+        /// <summary>16 zero bytes used as a sentinel identity/digest.</summary>
         public byte[] BlobId = Node.Zero128;
-        /// <summary>Size.</summary>
+        /// <summary>Size: size.</summary>
         public ulong Size;
-        /// <summary>ContentType.</summary>
+        /// <summary>ContentType: content type.</summary>
         public string ContentType = "";
-        /// <summary>Hash.</summary>
+        /// <summary>Hash: hash.</summary>
         public byte[] Hash = new byte[32];
     }
 
-    /// <summary>Encode.</summary>
+    /// <summary>Encode: encode.</summary>
     public static byte[] Encode(Descriptor d)
     {
         var w = new Writer();
@@ -108,7 +108,7 @@ public static class BlobRef
         return w.Value();
     }
 
-    /// <summary>Decode.</summary>
+    /// <summary>Decode: decode.</summary>
     public static Descriptor Decode(byte[] data)
     {
         var r = new Reader(data);

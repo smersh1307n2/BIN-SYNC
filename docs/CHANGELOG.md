@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.1.12 — 2026-11-02
+
+**XML-doc text quality pass.**
+
+- Replaced ~650 template summaries (`Represents X` / `Name.`) with meaningful descriptions
+- Codec, Writer/Reader, Ids, Node, Batch, Transport, Ops, Frame, HLC, Production surface covered
+- Weak template count on non-Crypto public surface: 0
+
+---
+
 ## 2.1.11 — 2026-11-02
 
 **Public API XML-doc coverage + exception hygiene.**

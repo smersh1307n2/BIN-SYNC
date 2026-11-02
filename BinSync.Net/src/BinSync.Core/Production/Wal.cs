@@ -4,7 +4,7 @@
 // Note: B128 is fixed 16-byte identity; field values use varint-length Bytes().
 namespace BinSync;
 
-/// <summary>Represents WalRecordType.</summary>
+/// <summary>WalRecordType type used by the BIN-SYNC engine.</summary>
 public enum WalRecordType : byte
 {
     FieldWrite = 0x01,
@@ -16,7 +16,7 @@ public enum WalRecordType : byte
 /// </summary>
 public sealed class Wal : IDisposable
 {
-    /// <summary>Tag.</summary>
+    /// <summary>TLV tag byte.</summary>
     public const string Tag = "BIN-SYNC/WAL/v1";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
     private const ushort Version = 1;
@@ -26,9 +26,9 @@ public sealed class Wal : IDisposable
     private readonly object _lock = new();
     private long _sequence;
 
-    /// <summary>Gets Path.</summary>
+    /// <summary>Gets the path.</summary>
     public string Path => _path;
-    /// <summary>Gets Sequence.</summary>
+    /// <summary>Gets the sequence.</summary>
     public long Sequence => _sequence;
 
     private Wal(string path, FileStream fs, long sequence)
@@ -38,7 +38,7 @@ public sealed class Wal : IDisposable
         _sequence = sequence;
     }
 
-    /// <summary>Open.</summary>
+    /// <summary>Open: open.</summary>
     public static Wal Open(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
@@ -76,7 +76,7 @@ public sealed class Wal : IDisposable
         return new Wal(path, fs, seq);
     }
 
-    /// <summary>AppendFieldWrite.</summary>
+    /// <summary>AppendFieldWrite: append field write.</summary>
     public long AppendFieldWrite(
         int namespaceId, byte[] recordId, ushort fieldId, byte[] value,
         Hlc hlc, byte[] authorNodeId)
@@ -93,7 +93,7 @@ public sealed class Wal : IDisposable
         return AppendRaw(w.Value());
     }
 
-    /// <summary>AppendCheckpoint.</summary>
+    /// <summary>AppendCheckpoint: append checkpoint.</summary>
     public long AppendCheckpoint()
     {
         var w = new Writer();
@@ -117,7 +117,7 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Replay.</summary>
+    /// <summary>Replay: replay.</summary>
     public int Replay(Node node)
     {
         lock (_lock)
@@ -142,7 +142,7 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>ReplayFile.</summary>
+    /// <summary>ReplayFile: replay file.</summary>
     public static int ReplayFile(string path, Node node)
     {
         if (!File.Exists(path)) return 0;
@@ -163,7 +163,7 @@ public sealed class Wal : IDisposable
         return applied;
     }
 
-    /// <summary>Truncate.</summary>
+    /// <summary>Truncate: truncate.</summary>
     public void Truncate()
     {
         lock (_lock)
@@ -176,7 +176,7 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Checkpoint.</summary>
+    /// <summary>Checkpoint: checkpoint.</summary>
     public void Checkpoint(Node node, string snapshotPath)
     {
         NodePersistence.Save(node, snapshotPath);
@@ -240,7 +240,7 @@ public sealed class Wal : IDisposable
         return (int)(((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]);
     }
 
-    /// <summary>Dispose.</summary>
+    /// <summary>Release acquired resources.</summary>
     public void Dispose()
     {
         lock (_lock)

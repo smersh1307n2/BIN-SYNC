@@ -1,45 +1,45 @@
 // MEMBERSHIP frame (§12.6 0x05): durable author roster + quarantine hints.
 namespace BinSync;
 
-/// <summary>Represents MembershipFrames.</summary>
+/// <summary>MembershipFrames type used by the BIN-SYNC engine.</summary>
 public static class MembershipFrames
 {
-    /// <summary>Membership.</summary>
+    /// <summary>Constant: membership.</summary>
     public const byte Membership = 0x05;
 }
 
 /// <summary>One member row in a MEMBERSHIP payload.</summary>
 public sealed class MembershipEntry
 {
-    /// <summary>Gets or sets NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public byte[] NodeId { get; set; } = Array.Empty<byte>();
-    /// <summary>Gets or sets Epoch.</summary>
+    /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
     public byte Flags;
-    /// <summary>Gets IsActive.</summary>
+    /// <summary>Indicates whether active.</summary>
     public bool IsActive => (Flags & 0x01) != 0;
-    /// <summary>Gets IsQuarantined.</summary>
+    /// <summary>Indicates whether quarantined.</summary>
     public bool IsQuarantined => (Flags & 0x02) != 0;
 }
 
 /// <summary>Decoded MEMBERSHIP message for one namespace view.</summary>
 public sealed class MembershipMessage
 {
-    /// <summary>NamespaceId.</summary>
+    /// <summary>NamespaceId: namespace id.</summary>
     public int NamespaceId;
-    /// <summary>MembershipEpoch.</summary>
+    /// <summary>MembershipEpoch: membership epoch.</summary>
     public uint MembershipEpoch;
-    /// <summary>List.</summary>
+    /// <summary>Members: members.</summary>
     public List<MembershipEntry> Members = new();
 }
 
-/// <summary>Represents Membership.</summary>
+/// <summary>Membership type used by the BIN-SYNC engine.</summary>
 public static class Membership
 {
-    /// <summary>FlagActive.</summary>
+    /// <summary>Constant: flag active.</summary>
     public const byte FlagActive = 0x01;
-    /// <summary>FlagQuarantined.</summary>
+    /// <summary>Constant: flag quarantined.</summary>
     public const byte FlagQuarantined = 0x02;
 
     /// <summary>
@@ -74,7 +74,7 @@ public static class Membership
         return msg;
     }
 
-    /// <summary>Encode.</summary>
+    /// <summary>Encode: encode.</summary>
     public static byte[] Encode(MembershipMessage m)
     {
         var w = new Writer();
@@ -90,7 +90,7 @@ public static class Membership
         return w.Value();
     }
 
-    /// <summary>Decode.</summary>
+    /// <summary>Decode: decode.</summary>
     public static MembershipMessage Decode(byte[] payload)
     {
         var r = new Reader(payload);

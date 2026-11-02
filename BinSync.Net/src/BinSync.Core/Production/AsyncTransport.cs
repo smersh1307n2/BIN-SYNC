@@ -12,11 +12,11 @@ namespace BinSync;
 /// <summary>Outcome of one full anti-entropy round (A→B then B→A).</summary>
 public sealed record SyncRoundResult(int BatchesFromA, int BatchesFromB)
 {
-    /// <summary>Gets Total.</summary>
+    /// <summary>Gets the total.</summary>
     public int Total => BatchesFromA + BatchesFromB;
 }
 
-/// <summary>Represents AsyncTransport.</summary>
+/// <summary>AsyncTransport type used by the BIN-SYNC engine.</summary>
 public static class AsyncTransport
 {
     /// <summary>

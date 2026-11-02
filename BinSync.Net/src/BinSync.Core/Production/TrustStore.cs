@@ -1,7 +1,7 @@
 // Trust model §15.6: TOFU, pre-shared allow-list, simple CA allow-list, revoke.
 namespace BinSync;
 
-/// <summary>Represents TrustMode.</summary>
+/// <summary>TrustMode type used by the BIN-SYNC engine.</summary>
 public enum TrustMode : byte
 {
     Tofu = 1,
@@ -9,32 +9,32 @@ public enum TrustMode : byte
     CertificateAuthority = 3,
 }
 
-/// <summary>Represents TrustedPeer.</summary>
+/// <summary>TrustedPeer type used by the BIN-SYNC engine.</summary>
 public sealed class TrustedPeer
 {
-    /// <summary>Gets NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
-    /// <summary>Gets PublicKey.</summary>
+    /// <summary>Gets the public key.</summary>
     public byte[] PublicKey { get; init; } = Array.Empty<byte>();
-    /// <summary>Gets Mode.</summary>
+    /// <summary>Gets the mode.</summary>
     public TrustMode Mode { get; init; }
-    /// <summary>Gets or sets Revoked.</summary>
+    /// <summary>Gets or sets the revoked.</summary>
     public bool Revoked { get; set; }
-    /// <summary>Gets PinnedAtUnixMs.</summary>
+    /// <summary>Gets the pinned at unix ms.</summary>
     public long PinnedAtUnixMs { get; init; }
 }
 
-/// <summary>Represents TrustStore.</summary>
+/// <summary>TrustStore type used by the BIN-SYNC engine.</summary>
 public sealed partial class TrustStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TrustedPeer> _peers = new(StringComparer.Ordinal);
     private readonly HashSet<string> _caRoots = new(StringComparer.Ordinal);
 
-    /// <summary>Gets or sets DefaultMode.</summary>
+    /// <summary>Gets or sets the default mode.</summary>
     public TrustMode DefaultMode { get; set; } = TrustMode.Tofu;
 
-    /// <summary>PeerCount.</summary>
+    /// <summary>PeerCount: peer count.</summary>
     public int PeerCount
     {
         get { lock (_gate) return _peers.Count; }
@@ -42,7 +42,7 @@ public sealed partial class TrustStore
 
     static string Key(byte[] nodeId) => Convert.ToHexString(Codec.CanonicalB128(nodeId));
 
-    /// <summary>Allow.</summary>
+    /// <summary>Allow: allow.</summary>
     public void Allow(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
@@ -61,19 +61,19 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>AddCaRoot.</summary>
+    /// <summary>AddCaRoot: add ca root.</summary>
     public void AddCaRoot(byte[] caNodeId)
     {
         lock (_gate) _caRoots.Add(Key(caNodeId));
     }
 
-    /// <summary>IsCaRoot.</summary>
+    /// <summary>Indicates whether ca root.</summary>
     public bool IsCaRoot(byte[] nodeId)
     {
         lock (_gate) return _caRoots.Contains(Key(nodeId));
     }
 
-    /// <summary>Revoke.</summary>
+    /// <summary>Revoke: revoke.</summary>
     public void Revoke(byte[] nodeId)
     {
         lock (_gate)
@@ -83,14 +83,14 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>TryGet.</summary>
+    /// <summary>Try to get; returns whether the operation succeeded.</summary>
     public bool TryGet(byte[] nodeId, out TrustedPeer? peer)
     {
         lock (_gate)
             return _peers.TryGetValue(Key(nodeId), out peer);
     }
 
-    /// <summary>ResolvePublicKey.</summary>
+    /// <summary>ResolvePublicKey: resolve public key.</summary>
     public byte[]? ResolvePublicKey(byte[] nodeId, byte[]? candidatePublicKey = null)
     {
         lock (_gate)
@@ -124,7 +124,7 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>VerifyBatchOrThrow.</summary>
+    /// <summary>VerifyBatchOrThrow: verify batch or throw.</summary>
     public void VerifyBatchOrThrow(
         Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
@@ -135,7 +135,7 @@ public sealed partial class TrustStore
             throw new SyncException("SIGNATURE_INVALID", batch.BatchId);
     }
 
-    /// <summary>TryVerifyBatch.</summary>
+    /// <summary>Try to verify batch; returns whether the operation succeeded.</summary>
     public bool TryVerifyBatch(Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
         try

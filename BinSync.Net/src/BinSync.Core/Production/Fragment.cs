@@ -5,16 +5,16 @@ namespace BinSync;
 /// <summary>One fragment of a logical message larger than the transport MTU.</summary>
 public readonly struct FrameFragment
 {
-    /// <summary>Gets MsgId.</summary>
+    /// <summary>Gets the msg id.</summary>
     public byte[] MsgId { get; }
-    /// <summary>Gets Index.</summary>
+    /// <summary>Gets the index.</summary>
     public ushort Index { get; }
-    /// <summary>Gets Count.</summary>
+    /// <summary>Gets the count.</summary>
     public ushort Count { get; }
-    /// <summary>Gets Body.</summary>
+    /// <summary>Gets the body.</summary>
     public byte[] Body { get; }
 
-    /// <summary>FrameFragment.</summary>
+    /// <summary>FrameFragment: frame fragment.</summary>
     public FrameFragment(byte[] msgId, ushort index, ushort count, byte[] body)
     {
         MsgId = msgId;
@@ -24,7 +24,7 @@ public readonly struct FrameFragment
     }
 }
 
-/// <summary>Represents FragmentCodec.</summary>
+/// <summary>FragmentCodec type used by the BIN-SYNC engine.</summary>
 public static class FragmentCodec
 {
     /// <summary>Split <paramref name="logicalPayload"/> into fragments of at most <paramref name="maxBody"/> bytes.</summary>
@@ -53,7 +53,7 @@ public static class FragmentCodec
         return list;
     }
 
-    /// <summary>EncodeOne.</summary>
+    /// <summary>EncodeOne: encode one.</summary>
     public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body)
     {
         var w = new Writer();
@@ -61,7 +61,7 @@ public static class FragmentCodec
         return w.Value();
     }
 
-    /// <summary>DecodeOne.</summary>
+    /// <summary>DecodeOne: decode one.</summary>
     public static FrameFragment DecodeOne(byte[] payload)
     {
         var r = new Reader(payload);
@@ -95,17 +95,17 @@ public sealed class FragmentReassembler
 {
     private sealed class Slot
     {
-        /// <summary>Count.</summary>
+        /// <summary>Count: count.</summary>
         public ushort Count;
-        /// <summary>Parts.</summary>
+        /// <summary>Parts: parts.</summary>
         public byte[]?[] Parts = Array.Empty<byte[]?>();
-        /// <summary>Have.</summary>
+        /// <summary>Have: have.</summary>
         public int Have;
     }
 
     private readonly Dictionary<string, Slot> _pending = new(StringComparer.Ordinal);
 
-    /// <summary>Gets PendingMessages.</summary>
+    /// <summary>Gets the pending messages.</summary>
     public int PendingMessages => _pending.Count;
 
     /// <summary>
@@ -150,6 +150,6 @@ public sealed class FragmentReassembler
         return buf;
     }
 
-    /// <summary>Clear.</summary>
+    /// <summary>Clear: clear.</summary>
     public void Clear() => _pending.Clear();
 }

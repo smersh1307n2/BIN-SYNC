@@ -5,10 +5,10 @@
 
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
-    /// <summary>Zero128.</summary>
+    /// <summary>Shared zero 128.</summary>
     public static readonly byte[] Zero128 = new byte[16];
 
     // ---- production hardening (Шаг 2): thread safety -------------------------------
@@ -48,51 +48,51 @@ public sealed partial class Node
     /// <summary>Live record store. Mutate maps in place; wholesale replace is not supported.</summary>
     public Dictionary<int, Dictionary<RecordId, Record>> Storage => _storage;
 
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Pending local mutations awaiting delta batch export.</summary>
     public Dictionary<int, List<OutboxEntry>> Outbox { get; } = new();
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
-    /// <summary>Gets HashSet.</summary>
+    /// <summary>Set of applied batch keys for idempotent replay detection.</summary>
     public HashSet<(byte[], int, int, byte[])> Inbox { get; } = new(BytesIntIntBytesEq.Instance);
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
     public Dictionary<(byte[], int, int), byte[]> LastBatchDigest { get; } = new(BytesIntIntEq.Instance);
     // per-stream prevBatchDigest: AM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Per-stream prev-batch digest checkpoints on the issuer side.</summary>
     public Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Gets the alias to node.</summary>
     public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Gets the node to alias.</summary>
     public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; } = new();
     // Errata E-9: durable author knowledge for session-table construction only [А3].
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Durable author knowledge for session-table construction (Errata E-9).</summary>
     public Dictionary<NodeId, int> DurableAuthors { get; } = new();
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Per-peer session cursors and ACK watermarks keyed by (peer, namespace).</summary>
     public Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
-    /// <summary>Gets HashSet.</summary>
+    /// <summary>Provenance seen-set of (sender, ns, changeId) for relay (Errata E-10).</summary>
     public HashSet<(byte[], int, byte[])> SeenChanges { get; } = new(SeenKeyComparer.Instance);
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
     public Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Highest known epoch per (author, namespace).</summary>
     public Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
-    /// <summary>Gets HashSet.</summary>
+    /// <summary>Peers currently quarantined from sync.</summary>
     public HashSet<NodeId> Quarantined { get; } = new();
-    /// <summary>Gets List.</summary>
+    /// <summary>Collected error code names from the last operations (diagnostic).</summary>
     public List<string> ErrorsOut { get; } = new();
-    /// <summary>Gets List.</summary>
+    /// <summary>Batch ids ACKed during the last apply (diagnostic).</summary>
     public List<byte[]> AcksOut { get; } = new();
-    /// <summary>Gets HashSet.</summary>
+    /// <summary>Namespaces that must not be applied (NAMESPACE_FORBIDDEN).</summary>
     public HashSet<int> ForbiddenNamespaces { get; } = new();
-    /// <summary>Gets Dictionary.</summary>
+    /// <summary>Highest supported schema version per namespace.</summary>
     public Dictionary<int, int> SchemaVersions { get; } = new();
     /// <summary>Optional in-process peer map for loopback transport.</summary>
     public Dictionary<NodeId, Node>? PeersByNid { get; set; }
 
-    /// <summary>Node.</summary>
+    /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000)
     {

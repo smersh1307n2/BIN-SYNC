@@ -1,7 +1,7 @@
 // STATE_DIGEST / NEED_RANGE / SNAPSHOT / AutoReconcile (§13.1).
 namespace BinSync;
 
-/// <summary>Represents TcpSyncSession.</summary>
+/// <summary>TcpSyncSession type used by the BIN-SYNC engine.</summary>
 public sealed partial class TcpSyncSession
 {
     /// <summary>
@@ -41,7 +41,7 @@ public sealed partial class TcpSyncSession
         }
     }
 
-    /// <summary>SendNeedRangeAsync.</summary>
+    /// <summary>SendNeedRangeAsync: send need range async.</summary>
     public async Task SendNeedRangeAsync(int namespaceId, byte[] prefix, CancellationToken ct = default)
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
@@ -50,7 +50,7 @@ public sealed partial class TcpSyncSession
             FrameCodec.BuildFrame(ReconcileFrames.NeedRange, streamId, 11, payload), ct).ConfigureAwait(false);
     }
 
-    /// <summary>Task.</summary>
+    /// <summary>ReceiveNeedRangeAsync: receive need range async.</summary>
     public async Task<NeedRangeMessage> ReceiveNeedRangeAsync(CancellationToken ct = default)
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
@@ -61,7 +61,7 @@ public sealed partial class TcpSyncSession
         return Reconcile.DecodeNeedRange(frame.Payload);
     }
 
-    /// <summary>SendNeedKeysAsync.</summary>
+    /// <summary>SendNeedKeysAsync: send need keys async.</summary>
     public async Task SendNeedKeysAsync(NeedKeysMessage keys, CancellationToken ct = default)
     {
         uint streamId = 0x0001_0000u | (uint)keys.NamespaceId;
@@ -70,7 +70,7 @@ public sealed partial class TcpSyncSession
             ct).ConfigureAwait(false);
     }
 
-    /// <summary>Task.</summary>
+    /// <summary>ReceiveNeedKeysAsync: receive need keys async.</summary>
     public async Task<NeedKeysMessage> ReceiveNeedKeysAsync(CancellationToken ct = default)
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)

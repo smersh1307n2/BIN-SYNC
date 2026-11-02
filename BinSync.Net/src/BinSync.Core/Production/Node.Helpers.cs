@@ -2,7 +2,7 @@
 
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     // ---------------------------------------------------------------------- helpers
@@ -69,7 +69,7 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>EncodeRecordsArray.</summary>
+    /// <summary>EncodeRecordsArray: encode records array.</summary>
     public static byte[] EncodeRecordsArray(List<OutboxEntry> entries)
     {
         int est = 8;
@@ -80,7 +80,7 @@ public sealed partial class Node
         return w.Value();
     }
 
-    /// <summary>List.</summary>
+    /// <summary>DecodeRecordsArray: decode records array.</summary>
     public static List<(byte[] Rid, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
     {
         var r = new Reader(data);
@@ -96,8 +96,7 @@ public sealed partial class Node
         return outp;
     }
 
-    /// §12.17.2 batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
-    /// <summary>ComputeBatchDigest.</summary>
+    /// <summary>BLAKE3 digest binding batch id, cursors, roots, and prev digest.</summary>
     public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest)
     {
@@ -117,9 +116,7 @@ public sealed partial class Node
         }
     }
 
-    /// recordsRoot = BLAKE3-128 over domainTag || canonical records array (§12.17).
-    /// ArrayPool buffer — no LOH growth after warmup; single BLAKE3 pass.
-    /// <summary>ComputeRecordsRoot.</summary>
+    /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
     public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)
     {
         int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);

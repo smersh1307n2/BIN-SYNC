@@ -40,7 +40,7 @@ public sealed class E2eeKeyRing
         }
     }
 
-    /// <summary>TryGet.</summary>
+    /// <summary>Try to get; returns whether the operation succeeded.</summary>
     public bool TryGet(int namespaceId, out byte[] key, out ushort keyEpoch)
     {
         lock (_gate)
@@ -69,14 +69,14 @@ public sealed class E2eeKeyRing
         }
     }
 
-    /// <summary>GetEpoch.</summary>
+    /// <summary>Return the epoch.</summary>
     public ushort GetEpoch(int namespaceId)
     {
         lock (_gate)
             return _epochs.TryGetValue(namespaceId, out var e) ? e : (ushort)0;
     }
 
-    /// <summary>HasKey.</summary>
+    /// <summary>Indicates whether key.</summary>
     public bool HasKey(int namespaceId)
     {
         lock (_gate) return _keys.ContainsKey(namespaceId);

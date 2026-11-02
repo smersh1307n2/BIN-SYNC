@@ -1,43 +1,43 @@
 // Data model (§7): Record, FieldState, lifecycle (delete-wins), ghosts.
 namespace BinSync;
 
-/// <summary>Represents Model.</summary>
+/// <summary>Model type used by the BIN-SYNC engine.</summary>
 public static class Model
 {
-    /// <summary>LifecycleFieldId.</summary>
+    /// <summary>Constant: lifecycle field id.</summary>
     public const ushort LifecycleFieldId = 0x0000;   // §7.2 reserved
-    /// <summary>FieldResolveId.</summary>
+    /// <summary>Constant: field resolve id.</summary>
     public const ushort FieldResolveId = 0x00FF;     // §8.9 MANUAL resolve field
-    /// <summary>UserFieldMin.</summary>
+    /// <summary>Constant: user field min.</summary>
     public const ushort UserFieldMin = 0x0100;
-    /// <summary>Alive.</summary>
+    /// <summary>Constant: alive.</summary>
     public const byte Alive = 0x00;
-    /// <summary>Dead.</summary>
+    /// <summary>Constant: dead.</summary>
     public const byte Dead = 0x01;
 }
 
-/// <summary>Represents FieldState.</summary>
+/// <summary>class type used by the BIN-SYNC engine.</summary>
 public sealed record class FieldState(
     byte[] Value, Hlc Timestamp, byte[] AuthorNodeId, ushort KeyEpoch = 0);
 
-/// <summary>Represents Record.</summary>
+/// <summary>Per-record state: fields map, lifecycle, tombstones.</summary>
 public class Record
 {
-    /// <summary>Gets or sets RecordId.</summary>
+    /// <summary>128-bit record identity with value equality.</summary>
     public byte[] RecordId { get; set; }
-    /// <summary>Gets or sets NamespaceId.</summary>
+    /// <summary>Logical namespace this entity belongs to.</summary>
     public ushort NamespaceId { get; set; }
-    /// <summary>Gets or sets Dictionary.</summary>
+    /// <summary>Map of field id to field state for this record.</summary>
     public Dictionary<ushort, FieldState> State { get; set; }
-    /// <summary>Gets or sets LifecycleHlc.</summary>
+    /// <summary>Gets or sets the lifecycle hlc.</summary>
     public Hlc? LifecycleHlc { get; set; }
-    /// <summary>Gets or sets LifecycleAuthor.</summary>
+    /// <summary>Gets or sets the lifecycle author.</summary>
     public byte[]? LifecycleAuthor { get; set; }
-    /// <summary>Gets or sets LifecycleValue.</summary>
+    /// <summary>Gets or sets the lifecycle value.</summary>
     public byte LifecycleValue { get; set; } = Model.Alive;
     // Lazy: most records never carry field tombs — avoid empty Dictionary per record.
     private Dictionary<ushort, FieldState>? _fieldTombs;
-    /// <summary>Dictionary.</summary>
+    /// <summary>FieldTombs: field tombs.</summary>
     public Dictionary<ushort, FieldState> FieldTombs
     {
         get => _fieldTombs ??= new Dictionary<ushort, FieldState>();
@@ -45,7 +45,7 @@ public class Record
     }
     internal bool HasFieldTombs => _fieldTombs is { Count: > 0 };
 
-    /// <summary>Record.</summary>
+    /// <summary>Per-record state: fields map, lifecycle, tombstones.</summary>
     public Record(byte[] recordId, ushort namespaceId, int fieldCapacity = 1)
     {
         RecordId = recordId;
@@ -53,7 +53,7 @@ public class Record
         State = new Dictionary<ushort, FieldState>(Math.Max(1, fieldCapacity));
     }
 
-    /// <summary>Gets IsDead.</summary>
+    /// <summary>True when the record is lifecycle-tombstoned.</summary>
     public bool IsDead => LifecycleValue == Model.Dead;
 
     /// <summary>Ghost semantics (§7.4): dead records hide fields ordered ≤ lifecycle.</summary>
@@ -68,10 +68,7 @@ public class Record
         return outp;
     }
 
-    /// [D7]/[У7] with SPEC HARDENING ghost rule (see binsync/model.py docstring):
-    /// ghost status only for DEAD records; time dominates, durable author is the
-    /// tie-break at exactly equal times.
-    /// <summary>IsGhost.</summary>
+    /// <summary>Indicates whether ghost.</summary>
     public static bool IsGhost(FieldState fs, Record rec)
     {
         if (rec.LifecycleHlc is null || rec.LifecycleAuthor is null) return false;

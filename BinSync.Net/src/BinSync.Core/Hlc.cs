@@ -1,20 +1,20 @@
 // HLC (§5): wall µs + logical + origin (wire only). Tick rules, skew clamp, tie-break.
 namespace BinSync;
 
-/// <summary>Represents Hlc.</summary>
+/// <summary>class type used by the BIN-SYNC engine.</summary>
 public sealed record class Hlc(ulong Wall, uint Logical, ushort Origin = 0)
 {
-    /// <summary>Key.</summary>
+    /// <summary>Key: key.</summary>
     public (ulong, uint) Key() => (Wall, Logical);
 }
 
-/// <summary>Represents HlcOps.</summary>
+/// <summary>HlcOps type used by the BIN-SYNC engine.</summary>
 public static class HlcOps
 {
     // §5.4 full order: wall, then logical, then durable authorNodeId (never alias).
     // BUGFIX (implementation finding): unknown (null) author sorts BEFORE every known
     // author — deterministic total order independent of arrival order.
-    /// <summary>CompareHlc.</summary>
+    /// <summary>CompareHlc: compare hlc.</summary>
     public static int CompareHlc(Hlc a, byte[]? aAuthor, Hlc b, byte[]? bAuthor)
     {
         // Unknown (null) author sorts as empty bytes — before every non-empty author,
@@ -24,36 +24,36 @@ public static class HlcOps
         return BytesCompare(aAuthor, bAuthor);
     }
 
-    /// <summary>BytesCompare.</summary>
+    /// <summary>BytesCompare: bytes compare.</summary>
     public static int BytesCompare(byte[]? x, byte[]? y) =>
         x.AsSpan().SequenceCompareTo(y);
 }
 
-/// <summary>Represents ClockDriftException.</summary>
+/// <summary>ClockDriftException type used by the BIN-SYNC engine.</summary>
 public class ClockDriftException : Exception
 {
     /// <summary>ClockDriftException for codec/protocol errors.</summary>
     public ClockDriftException(string msg) : base(msg) { }
 }
 
-/// <summary>Represents HlcClock.</summary>
+/// <summary>Mutable HLC state with skew protection for send and receive paths.</summary>
 public class HlcClock
 {
-    /// <summary>LogicalMax.</summary>
+    /// <summary>Maximum logical counter value (uint.MaxValue).</summary>
     public const uint LogicalMax = uint.MaxValue;
-    /// <summary>Func.</summary>
+    /// <summary>Optional wall-clock source (microseconds); null uses system time.</summary>
     public Func<long>? NowFn;
-    /// <summary>MaxSkewUs.</summary>
+    /// <summary>Maximum allowed clock skew in microseconds before protection kicks in.</summary>
     public long MaxSkewUs;
-    /// <summary>LastWall.</summary>
+    /// <summary>Last observed wall component (cold-starts at 0).</summary>
     public ulong LastWall = 0;   // BUGFIX: never tick at construction (§5.2 cold boot)
-    /// <summary>LastLogical.</summary>
+    /// <summary>Last observed logical component.</summary>
     public uint LastLogical = 0;
     // Production hardening: the clock is shared mutable state — concurrent writers inside
     // one node (and background clocks) must not interleave read-modify-write on Last*.
     private readonly object _tickGate = new();
 
-    /// <summary>HlcClock.</summary>
+    /// <summary>Mutable HLC state with skew protection for send and receive paths.</summary>
     public HlcClock(Func<long>? nowFn = null, long maxSkewUs = 60_000_000)
     {
         NowFn = nowFn ?? UnixTimeMicroseconds;
@@ -64,10 +64,10 @@ public class HlcClock
     public static long UnixTimeMicroseconds() =>
         (DateTimeOffset.UtcNow.UtcTicks - DateTimeOffset.UnixEpoch.Ticks) / 10;
 
-    /// <summary>Now.</summary>
+    /// <summary>Now: now.</summary>
     public long Now() => NowFn!();
 
-    /// <summary>SendTick.</summary>
+    /// <summary>Advance the clock for a local send and return the new timestamp.</summary>
     public Hlc SendTick()
     {
         lock (_tickGate)
@@ -83,7 +83,7 @@ public class HlcClock
         }
     }
 
-    /// <summary>ReceiveTick.</summary>
+    /// <summary>Merge a remote timestamp into the local clock and return the result.</summary>
     public Hlc ReceiveTick(Hlc remote)
     {
         lock (_tickGate)

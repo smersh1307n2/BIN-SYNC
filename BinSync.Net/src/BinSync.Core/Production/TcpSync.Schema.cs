@@ -1,10 +1,10 @@
 // SCHEMA_MAP (0x04) exchange on TcpSyncSession (§18.3).
 namespace BinSync;
 
-/// <summary>Represents TcpSyncSession.</summary>
+/// <summary>TcpSyncSession type used by the BIN-SYNC engine.</summary>
 public sealed partial class TcpSyncSession
 {
-    /// <summary>SendSchemaMapAsync.</summary>
+    /// <summary>SendSchemaMapAsync: send schema map async.</summary>
     public async Task SendSchemaMapAsync(Node local, CancellationToken ct = default)
     {
         var payload = local.ExportSchemaMap();
@@ -13,7 +13,7 @@ public sealed partial class TcpSyncSession
             ct).ConfigureAwait(false);
     }
 
-    /// <summary>Task.</summary>
+    /// <summary>ReceiveSchemaMapAsync: receive schema map async.</summary>
     public async Task<int> ReceiveSchemaMapAsync(Node local, CancellationToken ct = default)
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
@@ -24,7 +24,7 @@ public sealed partial class TcpSyncSession
         return local.LearnSchemaMap(frame.Payload);
     }
 
-    /// <summary>Task.</summary>
+    /// <summary>ExchangeSchemaMapAsync: exchange schema map async.</summary>
     public async Task<(int LearnedLocal, int LearnedRemote)> ExchangeSchemaMapAsync(
         Node local, bool initiate, CancellationToken ct = default)
     {

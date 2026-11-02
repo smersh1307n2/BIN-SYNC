@@ -5,35 +5,35 @@ using System.Buffers.Binary;
 
 namespace BinSync;
 
-/// <summary>Represents OpsConst.</summary>
+/// <summary>Wire tag constants for operation kinds.</summary>
 public static class OpsConst
 {
-    /// <summary>TagFieldWrite.</summary>
+    /// <summary>Constant: tag field write.</summary>
     public const byte TagFieldWrite = 0x01;
-    /// <summary>TagFieldTomb.</summary>
+    /// <summary>Constant: tag field tomb.</summary>
     public const byte TagFieldTomb = 0x02;
-    /// <summary>TagRecordTomb.</summary>
+    /// <summary>Constant: tag record tomb.</summary>
     public const byte TagRecordTomb = 0x03;
-    /// <summary>OriginOffset.</summary>
+    /// <summary>Constant: origin offset.</summary>
     public const int OriginOffset = 17;              // [C11] FieldWrite/FieldTomb
-    /// <summary>OriginOffsetRecordTomb.</summary>
+    /// <summary>Constant: origin offset record tomb.</summary>
     public const int OriginOffsetRecordTomb = 29;    // RecordTombstone
 }
 
-/// <summary>Represents OpFieldWrite.</summary>
+/// <summary>Decoded field-write operation.</summary>
 public class OpFieldWrite
 {
-    /// <summary>FieldId.</summary>
+    /// <summary>Key epoch associated with the field write.</summary>
     public ushort FieldId, KeyEpoch;
-    /// <summary>Wall.</summary>
+    /// <summary>Wall: wall.</summary>
     public ulong Wall; public uint Logical;
-    /// <summary>Origin.</summary>
+    /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
-    /// <summary>AuthorNodeId.</summary>
+    /// <summary>Durable author node id when full-author mode is used.</summary>
     public byte[]? AuthorNodeId;
-    /// <summary>Value.</summary>
+    /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public byte[] Value = Array.Empty<byte>();
-    /// <summary>Gets Tag.</summary>
+    /// <summary>TLV tag byte.</summary>
     public byte Tag => OpsConst.TagFieldWrite;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -47,18 +47,18 @@ public class OpFieldWrite
     internal int FullAuthorPayloadLen => 33 + Codec.VarintLength((ulong)Value.Length) + Value.Length;
 }
 
-/// <summary>Represents OpFieldTomb.</summary>
+/// <summary>Decoded field-tombstone operation.</summary>
 public class OpFieldTomb
 {
-    /// <summary>FieldId.</summary>
+    /// <summary>Key epoch associated with the field write.</summary>
     public ushort FieldId, KeyEpoch;
-    /// <summary>Wall.</summary>
+    /// <summary>Wall: wall.</summary>
     public ulong Wall; public uint Logical;
-    /// <summary>Origin.</summary>
+    /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
-    /// <summary>AuthorNodeId.</summary>
+    /// <summary>Durable author node id when full-author mode is used.</summary>
     public byte[]? AuthorNodeId;
-    /// <summary>Gets Tag.</summary>
+    /// <summary>TLV tag byte.</summary>
     public byte Tag => OpsConst.TagFieldTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -67,18 +67,18 @@ public class OpFieldTomb
     internal const int FullAuthorPayloadLen = 33;
 }
 
-/// <summary>Represents OpRecordTombstone.</summary>
+/// <summary>Decoded whole-record tombstone operation.</summary>
 public class OpRecordTombstone
 {
-    /// <summary>RecordId.</summary>
+    /// <summary>128-bit record identity with value equality.</summary>
     public byte[] RecordId = Array.Empty<byte>();
-    /// <summary>Wall.</summary>
+    /// <summary>Wall: wall.</summary>
     public ulong Wall; public uint Logical;
-    /// <summary>Origin.</summary>
+    /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
-    /// <summary>AuthorNodeId.</summary>
+    /// <summary>Durable author node id when full-author mode is used.</summary>
     public byte[]? AuthorNodeId;
-    /// <summary>Gets Tag.</summary>
+    /// <summary>TLV tag byte.</summary>
     public byte Tag => OpsConst.TagRecordTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -87,12 +87,10 @@ public class OpRecordTombstone
     internal const int FullAuthorPayloadLen = 45;
 }
 
-/// <summary>Represents Ops.</summary>
+/// <summary>Encode and decode FieldWrite / FieldTomb / RecordTombstone operations.</summary>
 public static partial class Ops
 {
-    /// Snapshot-mode encoding: always carries the durable author (mirrors Python
-    /// build_snapshot which calls encode_op(op) with default full_author=True).
-    /// <summary>EncodeOpFull.</summary>
+    /// <summary>Encode an operation forcing full-author mode on the wire.</summary>
     public static byte[] EncodeOpFull(object op) => EncodeOp(op, fullAuthor: true);
 
     /// <summary>Upper bound on <see cref="EncodeOp(object, bool?, int?)"/> size.</summary>
@@ -230,7 +228,7 @@ public static partial class Ops
         return TryCloneWithOrigin(payload.ToArray(), origin);
     }
 
-    /// <summary>TryCloneWithOrigin.</summary>
+    /// <summary>Clone an outbox entry with a new origin byte when needed; may share payload.</summary>
     public static byte[]? TryCloneWithOrigin(byte[] payload, ushort origin)
     {
         if (payload.Length < 19) return null;

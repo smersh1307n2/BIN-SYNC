@@ -1,37 +1,37 @@
 // GC_NOTICE (§12.6 0x0B): advertise tombstone cutoff + quarantine set.
 namespace BinSync;
 
-/// <summary>Represents ReconcileFrames.</summary>
+/// <summary>ReconcileFrames type used by the BIN-SYNC engine.</summary>
 public static partial class ReconcileFrames
 {
-    /// <summary>GcNotice.</summary>
+    /// <summary>Constant: gc notice.</summary>
     public const byte GcNotice = 0x0B;
 }
 
 /// <summary>One quarantined author advertised in GC_NOTICE.</summary>
 public sealed class GcQuarantineEntry
 {
-    /// <summary>Gets or sets NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public byte[] NodeId { get; set; } = Array.Empty<byte>();
-    /// <summary>Gets or sets Epoch.</summary>
+    /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; }
 }
 
 /// <summary>Decoded GC_NOTICE payload.</summary>
 public sealed class GcNoticeMessage
 {
-    /// <summary>NamespaceId.</summary>
+    /// <summary>NamespaceId: namespace id.</summary>
     public int NamespaceId;
     /// <summary>Fields/records with wall strictly below this may be GC'd locally (advisory).</summary>
     public ulong TombstoneCutoffWall;
-    /// <summary>List.</summary>
+    /// <summary>Peers currently quarantined from sync.</summary>
     public List<GcQuarantineEntry> Quarantined = new();
 }
 
-/// <summary>Represents GcNotice.</summary>
+/// <summary>GcNotice type used by the BIN-SYNC engine.</summary>
 public static class GcNotice
 {
-    /// <summary>Build.</summary>
+    /// <summary>Build: build.</summary>
     public static GcNoticeMessage Build(Node node, int namespaceId, ulong tombstoneCutoffWall = 0)
     {
         var msg = new GcNoticeMessage
@@ -53,7 +53,7 @@ public static class GcNotice
         return msg;
     }
 
-    /// <summary>Encode.</summary>
+    /// <summary>Encode: encode.</summary>
     public static byte[] Encode(GcNoticeMessage m)
     {
         var w = new Writer();
@@ -68,7 +68,7 @@ public static class GcNotice
         return w.Value();
     }
 
-    /// <summary>Decode.</summary>
+    /// <summary>Decode: decode.</summary>
     public static GcNoticeMessage Decode(byte[] payload)
     {
         var r = new Reader(payload);
@@ -89,7 +89,7 @@ public static class GcNotice
         return m;
     }
 
-    /// <summary>Apply.</summary>
+    /// <summary>Apply: apply.</summary>
     public static int Apply(Node node, GcNoticeMessage remote)
     {
         int added = 0;
@@ -115,7 +115,7 @@ public static class GcNotice
         return added;
     }
 
-    /// <summary>PurgeBelowCutoff.</summary>
+    /// <summary>PurgeBelowCutoff: purge below cutoff.</summary>
     public static int PurgeBelowCutoff(Node node, int namespaceId, ulong cutoffWall)
     {
         if (cutoffWall == 0) return 0;

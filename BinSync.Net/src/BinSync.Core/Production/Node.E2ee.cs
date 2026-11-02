@@ -2,7 +2,7 @@
 // Plain WriteField is unchanged — ciphertext only when E2eeKeys is set and *Sealed APIs used.
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// <summary>

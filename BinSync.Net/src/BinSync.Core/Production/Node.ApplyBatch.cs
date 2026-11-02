@@ -2,7 +2,7 @@
 
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// <summary>Thread-safe entry point (production hardening): takes the node gate

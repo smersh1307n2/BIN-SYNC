@@ -20,7 +20,7 @@ public sealed class PipeTransport : ISyncTransport
         _writer = writer;
     }
 
-    /// <summary>PeerNodeId.</summary>
+    /// <summary>PeerNodeId: peer node id.</summary>
     public byte[] PeerNodeId
     {
         get => _peerNodeId;
@@ -47,7 +47,7 @@ public sealed class PipeTransport : ISyncTransport
         return (left, right);
     }
 
-    /// <summary>SendAsync.</summary>
+    /// <summary>SendAsync: send async.</summary>
     public ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -57,7 +57,7 @@ public sealed class PipeTransport : ISyncTransport
             : new ValueTask(_writer.WriteAsync(copy, ct).AsTask());
     }
 
-    /// <summary>ValueTask.</summary>
+    /// <summary>ReceiveAsync: receive async.</summary>
     public async ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -73,7 +73,7 @@ public sealed class PipeTransport : ISyncTransport
         }
     }
 
-    /// <summary>DisposeAsync.</summary>
+    /// <summary>DisposeAsync: dispose async.</summary>
     public ValueTask DisposeAsync()
     {
         if (_disposed) return ValueTask.CompletedTask;

@@ -4,51 +4,51 @@ namespace BinSync;
 /// <summary>One field row inside a snapshot record.</summary>
 public sealed class SnapshotField
 {
-    /// <summary>FieldId.</summary>
+    /// <summary>Field identifier within a record.</summary>
     public ushort FieldId;
-    /// <summary>Wall.</summary>
+    /// <summary>Wall: wall.</summary>
     public ulong Wall;
-    /// <summary>Logical.</summary>
+    /// <summary>Logical: logical.</summary>
     public uint Logical;
-    /// <summary>AuthorNodeId.</summary>
+    /// <summary>AuthorNodeId: author node id.</summary>
     public byte[] AuthorNodeId = Array.Empty<byte>();
-    /// <summary>KeyEpoch.</summary>
+    /// <summary>Key epoch associated with the field write.</summary>
     public ushort KeyEpoch;
-    /// <summary>Value.</summary>
+    /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public byte[] Value = Array.Empty<byte>();
 }
 
 /// <summary>One record in a SNAPSHOT_CHUNK.</summary>
 public sealed class SnapshotRecord
 {
-    /// <summary>RecordId.</summary>
+    /// <summary>128-bit record identity with value equality.</summary>
     public byte[] RecordId = Array.Empty<byte>();
-    /// <summary>List.</summary>
+    /// <summary>Fields: fields.</summary>
     public List<SnapshotField> Fields = new();
-    /// <summary>LifecycleValue.</summary>
+    /// <summary>LifecycleValue: lifecycle value.</summary>
     public byte LifecycleValue = Model.Alive;
-    /// <summary>LifecycleWall.</summary>
+    /// <summary>LifecycleWall: lifecycle wall.</summary>
     public ulong LifecycleWall;
-    /// <summary>LifecycleLogical.</summary>
+    /// <summary>LifecycleLogical: lifecycle logical.</summary>
     public uint LifecycleLogical;
-    /// <summary>LifecycleAuthor.</summary>
+    /// <summary>LifecycleAuthor: lifecycle author.</summary>
     public byte[] LifecycleAuthor = Array.Empty<byte>();
 }
 
 /// <summary>Decoded SNAPSHOT_CHUNK payload.</summary>
 public sealed class SnapshotChunkMessage
 {
-    /// <summary>NamespaceId.</summary>
+    /// <summary>NamespaceId: namespace id.</summary>
     public int NamespaceId;
-    /// <summary>ChunkIndex.</summary>
+    /// <summary>ChunkIndex: chunk index.</summary>
     public uint ChunkIndex;
-    /// <summary>ChunkCount.</summary>
+    /// <summary>ChunkCount: chunk count.</summary>
     public uint ChunkCount = 1;
-    /// <summary>List.</summary>
+    /// <summary>Records: records.</summary>
     public List<SnapshotRecord> Records = new();
 }
 
-/// <summary>Represents Reconcile.</summary>
+/// <summary>Reconcile type used by the BIN-SYNC engine.</summary>
 public static partial class Reconcile
 {
     /// <summary>Build a single-chunk snapshot of records under <paramref name="prefix"/>.</summary>
@@ -97,7 +97,7 @@ public static partial class Reconcile
         return msg;
     }
 
-    /// <summary>EncodeSnapshotChunk.</summary>
+    /// <summary>EncodeSnapshotChunk: encode snapshot chunk.</summary>
     public static byte[] EncodeSnapshotChunk(SnapshotChunkMessage m)
     {
         var w = new Writer();
@@ -126,7 +126,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
-    /// <summary>DecodeSnapshotChunk.</summary>
+    /// <summary>DecodeSnapshotChunk: decode snapshot chunk.</summary>
     public static SnapshotChunkMessage DecodeSnapshotChunk(byte[] payload)
     {
         var r = new Reader(payload);

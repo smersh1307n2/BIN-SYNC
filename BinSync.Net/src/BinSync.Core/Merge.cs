@@ -33,14 +33,14 @@ public enum MergePolicy : byte
     MinU64 = 0x84,
 }
 
-/// <summary>Represents Merge.</summary>
+/// <summary>LWW and CRDT field merge helpers.</summary>
 public static class Merge
 {
-    /// <summary>MergeField.</summary>
+    /// <summary>MergeField: merge field.</summary>
     public static (FieldState Winner, bool Changed) MergeField(FieldState? local, FieldState remote)
         => MergeFieldWithPolicy(local, remote, MergePolicy.LwwField);
 
-    /// <summary>MergeFieldWithPolicy.</summary>
+    /// <summary>MergeFieldWithPolicy: merge field with policy.</summary>
     public static (FieldState Winner, bool Changed) MergeFieldWithPolicy(
         FieldState? local, FieldState remote, MergePolicy policy)
     {
@@ -116,7 +116,7 @@ public static class Merge
         return remoteWins ? (remote, true) : (local, false);
     }
 
-    /// <summary>AsU64.</summary>
+    /// <summary>AsU64: as 64.</summary>
     public static ulong AsU64(byte[] v)
     {
         if (v is null || v.Length == 0) return 0;
@@ -127,7 +127,7 @@ public static class Merge
         return r;
     }
 
-    /// <summary>CompareBytes.</summary>
+    /// <summary>CompareBytes: compare bytes.</summary>
     public static int CompareBytes(byte[] a, byte[] b)
     {
         a ??= Array.Empty<byte>();
@@ -141,7 +141,7 @@ public static class Merge
         return a.Length.CompareTo(b.Length);
     }
 
-    /// <summary>MergeLifecycle.</summary>
+    /// <summary>MergeLifecycle: merge lifecycle.</summary>
     public static (Hlc Hlc, byte[] Author, byte Value, bool Changed) MergeLifecycle(
         Hlc? localHlc, byte[]? localAuthor, byte localValue,
         Hlc remoteHlc, byte[] remoteAuthor, byte remoteValue)
@@ -159,7 +159,7 @@ public static class Merge
         return (localHlc!, localAuthor!, localValue, false);
     }
 
-    /// <summary>Represents ApplyFieldWrite.</summary>
+    /// <summary>ApplyFieldWrite type used by the BIN-SYNC engine.</summary>
     public static bool ApplyFieldWrite(Record record, ushort fieldId, FieldState op,
         MergePolicy policy = MergePolicy.LwwField)
     {
@@ -169,7 +169,7 @@ public static class Merge
         return changed;
     }
 
-    /// <summary>Represents ApplyFieldTomb.</summary>
+    /// <summary>ApplyFieldTomb type used by the BIN-SYNC engine.</summary>
     public static bool ApplyFieldTomb(Record record, ushort fieldId, FieldState op)
     {
         record.State.TryGetValue(fieldId, out var local);
@@ -204,7 +204,7 @@ public static class Merge
         return changed;
     }
 
-    /// <summary>Represents ApplyLifecycle.</summary>
+    /// <summary>ApplyLifecycle type used by the BIN-SYNC engine.</summary>
     public static bool ApplyLifecycle(Record record, Hlc hlc, byte[] author, byte value)
     {
         var (lc, la, lv, changed) = MergeLifecycle(
@@ -213,30 +213,30 @@ public static class Merge
         return changed;
     }
 
-    /// <summary>BytesEq.</summary>
+    /// <summary>Equality comparer for byte arrays by content.</summary>
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
 }
 
-/// <summary>Represents MergePolicyRegistry.</summary>
+/// <summary>MergePolicyRegistry type used by the BIN-SYNC engine.</summary>
 public sealed class MergePolicyRegistry
 {
     private readonly Dictionary<(int Ns, ushort FieldId), MergePolicy> _map = new();
     private readonly object _lock = new();
 
-    /// <summary>Set.</summary>
+    /// <summary>Set the .</summary>
     public void Set(int namespaceId, ushort fieldId, MergePolicy policy)
     {
         lock (_lock) _map[(namespaceId, fieldId)] = policy;
     }
 
-    /// <summary>Get.</summary>
+    /// <summary>Return the .</summary>
     public MergePolicy Get(int namespaceId, ushort fieldId)
     {
         lock (_lock)
             return _map.TryGetValue((namespaceId, fieldId), out var p) ? p : MergePolicy.LwwField;
     }
 
-    /// <summary>Remove.</summary>
+    /// <summary>Remove: remove.</summary>
     public bool Remove(int namespaceId, ushort fieldId)
     {
         lock (_lock) return _map.Remove((namespaceId, fieldId));

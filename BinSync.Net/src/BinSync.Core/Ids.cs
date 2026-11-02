@@ -9,15 +9,15 @@ namespace BinSync;
 /// </summary>
 public readonly partial struct NodeId : IEquatable<NodeId>
 {
-    /// <summary>Lo.</summary>
+    /// <summary>Low 64 bits of the 128-bit identity.</summary>
     public readonly ulong Lo;
-    /// <summary>Hi.</summary>
+    /// <summary>High 64 bits of the 128-bit identity.</summary>
     public readonly ulong Hi;
 
-    /// <summary>NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public NodeId(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static NodeId From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length == 16)
@@ -30,21 +30,21 @@ public readonly partial struct NodeId : IEquatable<NodeId>
             BinaryPrimitives.ReadUInt64LittleEndian(can.AsSpan(8)));
     }
 
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static NodeId From(byte[]? bytes) =>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
-    /// <summary>NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public static implicit operator NodeId(byte[]? bytes) => From(bytes);
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static NodeId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
-    /// <summary>NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public static implicit operator NodeId(ReadOnlyMemory<byte> bytes) => From(bytes);
 
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](NodeId id) => id.ToArray();
 
-    /// <summary>WriteTo.</summary>
+    /// <summary>Write the 16 bytes into a destination span.</summary>
     public void WriteTo(Span<byte> dest)
     {
         if (dest.Length < 16) throw new ArgumentException("need 16 bytes", nameof(dest));
@@ -52,7 +52,7 @@ public readonly partial struct NodeId : IEquatable<NodeId>
         BinaryPrimitives.WriteUInt64LittleEndian(dest.Slice(8), Hi);
     }
 
-    /// <summary>ToArray.</summary>
+    /// <summary>Return an owned array for the memory (copy if it is a slice).</summary>
     public byte[] ToArray()
     {
         var a = new byte[16];
@@ -60,12 +60,12 @@ public readonly partial struct NodeId : IEquatable<NodeId>
         return a;
     }
 
-    /// <summary>Gets IsZero.</summary>
+    /// <summary>True when all 16 bytes are zero.</summary>
     public bool IsZero => Lo == 0 && Hi == 0;
 
     /// <summary>Compare to a 16-byte wire id without allocating.</summary>
     public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
-    /// <summary>EqualsBytes.</summary>
+    /// <summary>Compare this id to a byte span for content equality.</summary>
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
@@ -74,18 +74,18 @@ public readonly partial struct NodeId : IEquatable<NodeId>
         return tmp.SequenceEqual(bytes);
     }
 
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public bool Equals(NodeId other) => Lo == other.Lo && Hi == other.Hi;
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public override bool Equals(object? obj) => obj is NodeId n && Equals(n);
-    /// <summary>GetHashCode.</summary>
+    /// <summary>Hash code consistent with content equality.</summary>
     public override int GetHashCode() => HashCode.Combine(Lo, Hi);
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public static bool operator ==(NodeId a, NodeId b) => a.Equals(b);
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public static bool operator !=(NodeId a, NodeId b) => !a.Equals(b);
 
-    /// <summary>ToString.</summary>
+    /// <summary>ToString: to string.</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }
 
@@ -94,15 +94,15 @@ public readonly partial struct NodeId : IEquatable<NodeId>
 /// </summary>
 public readonly partial struct RecordId : IEquatable<RecordId>
 {
-    /// <summary>Lo.</summary>
+    /// <summary>Low 64 bits of the 128-bit identity.</summary>
     public readonly ulong Lo;
-    /// <summary>Hi.</summary>
+    /// <summary>High 64 bits of the 128-bit identity.</summary>
     public readonly ulong Hi;
 
-    /// <summary>RecordId.</summary>
+    /// <summary>128-bit record identity with value equality.</summary>
     public RecordId(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static RecordId From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length == 16)
@@ -115,21 +115,21 @@ public readonly partial struct RecordId : IEquatable<RecordId>
             BinaryPrimitives.ReadUInt64LittleEndian(can.AsSpan(8)));
     }
 
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static RecordId From(byte[]? bytes) =>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
-    /// <summary>RecordId.</summary>
+    /// <summary>128-bit record identity with value equality.</summary>
     public static implicit operator RecordId(byte[]? bytes) => From(bytes);
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static RecordId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
-    /// <summary>RecordId.</summary>
+    /// <summary>128-bit record identity with value equality.</summary>
     public static implicit operator RecordId(ReadOnlyMemory<byte> bytes) => From(bytes);
 
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](RecordId id) => id.ToArray();
 
-    /// <summary>WriteTo.</summary>
+    /// <summary>Write the 16 bytes into a destination span.</summary>
     public void WriteTo(Span<byte> dest)
     {
         if (dest.Length < 16) throw new ArgumentException("need 16 bytes", nameof(dest));
@@ -137,7 +137,7 @@ public readonly partial struct RecordId : IEquatable<RecordId>
         BinaryPrimitives.WriteUInt64LittleEndian(dest.Slice(8), Hi);
     }
 
-    /// <summary>ToArray.</summary>
+    /// <summary>Return an owned array for the memory (copy if it is a slice).</summary>
     public byte[] ToArray()
     {
         var a = new byte[16];
@@ -145,12 +145,12 @@ public readonly partial struct RecordId : IEquatable<RecordId>
         return a;
     }
 
-    /// <summary>Gets IsZero.</summary>
+    /// <summary>True when all 16 bytes are zero.</summary>
     public bool IsZero => Lo == 0 && Hi == 0;
 
-    /// <summary>EqualsBytes.</summary>
+    /// <summary>Compare this id to a byte span for content equality.</summary>
     public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
-    /// <summary>EqualsBytes.</summary>
+    /// <summary>Compare this id to a byte span for content equality.</summary>
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
@@ -159,18 +159,18 @@ public readonly partial struct RecordId : IEquatable<RecordId>
         return tmp.SequenceEqual(bytes);
     }
 
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public bool Equals(RecordId other) => Lo == other.Lo && Hi == other.Hi;
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public override bool Equals(object? obj) => obj is RecordId r && Equals(r);
-    /// <summary>GetHashCode.</summary>
+    /// <summary>Hash code consistent with content equality.</summary>
     public override int GetHashCode() => HashCode.Combine(Lo, Hi);
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public static bool operator ==(RecordId a, RecordId b) => a.Equals(b);
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public static bool operator !=(RecordId a, RecordId b) => !a.Equals(b);
 
-    /// <summary>ToString.</summary>
+    /// <summary>ToString: to string.</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }
 
@@ -180,15 +180,15 @@ public readonly partial struct RecordId : IEquatable<RecordId>
 /// </summary>
 public readonly partial struct BatchId : IEquatable<BatchId>
 {
-    /// <summary>Lo.</summary>
+    /// <summary>Low 64 bits of the 128-bit identity.</summary>
     public readonly ulong Lo;
-    /// <summary>Hi.</summary>
+    /// <summary>High 64 bits of the 128-bit identity.</summary>
     public readonly ulong Hi;
 
-    /// <summary>BatchId.</summary>
+    /// <summary>128-bit batch identity with value equality.</summary>
     public BatchId(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static BatchId From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length == 16)
@@ -201,17 +201,17 @@ public readonly partial struct BatchId : IEquatable<BatchId>
             System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(can.AsSpan(8)));
     }
 
-    /// <summary>From.</summary>
+    /// <summary>Create an id from a 16-byte sequence.</summary>
     public static BatchId From(byte[]? bytes) =>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
-    /// <summary>BatchId.</summary>
+    /// <summary>128-bit batch identity with value equality.</summary>
     public static implicit operator BatchId(byte[]? bytes) => From(bytes);
 
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](BatchId id) => id.ToArray();
 
-    /// <summary>WriteTo.</summary>
+    /// <summary>Write the 16 bytes into a destination span.</summary>
     public void WriteTo(Span<byte> dest)
     {
         if (dest.Length < 16) throw new ArgumentException("need 16 bytes", nameof(dest));
@@ -219,7 +219,7 @@ public readonly partial struct BatchId : IEquatable<BatchId>
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(dest.Slice(8), Hi);
     }
 
-    /// <summary>ToArray.</summary>
+    /// <summary>Return an owned array for the memory (copy if it is a slice).</summary>
     public byte[] ToArray()
     {
         var a = new byte[16];
@@ -227,20 +227,20 @@ public readonly partial struct BatchId : IEquatable<BatchId>
         return a;
     }
 
-    /// <summary>Gets IsZero.</summary>
+    /// <summary>True when all 16 bytes are zero.</summary>
     public bool IsZero => Lo == 0 && Hi == 0;
 
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public bool Equals(BatchId other) => Lo == other.Lo && Hi == other.Hi;
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public override bool Equals(object? obj) => obj is BatchId b && Equals(b);
-    /// <summary>GetHashCode.</summary>
+    /// <summary>Hash code consistent with content equality.</summary>
     public override int GetHashCode() => HashCode.Combine(Lo, Hi);
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public static bool operator ==(BatchId a, BatchId b) => a.Equals(b);
-    /// <summary>Equals.</summary>
+    /// <summary>Content equality comparison.</summary>
     public static bool operator !=(BatchId a, BatchId b) => !a.Equals(b);
 
-    /// <summary>ToString.</summary>
+    /// <summary>ToString: to string.</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }

@@ -3,7 +3,7 @@
 
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     // ------------------------------------------------------------------ aliases
@@ -40,11 +40,11 @@ public sealed partial class Node
             KnownEpochs[(author, -1)] = epoch;
     }
 
-    /// <summary>KnownAuthorEpoch.</summary>
+    /// <summary>Return the highest known epoch for an author, if any.</summary>
     public int? KnownAuthorEpoch(NodeId author) =>
         KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
 
-    /// <summary>SessionEpoch.</summary>
+    /// <summary>Return the session epoch for a peer in a namespace, if any.</summary>
     public int? SessionEpoch(NodeId peer, int ns)
     {
         int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;

@@ -1,7 +1,7 @@
 // KEY_ROTATION (0x11) exchange on TcpSyncSession (§14.9).
 namespace BinSync;
 
-/// <summary>Represents TcpSyncSession.</summary>
+/// <summary>TcpSyncSession type used by the BIN-SYNC engine.</summary>
 public sealed partial class TcpSyncSession
 {
     /// <summary>Send a signed KEY_ROTATION notice to the peer.</summary>

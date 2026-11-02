@@ -21,13 +21,13 @@ public enum CausalOutcome
 /// <summary>One op waiting on causal parents.</summary>
 public sealed class PendingCausalOp
 {
-    /// <summary>Gets ChangeId.</summary>
+    /// <summary>Gets the change id.</summary>
     public required byte[] ChangeId { get; init; }
-    /// <summary>Gets Deps.</summary>
+    /// <summary>Gets the deps.</summary>
     public required byte[][] Deps { get; init; }
-    /// <summary>Gets EnqueuedUtcMs.</summary>
+    /// <summary>Gets the enqueued utc ms.</summary>
     public required long EnqueuedUtcMs { get; init; }
-    /// <summary>Gets Payload.</summary>
+    /// <summary>Frame payload bytes after the header.</summary>
     public object? Payload { get; init; }
 }
 
@@ -48,12 +48,12 @@ public sealed class CausalTracker
     /// <summary>Clock for tests; defaults to UTC now.</summary>
     public Func<long> UtcNowMs { get; set; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    /// <summary>Gets KnownCount.</summary>
+    /// <summary>Gets the known count.</summary>
     public int KnownCount { get { lock (_gate) return _known.Count; } }
-    /// <summary>Gets PendingCount.</summary>
+    /// <summary>Gets the pending count.</summary>
     public int PendingCount { get { lock (_gate) return _pending.Count; } }
 
-    /// <summary>Key.</summary>
+    /// <summary>Key: key.</summary>
     public static string Key(byte[] id) => Convert.ToHexString(id);
 
     /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
@@ -67,7 +67,7 @@ public sealed class CausalTracker
         }
     }
 
-    /// <summary>IsKnown.</summary>
+    /// <summary>Indicates whether known.</summary>
     public bool IsKnown(byte[] changeId)
     {
         lock (_gate) return _known.Contains(Key(changeId));
@@ -259,6 +259,6 @@ public sealed class CausalTracker
 /// <summary>Protocol error code for causal dep failures (§12 error table).</summary>
 public static class CausalError
 {
-    /// <summary>CausalDepMissing.</summary>
+    /// <summary>Constant: causal dep missing.</summary>
     public const ushort CausalDepMissing = 0x0012; // CAUSAL_DEP_MISSING
 }

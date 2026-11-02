@@ -2,7 +2,7 @@
 
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).

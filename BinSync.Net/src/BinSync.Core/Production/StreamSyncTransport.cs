@@ -14,21 +14,21 @@ public sealed class StreamSyncTransport : ISyncTransport
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly SemaphoreSlim _readLock = new(1, 1);
 
-    /// <summary>StreamSyncTransport.</summary>
+    /// <summary>StreamSyncTransport: stream sync transport.</summary>
     public StreamSyncTransport(Stream stream, bool ownsStream = false)
     {
         _stream = stream ?? throw new ArgumentNullException(nameof(stream));
         _ownsStream = ownsStream;
     }
 
-    /// <summary>PeerNodeId.</summary>
+    /// <summary>PeerNodeId: peer node id.</summary>
     public byte[] PeerNodeId
     {
         get => _peerNodeId;
         set => _peerNodeId = value ?? Array.Empty<byte>();
     }
 
-    /// <summary>SendAsync.</summary>
+    /// <summary>SendAsync: send async.</summary>
     public async ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
     {
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
@@ -42,7 +42,7 @@ public sealed class StreamSyncTransport : ISyncTransport
         }
     }
 
-    /// <summary>ValueTask.</summary>
+    /// <summary>ReceiveAsync: receive async.</summary>
     public async ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default)
     {
         await _readLock.WaitAsync(ct).ConfigureAwait(false);
@@ -56,7 +56,7 @@ public sealed class StreamSyncTransport : ISyncTransport
         }
     }
 
-    /// <summary>DisposeAsync.</summary>
+    /// <summary>DisposeAsync: dispose async.</summary>
     public async ValueTask DisposeAsync()
     {
         _writeLock.Dispose();

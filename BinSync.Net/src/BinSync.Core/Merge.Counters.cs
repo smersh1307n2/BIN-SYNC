@@ -20,7 +20,7 @@ public static class CounterG
         return w.Value();
     }
 
-    /// <summary>Dictionary.</summary>
+    /// <summary>Decode: decode.</summary>
     public static Dictionary<byte[], ulong> Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -50,7 +50,7 @@ public static class CounterG
         return Encode(a);
     }
 
-    /// <summary>Total.</summary>
+    /// <summary>Total: total.</summary>
     public static ulong Total(byte[] data)
     {
         ulong sum = 0;
@@ -86,7 +86,7 @@ public static class CounterPn
             w.B128(a).U64(v);
     }
 
-    /// <summary>Dictionary.</summary>
+    /// <summary>Decode: decode.</summary>
     public static (Dictionary<byte[], ulong> Pos, Dictionary<byte[], ulong> Neg) Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -104,7 +104,7 @@ public static class CounterPn
         return map;
     }
 
-    /// <summary>Merge.</summary>
+    /// <summary>LWW and CRDT field merge helpers.</summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var (lp, ln) = local is null || local.Length == 0
@@ -125,7 +125,7 @@ public static class CounterPn
         }
     }
 
-    /// <summary>Value.</summary>
+    /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public static long Value(byte[] data)
     {
         var (p, n) = Decode(data);
@@ -139,23 +139,23 @@ public static class CounterPn
 /// <summary>Observed-Remove set (§8.6): adds are (elem, actor, seq); removes are (actor, seq) dots.</summary>
 public static class SetOr
 {
-    /// <summary>Represents Dot.</summary>
+    /// <summary>Dot type used by the BIN-SYNC engine.</summary>
     public sealed class Dot
     {
-        /// <summary>Actor.</summary>
+        /// <summary>Actor: actor.</summary>
         public byte[] Actor = Array.Empty<byte>();
-        /// <summary>Seq.</summary>
+        /// <summary>Seq: seq.</summary>
         public ulong Seq;
     }
 
-    /// <summary>Represents Add.</summary>
+    /// <summary>Add type used by the BIN-SYNC engine.</summary>
     public sealed class Add
     {
-        /// <summary>Element.</summary>
+        /// <summary>Element: element.</summary>
         public byte[] Element = Array.Empty<byte>();
-        /// <summary>Actor.</summary>
+        /// <summary>Actor: actor.</summary>
         public byte[] Actor = Array.Empty<byte>();
-        /// <summary>Seq.</summary>
+        /// <summary>Seq: seq.</summary>
         public ulong Seq;
     }
 
@@ -193,7 +193,7 @@ public static class SetOr
         return w.Value();
     }
 
-    /// <summary>List.</summary>
+    /// <summary>Decode: decode.</summary>
     public static (List<Add> Adds, List<Dot> Removes) Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -208,7 +208,7 @@ public static class SetOr
         return (adds, rems);
     }
 
-    /// <summary>Merge.</summary>
+    /// <summary>LWW and CRDT field merge helpers.</summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
         var (la, lr) = local is null || local.Length == 0

@@ -9,13 +9,13 @@ namespace BinSync;
 /// <summary>Decoded KEY_ROTATION payload.</summary>
 public sealed class KeyRotationNotice
 {
-    /// <summary>Gets NamespaceId.</summary>
+    /// <summary>Logical namespace this entity belongs to.</summary>
     public ushort NamespaceId { get; init; }
-    /// <summary>Gets OldKeyEpoch.</summary>
+    /// <summary>Gets the old key epoch.</summary>
     public ushort OldKeyEpoch { get; init; }
-    /// <summary>Gets NewKeyEpoch.</summary>
+    /// <summary>Gets the new key epoch.</summary>
     public ushort NewKeyEpoch { get; init; }
-    /// <summary>Gets NodeId.</summary>
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
     /// <summary>Ed25519 signature (64 bytes) over <see cref="KeyRotation.BuildProofMessage"/>.</summary>
     public byte[] Proof { get; init; } = Array.Empty<byte>();
@@ -24,9 +24,9 @@ public sealed class KeyRotationNotice
 /// <summary>Encode / decode KEY_ROTATION (frame type 0x11) and verify epoch proofs.</summary>
 public static class KeyRotation
 {
-    /// <summary>FrameType.</summary>
+    /// <summary>Wire frame type byte (e.g. DELTA_BATCH, ACK).</summary>
     public const byte FrameType = 0x11;
-    /// <summary>ProofDomain.</summary>
+    /// <summary>Constant: proof domain.</summary>
     public const string ProofDomain = "BIN-SYNC/KEY-ROTATION/v1";
 
     /// <summary>
@@ -52,7 +52,7 @@ public static class KeyRotation
         return buf;
     }
 
-    /// <summary>Decode.</summary>
+    /// <summary>Decode: decode.</summary>
     public static KeyRotationNotice Decode(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2 + 2 + 2 + 16 + 2)

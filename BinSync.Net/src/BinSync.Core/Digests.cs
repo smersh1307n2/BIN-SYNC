@@ -5,26 +5,26 @@ using System.Numerics;
 
 namespace BinSync;
 
-/// <summary>Represents Domains.</summary>
+/// <summary>Domains type used by the BIN-SYNC engine.</summary>
 public static class Domains
 {
-    /// <summary>DomainRecord.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainRecord = Ascii("BIN-SYNC/RECORD/v1");
-    /// <summary>DomainField.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainField = Ascii("BIN-SYNC/FIELD/v1");
-    /// <summary>DomainBucket.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainBucket = Ascii("BIN-SYNC/BUCKET/v1");
-    /// <summary>DomainState.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainState = Ascii("BIN-SYNC/STATE/v1");
-    /// <summary>DomainBatch.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainBatch = Ascii("BIN-SYNC/BATCH/v1");
-    /// <summary>DomainRecords.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainRecords = Ascii("BIN-SYNC/RECORDS/v1");
-    /// <summary>DomainAuthId.</summary>
+    /// <summary>Ascii: ascii.</summary>
     public static readonly byte[] DomainAuthId = Ascii("BIN-SYNC/AUTHID/v1");
 
     private static byte[] Ascii(string s) => System.Text.Encoding.ASCII.GetBytes(s);
-    /// <summary>Cat.</summary>
+    /// <summary>Cat: cat.</summary>
     public static byte[] Cat(params byte[][] parts)
     {
         int n = 0;
@@ -41,7 +41,7 @@ public static class Domains
     }
 }
 
-/// <summary>Represents Digests.</summary>
+/// <summary>BLAKE3 helpers for record digests, batch digests, and roots.</summary>
 public static class Digests
 {
     /// <summary>BLAKE3-256 truncated to <paramref name="len"/> bytes (in-tree implementation).</summary>
@@ -68,9 +68,7 @@ public static class Digests
         return r;
     }
 
-    /// §9.1.2 exact formula: fieldId u16 | keyEpoch u16 | wall u64 | logical u32 |
-    /// authorNodeId b128 (DURABLE, never origin!) | valLen varint | valueBytes
-    /// <summary>FieldDigestPayload.</summary>
+    /// <summary>FieldDigestPayload: field digest payload.</summary>
     public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
         uint logical, byte[] authorNodeId, byte[] value)
     {
@@ -81,8 +79,7 @@ public static class Digests
         return w.Value();
     }
 
-    /// §9.1.3 — fixed layout with fieldId=0, keyEpoch=0, valLen=1, value=[lifecycleValue].
-    /// <summary>LifecycleDigestPayload.</summary>
+    /// <summary>LifecycleDigestPayload: lifecycle digest payload.</summary>
     public static byte[] LifecycleDigestPayload(ulong wall, uint logical, byte[] lifecycleAuthor, byte value)
     {
         Span<byte> one = stackalloc byte[1];
@@ -93,8 +90,7 @@ public static class Digests
         return w.Value();
     }
 
-    /// recordDigest = BLAKE3-N(recordId || sorted FieldDigestPayload* || LifecyclePayload) (§9.1).
-    /// <summary>RecordDigest.</summary>
+    /// <summary>Compute the canonical digest of a record state.</summary>
     public static byte[] RecordDigest(Record rec)
     {
         var parts = new List<byte[]>();
@@ -123,21 +119,21 @@ public static class Digests
 /// </summary>
 public class BucketAccumulator
 {
-    /// <summary>Prefix.</summary>
+    /// <summary>Bucket prefix bytes for the IBLT cell.</summary>
     public byte[] Prefix;
-    /// <summary>Count.</summary>
+    /// <summary>IBLT cell signed count.</summary>
     public long Count = 0;
-    /// <summary>Xor.</summary>
+    /// <summary>IBLT cell key XOR accumulator.</summary>
     public UInt128 Xor = 0;
-    /// <summary>Sum.</summary>
+    /// <summary>IBLT cell sum accumulator (mod 2^128).</summary>
     public UInt128 Sum = 0;   // wraps mod 2^128 like Python's masking at encode time
 
-    /// <summary>BucketAccumulator.</summary>
+    /// <summary>BucketAccumulator: bucket accumulator.</summary>
     public BucketAccumulator(byte[]? prefix = null) => Prefix = prefix ?? Array.Empty<byte>();
 
-    /// <summary>BucketKey.</summary>
+    /// <summary>BucketKey: bucket key.</summary>
     public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);
-    /// <summary>BucketKey.</summary>
+    /// <summary>BucketKey: bucket key.</summary>
     public static byte[] BucketKey(RecordId recordId)
     {
         Span<byte> id = stackalloc byte[16];
@@ -153,9 +149,9 @@ public class BucketAccumulator
         return v;
     }
 
-    /// <summary>Add.</summary>
+    /// <summary>Add: add.</summary>
     public void Add(byte[] digest) { var n = ToNum(digest); Count += 1; Xor ^= n; Sum += n; }
-    /// <summary>Remove.</summary>
+    /// <summary>Remove: remove.</summary>
     public void Remove(byte[] digest) { var n = ToNum(digest); Count -= 1; Xor ^= n; Sum -= n; }
 
     private static byte[] U128Le(UInt128 v)
@@ -165,7 +161,7 @@ public class BucketAccumulator
         return b;
     }
 
-    /// <summary>CanonicalEncoding.</summary>
+    /// <summary>CanonicalEncoding: canonical encoding.</summary>
     public byte[] CanonicalEncoding()
     {
         var w = new Writer();
@@ -178,15 +174,14 @@ public class BucketAccumulator
         return w.Value();
     }
 
-    /// <summary>Rollup.</summary>
+    /// <summary>Rollup: rollup.</summary>
     public byte[] Rollup() => Digests.Blake3(Domains.Cat(Domains.DomainBucket, CanonicalEncoding()), 32);
 }
 
-/// <summary>Represents StateHash.</summary>
+/// <summary>StateHash type used by the BIN-SYNC engine.</summary>
 public static class StateHash
 {
-    /// §9.1.4 StateRootDigest = BLAKE3-256(domainTag || nsId || outboxCursor || recordCount || buckets…)
-    /// <summary>StateRootDigest.</summary>
+    /// <summary>StateRootDigest: state root digest.</summary>
     public static byte[] StateRootDigest(ushort namespaceId, ulong outboxCursor, List<BucketAccumulator> buckets)
     {
         var sorted = buckets.OrderBy(b => Convert.ToHexString(b.CanonicalEncoding())).ToList();
@@ -197,7 +192,7 @@ public static class StateHash
         return Digests.Blake3(w.Value(), 32);
     }
 
-    /// <summary>List.</summary>
+    /// <summary>BuildBuckets: build buckets.</summary>
     public static List<BucketAccumulator> BuildBuckets(Dictionary<RecordId, Record> records, int radixBits = 8)
     {
         var buckets = new Dictionary<string, BucketAccumulator>();

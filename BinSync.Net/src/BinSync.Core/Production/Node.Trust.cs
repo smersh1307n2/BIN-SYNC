@@ -1,7 +1,7 @@
 // Opt-in trust surface on Node (§15.6).
 namespace BinSync;
 
-/// <summary>Represents Node.</summary>
+/// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// <summary>
@@ -46,7 +46,7 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>RevokeTrust.</summary>
+    /// <summary>RevokeTrust: revoke trust.</summary>
     public void RevokeTrust(byte[] nodeId)
     {
         lock (_lockMeta) Trust?.Revoke(nodeId);

@@ -3,7 +3,7 @@
 // Port of binsync/transport.py — all SPEC HARDENING / errata notes preserved.
 namespace BinSync;
 
-/// <summary>Represents Transport.</summary>
+/// <summary>Session setup, batch delivery, sync rounds, and sneakernet import/export helpers.</summary>
 public static partial class Transport
 {
     /// HELLO + ALIAS_MAP exchange for a session between two nodes (§4.3).
@@ -92,7 +92,7 @@ public static partial class Transport
         }
     }
 
-    /// <summary>EncodeAck.</summary>
+    /// <summary>Encode an ACK payload (batch id, cursor, optional author stream).</summary>
     public static byte[] EncodeAck(byte[] batchId, long ackedSeq, byte[]? authorStream = null)
     {
         var w = new Writer();
@@ -102,7 +102,7 @@ public static partial class Transport
         return w.Value();
     }
 
-    /// <summary>DecodeAck.</summary>
+    /// <summary>Decode an ACK payload; author stream is optional for legacy ACKs.</summary>
     public static (byte[] BatchId, long Seq, byte[]? Author) DecodeAck(byte[] data)
     {
         var r = new Reader(data);
@@ -169,8 +169,7 @@ public static partial class Transport
     }
 
     // ------------------------------------------------------------------ sneakernet (§3.5)
-    /// Dump DELTA_BATCH frames to a binary file (writer side of exportDelta).
-    /// <summary>ExportDelta.</summary>
+    /// <summary>Write pending DELTA_BATCH frames for a namespace to a binary file (sneakernet).</summary>
     public static int ExportDelta(Node node, int namespaceId, byte[] targetHint, string path)
     {
         int count = 0;
@@ -189,9 +188,7 @@ public static partial class Transport
         return count;
     }
 
-    /// Read frames from a file and apply them exactly like network delivery (§3.5):
-    /// same ApplyBatch path — identity and idempotency preserved.
-    /// <summary>ImportDelta.</summary>
+    /// <summary>Read frames from a file and apply them as network delivery would.</summary>
     public static int ImportDelta(Node node, string path, byte[] issuerHint)
     {
         var data = File.ReadAllBytes(path);

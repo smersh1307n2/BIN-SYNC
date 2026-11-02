@@ -5,61 +5,61 @@ namespace BinSync;
 /// <summary>Wire frame type bytes for the reconcile ladder (§12.6).</summary>
 public static partial class ReconcileFrames
 {
-    /// <summary>StateDigest.</summary>
+    /// <summary>Constant: state digest.</summary>
     public const byte StateDigest = 0x06;
-    /// <summary>NeedRange.</summary>
+    /// <summary>Constant: need range.</summary>
     public const byte NeedRange = 0x07;
-    /// <summary>NeedKeys.</summary>
+    /// <summary>Constant: need keys.</summary>
     public const byte NeedKeys = 0x08;
-    /// <summary>SnapshotChunk.</summary>
+    /// <summary>Constant: snapshot chunk.</summary>
     public const byte SnapshotChunk = 0x0A;
 }
 
 /// <summary>One bucket row carried in STATE_DIGEST.</summary>
 public sealed class DigestBucket
 {
-    /// <summary>Prefix.</summary>
+    /// <summary>Prefix: prefix.</summary>
     public byte[] Prefix = Array.Empty<byte>();
-    /// <summary>Count.</summary>
+    /// <summary>Count: count.</summary>
     public long Count;
-    /// <summary>Xor16.</summary>
+    /// <summary>Xor16: xor 16.</summary>
     public byte[] Xor16 = new byte[16];
-    /// <summary>Sum16.</summary>
+    /// <summary>Sum16: sum 16.</summary>
     public byte[] Sum16 = new byte[16];
-    /// <summary>Rollup32.</summary>
+    /// <summary>Rollup32: rollup 32.</summary>
     public byte[] Rollup32 = new byte[32];
 }
 
 /// <summary>Decoded STATE_DIGEST payload (§9.1.4 + §13.1).</summary>
 public sealed class StateDigestMessage
 {
-    /// <summary>NamespaceId.</summary>
+    /// <summary>NamespaceId: namespace id.</summary>
     public int NamespaceId;
-    /// <summary>OutboxCursor.</summary>
+    /// <summary>OutboxCursor: outbox cursor.</summary>
     public ulong OutboxCursor;
-    /// <summary>RadixBits.</summary>
+    /// <summary>RadixBits: radix bits.</summary>
     public int RadixBits = 8;
-    /// <summary>RootDigest.</summary>
+    /// <summary>RootDigest: root digest.</summary>
     public byte[] RootDigest = new byte[32];
-    /// <summary>List.</summary>
+    /// <summary>Buckets: buckets.</summary>
     public List<DigestBucket> Buckets = new();
 }
 
 /// <summary>NEED_RANGE: ask peer for records under a BLAKE3(recordId) prefix.</summary>
 public sealed class NeedRangeMessage
 {
-    /// <summary>NamespaceId.</summary>
+    /// <summary>NamespaceId: namespace id.</summary>
     public int NamespaceId;
-    /// <summary>Prefix.</summary>
+    /// <summary>Prefix: prefix.</summary>
     public byte[] Prefix = Array.Empty<byte>();
 }
 
 /// <summary>NEED_KEYS: ask peer for specific recordIds.</summary>
 public sealed class NeedKeysMessage
 {
-    /// <summary>NamespaceId.</summary>
+    /// <summary>NamespaceId: namespace id.</summary>
     public int NamespaceId;
-    /// <summary>List.</summary>
+    /// <summary>RecordIds: record ids.</summary>
     public List<byte[]> RecordIds = new();
 }
 
@@ -68,7 +68,7 @@ public sealed class NeedKeysMessage
 /// </summary>
 public static partial class Reconcile
 {
-    /// <summary>DefaultRadixBits.</summary>
+    /// <summary>Constant: default radix bits.</summary>
     public const int DefaultRadixBits = 8;
 
     /// <summary>Compute a STATE_DIGEST view of <paramref name="node"/> for one namespace.</summary>
@@ -115,7 +115,7 @@ public static partial class Reconcile
         return msg;
     }
 
-    /// <summary>EncodeStateDigest.</summary>
+    /// <summary>EncodeStateDigest: encode state digest.</summary>
     public static byte[] EncodeStateDigest(StateDigestMessage m)
     {
         var w = new Writer();
@@ -136,7 +136,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
-    /// <summary>DecodeStateDigest.</summary>
+    /// <summary>DecodeStateDigest: decode state digest.</summary>
     public static StateDigestMessage DecodeStateDigest(byte[] payload)
     {
         var r = new Reader(payload);
@@ -164,7 +164,7 @@ public static partial class Reconcile
         return m;
     }
 
-    /// <summary>EncodeNeedRange.</summary>
+    /// <summary>EncodeNeedRange: encode need range.</summary>
     public static byte[] EncodeNeedRange(NeedRangeMessage m)
     {
         var w = new Writer();
@@ -174,7 +174,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
-    /// <summary>DecodeNeedRange.</summary>
+    /// <summary>DecodeNeedRange: decode need range.</summary>
     public static NeedRangeMessage DecodeNeedRange(byte[] payload)
     {
         var r = new Reader(payload);
@@ -183,7 +183,7 @@ public static partial class Reconcile
         return new NeedRangeMessage { NamespaceId = ns, Prefix = r.Raw(plen) };
     }
 
-    /// <summary>EncodeNeedKeys.</summary>
+    /// <summary>EncodeNeedKeys: encode need keys.</summary>
     public static byte[] EncodeNeedKeys(NeedKeysMessage m)
     {
         var w = new Writer();
@@ -194,7 +194,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
-    /// <summary>DecodeNeedKeys.</summary>
+    /// <summary>DecodeNeedKeys: decode need keys.</summary>
     public static NeedKeysMessage DecodeNeedKeys(byte[] payload)
     {
         var r = new Reader(payload);
@@ -205,7 +205,7 @@ public static partial class Reconcile
         return m;
     }
 
-    /// <summary>List.</summary>
+    /// <summary>DivergentPrefixes: divergent prefixes.</summary>
     public static List<byte[]> DivergentPrefixes(StateDigestMessage local, StateDigestMessage remote)
     {
         var result = new List<byte[]>();
@@ -233,7 +233,7 @@ public static partial class Reconcile
         return result;
     }
 
-    /// <summary>List.</summary>
+    /// <summary>LocalKeysUnderPrefix: local keys under prefix.</summary>
     public static List<byte[]> LocalKeysUnderPrefix(Node node, int namespaceId, byte[] prefix)
     {
         var list = new List<byte[]>();

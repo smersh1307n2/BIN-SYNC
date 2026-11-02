@@ -2,7 +2,7 @@
 // identity keys survive even when the node snapshot is rotated.
 namespace BinSync;
 
-/// <summary>Represents TrustStore.</summary>
+/// <summary>TrustStore type used by the BIN-SYNC engine.</summary>
 public sealed partial class TrustStore
 {
     internal List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)> SnapshotPeers()
@@ -58,12 +58,12 @@ public sealed partial class TrustStore
 /// <summary>Atomic trust-pin file. Magic <c>TRST</c>, version 1.</summary>
 public static class TrustPersistence
 {
-    /// <summary>Magic.</summary>
+    /// <summary>Constant: magic.</summary>
     public const uint Magic = 0x54525354; // 'TRST'
-    /// <summary>Version.</summary>
+    /// <summary>Constant: version.</summary>
     public const ushort Version = 1;
 
-    /// <summary>Serialize.</summary>
+    /// <summary>Serialize: serialize.</summary>
     public static byte[] Serialize(TrustStore store)
     {
         var w = new Writer();
@@ -85,7 +85,7 @@ public static class TrustPersistence
         return w.Value();
     }
 
-    /// <summary>Deserialize.</summary>
+    /// <summary>Deserialize: deserialize.</summary>
     public static TrustStore Deserialize(byte[] data)
     {
         var r = new Reader(data);
@@ -115,7 +115,7 @@ public static class TrustPersistence
         return store;
     }
 
-    /// <summary>Save.</summary>
+    /// <summary>Save: save.</summary>
     public static void Save(TrustStore store, string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
@@ -134,6 +134,6 @@ public static class TrustPersistence
         }
     }
 
-    /// <summary>Load.</summary>
+    /// <summary>Load: load.</summary>
     public static TrustStore Load(string path) => Deserialize(File.ReadAllBytes(path));
 }
