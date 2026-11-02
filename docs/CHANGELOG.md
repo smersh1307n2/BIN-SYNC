@@ -1,5 +1,14 @@
 # Changelog — BinSync.Core
 
+## 2.1.13 — 2026-11-02
+
+**XML-doc: finish remaining thin summaries.**
+
+- Replaced leftover template/humanize/`Name: words` summaries across Codec, Digests, Merge, Model, Production (IBLT, Reconcile, TcpSync, Trust, WAL, …)
+- Non-Crypto public surface: no `Represents X` / single-token / colon-humanize stubs left
+
+---
+
 ## 2.1.12 — 2026-11-02
 
 **XML-doc text quality pass.**

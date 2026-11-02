@@ -2,7 +2,7 @@
 // identity keys survive even when the node snapshot is rotated.
 namespace BinSync;
 
-/// <summary>TrustStore type used by the BIN-SYNC engine.</summary>
+/// <summary>Pinned peer keys, CA roots, and batch signature verification.</summary>
 public sealed partial class TrustStore
 {
     internal List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)> SnapshotPeers()
@@ -58,12 +58,12 @@ public sealed partial class TrustStore
 /// <summary>Atomic trust-pin file. Magic <c>TRST</c>, version 1.</summary>
 public static class TrustPersistence
 {
-    /// <summary>Constant: magic.</summary>
+    /// <summary>File or segment magic number identifying the format.</summary>
     public const uint Magic = 0x54525354; // 'TRST'
-    /// <summary>Constant: version.</summary>
+    /// <summary>Format version for this on-disk or wire structure.</summary>
     public const ushort Version = 1;
 
-    /// <summary>Serialize: serialize.</summary>
+    /// <summary>Serialize the object to a durable byte encoding.</summary>
     public static byte[] Serialize(TrustStore store)
     {
         var w = new Writer();
@@ -85,7 +85,7 @@ public static class TrustPersistence
         return w.Value();
     }
 
-    /// <summary>Deserialize: deserialize.</summary>
+    /// <summary>Deserialize an instance from a durable byte encoding.</summary>
     public static TrustStore Deserialize(byte[] data)
     {
         var r = new Reader(data);
@@ -115,7 +115,7 @@ public static class TrustPersistence
         return store;
     }
 
-    /// <summary>Save: save.</summary>
+    /// <summary>Write the object to a file path on disk.</summary>
     public static void Save(TrustStore store, string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
@@ -134,6 +134,6 @@ public static class TrustPersistence
         }
     }
 
-    /// <summary>Load: load.</summary>
+    /// <summary>Load an instance from a file path on disk.</summary>
     public static TrustStore Load(string path) => Deserialize(File.ReadAllBytes(path));
 }

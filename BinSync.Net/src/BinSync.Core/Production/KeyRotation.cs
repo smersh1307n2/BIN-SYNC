@@ -11,9 +11,9 @@ public sealed class KeyRotationNotice
 {
     /// <summary>Logical namespace this entity belongs to.</summary>
     public ushort NamespaceId { get; init; }
-    /// <summary>Gets the old key epoch.</summary>
+    /// <summary>Key epoch being rotated away from.</summary>
     public ushort OldKeyEpoch { get; init; }
-    /// <summary>Gets the new key epoch.</summary>
+    /// <summary>Key epoch being rotated to.</summary>
     public ushort NewKeyEpoch { get; init; }
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
@@ -26,7 +26,7 @@ public static class KeyRotation
 {
     /// <summary>Wire frame type byte (e.g. DELTA_BATCH, ACK).</summary>
     public const byte FrameType = 0x11;
-    /// <summary>Constant: proof domain.</summary>
+    /// <summary>Constant proof domain.</summary>
     public const string ProofDomain = "BIN-SYNC/KEY-ROTATION/v1";
 
     /// <summary>
@@ -52,7 +52,7 @@ public static class KeyRotation
         return buf;
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static KeyRotationNotice Decode(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2 + 2 + 2 + 16 + 2)

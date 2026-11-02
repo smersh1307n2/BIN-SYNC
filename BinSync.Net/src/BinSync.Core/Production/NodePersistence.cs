@@ -23,7 +23,7 @@
 // ordering deterministic via explicit sorting).
 namespace BinSync;
 
-/// <summary>NodePersistence type used by the BIN-SYNC engine.</summary>
+/// <summary>Serialize and restore a Node to durable storage.</summary>
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>

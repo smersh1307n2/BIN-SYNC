@@ -108,7 +108,7 @@ public static class Frames
     public static uint Crc32C(byte[] data) => Crc32C(data.AsSpan());
 }
 
-/// <summary>class type used by the BIN-SYNC engine.</summary>
+/// <summary>class: class.</summary>
 public sealed record class Frame(byte FrameType, byte Flags, uint StreamId, ulong FrameSeq, byte[] Payload)
 {
     /// <summary>Symbolic frame type name when known.</summary>
@@ -204,7 +204,7 @@ public static class FrameCodec
     }
 }
 
-/// <summary>FlowControl type used by the BIN-SYNC engine.</summary>
+/// <summary>Per-stream send-window accounting for flow control.</summary>
 public class FlowControl
 {
     /// <summary>Configured initial flow-control window.</summary>
@@ -213,14 +213,14 @@ public class FlowControl
     public int MaxWindow;
     private readonly Dictionary<uint, long> _credit = new();
 
-    /// <summary>FlowControl: flow control.</summary>
+    /// <summary>Per-stream flow-control windows for send credit accounting.</summary>
     public FlowControl(int initial = Frames.INITIAL_WINDOW, int maxWindow = Frames.MAX_WINDOW_SIZE)
     { Initial = initial; MaxWindow = maxWindow; }
 
-    /// <summary>Balance: balance.</summary>
+    /// <summary>Remaining credit on a stream window (bytes that may still be sent).</summary>
     public long Balance(uint streamId) => _credit.TryGetValue(streamId, out var v) ? v : (_credit[streamId] = Initial);
 
-    /// <summary>Try to consume; returns whether the operation succeeded.</summary>
+    /// <summary>Attempt to consume payloadBytes from the stream window; false if insufficient credit.</summary>
     public bool TryConsume(uint streamId, long payloadBytes)
     {
         var bal = Balance(streamId);
@@ -229,7 +229,7 @@ public class FlowControl
         return true;
     }
 
-    /// <summary>ApplyUpdate: apply update.</summary>
+    /// <summary>Apply a window update (positive or negative) and return the new balance.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
         long nv = Math.Min(Balance(streamId) + credits, MaxWindow);

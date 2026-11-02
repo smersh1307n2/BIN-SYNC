@@ -4,7 +4,7 @@
 // Note: B128 is fixed 16-byte identity; field values use varint-length Bytes().
 namespace BinSync;
 
-/// <summary>WalRecordType type used by the BIN-SYNC engine.</summary>
+/// <summary>WAL record type tags.</summary>
 public enum WalRecordType : byte
 {
     FieldWrite = 0x01,
@@ -16,7 +16,7 @@ public enum WalRecordType : byte
 /// </summary>
 public sealed class Wal : IDisposable
 {
-    /// <summary>TLV tag byte.</summary>
+    /// <summary>WAL format identifier string written at the start of a log segment.</summary>
     public const string Tag = "BIN-SYNC/WAL/v1";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
     private const ushort Version = 1;
@@ -26,9 +26,9 @@ public sealed class Wal : IDisposable
     private readonly object _lock = new();
     private long _sequence;
 
-    /// <summary>Gets the path.</summary>
+    /// <summary>Filesystem path of the write-ahead log.</summary>
     public string Path => _path;
-    /// <summary>Gets the sequence.</summary>
+    /// <summary>Monotonic sequence of the last appended WAL record.</summary>
     public long Sequence => _sequence;
 
     private Wal(string path, FileStream fs, long sequence)
@@ -38,7 +38,7 @@ public sealed class Wal : IDisposable
         _sequence = sequence;
     }
 
-    /// <summary>Open: open.</summary>
+    /// <summary>Open or create a write-ahead log at the given path.</summary>
     public static Wal Open(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
@@ -76,7 +76,7 @@ public sealed class Wal : IDisposable
         return new Wal(path, fs, seq);
     }
 
-    /// <summary>AppendFieldWrite: append field write.</summary>
+    /// <summary>Append a field-write record to the WAL and return its sequence.</summary>
     public long AppendFieldWrite(
         int namespaceId, byte[] recordId, ushort fieldId, byte[] value,
         Hlc hlc, byte[] authorNodeId)
@@ -93,7 +93,7 @@ public sealed class Wal : IDisposable
         return AppendRaw(w.Value());
     }
 
-    /// <summary>AppendCheckpoint: append checkpoint.</summary>
+    /// <summary>Append a checkpoint marker and return its sequence.</summary>
     public long AppendCheckpoint()
     {
         var w = new Writer();
@@ -117,7 +117,7 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Replay: replay.</summary>
+    /// <summary>Replay WAL records into a node; returns the number of entries applied.</summary>
     public int Replay(Node node)
     {
         lock (_lock)
@@ -142,7 +142,7 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>ReplayFile: replay file.</summary>
+    /// <summary>Open a WAL file and replay it into a node.</summary>
     public static int ReplayFile(string path, Node node)
     {
         if (!File.Exists(path)) return 0;
@@ -163,7 +163,7 @@ public sealed class Wal : IDisposable
         return applied;
     }
 
-    /// <summary>Truncate: truncate.</summary>
+    /// <summary>Truncate the WAL after a successful checkpoint.</summary>
     public void Truncate()
     {
         lock (_lock)
@@ -176,7 +176,7 @@ public sealed class Wal : IDisposable
         }
     }
 
-    /// <summary>Checkpoint: checkpoint.</summary>
+    /// <summary>Checkpoint node state to a snapshot file and truncate the WAL.</summary>
     public void Checkpoint(Node node, string snapshotPath)
     {
         NodePersistence.Save(node, snapshotPath);

@@ -1,10 +1,10 @@
 // GC_NOTICE exchange on TcpSyncSession.
 namespace BinSync;
 
-/// <summary>TcpSyncSession type used by the BIN-SYNC engine.</summary>
+/// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
 public sealed partial class TcpSyncSession
 {
-    /// <summary>SendGcNoticeAsync: send gc notice async.</summary>
+    /// <summary>Send a GC notice frame to the peer.</summary>
     public async Task SendGcNoticeAsync(
         Node local, int namespaceId, ulong tombstoneCutoffWall = 0, CancellationToken ct = default)
     {
@@ -15,7 +15,7 @@ public sealed partial class TcpSyncSession
             ct).ConfigureAwait(false);
     }
 
-    /// <summary>ReceiveGcNoticeAsync: receive gc notice async.</summary>
+    /// <summary>Receive and apply a GC notice; returns how many entries were learned.</summary>
     public async Task<int> ReceiveGcNoticeAsync(Node local, CancellationToken ct = default)
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
@@ -27,7 +27,7 @@ public sealed partial class TcpSyncSession
         return GcNotice.Apply(local, msg);
     }
 
-    /// <summary>ExchangeGcNoticeAsync: exchange gc notice async.</summary>
+    /// <summary>Bidirectional GC notice exchange; returns learned counts both ways.</summary>
     public async Task<(int LearnedLocal, int LearnedRemote)> ExchangeGcNoticeAsync(
         Node local, int namespaceId, bool initiate,
         ulong tombstoneCutoffWall = 0, CancellationToken ct = default)

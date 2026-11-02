@@ -7,22 +7,22 @@ namespace BinSync;
 /// </summary>
 public static class SeqFractional
 {
-    /// <summary>Item type used by the BIN-SYNC engine.</summary>
+    /// <summary>Sequential-blob item descriptor entry.</summary>
     public sealed class Item
     {
         /// <summary>16 zero bytes used as a sentinel identity/digest.</summary>
         public byte[] ParentId = Node.Zero128;
-        /// <summary>OrderKey: order key.</summary>
+        /// <summary>Sort key used for sequential blob ordering.</summary>
         public string OrderKey = "";
         /// <summary>16 zero bytes used as a sentinel identity/digest.</summary>
         public byte[] AuthorNodeId = Node.Zero128;
-        /// <summary>Seq: seq.</summary>
+        /// <summary>Monotonic sequence number for the actor.</summary>
         public ulong Seq;
         /// <summary>Return a copy of the written buffer as a new byte array.</summary>
         public byte[] Value = Array.Empty<byte>();
     }
 
-    /// <summary>Encode: encode.</summary>
+    /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(Item item)
     {
         var w = new Writer();
@@ -34,7 +34,7 @@ public static class SeqFractional
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static Item Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -84,20 +84,20 @@ public static class SeqFractional
 /// </summary>
 public static class BlobRef
 {
-    /// <summary>Descriptor type used by the BIN-SYNC engine.</summary>
+    /// <summary>Sequential-blob descriptor (order key, size, content type).</summary>
     public sealed class Descriptor
     {
         /// <summary>16 zero bytes used as a sentinel identity/digest.</summary>
         public byte[] BlobId = Node.Zero128;
-        /// <summary>Size: size.</summary>
+        /// <summary>Declared size of the sequential blob content.</summary>
         public ulong Size;
-        /// <summary>ContentType: content type.</summary>
+        /// <summary>MIME-like content type of the sequential blob.</summary>
         public string ContentType = "";
-        /// <summary>Hash: hash.</summary>
+        /// <summary>True when h.</summary>
         public byte[] Hash = new byte[32];
     }
 
-    /// <summary>Encode: encode.</summary>
+    /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(Descriptor d)
     {
         var w = new Writer();
@@ -108,7 +108,7 @@ public static class BlobRef
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static Descriptor Decode(byte[] data)
     {
         var r = new Reader(data);

@@ -8,7 +8,7 @@ namespace BinSync;
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
-    /// <summary>Shared zero 128.</summary>
+    /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
     public static readonly byte[] Zero128 = new byte[16];
 
     // ---- production hardening (Шаг 2): thread safety -------------------------------
@@ -62,9 +62,9 @@ public sealed partial class Node
     /// <summary>Per-stream prev-batch digest checkpoints on the issuer side.</summary>
     public Dictionary<((byte[], int, int), byte[]), byte[]> LastStreamDigest { get; } = new(BytesIntIntBytesKeyEq.Instance);
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
-    /// <summary>Gets the alias to node.</summary>
+    /// <summary>Gets alias to node.</summary>
     public Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();
-    /// <summary>Gets the node to alias.</summary>
+    /// <summary>Gets node to alias.</summary>
     public Dictionary<NodeId, Dictionary<(NodeId Id, int Epoch), int>> NodeToAlias { get; } = new();
     // Errata E-9: durable author knowledge for session-table construction only [А3].
     /// <summary>Durable author knowledge for session-table construction (Errata E-9).</summary>

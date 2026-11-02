@@ -1,7 +1,7 @@
 // FLAG_FRAGMENT send/receive on an established TCP session (§12 / lab S12).
 namespace BinSync;
 
-/// <summary>TcpSyncSession type used by the BIN-SYNC engine.</summary>
+/// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
 public sealed partial class TcpSyncSession
 {
     /// <summary>

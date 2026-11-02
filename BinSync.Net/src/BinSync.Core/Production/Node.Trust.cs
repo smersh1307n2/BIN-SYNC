@@ -46,7 +46,7 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>RevokeTrust: revoke trust.</summary>
+    /// <summary>Revoke a previously trusted peer.</summary>
     public void RevokeTrust(byte[] nodeId)
     {
         lock (_lockMeta) Trust?.Revoke(nodeId);

@@ -85,7 +85,7 @@ public readonly partial struct NodeId : IEquatable<NodeId>
     /// <summary>Content equality comparison.</summary>
     public static bool operator !=(NodeId a, NodeId b) => !a.Equals(b);
 
-    /// <summary>ToString: to string.</summary>
+    /// <summary>Hex string of the 16-byte identity (uppercase).</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }
 
@@ -170,7 +170,7 @@ public readonly partial struct RecordId : IEquatable<RecordId>
     /// <summary>Content equality comparison.</summary>
     public static bool operator !=(RecordId a, RecordId b) => !a.Equals(b);
 
-    /// <summary>ToString: to string.</summary>
+    /// <summary>Hex string of the 16-byte identity (uppercase).</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }
 
@@ -241,6 +241,6 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     /// <summary>Content equality comparison.</summary>
     public static bool operator !=(BatchId a, BatchId b) => !a.Equals(b);
 
-    /// <summary>ToString: to string.</summary>
+    /// <summary>Hex string of the 16-byte identity (uppercase).</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }

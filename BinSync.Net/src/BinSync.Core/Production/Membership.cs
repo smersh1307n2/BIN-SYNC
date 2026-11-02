@@ -1,10 +1,10 @@
 // MEMBERSHIP frame (§12.6 0x05): durable author roster + quarantine hints.
 namespace BinSync;
 
-/// <summary>MembershipFrames type used by the BIN-SYNC engine.</summary>
+/// <summary>Frame type constants for membership messages.</summary>
 public static class MembershipFrames
 {
-    /// <summary>Constant: membership.</summary>
+    /// <summary>Membership list messages and peer flag helpers.</summary>
     public const byte Membership = 0x05;
 }
 
@@ -17,29 +17,29 @@ public sealed class MembershipEntry
     public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
     public byte Flags;
-    /// <summary>Indicates whether active.</summary>
+    /// <summary>True when membership flags include the active bit.</summary>
     public bool IsActive => (Flags & 0x01) != 0;
-    /// <summary>Indicates whether quarantined.</summary>
+    /// <summary>True when membership flags include the quarantined bit.</summary>
     public bool IsQuarantined => (Flags & 0x02) != 0;
 }
 
 /// <summary>Decoded MEMBERSHIP message for one namespace view.</summary>
 public sealed class MembershipMessage
 {
-    /// <summary>NamespaceId: namespace id.</summary>
+    /// <summary>Namespace identifier this message or entry applies to.</summary>
     public int NamespaceId;
-    /// <summary>MembershipEpoch: membership epoch.</summary>
+    /// <summary>Membership list epoch for this roster.</summary>
     public uint MembershipEpoch;
-    /// <summary>Members: members.</summary>
+    /// <summary>Membership entries describing peers and their flags.</summary>
     public List<MembershipEntry> Members = new();
 }
 
-/// <summary>Membership type used by the BIN-SYNC engine.</summary>
+/// <summary>Membership list messages and peer flag helpers.</summary>
 public static class Membership
 {
-    /// <summary>Constant: flag active.</summary>
+    /// <summary>Constant flag active.</summary>
     public const byte FlagActive = 0x01;
-    /// <summary>Constant: flag quarantined.</summary>
+    /// <summary>Constant flag quarantined.</summary>
     public const byte FlagQuarantined = 0x02;
 
     /// <summary>
@@ -74,7 +74,7 @@ public static class Membership
         return msg;
     }
 
-    /// <summary>Encode: encode.</summary>
+    /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(MembershipMessage m)
     {
         var w = new Writer();
@@ -90,7 +90,7 @@ public static class Membership
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static MembershipMessage Decode(byte[] payload)
     {
         var r = new Reader(payload);

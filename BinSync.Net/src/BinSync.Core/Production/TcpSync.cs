@@ -11,12 +11,12 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace BinSync;
 
-/// <summary>TcpSyncListener type used by the BIN-SYNC engine.</summary>
+/// <summary>TCP listener accepting BIN-SYNC sessions.</summary>
 public sealed class TcpSyncListener : IAsyncDisposable
 {
     private readonly TcpListener _listener;
 
-    /// <summary>Gets the port.</summary>
+    /// <summary>TCP port the listener is bound to.</summary>
     public int Port { get; }
 
     private TcpSyncListener(TcpListener listener)
@@ -25,7 +25,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
         Port = ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    /// <summary>Start: start.</summary>
+    /// <summary>Start a TCP sync listener on the given port (0 = ephemeral).</summary>
     public static TcpSyncListener Start(int port = 0, IPAddress? address = null)
     {
         var listener = new TcpListener(address ?? IPAddress.Loopback, port);
@@ -57,7 +57,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
         }
     }
 
-    /// <summary>DisposeAsync: dispose async.</summary>
+    /// <summary>Release unmanaged or pooled resources.</summary>
     public ValueTask DisposeAsync()
     {
         _listener.Stop();
@@ -72,13 +72,13 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     private readonly StreamSyncTransport _transport;
     private readonly Stream? _ownedOuter; // SslStream when TLS; disposed after transport
 
-    /// <summary>Gets the peer node id.</summary>
+    /// <summary>Remote peer node id this state is tracked for.</summary>
     public byte[] PeerNodeId { get; }
-    /// <summary>Gets the peer epoch.</summary>
+    /// <summary>Session epoch advertised by the connected peer.</summary>
     public int PeerEpoch { get; }
-    /// <summary>Gets the peer capabilities.</summary>
+    /// <summary>Capability bits advertised by the connected peer.</summary>
     public SessionCapabilities PeerCapabilities { get; }
-    /// <summary>Indicates whether tls.</summary>
+    /// <summary>True when this session transports frames over TLS.</summary>
     public bool IsTls { get; }
 
     private TcpSyncSession(
@@ -196,7 +196,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         return result;
     }
 
-    /// <summary>DisposeAsync: dispose async.</summary>
+    /// <summary>Release unmanaged or pooled resources.</summary>
     public async ValueTask DisposeAsync()
     {
         await _transport.DisposeAsync().ConfigureAwait(false);

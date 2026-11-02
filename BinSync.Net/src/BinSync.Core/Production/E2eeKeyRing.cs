@@ -40,7 +40,7 @@ public sealed class E2eeKeyRing
         }
     }
 
-    /// <summary>Try to get; returns whether the operation succeeded.</summary>
+    /// <summary>Try to get the E2EE key and epoch for a namespace.</summary>
     public bool TryGet(int namespaceId, out byte[] key, out ushort keyEpoch)
     {
         lock (_gate)
@@ -69,14 +69,14 @@ public sealed class E2eeKeyRing
         }
     }
 
-    /// <summary>Return the epoch.</summary>
+    /// <summary>Current key epoch registered for the namespace (0 if none).</summary>
     public ushort GetEpoch(int namespaceId)
     {
         lock (_gate)
             return _epochs.TryGetValue(namespaceId, out var e) ? e : (ushort)0;
     }
 
-    /// <summary>Indicates whether key.</summary>
+    /// <summary>True when the key ring holds an E2EE key for the namespace.</summary>
     public bool HasKey(int namespaceId)
     {
         lock (_gate) return _keys.ContainsKey(namespaceId);

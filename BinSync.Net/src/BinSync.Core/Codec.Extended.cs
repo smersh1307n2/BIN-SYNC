@@ -15,7 +15,7 @@ public class InvalidFloatException : Exception
 /// <summary>One raw TLV triple for unknown / extension fields (§6.5).</summary>
 public readonly struct Tlv
 {
-    /// <summary>TLV tag byte.</summary>
+    /// <summary>Discriminating tag for this element or format.</summary>
     public byte Tag { get; }
     /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public byte[] Value { get; }

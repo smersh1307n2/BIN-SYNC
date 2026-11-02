@@ -6,11 +6,11 @@ public sealed class SnapshotField
 {
     /// <summary>Field identifier within a record.</summary>
     public ushort FieldId;
-    /// <summary>Wall: wall.</summary>
+    /// <summary>HLC wall-clock component in microseconds.</summary>
     public ulong Wall;
-    /// <summary>Logical: logical.</summary>
+    /// <summary>HLC logical counter component.</summary>
     public uint Logical;
-    /// <summary>AuthorNodeId: author node id.</summary>
+    /// <summary>Durable author of the field or lifecycle entry in a snapshot record.</summary>
     public byte[] AuthorNodeId = Array.Empty<byte>();
     /// <summary>Key epoch associated with the field write.</summary>
     public ushort KeyEpoch;
@@ -23,32 +23,32 @@ public sealed class SnapshotRecord
 {
     /// <summary>128-bit record identity with value equality.</summary>
     public byte[] RecordId = Array.Empty<byte>();
-    /// <summary>Fields: fields.</summary>
+    /// <summary>Field snapshots included for this record.</summary>
     public List<SnapshotField> Fields = new();
-    /// <summary>LifecycleValue: lifecycle value.</summary>
+    /// <summary>Lifecycle byte: alive or tombstoned.</summary>
     public byte LifecycleValue = Model.Alive;
-    /// <summary>LifecycleWall: lifecycle wall.</summary>
+    /// <summary>Wall component of the record lifecycle HLC.</summary>
     public ulong LifecycleWall;
-    /// <summary>LifecycleLogical: lifecycle logical.</summary>
+    /// <summary>Logical component of the record lifecycle HLC.</summary>
     public uint LifecycleLogical;
-    /// <summary>LifecycleAuthor: lifecycle author.</summary>
+    /// <summary>Author of the last record-level lifecycle change.</summary>
     public byte[] LifecycleAuthor = Array.Empty<byte>();
 }
 
 /// <summary>Decoded SNAPSHOT_CHUNK payload.</summary>
 public sealed class SnapshotChunkMessage
 {
-    /// <summary>NamespaceId: namespace id.</summary>
+    /// <summary>Namespace identifier this message or entry applies to.</summary>
     public int NamespaceId;
-    /// <summary>ChunkIndex: chunk index.</summary>
+    /// <summary>Zero-based index of this snapshot chunk.</summary>
     public uint ChunkIndex;
-    /// <summary>ChunkCount: chunk count.</summary>
+    /// <summary>Total number of chunks in the snapshot.</summary>
     public uint ChunkCount = 1;
-    /// <summary>Records: records.</summary>
+    /// <summary>Records carried in this snapshot chunk.</summary>
     public List<SnapshotRecord> Records = new();
 }
 
-/// <summary>Reconcile type used by the BIN-SYNC engine.</summary>
+/// <summary>State-digest / NEED_RANGE / NEED_KEYS anti-entropy helpers.</summary>
 public static partial class Reconcile
 {
     /// <summary>Build a single-chunk snapshot of records under <paramref name="prefix"/>.</summary>
@@ -97,7 +97,7 @@ public static partial class Reconcile
         return msg;
     }
 
-    /// <summary>EncodeSnapshotChunk: encode snapshot chunk.</summary>
+    /// <summary>Encode snapshot chunk into canonical wire bytes.</summary>
     public static byte[] EncodeSnapshotChunk(SnapshotChunkMessage m)
     {
         var w = new Writer();
@@ -126,7 +126,7 @@ public static partial class Reconcile
         return w.Value();
     }
 
-    /// <summary>DecodeSnapshotChunk: decode snapshot chunk.</summary>
+    /// <summary>Decode snapshot chunk from canonical wire bytes.</summary>
     public static SnapshotChunkMessage DecodeSnapshotChunk(byte[] payload)
     {
         var r = new Reader(payload);

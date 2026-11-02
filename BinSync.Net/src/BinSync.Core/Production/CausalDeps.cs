@@ -21,11 +21,11 @@ public enum CausalOutcome
 /// <summary>One op waiting on causal parents.</summary>
 public sealed class PendingCausalOp
 {
-    /// <summary>Gets the change id.</summary>
+    /// <summary>Idempotency key (b128) for this change.</summary>
     public required byte[] ChangeId { get; init; }
-    /// <summary>Gets the deps.</summary>
+    /// <summary>Causal dependency change ids required before apply.</summary>
     public required byte[][] Deps { get; init; }
-    /// <summary>Gets the enqueued utc ms.</summary>
+    /// <summary>UTC time in milliseconds when the item was enqueued.</summary>
     public required long EnqueuedUtcMs { get; init; }
     /// <summary>Frame payload bytes after the header.</summary>
     public object? Payload { get; init; }
@@ -48,12 +48,12 @@ public sealed class CausalTracker
     /// <summary>Clock for tests; defaults to UTC now.</summary>
     public Func<long> UtcNowMs { get; set; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    /// <summary>Gets the known count.</summary>
+    /// <summary>Number of change ids marked known/applied in the tracker.</summary>
     public int KnownCount { get { lock (_gate) return _known.Count; } }
-    /// <summary>Gets the pending count.</summary>
+    /// <summary>Number of ops still waiting on causal dependencies.</summary>
     public int PendingCount { get { lock (_gate) return _pending.Count; } }
 
-    /// <summary>Key: key.</summary>
+    /// <summary>Tuple key (wall, logical) for ordering HLC timestamps.</summary>
     public static string Key(byte[] id) => Convert.ToHexString(id);
 
     /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
@@ -67,7 +67,7 @@ public sealed class CausalTracker
         }
     }
 
-    /// <summary>Indicates whether known.</summary>
+    /// <summary>True when this change id is already marked applied in the tracker.</summary>
     public bool IsKnown(byte[] changeId)
     {
         lock (_gate) return _known.Contains(Key(changeId));
@@ -259,6 +259,6 @@ public sealed class CausalTracker
 /// <summary>Protocol error code for causal dep failures (§12 error table).</summary>
 public static class CausalError
 {
-    /// <summary>Constant: causal dep missing.</summary>
+    /// <summary>Constant causal dep missing.</summary>
     public const ushort CausalDepMissing = 0x0012; // CAUSAL_DEP_MISSING
 }

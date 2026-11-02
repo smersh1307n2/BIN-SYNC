@@ -1,7 +1,7 @@
 // Trust model §15.6: TOFU, pre-shared allow-list, simple CA allow-list, revoke.
 namespace BinSync;
 
-/// <summary>TrustMode type used by the BIN-SYNC engine.</summary>
+/// <summary>How a peer key is trusted (pin, CA-signed, …).</summary>
 public enum TrustMode : byte
 {
     Tofu = 1,
@@ -9,32 +9,32 @@ public enum TrustMode : byte
     CertificateAuthority = 3,
 }
 
-/// <summary>TrustedPeer type used by the BIN-SYNC engine.</summary>
+/// <summary>One pinned peer entry in the trust store.</summary>
 public sealed class TrustedPeer
 {
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public byte[] NodeId { get; init; } = Array.Empty<byte>();
-    /// <summary>Gets the public key.</summary>
+    /// <summary>Ed25519 public key bytes pinned for this trusted peer.</summary>
     public byte[] PublicKey { get; init; } = Array.Empty<byte>();
-    /// <summary>Gets the mode.</summary>
+    /// <summary>Trust mode controlling how signatures from this peer are validated.</summary>
     public TrustMode Mode { get; init; }
-    /// <summary>Gets or sets the revoked.</summary>
+    /// <summary>True when this peer entry has been revoked.</summary>
     public bool Revoked { get; set; }
-    /// <summary>Gets the pinned at unix ms.</summary>
+    /// <summary>Unix time in milliseconds when the peer key was pinned.</summary>
     public long PinnedAtUnixMs { get; init; }
 }
 
-/// <summary>TrustStore type used by the BIN-SYNC engine.</summary>
+/// <summary>Pinned peer keys, CA roots, and batch signature verification.</summary>
 public sealed partial class TrustStore
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TrustedPeer> _peers = new(StringComparer.Ordinal);
     private readonly HashSet<string> _caRoots = new(StringComparer.Ordinal);
 
-    /// <summary>Gets or sets the default mode.</summary>
+    /// <summary>Default trust mode applied when pinning new peers.</summary>
     public TrustMode DefaultMode { get; set; } = TrustMode.Tofu;
 
-    /// <summary>PeerCount: peer count.</summary>
+    /// <summary>Number of peers currently present in the trust store.</summary>
     public int PeerCount
     {
         get { lock (_gate) return _peers.Count; }
@@ -42,7 +42,7 @@ public sealed partial class TrustStore
 
     static string Key(byte[] nodeId) => Convert.ToHexString(Codec.CanonicalB128(nodeId));
 
-    /// <summary>Allow: allow.</summary>
+    /// <summary>Pin a peer public key under the given trust mode.</summary>
     public void Allow(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
@@ -61,19 +61,19 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>AddCaRoot: add ca root.</summary>
+    /// <summary>Mark a node id as a certificate-authority root.</summary>
     public void AddCaRoot(byte[] caNodeId)
     {
         lock (_gate) _caRoots.Add(Key(caNodeId));
     }
 
-    /// <summary>Indicates whether ca root.</summary>
+    /// <summary>True when the node is listed as a certificate-authority root.</summary>
     public bool IsCaRoot(byte[] nodeId)
     {
         lock (_gate) return _caRoots.Contains(Key(nodeId));
     }
 
-    /// <summary>Revoke: revoke.</summary>
+    /// <summary>Revoke trust for a node id (signatures will no longer verify).</summary>
     public void Revoke(byte[] nodeId)
     {
         lock (_gate)
@@ -83,14 +83,14 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>Try to get; returns whether the operation succeeded.</summary>
+    /// <summary>Try to get trusted-peer metadata for a node id.</summary>
     public bool TryGet(byte[] nodeId, out TrustedPeer? peer)
     {
         lock (_gate)
             return _peers.TryGetValue(Key(nodeId), out peer);
     }
 
-    /// <summary>ResolvePublicKey: resolve public key.</summary>
+    /// <summary>Resolve the public key to use for a node, optionally checking a candidate.</summary>
     public byte[]? ResolvePublicKey(byte[] nodeId, byte[]? candidatePublicKey = null)
     {
         lock (_gate)
@@ -124,7 +124,7 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>VerifyBatchOrThrow: verify batch or throw.</summary>
+    /// <summary>Verify the batch signature or throw if the peer is untrusted/invalid.</summary>
     public void VerifyBatchOrThrow(
         Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
@@ -135,7 +135,7 @@ public sealed partial class TrustStore
             throw new SyncException("SIGNATURE_INVALID", batch.BatchId);
     }
 
-    /// <summary>Try to verify batch; returns whether the operation succeeded.</summary>
+    /// <summary>Verify the batch signature with the trust store; returns true if accepted.</summary>
     public bool TryVerifyBatch(Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
         try

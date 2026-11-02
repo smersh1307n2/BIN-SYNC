@@ -5,16 +5,16 @@ namespace BinSync;
 /// <summary>One fragment of a logical message larger than the transport MTU.</summary>
 public readonly struct FrameFragment
 {
-    /// <summary>Gets the msg id.</summary>
+    /// <summary>Fragment message id grouping parts of one logical frame.</summary>
     public byte[] MsgId { get; }
-    /// <summary>Gets the index.</summary>
+    /// <summary>Zero-based index of this fragment within the message.</summary>
     public ushort Index { get; }
-    /// <summary>Gets the count.</summary>
+    /// <summary>Signed multiplicity of digests folded into this cell.</summary>
     public ushort Count { get; }
-    /// <summary>Gets the body.</summary>
+    /// <summary>Fragment payload body bytes.</summary>
     public byte[] Body { get; }
 
-    /// <summary>FrameFragment: frame fragment.</summary>
+    /// <summary>One fragment of a larger frame (msg id, index, count, payload).</summary>
     public FrameFragment(byte[] msgId, ushort index, ushort count, byte[] body)
     {
         MsgId = msgId;
@@ -24,7 +24,7 @@ public readonly struct FrameFragment
     }
 }
 
-/// <summary>FragmentCodec type used by the BIN-SYNC engine.</summary>
+/// <summary>Encode and decode FLAG_FRAGMENT frame bodies.</summary>
 public static class FragmentCodec
 {
     /// <summary>Split <paramref name="logicalPayload"/> into fragments of at most <paramref name="maxBody"/> bytes.</summary>
@@ -53,7 +53,7 @@ public static class FragmentCodec
         return list;
     }
 
-    /// <summary>EncodeOne: encode one.</summary>
+    /// <summary>Encode one into canonical wire bytes.</summary>
     public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body)
     {
         var w = new Writer();
@@ -61,7 +61,7 @@ public static class FragmentCodec
         return w.Value();
     }
 
-    /// <summary>DecodeOne: decode one.</summary>
+    /// <summary>Decode one from canonical wire bytes.</summary>
     public static FrameFragment DecodeOne(byte[] payload)
     {
         var r = new Reader(payload);
@@ -95,17 +95,17 @@ public sealed class FragmentReassembler
 {
     private sealed class Slot
     {
-        /// <summary>Count: count.</summary>
+        /// <summary>Signed multiplicity of digests folded into this cell.</summary>
         public ushort Count;
-        /// <summary>Parts: parts.</summary>
+        /// <summary>Received fragment parts awaiting reassembly (null slots still missing).</summary>
         public byte[]?[] Parts = Array.Empty<byte[]?>();
-        /// <summary>Have: have.</summary>
+        /// <summary>Number of fragment parts received so far.</summary>
         public int Have;
     }
 
     private readonly Dictionary<string, Slot> _pending = new(StringComparer.Ordinal);
 
-    /// <summary>Gets the pending messages.</summary>
+    /// <summary>In-progress fragment reassembly keyed by message id.</summary>
     public int PendingMessages => _pending.Count;
 
     /// <summary>
@@ -150,6 +150,6 @@ public sealed class FragmentReassembler
         return buf;
     }
 
-    /// <summary>Clear: clear.</summary>
+    /// <summary>Drop all pending reassembly state.</summary>
     public void Clear() => _pending.Clear();
 }

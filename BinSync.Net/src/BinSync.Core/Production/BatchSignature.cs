@@ -11,16 +11,16 @@ namespace BinSync;
 /// <summary>Ed25519 helpers for signing / verifying batch authenticity material (§14.8).</summary>
 public static class BatchSignature
 {
-    /// <summary>Constant: sign domain.</summary>
+    /// <summary>Constant sign domain.</summary>
     public const string SignDomain = "BIN-SYNC/BATCH-SIGN/v1";
-    /// <summary>Constant: public key size.</summary>
+    /// <summary>Constant public key size.</summary>
     public const int PublicKeySize = 32;
-    /// <summary>Constant: seed size.</summary>
+    /// <summary>Constant seed size.</summary>
     public const int SeedSize = 32;
-    /// <summary>Constant: signature size.</summary>
+    /// <summary>Constant signature size.</summary>
     public const int SignatureSize = 64;
 
-    /// <summary>GenerateKeyPair: generate key pair.</summary>
+    /// <summary>Generate a new Ed25519 key pair (seed + public key).</summary>
     public static (byte[] Seed, byte[] PublicKey) GenerateKeyPair()
     {
         var seed = new byte[SeedSize];
@@ -30,7 +30,7 @@ public static class BatchSignature
         return (seed, pub);
     }
 
-    /// <summary>BuildSignPayload: build sign payload.</summary>
+    /// <summary>Build sign payload from current state.</summary>
     public static byte[] BuildSignPayload(
         int namespaceId,
         int issuerEpoch,
@@ -51,11 +51,11 @@ public static class BatchSignature
         return buf;
     }
 
-    /// <summary>BuildSignPayload: build sign payload.</summary>
+    /// <summary>Build sign payload from current state.</summary>
     public static byte[] BuildSignPayload(Batch batch) =>
         BuildSignPayload(batch.NamespaceId, batch.IssuerEpoch, batch.IssuerNodeId, batch.BatchId, batch.BatchDigest);
 
-    /// <summary>Sign: sign.</summary>
+    /// <summary>Sign a message with an Ed25519 private seed.</summary>
     public static byte[] Sign(ReadOnlySpan<byte> privateSeed, ReadOnlySpan<byte> message)
     {
         if (privateSeed.Length != SeedSize)
@@ -69,7 +69,7 @@ public static class BatchSignature
         return sig;
     }
 
-    /// <summary>Verify: verify.</summary>
+    /// <summary>Verify  and throw on failure when required.</summary>
     public static bool Verify(ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> message, ReadOnlySpan<byte> signature)
     {
         if (publicKey.Length != PublicKeySize || signature.Length != SignatureSize)
@@ -87,11 +87,11 @@ public static class BatchSignature
         }
     }
 
-    /// <summary>SignBatch: sign batch.</summary>
+    /// <summary>Sign the canonical batch digest with an Ed25519 private seed.</summary>
     public static byte[] SignBatch(ReadOnlySpan<byte> privateSeed, Batch batch) =>
         Sign(privateSeed, BuildSignPayload(batch));
 
-    /// <summary>VerifyBatch: verify batch.</summary>
+    /// <summary>Verify batch and throw on failure when required.</summary>
     public static bool VerifyBatch(ReadOnlySpan<byte> publicKey, Batch batch, ReadOnlySpan<byte> signature) =>
         Verify(publicKey, BuildSignPayload(batch), signature);
 }

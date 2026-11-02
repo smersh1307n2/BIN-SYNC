@@ -8,7 +8,7 @@ namespace BinSync;
 /// </summary>
 public sealed class ResourceLimits
 {
-    /// <summary>Gets the default.</summary>
+    /// <summary>Default resource-limit configuration.</summary>
     public static ResourceLimits Default { get; } = new();
 
     /// <summary>Max outbox entries per namespace (0 = unlimited).</summary>
@@ -20,7 +20,7 @@ public sealed class ResourceLimits
     /// <summary>Max records held in storage across all namespaces (0 = unlimited).</summary>
     public int MaxRecords { get; init; } = 0;
 
-    /// <summary>EnsureCanEnqueueOutbox: ensure can enqueue outbox.</summary>
+    /// <summary>Throw if enqueuing another outbox entry would exceed configured resource limits.</summary>
     public void EnsureCanEnqueueOutbox(Node node, int namespaceId)
     {
         if (MaxOutboxEntriesPerNamespace <= 0) return;
@@ -29,7 +29,7 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
-    /// <summary>EnsureSeenChangesCapacity: ensure seen changes capacity.</summary>
+    /// <summary>Throw if the provenance seen-set would exceed configured capacity.</summary>
     public void EnsureSeenChangesCapacity(Node node)
     {
         if (MaxSeenChanges <= 0) return;
@@ -37,7 +37,7 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
-    /// <summary>EnsureStorageCapacity: ensure storage capacity.</summary>
+    /// <summary>Throw if storage would exceed configured record/namespace limits.</summary>
     public void EnsureStorageCapacity(Node node)
     {
         if (MaxRecords <= 0) return;

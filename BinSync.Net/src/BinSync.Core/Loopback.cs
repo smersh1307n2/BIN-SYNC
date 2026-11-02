@@ -1,14 +1,14 @@
 // In-memory transport (§13.2): frame routing, per-stream flow control, session lifecycle.
 namespace BinSync;
 
-/// <summary>SessionException type used by the BIN-SYNC engine.</summary>
+/// <summary>Base exception for session/transport setup failures.</summary>
 public class SessionException : Exception { }
-/// <summary>NoSessionException type used by the BIN-SYNC engine.</summary>
+/// <summary>Thrown when an operation requires a session that is not open.</summary>
 public class NoSessionException : Exception { public NoSessionException() : base("no session") { } }
-/// <summary>PeerRejectedException type used by the BIN-SYNC engine.</summary>
+/// <summary>Thrown when a peer is rejected during session setup.</summary>
 public class PeerRejectedException : Exception { public PeerRejectedException(string msg) : base(msg) { } }
 
-/// <summary>LoopbackTransport type used by the BIN-SYNC engine.</summary>
+/// <summary>In-process transport delivering frames between local nodes.</summary>
 public class LoopbackTransport
 {
     /// <summary>Shared node map keyed by NodeId for in-process delivery.</summary>
@@ -18,7 +18,7 @@ public class LoopbackTransport
     /// <summary>Per-pair stream sequence counters keyed by (local, remote) node ids.</summary>
     public Dictionary<(byte[], byte[]), int> Streams = new(BytesPairEq.Instance);
 
-    /// <summary>Register: register.</summary>
+    /// <summary>Register a node in the loopback peer map for local delivery.</summary>
     public void Register(Node node) => (Nodes ??= new())[node.NodeId] = node;
 
     /// <summary>Wire two nodes for loopback delivery.</summary>
@@ -35,7 +35,7 @@ public class LoopbackTransport
         Streams[(b, a)] = _streamCounter;
     }
 
-    /// <summary>Close: close.</summary>
+    /// <summary>Tear down the loopback path between two node ids.</summary>
     public void Close(byte[] a, byte[] b)
     {
         _sessions.Remove((a, b));
@@ -46,11 +46,11 @@ public class LoopbackTransport
 
     // BUGFIX (port): the previous signature was a broken stub — frames are captured
     // per-node by SyncRound, so no extraction from raw bytes is needed here.
-    /// <summary>ExtractFrames: extract frames.</summary>
+    /// <summary>Extract delivered frames from a recorded exchange sequence.</summary>
     public static List<(Node From, Frame F)> ExtractFrames(IEnumerable<(Node From, Frame F)> frames)
         => frames.ToList();
 
-    /// <summary>Exchange: exchange.</summary>
+    /// <summary>Run a bidirectional loopback exchange of pending frames.</summary>
     public List<(Node From, Frame F)> Exchange(params (Node N, Frame F)[] frames)
     {
         var outp = new List<(Node, Frame)>();

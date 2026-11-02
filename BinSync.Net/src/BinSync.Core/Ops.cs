@@ -8,15 +8,15 @@ namespace BinSync;
 /// <summary>Wire tag constants for operation kinds.</summary>
 public static class OpsConst
 {
-    /// <summary>Constant: tag field write.</summary>
+    /// <summary>Wire tag for a field-write operation.</summary>
     public const byte TagFieldWrite = 0x01;
-    /// <summary>Constant: tag field tomb.</summary>
+    /// <summary>Wire tag for a field-tombstone operation.</summary>
     public const byte TagFieldTomb = 0x02;
-    /// <summary>Constant: tag record tomb.</summary>
+    /// <summary>Wire tag for a whole-record tombstone operation.</summary>
     public const byte TagRecordTomb = 0x03;
-    /// <summary>Constant: origin offset.</summary>
+    /// <summary>Constant origin offset.</summary>
     public const int OriginOffset = 17;              // [C11] FieldWrite/FieldTomb
-    /// <summary>Constant: origin offset record tomb.</summary>
+    /// <summary>Constant origin offset record tomb.</summary>
     public const int OriginOffsetRecordTomb = 29;    // RecordTombstone
 }
 
@@ -25,7 +25,7 @@ public class OpFieldWrite
 {
     /// <summary>Key epoch associated with the field write.</summary>
     public ushort FieldId, KeyEpoch;
-    /// <summary>Wall: wall.</summary>
+    /// <summary>HLC wall-clock component in microseconds.</summary>
     public ulong Wall; public uint Logical;
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
@@ -33,7 +33,7 @@ public class OpFieldWrite
     public byte[]? AuthorNodeId;
     /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public byte[] Value = Array.Empty<byte>();
-    /// <summary>TLV tag byte.</summary>
+    /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagFieldWrite;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -52,13 +52,13 @@ public class OpFieldTomb
 {
     /// <summary>Key epoch associated with the field write.</summary>
     public ushort FieldId, KeyEpoch;
-    /// <summary>Wall: wall.</summary>
+    /// <summary>HLC wall-clock component in microseconds.</summary>
     public ulong Wall; public uint Logical;
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
     public byte[]? AuthorNodeId;
-    /// <summary>TLV tag byte.</summary>
+    /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagFieldTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }
@@ -72,13 +72,13 @@ public class OpRecordTombstone
 {
     /// <summary>128-bit record identity with value equality.</summary>
     public byte[] RecordId = Array.Empty<byte>();
-    /// <summary>Wall: wall.</summary>
+    /// <summary>HLC wall-clock component in microseconds.</summary>
     public ulong Wall; public uint Logical;
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
     public byte[]? AuthorNodeId;
-    /// <summary>TLV tag byte.</summary>
+    /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagRecordTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
     public bool FullAuthorMode { get; internal set; }

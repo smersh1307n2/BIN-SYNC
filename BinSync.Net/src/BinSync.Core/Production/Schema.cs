@@ -9,7 +9,7 @@ public sealed class SchemaDescriptor
     public int NamespaceId { get; init; }
     /// <summary>Schema identifier for the namespace.</summary>
     public int SchemaId { get; init; }
-    /// <summary>Gets the version.</summary>
+    /// <summary>Format version for this on-disk or wire structure.</summary>
     public int Version { get; init; }
     /// <summary>Merge policy byte bound to this version (§18.2).</summary>
     public int MergePolicy { get; init; }
@@ -42,7 +42,7 @@ public sealed class SchemaRegistry
     // (namespaceId, schemaId) → version → descriptor
     private readonly Dictionary<(int Ns, int SchemaId), Dictionary<int, SchemaDescriptor>> _map = new();
 
-    /// <summary>Count: count.</summary>
+    /// <summary>Signed multiplicity of digests folded into this cell.</summary>
     public int Count
     {
         get { lock (_gate) return _map.Sum(kv => kv.Value.Count); }
@@ -87,7 +87,7 @@ public sealed class SchemaRegistry
         }
     }
 
-    /// <summary>Try to get; returns whether the operation succeeded.</summary>
+    /// <summary>Try to resolve a schema definition by namespace, schema id, and version.</summary>
     public bool TryGet(int namespaceId, int schemaId, int version, out SchemaDescriptor? desc)
     {
         lock (_gate)
@@ -210,7 +210,7 @@ public static class SchemaMap
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static List<SchemaDescriptor> Decode(ReadOnlySpan<byte> payload)
     {
         var r = new Reader(payload.ToArray());

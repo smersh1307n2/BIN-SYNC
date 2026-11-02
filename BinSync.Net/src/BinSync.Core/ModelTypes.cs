@@ -46,7 +46,7 @@ public sealed class OutboxEntry
     public int NamespaceId { get; set; }
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
     public long Seq { get; set; }
-    /// <summary>b128 idempotency key.</summary>
+    /// <summary>Idempotency key (b128) for this change.</summary>
     public ReadOnlyMemory<byte> ChangeId { get; set; } = Array.Empty<byte>();
     /// <summary>Record id (b128 / 16-byte).</summary>
     public ReadOnlyMemory<byte> RecordId { get; set; } = Array.Empty<byte>();
@@ -58,7 +58,7 @@ public sealed class OutboxEntry
     public ReadOnlyMemory<byte> AuthorNodeId { get; set; } = Array.Empty<byte>();
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
-    /// <summary>Gets or sets the causal deps.</summary>
+    /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
     public List<byte[]> CausalDeps { get; set; } = new();
 }
 
@@ -121,7 +121,7 @@ public sealed partial class Batch
         Entries = entries;
     }
 
-    /// <summary>EncodeRecords: encode records.</summary>
+    /// <summary>Encode records into canonical wire bytes.</summary>
     public byte[] EncodeRecords() => Node.EncodeRecordsArray(Entries);
 
     /// <summary>Encode and decode FieldWrite / FieldTomb / RecordTombstone operations.</summary>
@@ -160,26 +160,26 @@ public sealed partial class Batch
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
 public sealed partial class PeerState
 {
-    /// <summary>Gets or sets the peer node id.</summary>
+    /// <summary>Remote peer node id this state is tracked for.</summary>
     public byte[] PeerNodeId { get; set; } = Array.Empty<byte>();
     /// <summary>Logical namespace this entity belongs to.</summary>
     public int NamespaceId { get; set; }
-    /// <summary>Gets or sets the last pushed seq.</summary>
+    /// <summary>Highest sequence the local node has pushed to this peer stream.</summary>
     public long LastPushedSeq { get; set; }
-    /// <summary>Gets or sets the last received seq.</summary>
+    /// <summary>Gets or sets last received seq.</summary>
     public long LastReceivedSeq { get; set; }
-    /// <summary>Gets or sets the last acked seq.</summary>
+    /// <summary>Highest sequence the peer has ACKed on this stream.</summary>
     public long LastAckedSeq { get; set; }
-    /// <summary>Gets the received streams.</summary>
+    /// <summary>Per-author receive cursors: last contiguous seq accepted.</summary>
     public Dictionary<(byte[], int, int, byte[]), long> ReceivedStreams { get; } =
         new(BytesIntIntBytesEq.Instance);
-    /// <summary>Gets the stream acked.</summary>
+    /// <summary>Per-author ACK watermarks used when building the next delta.</summary>
     public Dictionary<NodeId, long> StreamAcked { get; } = new();
-    /// <summary>Gets or sets the initial sync complete.</summary>
+    /// <summary>Gets or sets initial sync complete.</summary>
     public bool InitialSyncComplete { get; set; }
-    /// <summary>Gets or sets the membership epoch.</summary>
+    /// <summary>Gets or sets membership epoch.</summary>
     public int MembershipEpoch { get; set; }
-    /// <summary>Gets or sets the last seen.</summary>
+    /// <summary>Last time this peer or stream was observed.</summary>
     public long LastSeen { get; set; }
     internal Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids { get; } =
         new(BytesLongLongEq.Instance);
@@ -194,11 +194,11 @@ public sealed partial class PeerState
     /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
     public PeerState(byte[] peer, int ns) : this((NodeId)peer, ns) { }
 
-    /// <summary>AckedFor: acked for.</summary>
+    /// <summary>Return the ACK watermark for a given author stream.</summary>
     public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
-    /// <summary>AckedFor: acked for.</summary>
+    /// <summary>Return the ACK watermark for a given author stream.</summary>
     public long AckedFor(ReadOnlyMemory<byte> author) => StreamAcked.TryGetValue((NodeId)author, out var v) ? v : 0;
-    /// <summary>AckedFor: acked for.</summary>
+    /// <summary>Return the ACK watermark for a given author stream.</summary>
     public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 

@@ -2,21 +2,21 @@
 // Wire frame type 0x09 (between NEED_KEYS 0x08 and SNAPSHOT 0x0A).
 namespace BinSync;
 
-/// <summary>ReconcileFrames type used by the BIN-SYNC engine.</summary>
+/// <summary>Wire frame type byte for IBLT reconciliation messages.</summary>
 public static partial class ReconcileFrames
 {
-    /// <summary>Constant: iblt.</summary>
+    /// <summary>Frame type constant identifying an IBLT payload.</summary>
     public const byte Iblt = 0x09;
 }
 
 /// <summary>One IBLT cell: count + XOR of keys + XOR of key hashes.</summary>
 public struct IbltCell
 {
-    /// <summary>Count: count.</summary>
+    /// <summary>Signed multiplicity of digests folded into this cell.</summary>
     public int Count;
-    /// <summary>KeyXor: key xor.</summary>
+    /// <summary>XOR of inserted keys in this IBLT cell (padded to KeyBytes).</summary>
     public byte[] KeyXor;   // length KeyBytes (padded)
-    /// <summary>Indicates whether h xor.</summary>
+    /// <summary>Running XOR of cell hashes used while peeling the IBLT.</summary>
     public ulong HashXor;
 }
 
@@ -26,17 +26,17 @@ public struct IbltCell
 /// </summary>
 public sealed class Iblt
 {
-    /// <summary>Constant: key bytes.</summary>
+    /// <summary>Fixed key width in bytes for IBLT cells.</summary>
     public const int KeyBytes = 16;
-    /// <summary>Constant: hash count.</summary>
+    /// <summary>Number of hash functions used to place each key into cells.</summary>
     public const int HashCount = 3;
 
-    /// <summary>Gets the cell count.</summary>
+    /// <summary>Number of cells in this IBLT.</summary>
     public int CellCount { get; }
-    /// <summary>Gets the cells.</summary>
+    /// <summary>Backing cell array (count / key XOR / hash XOR).</summary>
     public IbltCell[] Cells { get; }
 
-    /// <summary>Iblt: iblt.</summary>
+    /// <summary>Invertible Bloom Lookup Table for set-reconciliation of record ids.</summary>
     public Iblt(int cellCount)
     {
         if (cellCount < 4) throw new ArgumentOutOfRangeException(nameof(cellCount));
@@ -46,7 +46,7 @@ public sealed class Iblt
             Cells[i] = new IbltCell { KeyXor = new byte[KeyBytes], HashXor = 0, Count = 0 };
     }
 
-    /// <summary>NormalizeKey: normalize key.</summary>
+    /// <summary>Normalize a key to the fixed IBLT key width (pad or hash as required).</summary>
     public static byte[] NormalizeKey(byte[] key)
     {
         var k = Codec.CanonicalB128(key);
@@ -56,7 +56,7 @@ public sealed class Iblt
         return r;
     }
 
-    /// <summary>KeyHash: key hash.</summary>
+    /// <summary>Hash a key into the cell-selection space for IBLT placement.</summary>
     public static ulong KeyHash(ReadOnlySpan<byte> key)
     {
         ulong h = 14695981039346656037UL;
@@ -81,9 +81,9 @@ public sealed class Iblt
         if (idx[2] == idx[0] || idx[2] == idx[1]) idx[2] = (idx[2] + 2) % CellCount;
     }
 
-    /// <summary>Insert: insert.</summary>
+    /// <summary>Insert a key into the IBLT (+1 count).</summary>
     public void Insert(byte[] key) => Add(NormalizeKey(key), +1);
-    /// <summary>Delete: delete.</summary>
+    /// <summary>Delete a key from the IBLT (−1 count).</summary>
     public void Delete(byte[] key) => Add(NormalizeKey(key), -1);
 
     private void Add(byte[] key, int delta)
@@ -181,7 +181,7 @@ public sealed class Iblt
         return t;
     }
 
-    /// <summary>Encode: encode.</summary>
+    /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(Iblt t)
     {
         var w = new Writer();
@@ -195,7 +195,7 @@ public sealed class Iblt
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static Iblt Decode(byte[] payload)
     {
         var r = new Reader(payload);

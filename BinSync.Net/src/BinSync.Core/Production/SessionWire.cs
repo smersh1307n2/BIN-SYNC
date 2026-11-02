@@ -12,11 +12,11 @@ public enum SessionCapabilities : uint
     FlowControl = 1 << 1,
 }
 
-/// <summary>struct type used by the BIN-SYNC engine.</summary>
+/// <summary>struct: struct.</summary>
 public readonly record struct HelloPayload(
     byte[] NodeId, int Epoch, SessionCapabilities Capabilities);
 
-/// <summary>struct type used by the BIN-SYNC engine.</summary>
+/// <summary>struct: struct.</summary>
 public readonly record struct AliasMapEntry(
     ushort Alias, byte[] NodeId, int Epoch);
 
@@ -26,18 +26,18 @@ public readonly record struct AliasMapEntry(
 /// </summary>
 public static class SessionWire
 {
-    /// <summary>Constant: type hello.</summary>
+    /// <summary>Control message type: HELLO.</summary>
     public const byte TypeHello = 0x01;
-    /// <summary>Constant: type hello ack.</summary>
+    /// <summary>Constant type hello ack.</summary>
     public const byte TypeHelloAck = 0x02;
-    /// <summary>Constant: type alias map.</summary>
+    /// <summary>Control message type: ALIAS_MAP.</summary>
     public const byte TypeAliasMap = 0x03;
-    /// <summary>Constant: type error.</summary>
+    /// <summary>Control message type: ERROR.</summary>
     public const byte TypeError = 0x0D;
-    /// <summary>Constant: control stream id.</summary>
+    /// <summary>Stream id reserved for session control messages (0).</summary>
     public const uint ControlStreamId = 0;
 
-    /// <summary>EncodeHello: encode hello.</summary>
+    /// <summary>Encode hello into canonical wire bytes.</summary>
     public static byte[] EncodeHello(HelloPayload h)
     {
         var w = new Writer();
@@ -45,7 +45,7 @@ public static class SessionWire
         return FrameCodec.BuildFrame(TypeHello, ControlStreamId, 1, w.Value());
     }
 
-    /// <summary>DecodeHello: decode hello.</summary>
+    /// <summary>Decode hello from canonical wire bytes.</summary>
     public static HelloPayload DecodeHello(byte[] frameBytes)
     {
         var (frame, _) = FrameCodec.ParseFrame(frameBytes);
@@ -55,7 +55,7 @@ public static class SessionWire
         return new HelloPayload(r.B128(), (int)r.U32(), (SessionCapabilities)r.U32());
     }
 
-    /// <summary>EncodeHelloAck: encode hello ack.</summary>
+    /// <summary>Encode hello ack into canonical wire bytes.</summary>
     public static byte[] EncodeHelloAck(HelloPayload h)
     {
         var w = new Writer();
@@ -63,7 +63,7 @@ public static class SessionWire
         return FrameCodec.BuildFrame(TypeHelloAck, ControlStreamId, 2, w.Value());
     }
 
-    /// <summary>EncodeAliasMap: encode alias map.</summary>
+    /// <summary>Encode alias map into canonical wire bytes.</summary>
     public static byte[] EncodeAliasMap(IReadOnlyList<AliasMapEntry> entries)
     {
         var w = new Writer();
@@ -73,7 +73,7 @@ public static class SessionWire
         return FrameCodec.BuildFrame(TypeAliasMap, ControlStreamId, 3, w.Value());
     }
 
-    /// <summary>DecodeAliasMap: decode alias map.</summary>
+    /// <summary>Decode alias map from canonical wire bytes.</summary>
     public static List<AliasMapEntry> DecodeAliasMap(byte[] frameBytes)
     {
         var (frame, _) = FrameCodec.ParseFrame(frameBytes);
@@ -87,7 +87,7 @@ public static class SessionWire
         return list;
     }
 
-    /// <summary>EncodeError: encode error.</summary>
+    /// <summary>Encode error into canonical wire bytes.</summary>
     public static byte[] EncodeError(string codeName, string? detail = null)
     {
         ushort code = Frames.ErrorCodes.TryGetValue(codeName, out var c) ? c : (ushort)0;

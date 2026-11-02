@@ -20,7 +20,7 @@ public static class CounterG
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static Dictionary<byte[], ulong> Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -50,7 +50,7 @@ public static class CounterG
         return Encode(a);
     }
 
-    /// <summary>Total: total.</summary>
+    /// <summary>Sum all counter values encoded in the CRDT payload.</summary>
     public static ulong Total(byte[] data)
     {
         ulong sum = 0;
@@ -86,7 +86,7 @@ public static class CounterPn
             w.B128(a).U64(v);
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static (Dictionary<byte[], ulong> Pos, Dictionary<byte[], ulong> Neg) Decode(byte[] data)
     {
         var r = new Reader(data);
@@ -139,23 +139,23 @@ public static class CounterPn
 /// <summary>Observed-Remove set (§8.6): adds are (elem, actor, seq); removes are (actor, seq) dots.</summary>
 public static class SetOr
 {
-    /// <summary>Dot type used by the BIN-SYNC engine.</summary>
+    /// <summary>Actor/sequence pair identifying a causal counter dot.</summary>
     public sealed class Dot
     {
-        /// <summary>Actor: actor.</summary>
+        /// <summary>Actor node id that issued this counter/seq element.</summary>
         public byte[] Actor = Array.Empty<byte>();
-        /// <summary>Seq: seq.</summary>
+        /// <summary>Monotonic sequence number for the actor.</summary>
         public ulong Seq;
     }
 
-    /// <summary>Add type used by the BIN-SYNC engine.</summary>
+    /// <summary>OR-set/counter add element with actor and sequence.</summary>
     public sealed class Add
     {
-        /// <summary>Element: element.</summary>
+        /// <summary>Element payload bytes for the OR-set/counter entry.</summary>
         public byte[] Element = Array.Empty<byte>();
-        /// <summary>Actor: actor.</summary>
+        /// <summary>Actor node id that issued this counter/seq element.</summary>
         public byte[] Actor = Array.Empty<byte>();
-        /// <summary>Seq: seq.</summary>
+        /// <summary>Monotonic sequence number for the actor.</summary>
         public ulong Seq;
     }
 
@@ -193,7 +193,7 @@ public static class SetOr
         return w.Value();
     }
 
-    /// <summary>Decode: decode.</summary>
+    /// <summary>Decode  from canonical wire bytes.</summary>
     public static (List<Add> Adds, List<Dot> Removes) Decode(byte[] data)
     {
         var r = new Reader(data);

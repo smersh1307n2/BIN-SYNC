@@ -1,22 +1,22 @@
 // Data model (§7): Record, FieldState, lifecycle (delete-wins), ghosts.
 namespace BinSync;
 
-/// <summary>Model type used by the BIN-SYNC engine.</summary>
+/// <summary>Record/field model constants and lifecycle helpers.</summary>
 public static class Model
 {
-    /// <summary>Constant: lifecycle field id.</summary>
+    /// <summary>Reserved field id for record lifecycle (§7.2).</summary>
     public const ushort LifecycleFieldId = 0x0000;   // §7.2 reserved
-    /// <summary>Constant: field resolve id.</summary>
+    /// <summary>Reserved field id for mandatory field-resolve markers (§8.9).</summary>
     public const ushort FieldResolveId = 0x00FF;     // §8.9 MANUAL resolve field
-    /// <summary>Constant: user field min.</summary>
+    /// <summary>Minimum field id available for user-defined fields (0x0100).</summary>
     public const ushort UserFieldMin = 0x0100;
-    /// <summary>Constant: alive.</summary>
+    /// <summary>Lifecycle constant: record is alive.</summary>
     public const byte Alive = 0x00;
-    /// <summary>Constant: dead.</summary>
+    /// <summary>Lifecycle constant: record is tombstoned.</summary>
     public const byte Dead = 0x01;
 }
 
-/// <summary>class type used by the BIN-SYNC engine.</summary>
+/// <summary>class: class.</summary>
 public sealed record class FieldState(
     byte[] Value, Hlc Timestamp, byte[] AuthorNodeId, ushort KeyEpoch = 0);
 
@@ -29,15 +29,15 @@ public class Record
     public ushort NamespaceId { get; set; }
     /// <summary>Map of field id to field state for this record.</summary>
     public Dictionary<ushort, FieldState> State { get; set; }
-    /// <summary>Gets or sets the lifecycle hlc.</summary>
+    /// <summary>HLC of the last record-level lifecycle change (alive/dead).</summary>
     public Hlc? LifecycleHlc { get; set; }
-    /// <summary>Gets or sets the lifecycle author.</summary>
+    /// <summary>Author of the last record-level lifecycle change.</summary>
     public byte[]? LifecycleAuthor { get; set; }
-    /// <summary>Gets or sets the lifecycle value.</summary>
+    /// <summary>Lifecycle byte: alive or tombstoned.</summary>
     public byte LifecycleValue { get; set; } = Model.Alive;
     // Lazy: most records never carry field tombs — avoid empty Dictionary per record.
     private Dictionary<ushort, FieldState>? _fieldTombs;
-    /// <summary>FieldTombs: field tombs.</summary>
+    /// <summary>Map of field-id to tombstone field state for this record.</summary>
     public Dictionary<ushort, FieldState> FieldTombs
     {
         get => _fieldTombs ??= new Dictionary<ushort, FieldState>();
@@ -68,7 +68,7 @@ public class Record
         return outp;
     }
 
-    /// <summary>Indicates whether ghost.</summary>
+    /// <summary>True when the field is overshadowed by a newer record-level tombstone.</summary>
     public static bool IsGhost(FieldState fs, Record rec)
     {
         if (rec.LifecycleHlc is null || rec.LifecycleAuthor is null) return false;

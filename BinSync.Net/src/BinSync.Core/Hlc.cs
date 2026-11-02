@@ -1,20 +1,20 @@
 // HLC (§5): wall µs + logical + origin (wire only). Tick rules, skew clamp, tie-break.
 namespace BinSync;
 
-/// <summary>class type used by the BIN-SYNC engine.</summary>
+/// <summary>class: class.</summary>
 public sealed record class Hlc(ulong Wall, uint Logical, ushort Origin = 0)
 {
-    /// <summary>Key: key.</summary>
+    /// <summary>Tuple key (wall, logical) for ordering HLC timestamps.</summary>
     public (ulong, uint) Key() => (Wall, Logical);
 }
 
-/// <summary>HlcOps type used by the BIN-SYNC engine.</summary>
+/// <summary>Static helpers for HLC comparison and ordering.</summary>
 public static class HlcOps
 {
     // §5.4 full order: wall, then logical, then durable authorNodeId (never alias).
     // BUGFIX (implementation finding): unknown (null) author sorts BEFORE every known
     // author — deterministic total order independent of arrival order.
-    /// <summary>CompareHlc: compare hlc.</summary>
+    /// <summary>Total-order compare of two HLC timestamps with optional durable-author tiebreak.</summary>
     public static int CompareHlc(Hlc a, byte[]? aAuthor, Hlc b, byte[]? bAuthor)
     {
         // Unknown (null) author sorts as empty bytes — before every non-empty author,
@@ -24,12 +24,12 @@ public static class HlcOps
         return BytesCompare(aAuthor, bAuthor);
     }
 
-    /// <summary>BytesCompare: bytes compare.</summary>
+    /// <summary>Lexicographic compare of two byte arrays (null-safe).</summary>
     public static int BytesCompare(byte[]? x, byte[]? y) =>
         x.AsSpan().SequenceCompareTo(y);
 }
 
-/// <summary>ClockDriftException type used by the BIN-SYNC engine.</summary>
+/// <summary>Thrown when remote HLC violates local max-skew policy.</summary>
 public class ClockDriftException : Exception
 {
     /// <summary>ClockDriftException for codec/protocol errors.</summary>
@@ -64,7 +64,7 @@ public class HlcClock
     public static long UnixTimeMicroseconds() =>
         (DateTimeOffset.UtcNow.UtcTicks - DateTimeOffset.UnixEpoch.Ticks) / 10;
 
-    /// <summary>Now: now.</summary>
+    /// <summary>Read the configured wall-clock source in microseconds.</summary>
     public long Now() => NowFn!();
 
     /// <summary>Advance the clock for a local send and return the new timestamp.</summary>

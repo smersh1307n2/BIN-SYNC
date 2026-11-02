@@ -69,7 +69,7 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>EncodeRecordsArray: encode records array.</summary>
+    /// <summary>Encode records array into canonical wire bytes.</summary>
     public static byte[] EncodeRecordsArray(List<OutboxEntry> entries)
     {
         int est = 8;
@@ -80,7 +80,7 @@ public sealed partial class Node
         return w.Value();
     }
 
-    /// <summary>DecodeRecordsArray: decode records array.</summary>
+    /// <summary>Decode records array from canonical wire bytes.</summary>
     public static List<(byte[] Rid, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
     {
         var r = new Reader(data);
