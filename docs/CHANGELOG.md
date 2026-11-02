@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 2.2.1 — 2026-11-02
+
+**Hot-path allocation hygiene.**
+
+- `ApplyBatch`: lazy `senderPeer.ToArray()` only when byte[]-keyed maps need it; use `NodeId` for session maps
+- `LocalWrites` / `OwnQueueHolds`: span compares (`RecordId.EqualsBytes`, `NodeId.EqualsBytes`) instead of `ToArray` on every scan
+- `CreateDeltaBatch`: avoid extra `Mem.ToArray` when forming `NodeId` for alias lookup
+- Allocation regression tests: ApplyBatch duplicate replay + WriteField steady-state budgets
+
+Remaining `ToArray` on ownership boundaries (Record ctor, SeenChanges keys, crypto APIs) is intentional.
+
+---
+
 ## 2.2.0 — 2026-11-02
 
 **Breaking: engine state encapsulation + limits + TCP read timeout.**

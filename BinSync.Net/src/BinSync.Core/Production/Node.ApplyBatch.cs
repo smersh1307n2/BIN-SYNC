@@ -14,7 +14,10 @@ public sealed partial class Node
 
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer)
     {
-        byte[] senderPeerBytes = senderPeer.ToArray();
+        // Allocate wire form only when a byte[]-keyed map needs it (SeenChanges / stream keys).
+        byte[]? senderPeerBytesCache = null;
+        byte[] SenderPeerBytes() => senderPeerBytesCache ??= senderPeer.ToArray();
+
         var result = new BatchResult(batch.BatchId)
         {
             CursorEnd = batch.CursorEnd,
@@ -27,8 +30,8 @@ public sealed partial class Node
         // the watermark is keyed by the RECEIVING SESSION ((sender_peer, ns)) and compares
         // against the sender's CURRENT session incarnation epoch learned from HELLO/ALIAS_MAP.
         var chain = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
-        var sesKey = (senderPeerBytes, batch.NamespaceId);
-        var curKnown = SessionEpoch(senderPeerBytes, batch.NamespaceId);
+        var sesKey = (senderPeer, batch.NamespaceId);
+        var curKnown = SessionEpoch(senderPeer, batch.NamespaceId);
         if (curKnown is not null && batch.IssuerEpoch < curKnown.Value)
             throw new SyncException("EPOCH_REGRESSION", batch.BatchId);
         // STEP 0.6: schema pending (§18.3 / [СХ7]) — do NOT advance lastReceivedSeq
@@ -44,7 +47,7 @@ public sealed partial class Node
             result.Acked = true;
             // ACK must name the author stream (Errata E-4). Prefer the stream we learned
             // on the first accept; fall back to the batch's durable author.
-            if (LastStreamAuthor.TryGetValue((senderPeerBytes, batch.NamespaceId), out var priorAuthor))
+            if (LastStreamAuthor.TryGetValue((senderPeer, batch.NamespaceId), out var priorAuthor))
                 result.DurableAuthor = priorAuthor;
             else
                 result.DurableAuthor = batch.DurableAuthor;
@@ -64,7 +67,7 @@ public sealed partial class Node
             bool full = op switch { OpFieldWrite x => x.FullAuthorMode, OpFieldTomb x => x.FullAuthorMode, OpRecordTombstone x => x.FullAuthorMode, _ => false };
             var emb = GetAuthor(op);
             if (full && emb is not null && emb.Length == 16) return emb;
-            try { return ResolveAliasInternal(senderPeerBytes, GetOrigin(op)); }
+            try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
             catch (SyncException) when (full && emb is not null && emb.Length == 16) { return emb; }
         }
         // Decode ops once — reused for stream author, apply loop, and relay (no batch.Ops()).
@@ -80,8 +83,8 @@ public sealed partial class Node
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
         result.DurableAuthor = batch.DurableAuthor;
-        LastStreamAuthor[(senderPeerBytes, batch.NamespaceId)] = streamAuthor;   // E-11
-        var streamKey = (senderPeerBytes, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
+        LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
+        var streamKey = (SenderPeerBytes(), batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
         long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
@@ -158,7 +161,7 @@ public sealed partial class Node
             {
                 var e = batch.Entries[idx];
                 byte[] cid = e.ChangeId.Span.SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : Mem.ToArray(e.ChangeId);
-                var ck = (senderPeerBytes, batch.NamespaceId, cid);
+                var ck = (SenderPeerBytes(), batch.NamespaceId, cid);
                 bool known = SeenChanges.Contains(ck);
                 SeenChanges.Add(ck);
                 if (!known && !changedFlags[idx])
@@ -177,7 +180,7 @@ public sealed partial class Node
                         }
                         if (rAuthor is not null && rAuthor.AsSpan().SequenceEqual(NodeId) &&
                             SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null &&
-                            OwnQueueHolds(batch.NamespaceId, Mem.ToArray(e.RecordId), rop))
+                            OwnQueueHolds(batch.NamespaceId, e.RecordId, rop))
                             relayOk = false;   // own durable state echoed back [E2]/[Ш2]
                     }
                     if (relayOk) changedFlags[idx] = true; // new provenance ⇒ relay even as loser
@@ -231,12 +234,12 @@ public sealed partial class Node
     /// Errata E-13 follow-up 4 (scenario 37): does OUR OWN un-ACKed queue already carry a
     /// byte-equal winner for (recordId, fieldId)? If yes, the ring merely mirrors our own
     /// state back — enqueueing again would duplicate propagation [И2].
-    private bool OwnQueueHolds(int ns, byte[] rid, object qop)
+    private bool OwnQueueHolds(int ns, ReadOnlyMemory<byte> rid, object qop)
     {
         var list = Outbox.TryGetValue(ns, out var l) ? l : new List<OutboxEntry>();
         foreach (var q in list)
         {
-            if (!q.RecordId.Span.SequenceEqual(rid) || !NodeId.EqualsBytes(q.AuthorNodeId)) continue;
+            if (!q.RecordId.Span.SequenceEqual(rid.Span) || !NodeId.EqualsBytes(q.AuthorNodeId.Span)) continue;
             object sOp;
             try { sOp = Ops.DecodeOp(q.Payload).Op; }
             catch (Exception)

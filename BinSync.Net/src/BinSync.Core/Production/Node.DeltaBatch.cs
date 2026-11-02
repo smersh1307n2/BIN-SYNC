@@ -109,7 +109,7 @@ public sealed partial class Node
         for (int i = 0; i < pending.Count; i++)
         {
             var e = pending[i];
-            int? alias = AliasOf(targetPeer, (NodeId)Mem.ToArray(e.AuthorNodeId), Epoch);
+            int? alias = AliasOf(targetPeer, (NodeId)e.AuthorNodeId, Epoch);
             if (alias is null && NodeId.EqualsBytes(e.AuthorNodeId))
                 alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
             if (alias is null)
@@ -120,8 +120,8 @@ public sealed partial class Node
                 var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
                 if (peerNode is not null && !NodeId.EqualsBytes(e.AuthorNodeId))
                 {
-                    int epTry = KnownAuthorEpoch((NodeId)Mem.ToArray(e.AuthorNodeId)) ?? Epoch;
-                    alias = EnsureAlias(peerNode, (NodeId)Mem.ToArray(e.AuthorNodeId), epTry);
+                    int epTry = KnownAuthorEpoch((NodeId)e.AuthorNodeId) ?? Epoch;
+                    alias = EnsureAlias(peerNode, (NodeId)e.AuthorNodeId, epTry);
                 }
                 else if (peerNode is null)
                 {
@@ -130,7 +130,7 @@ public sealed partial class Node
                     // ALIAS_MAP with. Reuse the durable mapping instead of failing closed.
                     if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
                         foreach (var (a_, (nid_, _)) in existingMap)
-                            if (nid_ == (NodeId)Mem.ToArray(e.AuthorNodeId)) { alias = a_; break; }
+                            if (nid_ == (NodeId)e.AuthorNodeId) { alias = a_; break; }
                 }
             }
             if (alias is null)
