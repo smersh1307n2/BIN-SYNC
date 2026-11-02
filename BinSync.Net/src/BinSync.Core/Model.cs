@@ -23,8 +23,8 @@ public sealed record class FieldState(
 /// <summary>Per-record state: fields map, lifecycle, tombstones.</summary>
 public class Record
 {
-    /// <summary>128-bit record identity with value equality.</summary>
-    public byte[] RecordId { get; set; }
+    /// <summary>128-bit record identity (value type — no per-record byte[] copy of the map key).</summary>
+    public RecordId RecordId { get; set; }
     /// <summary>Logical namespace this entity belongs to.</summary>
     public ushort NamespaceId { get; set; }
     /// <summary>Map of field id to field state for this record.</summary>
@@ -46,12 +46,16 @@ public class Record
     internal bool HasFieldTombs => _fieldTombs is { Count: > 0 };
 
     /// <summary>Per-record state: fields map, lifecycle, tombstones.</summary>
-    public Record(byte[] recordId, ushort namespaceId, int fieldCapacity = 1)
+    public Record(RecordId recordId, ushort namespaceId, int fieldCapacity = 1)
     {
         RecordId = recordId;
         NamespaceId = namespaceId;
         State = new Dictionary<ushort, FieldState>(Math.Max(1, fieldCapacity));
     }
+
+    /// <summary>Convenience ctor from wire/owned bytes.</summary>
+    public Record(byte[] recordId, ushort namespaceId, int fieldCapacity = 1)
+        : this(RecordId.From(recordId), namespaceId, fieldCapacity) { }
 
     /// <summary>True when the record is lifecycle-tombstoned.</summary>
     public bool IsDead => LifecycleValue == Model.Dead;

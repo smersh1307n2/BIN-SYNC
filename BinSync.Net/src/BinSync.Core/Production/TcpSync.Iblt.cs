@@ -91,7 +91,7 @@ public sealed partial class TcpSyncSession
                     need.RecordIds.Select(k => Convert.ToHexString(Iblt.NormalizeKey(k))),
                     StringComparer.Ordinal);
                 chunk.Records = chunk.Records
-                    .Where(r => want.Contains(Convert.ToHexString(Iblt.NormalizeKey(r.RecordId))))
+                    .Where(r => want.Contains(Convert.ToHexString(Iblt.NormalizeKey(r.RecordId.ToArray()))))
                     .ToList();
             }
             uint streamId = 0x0001_0000u | (uint)namespaceId;

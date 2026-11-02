@@ -57,5 +57,5 @@ public sealed partial class Node
 public sealed partial class PeerState
 {
     /// <summary>Read-only view of cached (batchId, prevDigest) triples (tests).</summary>
-    internal IReadOnlyDictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> IdsRef => Ids;
+    internal IReadOnlyDictionary<(NodeId Author, long Start, long End), (BatchId Id, byte[] Prev)> IdsRef => Ids;
 }

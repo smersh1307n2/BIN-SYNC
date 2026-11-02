@@ -214,7 +214,8 @@ public static class NodePersistence
                 { w.B128(author.ToArray()); w.U64((ulong)seq); }
                 w.Varint((ulong)ps.Ids.Count);
                 foreach (var ((author, start, end), (id, prev)) in ps.Ids
-                           .OrderBy(k => k.Key.Item1, BytesOrd).ThenBy(k => k.Key.Item2).ThenBy(k => k.Key.Item3))
+                           .OrderBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi)
+                           .ThenBy(k => k.Key.Start).ThenBy(k => k.Key.End))
                 { w.B128(author); w.U64((ulong)start); w.U64((ulong)end); w.B128(id); w.B128(prev); }
             }
 
@@ -384,7 +385,7 @@ public static class NodePersistence
             {
                 var author = r.B128(); var start = (long)r.U64(); var end = (long)r.U64();
                 var id = r.B128(); var prev = r.B128();
-                ps.Ids[(author, start, end)] = (id, prev);
+                ps.Ids[((NodeId)author, start, end)] = (BatchId.From(id), prev);
             }
             n.PeerStates[((NodeId)peer, ns)] = ps;
         }

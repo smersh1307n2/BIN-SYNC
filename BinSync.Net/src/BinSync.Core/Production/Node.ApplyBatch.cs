@@ -122,13 +122,13 @@ public sealed partial class Node
             // clock skew clamp on incoming HLC wall (§5.3)
             if ((long)WallOf(op) > nowWall + maxSkew)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
-            byte[] recId = op is OpRecordTombstone rt ? rt.RecordId : Mem.ToArray(e.RecordId);
+            RecordId recId = op is OpRecordTombstone rt ? RecordId.From(rt.RecordId) : RecordId.From(e.RecordId);
             if (!overlays.TryGetValue(recId, out var rec))
             {
                 if (nsStore.TryGetValue(recId, out var existing))
                     rec = Clone(existing);
                 else
-                    rec = new Record(Mem.ToArray(e.RecordId), (ushort)batch.NamespaceId);
+                    rec = new Record(RecordId.From(e.RecordId), (ushort)batch.NamespaceId);
                 overlays[recId] = rec;
             }
             bool changed = ApplyOp(rec, op, opAuthor);
@@ -389,7 +389,7 @@ public sealed partial class Node
             var op = Ops.DecodeOp(e.Payload).Op;
             var author = GetAuthor(op)!;
             var nsStore = Ns(batch.NamespaceId);
-            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(Mem.ToArray(e.RecordId), (ushort)batch.NamespaceId);
+            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(RecordId.From(e.RecordId), (ushort)batch.NamespaceId);
             if (ApplyOp(rec, op, author)) applied++;
         }
         return applied;

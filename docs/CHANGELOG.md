@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.3 — 2026-11-02
+
+**More hot-path typed ids.**
+
+- `Record.RecordId` is `RecordId` (no duplicate byte[] of the storage key)
+- `PeerState.Ids` keyed by `(NodeId, start, end)` with `BatchId` values
+- `AuthorStreamId()` for zero-alloc id-cache lookup; digests write RecordId via stackalloc
+- LocalWrites `new Record(recordId)` without `.ToArray()`
+
+---
+
 ## 2.2.2 — 2026-11-02
 
 **Typed map keys on the apply/sync hot path (allocation cut).**

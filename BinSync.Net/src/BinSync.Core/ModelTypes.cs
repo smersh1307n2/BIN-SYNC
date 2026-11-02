@@ -135,7 +135,11 @@ public sealed partial class Batch
 
     /// <summary>§13.6.1 [Р3]: a batch carries exactly one author — the stream key.</summary>
     public byte[] AuthorStream() =>
-        Entries.Count > 0 ? Entries[0].AuthorNodeId.ToArray() : Node.Zero128;
+        Entries.Count > 0 ? Mem.ToArray(Entries[0].AuthorNodeId) : Node.Zero128;
+
+    /// <summary>Author stream as NodeId (no alloc when AuthorNodeId is already 16 bytes).</summary>
+    public NodeId AuthorStreamId() =>
+        Entries.Count > 0 ? NodeId.From(Entries[0].AuthorNodeId) : default;
 
     /// <summary>Errata E-4: durable author on receiver; sender uses per-author stream key.</summary>
     public byte[] DurableAuthor => AuthorStreamNodeId ?? AuthorStream();
@@ -180,8 +184,8 @@ public sealed partial class PeerState
     public int MembershipEpoch { get; set; }
     /// <summary>Last time this peer or stream was observed.</summary>
     public long LastSeen { get; set; }
-    internal Dictionary<(byte[], long, long), (byte[] Id, byte[] Prev)> Ids { get; } =
-        new(BytesLongLongEq.Instance);
+    /// <summary>Deterministic batch-id cache keyed by author stream + cursor range.</summary>
+    internal Dictionary<(NodeId Author, long Start, long End), (BatchId Id, byte[] Prev)> Ids { get; } = new();
 
     /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
     public PeerState(NodeId peer, int ns)

@@ -237,17 +237,17 @@ public sealed partial class Node
         // nodeId as placeholder author, so sender/receiver keys diverged), breaking the
         // deterministic-replay invariant §10.2.2 [П7] and every out-of-order / lost-ACK
         // scenario (duplicate deliveries escaped the inbox check).
-        var key = (batch.AuthorStream(), batch.CursorStart, batch.CursorEnd);
+        var key = (batch.AuthorStreamId(), batch.CursorStart, batch.CursorEnd);
         if (!ps.Ids.TryGetValue(key, out var cached))
         {
-            cached = (Guid.NewGuid().ToByteArray(),
+            cached = (BatchId.From(Guid.NewGuid().ToByteArray()),
                       LastStreamDigest.TryGetValue(streamKey, out var p) ? p : Zero128);
             ps.Ids[key] = cached;
         }
         var (batchId, prev) = cached;
-        batch.BatchId = batchId;
+        batch.BatchId = batchId.ToArray();
         batch.PrevBatchDigest = prev;
-        batch.BatchDigest = ComputeBatchDigest(batchId, batch.NamespaceId, batch.IssuerNodeId,
+        batch.BatchDigest = ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,
             batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, prev);
         return batch;
     }

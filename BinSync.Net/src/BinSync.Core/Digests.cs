@@ -106,7 +106,9 @@ public static class Digests
         int est = Domains.DomainRecord.Length + 16 + lc.Length;
         for (int i = 0; i < parts.Count; i++) est += parts[i].Length;
         var w = new Writer(est);
-        w.Raw(Domains.DomainRecord).Raw(rec.RecordId);
+        Span<byte> ridBuf = stackalloc byte[16];
+        rec.RecordId.WriteTo(ridBuf);
+        w.Raw(Domains.DomainRecord).Raw(ridBuf);
         for (int i = 0; i < parts.Count; i++) w.Raw(parts[i]);
         w.Raw(lc);
         return Blake3(w.Value(), 32);

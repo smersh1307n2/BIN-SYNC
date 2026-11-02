@@ -153,7 +153,7 @@ public sealed partial class Node
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(value, h, NodeId);
         // Origin is rewritten per target session in CreateDeltaBatch (§13.6.2 [R4]).
@@ -175,7 +175,7 @@ public sealed partial class Node
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(Array.Empty<byte>(), h, NodeId);
         var op = new OpFieldTomb { FieldId = (ushort)fieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
@@ -195,7 +195,7 @@ public sealed partial class Node
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         bool changed = Merge.ApplyLifecycle(rec, h, NodeId, Model.Dead);
         var op = new OpRecordTombstone { RecordId = recordId.ToArray(), Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
@@ -214,7 +214,7 @@ public sealed partial class Node
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId.ToArray(), (ushort)namespaceId);
+        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         bool changed = Merge.ApplyLifecycle(rec, h, NodeId, Model.Alive);
         // encode as FieldWrite on reserved field 0x0000 with value 0x00
