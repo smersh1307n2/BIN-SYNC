@@ -70,17 +70,16 @@ public static class Digests
 
     /// <summary>Build the canonical byte payload hashed for a single field digest.</summary>
     public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
-        uint logical, byte[] authorNodeId, byte[] value)
+        uint logical, NodeId authorNodeId, byte[] value)
     {
         var w = new Writer();
-        // B128 normalizes only when length != 16 (no double CanonicalB128).
         w.U16(fieldId).U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
         w.Varint((ulong)value.Length).Raw(value);
         return w.Value();
     }
 
     /// <summary>Build the canonical byte payload hashed for a record lifecycle digest.</summary>
-    public static byte[] LifecycleDigestPayload(ulong wall, uint logical, byte[] lifecycleAuthor, byte value)
+    public static byte[] LifecycleDigestPayload(ulong wall, uint logical, NodeId lifecycleAuthor, byte value)
     {
         Span<byte> one = stackalloc byte[1];
         one[0] = value;
@@ -102,7 +101,7 @@ public static class Digests
                                          fs.Timestamp.Logical, fs.AuthorNodeId, fs.Value));
         var lc = LifecycleDigestPayload(
             rec.LifecycleHlc?.Wall ?? 0, rec.LifecycleHlc?.Logical ?? 0,
-            rec.LifecycleAuthor ?? new byte[16], rec.LifecycleValue);
+            rec.LifecycleAuthor ?? default, rec.LifecycleValue);
         int est = Domains.DomainRecord.Length + 16 + lc.Length;
         for (int i = 0; i < parts.Count; i++) est += parts[i].Length;
         var w = new Writer(est);

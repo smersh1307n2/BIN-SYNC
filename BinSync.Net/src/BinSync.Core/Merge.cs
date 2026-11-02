@@ -49,7 +49,7 @@ public static class Merge
 
         if (local.Timestamp.Wall == remote.Timestamp.Wall &&
             local.Timestamp.Logical == remote.Timestamp.Logical &&
-            BytesEq(local.AuthorNodeId, remote.AuthorNodeId) &&
+            local.AuthorNodeId == remote.AuthorNodeId &&
             BytesEq(local.Value, remote.Value))
             return (local, false);
 
@@ -142,9 +142,9 @@ public static class Merge
     }
 
     /// <summary>Merge two record lifecycle states; returns the winning lifecycle and whether it changed.</summary>
-    public static (Hlc Hlc, byte[] Author, byte Value, bool Changed) MergeLifecycle(
-        Hlc? localHlc, byte[]? localAuthor, byte localValue,
-        Hlc remoteHlc, byte[] remoteAuthor, byte remoteValue)
+    public static (Hlc Hlc, NodeId Author, byte Value, bool Changed) MergeLifecycle(
+        Hlc? localHlc, NodeId? localAuthor, byte localValue,
+        Hlc remoteHlc, NodeId remoteAuthor, byte remoteValue)
     {
         if (localHlc is null)
             return (remoteHlc, remoteAuthor, remoteValue, true);
@@ -154,9 +154,9 @@ public static class Merge
         if (cmp == 0 && localValue != remoteValue)
         {
             byte mx = Math.Max(localValue, remoteValue);
-            return (localHlc!, localAuthor!, mx, localValue != mx);
+            return (localHlc!, localAuthor ?? default, mx, localValue != mx);
         }
-        return (localHlc!, localAuthor!, localValue, false);
+        return (localHlc!, localAuthor ?? default, localValue, false);
     }
 
     /// <summary>Apply a field-write into a record under LWW/merge rules; returns whether state changed.</summary>
@@ -205,13 +205,16 @@ public static class Merge
     }
 
     /// <summary>Apply a record lifecycle change; returns whether state changed.</summary>
-    public static bool ApplyLifecycle(Record record, Hlc hlc, byte[] author, byte value)
+    public static bool ApplyLifecycle(Record record, Hlc hlc, NodeId author, byte value)
     {
         var (lc, la, lv, changed) = MergeLifecycle(
             record.LifecycleHlc, record.LifecycleAuthor, record.LifecycleValue, hlc, author, value);
         record.LifecycleHlc = lc; record.LifecycleAuthor = la; record.LifecycleValue = lv;
         return changed;
     }
+
+    public static bool ApplyLifecycle(Record record, Hlc hlc, byte[] author, byte value) =>
+        ApplyLifecycle(record, hlc, NodeId.From(author), value);
 
     /// <summary>Equality comparer for byte arrays by content.</summary>
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);

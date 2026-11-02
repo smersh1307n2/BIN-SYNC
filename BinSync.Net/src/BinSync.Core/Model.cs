@@ -18,7 +18,7 @@ public static class Model
 
 /// <summary>class: class.</summary>
 public sealed record class FieldState(
-    byte[] Value, Hlc Timestamp, byte[] AuthorNodeId, ushort KeyEpoch = 0);
+    byte[] Value, Hlc Timestamp, NodeId AuthorNodeId, ushort KeyEpoch = 0);
 
 /// <summary>Per-record state: fields map, lifecycle, tombstones.</summary>
 public class Record
@@ -32,7 +32,7 @@ public class Record
     /// <summary>HLC of the last record-level lifecycle change (alive/dead).</summary>
     public Hlc? LifecycleHlc { get; set; }
     /// <summary>Author of the last record-level lifecycle change.</summary>
-    public byte[]? LifecycleAuthor { get; set; }
+    public NodeId? LifecycleAuthor { get; set; }
     /// <summary>Lifecycle byte: alive or tombstoned.</summary>
     public byte LifecycleValue { get; set; } = Model.Alive;
     // Lazy: most records never carry field tombs — avoid empty Dictionary per record.

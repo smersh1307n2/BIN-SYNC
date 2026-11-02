@@ -461,7 +461,7 @@ public static class NodePersistence
         if (rec.LifecycleHlc is not null)
         {
             w.U64(rec.LifecycleHlc.Wall); w.U32(rec.LifecycleHlc.Logical);
-            w.B128(rec.LifecycleAuthor ?? new byte[16]);
+            w.B128(rec.LifecycleAuthor ?? default);
         }
         w.Varint((ulong)rec.State.Count);
         foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
@@ -480,7 +480,7 @@ public static class NodePersistence
         {
             var wall = r.U64(); var logical = r.U32(); var author = r.B128();
             rec.LifecycleHlc = new Hlc(wall, logical);
-            rec.LifecycleAuthor = author;
+            rec.LifecycleAuthor = NodeId.From(author);
         }
         int fCount = (int)r.Varint();
         for (int i = 0; i < fCount; i++)
@@ -513,7 +513,7 @@ public static class NodePersistence
         var author = r.B128();
         var keyEpoch = r.U16();
         var value = r.Bytes();
-        return (fid, new FieldState(value, new Hlc(wall, logical), author, keyEpoch));
+        return (fid, new FieldState(value, new Hlc(wall, logical), NodeId.From(author), keyEpoch));
     }
 
     private static void WriteOutboxEntry(Writer w, OutboxEntry e)

@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.4 — 2026-11-02
+
+**FieldState.AuthorNodeId and Record.LifecycleAuthor are NodeId.**
+
+- LWW / merge / digests compare authors as value types (no byte[] content compare)
+- HlcOps.CompareHlc(NodeId) overload
+- Persistence and op-encoding convert at the boundary only
+
+---
+
 ## 2.2.3 — 2026-11-02
 
 **More hot-path typed ids.**

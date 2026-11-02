@@ -62,13 +62,13 @@ public class Production : IDisposable
                 if ((rec.LifecycleHlc is null) != (o.LifecycleHlc is null)) return false;
                 if (rec.LifecycleHlc is not null &&
                     (rec.LifecycleHlc!.Wall != o.LifecycleHlc!.Wall || rec.LifecycleHlc.Logical != o.LifecycleHlc.Logical ||
-                     !rec.LifecycleAuthor!.AsSpan().SequenceEqual(o.LifecycleAuthor!))) return false;
+                     rec.LifecycleAuthor != o.LifecycleAuthor)) return false;
                 if (rec.State.Count != o.State.Count) return false;
                 foreach (var (fid, fs) in rec.State)
                 {
                     if (!o.State.TryGetValue(fid, out var ofs)) return false;
                     if (fs.Timestamp.Wall != ofs.Timestamp.Wall || fs.Timestamp.Logical != ofs.Timestamp.Logical) return false;
-                    if (!fs.AuthorNodeId.AsSpan().SequenceEqual(ofs.AuthorNodeId)) return false;
+                    if (fs.AuthorNodeId != ofs.AuthorNodeId) return false;
                     if (!fs.Value.AsSpan().SequenceEqual(ofs.Value)) return false;
                 }
                 if (rec.FieldTombs.Count != o.FieldTombs.Count) return false;

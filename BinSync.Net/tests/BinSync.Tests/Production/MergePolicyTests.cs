@@ -65,7 +65,7 @@ public class MergePolicyTests
         var (w, changed) = Merge.MergeFieldWithPolicy(older, newer, MergePolicy.MaxBytes);
         Assert.True(changed);
         Assert.Equal(2UL, w.Timestamp.Wall);
-        Assert.Equal(2, w.AuthorNodeId[15]);
+        Assert.Equal(2, w.AuthorNodeId.ToArray()[15]);
     }
 
     [Fact]

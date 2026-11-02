@@ -17,12 +17,25 @@ public static class HlcOps
     /// <summary>Total-order compare of two HLC timestamps with optional durable-author tiebreak.</summary>
     public static int CompareHlc(Hlc a, byte[]? aAuthor, Hlc b, byte[]? bAuthor)
     {
-        // Unknown (null) author sorts as empty bytes — before every non-empty author,
-        // and equal to another unknown. Total order does not depend on arrival.
+        // Unknown (null) author sorts as empty bytes — before every non-empty author.
         if (a.Wall != b.Wall) return a.Wall < b.Wall ? -1 : 1;
         if (a.Logical != b.Logical) return a.Logical < b.Logical ? -1 : 1;
         return BytesCompare(aAuthor, bAuthor);
     }
+
+    /// <summary>Total-order compare using NodeId authors (default = unknown/empty).</summary>
+    public static int CompareHlc(Hlc a, NodeId aAuthor, Hlc b, NodeId bAuthor)
+    {
+        if (a.Wall != b.Wall) return a.Wall < b.Wall ? -1 : 1;
+        if (a.Logical != b.Logical) return a.Logical < b.Logical ? -1 : 1;
+        if (aAuthor.Lo != bAuthor.Lo) return aAuthor.Lo < bAuthor.Lo ? -1 : 1;
+        if (aAuthor.Hi != bAuthor.Hi) return aAuthor.Hi < bAuthor.Hi ? -1 : 1;
+        return 0;
+    }
+
+    /// <summary>Total-order compare with optional NodeId authors (null = default/unknown).</summary>
+    public static int CompareHlc(Hlc a, NodeId? aAuthor, Hlc b, NodeId? bAuthor) =>
+        CompareHlc(a, aAuthor ?? default, b, bAuthor ?? default);
 
     /// <summary>Lexicographic compare of two byte arrays (null-safe).</summary>
     public static int BytesCompare(byte[]? x, byte[]? y) =>

@@ -47,7 +47,7 @@ public sealed partial class Node
             var store = NsInternal(namespaceId);
             if (!store.TryGetValue(recordId, out var rec))
                 store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
-            var fs = new FieldState(value, hlc, authorNodeId, keyEpoch);
+            var fs = new FieldState(value, hlc, NodeId.From(authorNodeId), keyEpoch);
             return Merge.ApplyFieldWrite(rec, fieldId, fs);
         }
     }
