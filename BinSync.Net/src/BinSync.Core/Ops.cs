@@ -125,12 +125,21 @@ public static partial class Ops
     /// <summary>Encode an operation object to canonical wire bytes.</summary>
     public static byte[] EncodeOp(object op, bool? fullAuthor = null, int? valueLenOverride = null)
     {
-        int est = EstimateEncodeOpSize(op, fullAuthor, valueLenOverride);
-        var dest = new byte[Math.Max(est, 16)];
-        var w = new Writer(dest);
-        WriteOp(w, op, fullAuthor, valueLenOverride);
-        if (w.Length == dest.Length) return dest;
-        return dest.AsSpan(0, w.Length).ToArray();
+        int est = Math.Max(EstimateEncodeOpSize(op, fullAuthor, valueLenOverride), 16);
+        var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented);
+            WriteOp(w, op, fullAuthor, valueLenOverride);
+            int n = w.Length;
+            var result = new byte[n];
+            w.WrittenSpan.CopyTo(result);
+            return result;
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Encode into <paramref name="destination"/>; returns bytes written.</summary>

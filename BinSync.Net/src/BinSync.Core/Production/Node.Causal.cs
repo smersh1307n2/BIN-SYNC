@@ -45,7 +45,7 @@ public sealed partial class Node
                         // KЗ4: hold full batch for later DrainAndRetryCausal
                         var held = new HeldCausalBatch { Batch = batch, SenderPeer = (byte[])senderPeer.Clone() };
                         foreach (var e in batch.Entries)
-                            tracker.EnqueuePending(e.ChangeId.ToArray(), e.CausalDeps, payload: held);
+                            tracker.EnqueuePending(e.ChangeId, e.CausalDeps, payload: held);
                     }
                     throw new SyncException("CAUSAL_DEP_MISSING", batch.BatchId);
                 }
@@ -58,7 +58,7 @@ public sealed partial class Node
                 foreach (var e in batch.Entries)
                 {
                     if (!e.ChangeId.IsZero)
-                        tracker.NoteApplied(e.ChangeId.ToArray());
+                        tracker.NoteApplied(e.ChangeId);
                 }
             }
 

@@ -56,14 +56,32 @@ public sealed class CausalTracker
     /// <summary>Tuple key (wall, logical) for ordering HLC timestamps.</summary>
     public static string Key(byte[] id) => Convert.ToHexString(id);
 
+    /// <summary>Hex key for a typed batch/change id (no intermediate byte[]).</summary>
+    public static string Key(BatchId id)
+    {
+        Span<byte> tmp = stackalloc byte[16];
+        id.WriteTo(tmp);
+        return Convert.ToHexString(tmp);
+    }
+
     /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
     public void NoteApplied(byte[] changeId)
     {
         lock (_gate)
         {
             _known.Add(Key(changeId));
-            // Clear edge from pending graph if any
             _edges.Remove(Key(changeId));
+        }
+    }
+
+    /// <summary>Record that a typed change id is durably known.</summary>
+    public void NoteApplied(BatchId changeId)
+    {
+        lock (_gate)
+        {
+            var k = Key(changeId);
+            _known.Add(k);
+            _edges.Remove(k);
         }
     }
 
@@ -125,6 +143,9 @@ public sealed class CausalTracker
     }
 
     /// <summary>Quarantine an op that is Pending. KЗ4: caller must not advance cursors.</summary>
+    public void EnqueuePending(BatchId changeId, IReadOnlyList<byte[]> deps, object? payload = null) =>
+        EnqueuePending(changeId.ToArray(), deps, payload);
+
     public void EnqueuePending(byte[] changeId, IReadOnlyList<byte[]> deps, object? payload = null)
     {
         lock (_gate)

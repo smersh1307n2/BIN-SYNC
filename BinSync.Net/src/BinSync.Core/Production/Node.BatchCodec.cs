@@ -34,11 +34,21 @@ public sealed partial class Node
     internal byte[] EncodeBatchPayloadInternal(Batch batch)
     {
         int est = EstimateBatchPayloadSize(batch);
-        var dest = new byte[est];
-        var w = new Writer(dest);
-        WriteBatchPayload(w, batch);
-        if (w.Length == dest.Length) return dest;
-        return dest.AsSpan(0, w.Length).ToArray();
+        var rented = ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented);
+            WriteBatchPayload(w, batch);
+            int n = w.Length;
+            // Exact-sized owned buffer for the caller (API returns byte[]).
+            var result = new byte[n];
+            w.WrittenSpan.CopyTo(result);
+            return result;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     internal int EncodeBatchPayloadInternal(Batch batch, Span<byte> destination)

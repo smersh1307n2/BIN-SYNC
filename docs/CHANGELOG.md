@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.9 — 2026-11-03
+
+**ArrayPool encode path + CausalTracker typed ids.**
+
+- EncodeBatchPayloadInternal / EncodeOp rent scratch from ArrayPool; return exact-sized byte[]
+- CausalTracker.Key/NoteApplied/EnqueuePending overloads for BatchId (stackalloc hex key)
+- Snapshot branch: main-copy-2.2.8 on GitHub
+
+---
+
 ## 2.2.8 — 2026-11-03
 
 **OutboxEntry.RecordId / ChangeId are value types.**
