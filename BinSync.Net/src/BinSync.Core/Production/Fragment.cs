@@ -119,7 +119,7 @@ public sealed class FragmentReassembler
         public int Have;
     }
 
-    private readonly Dictionary<string, Slot> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<BatchId, Slot> _pending = new();
 
     /// <summary>In-progress fragment reassembly keyed by message id.</summary>
     public int PendingMessages => _pending.Count;
@@ -133,7 +133,7 @@ public sealed class FragmentReassembler
         if (f.Count == 0) throw new FrameException("FRAME_REJECTED");
         if (f.Index >= f.Count) throw new FrameException("FRAME_REJECTED");
 
-        var key = Convert.ToHexString(f.MsgId);
+        var key = BatchId.From(f.MsgId);
         if (!_pending.TryGetValue(key, out var slot))
         {
             slot = new Slot { Count = f.Count, Parts = new byte[f.Count][], Have = 0 };

@@ -1,5 +1,14 @@
 # Changelog — BinSync.Core
 
+## 2.2.17 — 2026-11-03
+
+**SessionWire ArrayPool encode; FragmentReassembler BatchId keys.**
+
+- EncodeHello/HelloAck/AliasMap/Error rent payload buffers from ArrayPool
+- FragmentReassembler keys by BatchId (no Convert.ToHexString on hot path)
+
+---
+
 ## 2.2.16 — 2026-11-03
 
 **KeyRotation + fragments on pooled send path.**

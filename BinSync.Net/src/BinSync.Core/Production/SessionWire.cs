@@ -1,3 +1,4 @@
+using System.Buffers;
 // Wire payloads for session bootstrap: HELLO, HELLO_ACK, ALIAS_MAP (§12.7+, §4.3–4.4).
 namespace BinSync;
 
@@ -40,9 +41,17 @@ public static class SessionWire
     /// <summary>Encode hello into canonical wire bytes.</summary>
     public static byte[] EncodeHello(HelloPayload h)
     {
-        var w = new Writer();
-        w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
-        return FrameCodec.BuildFrame(TypeHello, ControlStreamId, 1, w.Value());
+        var rented = ArrayPool<byte>.Shared.Rent(48);
+        try
+        {
+            var w = new Writer(rented);
+            w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
+            return FrameCodec.BuildFrame(TypeHello, ControlStreamId, 1, w.WrittenSpan);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Decode hello from canonical wire bytes.</summary>
@@ -58,19 +67,36 @@ public static class SessionWire
     /// <summary>Encode hello ack into canonical wire bytes.</summary>
     public static byte[] EncodeHelloAck(HelloPayload h)
     {
-        var w = new Writer();
-        w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
-        return FrameCodec.BuildFrame(TypeHelloAck, ControlStreamId, 2, w.Value());
+        var rented = ArrayPool<byte>.Shared.Rent(48);
+        try
+        {
+            var w = new Writer(rented);
+            w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
+            return FrameCodec.BuildFrame(TypeHelloAck, ControlStreamId, 2, w.WrittenSpan);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Encode alias map into canonical wire bytes.</summary>
     public static byte[] EncodeAliasMap(IReadOnlyList<AliasMapEntry> entries)
     {
-        var w = new Writer();
-        w.Varint((ulong)entries.Count);
-        foreach (var e in entries)
-            w.U16(e.Alias).B128(e.NodeId).U32((uint)e.Epoch);
-        return FrameCodec.BuildFrame(TypeAliasMap, ControlStreamId, 3, w.Value());
+        int est = 8 + entries.Count * 24;
+        var rented = ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented);
+            w.Varint((ulong)entries.Count);
+            foreach (var e in entries)
+                w.U16(e.Alias).B128(e.NodeId).U32((uint)e.Epoch);
+            return FrameCodec.BuildFrame(TypeAliasMap, ControlStreamId, 3, w.WrittenSpan);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Decode alias map from canonical wire bytes.</summary>
@@ -91,10 +117,19 @@ public static class SessionWire
     public static byte[] EncodeError(string codeName, string? detail = null)
     {
         ushort code = Frames.ErrorCodes.TryGetValue(codeName, out var c) ? c : (ushort)0;
-        var w = new Writer().U16(code);
-        if (detail is not null)
-            w.Bytes(System.Text.Encoding.UTF8.GetBytes(detail));
-        return FrameCodec.BuildFrame(TypeError, ControlStreamId, 0, w.Value());
+        int est = 16 + (detail is null ? 0 : System.Text.Encoding.UTF8.GetByteCount(detail) + 5);
+        var rented = ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented).U16(code);
+            if (detail is not null)
+                w.Bytes(System.Text.Encoding.UTF8.GetBytes(detail));
+            return FrameCodec.BuildFrame(TypeError, ControlStreamId, 0, w.WrittenSpan);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>
