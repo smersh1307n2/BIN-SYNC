@@ -309,7 +309,7 @@ public static class NodePersistence
         for (int i = 0; i < lbdCount; i++)
         {
             var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint(); var dig = r.B128();
-            n.LastBatchDigest[((NodeId)issuer, ns, ep)] = dig;
+            n.LastBatchDigest[((NodeId)issuer, ns, ep)] = Digest16.From(dig);
         }
 
         int lsCount = (int)r.Varint();
@@ -317,7 +317,7 @@ public static class NodePersistence
         {
             var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint();
             var peer = r.B128(); var dig = r.B128();
-            n.LastStreamDigest[(((NodeId)issuer, ns, ep), (NodeId)peer)] = dig;
+            n.LastStreamDigest[(((NodeId)issuer, ns, ep), (NodeId)peer)] = Digest16.From(dig);
         }
 
         int a2nCount = (int)r.Varint();
@@ -385,7 +385,7 @@ public static class NodePersistence
             {
                 var author = r.B128(); var start = (long)r.U64(); var end = (long)r.U64();
                 var id = r.B128(); var prev = r.B128();
-                ps.Ids[((NodeId)author, start, end)] = (BatchId.From(id), prev);
+                ps.Ids[((NodeId)author, start, end)] = (BatchId.From(id), Digest16.From(prev));
             }
             n.PeerStates[((NodeId)peer, ns)] = ps;
         }

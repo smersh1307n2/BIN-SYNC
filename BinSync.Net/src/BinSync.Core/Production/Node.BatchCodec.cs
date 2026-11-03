@@ -133,12 +133,11 @@ public sealed partial class Node
         long cend = (long)r.U64();
         int count = (int)r.Varint();
         var batchId = BatchId.From(r.B128());
-        byte[] prev = r.B128();
-        byte[] root = r.B128();
-        byte[] digest = r.B128();
+        var prev = Digest16.From(r.B128());
+        var root = Digest16.From(r.B128());
+        var digest = Digest16.From(r.B128());
         int recCount = (int)r.Varint();
         if (recCount != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
-        var issuerMem = (ReadOnlyMemory<byte>)issuer.ToArray();
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)
         {
@@ -150,7 +149,7 @@ public sealed partial class Node
                 RecordId = r.B128Memory(),
                 OpKind = r.U8(),
                 Payload = r.BytesMemory(),
-                AuthorNodeId = issuerMem,
+                AuthorNodeId = issuer,
                 CreatedAt = 0,
             });
         }

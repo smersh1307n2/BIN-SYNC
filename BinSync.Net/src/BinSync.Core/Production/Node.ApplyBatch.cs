@@ -93,16 +93,16 @@ public sealed partial class Node
         // per-(issuer,ns,epoch) chain could hit a stale non-zero checkpoint. With STEP 2
         // guaranteeing cursor contiguity, an unconditional check is exactly [Т3].
         {
-            byte[] expectPrev = LastBatchDigest.TryGetValue(chain, out var ep2) ? ep2 : Zero128;
-            if (!batch.PrevBatchDigest.AsSpan().SequenceEqual(expectPrev))
+            var expectPrev = LastBatchDigest.TryGetValue(chain, out var ep2) ? ep2 : default;
+            if (batch.PrevBatchDigest != expectPrev)
                 throw new SyncException("BATCH_CHAIN_BROKEN", batch.BatchId);
         }
         var root = ComputeRecordsRoot(batch.Entries);
-        if (!batch.RecordsRoot.AsSpan().SequenceEqual(root))
+        if (batch.RecordsRoot != root)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         var recomputed = ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,
             batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, batch.PrevBatchDigest);
-        if (!batch.BatchDigest.AsSpan().SequenceEqual(recomputed))
+        if (batch.BatchDigest != recomputed)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         // STEP 4: atomic application [T1] — copy-on-write only for touched records.
         // Untouched records stay as shared references in nsStore; overlays discard on throw.
@@ -198,7 +198,7 @@ public sealed partial class Node
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
                     Payload = e.Payload,
-                    AuthorNodeId = resolved.ToArray(),
+                    AuthorNodeId = resolved,
                     CreatedAt = (long)WallOf(op),   // BUGFIX: stamp the OP's own HLC wall time
                 };
                 if (!Outbox.TryGetValue(batch.NamespaceId, out var ol)) Outbox[batch.NamespaceId] = ol = new();
@@ -235,7 +235,7 @@ public sealed partial class Node
         var list = Outbox.TryGetValue(ns, out var l) ? l : new List<OutboxEntry>();
         foreach (var q in list)
         {
-            if (!q.RecordId.Span.SequenceEqual(rid.Span) || !NodeId.EqualsBytes(q.AuthorNodeId.Span)) continue;
+            if (!q.RecordId.Span.SequenceEqual(rid.Span) || q.AuthorNodeId != NodeId) continue;
             object sOp;
             try { sOp = Ops.DecodeOp(q.Payload).Op; }
             catch (Exception)
@@ -307,10 +307,10 @@ public sealed partial class Node
         else
         {
             var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : new List<OutboxEntry>();
-            var heads = new Dictionary<byte[], long>(BytesEq.Instance);
+            var heads = new Dictionary<NodeId, long>();
             foreach (var e in entries)
             {
-                var authorKey = Mem.ToArray(e.AuthorNodeId);
+                var authorKey = e.AuthorNodeId;
                 if (!heads.TryGetValue(authorKey, out var cur) || e.Seq < cur)
                     heads[authorKey] = e.Seq;
             }
@@ -340,13 +340,13 @@ public sealed partial class Node
             var entries = new List<OutboxEntry>();
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
-                var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId.ToArray(), Value = fs.Value };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId.ToArray(), CreatedAt = 0 });
+                var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId, Value = fs.Value };
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             foreach (var (fid, fs) in rec.FieldTombs.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldTomb { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId.ToArray(), CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             if (rec.LifecycleHlc is not null)
             {

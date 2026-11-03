@@ -37,7 +37,7 @@ public sealed partial class Node
                          (rec.FieldTombs.TryGetValue((ushort)fieldId, out var t) ? t : null);
         if (fs is null) return null;
         bool tomb = rec.FieldTombs.ContainsKey((ushort)fieldId);
-        return (fs.Timestamp.Wall, fs.Timestamp.Logical, fs.AuthorNodeId, tomb ? "TOMB" : fs.Value);
+        return (fs.Timestamp.Wall, fs.Timestamp.Logical, fs.AuthorNodeId.ToArray(), tomb ? "TOMB" : fs.Value);
     }
 
     /// Append a LOCAL write to outbox ONLY if merge reported changed (echo [E2]).
@@ -79,7 +79,7 @@ public sealed partial class Node
                         {
                             var q = list[i];
                             if (!recordId.EqualsBytes(q.RecordId.Span) ||
-                                !NodeId.EqualsBytes(q.AuthorNodeId.Span)) continue;
+                                q.AuthorNodeId != NodeId) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
                             catch (Exception)
@@ -111,7 +111,7 @@ public sealed partial class Node
             RecordId = recordId.ToArray(),
             OpKind = TagOf(op),
             Payload = payload,
-            AuthorNodeId = author,
+            AuthorNodeId = NodeId.From(author),
             CreatedAt = (long)Clock.SendTick().Wall,
         };
         Limits?.EnsureCanEnqueueOutbox(this, ns);

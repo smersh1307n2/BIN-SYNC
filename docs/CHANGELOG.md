@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.7 — 2026-11-03
+
+**Digest16 + OutboxEntry.AuthorNodeId as NodeId.**
+
+- New Digest16 value type for PrevBatchDigest / RecordsRoot / BatchDigest and chain maps
+- LastBatchDigest / LastStreamDigest / PeerState.Ids prev store Digest16
+- OutboxEntry.AuthorNodeId is NodeId (no ROM/byte[] on author hot path)
+- CreateDeltaBatch stream selection uses NodeId dictionaries
+
+---
+
 ## 2.2.6 — 2026-11-03
 
 **Author stream + ACKs typed.**

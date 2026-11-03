@@ -245,6 +245,15 @@ public partial class Writer
         return this;
     }
 
+    /// <summary>Write a 16-byte digest.</summary>
+    public Writer B128(Digest16 d)
+    {
+        Span<byte> s = stackalloc byte[16];
+        d.WriteTo(s);
+        Write(s);
+        return this;
+    }
+
     /// <summary>Zero-alloc varint encode into a stack buffer, then write.</summary>
     public Writer Varint(ulong v)
     {

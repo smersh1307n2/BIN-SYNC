@@ -97,10 +97,9 @@ public sealed partial class Node
     }
 
     /// <summary>BLAKE3 digest binding batch id, cursors, roots, and prev digest.</summary>
-    public static byte[] ComputeBatchDigest(BatchId batchId, int namespaceId, NodeId issuerNode,
-        int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest)
+    public static Digest16 ComputeBatchDigest(BatchId batchId, int namespaceId, NodeId issuerNode,
+        int issuerEpoch, long cursorStart, long cursorEnd, Digest16 recordsRoot, Digest16 prevBatchDigest)
     {
-        // Fixed layout ≤192B: rent tiny buffer (or new) — no growing Writer.
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(192);
         try
         {
@@ -108,7 +107,7 @@ public sealed partial class Node
             w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
             w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
             w.B128(recordsRoot).B128(prevBatchDigest);
-            return Digests.Blake3(w.WrittenSpan, 16);
+            return Digest16.From(Digests.Blake3(w.WrittenSpan, 16));
         }
         finally
         {
@@ -116,14 +115,13 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>Overload for wire byte arrays.</summary>
-    public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
+    public static Digest16 ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest) =>
         ComputeBatchDigest(BatchId.From(batchId), namespaceId, NodeId.From(issuerNode),
-            issuerEpoch, cursorStart, cursorEnd, recordsRoot, prevBatchDigest);
+            issuerEpoch, cursorStart, cursorEnd, Digest16.From(recordsRoot), Digest16.From(prevBatchDigest));
 
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
-    public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)
+    public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries)
     {
         int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
@@ -134,7 +132,7 @@ public sealed partial class Node
             var w = new Writer(buf);
             w.Raw(Domains.DomainRecords);
             WriteRecordsArray(w, entries);
-            return Digests.Blake3(w.WrittenSpan, 16);
+            return Digest16.From(Digests.Blake3(w.WrittenSpan, 16));
         }
         finally
         {

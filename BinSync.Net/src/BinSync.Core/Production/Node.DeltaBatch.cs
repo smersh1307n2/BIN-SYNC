@@ -45,18 +45,18 @@ public sealed partial class Node
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
         long wm;
-        byte[] stream;
+        NodeId stream;
         List<OutboxEntry> pending;
         var all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : new List<OutboxEntry>();
         if (filterAuthorNodeId is not null)
         {
-            stream = filterAuthorNodeId;
+            stream = NodeId.From(filterAuthorNodeId);
             wm = ps.AckedFor(stream);
             pending = new List<OutboxEntry>();
             for (int i = 0; i < all.Count; i++)
             {
                 var e = all[i];
-                if (e.AuthorNodeId.Span.SequenceEqual(stream) && e.Seq > wm)
+                if (e.AuthorNodeId == stream && e.Seq > wm)
                     pending.Add(e);
             }
             // Errata E-4: gap normalisation also applies on the explicit-filter path.
@@ -71,16 +71,16 @@ public sealed partial class Node
             // pick the CONTIGUOUS stream first (first un-acked seq == acked+1), earliest
             // outbox position; gapped stream as fallback (tail renumbered). BUGFIX/HARDENING
             // (scenario 42 livelock) — see Python port comment.
-            var firstPending = new Dictionary<byte[], long>(BytesEq.Instance);
+            var firstPending = new Dictionary<NodeId, long>();
             foreach (var e in all)
             {
                 long w = ps.AckedFor(e.AuthorNodeId);   // Errata E-4: per-author watermark
-                var authorKey = Mem.ToArray(e.AuthorNodeId);
+                var authorKey = e.AuthorNodeId;
                 if (e.Seq > w && (!firstPending.TryGetValue(authorKey, out var cur) || e.Seq < cur))
                     firstPending[authorKey] = e.Seq;
             }
-            stream = Array.Empty<byte>();
             bool found = false;
+            stream = default;
             foreach (var kv in firstPending)
                 if (kv.Value == ps.AckedFor(kv.Key) + 1) { stream = kv.Key; found = true; break; }
             if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
@@ -90,7 +90,7 @@ public sealed partial class Node
             for (int i = 0; i < all.Count; i++)
             {
                 var e = all[i];
-                if (e.Seq > wm && e.AuthorNodeId.Span.SequenceEqual(stream))
+                if (e.Seq > wm && e.AuthorNodeId == stream)
                     pending.Add(e);
             }
         }
@@ -109,8 +109,8 @@ public sealed partial class Node
         for (int i = 0; i < pending.Count; i++)
         {
             var e = pending[i];
-            int? alias = AliasOf(targetPeer, (NodeId)e.AuthorNodeId, Epoch);
-            if (alias is null && NodeId.EqualsBytes(e.AuthorNodeId))
+            int? alias = AliasOf(targetPeer, e.AuthorNodeId, Epoch);
+            if (alias is null && e.AuthorNodeId == NodeId)
                 alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
             if (alias is null)
             {
@@ -118,10 +118,10 @@ public sealed partial class Node
                 // NOTE: a resumed node (NodePersistence.Load) has registry KEYS but no live Node
                 // handles; TryGetValue then yields a null value — treat it as "peer not attached".
                 var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
-                if (peerNode is not null && !NodeId.EqualsBytes(e.AuthorNodeId))
+                if (peerNode is not null && e.AuthorNodeId != NodeId)
                 {
-                    int epTry = KnownAuthorEpoch((NodeId)e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAlias(peerNode, (NodeId)e.AuthorNodeId, epTry);
+                    int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
+                    alias = EnsureAlias(peerNode, e.AuthorNodeId, epTry);
                 }
                 else if (peerNode is null)
                 {
@@ -130,7 +130,7 @@ public sealed partial class Node
                     // ALIAS_MAP with. Reuse the durable mapping instead of failing closed.
                     if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
                         foreach (var (a_, (nid_, _)) in existingMap)
-                            if (nid_ == (NodeId)e.AuthorNodeId) { alias = a_; break; }
+                            if (nid_ == e.AuthorNodeId) { alias = a_; break; }
                 }
             }
             if (alias is null)
@@ -190,20 +190,20 @@ public sealed partial class Node
         // session (ALIAS_MAP entry / per-session watermark), not self.epoch.
         // BUGFIX (errata E-6 follow-up): stream key is `stream`, not a stale loop variable.
         int ep = Epoch;
-        byte[] author = stream;
-        if (!NodeId.EqualsBytes(author))
+        NodeId author = stream;
+        if (author != NodeId)
         {
             var m = AliasToNode.TryGetValue(targetPeer, out var am) ? am : new Dictionary<int, (NodeId Id, int Epoch)>();
             bool hit = false;
             foreach (var (alias_, (nid2, ep2)) in m)
-                if (nid2 == (NodeId)author) { ep = ep2; hit = true; break; }
+                if (nid2 == author) { ep = ep2; hit = true; break; }
             if (!hit)
                 foreach (var kv in KnownEpochs)
                     if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
                         ep = Math.Max(ep, kv.Value);
         }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
-                              NodeId, ep, start, end, default, Zero128, recordsRoot, Zero128, entries);
+                              NodeId, ep, start, end, default, default, recordsRoot, default, entries);
         ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, end);
         // BUGFIX (implementation finding): a freshly built batch must be fully signed —
         // sign_batch_for is idempotent w.r.t. the id cache; the per-stream chain checkpoint
@@ -241,7 +241,7 @@ public sealed partial class Node
         if (!ps.Ids.TryGetValue(key, out var cached))
         {
             cached = (BatchId.From(Guid.NewGuid().ToByteArray()),
-                      LastStreamDigest.TryGetValue(streamKey, out var p) ? p : Zero128);
+                      LastStreamDigest.TryGetValue(streamKey, out var p) ? p : default);
             ps.Ids[key] = cached;
         }
         var (batchId, prev) = cached;

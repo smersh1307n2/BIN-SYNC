@@ -59,7 +59,7 @@ public sealed class OutboxEntry
     /// <summary>Canonical encoded op (compact mode). May be a slice of a frame buffer.</summary>
     public ReadOnlyMemory<byte> Payload { get; set; } = Array.Empty<byte>();
     /// <summary>Durable author node id when full-author mode is used.</summary>
-    public ReadOnlyMemory<byte> AuthorNodeId { get; set; } = Array.Empty<byte>();
+    public NodeId AuthorNodeId { get; set; }
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
     /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
@@ -90,11 +90,11 @@ public sealed partial class Batch
     /// <summary>128-bit batch identity with value equality.</summary>
     public BatchId BatchId { get; set; }
     /// <summary>Digest of the previous batch in the issuer chain (or zero for the first).</summary>
-    public byte[] PrevBatchDigest { get; set; } = Node.Zero128;
+    public Digest16 PrevBatchDigest { get; set; }
     /// <summary>BLAKE3 root over the ordered records array.</summary>
-    public byte[] RecordsRoot { get; set; } = Node.Zero128;
+    public Digest16 RecordsRoot { get; set; }
     /// <summary>BLAKE3 digest binding batch id, cursors, roots, and prev digest.</summary>
-    public byte[] BatchDigest { get; set; } = Node.Zero128;
+    public Digest16 BatchDigest { get; set; }
     /// <summary>Decoded ops kept for retransmission/ACK.</summary>
     public List<OutboxEntry> Entries { get; set; } = new();
     /// <summary>Errata E-4: durable author of this batch, resolved on the receiver at apply time.</summary>
@@ -106,7 +106,7 @@ public sealed partial class Batch
     /// <summary>DELTA_BATCH logical unit: headers, digests, and list of OutboxEntry records.</summary>
     public Batch(int ns, int schemaId, int schemaVer, int policy, int flags,
                  NodeId issuer, int issuerEpoch, long cstart, long cend,
-                 BatchId batchId, byte[] prev, byte[] root, byte[] digest,
+                 BatchId batchId, Digest16 prev, Digest16 root, Digest16 digest,
                  List<OutboxEntry> entries)
     {
         NamespaceId = ns;
@@ -140,11 +140,11 @@ public sealed partial class Batch
 
     /// <summary>§13.6.1 [Р3]: a batch carries exactly one author — the stream key.</summary>
     public byte[] AuthorStream() =>
-        Entries.Count > 0 ? Mem.ToArray(Entries[0].AuthorNodeId) : Node.Zero128;
+        Entries.Count > 0 ? Entries[0].AuthorNodeId.ToArray() : Node.Zero128;
 
     /// <summary>Author stream as NodeId (no alloc when AuthorNodeId is already 16 bytes).</summary>
     public NodeId AuthorStreamId() =>
-        Entries.Count > 0 ? NodeId.From(Entries[0].AuthorNodeId) : default;
+        Entries.Count > 0 ? Entries[0].AuthorNodeId : default;
 
     /// <summary>Errata E-4: durable author on receiver; sender uses per-author stream key.</summary>
     public NodeId DurableAuthor => AuthorStreamNodeId ?? AuthorStreamId();
@@ -164,7 +164,7 @@ public sealed partial class Batch
             e.ChangeId = Mem.ToArray(e.ChangeId);
             e.RecordId = Mem.ToArray(e.RecordId);
             e.Payload = Mem.ToArray(e.Payload);
-            e.AuthorNodeId = Mem.ToArray(e.AuthorNodeId);
+            // AuthorNodeId is NodeId — no materialize
         }
     }
 }
@@ -193,7 +193,7 @@ public sealed partial class PeerState
     /// <summary>Last time this peer or stream was observed.</summary>
     public long LastSeen { get; set; }
     /// <summary>Deterministic batch-id cache keyed by author stream + cursor range.</summary>
-    internal Dictionary<(NodeId Author, long Start, long End), (BatchId Id, byte[] Prev)> Ids { get; } = new();
+    internal Dictionary<(NodeId Author, long Start, long End), (BatchId Id, Digest16 Prev)> Ids { get; } = new();
 
     /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
     public PeerState(NodeId peer, int ns)

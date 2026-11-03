@@ -258,3 +258,66 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     /// <summary>Hex string of the 16-byte identity (uppercase).</summary>
     public override string ToString() => Convert.ToHexString(ToArray());
 }
+
+
+/// <summary>
+/// Fixed 16-byte content digest (BLAKE3 truncated as used on the wire for batch/root digests).
+/// Value equality — safe as dictionary keys/values without byte[] copies.
+/// </summary>
+public readonly partial struct Digest16 : IEquatable<Digest16>
+{
+    public readonly ulong Lo;
+    public readonly ulong Hi;
+
+    public Digest16(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
+
+    public static Digest16 From(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 16)
+        {
+            if (bytes.Length == 0) return default;
+            // take first 16 or pad
+            Span<byte> tmp = stackalloc byte[16];
+            bytes[..Math.Min(16, bytes.Length)].CopyTo(tmp);
+            return From(tmp);
+        }
+        return new Digest16(
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes),
+            System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8)));
+    }
+
+    public static Digest16 From(byte[]? bytes) =>
+        bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
+
+    public static implicit operator Digest16(byte[]? bytes) => From(bytes);
+    public static implicit operator byte[](Digest16 d) => d.ToArray();
+
+    public void WriteTo(Span<byte> dest)
+    {
+        if (dest.Length < 16) throw new ArgumentException("need 16 bytes", nameof(dest));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(dest, Lo);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(dest.Slice(8), Hi);
+    }
+
+    public byte[] ToArray()
+    {
+        var a = new byte[16];
+        WriteTo(a);
+        return a;
+    }
+
+    public bool IsZero => Lo == 0 && Hi == 0;
+    public bool Equals(Digest16 other) => Lo == other.Lo && Hi == other.Hi;
+    public override bool Equals(object? obj) => obj is Digest16 d && Equals(d);
+    public override int GetHashCode() => HashCode.Combine(Lo, Hi);
+    public static bool operator ==(Digest16 a, Digest16 b) => a.Equals(b);
+    public static bool operator !=(Digest16 a, Digest16 b) => !a.Equals(b);
+    public bool SequenceEqual(ReadOnlySpan<byte> other)
+    {
+        if (other.Length != 16) return false;
+        Span<byte> tmp = stackalloc byte[16];
+        WriteTo(tmp);
+        return tmp.SequenceEqual(other);
+    }
+    public override string ToString() => Convert.ToHexString(ToArray());
+}

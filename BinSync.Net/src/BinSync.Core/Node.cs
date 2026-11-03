@@ -63,11 +63,11 @@ public sealed partial class Node
     internal HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox { get; } = new();
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
     /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
-    internal Dictionary<(NodeId Issuer, int Ns, int Epoch), byte[]> LastBatchDigest { get; } = new();
+    internal Dictionary<(NodeId Issuer, int Ns, int Epoch), Digest16> LastBatchDigest { get; } = new();
     // per-stream prevBatchDigest: AM chain for the ISSUER side: ((issuer, ns, epoch), targetPeer)
     // -> last sent batchDigest (§12.17.2 hardening).
     /// <summary>Per-stream prev-batch digest checkpoints on the issuer side.</summary>
-    internal Dictionary<((NodeId Issuer, int Ns, int Epoch), NodeId Peer), byte[]> LastStreamDigest { get; } = new();
+    internal Dictionary<((NodeId Issuer, int Ns, int Epoch), NodeId Peer), Digest16> LastStreamDigest { get; } = new();
     // alias maps per session peer: peerNodeId -> {alias -> (nodeId, epoch)} and reverse
     /// <summary>Gets alias to node.</summary>
     internal Dictionary<NodeId, Dictionary<int, (NodeId Id, int Epoch)>> AliasToNode { get; } = new();

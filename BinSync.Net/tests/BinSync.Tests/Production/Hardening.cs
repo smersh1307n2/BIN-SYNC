@@ -82,7 +82,7 @@ public class Production : IDisposable
         if (x.Inbox.Count != y.Inbox.Count) return false;
         if (x.LastBatchDigest.Count != y.LastBatchDigest.Count) return false;
         foreach (var (k, dig) in x.LastBatchDigest)
-            if (!y.LastBatchDigest.TryGetValue(k, out var od) || !dig.AsSpan().SequenceEqual(od)) return false;
+            if (!y.LastBatchDigest.TryGetValue(k, out var od) || dig != od) return false;
         if (x.LastStreamDigest.Count != y.LastStreamDigest.Count) return false;
         if (x.DurableAuthors.Count != y.DurableAuthors.Count) return false;
         if (x.SeenChanges.Count != y.SeenChanges.Count) return false;
