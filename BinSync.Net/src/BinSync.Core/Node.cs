@@ -11,6 +11,9 @@ public sealed partial class Node
     /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
     public static readonly byte[] Zero128 = new byte[16];
 
+    /// <summary>Shared empty alias map to avoid per-call empty Dictionary allocations.</summary>
+    private static readonly Dictionary<int, (NodeId Id, int Epoch)> EmptyAliasMap = new();
+
     // ---- production hardening (Шаг 2): thread safety -------------------------------
     /// <summary>
     /// Domain sub-gates (production). Acquisition order is fixed to avoid deadlocks:

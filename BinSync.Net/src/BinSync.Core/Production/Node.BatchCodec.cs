@@ -33,22 +33,13 @@ public sealed partial class Node
 
     internal byte[] EncodeBatchPayloadInternal(Batch batch)
     {
+        // Single allocation sized to estimate; return as-is when exact (no second copy).
         int est = EstimateBatchPayloadSize(batch);
-        var rented = ArrayPool<byte>.Shared.Rent(est);
-        try
-        {
-            var w = new Writer(rented);
-            WriteBatchPayload(w, batch);
-            int n = w.Length;
-            // Exact-sized owned buffer for the caller (API returns byte[]).
-            var result = new byte[n];
-            w.WrittenSpan.CopyTo(result);
-            return result;
-        }
-        finally
-        {
-            ArrayPool<byte>.Shared.Return(rented);
-        }
+        var dest = new byte[est];
+        var w = new Writer(dest);
+        WriteBatchPayload(w, batch);
+        if (w.Length == dest.Length) return dest;
+        return dest.AsSpan(0, w.Length).ToArray();
     }
 
     internal int EncodeBatchPayloadInternal(Batch batch, Span<byte> destination)
@@ -57,11 +48,10 @@ public sealed partial class Node
         if (destination.Length < est)
             throw new ArgumentException($"destination too small (need ~{est}, got {destination.Length})", nameof(destination));
 
-        // Write into a fixed ArrayPool buffer, then copy into the (possibly un-array) Span.
-        var rented = ArrayPool<byte>.Shared.Rent(est);
+        // Pooled scratch → one memcpy into caller Span (no LOH exact-sized intermediate).
+        var w = Writer.Rent(est);
         try
         {
-            var w = new Writer(rented);
             WriteBatchPayload(w, batch);
             int n = w.Length;
             w.WrittenSpan.CopyTo(destination);
@@ -69,7 +59,7 @@ public sealed partial class Node
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(rented);
+            w.ReturnPool();
         }
     }
 

@@ -1,5 +1,17 @@
 # Changelog — BinSync.Core
 
+## 2.2.21 — 2026-11-03
+
+**Fix encode latency regression (ArrayPool double-copy).**
+
+Root cause: EncodeBatchPayload/EncodeOp/EncodeRecordsArray rented a pool buffer then **always** copied into a new exact-sized byte[]. That added an extra full-payload memcpy on every encode vs the prior path which returned the estimate buffer when the size matched.
+
+- byte[] encode path: allocate estimate once; return as-is when exact
+- Span encode path: Writer.Rent scratch → one copy into destination
+- EmptyAliasMap static to avoid empty Dictionary alloc in CreateDeltaBatch
+
+---
+
 ## 2.2.20 — 2026-11-03
 
 **PeerState.PeerNodeId is NodeId; residual hex sorts cleaned.**

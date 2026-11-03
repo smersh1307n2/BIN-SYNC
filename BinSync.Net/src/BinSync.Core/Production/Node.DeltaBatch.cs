@@ -193,7 +193,7 @@ public sealed partial class Node
         NodeId author = stream;
         if (author != NodeId)
         {
-            var m = AliasToNode.TryGetValue(targetPeer, out var am) ? am : new Dictionary<int, (NodeId Id, int Epoch)>();
+            if (!AliasToNode.TryGetValue(targetPeer, out var m)) m = EmptyAliasMap;
             bool hit = false;
             foreach (var (alias_, (nid2, ep2)) in m)
                 if (nid2 == author) { ep = ep2; hit = true; break; }

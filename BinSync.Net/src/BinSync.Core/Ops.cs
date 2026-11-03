@@ -126,20 +126,11 @@ public static partial class Ops
     public static byte[] EncodeOp(object op, bool? fullAuthor = null, int? valueLenOverride = null)
     {
         int est = Math.Max(EstimateEncodeOpSize(op, fullAuthor, valueLenOverride), 16);
-        var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
-        try
-        {
-            var w = new Writer(rented);
-            WriteOp(w, op, fullAuthor, valueLenOverride);
-            int n = w.Length;
-            var result = new byte[n];
-            w.WrittenSpan.CopyTo(result);
-            return result;
-        }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
-        }
+        var dest = new byte[est];
+        var w = new Writer(dest);
+        WriteOp(w, op, fullAuthor, valueLenOverride);
+        if (w.Length == dest.Length) return dest;
+        return dest.AsSpan(0, w.Length).ToArray();
     }
 
     /// <summary>Encode into <paramref name="destination"/>; returns bytes written.</summary>

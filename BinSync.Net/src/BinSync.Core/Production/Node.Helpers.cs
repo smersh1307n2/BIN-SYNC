@@ -75,20 +75,11 @@ public sealed partial class Node
         int est = 8;
         for (int i = 0; i < entries.Count; i++)
             est += 24 + entries[i].Payload.Length;
-        var rented = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
-        try
-        {
-            var w = new Writer(rented);
-            WriteRecordsArray(w, entries);
-            int n = w.Length;
-            var result = new byte[n];
-            w.WrittenSpan.CopyTo(result);
-            return result;
-        }
-        finally
-        {
-            System.Buffers.ArrayPool<byte>.Shared.Return(rented);
-        }
+        var dest = new byte[Math.Max(est, 16)];
+        var w = new Writer(dest);
+        WriteRecordsArray(w, entries);
+        if (w.Length == dest.Length) return dest;
+        return dest.AsSpan(0, w.Length).ToArray();
     }
 
     /// <summary>Decode records array from canonical wire bytes.</summary>
