@@ -78,7 +78,7 @@ public sealed partial class Node
                         for (int i = list.Count - 1; i >= 0; i--)
                         {
                             var q = list[i];
-                            if (!recordId.EqualsBytes(q.RecordId.Span) ||
+                            if (recordId != q.RecordId ||
                                 q.AuthorNodeId != NodeId) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
@@ -107,8 +107,8 @@ public sealed partial class Node
         {
             NamespaceId = ns,
             Seq = NextOutboxSeq(author, ns),
-            ChangeId = Guid.NewGuid().ToByteArray(),
-            RecordId = recordId.ToArray(),
+            ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            RecordId = recordId,
             OpKind = TagOf(op),
             Payload = payload,
             AuthorNodeId = NodeId.From(author),
@@ -120,7 +120,7 @@ public sealed partial class Node
         ol.Add(entry);
         // Errata E-13 follow-up: register our own changeId under our OWN channel key so
         // apply_batch's relay rule treats a direct echo as already-seen (see Python port).
-        SeenChanges.Add((NodeId, ns, BatchId.From(entry.ChangeId.Span)));
+        SeenChanges.Add((NodeId, ns, entry.ChangeId));
         return entry;
     }
 

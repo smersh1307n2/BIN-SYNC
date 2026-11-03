@@ -145,8 +145,8 @@ public sealed partial class Node
             {
                 NamespaceId = ns,
                 Seq = 0,
-                ChangeId = Zero128,
-                RecordId = r.B128Memory(),
+                ChangeId = default,
+                RecordId = RecordId.From(r.B128()),
                 OpKind = r.U8(),
                 Payload = r.BytesMemory(),
                 AuthorNodeId = issuer,

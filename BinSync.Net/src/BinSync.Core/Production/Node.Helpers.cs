@@ -65,7 +65,7 @@ public sealed partial class Node
         for (int i = 0; i < entries.Count; i++)
         {
             var e = entries[i];
-            w.B128(e.RecordId.Span).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
+            w.B128(e.RecordId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
         }
     }
 

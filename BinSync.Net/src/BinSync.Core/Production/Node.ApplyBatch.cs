@@ -122,13 +122,13 @@ public sealed partial class Node
             // clock skew clamp on incoming HLC wall (§5.3)
             if ((long)WallOf(op) > nowWall + maxSkew)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
-            RecordId recId = op is OpRecordTombstone rt ? RecordId.From(rt.RecordId) : RecordId.From(e.RecordId);
+            RecordId recId = op is OpRecordTombstone rt ? RecordId.From(rt.RecordId) : e.RecordId;
             if (!overlays.TryGetValue(recId, out var rec))
             {
                 if (nsStore.TryGetValue(recId, out var existing))
                     rec = Clone(existing);
                 else
-                    rec = new Record(RecordId.From(e.RecordId), (ushort)batch.NamespaceId);
+                    rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
                 overlays[recId] = rec;
             }
             bool changed = ApplyOp(rec, op, opAuthor);
@@ -156,8 +156,8 @@ public sealed partial class Node
             for (int idx = 0; idx < nEnt; idx++)
             {
                 var e = batch.Entries[idx];
-                byte[] cid = e.ChangeId.Span.SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : Mem.ToArray(e.ChangeId);
-                var ck = (senderPeer, batch.NamespaceId, BatchId.From(cid));
+                var cid = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId;
+                var ck = (senderPeer, batch.NamespaceId, cid);
                 bool known = SeenChanges.Contains(ck);
                 SeenChanges.Add(ck);
                 if (!known && !changedFlags[idx])
@@ -194,7 +194,7 @@ public sealed partial class Node
                 {
                     NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
                     Seq = NextOutboxSeq(resolved, batch.NamespaceId),
-                    ChangeId = e.ChangeId.Span.SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId,
+                    ChangeId = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId,
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
                     Payload = e.Payload,
@@ -230,12 +230,12 @@ public sealed partial class Node
     /// Errata E-13 follow-up 4 (scenario 37): does OUR OWN un-ACKed queue already carry a
     /// byte-equal winner for (recordId, fieldId)? If yes, the ring merely mirrors our own
     /// state back — enqueueing again would duplicate propagation [И2].
-    private bool OwnQueueHolds(int ns, ReadOnlyMemory<byte> rid, object qop)
+    private bool OwnQueueHolds(int ns, RecordId rid, object qop)
     {
         var list = Outbox.TryGetValue(ns, out var l) ? l : new List<OutboxEntry>();
         foreach (var q in list)
         {
-            if (!q.RecordId.Span.SequenceEqual(rid.Span) || q.AuthorNodeId != NodeId) continue;
+            if (q.RecordId != rid || q.AuthorNodeId != NodeId) continue;
             object sOp;
             try { sOp = Ops.DecodeOp(q.Payload).Op; }
             catch (Exception)
@@ -341,26 +341,26 @@ public sealed partial class Node
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId, Value = fs.Value };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             foreach (var (fid, fs) in rec.FieldTombs.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldTomb { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             if (rec.LifecycleHlc is not null)
             {
                 var lcAuthor = rec.LifecycleAuthor ?? NodeId;
-                var op = new OpRecordTombstone { RecordId = rid.ToArray(), Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor };
+                var op = new OpRecordTombstone { RecordId = rid, Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor };
                 if (rec.LifecycleValue == Model.Alive)
                 {
                     // SPEC HARDENING: snapshots must carry an explicit REVIVE lifecycle op
                     // so the receiver un-ghosts historical fields (§7.4 У4).
                     var opw = new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor, Value = new[] { Model.Alive } };
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
                 }
                 else
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = Zero128, RecordId = rid.ToArray(), OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
             }
             if (entries.Count > 0)
                 batches.Add(new Batch(namespaceId, 0, 1, 0x02, 0, NodeId, Epoch, 0, 0,
@@ -389,7 +389,7 @@ public sealed partial class Node
             var op = Ops.DecodeOp(e.Payload).Op;
             var author = GetAuthor(op)!;
             var nsStore = Ns(batch.NamespaceId);
-            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(RecordId.From(e.RecordId), (ushort)batch.NamespaceId);
+            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
             if (ApplyOp(rec, op, author)) applied++;
         }
         return applied;

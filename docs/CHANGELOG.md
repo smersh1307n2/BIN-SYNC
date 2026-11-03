@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.8 — 2026-11-03
+
+**OutboxEntry.RecordId / ChangeId are value types.**
+
+- RecordId is RecordId; ChangeId is BatchId
+- MaterializeEntries only copies Payload (ids/authors already owned as structs)
+- WriteRecordsArray / persistence write B128(RecordId/BatchId) without ToArray
+- OwnQueueHolds / SeenChanges use typed equality
+
+---
+
 ## 2.2.7 — 2026-11-03
 
 **Digest16 + OutboxEntry.AuthorNodeId as NodeId.**

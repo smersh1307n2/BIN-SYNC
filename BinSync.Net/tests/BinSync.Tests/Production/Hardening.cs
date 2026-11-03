@@ -122,7 +122,7 @@ public class Production : IDisposable
             for (int i = 0; i < list.Count; i++)
             {
                 if (list[i].Seq != ol[i].Seq || list[i].OpKind != ol[i].OpKind) return false;
-                if (!list[i].ChangeId.Span.SequenceEqual(ol[i].ChangeId.Span)) return false;
+                if (list[i].ChangeId != ol[i].ChangeId) return false;
                 if (!list[i].Payload.Span.SequenceEqual(ol[i].Payload.Span)) return false;
                 if (list[i].CausalDeps.Count != ol[i].CausalDeps.Count) return false;
             }

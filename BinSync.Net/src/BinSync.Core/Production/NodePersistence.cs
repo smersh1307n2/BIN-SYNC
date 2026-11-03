@@ -521,7 +521,7 @@ public static class NodePersistence
         w.Varint((ulong)e.NamespaceId);
         w.U64((ulong)e.Seq);
         w.B128(e.ChangeId);
-        w.B128(Mem.ToArray(e.RecordId));
+        w.B128(e.RecordId);
         w.U8(e.OpKind);
         // The payload is a compact-mode op encoding; its value length is a varint, so
         // 0x00..0x7F bytes at the tail are ambiguous with an empty author-id slot. Store
@@ -540,11 +540,11 @@ public static class NodePersistence
         {
             NamespaceId = (int)r.Varint(),
             Seq = (long)r.U64(),
-            ChangeId = r.B128(),
-            RecordId = r.B128(),
+            ChangeId = BatchId.From(r.B128()),
+            RecordId = RecordId.From(r.B128()),
             OpKind = r.U8(),
             Payload = r.Raw((int)r.Varint()),
-            AuthorNodeId = r.B128(),
+            AuthorNodeId = NodeId.From(r.B128()),
             CreatedAt = (long)r.U64(),
         };
         int depCount = (int)r.Varint();

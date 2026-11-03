@@ -50,10 +50,10 @@ public sealed class OutboxEntry
     public int NamespaceId { get; set; }
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
     public long Seq { get; set; }
-    /// <summary>Idempotency key (b128) for this change.</summary>
-    public ReadOnlyMemory<byte> ChangeId { get; set; } = Array.Empty<byte>();
+    /// <summary>Idempotency key (16-byte) for this change.</summary>
+    public BatchId ChangeId { get; set; }
     /// <summary>Record id (b128 / 16-byte).</summary>
-    public ReadOnlyMemory<byte> RecordId { get; set; } = Array.Empty<byte>();
+    public RecordId RecordId { get; set; }
     /// <summary>Op tag (FieldWrite / FieldTomb / RecordTombstone).</summary>
     public byte OpKind { get; set; }
     /// <summary>Canonical encoded op (compact mode). May be a slice of a frame buffer.</summary>
@@ -161,10 +161,8 @@ public sealed partial class Batch
         for (int i = 0; i < Entries.Count; i++)
         {
             var e = Entries[i];
-            e.ChangeId = Mem.ToArray(e.ChangeId);
-            e.RecordId = Mem.ToArray(e.RecordId);
+            // ChangeId/RecordId/AuthorNodeId are value types — no materialize
             e.Payload = Mem.ToArray(e.Payload);
-            // AuthorNodeId is NodeId — no materialize
         }
     }
 }
