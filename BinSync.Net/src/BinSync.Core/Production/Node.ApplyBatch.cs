@@ -38,7 +38,7 @@ public sealed partial class Node
         var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
         if (Inbox.Contains(key))
         {
-            AcksOut.Add(batch.BatchId.ToArray());   // duplicate → no-op but ACK mandatory [П4]
+            AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
             // ACK must name the author stream (Errata E-4). Prefer the stream we learned
@@ -58,20 +58,20 @@ public sealed partial class Node
         // embed the TRUE author in full-author mode (§13.6). Author resolution helper:
         // full-author ops resolve via their embedded nodeId; otherwise fall back to the
         // session alias map, fail-closed on UNKNOWN_ALIAS [А2]/[А3].
-        byte[] ResolveAuthor(object op)
+        NodeId ResolveAuthor(object op)
         {
             bool full = op switch { OpFieldWrite x => x.FullAuthorMode, OpFieldTomb x => x.FullAuthorMode, OpRecordTombstone x => x.FullAuthorMode, _ => false };
             var emb = GetAuthor(op);
-            if (full && emb is not null && emb.Length == 16) return emb;
+            if (full && emb is not null && emb.Length == 16) return NodeId.From(emb);
             try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
-            catch (SyncException) when (full && emb is not null && emb.Length == 16) { return emb; }
+            catch (SyncException) when (full && emb is not null && emb.Length == 16) { return NodeId.From(emb); }
         }
         // Decode ops once — reused for stream author, apply loop, and relay (no batch.Ops()).
         int nEntEarly = batch.Entries.Count;
         var decodedOps = nEntEarly > 0 ? new object[nEntEarly] : Array.Empty<object>();
         for (int di = 0; di < nEntEarly; di++)
             decodedOps[di] = Ops.DecodeOp(batch.Entries[di].Payload).Op;
-        byte[] streamAuthor;
+        NodeId streamAuthor;
         try
         {
             streamAuthor = nEntEarly > 0 ? ResolveAuthor(decodedOps[0]) : batch.IssuerNodeId;
@@ -80,7 +80,7 @@ public sealed partial class Node
         batch.AuthorStreamNodeId = streamAuthor;
         result.DurableAuthor = batch.DurableAuthor;
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, (NodeId)streamAuthor);
+        var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
         long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
@@ -145,7 +145,7 @@ public sealed partial class Node
         // commit path only ever RAISES the watermark for batches that pass every gate.
         int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
         KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
-        AcksOut.Add(batch.BatchId.ToArray());
+        AcksOut.Add(batch.BatchId);
         result.Applied = applied;
         result.Acked = true;
         // Relay [Р1, Р2]: ONLY entries that actually changed state are appended to OUR
@@ -198,7 +198,7 @@ public sealed partial class Node
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
                     Payload = e.Payload,
-                    AuthorNodeId = resolved,
+                    AuthorNodeId = resolved.ToArray(),
                     CreatedAt = (long)WallOf(op),   // BUGFIX: stamp the OP's own HLC wall time
                 };
                 if (!Outbox.TryGetValue(batch.NamespaceId, out var ol)) Outbox[batch.NamespaceId] = ol = new();
@@ -265,10 +265,10 @@ public sealed partial class Node
     /// and delegates to <c>ApplyOpInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool ApplyOp(Record rec, object op, byte[] author)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyOpInternal(rec, op, author);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyOpInternal(rec, op, NodeId.From(author));
     }
 
-    internal bool ApplyOpInternal(Record rec, object op, byte[] author)
+    internal bool ApplyOpInternal(Record rec, object op, NodeId author)
     {
         if (op is OpFieldWrite fw)
         {

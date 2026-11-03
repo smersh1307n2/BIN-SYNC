@@ -401,7 +401,7 @@ public static class NodePersistence
         for (int i = 0; i < lsaCount; i++)
         {
             var peer = r.B128(); var ns = (int)r.Varint(); var author = r.B128();
-            n.LastStreamAuthor[((NodeId)peer, ns)] = author;
+            n.LastStreamAuthor[((NodeId)peer, ns)] = NodeId.From(author);
         }
 
         int keCount = (int)r.Varint();

@@ -83,7 +83,7 @@ public sealed partial class Node
     internal HashSet<(NodeId Peer, int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
-    internal Dictionary<(NodeId, int), byte[]> LastStreamAuthor { get; } = new();
+    internal Dictionary<(NodeId, int), NodeId> LastStreamAuthor { get; } = new();
     /// <summary>Highest known epoch per (author, namespace).</summary>
     internal Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
     /// <summary>Peers currently quarantined from sync.</summary>
@@ -91,7 +91,7 @@ public sealed partial class Node
     /// <summary>Collected error code names from the last operations (diagnostic).</summary>
     internal List<string> ErrorsOut { get; } = new();
     /// <summary>Batch ids ACKed during the last apply (diagnostic).</summary>
-    internal List<byte[]> AcksOut { get; } = new();
+    internal List<BatchId> AcksOut { get; } = new();
     /// <summary>Namespaces that must not be applied (NAMESPACE_FORBIDDEN).</summary>
     internal HashSet<int> ForbiddenNamespaces { get; } = new();
     /// <summary>Highest supported schema version per namespace.</summary>

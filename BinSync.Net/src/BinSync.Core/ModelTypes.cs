@@ -98,7 +98,7 @@ public sealed partial class Batch
     /// <summary>Decoded ops kept for retransmission/ACK.</summary>
     public List<OutboxEntry> Entries { get; set; } = new();
     /// <summary>Errata E-4: durable author of this batch, resolved on the receiver at apply time.</summary>
-    public byte[]? AuthorStreamNodeId { get; set; }
+    public NodeId? AuthorStreamNodeId { get; set; }
 
     /// <summary>DELTA_BATCH logical unit: headers, digests, and list of OutboxEntry records.</summary>
     public Batch() { }
@@ -147,7 +147,10 @@ public sealed partial class Batch
         Entries.Count > 0 ? NodeId.From(Entries[0].AuthorNodeId) : default;
 
     /// <summary>Errata E-4: durable author on receiver; sender uses per-author stream key.</summary>
-    public byte[] DurableAuthor => AuthorStreamNodeId ?? AuthorStream();
+    public NodeId DurableAuthor => AuthorStreamNodeId ?? AuthorStreamId();
+
+    /// <summary>Wire form of durable author (allocates).</summary>
+    public byte[] DurableAuthorBytes => DurableAuthor.ToArray();
 
     /// <summary>
     /// Copy all entry buffers to owned arrays so the batch outlives the decode frame.
@@ -226,7 +229,7 @@ public sealed class BatchResult
     /// <summary>Namespace of the applied batch (for ACK stream id).</summary>
     public int NamespaceId { get; set; }
     /// <summary>Durable author stream for ACK (Errata E-4).</summary>
-    public byte[] DurableAuthor { get; set; } = Array.Empty<byte>();
+    public NodeId DurableAuthor { get; set; }
 
     /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
     public BatchResult(BatchId batchId) => BatchId = batchId;

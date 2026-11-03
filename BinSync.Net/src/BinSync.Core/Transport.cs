@@ -93,6 +93,9 @@ public static partial class Transport
     }
 
     /// <summary>Encode an ACK payload (batch id, cursor, optional author stream).</summary>
+    public static byte[] EncodeAck(BatchId batchId, long ackedSeq, NodeId authorStream = default) =>
+        EncodeAck(batchId.ToArray(), ackedSeq, authorStream.IsZero ? null : authorStream.ToArray());
+
     public static byte[] EncodeAck(byte[] batchId, long ackedSeq, byte[]? authorStream = null)
     {
         var w = new Writer();

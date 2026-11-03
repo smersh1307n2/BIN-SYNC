@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 2.2.6 — 2026-11-03
+
+**Author stream + ACKs typed.**
+
+- Batch.AuthorStreamNodeId / DurableAuthor are NodeId
+- BatchResult.DurableAuthor is NodeId
+- LastStreamAuthor values are NodeId
+- AcksOut is List<BatchId> (no ToArray on apply)
+- ApplyBatch ResolveAuthor / ApplyOpInternal use NodeId end-to-end
+- EncodeAck overload for BatchId + NodeId
+
+---
+
 ## 2.2.5 — 2026-11-03
 
 **Batch.IssuerNodeId / Batch.BatchId are typed (NodeId / BatchId).**
