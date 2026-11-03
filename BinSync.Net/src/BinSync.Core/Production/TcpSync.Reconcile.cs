@@ -15,9 +15,7 @@ public sealed partial class TcpSyncSession
         var mine = Reconcile.BuildStateDigest(local, namespaceId);
         if (initiate)
         {
-            await _transport.SendAsync(
-                FrameCodec.BuildFrame(ReconcileFrames.StateDigest, streamId, 10, Reconcile.EncodeStateDigest(mine)),
-                ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.StateDigest, streamId, 10ul, Reconcile.EncodeStateDigest(mine), ct).ConfigureAwait(false);
             var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("peer closed during STATE_DIGEST");
             var (frame, _) = FrameCodec.ParseFrame(raw);
@@ -34,9 +32,7 @@ public sealed partial class TcpSyncSession
             if (frame.FrameType != ReconcileFrames.StateDigest)
                 throw new FrameException("FRAME_REJECTED");
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
-            await _transport.SendAsync(
-                FrameCodec.BuildFrame(ReconcileFrames.StateDigest, streamId, 10, Reconcile.EncodeStateDigest(mine)),
-                ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.StateDigest, streamId, 10ul, Reconcile.EncodeStateDigest(mine), ct).ConfigureAwait(false);
             return (mine, peer, Reconcile.DivergentPrefixes(mine, peer));
         }
     }
@@ -46,8 +42,7 @@ public sealed partial class TcpSyncSession
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var payload = Reconcile.EncodeNeedRange(new NeedRangeMessage { NamespaceId = namespaceId, Prefix = prefix });
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(ReconcileFrames.NeedRange, streamId, 11, payload), ct).ConfigureAwait(false);
+        await SendFrameAsync(ReconcileFrames.NeedRange, streamId, 11ul, payload, ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive a NEED_RANGE reconcile message.</summary>
@@ -65,9 +60,7 @@ public sealed partial class TcpSyncSession
     public async Task SendNeedKeysAsync(NeedKeysMessage keys, CancellationToken ct = default)
     {
         uint streamId = 0x0001_0000u | (uint)keys.NamespaceId;
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(ReconcileFrames.NeedKeys, streamId, 12, Reconcile.EncodeNeedKeys(keys)),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(ReconcileFrames.NeedKeys, streamId, 12ul, Reconcile.EncodeNeedKeys(keys), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive a NEED_KEYS reconcile message.</summary>
@@ -105,9 +98,7 @@ public sealed partial class TcpSyncSession
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var chunk = Reconcile.BuildSnapshot(local, namespaceId, prefix);
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(ReconcileFrames.SnapshotChunk, streamId, 13, Reconcile.EncodeSnapshotChunk(chunk)),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(ReconcileFrames.SnapshotChunk, streamId, 13ul, Reconcile.EncodeSnapshotChunk(chunk), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>

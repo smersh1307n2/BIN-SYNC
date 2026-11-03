@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.15 — 2026-11-03
+
+**ReadFrame pooled header; PipeTransport uninit copy; TcpSync SendFrameAsync everywhere.**
+
+- FrameStream.ReadFrameAsync rents header from ArrayPool
+- PipeTransport uses GC.AllocateUninitializedArray for channel ownership copies
+- Reconcile/GC/IBLT/Membership/Schema send via SendFrameAsync (ArrayPool frames)
+
+---
+
 ## 2.2.14 — 2026-11-03
 
 **TcpSync pooled frames; StreamSync zero-copy send; EncodeAck pool.**

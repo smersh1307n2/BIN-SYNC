@@ -51,7 +51,15 @@ public sealed class PipeTransport : ISyncTransport
     public ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var copy = packet.ToArray();
+        // Channel owns the array until Receive — must copy; skip zero-length special case.
+        byte[] copy;
+        if (packet.Length == 0)
+            copy = Array.Empty<byte>();
+        else
+        {
+            copy = GC.AllocateUninitializedArray<byte>(packet.Length);
+            packet.Span.CopyTo(copy);
+        }
         return _writer.TryWrite(copy)
             ? ValueTask.CompletedTask
             : new ValueTask(_writer.WriteAsync(copy, ct).AsTask());

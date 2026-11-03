@@ -11,9 +11,7 @@ public sealed partial class TcpSyncSession
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var table = Iblt.BuildFromNode(local, namespaceId, prefix, cellCount);
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(ReconcileFrames.Iblt, streamId, 15, Iblt.Encode(table)),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(ReconcileFrames.Iblt, streamId, 15, Iblt.Encode(table), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive one IBLT frame and decode.</summary>
@@ -38,13 +36,7 @@ public sealed partial class TcpSyncSession
         if (initiate)
         {
             var mine = Iblt.BuildFromNode(local, namespaceId, prefix, cellCount);
-            await _transport.SendAsync(
-                FrameCodec.BuildFrame(
-                    ReconcileFrames.Iblt,
-                    0x0001_0000u | (uint)namespaceId,
-                    15,
-                    Iblt.Encode(mine)),
-                ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.Iblt, 0x0001_0000u | (uint)namespaceId, 15, Iblt.Encode(mine), ct).ConfigureAwait(false);
             var peer = await ReceiveIbltAsync(ct).ConfigureAwait(false);
             mine.Subtract(peer);
             return mine.Peel();
@@ -53,13 +45,7 @@ public sealed partial class TcpSyncSession
         {
             var peer = await ReceiveIbltAsync(ct).ConfigureAwait(false);
             var mine = Iblt.BuildFromNode(local, namespaceId, prefix, cellCount);
-            await _transport.SendAsync(
-                FrameCodec.BuildFrame(
-                    ReconcileFrames.Iblt,
-                    0x0001_0000u | (uint)namespaceId,
-                    15,
-                    Iblt.Encode(mine)),
-                ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.Iblt, 0x0001_0000u | (uint)namespaceId, 15, Iblt.Encode(mine), ct).ConfigureAwait(false);
             mine.Subtract(peer);
             return mine.Peel();
         }
@@ -95,10 +81,7 @@ public sealed partial class TcpSyncSession
                     .ToList();
             }
             uint streamId = 0x0001_0000u | (uint)namespaceId;
-            await _transport.SendAsync(
-                FrameCodec.BuildFrame(
-                    ReconcileFrames.SnapshotChunk, streamId, 13, Reconcile.EncodeSnapshotChunk(chunk)),
-                ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.SnapshotChunk, streamId, 13, Reconcile.EncodeSnapshotChunk(chunk), ct).ConfigureAwait(false);
             return chunk.Records.Count;
         }
     }

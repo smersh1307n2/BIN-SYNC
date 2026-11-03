@@ -1,3 +1,4 @@
+using System.Buffers;
 // Stream ↔ self-describing BIN-SYNC frames (§3.4, §12.2).
 using System.Buffers.Binary;
 
@@ -26,28 +27,35 @@ public static class FrameStream
     /// </summary>
     public static async Task<byte[]?> ReadFrameAsync(Stream stream, CancellationToken ct = default)
     {
-        var header = new byte[Frames.HEADER_SIZE];
-        int n = await ReadExactAsync(stream, header, 0, header.Length, ct).ConfigureAwait(false);
-        if (n == 0) return null;
-        if (n < header.Length)
-            throw new FrameException("FRAME_REJECTED");
-
-        uint payloadLen = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(17));
-        if (payloadLen > Frames.MAX_PAYLOAD_SIZE)
-            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
-
-        var frame = new byte[Frames.HEADER_SIZE + (int)payloadLen];
-        Buffer.BlockCopy(header, 0, frame, 0, Frames.HEADER_SIZE);
-        if (payloadLen > 0)
+        var header = ArrayPool<byte>.Shared.Rent(Frames.HEADER_SIZE);
+        try
         {
-            int got = await ReadExactAsync(stream, frame, Frames.HEADER_SIZE, (int)payloadLen, ct)
-                .ConfigureAwait(false);
-            if (got < (int)payloadLen)
+            int n = await ReadExactAsync(stream, header, 0, Frames.HEADER_SIZE, ct).ConfigureAwait(false);
+            if (n == 0) return null;
+            if (n < Frames.HEADER_SIZE)
                 throw new FrameException("FRAME_REJECTED");
-        }
 
-        _ = FrameCodec.ParseFrame(frame);
-        return frame;
+            uint payloadLen = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(17));
+            if (payloadLen > Frames.MAX_PAYLOAD_SIZE)
+                throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
+
+            var frame = new byte[Frames.HEADER_SIZE + (int)payloadLen];
+            header.AsSpan(0, Frames.HEADER_SIZE).CopyTo(frame);
+            if (payloadLen > 0)
+            {
+                int got = await ReadExactAsync(stream, frame, Frames.HEADER_SIZE, (int)payloadLen, ct)
+                    .ConfigureAwait(false);
+                if (got < (int)payloadLen)
+                    throw new FrameException("FRAME_REJECTED");
+            }
+
+            _ = FrameCodec.ParseFrame(frame);
+            return frame;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(header);
+        }
     }
 
     private static async Task<int> ReadExactAsync(Stream stream, byte[] buf, int offset, int count, CancellationToken ct)

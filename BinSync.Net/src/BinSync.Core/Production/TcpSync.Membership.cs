@@ -10,9 +10,7 @@ public sealed partial class TcpSyncSession
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var msg = Membership.Build(local, namespaceId, membershipEpoch);
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(MembershipFrames.Membership, streamId, 14, Membership.Encode(msg)),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(MembershipFrames.Membership, streamId, 14, Membership.Encode(msg), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive MEMBERSHIP and merge into local durable authors.</summary>

@@ -8,9 +8,7 @@ public sealed partial class TcpSyncSession
     public async Task SendSchemaMapAsync(Node local, CancellationToken ct = default)
     {
         var payload = local.ExportSchemaMap();
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(SchemaMap.FrameType, 0, 18, payload),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(SchemaMap.FrameType, 0u, 18ul, payload, ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive a schema map and learn unknown schemas; returns how many were learned.</summary>

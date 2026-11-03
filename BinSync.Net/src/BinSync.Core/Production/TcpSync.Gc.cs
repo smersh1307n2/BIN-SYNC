@@ -10,9 +10,7 @@ public sealed partial class TcpSyncSession
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var msg = GcNotice.Build(local, namespaceId, tombstoneCutoffWall);
-        await _transport.SendAsync(
-            FrameCodec.BuildFrame(ReconcileFrames.GcNotice, streamId, 16, GcNotice.Encode(msg)),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(ReconcileFrames.GcNotice, streamId, 16, GcNotice.Encode(msg), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive and apply a GC notice; returns how many entries were learned.</summary>
