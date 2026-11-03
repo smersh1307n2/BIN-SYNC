@@ -1,8 +1,8 @@
 **Current package: 2.2.23** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
 
-# BinSync.Core — Public API surface (freeze for 1.0)
+# BinSync.Core — Public API surface
 
-**Package:** `BinSync.Core` **`2.1.1`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`2.2.23`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
 Normative: **BIN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
@@ -11,39 +11,100 @@ Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md
 
 | Change | Version impact |
 |--------|----------------|
-| Wire/protocol break, remove/rename public type or member | **major** (2.0) |
-| New public API, additive frame/op support, perf-only | **minor** (1.1) |
-| Bugfix, docs, internal optimisations | **patch** (1.0.1) |
+| Wire/protocol break, remove/rename public type or member | **major** |
+| New public API, additive frame/op support | **minor** |
+| Bugfix, docs, internal optimisations, non-breaking type-shape fixes agreed before external consumers | **patch** |
 
-
-## Public API shape (2.0)
-
-Breaking hygiene vs 1.0.x (no wire/protocol change):
-
-- DTO / engine **public fields → properties** (`OutboxEntry`, `Batch`, `PeerState`, `BatchResult`, `Record`, `Node` surface maps, …).
-- Typed ids: `NodeId`, `RecordId`, `BatchId` (value equality). `WriteField` / `TombField` / `DeleteRecord` / … take `RecordId`; `ApplyBatch` takes `NodeId` sender (implicit conversion from `byte[]` remains).
-- Wire remains b128 `byte[]` on batch payloads and digests.
-
-**Public** = types and members documented below and in XML docs shipped with the package.  
-Everything under `internal`, `*.Tests`, `bench/`, and unmarked helpers is **not** a compatibility contract.
+**Public** = types and members in this document and in XML docs shipped with the package.  
+Everything `internal`, under `*.Tests`, `bench/`, and unmarked helpers is **not** a compatibility contract.
 
 Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them is configuration, not a silent default change.
 
 ---
 
+## Shape of the 2.2 API (vs early 2.x / 1.x)
+
+Breaking hygiene (no wire/protocol change):
+
+| Area | Contract |
+|------|----------|
+| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `PeerState`, `Record`, … |
+| Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains where noted. |
+| `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
+| Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`PeerState.PeerNodeId`**, **`TcpSyncSession.PeerNodeId`** are **`NodeId`**. |
+| Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, …). Test assemblies use `InternalsVisibleTo`. |
+| Locks | Prefer **`EnterAllGates()`** (`AllGateScope`). `Node.Gate` is **obsolete** (Meta only). |
+| Decode safety | Public **`DecodeBatchPayload`** materializes owned entry buffers. **`ApplyBatchPayload`** may use zero-copy internally then drop the frame. |
+
+Wire remains b128 / canonical codec on the frame payload; typed ids are an API/layout concern, not a protocol change.
+
+---
+
 ## Supported (embedder contract)
 
-### Engine
-`Node`, `BoundedNode`, `ResourceLimits`, batch/outbox models, `WriteField` / `ApplyBatch` / alias registry, `ApplyRemoteField`, `RepublishUnderPrefix`.
+### Identities (`Ids.cs`)
+
+| Type | Role |
+|------|------|
+| `NodeId` | 16-byte node identity (`Lo`/`Hi`), `From` / `WriteTo` / `ToArray` / `EqualsBytes` |
+| `RecordId` | 16-byte record identity (same layout rules) |
+| `BatchId` | 16-byte batch identity |
+| `Digest16` | 16-byte digest (records root, batch digests, stream chain) |
+
+### Engine — `Node`
+
+**Construction:** `Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null, long maxSkewUs = …)`  
+**Public state:** `NodeId` (ctor-only), `Epoch`, `Clock`, optional `ResourceLimits? Limits`.
+
+| API | Role |
+|-----|------|
+| `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
+| `WriteFields(...)` | Batch of writes under one lock (distinct HLC stamps) |
+| `PushOutbox` / `NextOutboxSeq` | Low-level outbox helpers |
+| `CreateDeltaBatch(NodeId target, ns, …)` | Build one-author delta for peer |
+| `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
+| `EncodeBatchPayload` / `EncodeBatchPayload(…, Span<byte>)` | Batch → payload bytes |
+| `DecodeBatchPayload` | Payload → `Batch` with **owned** entry buffers |
+| `ApplyBatch(Batch, NodeId sender)` | Apply + inbox idempotency |
+| `ApplyBatchPayload(byte[], NodeId sender)` | Decode+apply (preferred on the wire path) |
+| `ProcessAck` | Advance per-author watermarks |
+| `ApplyRemoteField` / `ApplySnapshot` | Snapshot / anti-entropy apply paths |
+| `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
+| `OutboxSize` | Bound/diagnostic helper |
+
+**Resource bounds:** `ResourceLimits`, `BoundedNode` factory helpers.
+
+### Apply result — `BatchResult` (**struct**)
+
+| Property | Role |
+|----------|------|
+| `BatchId` | Applied / replayed batch id |
+| `Applied` | Ops newly applied (`0` on pure duplicate) |
+| `Acked` / `Duplicate` | ACK / idempotent replay flags |
+| `CursorEnd` / `NamespaceId` | ACK metadata |
+| `DurableAuthor` | Author stream for ACK (Errata E-4) |
+
+`Transport.DeliverBatch` returns **`BatchResult?`** (`null` = nothing pending). After a null-check use `.Value` (nullable value type).
+
+### Models
+
+| Type | Notes |
+|------|--------|
+| `OutboxEntry` | `RecordId`, `BatchId ChangeId`, `NodeId AuthorNodeId`, `ReadOnlyMemory<byte> Payload`, … |
+| `Batch` | Typed issuer/id/digests; `Entries`; `MaterializeEntries()` for owned payloads |
+| `PeerState` | `NodeId PeerNodeId`; stream ACK maps keyed by `NodeId` |
+| `Record` / `FieldState` | In-memory record store (reached via engine apply paths; maps are internal on `Node`) |
 
 ### Wire & codecs (§6, §12)
-`FrameCodec`, `Codec` / `Writer` / `Reader`, `Ops`, `Hlc`, digests, `FragmentCodec` / `FragmentReassembler` (FLAG_FRAGMENT).
+
+`FrameCodec`, `Frames`, `Frame` / `FrameException`, `Codec` / `Writer` / `Reader`, `Ops`, `Hlc` / `HlcClock` / `HlcOps`, `Digests` / `Digest16` domains, `FragmentCodec` / `FragmentReassembler` / `FrameFragment`, `FrameStream`, `FlowControl`, `Mem`.
 
 ### Merge (§8)
+
 | Policy | Code | API |
 |--------|------|-----|
-| LWW_FIELD | 0 / default | `WriteField`, `MergeField` |
-| COUNTER_G | 0x03 | `CounterG` + `MergePolicy.CounterG` |
+| LWW_FIELD | 0 / default | `WriteField`, `Merge` field write |
+| COUNTER_G | 0x03 | `CounterG` |
 | COUNTER_PN | 0x04 | `CounterPn` |
 | SET_OR | 0x05 | `SetOr` |
 | SEQ_FRACTIONAL | 0x06 | `SeqFractional` |
@@ -54,15 +115,26 @@ Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them i
 `MergePolicyRegistry` maps `(ns, fieldId)` → policy.
 
 ### Reconcile (§13)
-`Reconcile` ladder, `Iblt`, `GcNotice`, `MembershipRoster`, `BuildSnapshot` / `ApplySnapshot`, AutoReconcile / IBLT over TCP.
+
+`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over TCP (`TcpSync` partials).
 
 ### Session / transport
-`ISyncTransport`, TCP (+ TLS opt-in), pipe, loopback, `TcpSyncSession` / `TcpSyncListener`.
+
+| API | Role |
+|-----|------|
+| `ISyncTransport` | `NodeId PeerNodeId { get; }`, `SendAsync` / `ReceiveAsync` |
+| `PipeTransport` / `StreamSyncTransport` | Test / stream adapters (`PeerNodeId` settable on concrete types) |
+| `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`** |
+| `TcpSyncSession` / `TcpSyncListener` | TCP (+ TLS opt-in), push/receive batch, fragments, key rotation, IBLT |
+| `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, sneakernet helpers |
+| `LoopbackTransport` | Lab loopback |
 
 ### Persistence
+
 `NodePersistence` (full snapshot), `Wal` (append / replay / checkpoint).
 
 ### Schema (§18, opt-in)
+
 `SchemaDescriptor`, `SchemaRegistry`, `Node.Schemas`, `ApplyBatchWithSchema`, SCHEMA_MAP frame 0x04.
 
 ### Causal deps (§16.19, opt-in)
@@ -84,7 +156,7 @@ Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them i
 | `E2ee.SealField` / `OpenField` | ChaCha20-Poly1305 |
 | `E2eeKeyRing` / `Node.EnsureE2ee` | Per-namespace keys + epochs |
 | `WriteFieldSealed` / `ReadFieldOpen` | Convenience |
-| `KeyRotation` | Frame 0x11 + proof |
+| `KeyRotation` / `KeyRotationNotice` / `KeyEpochStore` | Frame 0x11 + proof |
 
 Blind merge compares ciphertext with open HLC + author.
 
@@ -98,15 +170,27 @@ Blind merge compares ciphertext with open HLC + author.
 | `VerifyAndApplyBatch` | Signature gate then apply |
 | `SIGNATURE_INVALID` / `TRUST_REVOKED` | 0x0013 / 0x0014 |
 
-### Lab
-`LabFuzzTests` scenarios, `TlsTestCert`, flow-control hooks.
+### Errors
+
+| Type | Role |
+|------|------|
+| `SyncException` | Domain codes (`CodeName` / `Code`); optional batch id |
+| `FrameException` | Frame parse / reject |
+| `InvalidVarintException` / `InvalidFloatException` | Codec |
+| `ClockDriftException` | HLC skew |
+| `SessionException` / `NoSessionException` / `PeerRejectedException` | Session / loopback |
+
+### Lab / test helpers (not product contract)
+
+`LabFuzzTests` scenarios, `TlsTestCert`, flow-control hooks, assemblies listed in `InternalsVisibleTo`.
 
 ---
 
-## Explicitly out of scope (1.0)
+## Explicitly out of scope
 
 - Full X.509 certificate path validation (CA roots are **node-id** allow-list only)
 - Auto-WAL on every `WriteField`
 - Forcing causal / E2EE / trust on every `ApplyBatch` (all opt-in)
 - Guaranteed allocation-free paths under all policies (hot paths optimised; domain objects still allocate)
+- Public mutable access to `Storage` / `Outbox` / `Inbox` maps (internal by design in 2.2)
 - NuGet.org publish automation (use `scripts/pack-nupkg.sh`)
