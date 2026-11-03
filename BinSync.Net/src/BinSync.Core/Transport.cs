@@ -133,25 +133,16 @@ public static partial class Transport
                                            schemaVersion: schemaVersion);
         if (batch is null) return null;
         sender.SignBatchFor(batch, receiver.NodeId);   // idempotent re-bind of the SAME cached (batchId, prev)
+        // In-process path: skip BuildFrame/ParseFrame (CRC is for the wire).
         var payload = sender.EncodeBatchPayload(batch);
-        uint streamId = 0x0001_0000 | (uint)namespaceId;   // §3.7 data streams
-        var raw = FrameCodec.BuildFrame(0x09, streamId, 1, payload);
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        var result = receiver.ApplyBatchPayload(frame.Payload, sender.NodeId);
-        // Receiver's own stream-chain checkpoint for (issuer→me) advances on ACCEPT only;
-        // the generic LastBatchDigest map is keyed by (issuer, ns, epoch).
+        var result = receiver.ApplyBatchPayload(payload, sender.NodeId);
         sender.AdvanceStream(receiver.NodeId, namespaceId, batch);
-        // ACK frame flows back to the ISSUER: advances the issuer's lastAckedSeq [СМ6].
-        // Errata E-4: the ACK names the acknowledged AUTHOR STREAM.
-        var ackRaw = FrameCodec.BuildFrame(0x0B, 0x0002_0000 | (uint)namespaceId, 2,
-            EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor));
-        var (ackFrame, _) = FrameCodec.ParseFrame(ackRaw);
-        var (bid, ackSeq, ackAuthor) = DecodeAck(ackFrame.Payload);
-        if (!bid.AsSpan().SequenceEqual(result.BatchId))
+        // ACK payload only (no frame) — same semantics as wire ACK without CRC tax.
+        var ackPayload = EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
+        var (bid, ackSeq, ackAuthor) = DecodeAck(ackPayload);
+        if (!result.BatchId.EqualsBytes(bid))
             throw new InvalidOperationException("ACK batch id mismatch");
         if (!dropAck)
-            // BUGFIX (implementation finding): the ACK must advance the ISSUER's push
-            // cursor for the RECEIVER as peer (self-keyed no-op broke every sync_round).
             sender.ProcessAck(receiver.NodeId, namespaceId, ackSeq, authorStream: ackAuthor);
         return result;
     }

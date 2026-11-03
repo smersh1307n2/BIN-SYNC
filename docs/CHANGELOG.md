@@ -1,5 +1,14 @@
 # Changelog — BinSync.Core
 
+## 2.2.12 — 2026-11-03
+
+**In-process DeliverBatch without frame tax; HeldCausalBatch typed.**
+
+- Transport.DeliverBatch applies payload and ACK body directly (no BuildFrame/ParseFrame for loopback)
+- HeldCausalBatch.SenderPeer is NodeId; ApplyBatchCausal(NodeId) overload
+
+---
+
 ## 2.2.11 — 2026-11-03
 
 **CausalDeps typed; BuildFrame Span API.**

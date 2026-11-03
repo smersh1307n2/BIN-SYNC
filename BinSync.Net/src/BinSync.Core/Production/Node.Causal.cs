@@ -8,14 +8,14 @@ public sealed class HeldCausalBatch
     /// <summary>DELTA_BATCH logical unit: headers, digests, and list of OutboxEntry records.</summary>
     public required Batch Batch { get; init; }
     /// <summary>Peer that sent the held batch.</summary>
-    public required byte[] SenderPeer { get; init; }
+    public required NodeId SenderPeer { get; init; }
 }
 
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
     /// <summary>
-    /// When set, <see cref="ApplyBatchCausal"/> evaluates <see cref="OutboxEntry.CausalDeps"/>
+    /// When set, <see cref="ApplyBatchCausal(Batch, NodeId)"/> evaluates <see cref="OutboxEntry.CausalDeps"/>
     /// before applying (KЗ5 all-or-nothing). Plain <see cref="ApplyBatch"/> ignores this.
     /// </summary>
     public CausalTracker? Causal { get; set; }
@@ -26,7 +26,11 @@ public sealed partial class Node
     /// then throw <c>CAUSAL_DEP_MISSING</c>. On Cycle / LostDep / TimedOut: throw same code
     /// without enqueuing. On Ready: apply, then NoteApplied each changeId.
     /// </summary>
-    public BatchResult ApplyBatchCausal(Batch batch, byte[] senderPeer)
+    public BatchResult ApplyBatchCausal(Batch batch, byte[] senderPeer) =>
+        ApplyBatchCausal(batch, NodeId.From(senderPeer));
+
+    /// <summary>Apply with typed sender peer.</summary>
+    public BatchResult ApplyBatchCausal(Batch batch, NodeId senderPeer)
     {
         lock (_lockMeta)
         {
@@ -43,7 +47,7 @@ public sealed partial class Node
                     if (outcome == CausalOutcome.Pending)
                     {
                         // KЗ4: hold full batch for later DrainAndRetryCausal
-                        var held = new HeldCausalBatch { Batch = batch, SenderPeer = (byte[])senderPeer.Clone() };
+                        var held = new HeldCausalBatch { Batch = batch, SenderPeer = senderPeer };
                         foreach (var e in batch.Entries)
                             tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
                     }
@@ -78,7 +82,7 @@ public sealed partial class Node
     }
 
     /// <summary>
-    /// Drain Ready held batches and re-apply them via <see cref="ApplyBatchCausal"/>.
+    /// Drain Ready held batches and re-apply them via <see cref="ApplyBatchCausal(Batch, NodeId)"/>.
     /// Returns how many batches successfully applied. Timed-out/cycle items are skipped.
     /// </summary>
     public int DrainAndRetryCausal()
