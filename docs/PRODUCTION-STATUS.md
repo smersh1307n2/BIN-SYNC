@@ -5,7 +5,7 @@
 **Package:** `BinSync.Core` **`2.2.23`** · **Target:** `net10.0` · **Branch:** `main`  
 **Tag:** `v2.2.23` (see GitHub Releases)  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** 274 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
+**Tests:** 276 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
 
 **Spec parity:** **~95%+** — reference engine production-hardened.  
 **Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** → **1.0.1** → **2.1.0** (API shape major).

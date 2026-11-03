@@ -7,6 +7,7 @@
 - Public API: `class BatchResult` → `struct BatchResult`
 - Idempotent replay no longer allocates a result object on the heap
 - `DeliverBatch` still returns `BatchResult?` (nullable value type)
+- `docs/PUBLIC-API.md` aligned with the 2.2.23 surface (typed ids, internal collections, session `NodeId`)
 
 ---
 

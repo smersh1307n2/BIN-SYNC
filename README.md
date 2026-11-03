@@ -7,7 +7,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Spec (v2.3.6) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
 | Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
-| Public API freeze (1.0) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
+| Public API surface (2.2) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
 | Changelog | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | License | [`LICENSE.md`](LICENSE.md) |
 | Crypto notice | [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md) |
@@ -17,7 +17,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Two-node sample | [`samples/TwoNodeLoopback/`](samples/TwoNodeLoopback/) |
 
 **Package:** `BinSync.Core` **`2.2.23`** · **Target:** `net10.0`  
-**Branch:** `main` · **Tests:** 274 (CI)  
+**Branch:** `main` · **Tests:** 276 (CI)  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
 ---
