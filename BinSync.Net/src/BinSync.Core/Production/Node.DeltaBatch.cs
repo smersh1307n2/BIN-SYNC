@@ -103,13 +103,17 @@ public sealed partial class Node
             if (gap > 0) foreach (var e in pending) e.Seq -= gap;
         }
         long start = pending[0].Seq, end = pending[^1].Seq;
+        // Resolve self-alias once (common path: all entries self-authored).
+        int selfAlias = AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1;
         // Translate origins. When every payload is already stamped (common self-alias=1 path),
         // reuse `pending` entry objects — no second List of OutboxEntry / no payload clones.
         List<OutboxEntry>? translated = null;
         for (int i = 0; i < pending.Count; i++)
         {
             var e = pending[i];
-            int? alias = AliasOf(targetPeer, e.AuthorNodeId, Epoch);
+            int? alias = e.AuthorNodeId == NodeId
+                ? selfAlias
+                : AliasOfInternal(targetPeer, e.AuthorNodeId, Epoch);
             if (alias is null && e.AuthorNodeId == NodeId)
                 alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
             if (alias is null)
@@ -121,7 +125,7 @@ public sealed partial class Node
                 if (peerNode is not null && e.AuthorNodeId != NodeId)
                 {
                     int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAlias(peerNode, e.AuthorNodeId, epTry);
+                    alias = EnsureAliasInternal(peerNode, e.AuthorNodeId, epTry);
                 }
                 else if (peerNode is null)
                 {
@@ -208,7 +212,7 @@ public sealed partial class Node
         // BUGFIX (implementation finding): a freshly built batch must be fully signed —
         // sign_batch_for is idempotent w.r.t. the id cache; the per-stream chain checkpoint
         // advances only after successful delivery (AdvanceStream).
-        return SignBatchFor(batch, targetPeer);
+        return SignBatchForInternal(batch, targetPeer);
     }
 
 

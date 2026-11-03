@@ -1,5 +1,17 @@
 # Changelog — BinSync.Core
 
+## 2.2.22 — 2026-11-03
+
+**CreateDeltaBatch speed (no alloc regression).**
+
+- Call AliasOfInternal / EnsureAliasInternal / SignBatchForInternal under existing gates (no re-entrant lock per entry)
+- Cache self-alias once for the common all-self-authored path
+- AliasOfInternal uses EmptyAliasMap / EmptyRevAlias instead of new empty Dictionary on miss
+
+N=500 CreateDelta: ~280 µs / 64 KB (was ~480 µs after 2.2.21; baseline ~359 µs / 554 KB)
+
+---
+
 ## 2.2.21 — 2026-11-03
 
 **Fix encode latency regression (ArrayPool double-copy).**

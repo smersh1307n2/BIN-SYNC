@@ -313,7 +313,7 @@ public sealed partial class Node
     {
         // BUGFIX (port): the fallback map MUST use the byte-content comparer too — with the
         // default ReferenceEqualityComparer an empty miss-map behaved inconsistently.
-        var rev = NodeToAlias.TryGetValue(peer, out var r) ? r : new Dictionary<(NodeId Id, int Epoch), int>();
+        if (!NodeToAlias.TryGetValue(peer, out var rev)) rev = EmptyRevAlias;
         // SPEC CORRECTION (errata E-1, Python port `alias_of`): the `epoch` argument is kept
         // for API compatibility ONLY; identity per §4.6 is the bare nodeId. The previous port
         // short-circuited on the exact (nodeId, epoch) pair, which made a stale registration
@@ -331,7 +331,7 @@ public sealed partial class Node
         foreach (var (dur, a) in rev)
             if (dur.Id == nodeId && found is null) found = a;
         if (found is null) return null;
-        var fwd = AliasToNode.TryGetValue(peer, out var f) ? f : new Dictionary<int, (NodeId Id, int Epoch)>();
+        if (!AliasToNode.TryGetValue(peer, out var fwd)) fwd = EmptyAliasMap;
         // collision check: does this alias belong to a DIFFERENT author in the forward map?
         if (fwd.TryGetValue(found.Value, out var owner) && !(owner.Id == nodeId))
             return null;      // ambiguous alias — never guess [А3]

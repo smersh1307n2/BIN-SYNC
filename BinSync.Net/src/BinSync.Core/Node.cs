@@ -13,6 +13,7 @@ public sealed partial class Node
 
     /// <summary>Shared empty alias map to avoid per-call empty Dictionary allocations.</summary>
     private static readonly Dictionary<int, (NodeId Id, int Epoch)> EmptyAliasMap = new();
+    private static readonly Dictionary<(NodeId Id, int Epoch), int> EmptyRevAlias = new();
 
     // ---- production hardening (Шаг 2): thread safety -------------------------------
     /// <summary>
