@@ -11,9 +11,11 @@ public sealed partial class TcpSyncSession
         byte logicalType, uint streamId, ulong baseSeq, byte[] logicalPayload, int maxBody,
         CancellationToken ct = default)
     {
-        var frames = FragmentCodec.BuildFrames(logicalType, streamId, baseSeq, logicalPayload, maxBody);
-        foreach (var fr in frames)
-            await _transport.SendAsync(fr, ct).ConfigureAwait(false);
+        // Split into fragment bodies, frame each via pooled SendFrameAsync.
+        var parts = FragmentCodec.Split(logicalPayload, maxBody);
+        for (int i = 0; i < parts.Count; i++)
+            await SendFrameAsync(logicalType, streamId, baseSeq + (ulong)i, parts[i], ct, Frames.FLAG_FRAGMENT)
+                .ConfigureAwait(false);
     }
 
     /// <summary>

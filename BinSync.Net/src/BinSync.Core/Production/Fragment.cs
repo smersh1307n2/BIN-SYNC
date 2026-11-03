@@ -1,3 +1,4 @@
+using System.Buffers;
 // Logical message fragmentation (§12 FLAG_FRAGMENT, lab §17 scenario 12).
 // Wire fragment payload: msgId b128 | index u16 | count u16 | body bytes.
 namespace BinSync;
@@ -46,19 +47,34 @@ public static class FragmentCodec
         {
             int off = i * maxBody;
             int len = Math.Min(maxBody, logicalPayload.Length - off);
-            var body = new byte[len];
-            Array.Copy(logicalPayload, off, body, 0, len);
-            list.Add(EncodeOne(msgId, (ushort)i, (ushort)count, body));
+            list.Add(EncodeOne(msgId, (ushort)i, (ushort)count, logicalPayload.AsSpan(off, len)));
         }
         return list;
     }
 
     /// <summary>Encode one into canonical wire bytes.</summary>
-    public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body)
+    public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body) =>
+        EncodeOne(msgId, index, count, (ReadOnlySpan<byte>)body);
+
+    /// <summary>Encode one fragment without requiring an owned body array.</summary>
+    public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, ReadOnlySpan<byte> body)
     {
-        var w = new Writer();
-        w.B128(Codec.CanonicalB128(msgId)).U16(index).U16(count).Bytes(body);
-        return w.Value();
+        int est = 24 + body.Length;
+        var rented = ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented);
+            // msgId is already 16-byte from Split
+            w.B128(msgId).U16(index).U16(count).Bytes(body);
+            int n = w.Length;
+            var result = new byte[n];
+            w.WrittenSpan.CopyTo(result);
+            return result;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Decode one from canonical wire bytes.</summary>

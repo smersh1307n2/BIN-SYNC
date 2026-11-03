@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.16 — 2026-11-03
+
+**KeyRotation + fragments on pooled send path.**
+
+- SendKeyRotationAsync uses SendFrameAsync (ArrayPool frame)
+- SendFragmentedAsync splits and sends via SendFrameAsync with FLAG_FRAGMENT
+- FragmentCodec.EncodeOne / Split: no intermediate body copy; ArrayPool encode buffer
+- SendFrameAsync accepts flags
+
+---
+
 ## 2.2.15 — 2026-11-03
 
 **ReadFrame pooled header; PipeTransport uninit copy; TcpSync SendFrameAsync everywhere.**

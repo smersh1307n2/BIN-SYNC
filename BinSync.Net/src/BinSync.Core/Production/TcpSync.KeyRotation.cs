@@ -8,9 +8,7 @@ public sealed partial class TcpSyncSession
     public async Task SendKeyRotationAsync(KeyRotationNotice notice, CancellationToken ct = default)
     {
         uint streamId = 0x0001_0000u | (uint)notice.NamespaceId;
-        await _transport.SendAsync(
-            KeyRotation.BuildFrame(notice, frameSeq: 17, streamId: streamId),
-            ct).ConfigureAwait(false);
+        await SendFrameAsync(KeyRotation.FrameType, streamId, 17ul, KeyRotation.Encode(notice), ct).ConfigureAwait(false);
     }
 
     /// <summary>

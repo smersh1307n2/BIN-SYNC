@@ -203,13 +203,13 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     }
 
     /// <summary>Build frame into an ArrayPool buffer and send without an extra intermediate copy.</summary>
-    private async Task SendFrameAsync(byte type, uint streamId, ulong seq, ReadOnlyMemory<byte> payload, CancellationToken ct)
+    private async Task SendFrameAsync(byte type, uint streamId, ulong seq, ReadOnlyMemory<byte> payload, CancellationToken ct, byte flags = 0)
     {
         int need = Frames.HEADER_SIZE + payload.Length;
         var rented = ArrayPool<byte>.Shared.Rent(need);
         try
         {
-            int n = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, need));
+            int n = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, need), flags);
             await _transport.SendAsync(rented.AsMemory(0, n), ct).ConfigureAwait(false);
         }
         finally
