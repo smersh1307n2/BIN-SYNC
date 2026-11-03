@@ -33,9 +33,18 @@ public sealed partial class Node
             var tracker = Causal;
             if (tracker is not null && batch.Entries.Count > 0)
             {
-                var members = new List<(byte[] ChangeId, IReadOnlyList<byte[]>? Deps)>(batch.Entries.Count);
+                var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(batch.Entries.Count);
                 foreach (var e in batch.Entries)
-                    members.Add((e.ChangeId.ToArray(), e.CausalDeps));
+                {
+                    BatchId[]? deps = null;
+                    if (e.CausalDeps.Count > 0)
+                    {
+                        deps = new BatchId[e.CausalDeps.Count];
+                        for (int di = 0; di < e.CausalDeps.Count; di++)
+                            deps[di] = BatchId.From(e.CausalDeps[di]);
+                    }
+                    members.Add((e.ChangeId, deps));
+                }
 
                 var outcome = tracker.EvaluateBatch(members, out _);
                 if (outcome != CausalOutcome.Ready)
@@ -94,7 +103,7 @@ public sealed partial class Node
             {
                 if (outcome != CausalOutcome.Ready) continue;
                 if (op.Payload is not HeldCausalBatch held) continue;
-                var key = Convert.ToHexString(held.Batch.BatchId);
+                var key = Convert.ToHexString(held.Batch.BatchId.ToArray());
                 if (!seen.Add(key)) continue;
                 try
                 {

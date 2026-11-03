@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.10 — 2026-11-03
+
+**CausalTracker on BatchId keys; EncodeRecordsArray ArrayPool.**
+
+- CausalTracker known/pending/edges use HashSet/Dictionary of BatchId (no hex-string keys on hot path)
+- PendingCausalOp.ChangeId/Deps are BatchId
+- EvaluateBatch typed overload; Node.ApplyBatchCausal uses it
+- EncodeRecordsArray rents scratch from ArrayPool
+
+---
+
 ## 2.2.9 — 2026-11-03
 
 **ArrayPool encode path + CausalTracker typed ids.**

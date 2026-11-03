@@ -21,26 +21,26 @@ public enum CausalOutcome
 /// <summary>One op waiting on causal parents.</summary>
 public sealed class PendingCausalOp
 {
-    /// <summary>Idempotency key (b128) for this change.</summary>
-    public required byte[] ChangeId { get; init; }
+    /// <summary>Idempotency key for this change.</summary>
+    public required BatchId ChangeId { get; init; }
     /// <summary>Causal dependency change ids required before apply.</summary>
-    public required byte[][] Deps { get; init; }
+    public required BatchId[] Deps { get; init; }
     /// <summary>UTC time in milliseconds when the item was enqueued.</summary>
     public required long EnqueuedUtcMs { get; init; }
-    /// <summary>Frame payload bytes after the header.</summary>
+    /// <summary>Optional held batch / payload for later retry.</summary>
     public object? Payload { get; init; }
 }
 
 /// <summary>
 /// Tracks known changeIds, quarantines ops with missing parents, detects cycles,
-/// and expires timed-out waits. Thread-safe.
+/// and expires timed-out waits. Thread-safe. Keys are BatchId (no hex-string allocations).
 /// </summary>
 public sealed class CausalTracker
 {
     private readonly object _gate = new();
-    private readonly HashSet<string> _known = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, PendingCausalOp> _pending = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, HashSet<string>> _edges = new(StringComparer.Ordinal); // child → parents
+    private readonly HashSet<BatchId> _known = new();
+    private readonly Dictionary<BatchId, PendingCausalOp> _pending = new();
+    private readonly Dictionary<BatchId, HashSet<BatchId>> _edges = new(); // child → parents
 
     /// <summary>How long a missing dep may stay pending before KЗ1 timeout.</summary>
     public TimeSpan DepTimeout { get; set; } = TimeSpan.FromSeconds(30);
@@ -53,10 +53,10 @@ public sealed class CausalTracker
     /// <summary>Number of ops still waiting on causal dependencies.</summary>
     public int PendingCount { get { lock (_gate) return _pending.Count; } }
 
-    /// <summary>Tuple key (wall, logical) for ordering HLC timestamps.</summary>
+    /// <summary>Hex key for diagnostics (allocates).</summary>
     public static string Key(byte[] id) => Convert.ToHexString(id);
 
-    /// <summary>Hex key for a typed batch/change id (no intermediate byte[]).</summary>
+    /// <summary>Hex key for diagnostics (allocates).</summary>
     public static string Key(BatchId id)
     {
         Span<byte> tmp = stackalloc byte[16];
@@ -64,108 +64,108 @@ public sealed class CausalTracker
         return Convert.ToHexString(tmp);
     }
 
-    /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
-    public void NoteApplied(byte[] changeId)
+    static BatchId[] ToBatchIds(IReadOnlyList<byte[]>? deps)
     {
-        lock (_gate)
-        {
-            _known.Add(Key(changeId));
-            _edges.Remove(Key(changeId));
-        }
+        if (deps is null || deps.Count == 0) return Array.Empty<BatchId>();
+        var a = new BatchId[deps.Count];
+        for (int i = 0; i < deps.Count; i++) a[i] = BatchId.From(deps[i]);
+        return a;
     }
+
+    /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
+    public void NoteApplied(byte[] changeId) => NoteApplied(BatchId.From(changeId));
 
     /// <summary>Record that a typed change id is durably known.</summary>
     public void NoteApplied(BatchId changeId)
     {
         lock (_gate)
         {
-            var k = Key(changeId);
-            _known.Add(k);
-            _edges.Remove(k);
+            _known.Add(changeId);
+            _edges.Remove(changeId);
         }
     }
 
     /// <summary>True when this change id is already marked applied in the tracker.</summary>
-    public bool IsKnown(byte[] changeId)
+    public bool IsKnown(byte[] changeId) => IsKnown(BatchId.From(changeId));
+
+    /// <summary>True when this change id is already marked applied in the tracker.</summary>
+    public bool IsKnown(BatchId changeId)
     {
-        lock (_gate) return _known.Contains(Key(changeId));
+        lock (_gate) return _known.Contains(changeId);
     }
 
     /// <summary>
     /// Evaluate an incoming op. Returns Ready when all deps are known and no cycle;
     /// otherwise Pending / Cycle / TimedOut / LostDep. Never mutates storage itself.
     /// </summary>
-    public CausalOutcome Evaluate(byte[] changeId, IReadOnlyList<byte[]>? deps, out string? detail)
+    public CausalOutcome Evaluate(byte[] changeId, IReadOnlyList<byte[]>? deps, out string? detail) =>
+        Evaluate(BatchId.From(changeId), ToBatchIds(deps), out detail);
+
+    /// <summary>Evaluate with typed change ids.</summary>
+    public CausalOutcome Evaluate(BatchId changeId, IReadOnlyList<BatchId>? deps, out string? detail)
     {
         detail = null;
-        deps ??= Array.Empty<byte[]>();
+        deps ??= Array.Empty<BatchId>();
         lock (_gate)
         {
-            var cid = Key(changeId);
-            if (_known.Contains(cid) && deps.Count == 0)
-                return CausalOutcome.Ready; // idempotent re-delivery of applied op
+            if (_known.Contains(changeId) && deps.Count == 0)
+                return CausalOutcome.Ready;
 
-            // Self-dependency is a trivial cycle
             foreach (var d in deps)
             {
-                if (Key(d) == cid)
+                if (d == changeId)
                 {
                     detail = "self-dep";
                     return CausalOutcome.Cycle;
                 }
             }
 
-            // Build tentative edges for cycle check
-            var parentKeys = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var d in deps)
-                parentKeys.Add(Key(d));
-
-            if (WouldCycle(cid, parentKeys))
+            var parentSet = deps is HashSet<BatchId> hs ? hs : new HashSet<BatchId>(deps);
+            if (WouldCycle(changeId, parentSet))
             {
                 detail = "cycle";
                 return CausalOutcome.Cycle;
             }
 
-            var missing = new List<string>();
             foreach (var d in deps)
             {
-                var k = Key(d);
-                if (!_known.Contains(k))
-                    missing.Add(k);
+                if (!_known.Contains(d))
+                {
+                    detail = Key(d); // missing parent hex for diagnostics / tests
+                    return CausalOutcome.Pending;
+                }
             }
-
-            if (missing.Count == 0)
-                return CausalOutcome.Ready;
-
-            detail = string.Join(",", missing);
-            return CausalOutcome.Pending;
+            return CausalOutcome.Ready;
         }
     }
 
-    /// <summary>Quarantine an op that is Pending. KЗ4: caller must not advance cursors.</summary>
+    /// <summary>Hold an op until parents arrive (or timeout).</summary>
     public void EnqueuePending(BatchId changeId, IReadOnlyList<byte[]> deps, object? payload = null) =>
-        EnqueuePending(changeId.ToArray(), deps, payload);
+        EnqueuePending(changeId, ToBatchIds(deps), payload);
 
-    public void EnqueuePending(byte[] changeId, IReadOnlyList<byte[]> deps, object? payload = null)
+    /// <summary>Hold an op until parents arrive (or timeout).</summary>
+    public void EnqueuePending(byte[] changeId, IReadOnlyList<byte[]> deps, object? payload = null) =>
+        EnqueuePending(BatchId.From(changeId), ToBatchIds(deps), payload);
+
+    /// <summary>Hold an op until parents arrive (or timeout).</summary>
+    public void EnqueuePending(BatchId changeId, IReadOnlyList<BatchId> deps, object? payload = null)
     {
         lock (_gate)
         {
-            var cid = Key(changeId);
-            var depArr = deps.Select(d => (byte[])d.Clone()).ToArray();
-            _pending[cid] = new PendingCausalOp
+            var depArr = deps is BatchId[] a ? a : deps.ToArray();
+            _pending[changeId] = new PendingCausalOp
             {
-                ChangeId = (byte[])changeId.Clone(),
+                ChangeId = changeId,
                 Deps = depArr,
                 EnqueuedUtcMs = UtcNowMs(),
                 Payload = payload,
             };
-            _edges[cid] = new HashSet<string>(depArr.Select(Key), StringComparer.Ordinal);
+            _edges[changeId] = new HashSet<BatchId>(depArr);
         }
     }
 
     /// <summary>
-    /// After a parent becomes known, return pending ops that are now Ready
-    /// (and mark them known). Timed-out entries are returned with TimedOut outcome.
+    /// After parents land, release any pending ops that are now Ready / TimedOut / Cycle.
     /// </summary>
     public List<(PendingCausalOp Op, CausalOutcome Outcome)> Drain()
     {
@@ -173,11 +173,9 @@ public sealed class CausalTracker
         lock (_gate)
         {
             long now = UtcNowMs();
-            var done = new List<string>();
-
+            var done = new List<BatchId>();
             foreach (var (cid, op) in _pending)
             {
-                // Timeout first (KЗ1)
                 if (now - op.EnqueuedUtcMs > DepTimeout.TotalMilliseconds)
                 {
                     released.Add((op, CausalOutcome.TimedOut));
@@ -185,14 +183,17 @@ public sealed class CausalTracker
                     continue;
                 }
 
-                if (WouldCycle(cid, _edges.GetValueOrDefault(cid) ?? new HashSet<string>()))
+                var parents = _edges.GetValueOrDefault(cid) ?? new HashSet<BatchId>();
+                if (WouldCycle(cid, parents))
                 {
                     released.Add((op, CausalOutcome.Cycle));
                     done.Add(cid);
                     continue;
                 }
 
-                bool allKnown = op.Deps.All(d => _known.Contains(Key(d)));
+                bool allKnown = true;
+                for (int i = 0; i < op.Deps.Length; i++)
+                    if (!_known.Contains(op.Deps[i])) { allKnown = false; break; }
                 if (allKnown)
                 {
                     _known.Add(cid);
@@ -200,7 +201,6 @@ public sealed class CausalTracker
                     done.Add(cid);
                 }
             }
-
             foreach (var cid in done)
             {
                 _pending.Remove(cid);
@@ -211,16 +211,21 @@ public sealed class CausalTracker
     }
 
     /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>
-    public List<PendingCausalOp> MarkLost(byte[] lostParent)
+    public List<PendingCausalOp> MarkLost(byte[] lostParent) => MarkLost(BatchId.From(lostParent));
+
+    /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>
+    public List<PendingCausalOp> MarkLost(BatchId lostParent)
     {
         var dropped = new List<PendingCausalOp>();
-        var lost = Key(lostParent);
         lock (_gate)
         {
-            var toRemove = new List<string>();
+            var toRemove = new List<BatchId>();
             foreach (var (cid, op) in _pending)
             {
-                if (op.Deps.Any(d => Key(d) == lost))
+                bool hit = false;
+                for (int i = 0; i < op.Deps.Length; i++)
+                    if (op.Deps[i] == lostParent) { hit = true; break; }
+                if (hit)
                 {
                     dropped.Add(op);
                     toRemove.Add(cid);
@@ -237,7 +242,6 @@ public sealed class CausalTracker
 
     /// <summary>
     /// Batch gate (KЗ5): if any op in the set is not Ready, the whole batch must not apply.
-    /// Returns Ready only when every member is Ready; otherwise the worst outcome among members.
     /// </summary>
     public CausalOutcome EvaluateBatch(
         IReadOnlyList<(byte[] ChangeId, IReadOnlyList<byte[]>? Deps)> members,
@@ -257,11 +261,29 @@ public sealed class CausalTracker
         return worst;
     }
 
-    private bool WouldCycle(string child, HashSet<string> parents)
+    /// <summary>Batch gate with typed change ids.</summary>
+    public CausalOutcome EvaluateBatch(
+        IReadOnlyList<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)> members,
+        out string? detail)
     {
-        // DFS: if following parents (and existing edges) we can reach child again → cycle
-        var stack = new Stack<string>(parents);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        detail = null;
+        CausalOutcome worst = CausalOutcome.Ready;
+        foreach (var (cid, deps) in members)
+        {
+            var o = Evaluate(cid, deps, out var d);
+            if (o != CausalOutcome.Ready)
+            {
+                detail = d;
+                if (o > worst) worst = o;
+            }
+        }
+        return worst;
+    }
+
+    private bool WouldCycle(BatchId child, HashSet<BatchId> parents)
+    {
+        var stack = new Stack<BatchId>(parents);
+        var seen = new HashSet<BatchId>();
         while (stack.Count > 0)
         {
             var n = stack.Pop();
