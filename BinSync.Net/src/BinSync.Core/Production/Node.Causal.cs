@@ -35,16 +35,7 @@ public sealed partial class Node
             {
                 var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(batch.Entries.Count);
                 foreach (var e in batch.Entries)
-                {
-                    BatchId[]? deps = null;
-                    if (e.CausalDeps.Count > 0)
-                    {
-                        deps = new BatchId[e.CausalDeps.Count];
-                        for (int di = 0; di < e.CausalDeps.Count; di++)
-                            deps[di] = BatchId.From(e.CausalDeps[di]);
-                    }
-                    members.Add((e.ChangeId, deps));
-                }
+                    members.Add((e.ChangeId, e.CausalDeps.Count > 0 ? e.CausalDeps : null));
 
                 var outcome = tracker.EvaluateBatch(members, out _);
                 if (outcome != CausalOutcome.Ready)
@@ -54,7 +45,7 @@ public sealed partial class Node
                         // KЗ4: hold full batch for later DrainAndRetryCausal
                         var held = new HeldCausalBatch { Batch = batch, SenderPeer = (byte[])senderPeer.Clone() };
                         foreach (var e in batch.Entries)
-                            tracker.EnqueuePending(e.ChangeId, e.CausalDeps, payload: held);
+                            tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
                     }
                     throw new SyncException("CAUSAL_DEP_MISSING", batch.BatchId);
                 }

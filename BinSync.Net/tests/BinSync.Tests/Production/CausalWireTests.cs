@@ -29,14 +29,14 @@ public class CausalWireTests
             {
                 ChangeId = Id(0x20),
                 RecordId = Rid(1),
-                CausalDeps = new List<byte[]> { Id(0x10), Id(0x11) },
+                CausalDeps = new List<BatchId> { Id(0x10), Id(0x11) },
                 Payload = new byte[] { 0x01 },
             },
             new()
             {
                 ChangeId = Id(0x21),
                 RecordId = Rid(2),
-                CausalDeps = new List<byte[]>(),
+                CausalDeps = new List<BatchId>(),
                 Payload = new byte[] { 0x02 },
             },
         };
@@ -78,7 +78,7 @@ public class CausalWireTests
             OpKind = 0x01,
             Payload = new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // minimal-ish
             AuthorNodeId = n.NodeId.ToArray(),
-            CausalDeps = new List<byte[]> { parent },
+            CausalDeps = new List<BatchId> { parent },
         };
         var batch = new Batch(
             1, 0, 1, 0x02, 0, n.NodeId, n.Epoch, 1, 1,
@@ -113,7 +113,7 @@ public class CausalWireTests
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),
-            CausalDeps = new List<byte[]> { parent },
+            CausalDeps = new List<BatchId> { parent },
         };
         var batch = new Batch(
             1, 0, 1, 0x02, 0, n.NodeId, n.Epoch, 1, 1,

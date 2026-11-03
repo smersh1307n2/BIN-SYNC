@@ -63,7 +63,7 @@ public sealed class OutboxEntry
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
     /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
-    public List<byte[]> CausalDeps { get; set; } = new();
+    public List<BatchId> CausalDeps { get; set; } = new();
 }
 
 /// <summary>DELTA_BATCH logical unit: headers, digests, and <see cref="OutboxEntry"/> list.</summary>

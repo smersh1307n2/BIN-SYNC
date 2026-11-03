@@ -548,7 +548,7 @@ public static class NodePersistence
             CreatedAt = (long)r.U64(),
         };
         int depCount = (int)r.Varint();
-        for (int i = 0; i < depCount; i++) e.CausalDeps.Add(r.B128());
+        for (int i = 0; i < depCount; i++) e.CausalDeps.Add(BatchId.From(r.B128()));
         return e;
     }
 

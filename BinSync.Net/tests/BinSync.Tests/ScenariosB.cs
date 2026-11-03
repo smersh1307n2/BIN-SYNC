@@ -267,7 +267,7 @@ public class ScenariosB
         byte[] parent = Enumerable.Repeat((byte)0xde, 16).ToArray();
         a.WriteField(NS, Rid(1), 0x0100, new byte[] { (byte)'x' }, new Hlc(10, 0));
         var ob = a.Outbox[NS][^1];
-        ob.CausalDeps = new List<byte[]> { parent };
+        ob.CausalDeps = new List<BatchId> { parent };
         long now = 200; // timeout elapsed
         bool timedOut = 100 < now && !a.Inbox.Contains(((NodeId)ob.ChangeId.ToArray(), NS, 0, BatchId.From(parent)));
         Assert.True(timedOut);

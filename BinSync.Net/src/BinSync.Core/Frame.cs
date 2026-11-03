@@ -161,7 +161,11 @@ public static class FrameCodec
     /// Header (§12.2 packed): magic u16 | version u8 | type u8 | flags u8 | streamId u32 |
     /// frameSeq u64 | payloadLen u32 | crc32c u32 — exactly 25 bytes (BUGFIX: no struct padding).
     /// <summary>Build a framed packet with CRC32C header.</summary>
-    public static byte[] BuildFrame(byte frameType, uint streamId, ulong frameSeq, byte[] payload, byte flags = 0)
+    public static byte[] BuildFrame(byte frameType, uint streamId, ulong frameSeq, byte[] payload, byte flags = 0) =>
+        BuildFrame(frameType, streamId, frameSeq, (ReadOnlySpan<byte>)payload, flags);
+
+    /// <summary>Build a framed packet with CRC32C header from a span payload.</summary>
+    public static byte[] BuildFrame(byte frameType, uint streamId, ulong frameSeq, ReadOnlySpan<byte> payload, byte flags = 0)
     {
         if (payload.Length > Frames.MAX_PAYLOAD_SIZE)
             throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
@@ -173,8 +177,27 @@ public static class FrameCodec
         BinaryPrimitives.WriteUInt64LittleEndian(frame.AsSpan(9), frameSeq);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(17), (uint)payload.Length);
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(21), crc);
-        payload.AsSpan().CopyTo(frame.AsSpan(Frames.HEADER_SIZE));
+        payload.CopyTo(frame.AsSpan(Frames.HEADER_SIZE));
         return frame;
+    }
+
+    /// <summary>Write frame into destination; returns bytes written.</summary>
+    public static int BuildFrame(byte frameType, uint streamId, ulong frameSeq, ReadOnlySpan<byte> payload, Span<byte> destination, byte flags = 0)
+    {
+        int need = Frames.HEADER_SIZE + payload.Length;
+        if (destination.Length < need)
+            throw new ArgumentException($"destination too small (need {need})", nameof(destination));
+        if (payload.Length > Frames.MAX_PAYLOAD_SIZE)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
+        uint crc = Frames.Crc32C(payload);
+        BinaryPrimitives.WriteUInt16LittleEndian(destination, Frames.MAGIC);
+        destination[2] = Frames.VERSION; destination[3] = frameType; destination[4] = flags;
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(5), streamId);
+        BinaryPrimitives.WriteUInt64LittleEndian(destination.Slice(9), frameSeq);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(17), (uint)payload.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(21), crc);
+        payload.CopyTo(destination.Slice(Frames.HEADER_SIZE));
+        return need;
     }
 
     /// <summary>Parse and validate a framed packet.</summary>

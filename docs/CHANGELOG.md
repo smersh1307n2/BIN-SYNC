@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.11 — 2026-11-03
+
+**CausalDeps typed; BuildFrame Span API.**
+
+- OutboxEntry.CausalDeps is List<BatchId>
+- CausalWire / persistence encode B128(BatchId) without CanonicalB128 copies
+- ApplyBatchCausal no longer converts deps at the gate
+- FrameCodec.BuildFrame accepts ReadOnlySpan and can write into a caller Span
+
+---
+
 ## 2.2.10 — 2026-11-03
 
 **CausalTracker on BatchId keys; EncodeRecordsArray ArrayPool.**

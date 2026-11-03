@@ -33,7 +33,7 @@ public class CausalApplyTests
         a.WriteField(1, rid, fieldId: 1, value: new byte[] { 0x11 });
         var entry = a.Outbox[1][^1];
         entry.ChangeId = changeId;
-        entry.CausalDeps = deps.ToList();
+        entry.CausalDeps = deps.Select(BatchId.From).ToList();
 
         // Build a batch the remote can try to apply via causal gate only.
         // Full ApplyBatch needs SEQ/cursor setup — we only assert the causal gate throws
@@ -87,7 +87,7 @@ public class CausalApplyTests
             OpKind = 0x01,
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),
-            CausalDeps = new List<byte[]> { parent },
+            CausalDeps = new List<BatchId> { parent },
         };
         var batch = new Batch(
             1, 0, 1, 0x02, 0, n.NodeId, n.Epoch, 1, 1,
@@ -114,7 +114,7 @@ public class CausalApplyTests
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),
-            CausalDeps = new List<byte[]> { changeId }, // self-dep
+            CausalDeps = new List<BatchId> { changeId }, // self-dep
         };
         var batch = new Batch(
             1, 0, 1, 0x02, 0, n.NodeId, n.Epoch, 1, 1,
@@ -142,7 +142,7 @@ public class CausalApplyTests
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),
-            CausalDeps = new List<byte[]> { parent },
+            CausalDeps = new List<BatchId> { parent },
         };
         var batch = new Batch(
             1, 0, 1, 0x02, 0, n.NodeId, n.Epoch, 1, 1,

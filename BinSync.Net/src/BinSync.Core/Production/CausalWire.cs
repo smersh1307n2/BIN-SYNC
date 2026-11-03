@@ -32,7 +32,7 @@ public static class CausalWire
             w.B128(e.ChangeId);
             w.Varint((ulong)e.CausalDeps.Count);
             foreach (var d in e.CausalDeps)
-                w.B128(d.Length == 16 ? d : Codec.CanonicalB128(d));
+                w.B128(d);
         }
         return w.Value();
     }
@@ -58,11 +58,11 @@ public static class CausalWire
                 if (n != entries.Count) continue;
                 for (int i = 0; i < n; i++)
                 {
-                    var cid = r.B128();
+                    var cid = BatchId.From(r.B128());
                     int dc = (int)r.Varint();
-                    var deps = new List<byte[]>(dc);
+                    var deps = new List<BatchId>(dc);
                     for (int j = 0; j < dc; j++)
-                        deps.Add(r.B128());
+                        deps.Add(BatchId.From(r.B128()));
                     entries[i].ChangeId = cid;
                     entries[i].CausalDeps = deps;
                 }
