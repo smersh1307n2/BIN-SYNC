@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.20 — 2026-11-03
+
+**PeerState.PeerNodeId is NodeId; residual hex sorts cleaned.**
+
+- PeerState.PeerNodeId typed as NodeId
+- DrainAndRetryCausal dedupes by HashSet<BatchId> (no ToHexString)
+- GcNotice / Membership member sort via span compare (no hex alloc)
+
+---
+
 ## 2.2.19 — 2026-11-03
 
 **Transport PeerNodeId is NodeId; session API typed.**

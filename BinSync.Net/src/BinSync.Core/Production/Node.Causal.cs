@@ -93,13 +93,12 @@ public sealed partial class Node
             int applied = 0;
             var released = Causal.Drain();
             // Deduplicate by batch id (one held batch may be enqueued under several changeIds)
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<BatchId>();
             foreach (var (op, outcome) in released)
             {
                 if (outcome != CausalOutcome.Ready) continue;
                 if (op.Payload is not HeldCausalBatch held) continue;
-                var key = Convert.ToHexString(held.Batch.BatchId.ToArray());
-                if (!seen.Add(key)) continue;
+                if (!seen.Add(held.Batch.BatchId)) continue;
                 try
                 {
                     // Re-enter causal gate; should be Ready now that parents are known

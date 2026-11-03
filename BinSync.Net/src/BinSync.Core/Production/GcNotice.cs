@@ -49,7 +49,7 @@ public static class GcNotice
             });
         }
         msg.Quarantined.Sort((a, b) =>
-            string.CompareOrdinal(Convert.ToHexString(a.NodeId), Convert.ToHexString(b.NodeId)));
+            a.NodeId.AsSpan().SequenceCompareTo(b.NodeId.AsSpan()));
         return msg;
     }
 

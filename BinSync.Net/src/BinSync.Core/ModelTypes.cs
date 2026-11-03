@@ -171,7 +171,7 @@ public sealed partial class Batch
 public sealed partial class PeerState
 {
     /// <summary>Remote peer node id this state is tracked for.</summary>
-    public byte[] PeerNodeId { get; set; } = Array.Empty<byte>();
+    public NodeId PeerNodeId { get; set; }
     /// <summary>Logical namespace this entity belongs to.</summary>
     public int NamespaceId { get; set; }
     /// <summary>Highest sequence the local node has pushed to this peer stream.</summary>
@@ -196,7 +196,7 @@ public sealed partial class PeerState
     /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
     public PeerState(NodeId peer, int ns)
     {
-        PeerNodeId = peer.ToArray();
+        PeerNodeId = peer;
         NamespaceId = ns;
     }
 
