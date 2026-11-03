@@ -136,7 +136,7 @@ public static class SessionWire
     /// Apply a decoded ALIAS_MAP onto <paramref name="local"/> for the session with
     /// <paramref name="peerNodeId"/> (symmetric registration, errata E-11).
     /// </summary>
-    public static void ApplyAliasMap(Node local, byte[] peerNodeId, IReadOnlyList<AliasMapEntry> entries)
+    public static void ApplyAliasMap(Node local, NodeId peerNodeId, IReadOnlyList<AliasMapEntry> entries)
     {
         foreach (var e in entries)
             local.RegisterAlias(peerNodeId, e.Alias, e.NodeId, e.Epoch);
@@ -146,7 +146,7 @@ public static class SessionWire
     /// Build the ALIAS_MAP this node would advertise: self + peer + durable third parties
     /// (same deterministic assignment as <see cref="Transport.MakeSession"/>).
     /// </summary>
-    public static List<AliasMapEntry> BuildAliasMapTable(Node local, byte[] peerNodeId, int peerEpoch,
+    public static List<AliasMapEntry> BuildAliasMapTable(Node local, NodeId peerNodeId, int peerEpoch,
         int selfAlias = 1, int peerAlias = 2)
     {
         var authors = new Dictionary<NodeId, int>()

@@ -1,5 +1,14 @@
 # Changelog — BinSync.Core
 
+## 2.2.19 — 2026-11-03
+
+**Transport PeerNodeId is NodeId; session API typed.**
+
+- ISyncTransport / PipeTransport / StreamSyncTransport / TcpSyncSession.PeerNodeId → NodeId
+- ApplyAliasMap / BuildAliasMapTable take NodeId peer
+
+---
+
 ## 2.2.18 — 2026-11-03
 
 **HelloPayload / AliasMapEntry use NodeId.**

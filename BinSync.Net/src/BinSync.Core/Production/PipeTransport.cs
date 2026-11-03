@@ -11,7 +11,7 @@ public sealed class PipeTransport : ISyncTransport
 {
     private readonly ChannelReader<byte[]> _reader;
     private readonly ChannelWriter<byte[]> _writer;
-    private byte[] _peerNodeId = Array.Empty<byte>();
+    private NodeId _peerNodeId;
     private bool _disposed;
 
     private PipeTransport(ChannelReader<byte[]> reader, ChannelWriter<byte[]> writer)
@@ -21,10 +21,10 @@ public sealed class PipeTransport : ISyncTransport
     }
 
     /// <summary>Remote peer node id this state is tracked for.</summary>
-    public byte[] PeerNodeId
+    public NodeId PeerNodeId
     {
         get => _peerNodeId;
-        set => _peerNodeId = value ?? Array.Empty<byte>();
+        set => _peerNodeId = value;
     }
 
     /// <summary>Create two endpoints of a bidirectional in-memory pipe.</summary>

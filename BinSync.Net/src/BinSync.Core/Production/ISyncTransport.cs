@@ -9,7 +9,7 @@ namespace BinSync;
 public interface ISyncTransport : IAsyncDisposable
 {
     /// <summary>Durable peer identity once the session is known; may be empty before HELLO.</summary>
-    byte[] PeerNodeId { get; }
+    NodeId PeerNodeId { get; }
 
     /// <summary>Send one complete framed packet (25-byte header + payload).</summary>
     ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default);

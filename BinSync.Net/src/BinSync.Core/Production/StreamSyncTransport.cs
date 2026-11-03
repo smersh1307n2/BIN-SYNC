@@ -10,7 +10,7 @@ public sealed class StreamSyncTransport : ISyncTransport
 {
     private readonly Stream _stream;
     private readonly bool _ownsStream;
-    private byte[] _peerNodeId = Array.Empty<byte>();
+    private NodeId _peerNodeId;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly SemaphoreSlim _readLock = new(1, 1);
 
@@ -28,10 +28,10 @@ public sealed class StreamSyncTransport : ISyncTransport
     }
 
     /// <summary>Remote peer node id this state is tracked for.</summary>
-    public byte[] PeerNodeId
+    public NodeId PeerNodeId
     {
         get => _peerNodeId;
-        set => _peerNodeId = value ?? Array.Empty<byte>();
+        set => _peerNodeId = value;
     }
 
     /// <summary>Send one packet on the transport.</summary>

@@ -74,7 +74,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     private readonly Stream? _ownedOuter; // SslStream when TLS; disposed after transport
 
     /// <summary>Remote peer node id this state is tracked for.</summary>
-    public byte[] PeerNodeId { get; }
+    public NodeId PeerNodeId { get; }
     /// <summary>Session epoch advertised by the connected peer.</summary>
     public int PeerEpoch { get; }
     /// <summary>Capability bits advertised by the connected peer.</summary>
