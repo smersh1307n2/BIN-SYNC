@@ -287,9 +287,9 @@ public class InvariantsAndAdvanced
         a.WriteField(NS, Rid(1), 0x0100, Asc("from-A"), new Hlc(10, 0));
         x.WriteField(NS, Rid(2), 0x0100, Asc("from-X"), new Hlc(11, 0));
         var first = Transport.DeliverBatch(a, b, NS, dropAck: true)!;
-        Assert.Equal(1, first.Applied);
+        Assert.Equal(1, first.Value.Applied);
         var replay = a.CreateDeltaBatch(b.NodeId, NS)!;
-        Assert.Equal(first.BatchId, replay.BatchId);      // deterministic replay id [§10.2.2]
+        Assert.Equal(first.Value.BatchId, replay!.BatchId);      // deterministic replay id [§10.2.2]
         // now deliver X's stream too and let both converge with ACKs flowing
         Transport.SyncRound(x, b, NS);
         Transport.SyncRound(a, b, NS);
@@ -590,7 +590,7 @@ public class InvariantsAndAdvanced
         decoded7.SchemaVersion = 2;
         Assert.Throws<SyncException>(() => b.ApplyBatch(decoded7, a.NodeId));
         var r8 = Transport.DeliverBatch(a, b, 8);       // unaffected namespace flows
-        Assert.Equal(1, r8!.Applied);
+        Assert.Equal(1, r8!.Value.Applied);
         b.SchemaVersions[NS] = 2;
         var again = b.DecodeBatchPayload(a.EncodeBatchPayload(batch7));
         b.ApplyBatch(again, a.NodeId);

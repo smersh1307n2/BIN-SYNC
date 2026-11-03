@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.23 — 2026-11-03
+
+**BatchResult is a struct (zero heap result on ApplyBatch).**
+
+- Public API: `class BatchResult` → `struct BatchResult`
+- Idempotent replay no longer allocates a result object on the heap
+- `DeliverBatch` still returns `BatchResult?` (nullable value type)
+
+---
+
 ## 2.2.22 — 2026-11-03
 
 **CreateDeltaBatch speed (no alloc regression).**

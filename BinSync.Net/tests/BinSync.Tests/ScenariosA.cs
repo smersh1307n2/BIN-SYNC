@@ -293,7 +293,7 @@ public class ScenariosA
         Transport.MakeSession(a, b);
         a.WriteField(NS, Rid(1), 0x0100, new byte[] { (byte)'x' }, new Hlc(10, 0));
         var r1 = Transport.DeliverBatch(a, b, NS, dropAck: true)!;   // ACK lost
-        Assert.Equal(1, r1.Applied);
+        Assert.Equal(1, r1.Value.Applied);
         var batch2 = a.CreateDeltaBatch(b.NodeId, NS);
         Assert.NotNull(batch2);
         var decoded = b.DecodeBatchPayload(a.EncodeBatchPayload(batch2!));
@@ -303,7 +303,7 @@ public class ScenariosA
         Assert.Equal(0, r2.Applied);                                  // no-op
         Assert.Single(b.AcksOut);
         Assert.Equal(decoded.BatchId, b.AcksOut[0]);                  // re-ACK mandatory [П4]
-        Assert.Equal(decoded.BatchId, r1.BatchId);                    // deterministic replay id
+        Assert.Equal(decoded.BatchId, r1.Value.BatchId);                    // deterministic replay id
     }
 
     [Fact]
@@ -329,6 +329,6 @@ public class ScenariosA
         var ex = Assert.Throws<SyncException>(() => Transport.DeliverBatch(a, b, 8));
         Assert.Equal("NAMESPACE_FORBIDDEN", ex.CodeName);
         var r = Transport.DeliverBatch(a, b, NS);
-        Assert.Equal(1, r!.Applied);                                  // other ns unaffected
+        Assert.Equal(1, r!.Value.Applied);                                  // other ns unaffected
     }
 }

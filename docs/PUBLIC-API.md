@@ -1,4 +1,4 @@
-**Current package: 2.2.22** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
+**Current package: 2.2.23** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
 
 # BinSync.Core — Public API surface (freeze for 1.0)
 

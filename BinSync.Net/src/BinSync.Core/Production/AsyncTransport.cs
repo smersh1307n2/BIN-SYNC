@@ -96,7 +96,7 @@ public static class AsyncTransport
             if (r is null) return n;   // sender has nothing pending for this peer (§10.2)
             n++;
             long after = PendingSeq(src, dst, ns);
-            if (after == before && r.Applied == 0)
+            if (after == before && r is { Applied: 0 })
             {
                 // No new ops moved in either dimension — one more idempotent hop, then stop.
                 var r2 = Transport.DeliverBatch(src, dst, ns, schemaVersion: schemaVersion);

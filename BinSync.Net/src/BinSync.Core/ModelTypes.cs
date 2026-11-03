@@ -211,8 +211,11 @@ public sealed partial class PeerState
     public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
 
-/// <summary>Outcome of <see cref="Node.ApplyBatch"/> / <see cref="Node.ApplyBatchPayload"/>.</summary>
-public sealed class BatchResult
+/// <summary>
+/// Outcome of <see cref="Node.ApplyBatch"/> / <see cref="Node.ApplyBatchPayload"/>.
+/// Value type so idempotent replay does not allocate on the heap.
+/// </summary>
+public struct BatchResult
 {
     /// <summary>128-bit batch identity with value equality.</summary>
     public BatchId BatchId { get; set; }

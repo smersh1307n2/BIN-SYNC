@@ -179,7 +179,7 @@ public class ScenariosB
         Transport.DeliverBatch(x, relay, NS);
         var r = Transport.DeliverBatch(relay, v, NS, filterAuthor: a.NodeId);  // author filter = A
         Assert.NotNull(r);
-        Assert.True(r!.Applied >= 1);
+        Assert.True(r.Value.Applied >= 1);
         Assert.Contains(Rid(1), v.Storage[NS]);
         Assert.DoesNotContain(Rid(2), v.Storage[NS]);   // X's records withheld [Р3]
     }
@@ -373,7 +373,7 @@ public class ScenariosB
         Assert.Equal(1, v.OutboxSize(NS));
         var r = Transport.DeliverBatch(v, a, NS);   // echo closes the ring
         Assert.NotNull(r);
-        Assert.Equal(0, r!.Applied);            // no-op on A [E2]
+        Assert.Equal(0, r.Value.Applied);            // no-op on A [E2]
         Assert.Equal(1, a.OutboxSize(NS));      // avalanche prevented [Ш2]
     }
 
@@ -414,7 +414,7 @@ public class ScenariosB
         foreach (var (fid, val) in new[] { (0x0100, "stale"), (0x0101, "two"), (0x0102, "three") })
             a.WriteField(NS, Rid(1), fid, Asc(val), new Hlc(2000, 0));
         var r = Transport.DeliverBatch(a, b, NS);
-        Assert.Equal(2, r!.Applied);   // fields 0x0101/0x0102; 0x0100 loses locally but batch commits
+        Assert.Equal(2, r!.Value.Applied);   // fields 0x0101/0x0102; 0x0100 loses locally but batch commits
         var rec = b.Storage[NS][Rid(1)];
         Assert.Equal(Asc("local-fresh"), rec.State[0x0100].Value);
         Assert.Equal(Asc("two"), rec.State[0x0101].Value);
