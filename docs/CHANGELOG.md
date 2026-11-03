@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.14 — 2026-11-03
+
+**TcpSync pooled frames; StreamSync zero-copy send; EncodeAck pool.**
+
+- FrameStream.WriteFrameAsync accepts ReadOnlyMemory (no forced copy)
+- StreamSyncTransport.SendAsync no longer ToArray()s the packet
+- TcpSync Push/Receive builds frames into ArrayPool buffers
+- EncodeAck uses ArrayPool + typed BatchId/NodeId (no dual ToArray)
+
+---
+
 ## 2.2.13 — 2026-11-03
 
 **FieldState.Value is ReadOnlyMemory<byte>.**

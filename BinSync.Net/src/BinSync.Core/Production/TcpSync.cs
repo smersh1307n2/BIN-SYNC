@@ -1,3 +1,4 @@
+using System.Buffers;
 // TCP accept/connect host (§3.2) over StreamSyncTransport, optional TLS (SslStream).
 // Session bootstrap: initiator sends HELLO, acceptor answers HELLO_ACK,
 // initiator publishes the canonical ALIAS_MAP (self=alias 1, peer=alias 2),
@@ -173,7 +174,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         sender.SignBatchFor(batch, PeerNodeId);
         var payload = sender.EncodeBatchPayload(batch);
         uint streamId = 0x0001_0000u | (uint)namespaceId;
-        await _transport.SendAsync(FrameCodec.BuildFrame(0x09, streamId, 1, payload), ct).ConfigureAwait(false);
+        await SendFrameAsync(0x09, streamId, 1, payload, ct).ConfigureAwait(false);
         var ackRaw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("peer closed before ACK");
         var (ackFrame, _) = FrameCodec.ParseFrame(ackRaw);
@@ -196,11 +197,25 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         if (frame.FrameType != 0x09)
             throw new FrameException("FRAME_REJECTED");
         var result = receiver.ApplyBatchPayload(frame.Payload, PeerNodeId);
-        var ack = FrameCodec.BuildFrame(
-            0x0B, 0x0002_0000u | (uint)result.NamespaceId, 2,
-            Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor));
-        await _transport.SendAsync(ack, ct).ConfigureAwait(false);
+        var ackPayload = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
+        await SendFrameAsync(0x0B, 0x0002_0000u | (uint)result.NamespaceId, 2, ackPayload, ct).ConfigureAwait(false);
         return result;
+    }
+
+    /// <summary>Build frame into an ArrayPool buffer and send without an extra intermediate copy.</summary>
+    private async Task SendFrameAsync(byte type, uint streamId, ulong seq, ReadOnlyMemory<byte> payload, CancellationToken ct)
+    {
+        int need = Frames.HEADER_SIZE + payload.Length;
+        var rented = ArrayPool<byte>.Shared.Rent(need);
+        try
+        {
+            int n = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, need));
+            await _transport.SendAsync(rented.AsMemory(0, n), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
 
     /// <summary>Release unmanaged or pooled resources.</summary>

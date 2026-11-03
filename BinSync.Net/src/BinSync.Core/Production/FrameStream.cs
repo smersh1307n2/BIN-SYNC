@@ -10,7 +10,11 @@ namespace BinSync;
 public static class FrameStream
 {
     /// <summary>Write a complete framed packet to the stream asynchronously.</summary>
-    public static async Task WriteFrameAsync(Stream stream, byte[] frame, CancellationToken ct = default)
+    public static Task WriteFrameAsync(Stream stream, byte[] frame, CancellationToken ct = default) =>
+        WriteFrameAsync(stream, (ReadOnlyMemory<byte>)frame, ct);
+
+    /// <summary>Write a complete framed packet without forcing a copy of the buffer.</summary>
+    public static async Task WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> frame, CancellationToken ct = default)
     {
         await stream.WriteAsync(frame, ct).ConfigureAwait(false);
         await stream.FlushAsync(ct).ConfigureAwait(false);

@@ -40,7 +40,7 @@ public sealed class StreamSyncTransport : ISyncTransport
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await FrameStream.WriteFrameAsync(_stream, packet.ToArray(), ct).ConfigureAwait(false);
+            await FrameStream.WriteFrameAsync(_stream, packet, ct).ConfigureAwait(false);
         }
         finally
         {

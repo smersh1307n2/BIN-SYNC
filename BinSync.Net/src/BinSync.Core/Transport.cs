@@ -1,3 +1,4 @@
+using System.Buffers;
 // Transport-agnostic session helpers (§3, §10.4): pairwise sync over in-memory pipes,
 // plus sneakernet file export/import (§3.5).
 // Port of binsync/transport.py — all SPEC HARDENING / errata notes preserved.
@@ -93,17 +94,30 @@ public static partial class Transport
     }
 
     /// <summary>Encode an ACK payload (batch id, cursor, optional author stream).</summary>
-    public static byte[] EncodeAck(BatchId batchId, long ackedSeq, NodeId authorStream = default) =>
-        EncodeAck(batchId.ToArray(), ackedSeq, authorStream.IsZero ? null : authorStream.ToArray());
-
-    public static byte[] EncodeAck(byte[] batchId, long ackedSeq, byte[]? authorStream = null)
+    public static byte[] EncodeAck(BatchId batchId, long ackedSeq, NodeId authorStream = default)
     {
-        var w = new Writer();
-        w.B128(batchId).U64((ulong)ackedSeq);
-        if (authorStream is not null)   // Errata E-4: ACK names the acknowledged stream
-            w.B128(authorStream);
-        return w.Value();
+        // Fixed upper bound: 16 + 8 + 16 = 40
+        int est = authorStream.IsZero ? 24 : 40;
+        var rented = ArrayPool<byte>.Shared.Rent(est);
+        try
+        {
+            var w = new Writer(rented);
+            w.B128(batchId).U64((ulong)ackedSeq);
+            if (!authorStream.IsZero)
+                w.B128(authorStream);
+            int n = w.Length;
+            var result = new byte[n];
+            w.WrittenSpan.CopyTo(result);
+            return result;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
     }
+
+    public static byte[] EncodeAck(byte[] batchId, long ackedSeq, byte[]? authorStream = null) =>
+        EncodeAck(BatchId.From(batchId), ackedSeq, authorStream is null ? default : NodeId.From(authorStream));
 
     /// <summary>Decode an ACK payload; author stream is optional for legacy ACKs.</summary>
     public static (byte[] BatchId, long Seq, byte[]? Author) DecodeAck(byte[] data)
