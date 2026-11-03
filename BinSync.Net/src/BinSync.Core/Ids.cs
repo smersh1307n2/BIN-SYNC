@@ -213,6 +213,18 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
     public static implicit operator byte[](BatchId id) => id.ToArray();
 
+    /// <summary>Content equality against a 16-byte span.</summary>
+    public bool EqualsBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 16) return false;
+        Span<byte> tmp = stackalloc byte[16];
+        WriteTo(tmp);
+        return tmp.SequenceEqual(bytes);
+    }
+
+    /// <summary>Content equality against a memory segment.</summary>
+    public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
+
     /// <summary>Write the 16 bytes into a destination span.</summary>
     public void WriteTo(Span<byte> dest)
     {

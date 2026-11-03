@@ -203,7 +203,7 @@ public sealed partial class Node
                         ep = Math.Max(ep, kv.Value);
         }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
-                              NodeId, ep, start, end, Zero128, Zero128, recordsRoot, Zero128, entries);
+                              NodeId, ep, start, end, default, Zero128, recordsRoot, Zero128, entries);
         ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, end);
         // BUGFIX (implementation finding): a freshly built batch must be fully signed —
         // sign_batch_for is idempotent w.r.t. the id cache; the per-stream chain checkpoint
@@ -245,7 +245,7 @@ public sealed partial class Node
             ps.Ids[key] = cached;
         }
         var (batchId, prev) = cached;
-        batch.BatchId = batchId.ToArray();
+        batch.BatchId = batchId;
         batch.PrevBatchDigest = prev;
         batch.BatchDigest = ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,
             batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, prev);

@@ -127,18 +127,18 @@ public sealed partial class Node
         int schemaVer = r.U16();
         byte policy = r.U8();
         byte flags = r.U8();
-        byte[] issuer = r.B128();
+        var issuer = NodeId.From(r.B128());
         int epoch = (int)r.U32();
         long cstart = (long)r.U64();
         long cend = (long)r.U64();
         int count = (int)r.Varint();
-        byte[] batchId = r.B128();
+        var batchId = BatchId.From(r.B128());
         byte[] prev = r.B128();
         byte[] root = r.B128();
         byte[] digest = r.B128();
         int recCount = (int)r.Varint();
         if (recCount != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
-        var issuerMem = (ReadOnlyMemory<byte>)issuer;
+        var issuerMem = (ReadOnlyMemory<byte>)issuer.ToArray();
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)
         {

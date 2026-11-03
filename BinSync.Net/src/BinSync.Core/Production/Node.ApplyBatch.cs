@@ -25,7 +25,7 @@ public sealed partial class Node
         // STEP 0.5: epoch regression (§4.4) — SPEC CORRECTIONS (errata E-2/E-3):
         // the watermark is keyed by the RECEIVING SESSION ((sender_peer, ns)) and compares
         // against the sender's CURRENT session incarnation epoch learned from HELLO/ALIAS_MAP.
-        var chain = ((NodeId)batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
+        var chain = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
         var sesKey = (senderPeer, batch.NamespaceId);
         var curKnown = SessionEpoch(senderPeer, batch.NamespaceId);
         if (curKnown is not null && batch.IssuerEpoch < curKnown.Value)
@@ -35,10 +35,10 @@ public sealed partial class Node
         if (batch.SchemaVersion > supported)
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
         // STEP 1: idempotency FIRST ([S7], [П7], §10.2.2 lost-ACK replay)
-        var key = ((NodeId)batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, BatchId.From(batch.BatchId));
+        var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
         if (Inbox.Contains(key))
         {
-            AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
+            AcksOut.Add(batch.BatchId.ToArray());   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
             // ACK must name the author stream (Errata E-4). Prefer the stream we learned
@@ -145,13 +145,13 @@ public sealed partial class Node
         // commit path only ever RAISES the watermark for batches that pass every gate.
         int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
         KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
-        AcksOut.Add(batch.BatchId);
+        AcksOut.Add(batch.BatchId.ToArray());
         result.Applied = applied;
         result.Acked = true;
         // Relay [Р1, Р2]: ONLY entries that actually changed state are appended to OUR
         // outbox under the ORIGINAL authorNodeId (SPEC HARDENING §8.3 [E2] + Errata E-10:
         // provenance-based relay eligibility — FULL rationale in the Python port).
-        if (!NodeId.EqualsBytes(batch.IssuerNodeId))
+        if (batch.IssuerNodeId != NodeId)
         {
             for (int idx = 0; idx < nEnt; idx++)
             {
@@ -364,7 +364,7 @@ public sealed partial class Node
             }
             if (entries.Count > 0)
                 batches.Add(new Batch(namespaceId, 0, 1, 0x02, 0, NodeId, Epoch, 0, 0,
-                                      Guid.NewGuid().ToByteArray(), Zero128,
+                                      BatchId.From(Guid.NewGuid().ToByteArray()), Zero128,
                                       ComputeRecordsRoot(entries), Zero128, entries));
         }
         foreach (var b in batches)

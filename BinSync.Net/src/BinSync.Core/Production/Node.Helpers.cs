@@ -97,7 +97,7 @@ public sealed partial class Node
     }
 
     /// <summary>BLAKE3 digest binding batch id, cursors, roots, and prev digest.</summary>
-    public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
+    public static byte[] ComputeBatchDigest(BatchId batchId, int namespaceId, NodeId issuerNode,
         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest)
     {
         // Fixed layout ≤192B: rent tiny buffer (or new) — no growing Writer.
@@ -115,6 +115,12 @@ public sealed partial class Node
             System.Buffers.ArrayPool<byte>.Shared.Return(buf);
         }
     }
+
+    /// <summary>Overload for wire byte arrays.</summary>
+    public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
+        int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest) =>
+        ComputeBatchDigest(BatchId.From(batchId), namespaceId, NodeId.From(issuerNode),
+            issuerEpoch, cursorStart, cursorEnd, recordsRoot, prevBatchDigest);
 
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
     public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)

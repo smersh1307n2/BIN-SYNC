@@ -91,6 +91,9 @@ public sealed partial class TrustStore
     }
 
     /// <summary>Resolve the public key to use for a node, optionally checking a candidate.</summary>
+    public byte[]? ResolvePublicKey(NodeId nodeId, byte[]? candidatePublicKey = null) =>
+        ResolvePublicKey(nodeId.ToArray(), candidatePublicKey);
+
     public byte[]? ResolvePublicKey(byte[] nodeId, byte[]? candidatePublicKey = null)
     {
         lock (_gate)

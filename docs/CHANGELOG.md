@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.2.5 — 2026-11-03
+
+**Batch.IssuerNodeId / Batch.BatchId are typed (NodeId / BatchId).**
+
+- In-memory batch DTO no longer carries byte[] identities for issuer and batch id
+- BatchResult.BatchId is BatchId; SyncException accepts BatchId
+- ComputeBatchDigest / encode use stackalloc B128(NodeId/BatchId)
+- Digests (prev/root/batch) remain byte[16] (wire BLAKE3 truncated)
+
+---
+
 ## 2.2.4 — 2026-11-02
 
 **FieldState.AuthorNodeId and Record.LifecycleAuthor are NodeId.**

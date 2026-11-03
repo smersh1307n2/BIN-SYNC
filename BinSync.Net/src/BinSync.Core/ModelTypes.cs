@@ -22,6 +22,10 @@ public class SyncException : Exception
         BatchId = batchId;
     }
 
+    /// <summary>Create with code name and typed batch id.</summary>
+    public SyncException(string codeName, BatchId batchId)
+        : this(codeName, batchId.ToArray()) { }
+
     /// <summary>Create with a distinct human-readable message.</summary>
     public SyncException(string codeName, string message, byte[]? batchId = null)
         : base(message)
@@ -76,7 +80,7 @@ public sealed partial class Batch
     /// <summary>Batch flag bits from the wire header.</summary>
     public int Flags { get; set; }
     /// <summary>Node that issued this batch.</summary>
-    public byte[] IssuerNodeId { get; set; } = Array.Empty<byte>();
+    public NodeId IssuerNodeId { get; set; }
     /// <summary>Epoch of the issuer at batch creation.</summary>
     public int IssuerEpoch { get; set; }
     /// <summary>Inclusive start of the issuer sequence range covered by this batch.</summary>
@@ -84,7 +88,7 @@ public sealed partial class Batch
     /// <summary>Batch cursor end, copied for ACK construction.</summary>
     public long CursorEnd { get; set; }
     /// <summary>128-bit batch identity with value equality.</summary>
-    public byte[] BatchId { get; set; } = Node.Zero128;
+    public BatchId BatchId { get; set; }
     /// <summary>Digest of the previous batch in the issuer chain (or zero for the first).</summary>
     public byte[] PrevBatchDigest { get; set; } = Node.Zero128;
     /// <summary>BLAKE3 root over the ordered records array.</summary>
@@ -101,8 +105,8 @@ public sealed partial class Batch
 
     /// <summary>DELTA_BATCH logical unit: headers, digests, and list of OutboxEntry records.</summary>
     public Batch(int ns, int schemaId, int schemaVer, int policy, int flags,
-                 byte[] issuer, int issuerEpoch, long cstart, long cend,
-                 byte[] batchId, byte[] prev, byte[] root, byte[] digest,
+                 NodeId issuer, int issuerEpoch, long cstart, long cend,
+                 BatchId batchId, byte[] prev, byte[] root, byte[] digest,
                  List<OutboxEntry> entries)
     {
         NamespaceId = ns;
@@ -120,6 +124,7 @@ public sealed partial class Batch
         BatchDigest = digest;
         Entries = entries;
     }
+
 
     /// <summary>Encode records into canonical wire bytes.</summary>
     public byte[] EncodeRecords() => Node.EncodeRecordsArray(Entries);
@@ -209,7 +214,7 @@ public sealed partial class PeerState
 public sealed class BatchResult
 {
     /// <summary>128-bit batch identity with value equality.</summary>
-    public byte[] BatchId { get; set; }
+    public BatchId BatchId { get; set; }
     /// <summary>Number of operations newly applied (0 on pure duplicate).</summary>
     public int Applied { get; set; }
     /// <summary>True when the batch should be ACKed to the sender.</summary>
@@ -224,5 +229,7 @@ public sealed class BatchResult
     public byte[] DurableAuthor { get; set; } = Array.Empty<byte>();
 
     /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
-    public BatchResult(byte[] batchId) => BatchId = batchId;
+    public BatchResult(BatchId batchId) => BatchId = batchId;
+    /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
+    public BatchResult(byte[] batchId) => BatchId = BatchId.From(batchId);
 }

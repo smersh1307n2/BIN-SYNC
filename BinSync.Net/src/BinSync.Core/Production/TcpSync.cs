@@ -180,7 +180,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         if (ackFrame.FrameType != 0x0B)
             throw new FrameException("FRAME_REJECTED");
         var (bid, seq, author) = Transport.DecodeAck(ackFrame.Payload);
-        if (!bid.AsSpan().SequenceEqual(batch.BatchId))
+        if (!batch.BatchId.EqualsBytes(bid))
             throw new InvalidOperationException("ACK batch id mismatch");
         sender.AdvanceStream(PeerNodeId, namespaceId, batch);
         sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: author);
