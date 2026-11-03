@@ -117,9 +117,11 @@ public static class Merge
     }
 
     /// <summary>Interpret a little-endian byte value as ulong.</summary>
-    public static ulong AsU64(byte[] v)
+    public static ulong AsU64(byte[]? v) => AsU64((ReadOnlySpan<byte>)(v ?? Array.Empty<byte>()));
+    public static ulong AsU64(ReadOnlyMemory<byte> v) => AsU64(v.Span);
+    public static ulong AsU64(ReadOnlySpan<byte> v)
     {
-        if (v is null || v.Length == 0) return 0;
+        if (v.Length == 0) return 0;
         ulong r = 0;
         int n = Math.Min(8, v.Length);
         for (int i = 0; i < n; i++)
@@ -128,10 +130,12 @@ public static class Merge
     }
 
     /// <summary>Lexicographic comparison of two byte arrays.</summary>
-    public static int CompareBytes(byte[] a, byte[] b)
+    public static int CompareBytes(byte[]? a, byte[]? b) =>
+        CompareBytes((ReadOnlySpan<byte>)(a ?? Array.Empty<byte>()), b ?? Array.Empty<byte>());
+    public static int CompareBytes(ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b) =>
+        a.Span.SequenceCompareTo(b.Span);
+    public static int CompareBytes(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
     {
-        a ??= Array.Empty<byte>();
-        b ??= Array.Empty<byte>();
         int n = Math.Min(a.Length, b.Length);
         for (int i = 0; i < n; i++)
         {
@@ -218,6 +222,9 @@ public static class Merge
 
     /// <summary>Equality comparer for byte arrays by content.</summary>
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
+    public static bool BytesEq(ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b) => a.Span.SequenceEqual(b.Span);
+    public static bool BytesEq(byte[] a, ReadOnlyMemory<byte> b) => a.AsSpan().SequenceEqual(b.Span);
+    public static bool BytesEq(ReadOnlyMemory<byte> a, byte[] b) => a.Span.SequenceEqual(b);
 }
 
 /// <summary>Registry of per-(namespace, field) merge policies.</summary>

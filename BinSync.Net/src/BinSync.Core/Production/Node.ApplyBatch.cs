@@ -340,7 +340,7 @@ public sealed partial class Node
             var entries = new List<OutboxEntry>();
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
-                var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId, Value = fs.Value };
+                var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId.ToArray(), Value = fs.Value.ToArray() };
                 entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             foreach (var (fid, fs) in rec.FieldTombs.OrderBy(kv => kv.Key))

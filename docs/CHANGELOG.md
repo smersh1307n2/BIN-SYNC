@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.2.13 — 2026-11-03
+
+**FieldState.Value is ReadOnlyMemory<byte>.**
+
+- Avoids forcing owned byte[] on every field in storage when the source is already a slice
+- Merge/digests/compare operate on spans
+- Snapshot branch: main-copy-2.2.12
+
+---
+
 ## 2.2.12 — 2026-11-03
 
 **In-process DeliverBatch without frame tax; HeldCausalBatch typed.**

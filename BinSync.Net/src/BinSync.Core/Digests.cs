@@ -70,11 +70,11 @@ public static class Digests
 
     /// <summary>Build the canonical byte payload hashed for a single field digest.</summary>
     public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
-        uint logical, NodeId authorNodeId, byte[] value)
+        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value)
     {
         var w = new Writer();
         w.U16(fieldId).U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
-        w.Varint((ulong)value.Length).Raw(value);
+        w.Varint((ulong)value.Length).Raw(value.Span);
         return w.Value();
     }
 

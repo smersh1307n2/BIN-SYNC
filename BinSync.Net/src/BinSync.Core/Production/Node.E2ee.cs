@@ -76,7 +76,7 @@ public sealed partial class Node
             return E2ee.OpenField(
                 key, recordId, (ushort)fieldId,
                 fs.Timestamp.Wall, fs.Timestamp.Logical,
-                fs.AuthorNodeId, fs.KeyEpoch, fs.Value);
+                fs.AuthorNodeId, fs.KeyEpoch, fs.Value.ToArray());
         }
     }
 
