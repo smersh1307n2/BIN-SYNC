@@ -1,5 +1,14 @@
 # Changelog — BinSync.Core
 
+## 2.2.18 — 2026-11-03
+
+**HelloPayload / AliasMapEntry use NodeId.**
+
+- Session wire structs carry typed NodeId (no bare byte[] on the session control plane)
+- MergeAliasMap uses HashSet<NodeId> (no hex-string keys)
+
+---
+
 ## 2.2.17 — 2026-11-03
 
 **SessionWire ArrayPool encode; FragmentReassembler BatchId keys.**

@@ -277,22 +277,29 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
     /// (sorted by nodeId) into the next free alias slots.
     /// </summary>
     internal static List<AliasMapEntry> MergeAliasMap(
-        Node local, byte[] peerNodeId, int peerEpoch, IReadOnlyList<AliasMapEntry> remote)
+        Node local, NodeId peerNodeId, int peerEpoch, IReadOnlyList<AliasMapEntry> remote)
     {
         var result = new List<AliasMapEntry>(remote);
-        var known = new HashSet<string>(result.Select(e => Convert.ToHexString(e.NodeId)));
-        var extras = new List<(byte[] Id, int Epoch)>();
-        void Consider(byte[] id, int epoch)
+        var known = new HashSet<NodeId>();
+        foreach (var e in result) known.Add(e.NodeId);
+        var extras = new List<(NodeId Id, int Epoch)>();
+        void Consider(NodeId id, int epoch)
         {
-            var hex = Convert.ToHexString(id);
-            if (!known.Add(hex)) return;
+            if (!known.Add(id)) return;
             extras.Add((id, epoch));
         }
         Consider(local.NodeId, local.Epoch);
         Consider(peerNodeId, peerEpoch);
         foreach (var (nid, ep) in local.DurableAuthors)
-            Consider(nid.ToArray(), ep);
-        extras.Sort((a, b) => string.CompareOrdinal(Convert.ToHexString(a.Id), Convert.ToHexString(b.Id)));
+            Consider(nid, ep);
+        extras.Sort(static (a, b) =>
+        {
+            Span<byte> ba = stackalloc byte[16];
+            Span<byte> bb = stackalloc byte[16];
+            a.Id.WriteTo(ba);
+            b.Id.WriteTo(bb);
+            return ba.SequenceCompareTo(bb);
+        });
         int next = 1;
         foreach (var extra in extras)
         {

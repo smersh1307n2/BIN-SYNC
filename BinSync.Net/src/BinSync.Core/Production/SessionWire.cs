@@ -15,11 +15,11 @@ public enum SessionCapabilities : uint
 
 /// <summary>struct: struct.</summary>
 public readonly record struct HelloPayload(
-    byte[] NodeId, int Epoch, SessionCapabilities Capabilities);
+    NodeId NodeId, int Epoch, SessionCapabilities Capabilities);
 
 /// <summary>struct: struct.</summary>
 public readonly record struct AliasMapEntry(
-    ushort Alias, byte[] NodeId, int Epoch);
+    ushort Alias, NodeId NodeId, int Epoch);
 
 /// <summary>
 /// Encode / decode session-control payloads. Frame types: HELLO=0x01, HELLO_ACK=0x02,
@@ -61,7 +61,7 @@ public static class SessionWire
         if (frame.FrameType is not TypeHello and not TypeHelloAck)
             throw new FrameException("FRAME_REJECTED");
         var r = new Reader(frame.Payload);
-        return new HelloPayload(r.B128(), (int)r.U32(), (SessionCapabilities)r.U32());
+        return new HelloPayload(NodeId.From(r.B128()), (int)r.U32(), (SessionCapabilities)r.U32());
     }
 
     /// <summary>Encode hello ack into canonical wire bytes.</summary>
@@ -109,7 +109,7 @@ public static class SessionWire
         int n = (int)r.Varint();
         var list = new List<AliasMapEntry>(n);
         for (int i = 0; i < n; i++)
-            list.Add(new AliasMapEntry(r.U16(), r.B128(), (int)r.U32()));
+            list.Add(new AliasMapEntry(r.U16(), NodeId.From(r.B128()), (int)r.U32()));
         return list;
     }
 
@@ -175,7 +175,7 @@ public static class SessionWire
 
         var result = new List<AliasMapEntry>(ordered.Count);
         foreach (var kv in ordered)
-            result.Add(new AliasMapEntry((ushort)assigned[kv.Key], kv.Key.ToArray(), kv.Value));
+            result.Add(new AliasMapEntry((ushort)assigned[kv.Key], kv.Key, kv.Value));
         return result;
     }
 
