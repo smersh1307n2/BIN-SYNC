@@ -16,7 +16,7 @@ public sealed class KeyRotationNotice
     /// <summary>Key epoch being rotated to.</summary>
     public ushort NewKeyEpoch { get; init; }
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
-    public byte[] NodeId { get; init; } = Array.Empty<byte>();
+    public NodeId NodeId { get; init; }
     /// <summary>Ed25519 signature (64 bytes) over <see cref="KeyRotation.BuildProofMessage"/>.</summary>
     public byte[] Proof { get; init; } = Array.Empty<byte>();
 }
@@ -35,8 +35,6 @@ public static class KeyRotation
     /// </summary>
     public static byte[] Encode(KeyRotationNotice n)
     {
-        if (n.NodeId.Length != 16)
-            throw new ArgumentException("nodeId must be 16 bytes", nameof(n));
         if (n.NewKeyEpoch <= n.OldKeyEpoch)
             throw new ArgumentException("newKeyEpoch must be greater than oldKeyEpoch");
 
@@ -46,7 +44,7 @@ public static class KeyRotation
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), n.NamespaceId); o += 2;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), n.OldKeyEpoch); o += 2;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), n.NewKeyEpoch); o += 2;
-        n.NodeId.CopyTo(buf.AsSpan(o)); o += 16;
+        n.NodeId.WriteTo(buf.AsSpan(o)); o += 16;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), (ushort)proofLen); o += 2;
         n.Proof.CopyTo(buf.AsSpan(o));
         return buf;
@@ -61,7 +59,7 @@ public static class KeyRotation
         ushort ns = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
         ushort oldE = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
         ushort newE = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
-        var nodeId = payload.Slice(o, 16).ToArray(); o += 16;
+        var nodeId = NodeId.From(payload.Slice(o, 16)); o += 16;
         ushort proofLen = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
         if (payload.Length < o + proofLen)
             throw new ArgumentException("KEY_ROTATION proof truncated");
@@ -105,7 +103,7 @@ public static class KeyRotation
             NamespaceId = namespaceId,
             OldKeyEpoch = oldKeyEpoch,
             NewKeyEpoch = newKeyEpoch,
-            NodeId = nodeId.ToArray(),
+            NodeId = NodeId.From(nodeId),
             Proof = proof,
         };
     }
@@ -114,7 +112,9 @@ public static class KeyRotation
     public static bool VerifyProof(KeyRotationNotice n, ReadOnlySpan<byte> publisherPublicKey)
     {
         if (n.NewKeyEpoch <= n.OldKeyEpoch) return false;
-        var msg = BuildProofMessage(n.NamespaceId, n.OldKeyEpoch, n.NewKeyEpoch, n.NodeId);
+        Span<byte> nid = stackalloc byte[16];
+        n.NodeId.WriteTo(nid);
+        var msg = BuildProofMessage(n.NamespaceId, n.OldKeyEpoch, n.NewKeyEpoch, nid);
         return BatchSignature.Verify(publisherPublicKey, msg, n.Proof);
     }
 

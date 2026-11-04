@@ -12,7 +12,7 @@ public static class MembershipFrames
 public sealed class MembershipEntry
 {
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
-    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public NodeId NodeId { get; set; }
     /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
@@ -52,11 +52,11 @@ public static class Membership
             NamespaceId = namespaceId,
             MembershipEpoch = membershipEpoch,
         };
-        void Add(byte[] id, int epoch, byte flags)
+        void Add(NodeId id, int epoch, byte flags)
         {
             msg.Members.Add(new MembershipEntry
             {
-                NodeId = Codec.CanonicalB128(id),
+                NodeId = id,
                 Epoch = epoch,
                 Flags = flags,
             });
@@ -64,13 +64,19 @@ public static class Membership
         Add(node.NodeId, node.Epoch, FlagActive);
         foreach (var (nid, ep) in node.DurableAuthors)
         {
-            if (nid == (NodeId)node.NodeId) continue;
+            if (nid == node.NodeId) continue;
             byte flags = FlagActive;
             if (node.Quarantined.Contains(nid)) flags = FlagQuarantined;
-            Add(nid.ToArray(), ep, flags);
+            Add(nid, ep, flags);
         }
         msg.Members.Sort((a, b) =>
-            a.NodeId.AsSpan().SequenceCompareTo(b.NodeId.AsSpan()));
+        {
+            Span<byte> aa = stackalloc byte[16];
+            Span<byte> bb = stackalloc byte[16];
+            a.NodeId.WriteTo(aa);
+            b.NodeId.WriteTo(bb);
+            return ((ReadOnlySpan<byte>)aa).SequenceCompareTo(bb);
+        });
         return msg;
     }
 
@@ -83,7 +89,7 @@ public static class Membership
         w.Varint((ulong)m.Members.Count);
         foreach (var e in m.Members)
         {
-            w.B128(Codec.CanonicalB128(e.NodeId));
+            w.B128(e.NodeId);
             w.U32(unchecked((uint)e.Epoch));
             w.U8(e.Flags);
         }
@@ -104,7 +110,7 @@ public static class Membership
         {
             m.Members.Add(new MembershipEntry
             {
-                NodeId = r.B128(),
+                NodeId = r.ReadNodeId(),
                 Epoch = unchecked((int)r.U32()),
                 Flags = r.U8(),
             });
@@ -121,19 +127,18 @@ public static class Membership
         int learned = 0;
         foreach (var e in remote.Members)
         {
-            if (node.NodeId.EqualsBytes(e.NodeId)) continue;
+            if (e.NodeId == node.NodeId) continue;
             if (e.IsQuarantined)
-            {
-                node.Quarantined.Add(Codec.CanonicalB128(e.NodeId));
-            }
+                node.Quarantined.Add(e.NodeId);
             int prev = node.DurableAuthors.TryGetValue(e.NodeId, out var cur) ? cur : 0;
             if (e.Epoch > prev)
             {
-                node.DurableAuthors[Codec.CanonicalB128(e.NodeId)] = e.Epoch;
+                node.DurableAuthors[e.NodeId] = e.Epoch;
                 node.LearnAuthorEpoch(e.NodeId, e.Epoch);
                 if (prev == 0) learned++;
             }
         }
+        node.RaiseMembershipApplied(remote, learned);
         return learned;
     }
 }

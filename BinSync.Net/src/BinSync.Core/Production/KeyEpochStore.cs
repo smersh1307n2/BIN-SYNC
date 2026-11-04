@@ -39,7 +39,7 @@ public sealed class KeyEpochStore
     public bool TryApply(KeyRotationNotice notice)
     {
         if (notice.NewKeyEpoch <= notice.OldKeyEpoch) return false;
-        var hex = Hex(notice.NodeId);
+        var hex = Hex(notice.NodeId.ToArray());
         if (!_identityKeys.TryGetValue(hex, out var pub))
             return false; // UNKNOWN identity → drop (caller may surface UNKNOWN_KEY_EPOCH)
         if (!KeyRotation.VerifyProof(notice, pub))

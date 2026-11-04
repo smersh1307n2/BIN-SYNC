@@ -15,7 +15,13 @@ public sealed partial class TcpSyncSession
     /// Receive one KEY_ROTATION frame, verify+apply into <paramref name="store"/>.
     /// Returns true when the local epoch advanced.
     /// </summary>
-    public async Task<bool> ReceiveKeyRotationAsync(KeyEpochStore store, CancellationToken ct = default)
+    public async Task<bool> ReceiveKeyRotationAsync(KeyEpochStore store, CancellationToken ct = default) =>
+        await ReceiveKeyRotationAsync(store, local: null, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Receive one KEY_ROTATION frame; when <paramref name="local"/> is set, raises <see cref="Node.KeyRotationApplied"/>.
+    /// </summary>
+    public async Task<bool> ReceiveKeyRotationAsync(KeyEpochStore store, Node? local, CancellationToken ct = default)
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("peer closed during KEY_ROTATION");
@@ -23,7 +29,7 @@ public sealed partial class TcpSyncSession
         if (frame.FrameType != KeyRotation.FrameType)
             throw new FrameException("FRAME_REJECTED");
         var notice = KeyRotation.Decode(frame.Payload);
-        return store.TryApply(notice);
+        return local is not null ? local.ApplyKeyRotation(notice, store) : store.TryApply(notice);
     }
 
     /// <summary>

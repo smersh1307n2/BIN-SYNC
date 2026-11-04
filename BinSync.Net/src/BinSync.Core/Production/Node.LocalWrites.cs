@@ -51,6 +51,14 @@ public sealed partial class Node
     /// Errata E-13 (scenario 37): restored-echo suppression — see Python port docstring.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>PushOutboxInternal</c>. See <see cref="EnterAllGates"/>.</summary>
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, NodeId author, NodeId? peer = null)
+    {
+        lock (_lockStorage) lock (_lockOutbox)
+            return PushOutboxInternal(ns, recordId, op, author.ToArray(),
+                peer is { } p ? p.ToArray() : null);
+    }
+
+    /// <summary>Legacy byte[] author/peer.</summary>
     public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {
         lock (_lockStorage) lock (_lockOutbox) return PushOutboxInternal(ns, recordId, op, author, peer);

@@ -43,6 +43,12 @@ public sealed partial class Node : IDisposable
     /// <summary>Raised after an ACK advances peer watermarks (outside engine locks).</summary>
     public event Action<NodeId, int, long, NodeId?>? AckProcessed;
 
+    /// <summary>Raised after a MEMBERSHIP roster is merged (outside engine locks when possible).</summary>
+    public event Action<MembershipMessage, int>? MembershipApplied;
+
+    /// <summary>Raised after a KEY_ROTATION notice is accepted.</summary>
+    public event Action<KeyRotationNotice>? KeyRotationApplied;
+
     private int _disposed;
 
     /// <summary>Stable node identity; set only in the constructor.</summary>
@@ -145,6 +151,21 @@ public sealed partial class Node : IDisposable
         AckProcessed?.Invoke(peer, namespaceId, ackedSeq, authorStream);
     }
 
+    internal void RaiseMembershipApplied(MembershipMessage msg, int learned) =>
+        MembershipApplied?.Invoke(msg, learned);
+
+    internal void RaiseKeyRotationApplied(KeyRotationNotice notice) =>
+        KeyRotationApplied?.Invoke(notice);
+
+    /// <summary>Apply a verified KEY_ROTATION notice via <paramref name="store"/> and raise <see cref="KeyRotationApplied"/>.</summary>
+    public bool ApplyKeyRotation(KeyRotationNotice notice, KeyEpochStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        if (!store.TryApply(notice)) return false;
+        RaiseKeyRotationApplied(notice);
+        return true;
+    }
+
     /// <summary>Release large engine maps; safe to call multiple times.</summary>
     public void Dispose()
     {
@@ -168,6 +189,8 @@ public sealed partial class Node : IDisposable
             BatchApplied = null;
             FieldWritten = null;
             AckProcessed = null;
+            MembershipApplied = null;
+            KeyRotationApplied = null;
         }
         GC.SuppressFinalize(this);
     }

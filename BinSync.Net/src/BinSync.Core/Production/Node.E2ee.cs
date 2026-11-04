@@ -6,18 +6,17 @@ namespace BinSync;
 public sealed partial class Node
 {
     /// <summary>
-    /// When set, <see cref="WriteFieldSealed"/> / <see cref="ReadFieldOpen"/> use the ring
-    /// to seal and open field values. Default WriteField never consults this.
+    /// When set, sealed field APIs use the ring to seal and open values.
+    /// Default WriteField never consults this.
     /// </summary>
     public E2eeKeyRing? E2eeKeys { get; set; }
 
     /// <summary>
     /// Seal <paramref name="plaintext"/> under the namespace key and write ciphertext
     /// (ChaCha20-Poly1305). Uses current key epoch from <see cref="E2eeKeys"/>.
-    /// Throws if no key is configured for the namespace.
     /// </summary>
     public bool WriteFieldSealed(
-        int namespaceId, byte[] recordId, int fieldId, byte[] plaintext, Hlc? hlc = null)
+        int namespaceId, RecordId recordId, int fieldId, byte[] plaintext, Hlc? hlc = null)
     {
         lock (_lockMeta)
         {
@@ -31,8 +30,12 @@ public sealed partial class Node
                 store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
 
             var h = hlc ?? Clock.SendTick();
+            Span<byte> ridBuf = stackalloc byte[16];
+            recordId.WriteTo(ridBuf);
+            Span<byte> authorBuf = stackalloc byte[16];
+            NodeId.WriteTo(authorBuf);
             var sealedValue = E2ee.SealField(
-                key, recordId, (ushort)fieldId, h.Wall, h.Logical, NodeId, epoch, plaintext);
+                key, ridBuf, (ushort)fieldId, h.Wall, h.Logical, authorBuf, epoch, plaintext);
 
             var fs = new FieldState(sealedValue, h, NodeId, KeyEpoch: epoch);
             var op = new OpFieldWrite
@@ -47,17 +50,21 @@ public sealed partial class Node
             };
             bool changed = Merge.ApplyFieldWrite(rec, (ushort)fieldId, fs);
             if (changed)
-                PushOutboxInternal(namespaceId, recordId, op, NodeId);
+                PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
             return changed;
         }
     }
 
+    /// <summary>Sealed write with legacy byte[] record id.</summary>
+    public bool WriteFieldSealed(
+        int namespaceId, byte[] recordId, int fieldId, byte[] plaintext, Hlc? hlc = null) =>
+        WriteFieldSealed(namespaceId, RecordId.From(recordId), fieldId, plaintext, hlc);
+
     /// <summary>
     /// Read a field and open ciphertext with the namespace key.
-    /// Returns null when the field is absent. Throws <see cref="System.Security.Cryptography.CryptographicException"/>
-    /// on auth failure (wrong key / tampered value).
+    /// Returns null when the field is absent.
     /// </summary>
-    public byte[]? ReadFieldOpen(int namespaceId, byte[] recordId, int fieldId)
+    public byte[]? ReadFieldOpen(int namespaceId, RecordId recordId, int fieldId)
     {
         lock (_lockMeta)
         {
@@ -73,18 +80,26 @@ public sealed partial class Node
             if (!rec.State.TryGetValue((ushort)fieldId, out var fs))
                 return null;
 
+            Span<byte> ridBuf = stackalloc byte[16];
+            recordId.WriteTo(ridBuf);
+            Span<byte> authorBuf = stackalloc byte[16];
+            fs.AuthorNodeId.WriteTo(authorBuf);
             return E2ee.OpenField(
-                key, recordId, (ushort)fieldId,
+                key, ridBuf, (ushort)fieldId,
                 fs.Timestamp.Wall, fs.Timestamp.Logical,
-                fs.AuthorNodeId, fs.KeyEpoch, fs.Value.ToArray());
+                authorBuf, fs.KeyEpoch, fs.Value.AsSpan());
         }
     }
+
+    /// <summary>Open field with legacy byte[] record id.</summary>
+    public byte[]? ReadFieldOpen(int namespaceId, byte[] recordId, int fieldId) =>
+        ReadFieldOpen(namespaceId, RecordId.From(recordId), fieldId);
 
     /// <summary>
     /// True when the stored field opens successfully under the configured key.
     /// </summary>
     public bool TryOpenField(
-        int namespaceId, byte[] recordId, int fieldId, out byte[]? plaintext)
+        int namespaceId, RecordId recordId, int fieldId, out byte[]? plaintext)
     {
         plaintext = null;
         try
@@ -101,4 +116,8 @@ public sealed partial class Node
             return false;
         }
     }
+
+    /// <summary>Try-open with legacy byte[] record id.</summary>
+    public bool TryOpenField(int namespaceId, byte[] recordId, int fieldId, out byte[]? plaintext) =>
+        TryOpenField(namespaceId, RecordId.From(recordId), fieldId, out plaintext);
 }

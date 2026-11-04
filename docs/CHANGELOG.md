@@ -1,5 +1,19 @@
 # Changelog — BinSync.Core
 
+## 2.6.0 — 2026-11-04
+
+**Membership / key-rotation events and typed cleanup.**
+
+- `MembershipEntry.NodeId` and `KeyRotationNotice.NodeId` are **`NodeId`**
+- Events: `MembershipApplied`, `KeyRotationApplied`
+- `Node.ApplyKeyRotation(notice, store)` raises key-rotation event
+- `TcpSyncSession.ReceiveKeyRotationAsync(store, local, …)` optional node for events
+- E2EE: `WriteFieldSealed` / `ReadFieldOpen` / `TryOpenField` primary on **`RecordId`**
+- `ApplyRemoteField` primary on **`RecordId` + `NodeId`**
+- `PushOutbox` primary on **`NodeId` author**
+
+---
+
 ## 2.5.0 — 2026-11-04
 
 **API polish: builder, typed trust/schema, AckProcessed, internal Writer pool.**

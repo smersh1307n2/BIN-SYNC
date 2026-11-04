@@ -39,15 +39,15 @@ public sealed partial class Node
     /// Apply a remote field state (snapshot path): LWW merge with original author/HLC.
     /// Does not push outbox — peer already holds the op; local anti-entropy republishes separately.
     /// </summary>
-    public bool ApplyRemoteField(int namespaceId, byte[] recordId, ushort fieldId,
-        byte[] value, Hlc hlc, byte[] authorNodeId, ushort keyEpoch = 0)
+    public bool ApplyRemoteField(int namespaceId, RecordId recordId, ushort fieldId,
+        byte[] value, Hlc hlc, NodeId authorNodeId, ushort keyEpoch = 0)
     {
         lock (_lockStorage)
         {
             var store = NsInternal(namespaceId);
             if (!store.TryGetValue(recordId, out var rec))
                 store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
-            var fs = new FieldState(value, hlc, NodeId.From(authorNodeId), keyEpoch);
+            var fs = new FieldState(value, hlc, authorNodeId, keyEpoch);
             return Merge.ApplyFieldWrite(rec, fieldId, fs);
         }
     }
