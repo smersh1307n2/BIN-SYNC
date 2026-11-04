@@ -3,23 +3,26 @@ using System.Text;
 using BinSync;
 
 const int Ns = 1;
-static byte[] Rid(int n)
+
+static RecordId Rid(int n)
 {
     var b = new byte[16];
     BitConverter.GetBytes(n).CopyTo(b, 0);
-    return b;
+    return RecordId.From(b);
 }
+
 static byte[] Val(string s) => Encoding.UTF8.GetBytes(s);
-static bool Has(Node node, byte[] rid, string expected)
+
+static bool Has(Node node, RecordId rid, string expected)
 {
-    if (!node.Storage.TryGetValue(Ns, out var store)) return false;
-    if (!store.TryGetValue(rid, out var rec)) return false;
-    if (!rec.State.TryGetValue(0x101, out var fs)) return false;
+    if (!node.TryGetField(Ns, rid, 0x101, out var fs) || fs is null)
+        return false;
     return Encoding.UTF8.GetString(fs.Value) == expected;
 }
 
-var serverNode = new Node(nodeId: Rid(1), epoch: 1);
-var clientNode = new Node(nodeId: Rid(2), epoch: 1);
+using var serverNode = new NodeBuilder().WithNodeId(Rid(1).ToArray()).WithEpoch(1).Build();
+using var clientNode = new NodeBuilder().WithNodeId(Rid(2).ToArray()).WithEpoch(1).Build();
+
 serverNode.WriteField(Ns, Rid(100), 0x101, Val("via-tcp-from-server"));
 clientNode.WriteField(Ns, Rid(200), 0x101, Val("via-tcp-from-client"));
 

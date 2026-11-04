@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.6.1 — 2026-11-04
+
+**Samples + query API restore + DurableId span write.**
+
+- Restored public `TryGetRecord` / `TryGetField` / `GetRecordCount` / `GetOutboxCount` / `RegisterLoopbackPeer` on Node
+- `WriteDurableId(Span<byte>)` — zero-alloc durable identity write
+- `ResolveAlias` returns `NodeId` without intermediate `ToArray`
+- Samples `TwoNodeLoopback` / `TwoNodeTcp` use `NodeBuilder`, events, `TryGetField`
+
+---
+
 ## 2.6.0 — 2026-11-04
 
 **Membership / key-rotation events and typed cleanup.**

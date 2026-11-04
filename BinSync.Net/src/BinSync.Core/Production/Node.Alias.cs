@@ -257,7 +257,7 @@ public sealed partial class Node
                 var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (NodeId Id, int Epoch)>();
                 if (theirFwd.TryGetValue(alias, out var durThere))
                 {
-                    try { RegisterAlias(peer, alias, durThere.Id, durThere.Epoch); return durThere.Id.ToArray(); } // E-1: bare nodeId
+                    try { RegisterAlias(peer, alias, durThere.Id, durThere.Epoch); return durThere.Id; } // E-1: bare nodeId
                     catch (SyncException) { throw new SyncException("UNKNOWN_ALIAS"); } // genuine conflict — never guess
                 }
                 // BUGFIX (persistence resume, symmetric E-12): the wire alias is missing from
@@ -272,14 +272,14 @@ public sealed partial class Node
                     var theirMapForUs = other.AliasToNode.TryGetValue(NodeId, out var tm) ? tm : null;
                     if (theirMapForUs is not null && theirMapForUs.TryGetValue(alias, out var durTheir))
                     {
-                        try { RegisterAlias(peer, alias, durTheir.Id, durTheir.Epoch); return durTheir.Id.ToArray(); }
+                        try { RegisterAlias(peer, alias, durTheir.Id, durTheir.Epoch); return durTheir.Id; }
                         catch (SyncException) { /* real conflict — fail closed below */ }
                     }
                 }
             }
             throw new SyncException("UNKNOWN_ALIAS");  // [А3]/[И3] never guess
         }
-        return entry.Id.IsZero && entry.Epoch == int.MinValue ? throw new SyncException("UNKNOWN_ALIAS") : entry.Id.ToArray(); // E-1: bare nodeId
+        return entry.Id.IsZero && entry.Epoch == int.MinValue ? throw new SyncException("UNKNOWN_ALIAS") : entry.Id; // E-1: bare nodeId
     }
 
     /// Canonical durable author identity: nodeId || epoch(u32 LE), 20 bytes.
@@ -290,13 +290,23 @@ public sealed partial class Node
         lock (_lockMeta) return DurableIdInternal(nodeId, epoch);
     }
 
+    /// <summary>Write the 20-byte durable identity (nodeId || epoch u32 LE) into <paramref name="dest"/>.</summary>
+    public void WriteDurableId(Span<byte> dest, NodeId? nodeId = null, int? epoch = null)
+    {
+        if (dest.Length < 20) throw new ArgumentException("need 20 bytes", nameof(dest));
+        lock (_lockMeta)
+        {
+            var n = nodeId ?? NodeId;
+            var e = epoch ?? Epoch;
+            n.WriteTo(dest[..16]);
+            BitConverter.TryWriteBytes(dest[16..], (uint)e);
+        }
+    }
+
     internal byte[] DurableIdInternal(NodeId? nodeId = null, int? epoch = null)
     {
-        var n = nodeId ?? NodeId;
-        var e = epoch ?? Epoch;
         var r = new byte[20];
-        n.WriteTo(r.AsSpan(0, 16));
-        BitConverter.GetBytes((uint)e).CopyTo(r, 16);
+        WriteDurableId(r, nodeId, epoch);
         return r;
     }
 

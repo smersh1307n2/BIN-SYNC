@@ -63,6 +63,60 @@ public sealed partial class Node : IDisposable
     /// paths enforce them; null means unlimited (tests / unconstrained hosts).
     /// </summary>
     public ResourceLimits? Limits { get; set; }
+
+    /// <summary>Look up a record in the live store.</summary>
+    public bool TryGetRecord(int namespaceId, RecordId recordId, out Record? record)
+    {
+        lock (_lockStorage)
+        {
+            if (_storage.TryGetValue(namespaceId, out var map) && map.TryGetValue(recordId, out var rec))
+            {
+                record = rec;
+                return true;
+            }
+            record = null;
+            return false;
+        }
+    }
+
+    /// <summary>Look up one field state inside a record.</summary>
+    public bool TryGetField(int namespaceId, RecordId recordId, int fieldId, out FieldState? field)
+    {
+        lock (_lockStorage)
+        {
+            if (_storage.TryGetValue(namespaceId, out var map)
+                && map.TryGetValue(recordId, out var rec)
+                && rec.State.TryGetValue((ushort)fieldId, out var fs))
+            {
+                field = fs;
+                return true;
+            }
+            field = null;
+            return false;
+        }
+    }
+
+    /// <summary>Number of records currently stored in a namespace.</summary>
+    public int GetRecordCount(int namespaceId)
+    {
+        lock (_lockStorage)
+            return _storage.TryGetValue(namespaceId, out var map) ? map.Count : 0;
+    }
+
+    /// <summary>Number of pending outbox entries for a namespace.</summary>
+    public int GetOutboxCount(int namespaceId) => OutboxSize(namespaceId);
+
+    /// <summary>Register an in-process peer for alias negotiation / loopback helpers.</summary>
+    public void RegisterLoopbackPeer(Node peer)
+    {
+        ArgumentNullException.ThrowIfNull(peer);
+        lock (_lockMeta)
+        {
+            PeersByNid ??= new Dictionary<NodeId, Node>();
+            PeersByNid[peer.NodeId] = peer;
+        }
+    }
+
     // storage: namespaceId -> recordId -> Record (RecordId uses value equality).
     private readonly Dictionary<int, Dictionary<RecordId, Record>> _storage = new();
 
