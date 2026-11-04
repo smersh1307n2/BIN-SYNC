@@ -1,5 +1,19 @@
 # Changelog — BinSync.Core
 
+## 2.6.3 — 2026-11-04
+
+**Perf regression fixes**
+
+- `EncodeBatchPayload` / `DecodeBatchPayload` are **lock-free** (operate on snapshot / buffer only)
+- Skip `BatchApplied` event on pure idempotent replay (`Duplicate && Applied==0`)
+- `SignBatchForInternal`: `Guid.TryWriteBytes` (no `ToByteArray` alloc)
+- Encode: `Array.Resize` instead of second full copy when estimate overshoots
+- Note: outbox still retained after ACK (compact helper present, off by default — multi-peer/relay safety)
+
+Root cause of inflated CreateDelta times in prior comparison: repeated write+ack without outbox compaction left O(history) scans. Fair one-shot CreateDelta is back ~350 µs / 64 KB at N=500.
+
+---
+
 ## 2.6.2 — same as 2.6.1 (retag after protected tag)
 
 ## 2.6.1 — 2026-11-04

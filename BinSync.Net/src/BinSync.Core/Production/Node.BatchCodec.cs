@@ -18,28 +18,24 @@ public sealed partial class Node
     }
 
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>
-    public byte[] EncodeBatchPayload(Batch batch)
-    {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return EncodeBatchPayloadInternal(batch);
-    }
+    /// <summary>Encode batch to wire bytes. Lock-free: operates only on the given <see cref="Batch"/> snapshot.</summary>
+    public byte[] EncodeBatchPayload(Batch batch) => EncodeBatchPayloadInternal(batch);
 
     /// <summary>Encode into <paramref name="destination"/>; returns bytes written.
-    /// Destination must be at least <see cref="EstimateBatchPayloadSize"/>.</summary>
-    public int EncodeBatchPayload(Batch batch, Span<byte> destination)
-    {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
-            return EncodeBatchPayloadInternal(batch, destination);
-    }
+    /// Destination must be at least <see cref="EstimateBatchPayloadSize"/>. Lock-free.</summary>
+    public int EncodeBatchPayload(Batch batch, Span<byte> destination) =>
+        EncodeBatchPayloadInternal(batch, destination);
 
     internal byte[] EncodeBatchPayloadInternal(Batch batch)
     {
-        // Single allocation sized to estimate; return as-is when exact (no second copy).
+        // Single allocation sized to estimate; shrink in-place when overshot (no second LOH copy).
         int est = EstimateBatchPayloadSize(batch);
         var dest = new byte[est];
         var w = new Writer(dest);
         WriteBatchPayload(w, batch);
         if (w.Length == dest.Length) return dest;
-        return dest.AsSpan(0, w.Length).ToArray();
+        Array.Resize(ref dest, w.Length);
+        return dest;
     }
 
     internal int EncodeBatchPayloadInternal(Batch batch, Span<byte> destination)
@@ -81,25 +77,20 @@ public sealed partial class Node
     /// Returns a batch with <b>owned</b> entry buffers (safe to keep after the frame is recycled).
     /// For decode+apply in one step without the copy, use <see cref="ApplyBatchPayload"/>.
     /// </remarks>
+    /// <summary>Decode batch payload. Lock-free; materializes owned entry buffers.</summary>
     public Batch DecodeBatchPayload(byte[] data)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
-        {
-            var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
-            batch.MaterializeEntries();
-            return batch;
-        }
+        var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+        batch.MaterializeEntries();
+        return batch;
     }
 
-    /// <summary>Decode from memory; entries are owned copies (safe after <paramref name="data"/> is dropped).</summary>
+    /// <summary>Decode from memory; entries are owned copies (safe after <paramref name="data"/> is dropped). Lock-free.</summary>
     public Batch DecodeBatchPayload(ReadOnlyMemory<byte> data)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
-        {
-            var batch = DecodeBatchPayloadInternal(data);
-            batch.MaterializeEntries();
-            return batch;
-        }
+        var batch = DecodeBatchPayloadInternal(data);
+        batch.MaterializeEntries();
+        return batch;
     }
 
     /// <summary>
@@ -114,7 +105,8 @@ public sealed partial class Node
             var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
             result = ApplyBatchInternal(batch, senderPeer);
         }
-        RaiseBatchApplied(result, senderPeer);
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
         return result;
     }
 

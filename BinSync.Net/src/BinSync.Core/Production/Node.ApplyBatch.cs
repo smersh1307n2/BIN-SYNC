@@ -12,7 +12,9 @@ public sealed partial class Node
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
             result = ApplyBatchInternal(batch, senderPeer);
-        RaiseBatchApplied(result, senderPeer);
+        // Skip pure idempotent replay (Duplicate, Applied==0) — hot path must stay ~ns.
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
         return result;
     }
 
@@ -337,6 +339,7 @@ public sealed partial class Node
         if (ps.StreamAcked.Count > 0)
             ps.LastAckedSeq = ps.StreamAcked.Values.Min();
     }
+
 
     /// Snapshot = all live records + tombstones + ghosts (§ summary 'снапшот').
     /// <summary>Thread-safe entry point (production hardening): takes the node gate

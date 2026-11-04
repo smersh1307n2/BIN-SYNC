@@ -44,6 +44,8 @@ public sealed partial class Node
     {
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
+        // Compaction: drop entries this target has already acked when no other peer still needs them.
+        // CompactOutboxForPeer(namespaceId, targetPeer, ps);
         long wm;
         NodeId stream;
         List<OutboxEntry> pending;
@@ -216,6 +218,35 @@ public sealed partial class Node
     }
 
 
+
+    /// <summary>
+    /// Remove outbox entries acked by <paramref name="targetPeer"/> if every other peer for this
+    /// namespace has also acked them. Prevents CreateDeltaBatch from scanning unbounded history.
+    /// </summary>
+    private void CompactOutboxForPeer(int namespaceId, NodeId targetPeer, PeerState targetPs)
+    {
+        if (!Outbox.TryGetValue(namespaceId, out var list) || list.Count == 0) return;
+
+        // Count other peers for this namespace. Multi-peer / relay keeps history (tests + E-8).
+        int otherPeers = 0;
+        foreach (var kv in PeerStates)
+        {
+            if (kv.Key.Item2 == namespaceId && kv.Key.Item1 != targetPeer)
+                otherPeers++;
+        }
+        if (otherPeers > 0) return;
+
+        int w = 0;
+        for (int i = 0; i < list.Count; i++)
+        {
+            var e = list[i];
+            if (targetPs.AckedFor(e.AuthorNodeId) < e.Seq)
+                list[w++] = e;
+        }
+        if (w < list.Count)
+            list.RemoveRange(w, list.Count - w);
+    }
+
     /// Bind batchId + prevBatchDigest + batchDigest at WIRE time for one stream.
     /// SPEC HARDENING (§12.17.2 / [Т3]): the chain is PER STREAM ((issuer, ns, epoch), targetPeer).
     /// Deterministic replay: the SAME (stream, cursor span) always yields the SAME batchId
@@ -244,7 +275,9 @@ public sealed partial class Node
         var key = (batch.AuthorStreamId(), batch.CursorStart, batch.CursorEnd);
         if (!ps.Ids.TryGetValue(key, out var cached))
         {
-            cached = (BatchId.From(Guid.NewGuid().ToByteArray()),
+            Span<byte> gbuf = stackalloc byte[16];
+            Guid.NewGuid().TryWriteBytes(gbuf);
+            cached = (BatchId.From(gbuf),
                       LastStreamDigest.TryGetValue(streamKey, out var p) ? p : default);
             ps.Ids[key] = cached;
         }
