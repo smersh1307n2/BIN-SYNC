@@ -5,7 +5,7 @@ namespace BinSync;
 public sealed partial class Node
 {
     /// <summary>
-    /// When set, <see cref="ApplyBatchWithSchema"/> checks schema version before apply.
+    /// When set, <see cref="ApplyBatchWithSchema(Batch, NodeId)"/> checks schema version before apply.
     /// Plain <see cref="ApplyBatch"/> ignores this registry.
     /// </summary>
     public SchemaRegistry? Schemas { get; set; }
@@ -14,7 +14,7 @@ public sealed partial class Node
     /// Apply a batch after schema gate. On Pending → throw SCHEMA_PENDING;
     /// on Mismatch → SCHEMA_MISMATCH; on Ok → ApplyBatchInternal.
     /// </summary>
-    public BatchResult ApplyBatchWithSchema(Batch batch, byte[] senderPeer)
+    public BatchResult ApplyBatchWithSchema(Batch batch, NodeId senderPeer)
     {
         lock (_lockMeta)
         {
@@ -35,9 +35,13 @@ public sealed partial class Node
                     throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
                 }
             }
-            return ApplyBatchInternal(batch, senderPeer);
         }
+        return ApplyBatch(batch, senderPeer);
     }
+
+    /// <summary>Schema-gated apply (legacy byte[] sender id).</summary>
+    public BatchResult ApplyBatchWithSchema(Batch batch, byte[] senderPeer) =>
+        ApplyBatchWithSchema(batch, NodeId.From(senderPeer));
 
     /// <summary>Publish local schemas into the registry (convenience).</summary>
     public void RegisterSchema(SchemaDescriptor desc)

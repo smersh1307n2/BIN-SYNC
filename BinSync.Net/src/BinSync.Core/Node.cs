@@ -40,6 +40,9 @@ public sealed partial class Node : IDisposable
     /// <summary>Raised after a successful local field write (outside engine locks).</summary>
     public event Action<int, RecordId, int>? FieldWritten;
 
+    /// <summary>Raised after an ACK advances peer watermarks (outside engine locks).</summary>
+    public event Action<NodeId, int, long, NodeId?>? AckProcessed;
+
     private int _disposed;
 
     /// <summary>Stable node identity; set only in the constructor.</summary>
@@ -137,6 +140,11 @@ public sealed partial class Node : IDisposable
         FieldWritten?.Invoke(namespaceId, recordId, fieldId);
     }
 
+    internal void RaiseAckProcessed(NodeId peer, int namespaceId, long ackedSeq, NodeId? authorStream)
+    {
+        AckProcessed?.Invoke(peer, namespaceId, ackedSeq, authorStream);
+    }
+
     /// <summary>Release large engine maps; safe to call multiple times.</summary>
     public void Dispose()
     {
@@ -159,6 +167,7 @@ public sealed partial class Node : IDisposable
             PeersByNid = null;
             BatchApplied = null;
             FieldWritten = null;
+            AckProcessed = null;
         }
         GC.SuppressFinalize(this);
     }

@@ -5,7 +5,7 @@ namespace BinSync;
 public sealed partial class Node
 {
     /// <summary>
-    /// When set, callers may use <see cref="VerifyAndApplyBatch"/> before apply.
+    /// When set, callers may use <see cref="VerifyAndApplyBatch(Batch, NodeId, ReadOnlySpan{byte}, byte[])"/> before apply.
     /// Plain <see cref="ApplyBatch"/> does not consult trust (backward compatible).
     /// </summary>
     public TrustStore? Trust { get; set; }
@@ -26,31 +26,46 @@ public sealed partial class Node
     /// Verify signature then apply. Requires <see cref="Trust"/>.
     /// </summary>
     public BatchResult VerifyAndApplyBatch(
-        Batch batch, byte[] senderPeer, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
+        Batch batch, NodeId senderPeer, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
+        BatchResult result;
         lock (_lockMeta)
         {
             var store = Trust ?? throw new InvalidOperationException("Trust store not configured");
             store.VerifyBatchOrThrow(batch, signature, candidatePublicKey);
-            return ApplyBatchInternal(batch, senderPeer);
+            // Apply under full gates (trust check already done under Meta)
         }
+        result = ApplyBatch(batch, senderPeer);
+        return result;
     }
 
+    /// <summary>Verify then apply (legacy byte[] sender id).</summary>
+    public BatchResult VerifyAndApplyBatch(
+        Batch batch, byte[] senderPeer, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null) =>
+        VerifyAndApplyBatch(batch, NodeId.From(senderPeer), signature, candidatePublicKey);
+
     /// <summary>Pin or pre-share a peer key.</summary>
-    public void TrustPeer(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
+    public void TrustPeer(NodeId nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         lock (_lockMeta)
         {
             EnsureTrust(mode == TrustMode.Tofu ? TrustMode.Tofu : mode)
-                .Allow(nodeId, publicKey, mode);
+                .Allow(nodeId.ToArray(), publicKey, mode);
         }
     }
 
+    /// <summary>Pin or pre-share a peer key (legacy byte[] id).</summary>
+    public void TrustPeer(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared) =>
+        TrustPeer(NodeId.From(nodeId), publicKey, mode);
+
     /// <summary>Revoke a previously trusted peer.</summary>
-    public void RevokeTrust(byte[] nodeId)
+    public void RevokeTrust(NodeId nodeId)
     {
-        lock (_lockMeta) Trust?.Revoke(nodeId);
+        lock (_lockMeta) Trust?.Revoke(nodeId.ToArray());
     }
+
+    /// <summary>Revoke a previously trusted peer (legacy byte[] id).</summary>
+    public void RevokeTrust(byte[] nodeId) => RevokeTrust(NodeId.From(nodeId));
 
     /// <summary>Persist <see cref="Trust"/> (creating a TOFU store if missing).</summary>
     public void SaveTrust(string path)

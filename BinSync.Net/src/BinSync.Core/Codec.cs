@@ -152,8 +152,8 @@ public partial class Writer
         _pooled = false;
     }
 
-    /// <summary>ArrayPool-backed writer; call <see cref="ReturnPool"/> when done if not using <see cref="ToArrayReturn"/>.</summary>
-    public static Writer Rent(int capacity)
+    /// <summary>ArrayPool-backed writer (engine-internal). Prefer <c>new Writer(capacity)</c> from host code.</summary>
+    internal static Writer Rent(int capacity)
     {
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(Math.Max(16, capacity));
         return new Writer(buf, pooled: true);
@@ -284,7 +284,7 @@ public partial class Writer
     }
 
     /// <summary>Copy written bytes to a new array and return the pool buffer (if any).</summary>
-    public byte[] ToArrayReturn()
+    internal byte[] ToArrayReturn()
     {
         var r = _buf.AsSpan(0, _len).ToArray();
         ReturnPool();
@@ -292,7 +292,7 @@ public partial class Writer
     }
 
     /// <summary>Return a rented buffer to the shared ArrayPool when the writer used pooling.</summary>
-    public void ReturnPool()
+    internal void ReturnPool()
     {
         if (!_pooled) return;
         System.Buffers.ArrayPool<byte>.Shared.Return(_buf);

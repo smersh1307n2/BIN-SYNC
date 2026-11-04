@@ -303,6 +303,7 @@ public sealed partial class Node
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
             ProcessAckInternal(peerNode, namespaceId, ackedSeq, authorStream);
+        RaiseAckProcessed(peerNode, namespaceId, ackedSeq, authorStream);
     }
 
     /// <summary>Legacy byte[] peer id; prefer the <see cref="NodeId"/> overload.</summary>

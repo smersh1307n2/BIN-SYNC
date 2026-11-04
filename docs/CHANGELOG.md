@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.5.0 — 2026-11-04
+
+**API polish: builder, typed trust/schema, AckProcessed, internal Writer pool.**
+
+- `NodeBuilder` fluent construction
+- `TrustPeer` / `RevokeTrust` / `VerifyAndApplyBatch` / `ApplyBatchWithSchema` primary on `NodeId`
+- Event `AckProcessed`
+- `Writer.Rent` / `ReturnPool` / `ToArrayReturn` are **internal** (hosts use `new Writer`)
+
+---
+
 ## 2.4.0 — 2026-11-04
 
 **Usability: events, dispose, error codes, construction.**
