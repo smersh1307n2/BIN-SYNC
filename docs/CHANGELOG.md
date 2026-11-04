@@ -1,5 +1,7 @@
 # Changelog — BinSync.Core
 
+## 2.6.2 — same as 2.6.1 (retag after protected tag)
+
 ## 2.6.1 — 2026-11-04
 
 **Samples + query API restore + DurableId span write.**
