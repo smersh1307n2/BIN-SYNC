@@ -1,8 +1,8 @@
-**Current package: 2.3.0** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
+**Current package: 2.4.0** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
 
 # BinSync.Core — Public API surface
 
-**Package:** `BinSync.Core` **`2.3.0`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`2.4.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
 Normative: **BIN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
@@ -75,6 +75,10 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `TryGetRecord` / `TryGetField` | Read live store without exposing internal maps |
 | `GetRecordCount` | Records in a namespace |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
+| `BatchApplied` / `FieldWritten` | Events (handlers run outside engine locks) |
+| `Dispose` | Clear maps / detach events |
+| `NodeOptions` | Structured construction (limits at create) |
+| `SyncErrorCode` / `SyncException.ErrorCode` | Typed error codes |
 
 **Resource bounds:** `ResourceLimits`, `BoundedNode` factory helpers.
 

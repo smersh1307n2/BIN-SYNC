@@ -6,7 +6,7 @@
 namespace BinSync;
 
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
-public sealed partial class Node
+public sealed partial class Node : IDisposable
 {
     /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
     private static readonly byte[] Zero128Storage = new byte[16];
@@ -30,17 +30,17 @@ public sealed partial class Node
     private readonly object _lockMeta = new();
 
     /// <summary>
-    /// Acquire all domain locks (Storage → Outbox → Meta). Prefer this over the legacy
-    /// <see cref="Gate"/> object when taking a point-in-time snapshot.
+    /// Acquire all domain locks (Storage → Outbox → Meta) for a point-in-time snapshot.
     /// </summary>
     public AllGateScope EnterAllGates() => new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
 
-    /// <summary>
-    /// Legacy coarse gate object (locks Meta only). Prefer <see cref="EnterAllGates"/>.
-    /// </summary>
-    [Obsolete("Use EnterAllGates() for full Storage/Outbox/Meta exclusion.")]
-    public object Gate => _lockMeta;
+    /// <summary>Raised after a batch is applied or accepted as a duplicate (outside engine locks).</summary>
+    public event Action<BatchResult, NodeId>? BatchApplied;
 
+    /// <summary>Raised after a successful local field write (outside engine locks).</summary>
+    public event Action<int, RecordId, int>? FieldWritten;
+
+    private int _disposed;
 
     /// <summary>Stable node identity; set only in the constructor.</summary>
     public NodeId NodeId { get; }
@@ -107,14 +107,60 @@ public sealed partial class Node
     internal Dictionary<NodeId, Node>? PeersByNid { get; set; }
 
     /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
+    /// <summary>Create a node with optional identity, epoch, clock and resource limits.</summary>
     public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
-                long maxSkewUs = 60_000_000)
+                long maxSkewUs = 60_000_000, ResourceLimits? limits = null)
     {
         var raw = nodeId ?? Guid.NewGuid().ToByteArray();
         if (raw.Length != 16) throw new ArgumentException("nodeId must be 16 bytes", nameof(nodeId));
         NodeId = NodeId.From(raw);
         Epoch = epoch;
         Clock = new HlcClock(nowFn, maxSkewUs);
+        Limits = limits;
+    }
+
+    /// <summary>Create a node from a structured options bag.</summary>
+    public Node(NodeOptions options)
+        : this(options.NodeId, options.Epoch, options.NowFn, options.MaxSkewUs, options.Limits)
+    {
+    }
+
+    /// <summary>Raise <see cref="BatchApplied"/> if handlers are attached (call outside locks).</summary>
+    internal void RaiseBatchApplied(BatchResult result, NodeId senderPeer)
+    {
+        BatchApplied?.Invoke(result, senderPeer);
+    }
+
+    /// <summary>Raise <see cref="FieldWritten"/> if handlers are attached (call outside locks).</summary>
+    internal void RaiseFieldWritten(int namespaceId, RecordId recordId, int fieldId)
+    {
+        FieldWritten?.Invoke(namespaceId, recordId, fieldId);
+    }
+
+    /// <summary>Release large engine maps; safe to call multiple times.</summary>
+    public void Dispose()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            _storage.Clear();
+            Outbox.Clear();
+            Inbox.Clear();
+            PeerStates.Clear();
+            AliasToNode.Clear();
+            NodeToAlias.Clear();
+            SeenChanges.Clear();
+            LastBatchDigest.Clear();
+            LastStreamDigest.Clear();
+            DurableAuthors.Clear();
+            KnownEpochs.Clear();
+            AcksOut.Clear();
+            ErrorsOut.Clear();
+            PeersByNid = null;
+            BatchApplied = null;
+            FieldWritten = null;
+        }
+        GC.SuppressFinalize(this);
     }
 
     // Alias / session epoch / durable id → Production/Node.Alias.cs (partial)

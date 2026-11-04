@@ -8,8 +8,13 @@ public class SyncException : Exception
     /// <summary>Symbolic error code (e.g. SEQ_GAP, UNKNOWN_ALIAS).</summary>
     public string CodeName { get; }
 
+    /// <summary>Typed wire error code (preferred over string matching).</summary>
+    public SyncErrorCode ErrorCode { get; }
+
     /// <summary>Numeric wire code when known; otherwise 0.</summary>
-    public ushort Code => Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0;
+    public ushort Code => ErrorCode != SyncErrorCode.Unknown
+        ? (ushort)ErrorCode
+        : (Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0);
 
     /// <summary>Optional batch id (wire b128) associated with the error.</summary>
     public byte[]? BatchId { get; }
@@ -19,6 +24,16 @@ public class SyncException : Exception
         : base(codeName)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        ErrorCode = SyncErrorCodes.Parse(CodeName);
+        BatchId = batchId;
+    }
+
+    /// <summary>Create with typed error code (message = symbolic name when known).</summary>
+    public SyncException(SyncErrorCode errorCode, byte[]? batchId = null)
+        : base(SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString())
+    {
+        ErrorCode = errorCode;
+        CodeName = SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString();
         BatchId = batchId;
     }
 
@@ -31,6 +46,7 @@ public class SyncException : Exception
         : base(message)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        ErrorCode = SyncErrorCodes.Parse(CodeName);
         BatchId = batchId;
     }
 
@@ -39,6 +55,7 @@ public class SyncException : Exception
         : base(message, innerException)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
+        ErrorCode = SyncErrorCodes.Parse(CodeName);
         BatchId = batchId;
     }
 }

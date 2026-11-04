@@ -9,7 +9,11 @@ public sealed partial class Node
     /// and delegates to <c>ApplyBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public BatchResult ApplyBatch(Batch batch, NodeId senderPeer)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyBatchInternal(batch, senderPeer);
+        BatchResult result;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            result = ApplyBatchInternal(batch, senderPeer);
+        RaiseBatchApplied(result, senderPeer);
+        return result;
     }
 
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer)
@@ -294,16 +298,26 @@ public sealed partial class Node
     /// SPEC CORRECTION (errata E-4): the ACK names the acknowledged AUTHOR STREAM.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ProcessAckInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public void ProcessAck(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
+    /// <summary>Process an ACK: advance per-author watermarks for the peer session.</summary>
+    public void ProcessAck(NodeId peerNode, int namespaceId, long ackedSeq, NodeId? authorStream = null)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) ProcessAckInternal(peerNode, namespaceId, ackedSeq, authorStream);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            ProcessAckInternal(peerNode, namespaceId, ackedSeq, authorStream);
     }
 
-    internal void ProcessAckInternal(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null)
+    /// <summary>Legacy byte[] peer id; prefer the <see cref="NodeId"/> overload.</summary>
+    public void ProcessAck(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null) =>
+        ProcessAck(NodeId.From(peerNode), namespaceId, ackedSeq,
+            authorStream is null ? null : NodeId.From(authorStream));
+
+    internal void ProcessAckInternal(NodeId peerNode, int namespaceId, long ackedSeq, NodeId? authorStream = null)
     {
         if (!PeerStates.TryGetValue((peerNode, namespaceId), out var ps)) return;
         if (authorStream is not null)
-            ps.StreamAcked[authorStream] = Math.Max(ps.StreamAcked.TryGetValue(authorStream, out var cur) ? cur : 0, ackedSeq);
+        {
+            var a = authorStream.Value;
+            ps.StreamAcked[a] = Math.Max(ps.StreamAcked.TryGetValue(a, out var cur) ? cur : 0, ackedSeq);
+        }
         else
         {
             var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : new List<OutboxEntry>();

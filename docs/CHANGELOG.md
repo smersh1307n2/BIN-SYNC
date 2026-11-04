@@ -1,5 +1,19 @@
 # Changelog — BinSync.Core
 
+## 2.4.0 — 2026-11-04
+
+**Usability: events, dispose, error codes, construction.**
+
+- `Node` implements `IDisposable` (clears maps, detaches events)
+- Events: `BatchApplied`, `FieldWritten` (raised outside engine locks)
+- `SyncErrorCode` enum + `SyncException.ErrorCode` + `SyncErrorCodes` helpers
+- `NodeOptions` + `ResourceLimits` in constructor
+- Removed public `Gate` (use `EnterAllGates`)
+- `ProcessAck(NodeId, …)` primary; ExportDelta ACK/stream advance fixed
+- Docs / version stamps → 2.4.0
+
+---
+
 ## 2.3.0 — 2026-11-04
 
 **Performance + public query API.**

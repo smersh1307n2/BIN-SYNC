@@ -184,7 +184,7 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         if (!batch.BatchId.EqualsBytes(bid))
             throw new InvalidOperationException("ACK batch id mismatch");
         sender.AdvanceStream(PeerNodeId, namespaceId, batch);
-        sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: author);
+        sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: NodeId.From(author));
         return true;
     }
 

@@ -157,7 +157,7 @@ public static partial class Transport
         if (!result.BatchId.EqualsBytes(bid))
             throw new InvalidOperationException("ACK batch id mismatch");
         if (!dropAck)
-            sender.ProcessAck(receiver.NodeId, namespaceId, ackSeq, authorStream: ackAuthor);
+            sender.ProcessAck(receiver.NodeId, namespaceId, ackSeq, authorStream: NodeId.From(ackAuthor));
         return result;
     }
 
@@ -190,7 +190,8 @@ public static partial class Transport
                 var payload = node.EncodeBatchPayload(batch);
                 f.Write(FrameCodec.BuildFrame(0x09, 0x0001_0000 | (uint)namespaceId, (ulong)(count + 1), payload));
                 count++;
-                node.ProcessAck(targetHint, namespaceId, batch.CursorEnd);
+                node.AdvanceStream(NodeId.From(targetHint), namespaceId, batch);
+                node.ProcessAck(NodeId.From(targetHint), namespaceId, batch.CursorEnd, batch.DurableAuthor);
             }
         }
         return count;

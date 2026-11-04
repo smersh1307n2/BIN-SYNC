@@ -108,11 +108,14 @@ public sealed partial class Node
     /// </summary>
     public BatchResult ApplyBatchPayload(byte[] data, NodeId senderPeer)
     {
+        BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
-            return ApplyBatchInternal(batch, senderPeer);
+            result = ApplyBatchInternal(batch, senderPeer);
         }
+        RaiseBatchApplied(result, senderPeer);
+        return result;
     }
 
     internal Batch DecodeBatchPayloadInternal(byte[] data)

@@ -154,7 +154,11 @@ public sealed partial class Node
     public bool WriteField(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         Limits?.EnsureStorageCapacity(this);
-        lock (_lockStorage) lock (_lockOutbox) return WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
+        bool changed;
+        lock (_lockStorage) lock (_lockOutbox)
+            changed = WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
+        if (changed) RaiseFieldWritten(namespaceId, recordId, fieldId);
+        return changed;
     }
 
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
