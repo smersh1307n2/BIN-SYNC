@@ -16,7 +16,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 | Two-node sample | [`samples/TwoNodeLoopback/`](samples/TwoNodeLoopback/) |
 
-**Package:** `BinSync.Core` **`2.6.3`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`2.6.4`** · **Target:** `net10.0`  
 **Branch:** `main` · **Tests:** 276 (CI)  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
@@ -60,12 +60,15 @@ Embedder contract and SemVer rules: **[docs/PUBLIC-API.md](docs/PUBLIC-API.md)**
 
 ---
 
-### Minimal sample (two nodes, loopback)
+### Samples
 
 ```bash
-bash scripts/vendor-ed25519-from-ztsharp.sh   # once
-dotnet run --project samples/TwoNodeLoopback -c Release
+dotnet run --project samples/TwoNodeLoopback -c Release   # in-process SyncRound + events
+dotnet run --project samples/TwoNodeTcp -c Release        # TCP push/receive
+dotnet run --project samples/ScenarioHarness -c Release   # 9 scenarios (+ optional --soak)
 ```
+
+See [samples/README.md](samples/README.md).
 
 
 ## License

@@ -1,8 +1,8 @@
-// Scenario harness — exercises realistic multi-step flows with logging.
+// Scenario harness — multi-step flows with logging (BinSync.Core 2.6+ public API).
 // Exit 0 only if all scenarios pass.
 //
-//   bash scripts/vendor-ed25519-from-ztsharp.sh
 //   dotnet run --project samples/ScenarioHarness -c Release
+//   dotnet run --project samples/ScenarioHarness -c Release -- --soak 10
 using System.Text;
 using BinSync;
 
@@ -253,30 +253,32 @@ static bool S10_Soak(Log log, int seconds)
     return missing == 0 && iter > 0;
 }
 
-// --- helpers ---
+// --- helpers (public API only) ---
 
-static Node N(int seed) => new(nodeId: Rid(seed), epoch: 1);
+static Node N(int seed) => new NodeBuilder()
+    .WithNodeId(Rid(seed).ToArray())
+    .WithEpoch(1)
+    .Build();
 
-static byte[] Rid(int n)
+static RecordId Rid(int n)
 {
     var b = new byte[16];
     BitConverter.GetBytes(n).CopyTo(b, 0);
-    return b;
+    return RecordId.From(b);
 }
 
 static byte[] Val(string s) => Encoding.UTF8.GetBytes(s);
 
-static bool Has(Node node, byte[] rid, string expected)
+static bool Has(Node node, RecordId rid, string expected)
 {
     var g = Get(node, rid);
     return g == expected;
 }
 
-static string? Get(Node node, byte[] rid)
+static string? Get(Node node, RecordId rid)
 {
-    if (!node.Storage.TryGetValue(Ns, out var store)) return null;
-    if (!store.TryGetValue(rid, out var rec)) return null;
-    if (!rec.State.TryGetValue(0x101, out var fs)) return null;
+    if (!node.TryGetField(Ns, rid, 0x101, out var fs) || fs is null)
+        return null;
     return Encoding.UTF8.GetString(fs.Value);
 }
 

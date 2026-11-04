@@ -1,5 +1,15 @@
 # Changelog — BinSync.Core
 
+## 2.6.4 — 2026-11-04
+
+**Docs + samples aligned with public API.**
+
+- `samples/ScenarioHarness` uses `NodeBuilder` / `RecordId` / `TryGetField` (no Storage)
+- `samples/README.md` and root README sample section updated
+- Tests: 276 passed
+
+---
+
 ## 2.6.3 — 2026-11-04
 
 **Perf regression fixes**
