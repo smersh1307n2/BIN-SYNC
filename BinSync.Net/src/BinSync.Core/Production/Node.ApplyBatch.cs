@@ -180,10 +180,12 @@ public sealed partial class Node
                             // On-purpose: unknown alias / origin during relay-eligibility
                             // check must not fail the batch — treat as non-own, allow relay.
                         }
+                        // After CompactOutbox, the un-acked queue copy may be gone; any
+                        // self-authored field already in storage is an echo ([E2]/[Ш2]) —
+                        // never re-queue it solely because OwnQueueHolds is false.
                         if (rAuthor is not null && rAuthor.AsSpan().SequenceEqual(NodeId) &&
-                            SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null &&
-                            OwnQueueHolds(batch.NamespaceId, e.RecordId, rop))
-                            relayOk = false;   // own durable state echoed back [E2]/[Ш2]
+                            SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null)
+                            relayOk = false;
                     }
                     if (relayOk) changedFlags[idx] = true; // new provenance ⇒ relay even as loser
                 }
@@ -259,6 +261,7 @@ public sealed partial class Node
         }
         return false;
     }
+
 
     private static ushort GetOrigin(object op) => op switch
     { OpFieldWrite x => x.Origin, OpFieldTomb x => x.Origin, OpRecordTombstone x => x.Origin, _ => (ushort)0 };
@@ -338,6 +341,7 @@ public sealed partial class Node
         // legacy mirror: monotone scalar = min over known streams' watermarks.
         if (ps.StreamAcked.Count > 0)
             ps.LastAckedSeq = ps.StreamAcked.Values.Min();
+        CompactOutbox(namespaceId);
     }
 
 

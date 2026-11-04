@@ -44,8 +44,6 @@ public sealed partial class Node
     {
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
-        // Compaction: drop entries this target has already acked when no other peer still needs them.
-        // CompactOutboxForPeer(namespaceId, targetPeer, ps);
         long wm;
         NodeId stream;
         List<OutboxEntry> pending;
@@ -220,28 +218,47 @@ public sealed partial class Node
 
 
     /// <summary>
-    /// Remove outbox entries acked by <paramref name="targetPeer"/> if every other peer for this
-    /// namespace has also acked them. Prevents CreateDeltaBatch from scanning unbounded history.
+    /// Drop outbox entries that every known peer of this namespace has acknowledged.
+    /// A session peer that has no <see cref="PeerState"/> yet has not acked — those
+    /// entries stay (relay to a peer not yet contacted). No peers at all: keep the
+    /// log (sneakernet / not-yet-exported).
     /// </summary>
-    private void CompactOutboxForPeer(int namespaceId, NodeId targetPeer, PeerState targetPs)
+    internal void CompactOutbox(int namespaceId)
     {
         if (!Outbox.TryGetValue(namespaceId, out var list) || list.Count == 0) return;
 
-        // Count other peers for this namespace. Multi-peer / relay keeps history (tests + E-8).
-        int otherPeers = 0;
+        var interested = new List<NodeId>(4);
+        if (PeersByNid is not null)
+        {
+            foreach (var id in PeersByNid.Keys)
+                interested.Add(id);
+        }
+        foreach (var id in AliasToNode.Keys)
+        {
+            if (!interested.Contains(id)) interested.Add(id);
+        }
         foreach (var kv in PeerStates)
         {
-            if (kv.Key.Item2 == namespaceId && kv.Key.Item1 != targetPeer)
-                otherPeers++;
+            if (kv.Key.Item2 == namespaceId && !interested.Contains(kv.Key.Item1))
+                interested.Add(kv.Key.Item1);
         }
-        if (otherPeers > 0) return;
+        if (interested.Count == 0) return;
 
         int w = 0;
         for (int i = 0; i < list.Count; i++)
         {
             var e = list[i];
-            if (targetPs.AckedFor(e.AuthorNodeId) < e.Seq)
-                list[w++] = e;
+            bool pending = false;
+            for (int p = 0; p < interested.Count; p++)
+            {
+                if (!PeerStates.TryGetValue((interested[p], namespaceId), out var ps)
+                    || ps.AckedFor(e.AuthorNodeId) < e.Seq)
+                {
+                    pending = true;
+                    break;
+                }
+            }
+            if (pending) list[w++] = e;
         }
         if (w < list.Count)
             list.RemoveRange(w, list.Count - w);

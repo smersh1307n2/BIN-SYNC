@@ -212,11 +212,15 @@ public class Production : IDisposable
         var rmap = restored.OutboxSeqRef;
         Assert.Equal(before, rmap[(restored.NodeId, NS)]);
 
-        // A fresh write on the restored node must continue the durable per-author stream.
+        // A fresh write on the restored node must continue the durable per-author stream
+        // (OutboxSeqRef). Cursor span for a brand-new peer is gap-normalised independently.
         restored.WriteField(NS, Fix.Rid(300), 0x101, Val("post-restart"));
+        long after = restored.OutboxSeqRef[(restored.NodeId, NS)];
+        Assert.Equal(before + 1, after);
         var batch = restored.CreateDeltaBatch(Fix.Nid(99), NS);
         Assert.NotNull(batch);
-        Assert.True(batch!.CursorEnd > before, $"expected cursorEnd > {before}, got {batch.CursorEnd}");
+        Assert.True(batch!.Entries.Count >= 1);
+        Assert.Contains(batch.Entries, e => e.RecordId == Fix.Rid(300));
     }
 
     [Fact]

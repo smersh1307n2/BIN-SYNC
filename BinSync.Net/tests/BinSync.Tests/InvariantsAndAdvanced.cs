@@ -157,7 +157,7 @@ public class InvariantsAndAdvanced
         for (int i = 0; i < 12; i++)
             a.WriteField(NS, Rid(i + 1), 0x0100, Asc($"v{i}"), new Hlc((ulong)(1000 + i), 0));
         // BUGFIX (test port): count the STILL-PENDING entries (seq > per-author acked
-        // watermark), not the raw outbox list — acked entries are never trimmed here.
+        // watermark), not the raw outbox list — acked entries may be compacted after ProcessAck (CompactOutbox).
         // NOTE: PeerStates is keyed by a byte[] tuple WITHOUT a structural comparer
         // (Node.cs:1057 reference-equals the key array), so look it up via TryGetValue.
         Assert.Equal(12, a.Outbox[NS].Count(e => !a.PeerStates.TryGetValue((b.NodeId, NS), out var ps)

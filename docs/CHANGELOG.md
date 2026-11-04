@@ -1,5 +1,16 @@
 # Changelog — BinSync.Core
 
+## 2.6.5 — 2026-11-04
+
+**Outbox compaction (safe)**
+
+- `CompactOutbox` after `ProcessAck`: drop entries acked by every interested peer (session / alias / PeerState)
+- Peers without a `PeerState` yet still need the entry (relay-safe)
+- Self-echo suppression: self-authored field already in storage is never re-queued ([E2]/[Ш2]) — works after compact
+- Tests: durable `OutboxSeqRef` continuity after restart (CursorEnd is gap-norm for new peers)
+
+---
+
 ## 2.6.4 — 2026-11-04
 
 **Docs + samples aligned with public API.**
