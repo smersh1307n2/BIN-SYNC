@@ -66,12 +66,12 @@ public readonly partial struct NodeId : IEquatable<NodeId>
     /// <summary>Compare to a 16-byte wire id without allocating.</summary>
     public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
     /// <summary>Compare this id to a byte span for content equality.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
-        Span<byte> tmp = stackalloc byte[16];
-        WriteTo(tmp);
-        return tmp.SequenceEqual(bytes);
+        return BinaryPrimitives.ReadUInt64LittleEndian(bytes) == Lo
+            && BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8)) == Hi;
     }
 
     /// <summary>Content equality comparison.</summary>
@@ -151,12 +151,12 @@ public readonly partial struct RecordId : IEquatable<RecordId>
     /// <summary>Compare this id to a byte span for content equality.</summary>
     public bool EqualsBytes(ReadOnlyMemory<byte> bytes) => EqualsBytes(bytes.Span);
     /// <summary>Compare this id to a byte span for content equality.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
-        Span<byte> tmp = stackalloc byte[16];
-        WriteTo(tmp);
-        return tmp.SequenceEqual(bytes);
+        return BinaryPrimitives.ReadUInt64LittleEndian(bytes) == Lo
+            && BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8)) == Hi;
     }
 
     /// <summary>Content equality comparison.</summary>
@@ -214,12 +214,12 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     public static implicit operator byte[](BatchId id) => id.ToArray();
 
     /// <summary>Content equality against a 16-byte span.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public bool EqualsBytes(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16) return false;
-        Span<byte> tmp = stackalloc byte[16];
-        WriteTo(tmp);
-        return tmp.SequenceEqual(bytes);
+        return BinaryPrimitives.ReadUInt64LittleEndian(bytes) == Lo
+            && BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8)) == Hi;
     }
 
     /// <summary>Content equality against a memory segment.</summary>

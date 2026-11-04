@@ -1,8 +1,8 @@
-**Current package: 2.2.23** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
+**Current package: 2.3.0** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
 
 # BinSync.Core — Public API surface
 
-**Package:** `BinSync.Core` **`2.2.23`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`2.3.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
 Normative: **BIN-SYNC-SPECIFICATION.txt v2.3.6** + [ERRATA-v2.3.7](ERRATA-v2.3.7.md) / addendum.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
@@ -32,7 +32,8 @@ Breaking hygiene (no wire/protocol change):
 | Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains where noted. |
 | `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
 | Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`PeerState.PeerNodeId`**, **`TcpSyncSession.PeerNodeId`** are **`NodeId`**. |
-| Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, …). Test assemblies use `InternalsVisibleTo`. |
+| Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, `TryGetRecord` / `TryGetField`, …). Test assemblies use `InternalsVisibleTo`. |
+| `Zero128` | Returns a **fresh copy** each access (callers cannot corrupt a shared buffer). |
 | Locks | Prefer **`EnterAllGates()`** (`AllGateScope`). `Node.Gate` is **obsolete** (Meta only). |
 | Decode safety | Public **`DecodeBatchPayload`** materializes owned entry buffers. **`ApplyBatchPayload`** may use zero-copy internally then drop the frame. |
 
@@ -70,7 +71,10 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `ProcessAck` | Advance per-author watermarks |
 | `ApplyRemoteField` / `ApplySnapshot` | Snapshot / anti-entropy apply paths |
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
-| `OutboxSize` | Bound/diagnostic helper |
+| `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
+| `TryGetRecord` / `TryGetField` | Read live store without exposing internal maps |
+| `GetRecordCount` | Records in a namespace |
+| `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
 
 **Resource bounds:** `ResourceLimits`, `BoundedNode` factory helpers.
 

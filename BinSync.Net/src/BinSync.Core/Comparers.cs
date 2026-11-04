@@ -3,6 +3,18 @@
 
 namespace BinSync;
 
+internal sealed class ByteArrayComparer : IComparer<byte[]>
+{
+    public static readonly ByteArrayComparer Instance = new();
+    public int Compare(byte[]? x, byte[]? y)
+    {
+        if (ReferenceEquals(x, y)) return 0;
+        if (x is null) return -1;
+        if (y is null) return 1;
+        return x.AsSpan().SequenceCompareTo(y);
+    }
+}
+
 internal sealed class BytesEq : IEqualityComparer<byte[]>
 {
     /// <summary>Shared singleton instance of this content-equality comparer.</summary>
@@ -147,3 +159,21 @@ public sealed class SeenKeyComparer : IEqualityComparer<(byte[], int, byte[])>
         HashCode.Combine(BytesEq.Instance.GetHashCode(t.Item1), t.Item2, BytesEq.Instance.GetHashCode(t.Item3));
 }
 
+
+internal sealed class ActorSeqElemEq : IEqualityComparer<(byte[] Actor, ulong Seq, byte[] Element)>
+{
+    public static readonly ActorSeqElemEq Instance = new();
+    public bool Equals((byte[] Actor, ulong Seq, byte[] Element) x, (byte[] Actor, ulong Seq, byte[] Element) y) =>
+        x.Seq == y.Seq && BytesEq.Instance.Equals(x.Actor, y.Actor) && BytesEq.Instance.Equals(x.Element, y.Element);
+    public int GetHashCode((byte[] Actor, ulong Seq, byte[] Element) t) =>
+        HashCode.Combine(BytesEq.Instance.GetHashCode(t.Actor), t.Seq, BytesEq.Instance.GetHashCode(t.Element));
+}
+
+internal sealed class ActorSeqEq : IEqualityComparer<(byte[] Actor, ulong Seq)>
+{
+    public static readonly ActorSeqEq Instance = new();
+    public bool Equals((byte[] Actor, ulong Seq) x, (byte[] Actor, ulong Seq) y) =>
+        x.Seq == y.Seq && BytesEq.Instance.Equals(x.Actor, y.Actor);
+    public int GetHashCode((byte[] Actor, ulong Seq) t) =>
+        HashCode.Combine(BytesEq.Instance.GetHashCode(t.Actor), t.Seq);
+}

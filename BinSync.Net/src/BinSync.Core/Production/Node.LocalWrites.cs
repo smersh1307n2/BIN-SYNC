@@ -5,6 +5,13 @@ namespace BinSync;
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
+    private static BatchId NewChangeId()
+    {
+        Span<byte> g = stackalloc byte[16];
+        Guid.NewGuid().TryWriteBytes(g);
+        return BatchId.From(g);
+    }
+
     /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>NextOutboxSeqInternal</c>. See <see cref="EnterAllGates"/>.</summary>
@@ -107,7 +114,7 @@ public sealed partial class Node
         {
             NamespaceId = ns,
             Seq = NextOutboxSeq(author, ns),
-            ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            ChangeId = NewChangeId(),
             RecordId = recordId,
             OpKind = TagOf(op),
             Payload = payload,

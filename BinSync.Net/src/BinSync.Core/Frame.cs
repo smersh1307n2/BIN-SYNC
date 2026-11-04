@@ -1,5 +1,8 @@
 // Frame format (§12.2): 25-byte header, magic 0x4253, CRC32C, hard limits; flow control (§3.6).
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
+using System.Runtime.Intrinsics.Arm;
 
 namespace BinSync;
 
@@ -97,15 +100,94 @@ public static class Frames
         return t;
     }
 
-    /// <summary>Compute Castagnoli CRC32C over the data.</summary>
+    /// <summary>Compute Castagnoli CRC32C over the data (SSE4.2 / ARM CRC32 when available).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static uint Crc32C(ReadOnlySpan<byte> data)
     {
-        uint crc = 0xFFFFFFFFu;
-        foreach (byte b in data) crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
-        return crc ^ 0xFFFFFFFFu;
+        if (Sse42.IsSupported)
+            return Crc32CSse42(data);
+        if (Crc32.Arm64.IsSupported)
+            return Crc32CArm64(data);
+        if (Crc32.IsSupported)
+            return Crc32CArm(data);
+        return Crc32CSoftware(data);
     }
+
     /// <summary>Compute Castagnoli CRC32C over the data.</summary>
     public static uint Crc32C(byte[] data) => Crc32C(data.AsSpan());
+
+    private static uint Crc32CSoftware(ReadOnlySpan<byte> data)
+    {
+        uint crc = 0xFFFFFFFFu;
+        foreach (byte b in data)
+            crc = CrcTable[(crc ^ b) & 0xFF] ^ (crc >> 8);
+        return crc ^ 0xFFFFFFFFu;
+    }
+
+    private static uint Crc32CSse42(ReadOnlySpan<byte> data)
+    {
+        if (Sse42.X64.IsSupported)
+        {
+            ulong crc = 0xFFFF_FFFFUL;
+            while (data.Length >= 8)
+            {
+                crc = Sse42.X64.Crc32(crc, BinaryPrimitives.ReadUInt64LittleEndian(data));
+                data = data.Slice(8);
+            }
+            uint c = (uint)crc;
+            while (data.Length > 0)
+            {
+                c = Sse42.Crc32(c, data[0]);
+                data = data.Slice(1);
+            }
+            return c ^ 0xFFFF_FFFFu;
+        }
+        // 32-bit path: process 4 bytes at a time
+        uint crc32 = 0xFFFF_FFFFu;
+        while (data.Length >= 4)
+        {
+            crc32 = Sse42.Crc32(crc32, BinaryPrimitives.ReadUInt32LittleEndian(data));
+            data = data.Slice(4);
+        }
+        while (data.Length > 0)
+        {
+            crc32 = Sse42.Crc32(crc32, data[0]);
+            data = data.Slice(1);
+        }
+        return crc32 ^ 0xFFFF_FFFFu;
+    }
+
+    private static uint Crc32CArm64(ReadOnlySpan<byte> data)
+    {
+        uint crc = 0xFFFF_FFFFu;
+        while (data.Length >= 8)
+        {
+            crc = Crc32.Arm64.ComputeCrc32C(crc, BinaryPrimitives.ReadUInt64LittleEndian(data));
+            data = data.Slice(8);
+        }
+        while (data.Length > 0)
+        {
+            crc = Crc32.ComputeCrc32C(crc, data[0]);
+            data = data.Slice(1);
+        }
+        return crc ^ 0xFFFF_FFFFu;
+    }
+
+    private static uint Crc32CArm(ReadOnlySpan<byte> data)
+    {
+        uint crc = 0xFFFF_FFFFu;
+        while (data.Length >= 4)
+        {
+            crc = Crc32.ComputeCrc32C(crc, BinaryPrimitives.ReadUInt32LittleEndian(data));
+            data = data.Slice(4);
+        }
+        while (data.Length > 0)
+        {
+            crc = Crc32.ComputeCrc32C(crc, data[0]);
+            data = data.Slice(1);
+        }
+        return crc ^ 0xFFFF_FFFFu;
+    }
 }
 
 /// <summary>class: class.</summary>
@@ -224,6 +306,25 @@ public static class FrameCodec
             throw new FrameException("CORRUPTED_FRAME");  // [Ц1] session preserved
         var payload = payloadSpan.ToArray();
         return (new Frame(ftype, flags, streamId, frameSeq, payload), Frames.HEADER_SIZE + (int)payloadLen);
+    }
+
+    /// <summary>Validate magic, length and CRC without allocating a <see cref="Frame"/> or payload copy.</summary>
+    public static void ValidateFrame(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < Frames.HEADER_SIZE)
+            throw new FrameException("FRAME_REJECTED");
+        ushort magic = BinaryPrimitives.ReadUInt16LittleEndian(data);
+        if (magic != Frames.MAGIC)
+            throw new FrameException("BAD_MAGIC") { SilentDrop = true };
+        uint payloadLen = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(17));
+        if (payloadLen > Frames.MAX_PAYLOAD_SIZE)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
+        if (data.Length < Frames.HEADER_SIZE + (int)payloadLen)
+            throw new FrameException("FRAME_REJECTED");
+        uint crc = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(21));
+        var payloadSpan = data.Slice(Frames.HEADER_SIZE, (int)payloadLen);
+        if (Frames.Crc32C(payloadSpan) != crc)
+            throw new FrameException("CORRUPTED_FRAME");
     }
 }
 

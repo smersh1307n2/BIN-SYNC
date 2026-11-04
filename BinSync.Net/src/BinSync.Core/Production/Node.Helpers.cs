@@ -109,7 +109,7 @@ public sealed partial class Node
             w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
             w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
             w.B128(recordsRoot).B128(prevBatchDigest);
-            return Digest16.From(Digests.Blake3(w.WrittenSpan, 16));
+            return Digests.Blake3Digest16(w.WrittenSpan);
         }
         finally
         {
@@ -134,7 +134,7 @@ public sealed partial class Node
             var w = new Writer(buf);
             w.Raw(Domains.DomainRecords);
             WriteRecordsArray(w, entries);
-            return Digest16.From(Digests.Blake3(w.WrittenSpan, 16));
+            return Digests.Blake3Digest16(w.WrittenSpan);
         }
         finally
         {

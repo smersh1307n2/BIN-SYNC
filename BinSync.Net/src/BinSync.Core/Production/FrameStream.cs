@@ -49,7 +49,7 @@ public static class FrameStream
                     throw new FrameException("FRAME_REJECTED");
             }
 
-            _ = FrameCodec.ParseFrame(frame);
+            FrameCodec.ValidateFrame(frame);
             return frame;
         }
         finally

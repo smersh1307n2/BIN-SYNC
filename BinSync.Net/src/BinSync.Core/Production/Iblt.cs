@@ -14,10 +14,41 @@ public struct IbltCell
 {
     /// <summary>Signed multiplicity of digests folded into this cell.</summary>
     public int Count;
-    /// <summary>XOR of inserted keys in this IBLT cell (padded to KeyBytes).</summary>
-    public byte[] KeyXor;   // length KeyBytes (padded)
     /// <summary>Running XOR of cell hashes used while peeling the IBLT.</summary>
     public ulong HashXor;
+    /// <summary>Low 8 bytes of the XORed key (little-endian).</summary>
+    public ulong KeyLo;
+    /// <summary>High 8 bytes of the XORed key (little-endian).</summary>
+    public ulong KeyHi;
+
+    /// <summary>Write the 16-byte key XOR into <paramref name="dest"/>.</summary>
+    public void WriteKey(Span<byte> dest)
+    {
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(dest, KeyLo);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(dest.Slice(8), KeyHi);
+    }
+
+    /// <summary>Materialize key XOR as a new array (peel / wire).</summary>
+    public byte[] KeyToArray()
+    {
+        var a = new byte[16];
+        WriteKey(a);
+        return a;
+    }
+
+    /// <summary>Load key XOR from a 16-byte span.</summary>
+    public void SetKey(ReadOnlySpan<byte> key)
+    {
+        KeyLo = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(key);
+        KeyHi = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(key.Slice(8));
+    }
+
+    /// <summary>XOR this cell's key with <paramref name="key"/>.</summary>
+    public void XorKey(ReadOnlySpan<byte> key)
+    {
+        KeyLo ^= System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(key);
+        KeyHi ^= System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(key.Slice(8));
+    }
 }
 
 /// <summary>
@@ -42,8 +73,6 @@ public sealed class Iblt
         if (cellCount < 4) throw new ArgumentOutOfRangeException(nameof(cellCount));
         CellCount = cellCount;
         Cells = new IbltCell[cellCount];
-        for (int i = 0; i < cellCount; i++)
-            Cells[i] = new IbltCell { KeyXor = new byte[KeyBytes], HashXor = 0, Count = 0 };
     }
 
     /// <summary>Normalize a key to the fixed IBLT key width (pad or hash as required).</summary>
@@ -95,7 +124,7 @@ public sealed class Iblt
         {
             ref var c = ref Cells[idx[t]];
             c.Count += delta;
-            XorInPlace(c.KeyXor, key);
+            c.XorKey(key);
             c.HashXor ^= hh;
         }
     }
@@ -107,9 +136,12 @@ public sealed class Iblt
             throw new ArgumentException("IBLT size mismatch");
         for (int i = 0; i < CellCount; i++)
         {
-            Cells[i].Count -= remote.Cells[i].Count;
-            XorInPlace(Cells[i].KeyXor, remote.Cells[i].KeyXor);
-            Cells[i].HashXor ^= remote.Cells[i].HashXor;
+            ref var a = ref Cells[i];
+            ref var b = ref remote.Cells[i];
+            a.Count -= b.Count;
+            a.KeyLo ^= b.KeyLo;
+            a.KeyHi ^= b.KeyHi;
+            a.HashXor ^= b.HashXor;
         }
     }
 
@@ -132,17 +164,17 @@ public sealed class Iblt
             int i = queue.Dequeue();
             var c = Cells[i];
             if (!IsPure(c)) continue;
-            var key = (byte[])c.KeyXor.Clone();
+            var key = c.KeyToArray();
             int sign = c.Count;
             if (sign > 0) onlyLocal.Add(key);
             else onlyRemote.Add(key);
             Indices(key, idx);
             ulong hh = KeyHash(key);
-            for (int t = 0; t < HashCount; t++)
+            for (int ht = 0; ht < HashCount; ht++)
             {
-                int j = idx[t];
+                int j = idx[ht];
                 Cells[j].Count -= sign;
-                XorInPlace(Cells[j].KeyXor, key);
+                Cells[j].XorKey(key);
                 Cells[j].HashXor ^= hh;
                 if (IsPure(Cells[j])) queue.Enqueue(j);
             }
@@ -153,13 +185,9 @@ public sealed class Iblt
     private static bool IsPure(IbltCell c)
     {
         if (c.Count != 1 && c.Count != -1) return false;
-        return KeyHash(c.KeyXor) == c.HashXor;
-    }
-
-    private static void XorInPlace(byte[] a, byte[] b)
-    {
-        int n = Math.Min(a.Length, b.Length);
-        for (int i = 0; i < n; i++) a[i] ^= b[i];
+        Span<byte> key = stackalloc byte[KeyBytes];
+        c.WriteKey(key);
+        return KeyHash(key) == c.HashXor;
     }
 
     /// <summary>Build IBLT from local recordIds under optional prefix.</summary>
@@ -186,10 +214,12 @@ public sealed class Iblt
     {
         var w = new Writer();
         w.U32((uint)t.CellCount);
+        Span<byte> key = stackalloc byte[KeyBytes];
         for (int i = 0; i < t.CellCount; i++)
         {
             w.U32(unchecked((uint)t.Cells[i].Count));
-            w.Raw(t.Cells[i].KeyXor.Length == KeyBytes ? t.Cells[i].KeyXor : PadKey(t.Cells[i].KeyXor));
+            t.Cells[i].WriteKey(key);
+            w.Raw(key);
             w.U64(t.Cells[i].HashXor);
         }
         return w.Value();
@@ -204,16 +234,10 @@ public sealed class Iblt
         for (int i = 0; i < n; i++)
         {
             t.Cells[i].Count = unchecked((int)r.U32());
-            t.Cells[i].KeyXor = r.Raw(KeyBytes);
+            t.Cells[i].SetKey(r.TakeSpan(KeyBytes));
             t.Cells[i].HashXor = r.U64();
         }
         return t;
     }
 
-    private static byte[] PadKey(byte[] k)
-    {
-        var r = new byte[KeyBytes];
-        Array.Copy(k, r, Math.Min(KeyBytes, k.Length));
-        return r;
-    }
 }

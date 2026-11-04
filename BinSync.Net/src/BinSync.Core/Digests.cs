@@ -58,6 +58,14 @@ public static class Digests
         return r;
     }
 
+    /// <summary>BLAKE3 truncated to 16 bytes as <see cref="Digest16"/> (no intermediate array).</summary>
+    public static Digest16 Blake3Digest16(ReadOnlySpan<byte> data)
+    {
+        Span<byte> full = stackalloc byte[32];
+        Blake3Core.Hash256(data, full);
+        return Digest16.From(full[..16]);
+    }
+
     /// <summary>Domain-tagged BLAKE3-256 (keyed-hash mode), truncated to `len` bytes.</summary>
     public static byte[] TaggedBlake3(string tag, byte[] data, int len = 32)
     {

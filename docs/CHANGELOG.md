@@ -1,5 +1,29 @@
 # Changelog — BinSync.Core
 
+## 2.3.0 — 2026-11-04
+
+**Performance + public query API.**
+
+### Performance
+- **CRC32C**: SSE4.2 / ARM CRC32 hardware path with table fallback (portable)
+- **Reader**: `ReadNodeId` / `ReadRecordId` / `ReadBatchId` / `ReadDigest16` (no `byte[16]` per id)
+- **FrameStream**: `ValidateFrame` — no discarded `ParseFrame` payload copy
+- **Ids**: `EqualsBytes` compares two `ulong`s (no stack copy + SequenceEqual)
+- **IBLT**: cells pack key as `KeyLo`/`KeyHi` (one array of cells, no per-cell `byte[16]`)
+- **CRDT SetOr/Counters**: binary keys / comparers instead of `Convert.ToHexString`
+- **Digests**: `Blake3Digest16`; **ChangeId** via `Guid.TryWriteBytes`
+
+### Public API
+- `TryGetRecord` / `TryGetField` / `GetRecordCount` / `GetOutboxCount` / `RegisterLoopbackPeer`
+- `Node.Zero128` returns a defensive copy
+- `FrameCodec.ValidateFrame`
+
+### Docs
+- Removed archived `docs/RELEASE-*.md` (history remains in git + CHANGELOG)
+- PUBLIC-API aligned with 2.3.0
+
+---
+
 ## 2.2.23 — 2026-11-03
 
 **BatchResult is a struct (zero heap result on ApplyBatch).**

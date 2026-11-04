@@ -49,7 +49,7 @@ public class IbltTests
         {
             Assert.Equal(t.Cells[i].Count, back.Cells[i].Count);
             Assert.Equal(t.Cells[i].HashXor, back.Cells[i].HashXor);
-            Assert.Equal(t.Cells[i].KeyXor, back.Cells[i].KeyXor);
+            Assert.Equal(t.Cells[i].KeyToArray(), back.Cells[i].KeyToArray());
         }
     }
 

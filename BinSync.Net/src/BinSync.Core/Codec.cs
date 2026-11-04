@@ -385,6 +385,52 @@ public partial class Reader
 
     /// <summary>Read a 16-byte b128 identity as a new array.</summary>
     public byte[] B128() => Take(16);
+
+    /// <summary>Read a 16-byte node id without allocating.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public NodeId ReadNodeId()
+    {
+        Ensure(16);
+        var v = new NodeId(
+            BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos, 8)),
+            BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos + 8, 8)));
+        Pos += 16;
+        return v;
+    }
+
+    /// <summary>Read a 16-byte record id without allocating.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public RecordId ReadRecordId()
+    {
+        Ensure(16);
+        var v = new RecordId(
+            BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos, 8)),
+            BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos + 8, 8)));
+        Pos += 16;
+        return v;
+    }
+
+    /// <summary>Read a 16-byte batch id without allocating.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public BatchId ReadBatchId()
+    {
+        Ensure(16);
+        var v = new BatchId(
+            BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos, 8)),
+            BinaryPrimitives.ReadUInt64LittleEndian(Span.Slice(Pos + 8, 8)));
+        Pos += 16;
+        return v;
+    }
+
+    /// <summary>Read a 16-byte digest without allocating.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public Digest16 ReadDigest16()
+    {
+        Ensure(16);
+        var v = Digest16.From(Span.Slice(Pos, 16));
+        Pos += 16;
+        return v;
+    }
     /// <summary>Read a 16-byte b128 identity as a span into the underlying buffer.</summary>
     public ReadOnlySpan<byte> B128Span() => TakeSpan(16);
     /// <summary>Read a 16-byte b128 identity as ReadOnlyMemory (may slice the frame).</summary>

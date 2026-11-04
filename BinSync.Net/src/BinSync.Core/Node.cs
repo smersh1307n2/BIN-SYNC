@@ -9,7 +9,9 @@ namespace BinSync;
 public sealed partial class Node
 {
     /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
-    public static readonly byte[] Zero128 = new byte[16];
+    private static readonly byte[] Zero128Storage = new byte[16];
+    /// <summary>16 zero bytes. Returns a fresh copy so callers cannot corrupt a shared buffer.</summary>
+    public static byte[] Zero128 => (byte[])Zero128Storage.Clone();
 
     /// <summary>Shared empty alias map to avoid per-call empty Dictionary allocations.</summary>
     private static readonly Dictionary<int, (NodeId Id, int Epoch)> EmptyAliasMap = new();

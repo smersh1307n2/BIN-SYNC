@@ -11,7 +11,7 @@ public static class CounterG
     {
         var items = byAuthor
             .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value))
-            .OrderBy(x => Convert.ToHexString(x.Author), StringComparer.Ordinal)
+            .OrderBy(x => x.Author, ByteArrayComparer.Instance)
             .ToList();
         var w = new Writer();
         w.Varint((ulong)items.Count);
@@ -79,7 +79,7 @@ public static class CounterPn
     {
         var items = map
             .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value))
-            .OrderBy(x => Convert.ToHexString(x.Author), StringComparer.Ordinal)
+            .OrderBy(x => x.Author, ByteArrayComparer.Instance)
             .ToList();
         w.Varint((ulong)items.Count);
         foreach (var (a, v) in items)
@@ -173,13 +173,13 @@ public static class SetOr
                 Actor = Codec.CanonicalB128(a.Actor),
                 Seq = a.Seq,
             })
-            .OrderBy(a => Convert.ToHexString(a.Element), StringComparer.Ordinal)
-            .ThenBy(a => Convert.ToHexString(a.Actor), StringComparer.Ordinal)
+            .OrderBy(a => a.Element, ByteArrayComparer.Instance)
+            .ThenBy(a => a.Actor, ByteArrayComparer.Instance)
             .ThenBy(a => a.Seq)
             .ToList();
         var remSorted = removes
             .Select(d => new Dot { Actor = Codec.CanonicalB128(d.Actor), Seq = d.Seq })
-            .OrderBy(d => Convert.ToHexString(d.Actor), StringComparer.Ordinal)
+            .OrderBy(d => d.Actor, ByteArrayComparer.Instance)
             .ThenBy(d => d.Seq)
             .ToList();
 
@@ -217,22 +217,20 @@ public static class SetOr
         var (ra, rr) = Decode(remote);
 
         // Union of adds (dedupe by actor+seq+elem) and removes (by actor+seq)
-        var addKey = new HashSet<string>(StringComparer.Ordinal);
+        var addKey = new HashSet<(byte[], ulong, byte[])>(ActorSeqElemEq.Instance);
         var mergedAdds = new List<Add>();
         void AddOne(Add a)
         {
-            var k = Convert.ToHexString(a.Actor) + ":" + a.Seq + ":" + Convert.ToHexString(a.Element);
-            if (addKey.Add(k)) mergedAdds.Add(a);
+            if (addKey.Add((a.Actor, a.Seq, a.Element))) mergedAdds.Add(a);
         }
         foreach (var a in la) AddOne(a);
         foreach (var a in ra) AddOne(a);
 
-        var remKey = new HashSet<string>(StringComparer.Ordinal);
+        var remKey = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
         var mergedRem = new List<Dot>();
         void RemOne(Dot d)
         {
-            var k = Convert.ToHexString(d.Actor) + ":" + d.Seq;
-            if (remKey.Add(k)) mergedRem.Add(d);
+            if (remKey.Add((d.Actor, d.Seq))) mergedRem.Add(d);
         }
         foreach (var d in lr) RemOne(d);
         foreach (var d in rr) RemOne(d);
@@ -244,17 +242,14 @@ public static class SetOr
     public static List<byte[]> Visible(byte[] data)
     {
         var (adds, rems) = Decode(data);
-        var removed = new HashSet<string>(
-            rems.Select(d => Convert.ToHexString(d.Actor) + ":" + d.Seq),
-            StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var removed = new HashSet<(byte[], ulong)>(
+            rems.Select(d => (d.Actor, d.Seq)), ActorSeqEq.Instance);
+        var seen = new HashSet<byte[]>(BytesEq.Instance);
         var result = new List<byte[]>();
         foreach (var a in adds)
         {
-            var dot = Convert.ToHexString(a.Actor) + ":" + a.Seq;
-            if (removed.Contains(dot)) continue;
-            var eh = Convert.ToHexString(a.Element);
-            if (seen.Add(eh))
+            if (removed.Contains((a.Actor, a.Seq))) continue;
+            if (seen.Add(a.Element))
                 result.Add(a.Element);
         }
         return result;
