@@ -123,7 +123,7 @@ public class ReconcileExchangeTests
         });
 
         Assert.NotNull(escaped);
-        Assert.Throws<ObjectDisposedException>(() => escaped!.ReceiveNeedKeysAsync());
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await escaped!.ReceiveNeedKeysAsync());
     }
 
     [Fact]
