@@ -35,7 +35,7 @@ public sealed class StateDigestMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
     public int NamespaceId;
-    /// <summary>Outbox cursor included in a state-digest message.</summary>
+    /// <summary>Reserved legacy wire field. Canonical STATE_DIGEST messages set it to zero.</summary>
     public ulong OutboxCursor;
     /// <summary>Number of prefix bits used when partitioning buckets.</summary>
     public int RadixBits = 8;
@@ -86,8 +86,11 @@ public static partial class Reconcile
             dict[rid] = rec;
 
         var buckets = StateHash.BuildBuckets(dict, radixBits);
-        ulong cursor = OutboxHighWater(node, namespaceId);
-        var root = StateHash.StateRootDigest((ushort)namespaceId, cursor, buckets);
+        // Outbox sequence numbers are independent per author stream. A scalar maximum
+        // is neither a globally comparable cursor nor replicated state; delta/ACK
+        // synchronization tracks each author stream separately.
+        const ulong cursor = 0;
+        var root = StateHash.StateRootDigest((ushort)namespaceId, buckets);
 
         var msg = new StateDigestMessage
         {
@@ -124,7 +127,7 @@ public static partial class Reconcile
     {
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
-        w.U64(m.OutboxCursor);
+        w.U64(0); // Reserved legacy field; never serialize a misleading aggregate cursor.
         w.U8((byte)m.RadixBits);
         w.Raw(m.RootDigest.Length == 32 ? m.RootDigest : Pad32(m.RootDigest));
         w.Varint((ulong)m.Buckets.Count);
@@ -147,7 +150,7 @@ public static partial class Reconcile
         var m = new StateDigestMessage
         {
             NamespaceId = r.U16(),
-            OutboxCursor = r.U64(),
+            OutboxCursor = 0, // Consume the legacy field but do not treat it as synchronization state.
             RadixBits = r.U8(),
             RootDigest = r.Raw(32),
         };
@@ -213,10 +216,6 @@ public static partial class Reconcile
     public static List<byte[]> DivergentPrefixes(StateDigestMessage local, StateDigestMessage remote)
     {
         var result = new List<byte[]>();
-        if (local.RootDigest.AsSpan().SequenceEqual(remote.RootDigest) &&
-            local.NamespaceId == remote.NamespaceId)
-            return result;
-
         var remoteBy = remote.Buckets.ToDictionary(
             b => Convert.ToHexString(b.Prefix), b => b, StringComparer.Ordinal);
         var localKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -256,16 +255,6 @@ public static partial class Reconcile
         a.Xor16.AsSpan().SequenceEqual(b.Xor16) &&
         a.Sum16.AsSpan().SequenceEqual(b.Sum16) &&
         a.Rollup32.AsSpan().SequenceEqual(b.Rollup32);
-
-    private static ulong OutboxHighWater(Node node, int namespaceId)
-    {
-        long max = 0;
-        foreach (var ((author, ns), seq) in node.OutboxSeqRef)
-        {
-            if (ns == namespaceId && seq > max) max = seq;
-        }
-        return unchecked((ulong)max);
-    }
 
     private static byte[] Pad16(byte[] b)
     {

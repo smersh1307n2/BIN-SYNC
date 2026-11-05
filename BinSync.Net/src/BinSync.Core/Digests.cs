@@ -15,7 +15,7 @@ public static class Domains
     /// <summary>BLAKE3 domain separation label for bucket rollups.</summary>
     public static readonly byte[] DomainBucket = Ascii("BIN-SYNC/BUCKET/v1");
     /// <summary>BLAKE3 domain separation label for state digests.</summary>
-    public static readonly byte[] DomainState = Ascii("BIN-SYNC/STATE/v1");
+    public static readonly byte[] DomainState = Ascii("BIN-SYNC/STATE/v2");
     /// <summary>BLAKE3 domain separation label for batch digests.</summary>
     public static readonly byte[] DomainBatch = Ascii("BIN-SYNC/BATCH/v1");
     /// <summary>BLAKE3 domain separation label for the records-root hash.</summary>
@@ -190,16 +190,21 @@ public class BucketAccumulator
 /// <summary>Helpers to compute namespace state roots and bucket digests.</summary>
 public static class StateHash
 {
-    /// <summary>Compute the state-root digest for a namespace given outbox cursor metadata.</summary>
-    public static byte[] StateRootDigest(ushort namespaceId, ulong outboxCursor, List<BucketAccumulator> buckets)
+    /// <summary>Compute the state-root digest for replicated namespace data.</summary>
+    public static byte[] StateRootDigest(ushort namespaceId, List<BucketAccumulator> buckets)
     {
         var sorted = buckets.OrderBy(b => Convert.ToHexString(b.CanonicalEncoding())).ToList();
         long total = buckets.Sum(b => b.Count);
         var w = new Writer();
-        w.Raw(Domains.DomainState).U16(namespaceId).U64(outboxCursor).Varint((ulong)total);
+        w.Raw(Domains.DomainState).U16(namespaceId).Varint((ulong)total);
         foreach (var b in sorted) w.Bytes(b.CanonicalEncoding());
         return Digests.Blake3(w.Value(), 32);
     }
+
+    /// <summary>Compatibility overload. Outbox cursors are not part of replicated state.</summary>
+    [Obsolete("Outbox cursors are per-author transport state and are excluded from STATE_ROOT. Use the overload without outboxCursor.")]
+    public static byte[] StateRootDigest(ushort namespaceId, ulong outboxCursor, List<BucketAccumulator> buckets) =>
+        StateRootDigest(namespaceId, buckets);
 
     /// <summary>Partition record digests into bucket accumulators for anti-entropy.</summary>
     public static List<BucketAccumulator> BuildBuckets(Dictionary<RecordId, Record> records, int radixBits = 8)

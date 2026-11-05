@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.5 FINAL
+# BIN-SYNC CORE v2.4.6 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.5 FINAL (bounded snapshot decoding)  
+**Версия:** 2.4.6 FINAL (STATE_ROOT excludes transport cursors)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -13,6 +13,7 @@
 - Дубликат batch подтверждается автором, сохранённым по ключу Inbox, а не последним автором сессии
 - Node-state v4 сохраняет StreamPushed, InboxAuthors и per-peer/per-author StreamOffsets; чтение v3 сохранено
 - Сохранены wire-format изменения ChangeId из v2.3.8
+- `STATE_ROOT` больше не включает агрегированный Outbox cursor: sequence numbers независимы по author stream; legacy `OutboxCursor` в `STATE_DIGEST` зарезервирован и передаётся как zero
 
 ---
 
@@ -2231,3 +2232,19 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 6. Те же ограничения chunk count применяются к прямому атомарному `ApplySnapshotChunks`.
 
 **Wire format:** без изменений. Ограничения являются parser/resource bounds и не меняют кодирование корректных snapshot chunks в пределах установленных лимитов.
+
+
+# ERRATA v2.4.6
+
+## E-20. §9.1.4 / §12.7 / §13.1 — Outbox cursor не является частью STATE_ROOT
+
+**Дефект:** Outbox sequence монотонен отдельно для каждого `(authorNodeId, namespaceId)`. Сведение независимых потоков к одному `max(seq)` создаёт неоднозначный scalar cursor: оно теряет идентичность author stream, может совпадать при разных наборах stream counters и различаться у узлов с идентичным реплицированным состоянием. Включение этого значения в `StateRootDigest` порождает ложное расхождение root digest, не соответствующее расхождению данных.
+
+**Нормативно:**
+1. `STATE_ROOT` хеширует только реплицируемое состояние namespace: `domainTag("BIN-SYNC/STATE/v2") || namespaceId || recordCount || sort_by_prefix_then_recordId(all BucketDigest canonical encodings)`. Outbox sequence counters, ACK watermarks, `StreamPushed` и `StreamOffsets` не входят в `STATE_ROOT`.
+2. `OutboxEntry.Seq` и high-water counters остаются независимыми для каждого author stream. Их синхронизация и подтверждение выполняются только в соответствующем `(peer, namespace, authorNodeId)` контексте; агрегированный namespace-wide cursor запрещён.
+3. Для сохранения layout существующего `STATE_DIGEST` поле `OutboxCursor : u64` остаётся на прежнем wire offset как зарезервированное поле. Отправитель обязан передавать `0`; получатель потребляет поле, но не использует его для сравнения состояния. Новые реализации нормализуют decoded `OutboxCursor` к `0`.
+4. Совпадение `RootDigest` не заменяет проверку полученных bucket rows: divergent prefixes вычисляются по фактическому сравнению bucket entries. Root digest не считается аутентифицированным только на основании значения, присланного peer.
+5. Смена domain tag с `BIN-SYNC/STATE/v1` на `BIN-SYNC/STATE/v2` отражает новую формулу root. При несовпадении root реализации продолжают сравнение bucket entries; несовпадение одного root без bucket divergence не требует snapshot.
+
+**Wire layout:** размер и порядок полей `STATE_DIGEST` не меняются. Legacy ненулевой `OutboxCursor` принимается и игнорируется; новые отправители кодируют ноль.

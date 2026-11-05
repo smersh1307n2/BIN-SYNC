@@ -38,6 +38,47 @@ public class ReconcileTests
     }
 
     [Fact]
+    public void Outbox_cursors_are_not_part_of_replicated_state_root()
+    {
+        var a = Fix.MakeNode(7);
+        var b = Fix.MakeNode(8);
+        var authorABytes = new byte[16]; authorABytes[0] = 70;
+        var authorBBytes = new byte[16]; authorBBytes[0] = 80;
+        var authorA = NodeId.From(authorABytes);
+        var authorB = NodeId.From(authorBBytes);
+        a.NextOutboxSeq(authorA, 1);
+        a.NextOutboxSeq(authorA, 1);
+        b.NextOutboxSeq(authorB, 1);
+        b.NextOutboxSeq(authorB, 1);
+        b.NextOutboxSeq(authorB, 1);
+        var da = Reconcile.BuildStateDigest(a, 1);
+        var db = Reconcile.BuildStateDigest(b, 1);
+        Assert.Equal(0UL, da.OutboxCursor);
+        Assert.Equal(0UL, db.OutboxCursor);
+        Assert.True(da.RootDigest.AsSpan().SequenceEqual(db.RootDigest));
+        Assert.Empty(Reconcile.DivergentPrefixes(da, db));
+    }
+
+    [Fact]
+    public void DivergentPrefixes_does_not_trust_unverified_matching_root_digest()
+    {
+        var node = Fix.MakeNode(9);
+        node.WriteField(1, Fix.Rid(91), 0x10, new byte[] { 1 });
+        var local = Reconcile.BuildStateDigest(node, 1);
+        var remote = new StateDigestMessage
+        {
+            NamespaceId = local.NamespaceId, OutboxCursor = local.OutboxCursor,
+            RadixBits = local.RadixBits, RootDigest = local.RootDigest.ToArray(),
+            Buckets = local.Buckets.Select(b => new DigestBucket
+            {
+                Prefix = b.Prefix.ToArray(), Count = b.Count + 1,
+                Xor16 = b.Xor16.ToArray(), Sum16 = b.Sum16.ToArray(), Rollup32 = b.Rollup32.ToArray(),
+            }).ToList(),
+        };
+        Assert.NotEmpty(Reconcile.DivergentPrefixes(local, remote));
+    }
+
+    [Fact]
     public void StateDigest_wire_roundtrip()
     {
         var a = Fix.MakeNode(5);
@@ -46,7 +87,7 @@ public class ReconcileTests
         var raw = Reconcile.EncodeStateDigest(msg);
         var back = Reconcile.DecodeStateDigest(raw);
         Assert.Equal(msg.NamespaceId, back.NamespaceId);
-        Assert.Equal(msg.OutboxCursor, back.OutboxCursor);
+        Assert.Equal(0UL, back.OutboxCursor);
         Assert.Equal(msg.RadixBits, back.RadixBits);
         Assert.True(msg.RootDigest.AsSpan().SequenceEqual(back.RootDigest));
         Assert.Equal(msg.Buckets.Count, back.Buckets.Count);
