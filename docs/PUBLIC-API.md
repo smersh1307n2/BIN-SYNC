@@ -31,7 +31,7 @@ Breaking hygiene (no wire/protocol change):
 | DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `PeerState`, `Record`, … |
 | Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains where noted. |
 | `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
-| Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`PeerState.PeerNodeId`**, **`TcpSyncSession.PeerNodeId`** are **`NodeId`**. |
+| Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`PeerState.PeerNodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. |
 | Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, `TryGetRecord` / `TryGetField`, …). Test assemblies use `InternalsVisibleTo`. |
 | `Zero128` | Returns a **fresh copy** each access (callers cannot corrupt a shared buffer). |
 | Locks | Prefer **`EnterAllGates()`** (`AllGateScope`). `Node.Gate` is **obsolete** (Meta only). |
@@ -129,7 +129,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 ### Reconcile (§13)
 
-`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over TCP (`TcpSync` partials).
+`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific).
 
 ### Session / transport
 
@@ -138,7 +138,8 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `ISyncTransport` | `NodeId PeerNodeId { get; }`, `SendAsync` / `ReceiveAsync` |
 | `PipeTransport` / `StreamSyncTransport` | Test / stream adapters (`PeerNodeId` settable on concrete types) |
 | `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`** |
-| `TcpSyncSession` / `TcpSyncListener` | TCP (+ TLS opt-in), push/receive batch, fragments, key rotation, IBLT |
+| `SyncSession` | Transport-independent protocol session; generic `ConnectAsync` / `AcceptAsync`, batch/ACK, reconciliation, snapshots, IBLT, membership, schema, key rotation, fragmentation |
+| `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; creates generic `SyncSession` instances |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, sneakernet helpers |
 | `LoopbackTransport` | Lab loopback |
 

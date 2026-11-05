@@ -95,7 +95,7 @@ BIN-SYNC CORE — компактный бинарный протокол для 
 Разделение реализации .NET:
 - `Sync/` — `SyncSession` и операции протокола (HELLO, batch/ACK, reconciliation, snapshot, IBLT, membership, schema, key rotation, fragmentation).
 - `Transport/` — транспортные контракты и адаптеры.
-- `Transport/Tcp/` — TCP listener, TLS handshake и совместимый `TcpSyncSession`.
+- `Transport/Tcp/` — TCP listener и TLS host adapter; возвращает обычный `SyncSession`. Отдельного TCP-типа сессии нет.
 - `Transport/Streams/` — адаптер `Stream` для TCP/TLS и других двунаправленных потоков.
 - `Transport/InMemory/` — in-memory канал для тестов и embedded-host сценариев.
 

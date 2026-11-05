@@ -1,4 +1,4 @@
-// FLAG_FRAGMENT over TCP session.
+// FLAG_FRAGMENT over the TCP-backed generic SyncSession.
 using BinSync;
 using Xunit;
 
@@ -16,7 +16,7 @@ public class TcpFragmentTests
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
-        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
         var send = client.SendFragmentedAsync(0x09, 1, 1, body, maxBody: 80);
