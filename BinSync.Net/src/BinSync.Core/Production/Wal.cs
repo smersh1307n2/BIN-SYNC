@@ -297,7 +297,7 @@ public sealed class Wal : IDisposable
                 break;
             case WalRecordType.LocalMutation:
                 {
-                    var (applyToStorage, entry) = ReadLocalMutation(r);
+                    var (_, entry) = ReadLocalMutation(r);
                     if (entry.Seq <= 0 || entry.ChangeId.IsZero || entry.AuthorNodeId.IsZero || entry.CreatedAt < 0)
                         throw new InvalidDataException("Invalid WAL local-mutation metadata.");
                     var decoded = Ops.DecodeOp(entry.Payload).Op;

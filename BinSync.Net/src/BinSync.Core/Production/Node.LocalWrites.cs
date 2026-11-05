@@ -216,7 +216,8 @@ public sealed partial class Node
 
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
-        var store = Ns(namespaceId);
+        Storage.TryGetValue(namespaceId, out var store);
+        store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var currentRecord);
         var rec = exists ? Clone(currentRecord!) : new Record(recordId, (ushort)namespaceId);
 
@@ -272,7 +273,8 @@ public sealed partial class Node
 
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
-        var store = Ns(namespaceId);
+        Storage.TryGetValue(namespaceId, out var store);
+        store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);
         var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
@@ -308,7 +310,8 @@ public sealed partial class Node
 
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
-        var store = Ns(namespaceId);
+        Storage.TryGetValue(namespaceId, out var store);
+        store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);
         var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
@@ -341,7 +344,8 @@ public sealed partial class Node
 
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
-        var store = Ns(namespaceId);
+        Storage.TryGetValue(namespaceId, out var store);
+        store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);
         var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();

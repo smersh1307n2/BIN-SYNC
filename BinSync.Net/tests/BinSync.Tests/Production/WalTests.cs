@@ -306,6 +306,14 @@ public class WalTests
 
             Assert.Throws<ObjectDisposedException>(() => node.WriteField(1, rid, 0x100, new byte[] { 0x62 }));
             Assert.False(node.TryGetField(1, rid, 0x100, out _));
+            Assert.False(node.Storage.ContainsKey(1)); // failed WAL append must not publish an empty namespace
+            Assert.Equal(0, node.GetOutboxCount(1));
+            Assert.False(node.OutboxSeqRef.ContainsKey((node.NodeId, 1)));
+
+            Assert.Throws<ObjectDisposedException>(() => node.TombField(1, rid, 0x101));
+            Assert.Throws<ObjectDisposedException>(() => node.DeleteRecord(1, rid));
+            Assert.Throws<ObjectDisposedException>(() => node.UndeleteRecord(1, rid));
+            Assert.False(node.Storage.ContainsKey(1));
             Assert.Equal(0, node.GetOutboxCount(1));
             Assert.False(node.OutboxSeqRef.ContainsKey((node.NodeId, 1)));
         }
