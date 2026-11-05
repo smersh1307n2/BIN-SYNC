@@ -57,7 +57,10 @@ jobs:
           --verbosity minimal
           --collect:"XPlat Code Coverage"
           --results-directory "${{ runner.temp }}/test-results"
+          --logger "console;verbosity=detailed"
           --logger "trx;LogFileName=test-results.trx"
+          --blame-hang-timeout 3m
+          --blame-hang-dump-type mini
           --
           DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
