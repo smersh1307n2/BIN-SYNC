@@ -40,6 +40,39 @@ public class LabEdgeTests
     }
 
     [Fact]
+    public void S4_NewPeerTailCursor_DoesNotRenumberExistingPeerOutbox()
+    {
+        var donor = Fix.MakeNode(805);
+        var oldPeer = Fix.MakeNode(806);
+        var newPeer = Fix.MakeNode(807);
+        Transport.MakeSession(donor, oldPeer);
+        Transport.MakeSession(donor, newPeer);
+
+        donor.WriteField(NS, Fix.Rid(1), 0x100, Val("one"));
+        Transport.SyncRound(donor, oldPeer, NS);
+        donor.WriteField(NS, Fix.Rid(2), 0x100, Val("two"));
+        Transport.SyncRound(donor, oldPeer, NS);
+        Assert.DoesNotContain(donor.Outbox[NS], e => e.Seq <= 2);
+
+        donor.WriteField(NS, Fix.Rid(3), 0x100, Val("tail"));
+        Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
+        var snapshot = Reconcile.BuildSnapshot(donor, NS);
+        Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 3);
+
+        var newPeerBatch = donor.CreateDeltaBatch(newPeer.NodeId, NS);
+        Assert.NotNull(newPeerBatch);
+        Assert.Equal(1L, newPeerBatch!.CursorStart);
+        Assert.Equal(1L, newPeerBatch.CursorEnd);
+        Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
+
+        var oldPeerBatch = donor.CreateDeltaBatch(oldPeer.NodeId, NS);
+        Assert.NotNull(oldPeerBatch);
+        Assert.Equal(3L, oldPeerBatch!.CursorStart);
+        Assert.Equal(3L, oldPeerBatch.CursorEnd);
+        Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
+    }
+
+    [Fact]
     public void S4_Multi_chunk_snapshot_indices()
     {
         var n = Fix.MakeNode(803);

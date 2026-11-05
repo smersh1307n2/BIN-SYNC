@@ -27,13 +27,12 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v3";
-    // Version 3 was initially emitted with the v2 domain tag. Accept those files
-    // during this transition, but all newly saved files use the normative v3 tag.
+    public const string StateTag = "BIN-SYNC/NODESTATE/v4";
+    private const string Version3StateTag = "BIN-SYNC/NODESTATE/v3";
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 3;
+    private const ushort Version = 4;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -98,8 +97,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}).");
+        if (ver != Version && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version} or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen > (ulong)(bytes.Length - 14 - DigestLen))
@@ -109,18 +108,22 @@ public static class NodePersistence
         if (body.Length != (int)bodyLen)
             throw new InvalidDataException("State file truncated mid-body.");
 
-        var actual = Blake3Core.TaggedHash(StateTag, body);
-        bool validDigest = actual.AsSpan().SequenceEqual(storedDigest);
-        if (!validDigest)
+        bool validDigest;
+        if (ver == Version)
         {
-            // Compatibility for v3 images created before the domain tag was corrected.
+            var actual = Blake3Core.TaggedHash(StateTag, body);
+            validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else
+        {
+            var v3 = Blake3Core.TaggedHash(Version3StateTag, body);
             var legacy = Blake3Core.TaggedHash(LegacyVersion3StateTag, body);
-            validDigest = legacy.AsSpan().SequenceEqual(storedDigest);
+            validDigest = v3.AsSpan().SequenceEqual(storedDigest) || legacy.AsSpan().SequenceEqual(storedDigest);
         }
         if (!validDigest)
             throw new InvalidDataException("State digest mismatch — file corrupted (tagged BLAKE3 " + StateTag + ").");
 
-        return DeserializeBody(body);
+        return DeserializeBody(body, ver);
     }
 
     // ------------------------------------------------------------- serialization
@@ -233,6 +236,9 @@ public static class NodePersistence
                 w.Varint((ulong)ps.StreamPushed.Count);
                 foreach (var (author, seq) in ps.StreamPushed.OrderBy(k => k.Key.ToString()))
                 { w.B128(author.ToArray()); w.U64((ulong)seq); }
+                w.Varint((ulong)ps.StreamOffsets.Count);
+                foreach (var (author, offset) in ps.StreamOffsets.OrderBy(k => k.Key.ToString()))
+                { w.B128(author.ToArray()); w.U64((ulong)offset); }
                 w.Varint((ulong)ps.Ids.Count);
                 foreach (var ((author, start, end), (id, prev)) in ps.Ids
                            .OrderBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi)
@@ -276,7 +282,7 @@ public static class NodePersistence
         }
     }
 
-    private static Node DeserializeBody(byte[] body)
+    private static Node DeserializeBody(byte[] body, ushort version)
     {
         var r = new Reader(body);
         var nodeId = r.B128();
@@ -414,6 +420,15 @@ public static class NodePersistence
                 var author = r.B128(); var seq = (long)r.U64();
                 ps.StreamPushed[(NodeId)author] = seq;
             }
+            if (version >= 4)
+            {
+                int offsetCount = (int)r.Varint();
+                for (int j = 0; j < offsetCount; j++)
+                {
+                    var author = r.B128(); var offset = (long)r.U64();
+                    ps.StreamOffsets[(NodeId)author] = offset;
+                }
+            }
             int idsCount = (int)r.Varint();
             for (int j = 0; j < idsCount; j++)
             {
@@ -510,6 +525,13 @@ public static class NodePersistence
             {
                 if (author.IsZero || pushed < 0)
                     throw new InvalidDataException("Invalid persisted pushed watermark.");
+            }
+            foreach (var (author, offset) in ps.StreamOffsets)
+            {
+                if (author.IsZero || offset < 0 ||
+                    (ps.StreamAcked.TryGetValue(author, out var acked) && acked > long.MaxValue - offset) ||
+                    (ps.StreamPushed.TryGetValue(author, out var pushed) && pushed > long.MaxValue - offset))
+                    throw new InvalidDataException("Invalid persisted stream offset.");
             }
         }
 

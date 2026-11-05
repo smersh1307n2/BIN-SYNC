@@ -411,8 +411,11 @@ public sealed partial class Node
             var current = ps.AckedFor(author);
             if (ackedSeq > current)
             {
+                long offset = ps.StreamOffsets.TryGetValue(author, out var savedOffset) ? savedOffset : 0;
+                long localCurrent = checked(current + offset);
+                long localRequested = checked(ackedSeq + offset);
                 if (!ps.StreamPushed.TryGetValue(author, out var pushed) || ackedSeq > pushed ||
-                    !HasContiguousOutboxRange(entries, author, current, ackedSeq))
+                    !HasContiguousOutboxRange(entries, author, localCurrent, localRequested))
                     throw new SyncException("ACK_OUT_OF_RANGE");
                 ps.StreamAcked[author] = ackedSeq;
             }
@@ -429,9 +432,12 @@ public sealed partial class Node
                 var current = ps.AckedFor(author);
                 var target = Math.Min(ackedSeq, pushed);
                 if (target <= current) continue;
-                var contiguous = ContiguousOutboxEnd(entries, author, current, target);
-                if (contiguous > current)
-                    ps.StreamAcked[author] = contiguous;
+                long offset = ps.StreamOffsets.TryGetValue(author, out var savedOffset) ? savedOffset : 0;
+                long localCurrent = checked(current + offset);
+                long localTarget = checked(target + offset);
+                var contiguous = ContiguousOutboxEnd(entries, author, localCurrent, localTarget);
+                if (contiguous > localCurrent)
+                    ps.StreamAcked[author] = contiguous - offset;
             }
         }
 

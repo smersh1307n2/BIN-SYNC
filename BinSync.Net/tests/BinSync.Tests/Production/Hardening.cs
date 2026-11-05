@@ -113,6 +113,9 @@ public class Production : IDisposable
             if (ps.StreamPushed.Count != ops.StreamPushed.Count) return false;
             foreach (var (author, seq) in ps.StreamPushed)
                 if (!ops.StreamPushed.TryGetValue(author, out var pushed) || pushed != seq) return false;
+            if (ps.StreamOffsets.Count != ops.StreamOffsets.Count) return false;
+            foreach (var (author, offset) in ps.StreamOffsets)
+                if (!ops.StreamOffsets.TryGetValue(author, out var otherOffset) || otherOffset != offset) return false;
             if (ps.IdsRef.Count != ops.IdsRef.Count) return false;
         }
         // Outbox entries + per-author seq counters
@@ -230,8 +233,25 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_UsesV3TagAndReadsEarlierV3TagImages()
+    public void Persistence_V4TagAndStreamOffsetsRoundTrip()
     {
+        var (a, _) = BuildHistory();
+        var peer = a.PeerStates.Values.First();
+        var author = a.Outbox[NS].First().AuthorNodeId;
+        peer.StreamOffsets[author] = 17;
+        var path = Path.Combine(_dir, "tag-v4.state");
+        NodePersistence.Save(a, path);
+        var bytes = File.ReadAllBytes(path);
+        Assert.Equal((ushort)4, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
+        var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v4", body);
+        Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
+        var restored = NodePersistence.LoadFromBytes(bytes);
+        Assert.True(StateEqual(a, restored));
+    }
+
+
         var (a, _) = BuildHistory();
         var path = Path.Combine(_dir, "tag-v3.state");
         NodePersistence.Save(a, path);

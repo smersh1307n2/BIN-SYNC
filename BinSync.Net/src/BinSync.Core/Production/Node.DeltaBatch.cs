@@ -52,61 +52,67 @@ public sealed partial class Node
         {
             stream = NodeId.From(filterAuthorNodeId);
             wm = ps.AckedFor(stream);
-            pending = new List<OutboxEntry>();
-            for (int i = 0; i < all.Count; i++)
-            {
-                var e = all[i];
-                if (e.AuthorNodeId == stream && e.Seq > wm)
-                    pending.Add(e);
-            }
-            // Errata E-4: gap normalisation also applies on the explicit-filter path.
-            if (pending.Count > 0)
-            {
-                long gap = pending[0].Seq - (wm + 1);
-                if (gap > 0) foreach (var e in pending) e.Seq -= gap;
-            }
         }
         else
         {
-            // pick the CONTIGUOUS stream first (first un-acked seq == acked+1), earliest
-            // outbox position; gapped stream as fallback (tail renumbered). BUGFIX/HARDENING
-            // (scenario 42 livelock) — see Python port comment.
             var firstPending = new Dictionary<NodeId, long>();
             foreach (var e in all)
             {
-                long w = ps.AckedFor(e.AuthorNodeId);   // Errata E-4: per-author watermark
-                var authorKey = e.AuthorNodeId;
-                if (e.Seq > w && (!firstPending.TryGetValue(authorKey, out var cur) || e.Seq < cur))
-                    firstPending[authorKey] = e.Seq;
+                long offset = ps.StreamOffsets.TryGetValue(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
+                if (e.Seq > localAck &&
+                    (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
+                    firstPending[e.AuthorNodeId] = e.Seq;
             }
             bool found = false;
             stream = default;
             foreach (var kv in firstPending)
-                if (kv.Value == ps.AckedFor(kv.Key) + 1) { stream = kv.Key; found = true; break; }
+            {
+                long offset = ps.StreamOffsets.TryGetValue(kv.Key, out var savedOffset) ? savedOffset : 0;
+                long localAck = checked(ps.AckedFor(kv.Key) + offset);
+                if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
+            }
             if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
             if (!found) return null;
             wm = ps.AckedFor(stream);
-            pending = new List<OutboxEntry>();
-            for (int i = 0; i < all.Count; i++)
-            {
-                var e = all[i];
-                if (e.Seq > wm && e.AuthorNodeId == stream)
-                    pending.Add(e);
-            }
         }
-        if (pending.Count == 0) return null;
-        // BUGFIX: cursorStart = first still-un-ACKed seq of THIS stream, not lastPushedSeq+1.
-        // SPEC HARDENING (§10.5): close gaps deterministically by renumbering the un-acked
-        // tail so it starts exactly at lastAckedSeq+1 ([П2]/[S2]).
+
+        if (!ps.StreamOffsets.TryGetValue(stream, out var streamOffset))
         {
-            long gap = pending[0].Seq - (wm + 1);   // Errata E-4: per-author watermark `wm`
-            if (gap > 0) foreach (var e in pending) e.Seq -= gap;
+            streamOffset = 0;
+            if (!ps.StreamAcked.ContainsKey(stream))
+            {
+                long firstLocal = long.MaxValue;
+                foreach (var e in all)
+                    if (e.AuthorNodeId == stream && e.Seq < firstLocal) firstLocal = e.Seq;
+                if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
+            }
+            ps.StreamOffsets[stream] = streamOffset;
+        }
+
+        long localWm = checked(wm + streamOffset);
+        var localPending = new List<OutboxEntry>();
+        for (int i = 0; i < all.Count; i++)
+        {
+            var e = all[i];
+            if (e.AuthorNodeId == stream && e.Seq > localWm) localPending.Add(e);
+        }
+        if (localPending.Count == 0) return null;
+
+        pending = new List<OutboxEntry>(localPending.Count);
+        foreach (var e in localPending)
+        {
+            pending.Add(new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId, Seq = checked(e.Seq - streamOffset),
+                ChangeId = e.ChangeId, RecordId = e.RecordId, OpKind = e.OpKind,
+                Payload = e.Payload, AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt,
+            });
         }
         long start = pending[0].Seq, end = pending[^1].Seq;
         // Resolve self-alias once (common path: all entries self-authored).
         int selfAlias = AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1;
-        // Translate origins. When every payload is already stamped (common self-alias=1 path),
-        // reuse `pending` entry objects — no second List of OutboxEntry / no payload clones.
+        // Translate origins. Peer-relative wrappers share payload buffers, avoiding payload copies.
         List<OutboxEntry>? translated = null;
         for (int i = 0; i < pending.Count; i++)
         {
@@ -251,8 +257,14 @@ public sealed partial class Node
             bool pending = false;
             for (int p = 0; p < interested.Count; p++)
             {
-                if (!PeerStates.TryGetValue((interested[p], namespaceId), out var ps)
-                    || ps.AckedFor(e.AuthorNodeId) < e.Seq)
+                if (!PeerStates.TryGetValue((interested[p], namespaceId), out var ps))
+                {
+                    pending = true;
+                    break;
+                }
+                long offset = ps.StreamOffsets.TryGetValue(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
+                if (localAck < e.Seq)
                 {
                     pending = true;
                     break;
