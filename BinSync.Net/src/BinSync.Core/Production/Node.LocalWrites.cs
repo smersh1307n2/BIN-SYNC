@@ -69,12 +69,22 @@ public sealed partial class Node
 
     internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {
+        var entry = PrepareOutboxEntryInternal(ns, recordId, op, author, suppressRestoredEcho: true);
+        if (entry is null) return null;
+        CommitLocalMutationInternal(entry, stagedRecord: null, applyToStorage: false);
+        return entry;
+    }
+
+    private OutboxEntry? PrepareOutboxEntryInternal(
+        int ns, RecordId recordId, object op, byte[] author, bool suppressRestoredEcho)
+    {
         if (!NodeId.EqualsBytes(author))
             throw new InvalidOperationException("local push only; relay path enqueues raw payloads");
-        // Errata E-13 follow-up 3: suppress ONLY when OUR OWN queued rival carried
-        // byte-identical durable state to what this write re-established [Ш2].
+
+        // Errata E-13: manual outbox pushes may be restored echoes. A local write
+        // which has already passed its merge test is not suppressed here.
         ushort? fid = op switch { OpFieldWrite fw => fw.FieldId, OpFieldTomb ft => ft.FieldId, _ => (ushort?)null };
-        if (fid is not null && op is not OpRecordTombstone)
+        if (suppressRestoredEcho && fid is not null && op is not OpRecordTombstone)
         {
             var st = SeenState(ns, recordId, fid.Value);
             if (st is not null)
@@ -96,8 +106,7 @@ public sealed partial class Node
                         for (int i = list.Count - 1; i >= 0; i--)
                         {
                             var q = list[i];
-                            if (recordId != q.RecordId ||
-                                q.AuthorNodeId != NodeId) continue;
+                            if (recordId != q.RecordId || q.AuthorNodeId != NodeId) continue;
                             object qop;
                             try { qop = Ops.DecodeOp(q.Payload).Op; }
                             catch (Exception)
@@ -110,38 +119,52 @@ public sealed partial class Node
                             bool qSame = TagOf(qop) == TagOf(op) && WallOf(qop) == WallOf(op) &&
                                          LogicalOf(qop) == LogicalOf(op) &&
                                          ValueOf(qop).AsSpan().SequenceEqual(ValueOf(op).AsSpan());
-                            if (qSame) return null;   // E-13: restored echo of a queued winner
-                            break;                    // newest own queued op differs → push
+                            if (qSame) return null;
+                            break;
                         }
                     }
                 }
             }
         }
-        // Prefer origin=1 (self alias in MakeSession). CreateDeltaBatch still rewrites
-        // when the session alias differs; TryCloneWithOrigin then shares the buffer.
+
         SetOrigin(op, 1);
         var payload = Ops.EncodeOp(op, fullAuthor: false);
-        // Capacity checks must precede sequence allocation: a rejected enqueue
-        // must not consume a per-author sequence and create an unrecoverable stream gap.
         Limits?.EnsureCanEnqueueOutbox(this, ns);
         Limits?.EnsureSeenChangesCapacity(this);
-        var entry = new OutboxEntry
+        var key = (NodeId, ns);
+        long current = _outboxSeq.TryGetValue(key, out var value) ? value : 0;
+        if (current == long.MaxValue) throw new SyncException("INTERNAL");
+        return new OutboxEntry
         {
             NamespaceId = ns,
-            Seq = NextOutboxSeq(author, ns),
+            Seq = current + 1,
             ChangeId = NewChangeId(),
             RecordId = recordId,
             OpKind = TagOf(op),
             Payload = payload,
-            AuthorNodeId = NodeId.From(author),
+            AuthorNodeId = NodeId,
             CreatedAt = (long)Clock.SendTick().Wall,
         };
-        if (!Outbox.TryGetValue(ns, out var ol)) Outbox[ns] = ol = new();
-        ol.Add(entry);
-        // Errata E-13 follow-up: register our own changeId under our OWN channel key so
-        // apply_batch's relay rule treats a direct echo as already-seen (see Python port).
-        SeenChanges.Add((NodeId, ns, entry.ChangeId));
-        return entry;
+    }
+
+    /// <summary>
+    /// Durably append the complete mutation before publishing storage, sequence,
+    /// Outbox and provenance changes. Caller holds Storage → Outbox locks.
+    /// </summary>
+    private void CommitLocalMutationInternal(OutboxEntry entry, Record? stagedRecord, bool applyToStorage)
+    {
+        _wal?.AppendLocalMutation(entry, applyToStorage);
+        if (stagedRecord is not null)
+        {
+            var store = Ns(entry.NamespaceId);
+            store[entry.RecordId] = stagedRecord;
+        }
+
+        _outboxSeq[(NodeId, entry.NamespaceId)] = entry.Seq;
+        if (!Outbox.TryGetValue(entry.NamespaceId, out var list))
+            Outbox[entry.NamespaceId] = list = new List<OutboxEntry>();
+        list.Add(entry);
+        SeenChanges.Add((NodeId, entry.NamespaceId, entry.ChangeId));
     }
 
     private static byte TagOf(object op) => op switch
@@ -176,8 +199,8 @@ public sealed partial class Node
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        bool exists = store.TryGetValue(recordId, out var rec);
-        rec ??= new Record(recordId, (ushort)namespaceId);
+        bool exists = store.TryGetValue(recordId, out var currentRecord);
+        var rec = exists ? Clone(currentRecord!) : new Record(recordId, (ushort)namespaceId);
 
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(value, h, NodeId);
@@ -204,10 +227,10 @@ public sealed partial class Node
             Value = value
         };
 
-        if (!exists)
-            store.Add(recordId, rec);
         rec.State[(ushort)fieldId] = winner;
-        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        var entry = PrepareOutboxEntryInternal(namespaceId, recordId, op, NodeId.ToArray(),
+            suppressRestoredEcho: false) ?? throw new InvalidOperationException("A changed local write must produce an Outbox entry.");
+        CommitLocalMutationInternal(entry, rec, applyToStorage: true);
         return true;
     }
 
@@ -251,9 +274,9 @@ public sealed partial class Node
             return false;
 
         EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
-        if (exists) store[recordId] = rec;
-        else store.Add(recordId, rec);
-        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        var entry = PrepareOutboxEntryInternal(namespaceId, recordId, op, NodeId.ToArray(),
+            suppressRestoredEcho: false) ?? throw new InvalidOperationException("A changed local tombstone must produce an Outbox entry.");
+        CommitLocalMutationInternal(entry, rec, applyToStorage: true);
         return true;
     }
 
@@ -284,9 +307,9 @@ public sealed partial class Node
             Origin = 1,
             AuthorNodeId = NodeId
         };
-        if (exists) store[recordId] = rec;
-        else store.Add(recordId, rec);
-        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        var entry = PrepareOutboxEntryInternal(namespaceId, recordId, op, NodeId.ToArray(),
+            suppressRestoredEcho: false) ?? throw new InvalidOperationException("A changed record deletion must produce an Outbox entry.");
+        CommitLocalMutationInternal(entry, rec, applyToStorage: true);
         return true;
     }
 
@@ -318,12 +341,9 @@ public sealed partial class Node
             AuthorNodeId = NodeId,
             Value = [Model.Alive]
         };
-        if (changed)
-        {
-            if (exists) store[recordId] = rec;
-            else store.Add(recordId, rec);
-        }
-        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        var entry = PrepareOutboxEntryInternal(namespaceId, recordId, op, NodeId.ToArray(),
+            suppressRestoredEcho: false) ?? throw new InvalidOperationException("An explicit undelete must produce an Outbox entry.");
+        CommitLocalMutationInternal(entry, changed ? rec : null, applyToStorage: true);
         return changed;
     }
 

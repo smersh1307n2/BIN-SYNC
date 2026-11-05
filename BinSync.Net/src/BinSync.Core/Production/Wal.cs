@@ -338,8 +338,6 @@ public sealed class Wal : IDisposable
                     };
                     if (entry.OpKind != expectedKind)
                         throw new InvalidDataException("WAL local-mutation operation tag mismatch.");
-                    if (applyToStorage && decoded is null)
-                        throw new InvalidDataException("WAL local-mutation has no operation.");
                     break;
                 }
             default:

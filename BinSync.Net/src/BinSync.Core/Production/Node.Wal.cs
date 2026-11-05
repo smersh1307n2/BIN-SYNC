@@ -3,6 +3,23 @@ namespace BinSync;
 
 public sealed partial class Node
 {
+    private Wal? _wal;
+
+    /// <summary>
+    /// Attach a WAL for subsequent local mutations. Replay the WAL before exposing
+    /// the node; the caller retains ownership and must dispose the WAL separately.
+    /// </summary>
+    public void AttachWal(Wal wal)
+    {
+        ArgumentNullException.ThrowIfNull(wal);
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            if (_wal is not null && !ReferenceEquals(_wal, wal))
+                throw new InvalidOperationException("A WAL is already attached to this node.");
+            _wal = wal;
+        }
+    }
+
     /// <summary>Restore one durable local mutation, preserving its original Outbox identity.</summary>
     internal bool ReplayLocalMutation(OutboxEntry entry, bool applyToStorage)
     {
@@ -17,6 +34,10 @@ public sealed partial class Node
             if (Outbox.TryGetValue(entry.NamespaceId, out var queued) &&
                 queued.Any(existing => existing.ChangeId == entry.ChangeId))
                 throw new InvalidDataException("WAL local mutation duplicates an Outbox change without matching provenance.");
+
+            long currentSeq = _outboxSeq.TryGetValue((NodeId, entry.NamespaceId), out var seq) ? seq : 0;
+            if (entry.Seq <= currentSeq || entry.Seq != currentSeq + 1)
+                throw new InvalidDataException("WAL local-mutation sequence is not the next expected value.");
 
             var decoded = Ops.DecodeOp(entry.Payload).Op;
             Hlc timestamp = decoded switch
@@ -42,11 +63,6 @@ public sealed partial class Node
                 }
             }
 
-            long currentSeq = _outboxSeq.TryGetValue((NodeId, entry.NamespaceId), out var seq) ? seq : 0;
-            if (entry.Seq <= currentSeq)
-                throw new InvalidDataException("WAL local-mutation sequence is not monotonic.");
-            if (entry.Seq != currentSeq + 1)
-                throw new InvalidDataException("WAL local-mutation sequence contains a gap.");
 
             if (!Outbox.TryGetValue(entry.NamespaceId, out var list))
                 Outbox[entry.NamespaceId] = list = new List<OutboxEntry>();

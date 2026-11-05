@@ -161,6 +161,63 @@ public class WalTests
     }
 
     [Fact]
+    public void Node_attached_wal_commits_local_write_before_publishing_state()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-attached-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "node.wal");
+        try
+        {
+            var node = Fix.MakeNode(135);
+            var rid = Fix.Rid(331);
+            using (var wal = Wal.Open(path))
+            {
+                node.AttachWal(wal);
+                Assert.True(node.WriteField(1, rid, 0x100, new byte[] { 0x61 }));
+                Assert.Equal(1, wal.Sequence);
+                Assert.Equal(1, node.GetOutboxCount(1));
+            }
+
+            var recovered = Fix.MakeNode(135);
+            Assert.Equal(1, Wal.ReplayFile(path, recovered));
+            Assert.True(recovered.TryGetField(1, rid, 0x100, out var field));
+            Assert.Equal(new byte[] { 0x61 }, field!.Value);
+            var restored = Assert.Single(recovered.Outbox[1]);
+            Assert.Equal(1, restored.Seq);
+            Assert.Equal(1, recovered.OutboxSeqRef[(recovered.NodeId, 1)]);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Node_attached_wal_failure_does_not_publish_local_write()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "node.wal");
+        try
+        {
+            var node = Fix.MakeNode(136);
+            var rid = Fix.Rid(332);
+            var wal = Wal.Open(path);
+            node.AttachWal(wal);
+            wal.Dispose();
+
+            Assert.Throws<ObjectDisposedException>(() => node.WriteField(1, rid, 0x100, new byte[] { 0x62 }));
+            Assert.False(node.TryGetField(1, rid, 0x100, out _));
+            Assert.Equal(0, node.GetOutboxCount(1));
+            Assert.False(node.OutboxSeqRef.ContainsKey((node.NodeId, 1)));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_v2_detects_payload_corruption_before_replay()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
