@@ -41,7 +41,7 @@ public class MembershipTests
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
-        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
         var tServer = server.ExchangeMembershipAsync(b, 1, initiate: false);
@@ -65,7 +65,7 @@ public class MembershipTests
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
-        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
         var serverTask = server.BilateralAutoReconcileAsync(b, 1, initiate: false);
