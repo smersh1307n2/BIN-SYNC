@@ -180,6 +180,9 @@ public sealed class Wal : IDisposable
     /// <summary>Replay WAL records into a node; returns the number of entries applied.</summary>
     public int Replay(Node node)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        // Match writer/checkpoint lock order and prevent WAL → Node inversion.
+        using (node.EnterAllGates())
         lock (_lock)
         {
             if (_fs is null) throw new ObjectDisposedException(nameof(Wal));

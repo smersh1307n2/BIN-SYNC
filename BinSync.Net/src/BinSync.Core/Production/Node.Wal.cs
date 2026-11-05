@@ -81,6 +81,7 @@ public sealed partial class Node
             _outboxSeq[(NodeId, entry.NamespaceId)] = entry.Seq;
             SeenChanges.Add(seenKey);
             Clock.Observe(timestamp);
+            if (entry.CreatedAt > 0) Clock.Observe(new Hlc((ulong)entry.CreatedAt, 0));
             return true;
         }
     }

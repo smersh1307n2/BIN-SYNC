@@ -151,13 +151,31 @@ public sealed partial class Node
     /// Durably append the complete mutation before publishing storage, sequence,
     /// Outbox and provenance changes. Caller holds Storage → Outbox locks.
     /// </summary>
-    private void CommitLocalMutationInternal(OutboxEntry entry, Record? stagedRecord, bool applyToStorage)
+    private void CommitLocalMutationInternal(
+        OutboxEntry entry, Record? stagedRecord, bool applyToStorage, bool preserveRecordIdentity = false)
     {
         _wal?.AppendLocalMutation(entry, applyToStorage);
         if (stagedRecord is not null)
         {
             var store = Ns(entry.NamespaceId);
-            store[entry.RecordId] = stagedRecord;
+            if (preserveRecordIdentity && store.TryGetValue(entry.RecordId, out var current))
+            {
+                // WriteField historically updates the live Record and its State map in
+                // place. Keep references returned by TryGetRecord and State usable.
+                current.RecordId = stagedRecord.RecordId;
+                current.NamespaceId = stagedRecord.NamespaceId;
+                current.LifecycleValue = stagedRecord.LifecycleValue;
+                current.LifecycleHlc = stagedRecord.LifecycleHlc;
+                current.LifecycleAuthor = stagedRecord.LifecycleAuthor;
+                current.State.Clear();
+                foreach (var pair in stagedRecord.State) current.State.Add(pair.Key, pair.Value);
+                current.FieldTombs.Clear();
+                foreach (var pair in stagedRecord.FieldTombs) current.FieldTombs.Add(pair.Key, pair.Value);
+            }
+            else
+            {
+                store[entry.RecordId] = stagedRecord;
+            }
         }
 
         _outboxSeq[(NodeId, entry.NamespaceId)] = entry.Seq;
@@ -230,7 +248,7 @@ public sealed partial class Node
         rec.State[(ushort)fieldId] = winner;
         var entry = PrepareOutboxEntryInternal(namespaceId, recordId, op, NodeId.ToArray(),
             suppressRestoredEcho: false) ?? throw new InvalidOperationException("A changed local write must produce an Outbox entry.");
-        CommitLocalMutationInternal(entry, rec, applyToStorage: true);
+        CommitLocalMutationInternal(entry, rec, applyToStorage: true, preserveRecordIdentity: true);
         return true;
     }
 
