@@ -73,7 +73,7 @@ public partial class SyncSession
     {
         await _needRangeGate.WaitAsync(ct).ConfigureAwait(false);
         try { await SendNeedRangeCoreAsync(namespaceId, prefix, ct).ConfigureAwait(false); }
-        finally { _stateDigestGate.Release(); }
+        finally { _needRangeGate.Release(); }
     }
 
     private async Task SendNeedRangeCoreAsync(int namespaceId, byte[] prefix, CancellationToken ct)
@@ -88,7 +88,7 @@ public partial class SyncSession
     {
         await _needRangeGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await ReceiveNeedRangeCoreAsync(ct).ConfigureAwait(false); }
-        finally { _stateDigestGate.Release(); }
+        finally { _needRangeGate.Release(); }
     }
 
     private async Task<NeedRangeMessage> ReceiveNeedRangeCoreAsync(CancellationToken ct)
@@ -105,7 +105,7 @@ public partial class SyncSession
     {
         await _needKeysGate.WaitAsync(ct).ConfigureAwait(false);
         try { await SendNeedKeysCoreAsync(keys, ct).ConfigureAwait(false); }
-        finally { _stateDigestGate.Release(); }
+        finally { _needKeysGate.Release(); }
     }
 
     private async Task SendNeedKeysCoreAsync(NeedKeysMessage keys, CancellationToken ct)
@@ -119,7 +119,7 @@ public partial class SyncSession
     {
         await _needKeysGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await ReceiveNeedKeysCoreAsync(ct).ConfigureAwait(false); }
-        finally { _stateDigestGate.Release(); }
+        finally { _needKeysGate.Release(); }
     }
 
     private async Task<NeedKeysMessage> ReceiveNeedKeysCoreAsync(CancellationToken ct)
@@ -155,7 +155,7 @@ public partial class SyncSession
     {
         await _snapshotGate.WaitAsync(ct).ConfigureAwait(false);
         try { await SendSnapshotCoreAsync(local, namespaceId, prefix, ct).ConfigureAwait(false); }
-        finally { _stateDigestGate.Release(); }
+        finally { _snapshotGate.Release(); }
     }
 
     private async Task SendSnapshotCoreAsync(
@@ -178,7 +178,7 @@ public partial class SyncSession
     {
         await _snapshotGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await ReceiveSnapshotCoreAsync(local, ct).ConfigureAwait(false); }
-        finally { _stateDigestGate.Release(); }
+        finally { _snapshotGate.Release(); }
     }
 
     private async Task<int> ReceiveSnapshotCoreAsync(Node local, CancellationToken ct)
