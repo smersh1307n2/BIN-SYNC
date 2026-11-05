@@ -19,23 +19,28 @@ public sealed class Wal : IDisposable
     /// <summary>WAL format identifier string written at the start of a log segment.</summary>
     public const string Tag = "BIN-SYNC/WAL/v1";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
-    private const ushort Version = 1;
+    private const ushort Version = 2;
+    private const ushort LegacyVersion = 1;
+    private const int RecordDigestLen = 16;
+    private const string RecordDigestTag = "BIN-SYNC/WAL-RECORD/v1";
 
     private readonly string _path;
     private FileStream? _fs;
     private readonly object _lock = new();
     private long _sequence;
+    private ushort _version;
 
     /// <summary>Filesystem path of the write-ahead log.</summary>
     public string Path => _path;
     /// <summary>Monotonic sequence of the last appended WAL record.</summary>
     public long Sequence => _sequence;
 
-    private Wal(string path, FileStream fs, long sequence)
+    private Wal(string path, FileStream fs, long sequence, ushort version)
     {
         _path = path;
         _fs = fs;
         _sequence = sequence;
+        _version = version;
     }
 
     /// <summary>Open or create a write-ahead log at the given path.</summary>
@@ -48,8 +53,10 @@ public sealed class Wal : IDisposable
         var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read,
             4096, FileOptions.WriteThrough);
         long seq = 0;
+        ushort version;
         if (fs.Length == 0)
         {
+            version = Version;
             WriteHeader(fs);
         }
         else
@@ -59,9 +66,9 @@ public sealed class Wal : IDisposable
             {
                 if (ReadBEU32(br) != Magic)
                     throw new InvalidDataException("Not a BinSync WAL (bad magic).");
-                var ver = ReadBEU16(br);
-                if (ver != Version)
-                    throw new InvalidDataException($"Unsupported WAL version {ver}.");
+                version = ReadBEU16(br);
+                if (version != Version && version != LegacyVersion)
+                    throw new InvalidDataException($"Unsupported WAL version {version}.");
             }
             long validEnd = 6;
             while (validEnd + 4 <= fs.Length)
@@ -70,11 +77,18 @@ public sealed class Wal : IDisposable
                 int len = ReadBEInt32(fs);
                 if (len < 1)
                     throw new InvalidDataException("Invalid WAL record length.");
-                if (fs.Position + len > fs.Length)
-                    break; // Torn final record: discard it before accepting new appends.
+                int trailerLength = version >= 2 ? RecordDigestLen : 0;
+                if (fs.Position + len + trailerLength > fs.Length)
+                    break;
                 var payload = new byte[len];
                 int read = fs.Read(payload, 0, len);
                 if (read != len) break;
+                if (version >= 2)
+                {
+                    var storedDigest = new byte[RecordDigestLen];
+                    if (fs.Read(storedDigest, 0, storedDigest.Length) != storedDigest.Length) break;
+                    VerifyRecordDigest(payload, storedDigest);
+                }
                 ValidateRecord(payload);
                 validEnd = fs.Position;
                 seq++;
@@ -89,7 +103,7 @@ public sealed class Wal : IDisposable
             }
             fs.Position = fs.Length;
         }
-        return new Wal(path, fs, seq);
+        return new Wal(path, fs, seq, version);
     }
 
     /// <summary>Append a field-write record to the WAL and return its sequence.</summary>
@@ -127,6 +141,7 @@ public sealed class Wal : IDisposable
             WriteBEInt32(lenBuf, payload.Length);
             _fs.Write(lenBuf);
             _fs.Write(payload);
+            if (_version >= 2) _fs.Write(ComputeRecordDigest(payload));
             _fs.Flush(flushToDisk: true);
             _sequence++;
             return _sequence;
@@ -148,12 +163,18 @@ public sealed class Wal : IDisposable
                 int len = ReadBEInt32(_fs);
                 if (len < 1)
                     throw new InvalidDataException("Invalid WAL record length.");
-                if (pos + 4L + len > end)
-                    break; // Ignore a torn final record; complete records are validated below.
+                int trailerLength = _version >= 2 ? RecordDigestLen : 0;
+                if (pos + 4L + len + trailerLength > end)
+                    break;
                 var payload = new byte[len];
                 int read = _fs.Read(payload, 0, len);
-                if (read != len)
-                    throw new InvalidDataException("WAL record is truncated.");
+                if (read != len) break;
+                if (_version >= 2)
+                {
+                    var storedDigest = new byte[RecordDigestLen];
+                    if (_fs.Read(storedDigest, 0, storedDigest.Length) != storedDigest.Length) break;
+                    VerifyRecordDigest(payload, storedDigest);
+                }
                 ValidateRecord(payload);
                 pos = _fs.Position;
                 records.Add(payload);
@@ -175,18 +196,26 @@ public sealed class Wal : IDisposable
         if (fs.Length < 6) return 0;
         using var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true);
         if (ReadBEU32(br) != Magic) throw new InvalidDataException("Not a BinSync WAL.");
-        if (ReadBEU16(br) != Version) throw new InvalidDataException("Unsupported WAL version.");
+        var version = ReadBEU16(br);
+        if (version != Version && version != LegacyVersion)
+            throw new InvalidDataException("Unsupported WAL version.");
         var records = new List<byte[]>();
         while (fs.Position + 4 <= fs.Length)
         {
             int len = ReadBEInt32(fs);
             if (len < 1)
                 throw new InvalidDataException("Invalid WAL record length.");
-            if (fs.Position + len > fs.Length)
-                break; // Ignore a torn final record.
+            int trailerLength = version >= 2 ? RecordDigestLen : 0;
+            if (fs.Position + len + trailerLength > fs.Length)
+                break;
             var payload = br.ReadBytes(len);
-            if (payload.Length != len)
-                throw new InvalidDataException("WAL record is truncated.");
+            if (payload.Length != len) break;
+            if (version >= 2)
+            {
+                var storedDigest = br.ReadBytes(RecordDigestLen);
+                if (storedDigest.Length != RecordDigestLen) break;
+                VerifyRecordDigest(payload, storedDigest);
+            }
             ValidateRecord(payload);
             records.Add(payload);
         }
@@ -207,6 +236,7 @@ public sealed class Wal : IDisposable
             if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
             _fs.SetLength(0);
             WriteHeader(_fs);
+            _version = Version;
             _fs.Flush(flushToDisk: true);
             _sequence = 0;
         }
@@ -224,6 +254,16 @@ public sealed class Wal : IDisposable
             AppendCheckpoint();
             Truncate();
         }
+    }
+
+    private static byte[] ComputeRecordDigest(byte[] payload)
+        => Blake3Core.TaggedHash(RecordDigestTag, payload).AsSpan(0, RecordDigestLen).ToArray();
+
+    private static void VerifyRecordDigest(byte[] payload, byte[] storedDigest)
+    {
+        var actual = ComputeRecordDigest(payload);
+        if (!actual.AsSpan().SequenceEqual(storedDigest))
+            throw new InvalidDataException("WAL record digest mismatch.");
     }
 
     // Validate framing and the complete payload before any replay mutation.

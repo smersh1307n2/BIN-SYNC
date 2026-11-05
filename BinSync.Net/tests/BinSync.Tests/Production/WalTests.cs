@@ -107,6 +107,73 @@ public class WalTests
     }
 
     [Fact]
+    public void Wal_v2_detects_payload_corruption_before_replay()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "node.wal");
+            var source = Fix.MakeNode(132);
+            var rid = Fix.Rid(307);
+            using (var wal = Wal.Open(path))
+                wal.AppendFieldWrite(1, rid, 0x100, new byte[] { 0x42 },
+                    new Hlc(12345, 7), source.NodeId);
+
+            var bytes = File.ReadAllBytes(path);
+            bytes[6 + 4 + 1 + 1 + 16 + 2 + 1] ^= 0x01;
+            File.WriteAllBytes(path, bytes);
+
+            var target = Fix.MakeNode(133);
+            Assert.Throws<InvalidDataException>(() => Wal.ReplayFile(path, target));
+            Assert.False(target.TryGetRecord(1, rid, out _));
+            Assert.Throws<InvalidDataException>(() => Wal.Open(path));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Wal_v1_remains_readable_and_truncate_upgrades_to_v2()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "legacy.wal");
+            var source = Fix.MakeNode(134);
+            var rid = Fix.Rid(308);
+            var payload = new Writer().U8((byte)WalRecordType.FieldWrite)
+                .Varint(1).B128(rid).U16(0x100).Bytes(new byte[] { 0x24 })
+                .U64(500).U32(2).B128(source.NodeId).Value();
+
+            using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                fs.Write(new byte[] { 0x42, 0x53, 0x57, 0x4C, 0x00, 0x01 });
+                Span<byte> length = stackalloc byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, payload.Length);
+                fs.Write(length);
+                fs.Write(payload);
+                fs.Flush(flushToDisk: true);
+            }
+
+            var restored = Fix.MakeNode(135);
+            Assert.Equal(1, Wal.ReplayFile(path, restored));
+            Assert.True(restored.TryGetRecord(1, rid, out _));
+            using (var wal = Wal.Open(path)) wal.Truncate();
+
+            var upgraded = File.ReadAllBytes(path);
+            Assert.Equal(2, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(upgraded.AsSpan(4)));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_replay_validates_entire_log_before_mutating_node()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
