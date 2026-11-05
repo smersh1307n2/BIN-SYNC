@@ -34,7 +34,7 @@ public partial class SyncSession
         if (initiate)
         {
             await SendFrameAsync(ReconcileFrames.StateDigest, streamId, 10ul, Reconcile.EncodeStateDigest(mine), ct).ConfigureAwait(false);
-            var raw = await ReceivePacketAsync(ReconcileFrames.StateDigest, ct).ConfigureAwait(false)
+            var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.StateDigest, ct).ConfigureAwait(false)
                ;
             var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.StateDigest);
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
@@ -68,7 +68,7 @@ public partial class SyncSession
     /// <summary>Receive a NEED_RANGE reconcile message.</summary>
     public async Task<NeedRangeMessage> ReceiveNeedRangeAsync(CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(ReconcileFrames.NeedRange, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.NeedRange, ct).ConfigureAwait(false)
            ;
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedRange);
         var need = Reconcile.DecodeNeedRange(frame.Payload);
@@ -86,7 +86,7 @@ public partial class SyncSession
     /// <summary>Receive a NEED_KEYS reconcile message.</summary>
     public async Task<NeedKeysMessage> ReceiveNeedKeysAsync(CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(ReconcileFrames.NeedKeys, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.NeedKeys, ct).ConfigureAwait(false)
            ;
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedKeys);
         var need = Reconcile.DecodeNeedKeys(frame.Payload);
@@ -126,7 +126,7 @@ public partial class SyncSession
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>
     public async Task<int> ReceiveSnapshotAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
            ;
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
         var first = Reconcile.DecodeSnapshotChunk(frame.Payload);

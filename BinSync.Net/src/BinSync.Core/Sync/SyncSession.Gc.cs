@@ -16,7 +16,7 @@ public partial class SyncSession
     /// <summary>Receive and apply a GC notice; returns how many entries were learned.</summary>
     public async Task<int> ReceiveGcNoticeAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(ReconcileFrames.GcNotice, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.GcNotice, ct).ConfigureAwait(false)
            ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != ReconcileFrames.GcNotice)

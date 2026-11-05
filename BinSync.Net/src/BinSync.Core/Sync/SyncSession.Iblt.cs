@@ -17,7 +17,7 @@ public partial class SyncSession
     /// <summary>Receive one IBLT frame and decode.</summary>
     public async Task<Iblt> ReceiveIbltAsync(CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(ReconcileFrames.Iblt, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.Iblt, ct).ConfigureAwait(false)
            ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != ReconcileFrames.Iblt)

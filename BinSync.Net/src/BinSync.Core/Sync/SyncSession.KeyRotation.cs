@@ -23,7 +23,7 @@ public partial class SyncSession
     /// </summary>
     public async Task<bool> ReceiveKeyRotationAsync(KeyEpochStore store, Node? local, CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(KeyRotation.FrameType, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(KeyRotation.FrameType, ct).ConfigureAwait(false)
            ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != KeyRotation.FrameType)

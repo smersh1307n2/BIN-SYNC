@@ -21,7 +21,7 @@ public partial class SyncSession
     /// </summary>
     public async Task<byte[]> ReceiveReassembledAsync(CancellationToken ct = default)
     {
-        await _rawReceiveGate.WaitAsync(ct).ConfigureAwait(false);
+        await _exclusiveReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             BeginRawReceiveMode();

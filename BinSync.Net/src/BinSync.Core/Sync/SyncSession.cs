@@ -15,7 +15,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _pushGate = new(1, 1);
     private readonly SemaphoreSlim _batchReceiveGate = new(1, 1);
-    private readonly SemaphoreSlim _rawReceiveGate = new(1, 1);
+    private readonly SemaphoreSlim _exclusiveReceiveGate = new(1, 1);
     private readonly object _receiveSync = new();
     private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();
     private readonly CancellationTokenSource _receiveCts = new();
@@ -236,6 +236,8 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceivePacketAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        if (expectedType != 0x09 && expectedType != 0x0B)
+            throw new InvalidOperationException("The concurrent dispatcher is reserved for DELTA_BATCH and ACK");
         Channel<byte[]> channel;
         lock (_receiveSync)
         {
@@ -268,7 +270,8 @@ public partial class SyncSession : IAsyncDisposable
                 var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                     ?? throw new IOException("Peer closed the session");
                 var (frame, consumed) = FrameCodec.ParseFrame(raw);
-                if (consumed != raw.Length) throw new FrameException("FRAME_REJECTED");
+                if (consumed != raw.Length || (frame.FrameType != 0x09 && frame.FrameType != 0x0B))
+                    throw new FrameException("FRAME_REJECTED");
                 Channel<byte[]> channel;
                 lock (_receiveSync)
                 {
@@ -297,12 +300,33 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
+    private async Task<byte[]> ReceiveExpectedExclusiveAsync(byte expectedType, CancellationToken ct)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        await _exclusiveReceiveGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            lock (_receiveSync)
+            {
+                if (_receivePump is not null || _rawReceiveActive)
+                    throw new InvalidOperationException("Exclusive protocol reads cannot overlap with batch multiplexing or raw receive mode");
+            }
+            var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("Peer closed the session");
+            var (frame, consumed) = FrameCodec.ParseFrame(raw);
+            if (consumed != raw.Length || frame.FrameType != expectedType)
+                throw new FrameException("FRAME_REJECTED");
+            return raw;
+        }
+        finally { _exclusiveReceiveGate.Release(); }
+    }
+
     private void BeginRawReceiveMode()
     {
         lock (_receiveSync)
         {
             if (_receivePump is not null)
-                throw new InvalidOperationException("Raw receive cannot be mixed with typed session receive operations");
+                throw new InvalidOperationException("Raw receive cannot be mixed with batch multiplexing");
             _rawReceiveActive = true;
         }
     }

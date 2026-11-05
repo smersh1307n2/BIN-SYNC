@@ -16,7 +16,7 @@ public partial class SyncSession
     /// <summary>Receive MEMBERSHIP and merge into local durable authors.</summary>
     public async Task<int> ReceiveMembershipAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await ReceivePacketAsync(MembershipFrames.Membership, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(MembershipFrames.Membership, ct).ConfigureAwait(false)
            ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != MembershipFrames.Membership)
