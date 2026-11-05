@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v2", in-tree Blake3Core, zero dependencies). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v3", in-tree Blake3Core, zero dependencies). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -30,7 +30,7 @@ public static class NodePersistence
     public const string StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 2;
+    private const ushort Version = 3;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -158,6 +158,14 @@ public static class NodePersistence
                                                          .ThenBy(k => k.Ns).ThenBy(k => k.Epoch)
                                                          .ThenBy(k => k.BatchId.Lo).ThenBy(k => k.BatchId.Hi))
             { w.B128(issuer); w.Varint((ulong)ns); w.Varint((ulong)ep); w.B128(bid); }
+            w.Varint((ulong)n.InboxAuthors.Count);
+            foreach (var (key, author) in n.InboxAuthors.OrderBy(k => k.Key.Issuer.Lo).ThenBy(k => k.Key.Issuer.Hi)
+                                                        .ThenBy(k => k.Key.Ns).ThenBy(k => k.Key.Epoch)
+                                                        .ThenBy(k => k.Key.BatchId.Lo).ThenBy(k => k.Key.BatchId.Hi))
+            {
+                w.B128(key.Issuer); w.Varint((ulong)key.Ns); w.Varint((ulong)key.Epoch);
+                w.B128(key.BatchId); w.B128(author);
+            }
 
             // --- batch-digest chain checkpoints: (issuer, ns, epoch) -> digest
             w.Varint((ulong)n.LastBatchDigest.Count);
@@ -306,6 +314,13 @@ public static class NodePersistence
         {
             var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint(); var bid = r.B128();
             n.Inbox.Add(((NodeId)issuer, ns, ep, BatchId.From(bid)));
+        }
+        int inboxAuthorCount = (int)r.Varint();
+        for (int i = 0; i < inboxAuthorCount; i++)
+        {
+            var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint();
+            var bid = r.B128(); var author = r.B128();
+            n.InboxAuthors[((NodeId)issuer, ns, ep, BatchId.From(bid))] = (NodeId)author;
         }
 
         int lbdCount = (int)r.Varint();

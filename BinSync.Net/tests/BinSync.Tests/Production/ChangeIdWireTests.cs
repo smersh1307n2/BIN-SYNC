@@ -236,4 +236,39 @@ public class ChangeIdWireTests
         }
     }
 
+    [Fact]
+    public void Duplicate_batch_ack_uses_original_author_after_another_author_stream_arrives()
+    {
+        var author = Fix.MakeNode(65);
+        var relay = Fix.MakeNode(66);
+        var receiver = Fix.MakeNode(67);
+        Transport.MakeSession(author, relay);
+        Assert.True(author.WriteField(1, Fix.Rid(0x65), 0x100, new byte[] { 1 }));
+        Transport.DeliverBatch(author, relay, 1);
+        Transport.MakeSession(relay, receiver);
+
+        var firstBatch = relay.CreateDeltaBatch(receiver.NodeId, 1,
+            filterAuthorNodeId: author.NodeId.ToArray())!;
+        relay.SignBatchFor(firstBatch, receiver.NodeId);
+        var firstPayload = relay.EncodeBatchPayload(firstBatch);
+        var firstAccepted = receiver.ApplyBatchPayload(firstPayload, relay.NodeId);
+        relay.AdvanceStream(receiver.NodeId, 1, firstBatch);
+        Assert.Equal(author.NodeId, firstAccepted.DurableAuthor);
+
+        Assert.True(relay.WriteField(1, Fix.Rid(0x66), 0x100, new byte[] { 2 }));
+        var secondBatch = relay.CreateDeltaBatch(receiver.NodeId, 1,
+            filterAuthorNodeId: relay.NodeId.ToArray())!;
+        relay.SignBatchFor(secondBatch, receiver.NodeId);
+        var secondAccepted = receiver.ApplyBatchPayload(relay.EncodeBatchPayload(secondBatch), relay.NodeId);
+        relay.AdvanceStream(receiver.NodeId, 1, secondBatch);
+        relay.ProcessAck(receiver.NodeId, 1, secondAccepted.CursorEnd, secondAccepted.DurableAuthor);
+        Assert.Equal(relay.NodeId, receiver.LastStreamAuthor[(relay.NodeId, 1)]);
+
+        var replay = receiver.ApplyBatchPayload(firstPayload, relay.NodeId);
+        Assert.True(replay.Duplicate);
+        Assert.Equal(author.NodeId, replay.DurableAuthor);
+        relay.ProcessAck(receiver.NodeId, 1, replay.CursorEnd, replay.DurableAuthor);
+        Assert.Equal(firstBatch.CursorEnd, relay.PeerStates[(receiver.NodeId, 1)].AckedFor(author.NodeId));
+    }
+
 }

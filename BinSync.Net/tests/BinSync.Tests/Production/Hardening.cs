@@ -80,6 +80,9 @@ public class Production : IDisposable
             }
         }
         if (x.Inbox.Count != y.Inbox.Count) return false;
+        if (x.InboxAuthors.Count != y.InboxAuthors.Count) return false;
+        foreach (var (key, author) in x.InboxAuthors)
+            if (!y.InboxAuthors.TryGetValue(key, out var otherAuthor) || otherAuthor != author) return false;
         if (x.LastBatchDigest.Count != y.LastBatchDigest.Count) return false;
         foreach (var (k, dig) in x.LastBatchDigest)
             if (!y.LastBatchDigest.TryGetValue(k, out var od) || dig != od) return false;
