@@ -107,6 +107,9 @@ public class Production : IDisposable
                 ps.LastAckedSeq != ops.LastAckedSeq || ps.InitialSyncComplete != ops.InitialSyncComplete) return false;
             if (ps.ReceivedStreams.Count != ops.ReceivedStreams.Count) return false;
             if (ps.StreamAcked.Count != ops.StreamAcked.Count) return false;
+            if (ps.StreamPushed.Count != ops.StreamPushed.Count) return false;
+            foreach (var (author, seq) in ps.StreamPushed)
+                if (!ops.StreamPushed.TryGetValue(author, out var pushed) || pushed != seq) return false;
             if (ps.IdsRef.Count != ops.IdsRef.Count) return false;
         }
         // Outbox entries + per-author seq counters

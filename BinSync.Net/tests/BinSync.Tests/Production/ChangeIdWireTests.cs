@@ -185,4 +185,55 @@ public class ChangeIdWireTests
         Assert.Empty(target.Storage);
     }
 
+    [Fact]
+    public void Ack_cannot_advance_beyond_sent_stream_or_accept_another_author()
+    {
+        var a = Fix.MakeNode(61);
+        var b = Fix.MakeNode(62);
+        Transport.MakeSession(a, b);
+        Assert.True(a.WriteField(1, Fix.Rid(0x61), 0x100, new byte[] { 1 }));
+
+        var batch = a.CreateDeltaBatch(b.NodeId, 1)!;
+        a.SignBatchFor(batch, b.NodeId);
+        a.AdvanceStream(b.NodeId, 1, batch);
+
+        Assert.Throws<SyncException>(() =>
+            a.ProcessAck(b.NodeId, 1, batch.CursorEnd + 100, batch.DurableAuthor));
+        Assert.Throws<SyncException>(() =>
+            a.ProcessAck(b.NodeId, 1, batch.CursorEnd, NodeId.From(Id(0xEE))));
+        Assert.Equal(1, a.OutboxSize(1));
+
+        a.ProcessAck(b.NodeId, 1, batch.CursorEnd, batch.DurableAuthor);
+        Assert.Equal(0, a.OutboxSize(1));
+    }
+
+    [Fact]
+    public void Ack_watermark_and_pushed_stream_survive_restart_and_duplicate_ack_is_idempotent()
+    {
+        var a = Fix.MakeNode(63);
+        var b = Fix.MakeNode(64);
+        Transport.MakeSession(a, b);
+        Assert.True(a.WriteField(1, Fix.Rid(0x63), 0x100, new byte[] { 2 }));
+
+        var batch = a.CreateDeltaBatch(b.NodeId, 1)!;
+        a.SignBatchFor(batch, b.NodeId);
+        a.AdvanceStream(b.NodeId, 1, batch);
+        a.ProcessAck(b.NodeId, 1, batch.CursorEnd, batch.DurableAuthor);
+
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-ack-{Guid.NewGuid():N}.bin");
+        try
+        {
+            NodePersistence.Save(a, path);
+            var restored = NodePersistence.Load(path);
+            Assert.Equal(batch.CursorEnd, restored.PeerStates[(b.NodeId, 1)].StreamPushed[batch.DurableAuthor]);
+            Assert.Equal(batch.CursorEnd, restored.PeerStates[(b.NodeId, 1)].AckedFor(batch.DurableAuthor));
+            restored.ProcessAck(b.NodeId, 1, batch.CursorEnd, batch.DurableAuthor);
+            Assert.Equal(0, restored.OutboxSize(1));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
 }
