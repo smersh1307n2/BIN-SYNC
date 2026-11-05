@@ -187,7 +187,9 @@ public partial class SyncSession
         }
 
         int handled = 0;
-        for (int i = 0; i < maxPrefixes + 1; i++)
+        bool receivedTerminator = false;
+        // Use long for the loop counter so maxPrefixes == int.MaxValue cannot overflow.
+        for (long i = 0; i <= maxPrefixes; i++)
         {
             var need = await ReceiveNeedRangeAsync(ct).ConfigureAwait(false);
             if (need.Prefix.Length == 0)
@@ -196,11 +198,18 @@ public partial class SyncSession
                 // snapshot was fully received and atomically applied. This confirms
                 // our outbound baseline, but not the reverse direction; the outer
                 // two-round operation commits InitialSyncComplete after both finish.
+                receivedTerminator = true;
                 break;
             }
             await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
             handled++;
         }
-        return (handled, 0, diverged.Count <= maxPrefixes);
+
+        // Do not accept an early terminator as a complete baseline: every divergent
+        // prefix in our digest must have been requested and fulfilled by the peer.
+        bool complete = receivedTerminator &&
+            handled == diverged.Count &&
+            diverged.Count <= maxPrefixes;
+        return (handled, 0, complete);
     }
 }
