@@ -253,6 +253,57 @@ public class Production : IDisposable
 
 
     [Fact]
+    public void Persistence_StreamOffsetSurvivesRestartAndMapsNextAck()
+    {
+        var donor = Fix.MakeNode(861);
+        var oldPeer = Fix.MakeNode(862);
+        var newPeer = Fix.MakeNode(863);
+        Transport.MakeSession(donor, oldPeer);
+
+        donor.WriteField(NS, Fix.Rid(861), 0x100, Val("prefix-1"));
+        donor.WriteField(NS, Fix.Rid(862), 0x100, Val("prefix-2"));
+        var oldBatch = donor.CreateDeltaBatch(oldPeer.NodeId, NS)!;
+        donor.AdvanceStream(oldPeer.NodeId, NS, oldBatch);
+        donor.ProcessAck(oldPeer.NodeId, NS, oldBatch.CursorEnd, oldBatch.DurableAuthor);
+        Assert.Equal(2L, donor.PeerStates[(oldPeer.NodeId, NS)].AckedFor(donor.NodeId));
+
+        // Prefix is now acknowledged by the only existing peer and may be collected.
+        donor.CompactOutbox(NS);
+        Assert.Empty(donor.Outbox[NS]);
+
+        Transport.MakeSession(donor, newPeer);
+        var snapshot = Reconcile.BuildSnapshot(donor, NS);
+        Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);
+
+        donor.WriteField(NS, Fix.Rid(863), 0x100, Val("tail-3"));
+        var tail = donor.CreateDeltaBatch(newPeer.NodeId, NS)!;
+        Assert.Equal(1L, tail.CursorStart);
+        Assert.Equal(1L, tail.CursorEnd);
+        var received = newPeer.ApplyBatchPayload(donor.EncodeBatchPayload(tail), donor.NodeId);
+        donor.AdvanceStream(newPeer.NodeId, NS, tail);
+        donor.ProcessAck(newPeer.NodeId, NS, received.CursorEnd, received.DurableAuthor);
+        Assert.Equal(1L, donor.PeerStates[(newPeer.NodeId, NS)].AckedFor(donor.NodeId));
+        Assert.Equal(2L, donor.PeerStates[(newPeer.NodeId, NS)].StreamOffsets[donor.NodeId]);
+
+        var path = Path.Combine(_dir, "stream-offset-restart.state");
+        NodePersistence.Save(donor, path);
+        var resumed = NodePersistence.Load(path);
+        Transport.MakeSession(resumed, newPeer);
+
+        resumed.WriteField(NS, Fix.Rid(864), 0x100, Val("tail-4"));
+        var next = resumed.CreateDeltaBatch(newPeer.NodeId, NS)!;
+        Assert.Equal(2L, next.CursorStart);
+        Assert.Equal(2L, next.CursorEnd);
+        resumed.AdvanceStream(newPeer.NodeId, NS, next);
+        resumed.ProcessAck(newPeer.NodeId, NS, next.CursorEnd, next.DurableAuthor);
+
+        var peerState = resumed.PeerStates[(newPeer.NodeId, NS)];
+        Assert.Equal(2L, peerState.AckedFor(resumed.NodeId));
+        Assert.Equal(2L, peerState.StreamOffsets[resumed.NodeId]);
+        Assert.Contains(resumed.Outbox[NS], e => e.Seq == 4);
+    }
+
+    [Fact]
     public void Persistence_RejectsIncompleteOrInvalidInboxAuthorMap()
     {
         var (a, _) = BuildHistory();
