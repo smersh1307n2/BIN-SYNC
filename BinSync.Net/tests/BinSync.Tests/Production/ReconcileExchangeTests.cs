@@ -90,6 +90,35 @@ public class ReconcileExchangeTests
         Assert.Same(bPeerState, b.PeerStates[(a.NodeId, 1)]);
     }
 
+    [Fact]
+    public async Task AutoReconcile_commits_baseline_when_divergence_exactly_matches_limit()
+    {
+        var a = Fix.MakeNode(51);
+        var b = Fix.MakeNode(52);
+        var sharedRecord = Fix.Rid(510);
+        a.WriteField(1, sharedRecord, 0x100, new byte[] { 1 });
+        b.WriteField(1, sharedRecord, 0x100, new byte[] { 2 });
+
+        var aPeerState = new PeerState(b.NodeId, 1);
+        var bPeerState = new PeerState(a.NodeId, 1);
+        a.PeerStates[(b.NodeId, 1)] = aPeerState;
+        b.PeerStates[(a.NodeId, 1)] = bPeerState;
+
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var aTask = client.AutoReconcileAsync(a, 1, initiate: true, maxPrefixes: 1);
+        var bTask = server.AutoReconcileAsync(b, 1, initiate: false, maxPrefixes: 1);
+        await Task.WhenAll(aTask, bTask);
+
+        Assert.True(aPeerState.InitialSyncComplete);
+        Assert.True(bPeerState.InitialSyncComplete);
+        Assert.Same(aPeerState, a.PeerStates[(b.NodeId, 1)]);
+        Assert.Same(bPeerState, b.PeerStates[(a.NodeId, 1)]);
+    }
+
     private sealed class FailOnSecondStateDigestTransport : ISyncTransport
     {
         private readonly PipeTransport _inner;
