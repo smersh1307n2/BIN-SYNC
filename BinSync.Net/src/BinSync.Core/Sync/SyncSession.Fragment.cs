@@ -41,7 +41,7 @@ public partial class SyncSession
         }
         finally
         {
-            _rawReceiveGate.Release();
+            _exclusiveReceiveGate.Release();
         }
     }
 }
