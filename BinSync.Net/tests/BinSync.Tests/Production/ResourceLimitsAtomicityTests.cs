@@ -204,4 +204,25 @@ public sealed class ResourceLimitsAtomicityTests
         Assert.Equal(0, receiver.GetOutboxCount(3));
         Assert.Single(receiver.SeenChanges);
     }
+
+    [Fact]
+    public void Apply_batch_rejects_outbox_sequence_exhaustion_before_commit()
+    {
+        var sender = Fix.MakeNode(57);
+        using var receiver = new Node(Fix.Nid(58), epoch: 1, nowFn: () => 58_000_000);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+        receiver._outboxSeq[(sender.NodeId, 3)] = long.MaxValue;
+
+        Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+
+        Assert.Equal(0, receiver.GetRecordCount(3));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Empty(receiver.Inbox);
+        Assert.Empty(receiver.SeenChanges);
+        Assert.Empty(receiver.PeerStates);
+        Assert.Equal(long.MaxValue, receiver._outboxSeq[(sender.NodeId, 3)]);
+    }
 }

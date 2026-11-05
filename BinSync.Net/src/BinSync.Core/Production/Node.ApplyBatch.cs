@@ -210,6 +210,23 @@ public sealed partial class Node
             }
         }
 
+        // Reserve every relay sequence during preflight. Sequence exhaustion must
+        // reject the batch before storage, cursors, Inbox or SeenChanges are published.
+        var relaySequences = nEnt > 0 ? new long[nEnt] : Array.Empty<long>();
+        var stagedOutboxSequences = new Dictionary<(NodeId Author, int NamespaceId), long>();
+        foreach (int idx in relayIndices)
+        {
+            var sequenceKey = (resolvedAuthors[idx], batch.NamespaceId);
+            long current;
+            if (!stagedOutboxSequences.TryGetValue(sequenceKey, out current))
+                current = _outboxSeq.TryGetValue(sequenceKey, out var persisted) ? persisted : 0;
+            if (current == long.MaxValue)
+                throw new SyncException("INTERNAL", batch.BatchId);
+            long next = current + 1;
+            stagedOutboxSequences[sequenceKey] = next;
+            relaySequences[idx] = next;
+        }
+
         // Count only genuinely new records and provenance keys. Limits are checked
         // against the complete batch, before any record, cursor, inbox or relay mutation.
         int newRecordCount = 0;
@@ -253,7 +270,7 @@ public sealed partial class Node
                 var entry = new OutboxEntry
                 {
                     NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
-                    Seq = NextOutboxSeq(resolved, batch.NamespaceId),
+                    Seq = relaySequences[idx],
                     ChangeId = relayChangeIds[idx],
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
@@ -263,6 +280,7 @@ public sealed partial class Node
                 };
                 if (!Outbox.TryGetValue(batch.NamespaceId, out var ol)) Outbox[batch.NamespaceId] = ol = new();
                 ol.Add(entry);
+                _outboxSeq[(resolved, batch.NamespaceId)] = relaySequences[idx];
 
                 // Propagate the third-party binding learned through this session.
                 int? epm = null;

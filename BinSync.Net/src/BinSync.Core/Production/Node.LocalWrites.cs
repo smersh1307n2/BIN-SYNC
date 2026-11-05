@@ -23,7 +23,10 @@ public sealed partial class Node
     internal long NextOutboxSeqInternal(NodeId author, int namespaceId)
     {
         var key = (author, namespaceId);
-        long s = (_outboxSeq.TryGetValue(key, out var v) ? v : 0) + 1;
+        long current = _outboxSeq.TryGetValue(key, out var v) ? v : 0;
+        if (current == long.MaxValue)
+            throw new SyncException("INTERNAL");
+        long s = current + 1;
         _outboxSeq[key] = s;
         return s;
     }
@@ -215,6 +218,8 @@ public sealed partial class Node
             Limits?.EnsureStorageCapacity(this);
         Limits?.EnsureCanEnqueueOutbox(this, namespaceId);
         Limits?.EnsureSeenChangesCapacity(this);
+        if (_outboxSeq.TryGetValue((NodeId, namespaceId), out var seq) && seq == long.MaxValue)
+            throw new SyncException("INTERNAL");
     }
 
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
