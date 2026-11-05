@@ -32,6 +32,32 @@ public sealed class AliasAtomicityTests
         Assert.Equal(99, peer.NodeToAlias[local.NodeId][(author, 7)]);
     }
 
+
+    [Fact]
+    public void ApplyAliasMap_is_atomic_when_a_late_entry_conflicts()
+    {
+        using var local = new Node(Fix.Nid(101));
+        var peer = Fix.Nid(102);
+        var freshAuthor = Fix.Nid(103);
+        var conflictingAuthor = Fix.Nid(104);
+
+        local.RegisterAlias(peer, 9, conflictingAuthor, 4);
+
+        var entries = new List<AliasMapEntry>
+        {
+            new(1, freshAuthor, 7),
+            new(9, Fix.Nid(105), 2),
+        };
+
+        Assert.Throws<SyncException>(() => SessionWire.ApplyAliasMap(local, peer, entries));
+
+        Assert.False(local.AliasToNode[peer].ContainsKey(1));
+        Assert.False(local.NodeToAlias[peer].ContainsKey((freshAuthor, 7)));
+        Assert.Null(local.KnownAuthorEpoch(freshAuthor));
+        Assert.Equal(conflictingAuthor, local.ResolveAlias(peer, 9));
+        Assert.Equal(4, local.KnownAuthorEpoch(conflictingAuthor));
+    }
+
     [Fact]
     public void Opposite_direction_alias_negotiation_does_not_deadlock()
     {

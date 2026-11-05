@@ -319,6 +319,47 @@ public sealed partial class Node
             DurableAuthors[nodeId] = epoch;
     }
 
+
+    /// <summary>
+    /// Apply a complete session alias map atomically. Validate every forward and reverse
+    /// binding before mutating either map or the durable-author registry.
+    /// </summary>
+    internal void ApplyAliasMapAtomic(NodeId peer, IReadOnlyList<AliasMapEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        lock (_lockMeta)
+        {
+            var aliases = new HashSet<int>();
+            var authors = new HashSet<NodeId>();
+            var fwd = AliasToNode.TryGetValue(peer, out var currentFwd)
+                ? currentFwd : null;
+            var rev = NodeToAlias.TryGetValue(peer, out var currentRev)
+                ? currentRev : null;
+
+            foreach (var entry in entries)
+            {
+                int alias = entry.Alias;
+                var durable = (entry.NodeId, entry.Epoch);
+                if (alias <= 0 || entry.NodeId.IsZero || entry.Epoch < 0 ||
+                    !aliases.Add(alias) || !authors.Add(entry.NodeId))
+                    throw new FrameException("FRAME_REJECTED");
+
+                if (fwd is not null && fwd.TryGetValue(alias, out var owner) &&
+                    (owner.Id != entry.NodeId || owner.Epoch != entry.Epoch))
+                    throw new SyncException("UNKNOWN_ALIAS");
+
+                if (rev is not null && rev.TryGetValue(durable, out int existingAlias) &&
+                    existingAlias != alias)
+                    throw new SyncException("UNKNOWN_ALIAS");
+            }
+
+            // No operation below can encounter a binding conflict: the complete set
+            // was checked against both maps while holding the same metadata gate.
+            foreach (var entry in entries)
+                RegisterAliasInternal(peer, entry.Alias, entry.NodeId, entry.Epoch);
+        }
+    }
+
     /// Resolve a wire alias to the DURABLE author identity.
     /// SPEC CORRECTION (errata E-1): the durable author is the bare b128 nodeId (§4.6/§5.4).
     /// Errata E-12: on a miss, consult the peer's copy of THIS session and adopt its

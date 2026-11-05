@@ -174,8 +174,7 @@ public static class SessionWire
     /// </summary>
     public static void ApplyAliasMap(Node local, NodeId peerNodeId, IReadOnlyList<AliasMapEntry> entries)
     {
-        foreach (var e in entries)
-            local.RegisterAlias(peerNodeId, e.Alias, e.NodeId, e.Epoch);
+        local.ApplyAliasMapAtomic(peerNodeId, entries);
     }
 
     /// <summary>
