@@ -168,4 +168,27 @@ public class SnapshotTests
         Assert.True(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
     }
 
+    [Fact]
+    public void Snapshot_decoder_rejects_unbounded_chunk_and_record_counts()
+    {
+        var oversizedChunks = new Writer()
+            .U16(1).U32(0).U32(uint.MaxValue).Varint(0).Value();
+        Assert.Throws<FormatException>(() => Reconcile.DecodeSnapshotChunk(oversizedChunks));
+
+        var oversizedRecords = new Writer()
+            .U16(1).U32(0).U32(1)
+            .Varint((ulong)Reconcile.MaxSnapshotRecordsPerChunk + 1).Value();
+        Assert.Throws<FormatException>(() => Reconcile.DecodeSnapshotChunk(oversizedRecords));
+    }
+
+    [Fact]
+    public void Snapshot_decoder_rejects_excessive_field_count_before_reading_fields()
+    {
+        var oversizedFields = new Writer()
+            .U16(1).U32(0).U32(1)
+            .Varint(1).B128(Fix.Rid(222))
+            .Varint((ulong)Reconcile.MaxSnapshotFieldsPerChunk + 1).Value();
+        Assert.Throws<FormatException>(() => Reconcile.DecodeSnapshotChunk(oversizedFields));
+    }
+
 }

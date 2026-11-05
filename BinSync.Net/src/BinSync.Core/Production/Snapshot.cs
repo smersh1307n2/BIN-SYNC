@@ -55,6 +55,10 @@ public sealed class SnapshotChunkMessage
 /// <summary>State-digest / NEED_RANGE / NEED_KEYS anti-entropy helpers.</summary>
 public static partial class Reconcile
 {
+    // Hard parser bounds apply even when a host does not configure optional ResourceLimits.
+    internal const uint MaxSnapshotChunks = 4096;
+    internal const int MaxSnapshotRecordsPerChunk = 100_000;
+    internal const int MaxSnapshotFieldsPerChunk = 250_000;
     /// <summary>Build the first bounded chunk of a consistent snapshot under <paramref name="prefix"/>.</summary>
     public static SnapshotChunkMessage BuildSnapshot(
         Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000) =>
@@ -172,22 +176,42 @@ public static partial class Reconcile
             ChunkIndex = r.U32(),
             ChunkCount = r.U32(),
         };
-        int n = (int)r.Varint();
+        if (m.ChunkCount == 0 || m.ChunkCount > MaxSnapshotChunks || m.ChunkIndex >= m.ChunkCount)
+            throw new FormatException("Snapshot chunk index/count is outside protocol limits");
+
+        ulong recordCount = r.Varint();
+        if (recordCount > MaxSnapshotRecordsPerChunk)
+            throw new FormatException("Snapshot chunk has too many records");
+        int n = (int)recordCount;
+        int totalFields = 0;
         for (int i = 0; i < n; i++)
         {
             var sr = new SnapshotRecord { RecordId = r.B128() };
-            int fc = (int)r.Varint();
+            ulong fieldCount = r.Varint();
+            if (fieldCount > (ulong)(MaxSnapshotFieldsPerChunk - totalFields))
+                throw new FormatException("Snapshot chunk has too many fields");
+            int fc = (int)fieldCount;
+            totalFields += fc;
             for (int j = 0; j < fc; j++)
             {
+                ushort fieldId = r.U16();
+                bool tombstone = r.U8() switch { 0 => false, 1 => true, _ => throw new FormatException("Invalid snapshot field flags") };
+                ulong wall = r.U64();
+                uint logical = r.U32();
+                byte[] author = r.B128();
+                ushort keyEpoch = r.U16();
+                ulong valueLength = r.Varint();
+                if (valueLength > int.MaxValue || valueLength > (ulong)r.Remaining)
+                    throw new FormatException("Invalid snapshot field value length");
                 sr.Fields.Add(new SnapshotField
                 {
-                    FieldId = r.U16(),
-                    IsTombstone = r.U8() switch { 0 => false, 1 => true, _ => throw new FormatException("Invalid snapshot field flags") },
-                    Wall = r.U64(),
-                    Logical = r.U32(),
-                    AuthorNodeId = r.B128(),
-                    KeyEpoch = r.U16(),
-                    Value = r.Bytes(),
+                    FieldId = fieldId,
+                    IsTombstone = tombstone,
+                    Wall = wall,
+                    Logical = logical,
+                    AuthorNodeId = author,
+                    KeyEpoch = keyEpoch,
+                    Value = r.Raw((int)valueLength),
                 });
             }
             sr.HasLifecycle = r.U8() switch { 0 => false, 1 => true, _ => throw new FormatException("Invalid snapshot lifecycle flags") };
@@ -197,6 +221,8 @@ public static partial class Reconcile
             sr.LifecycleAuthor = r.B128();
             m.Records.Add(sr);
         }
+        if (!r.Eof())
+            throw new FormatException("Trailing bytes in snapshot chunk");
         return m;
     }
 
@@ -216,8 +242,8 @@ public static partial class Reconcile
     {
         if (chunks.Count == 0) throw new FormatException("Snapshot transfer is empty");
         var first = chunks[0];
-        if (first.ChunkCount == 0 || chunks.Count != first.ChunkCount)
-            throw new FormatException("Snapshot transfer is incomplete");
+        if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || chunks.Count != first.ChunkCount)
+            throw new FormatException("Snapshot transfer is incomplete or exceeds protocol limits");
         for (int i = 0; i < chunks.Count; i++)
         {
             var chunk = chunks[i];
