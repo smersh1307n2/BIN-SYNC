@@ -245,13 +245,20 @@ public sealed class Wal : IDisposable
     public void Checkpoint(Node node, string snapshotPath)
     {
         ArgumentNullException.ThrowIfNull(node);
-        lock (_lock)
+        // Match the global mutation lock order: Node gates → WAL lock.
+        // Local writes hold Storage/Outbox while appending to WAL; taking the WAL
+        // lock first here would deadlock against a writer waiting for that lock.
+        using (node.EnterAllGates())
         {
-            if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
-            // Prevent appends between snapshot creation and WAL truncation.
-            NodePersistence.Save(node, snapshotPath);
-            AppendCheckpoint();
-            Truncate();
+            lock (_lock)
+            {
+                if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
+                // The node state cannot change, and no WAL append can interleave,
+                // between the snapshot and truncation.
+                NodePersistence.Save(node, snapshotPath);
+                AppendCheckpoint();
+                Truncate();
+            }
         }
     }
 
