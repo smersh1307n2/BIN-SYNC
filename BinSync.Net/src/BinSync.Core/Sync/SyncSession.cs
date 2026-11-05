@@ -30,7 +30,7 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
-        try { return new SyncSession(transport, await InitiateAsync(local, transport, caps, ct).ConfigureAwait(false), ownsTransport); }
+        try { EnsureTransportCapabilities(transport); return new SyncSession(transport, await InitiateAsync(local, transport, caps, ct).ConfigureAwait(false), ownsTransport); }
         catch { if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
@@ -40,7 +40,7 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
-        try { return new SyncSession(transport, await AcceptHandshakeAsync(local, transport, caps, ct).ConfigureAwait(false), ownsTransport); }
+        try { EnsureTransportCapabilities(transport); return new SyncSession(transport, await AcceptHandshakeAsync(local, transport, caps, ct).ConfigureAwait(false), ownsTransport); }
         catch { if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false); throw; }
     }
 
@@ -94,6 +94,16 @@ public partial class SyncSession : IAsyncDisposable
     public virtual async ValueTask DisposeAsync()
     {
         if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
+    }
+
+    private static void EnsureTransportCapabilities(ISyncTransport transport)
+    {
+        const SyncTransportCapabilities required =
+            SyncTransportCapabilities.ReliableDelivery | SyncTransportCapabilities.OrderedDelivery;
+        if ((transport.Capabilities & required) != required)
+            throw new ArgumentException(
+                "BIN-SYNC sessions require reliable, ordered packet delivery. Wrap datagram transports in a reliable ordered adapter.",
+                nameof(transport));
     }
 
     internal static async Task<HelloPayload> InitiateAsync(Node local, ISyncTransport transport,

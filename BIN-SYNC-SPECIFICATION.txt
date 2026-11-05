@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.2 FINAL
+# BIN-SYNC CORE v2.4.3 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.2 FINAL (bidirectional baseline confirmation and guarded cursor offsets)  
+**Версия:** 2.4.3 FINAL (transport-independent session API and explicit delivery guarantees)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -90,34 +90,41 @@ BIN-SYNC CORE — компактный бинарный протокол для 
 
 ## 3.1. Принцип
 
-Движок синхронизации полностью отвязан от транспорта. Он принимает и отдаёт сырые байты.
+Протокольная сессия не открывает сокеты и не зависит от конкретного транспорта. `SyncSession` работает поверх `ISyncTransport`, который передаёт целые BIN-SYNC frames. TCP/TLS является одной из реализаций, а не частью общего протокольного слоя.
 
+Разделение реализации .NET:
+- `Sync/` — `SyncSession` и операции протокола (HELLO, batch/ACK, reconciliation, snapshot, IBLT, membership, schema, key rotation, fragmentation).
+- `Transport/` — транспортные контракты и адаптеры.
+- `Transport/Tcp/` — TCP listener, TLS handshake и совместимый `TcpSyncSession`.
+- `Transport/Streams/` — адаптер `Stream` для TCP/TLS и других двунаправленных потоков.
+- `Transport/InMemory/` — in-memory канал для тестов и embedded-host сценариев.
+
+## 3.2. Контракт транспорта
+
+`ISyncTransport` передаёт один полный пакет за вызов `SendAsync` и возвращает один полный пакет за `ReceiveAsync`. Частичные кадры, скрытая потеря, дублирование и переупорядочивание не допускаются, пока канал открыт. `MaxPacketSize` — предел полного пакета вместе с заголовком BIN-SYNC.
+
+`SyncTransportCapabilities` явно объявляет гарантии доставки. `SyncSession.ConnectAsync` и `SyncSession.AcceptAsync` требуют одновременно `ReliableDelivery` и `OrderedDelivery`. Это необходимо, поскольку handshake и reconciliation обмениваются ожидаемыми последовательностями управляющих кадров.
+
+```csharp
+var (left, right) = PipeTransport.CreatePair();
+var acceptTask = SyncSession.AcceptAsync(remoteNode, right);
+var connectTask = SyncSession.ConnectAsync(localNode, left);
+await using var acceptor = await acceptTask;
+await using var initiator = await connectTask;
 ```
-Реплика не знает о сокетах, HTTP, BLE или файлах.
-Реплика знает только: дать байты → получить байты.
-```
 
-## 3.2. Интерфейс транспорта
+Пользовательский транспорт реализует `ISyncTransport`, объявляет свои гарантии и передаёт полные frames. `IPeerAwareSyncTransport` — необязательное расширение для записи peer NodeId после HELLO.
 
-```typescript
-interface SyncTransport {
-    send(peerId: NodeId, packet: Uint8Array): Promise<void>
-    onReceive(handler: (fromPeerId: NodeId, packet: Uint8Array) => void): void
-    supportsStreaming?: boolean
-    maxPacketSize?: number
-}
-```
+## 3.3. Требования к каналам
 
-## 3.3. Поддерживаемые каналы
-
-| Канал | Использование |
-|---|---|
-| TCP / TLS | Клиент-сервер, сервер-сервер |
-| WebSocket / WebRTC | Браузер, P2P |
-| BLE / Wi-Fi Direct | Локальный mesh, IoT |
-| MQTT / NATS / Kafka | Микросервисный бэкбон |
-| Файлы / USB / QR | Air-gapped, sneakernet |
-| UDP / QUIC | Быстрый мультиплексинг |
+| Канал | Поддержка | Требования |
+|---|---|---|
+| TCP / TLS | Нативно | `StreamSyncTransport`, reliable + ordered |
+| WebRTC DataChannel | Нативно при `ordered=true` и `maxRetransmits=null` | Reliable ordered messages |
+| UDP | Через адаптер | Повторная передача, дедупликация, упорядочивание, фрагментация по MTU и congestion control |
+| BLE / Wi-Fi Direct | Через адаптер | Надёжная упорядоченная доставка полных пакетов |
+| MQTT / NATS / Kafka | Через адаптер | Сохранение packet boundaries и порядка в пределах одной сессии |
+| Файлы / USB / QR | Отдельный import/export path | Не являются интерактивной `ISyncTransport`-сессией |
 
 ## 3.4. Самодостаточность кадров
 
@@ -2057,6 +2064,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 | **2.4.0** | **2026-11-05** | **Immutable Outbox sequence and per-peer/per-author cursor offsets; ACK and compaction coordinate conversion; node-state v4 with v3 reader compatibility; scenario 44.**
 | **2.4.1** | **2026-11-05** | **Snapshot preserves field tombstones and explicit lifecycle state; applies both through LWW merge; takes a consistent node snapshot under ordered gates; supports complete multi-chunk transfer and atomic publication after all chunks validate.**
 | **2.4.2** | **2026-11-05** | **AutoReconcile exchanges snapshot baselines in both directions; InitialSyncComplete is set only after the peer confirms receipt; peer-relative Outbox offset initialization fails closed with SNAPSHOT_REQUIRED until the baseline is complete.** |
+| **2.4.3** | **2026-11-05** | **Public transport-independent SyncSession; TCP/TLS moved to a dedicated adapter; explicit reliable/ordered transport capability contract; raw UDP requires a reliability adapter. No wire-format change.** |
 
 ---
 

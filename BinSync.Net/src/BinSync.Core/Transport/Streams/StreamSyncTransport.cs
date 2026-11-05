@@ -28,6 +28,8 @@ public sealed class StreamSyncTransport : IPeerAwareSyncTransport
     }
 
     /// <summary>Remote peer node id this state is tracked for.</summary>
+    public SyncTransportCapabilities Capabilities => SyncTransportCapabilities.ReliableDelivery | SyncTransportCapabilities.OrderedDelivery;
+
     public NodeId PeerNodeId
     {
         get => _peerNodeId;
