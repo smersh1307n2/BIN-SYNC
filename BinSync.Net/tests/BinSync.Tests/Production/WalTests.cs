@@ -107,6 +107,60 @@ public class WalTests
     }
 
     [Fact]
+    public void Wal_local_mutation_replay_restores_field_and_exact_outbox_identity()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-local-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "node.wal");
+        try
+        {
+            var source = Fix.MakeNode(134);
+            var rid = Fix.Rid(330);
+            var changeId = BatchId.From(Guid.NewGuid().ToByteArray());
+            var op = new OpFieldWrite
+            {
+                FieldId = 0x100, KeyEpoch = 0, Wall = 12345, Logical = 7,
+                Origin = 1, AuthorNodeId = source.NodeId, Value = new byte[] { 0x51, 0x52 }
+            };
+            var entry = new OutboxEntry
+            {
+                NamespaceId = 1, Seq = 1, ChangeId = changeId, RecordId = rid,
+                OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOp(op, fullAuthor: false),
+                AuthorNodeId = source.NodeId, CreatedAt = 12345,
+                CausalDeps = new List<BatchId> { BatchId.From(Guid.NewGuid().ToByteArray()) }
+            };
+
+            using (var wal = Wal.Open(path))
+                wal.AppendLocalMutation(entry, applyToStorage: true);
+
+            var recovered = Fix.MakeNode(134);
+            using (var wal = Wal.Open(path))
+            {
+                Assert.Equal(1, wal.Replay(recovered));
+                Assert.Equal(0, wal.Replay(recovered));
+            }
+
+            Assert.True(recovered.TryGetField(1, rid, 0x100, out var field));
+            Assert.Equal(new byte[] { 0x51, 0x52 }, field!.Value);
+            var restored = Assert.Single(recovered.Outbox[1]);
+            Assert.Equal(entry.Seq, restored.Seq);
+            Assert.Equal(entry.ChangeId, restored.ChangeId);
+            Assert.Equal(entry.RecordId, restored.RecordId);
+            Assert.Equal(entry.OpKind, restored.OpKind);
+            Assert.Equal(entry.Payload.ToArray(), restored.Payload.ToArray());
+            Assert.Equal(entry.AuthorNodeId, restored.AuthorNodeId);
+            Assert.Equal(entry.CreatedAt, restored.CreatedAt);
+            Assert.Equal(entry.CausalDeps, restored.CausalDeps);
+            Assert.Equal(1, recovered.OutboxSeqRef[(source.NodeId, 1)]);
+            Assert.True(recovered.Clock.LastWall >= 12345);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_v2_detects_payload_corruption_before_replay()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));

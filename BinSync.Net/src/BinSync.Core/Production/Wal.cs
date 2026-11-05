@@ -9,6 +9,7 @@ public enum WalRecordType : byte
 {
     FieldWrite = 0x01,
     Checkpoint = 0x02,
+    LocalMutation = 0x03,
 }
 
 /// <summary>
@@ -123,6 +124,32 @@ public sealed class Wal : IDisposable
         w.U32(hlc.Logical);
         w.B128(Codec.CanonicalB128(authorNodeId));
         return AppendRaw(w.Value());
+    }
+
+    /// <summary>
+    /// Append one complete local mutation, including its exact durable Outbox identity.
+    /// The caller publishes the corresponding in-memory state only after this returns.
+    /// </summary>
+    internal long AppendLocalMutation(OutboxEntry entry, bool applyToStorage)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var w = new Writer();
+        w.U8((byte)WalRecordType.LocalMutation);
+        w.U8(applyToStorage ? (byte)1 : (byte)0);
+        w.Varint((ulong)entry.NamespaceId);
+        w.U64((ulong)entry.Seq);
+        w.B128(entry.ChangeId);
+        w.B128(entry.RecordId);
+        w.U8(entry.OpKind);
+        w.Varint((ulong)entry.Payload.Length);
+        w.Raw(entry.Payload.Span);
+        w.B128(entry.AuthorNodeId);
+        w.U64((ulong)entry.CreatedAt);
+        w.Varint((ulong)entry.CausalDeps.Count);
+        foreach (var dep in entry.CausalDeps) w.B128(dep);
+        var payload = w.Value();
+        ValidateRecord(payload);
+        return AppendRaw(payload);
     }
 
     /// <summary>Append a checkpoint marker and return its sequence.</summary>
@@ -296,6 +323,25 @@ public sealed class Wal : IDisposable
             case WalRecordType.Checkpoint:
                 _ = r.U64();
                 break;
+            case WalRecordType.LocalMutation:
+                {
+                    var (applyToStorage, entry) = ReadLocalMutation(r);
+                    if (entry.Seq <= 0 || entry.ChangeId.IsZero || entry.AuthorNodeId.IsZero || entry.CreatedAt < 0)
+                        throw new InvalidDataException("Invalid WAL local-mutation metadata.");
+                    var decoded = Ops.DecodeOp(entry.Payload).Op;
+                    byte expectedKind = decoded switch
+                    {
+                        OpFieldWrite => OpsConst.TagFieldWrite,
+                        OpFieldTomb => OpsConst.TagFieldTomb,
+                        OpRecordTombstone => OpsConst.TagRecordTomb,
+                        _ => throw new InvalidDataException("Unsupported WAL local-mutation operation.")
+                    };
+                    if (entry.OpKind != expectedKind)
+                        throw new InvalidDataException("WAL local-mutation operation tag mismatch.");
+                    if (applyToStorage && decoded is null)
+                        throw new InvalidDataException("WAL local-mutation has no operation.");
+                    break;
+                }
             default:
                 throw new InvalidDataException($"Unknown WAL record type 0x{(byte)type:X2}.");
         }
@@ -324,9 +370,49 @@ public sealed class Wal : IDisposable
                 }
             case WalRecordType.Checkpoint:
                 return 0;
+            case WalRecordType.LocalMutation:
+                {
+                    var (applyToStorage, entry) = ReadLocalMutation(r);
+                    return node.ReplayLocalMutation(entry, applyToStorage) ? 1 : 0;
+                }
             default:
                 throw new InvalidDataException($"Unknown WAL record type 0x{(byte)type:X2}.");
         }
+    }
+
+    private static (bool ApplyToStorage, OutboxEntry Entry) ReadLocalMutation(Reader r)
+    {
+        byte applyFlag = r.U8();
+        if (applyFlag > 1) throw new InvalidDataException("Invalid WAL local-mutation flags.");
+        ulong ns = r.Varint();
+        ulong seq = r.U64();
+        var changeId = BatchId.From(r.B128());
+        var recordId = RecordId.From(r.B128());
+        byte opKind = r.U8();
+        ulong payloadLength = r.Varint();
+        if (ns > int.MaxValue || seq > long.MaxValue || payloadLength > int.MaxValue)
+            throw new InvalidDataException("WAL local-mutation field is out of range.");
+        var payload = r.Raw((int)payloadLength);
+        var author = NodeId.From(r.B128());
+        ulong createdAt = r.U64();
+        if (createdAt > long.MaxValue)
+            throw new InvalidDataException("WAL local-mutation creation time is out of range.");
+        ulong depCount = r.Varint();
+        if (depCount > 1_000_000)
+            throw new InvalidDataException("WAL local-mutation dependency count is out of range.");
+        var entry = new OutboxEntry
+        {
+            NamespaceId = (int)ns,
+            Seq = (long)seq,
+            ChangeId = changeId,
+            RecordId = recordId,
+            OpKind = opKind,
+            Payload = payload,
+            AuthorNodeId = author,
+            CreatedAt = (long)createdAt,
+        };
+        for (ulong i = 0; i < depCount; i++) entry.CausalDeps.Add(BatchId.From(r.B128()));
+        return (applyFlag != 0, entry);
     }
 
     private static void WriteHeader(FileStream fs)

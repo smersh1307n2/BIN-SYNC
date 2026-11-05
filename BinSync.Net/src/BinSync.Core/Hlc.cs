@@ -96,6 +96,23 @@ public class HlcClock
         }
     }
 
+    /// <summary>Advance the clock to at least a timestamp restored from durable local history.</summary>
+    internal void Observe(Hlc timestamp)
+    {
+        lock (_tickGate)
+        {
+            if (timestamp.Wall > LastWall)
+            {
+                LastWall = timestamp.Wall;
+                LastLogical = timestamp.Logical;
+            }
+            else if (timestamp.Wall == LastWall && timestamp.Logical > LastLogical)
+            {
+                LastLogical = timestamp.Logical;
+            }
+        }
+    }
+
     /// <summary>Merge a remote timestamp into the local clock and return the result.</summary>
     public Hlc ReceiveTick(Hlc remote)
     {
