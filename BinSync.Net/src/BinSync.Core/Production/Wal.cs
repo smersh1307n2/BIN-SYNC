@@ -63,13 +63,25 @@ public sealed class Wal : IDisposable
                 if (ver != Version)
                     throw new InvalidDataException($"Unsupported WAL version {ver}.");
             }
-            fs.Position = 6;
-            while (fs.Position + 5 <= fs.Length)
+            long validEnd = 6;
+            while (validEnd + 4 <= fs.Length)
             {
+                fs.Position = validEnd;
                 int len = ReadBEInt32(fs);
-                if (len < 1 || fs.Position + len > fs.Length) break;
-                fs.Position += len;
+                if (len < 1)
+                    throw new InvalidDataException("Invalid WAL record length.");
+                if (fs.Position + len > fs.Length)
+                    break; // Torn final record: discard it before accepting new appends.
+                validEnd = fs.Position + len;
                 seq++;
+            }
+
+            // Also discard a torn length prefix (< 4 bytes) at EOF. Appending after
+            // an incomplete tail would make every later record unreachable to replay.
+            if (validEnd != fs.Length)
+            {
+                fs.SetLength(validEnd);
+                fs.Flush(flushToDisk: true);
             }
             fs.Position = fs.Length;
         }

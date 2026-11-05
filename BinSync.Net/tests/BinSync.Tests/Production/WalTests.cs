@@ -39,6 +39,55 @@ public class WalTests
     }
 
     [Fact]
+    public void Wal_open_truncates_torn_tail_before_accepting_new_appends()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var walPath = Path.Combine(dir, "node.wal");
+            var first = Fix.MakeNode(125);
+            var second = Fix.MakeNode(126);
+            var firstRid = Fix.Rid(304);
+            var secondRid = Fix.Rid(305);
+
+            using (var wal = Wal.Open(walPath))
+            {
+                wal.AppendFieldWrite(1, firstRid, 0x100, new byte[] { 1 },
+                    new Hlc(100, 0), first.NodeId);
+            }
+
+            // Simulate a process/power failure after the length prefix and only
+            // part of the final record payload reached the file.
+            using (var fs = new FileStream(walPath, FileMode.Append, FileAccess.Write, FileShare.None))
+            {
+                Span<byte> length = stackalloc byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, 64);
+                fs.Write(length);
+                fs.Write(new byte[] { 0x01, 0x02, 0x03 });
+                fs.Flush(flushToDisk: true);
+            }
+
+            using (var wal = Wal.Open(walPath))
+            {
+                Assert.Equal(1, wal.Sequence);
+                wal.AppendFieldWrite(1, secondRid, 0x100, new byte[] { 2 },
+                    new Hlc(200, 0), second.NodeId);
+                Assert.Equal(2, wal.Sequence);
+            }
+
+            var recovered = Fix.MakeNode(127);
+            Assert.Equal(2, Wal.ReplayFile(walPath, recovered));
+            Assert.True(recovered.TryGetRecord(1, firstRid, out _));
+            Assert.True(recovered.TryGetRecord(1, secondRid, out _));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_checkpoint_truncates_after_snapshot()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
