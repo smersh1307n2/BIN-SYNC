@@ -74,4 +74,55 @@ public sealed class AliasAtomicityTests
         Assert.Null(errorA);
         Assert.Null(errorB);
     }
+
+    [Fact]
+    public void Delta_creation_uses_nonblocking_alias_negotiation_under_opposite_node_gates()
+    {
+        using var a = Fix.MakeNode(85);
+        using var b = Fix.MakeNode(86);
+        Transport.MakeSession(a, b);
+
+        Assert.True(a.WriteField(1, Fix.Rid(1), 0x100, [1]));
+        Assert.True(b.WriteField(1, Fix.Rid(2), 0x100, [2]));
+        a.Outbox[1][^1].AuthorNodeId = Fix.Nid(87);
+        b.Outbox[1][^1].AuthorNodeId = Fix.Nid(88);
+
+        using var rendezvous = new Barrier(2);
+        Exception? errorA = null;
+        Exception? errorB = null;
+
+        var threadA = new Thread(() =>
+        {
+            try
+            {
+                using var gates = a.EnterAllGates();
+                if (!rendezvous.SignalAndWait(TimeSpan.FromSeconds(3)))
+                    throw new TimeoutException("A rendezvous timed out");
+                _ = a.CreateDeltaBatch(b.NodeId, 1);
+            }
+            catch (Exception ex) { errorA = ex; }
+        }) { IsBackground = true };
+
+        var threadB = new Thread(() =>
+        {
+            try
+            {
+                using var gates = b.EnterAllGates();
+                if (!rendezvous.SignalAndWait(TimeSpan.FromSeconds(3)))
+                    throw new TimeoutException("B rendezvous timed out");
+                _ = b.CreateDeltaBatch(a.NodeId, 1);
+            }
+            catch (Exception ex) { errorB = ex; }
+        }) { IsBackground = true };
+
+        threadA.Start();
+        threadB.Start();
+
+        Assert.True(threadA.Join(TimeSpan.FromSeconds(3)), "A→B delta creation deadlocked");
+        Assert.True(threadB.Join(TimeSpan.FromSeconds(3)), "B→A delta creation deadlocked");
+        Assert.IsType<SyncException>(errorA);
+        Assert.IsType<SyncException>(errorB);
+        Assert.Equal("UNKNOWN_ALIAS", ((SyncException)errorA!).CodeName);
+        Assert.Equal("UNKNOWN_ALIAS", ((SyncException)errorB!).CodeName);
+    }
 }
