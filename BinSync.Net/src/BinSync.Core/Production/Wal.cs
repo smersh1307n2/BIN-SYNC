@@ -191,9 +191,15 @@ public sealed class Wal : IDisposable
     /// <summary>Checkpoint node state to a snapshot file and truncate the WAL.</summary>
     public void Checkpoint(Node node, string snapshotPath)
     {
-        NodePersistence.Save(node, snapshotPath);
-        AppendCheckpoint();
-        Truncate();
+        ArgumentNullException.ThrowIfNull(node);
+        lock (_lock)
+        {
+            if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
+            // Prevent appends between snapshot creation and WAL truncation.
+            NodePersistence.Save(node, snapshotPath);
+            AppendCheckpoint();
+            Truncate();
+        }
     }
 
     private static int ApplyRecord(Node node, byte[] payload)
