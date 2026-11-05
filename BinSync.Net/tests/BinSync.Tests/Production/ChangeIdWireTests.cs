@@ -143,6 +143,20 @@ public class ChangeIdWireTests
         Assert.Throws<SyncException>(() => target.ApplySnapshot(zeroIdBatch, source.NodeId.ToArray()));
         Assert.Empty(target.Storage);
 
+        var tamperedEntries = snapshot.Entries.Select((e, i) => new OutboxEntry
+        {
+            NamespaceId = e.NamespaceId, Seq = e.Seq,
+            ChangeId = i == 0 ? BatchId.From(Id(0x77)) : e.ChangeId,
+            RecordId = e.RecordId, OpKind = e.OpKind, Payload = e.Payload,
+            AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
+        }).ToList();
+        var tamperedBatch = new Batch(snapshot.NamespaceId, snapshot.SchemaId, snapshot.SchemaVersion,
+            snapshot.MergePolicy, snapshot.Flags, snapshot.IssuerNodeId, snapshot.IssuerEpoch,
+            snapshot.CursorStart, snapshot.CursorEnd, snapshot.BatchId, snapshot.PrevBatchDigest,
+            snapshot.RecordsRoot, snapshot.BatchDigest, tamperedEntries);
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(tamperedBatch, source.NodeId.ToArray()));
+        Assert.Empty(target.Storage);
+
         var duplicateEntries = snapshot.Entries.Select(e => new OutboxEntry
         {
             NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = snapshot.Entries[0].ChangeId,

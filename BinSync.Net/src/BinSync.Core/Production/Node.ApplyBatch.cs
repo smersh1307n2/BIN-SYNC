@@ -491,6 +491,14 @@ public sealed partial class Node
             if (entry.ChangeId.IsZero || !snapshotChangeIds.Add(entry.ChangeId))
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
 
+        var snapshotRoot = ComputeRecordsRoot(batch.Entries);
+        if (batch.RecordsRoot != snapshotRoot)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+        var snapshotDigest = ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,
+            batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, batch.PrevBatchDigest);
+        if (batch.BatchDigest != snapshotDigest)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+
         int applied = 0;
         foreach (var e in batch.Entries)
         {
