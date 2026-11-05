@@ -18,6 +18,8 @@ Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md
 **Public** = types and members in this document and in XML docs shipped with the package.  
 Everything `internal`, under `*.Tests`, `bench/`, and unmarked helpers is **not** a compatibility contract.
 
+**Breaking API note:** This branch removes `TcpSyncSession` and changes the TCP listener's session return type. The next published NuGet package must use the next major version (`3.0.0`) under the policy above.
+
 Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them is configuration, not a silent default change.
 
 ---
