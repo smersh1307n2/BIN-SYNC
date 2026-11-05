@@ -47,10 +47,12 @@ public sealed partial class Node
             AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
-            // ACK must name the author stream (Errata E-4). Prefer the stream we learned
-            // on the first accept; fall back to the batch's durable author.
-            if (LastStreamAuthor.TryGetValue((senderPeer, batch.NamespaceId), out var priorAuthor))
-                result.DurableAuthor = priorAuthor;
+            // ACK must name the author stream of THIS batch, not merely the last
+            // stream seen from this peer. A peer may interleave several authors.
+            if (InboxAuthors.TryGetValue(key, out var acceptedAuthor))
+                result.DurableAuthor = acceptedAuthor;
+            else if (LastStreamAuthor.TryGetValue((senderPeer, batch.NamespaceId), out var priorAuthor))
+                result.DurableAuthor = priorAuthor; // defensive fallback for pre-v3 in-memory state
             else
                 result.DurableAuthor = batch.DurableAuthor;
             return result;
@@ -255,6 +257,7 @@ public sealed partial class Node
             PeerStates[pkey] = ps = new PeerState(batch.IssuerNodeId, batch.NamespaceId);
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
         Inbox.Add(key);
+        InboxAuthors[key] = streamAuthor;
         ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
         LastBatchDigest[chain] = batch.BatchDigest;

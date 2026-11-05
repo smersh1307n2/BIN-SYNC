@@ -130,6 +130,8 @@ public sealed partial class Node : IDisposable
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
     /// <summary>Set of applied batch keys for idempotent replay detection.</summary>
     internal HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox { get; } = new();
+    /// <summary>Durable author stream for each accepted batch, retained for exact duplicate ACKs.</summary>
+    internal Dictionary<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId), NodeId> InboxAuthors { get; } = new();
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
     /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
     internal Dictionary<(NodeId Issuer, int Ns, int Epoch), Digest16> LastBatchDigest { get; } = new();
@@ -229,6 +231,7 @@ public sealed partial class Node : IDisposable
             _storage.Clear();
             Outbox.Clear();
             Inbox.Clear();
+            InboxAuthors.Clear();
             PeerStates.Clear();
             AliasToNode.Clear();
             NodeToAlias.Clear();
