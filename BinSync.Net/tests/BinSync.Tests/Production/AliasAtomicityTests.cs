@@ -53,9 +53,9 @@ public sealed class AliasAtomicityTests
 
         Assert.False(local.AliasToNode[peer].ContainsKey(1));
         Assert.False(local.NodeToAlias[peer].ContainsKey((freshAuthor, 7)));
-        Assert.Null(local.KnownAuthorEpoch(freshAuthor));
+        Assert.False(local.DurableAuthors.ContainsKey(freshAuthor));
         Assert.Equal(conflictingAuthor, local.ResolveAlias(peer, 9));
-        Assert.Equal(4, local.KnownAuthorEpoch(conflictingAuthor));
+        Assert.Equal(4, local.DurableAuthors[conflictingAuthor]);
     }
 
     [Fact]
