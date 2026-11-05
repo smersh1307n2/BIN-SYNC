@@ -187,11 +187,19 @@ public partial class SyncSession
         }
 
         int handled = 0;
+        var remainingPrefixes = diverged
+            .Select(Convert.ToHexString)
+            .ToHashSet(StringComparer.Ordinal);
         bool receivedTerminator = false;
-        // Use long for the loop counter so maxPrefixes == int.MaxValue cannot overflow.
+
+        // At most maxPrefixes requests plus one terminator are accepted. Use long
+        // for the counter so maxPrefixes == int.MaxValue cannot overflow.
         for (long i = 0; i <= maxPrefixes; i++)
         {
             var need = await ReceiveNeedRangeAsync(ct).ConfigureAwait(false);
+            if (need.NamespaceId != namespaceId)
+                throw new FormatException("NEED_RANGE namespace does not match STATE_DIGEST");
+
             if (need.Prefix.Length == 0)
             {
                 // The initiator sends this terminator only after every requested
@@ -201,6 +209,17 @@ public partial class SyncSession
                 receivedTerminator = true;
                 break;
             }
+
+            if (handled >= maxPrefixes)
+                throw new FormatException("NEED_RANGE exceeds maxPrefixes");
+
+            // A peer must request each divergent prefix exactly once. Merely
+            // matching the request count is insufficient: duplicates could omit
+            // another divergent bucket and falsely establish the baseline.
+            var prefixKey = Convert.ToHexString(need.Prefix);
+            if (!remainingPrefixes.Remove(prefixKey))
+                throw new FormatException("NEED_RANGE prefix is unexpected or duplicated");
+
             await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
             handled++;
         }
@@ -208,6 +227,7 @@ public partial class SyncSession
         // Do not accept an early terminator as a complete baseline: every divergent
         // prefix in our digest must have been requested and fulfilled by the peer.
         bool complete = receivedTerminator &&
+            remainingPrefixes.Count == 0 &&
             handled == diverged.Count &&
             diverged.Count <= maxPrefixes;
         return (handled, 0, complete);
