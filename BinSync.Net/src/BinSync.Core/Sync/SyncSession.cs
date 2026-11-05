@@ -21,6 +21,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
     private bool _rawReceiveActive;
+    private bool _exclusiveReceiveActive;
     private bool _receiveCompleted;
     private Exception? _receiveFailure;
     /// <summary>Remote peer identity established by HELLO.</summary>
@@ -241,8 +242,8 @@ public partial class SyncSession : IAsyncDisposable
         Channel<byte[]> channel;
         lock (_receiveSync)
         {
-            if (_rawReceiveActive)
-                throw new InvalidOperationException("Raw receive mode is already active on this session");
+            if (_rawReceiveActive || _exclusiveReceiveActive)
+                throw new InvalidOperationException("An exclusive receive operation is already active on this session");
             channel = _receiveChannels.GetOrAdd(expectedType, static _ =>
                 Channel.CreateBounded<byte[]>(new BoundedChannelOptions(64)
                 {
@@ -308,15 +309,23 @@ public partial class SyncSession : IAsyncDisposable
         {
             lock (_receiveSync)
             {
-                if (_receivePump is not null || _rawReceiveActive)
+                if (_receivePump is not null || _rawReceiveActive || _exclusiveReceiveActive)
                     throw new InvalidOperationException("Exclusive protocol reads cannot overlap with batch multiplexing or raw receive mode");
+                _exclusiveReceiveActive = true;
             }
-            var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                ?? throw new IOException("Peer closed the session");
-            var (frame, consumed) = FrameCodec.ParseFrame(raw);
-            if (consumed != raw.Length || frame.FrameType != expectedType)
-                throw new FrameException("FRAME_REJECTED");
-            return raw;
+            try
+            {
+                var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
+                    ?? throw new IOException("Peer closed the session");
+                var (frame, consumed) = FrameCodec.ParseFrame(raw);
+                if (consumed != raw.Length || frame.FrameType != expectedType)
+                    throw new FrameException("FRAME_REJECTED");
+                return raw;
+            }
+            finally
+            {
+                lock (_receiveSync) _exclusiveReceiveActive = false;
+            }
         }
         finally { _exclusiveReceiveGate.Release(); }
     }
@@ -325,8 +334,8 @@ public partial class SyncSession : IAsyncDisposable
     {
         lock (_receiveSync)
         {
-            if (_receivePump is not null)
-                throw new InvalidOperationException("Raw receive cannot be mixed with batch multiplexing");
+            if (_receivePump is not null || _exclusiveReceiveActive)
+                throw new InvalidOperationException("Raw receive cannot be mixed with another receive mode");
             _rawReceiveActive = true;
         }
     }

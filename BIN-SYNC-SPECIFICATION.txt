@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.9 FINAL
+# BIN-SYNC CORE v2.4.10 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.9 FINAL (symmetric peer-session establishment)  
+**Версия:** 2.4.10 FINAL (full-duplex batch receive dispatch)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -116,6 +116,8 @@ await using var rightSession = await rightTask;
 ```
 
 Пользовательский транспорт реализует `ISyncTransport`, объявляет свои гарантии и передаёт полные frames. `IPeerAwareSyncTransport` — необязательное расширение для записи peer NodeId после HELLO.
+
+Для full-duplex обмена `DELTA_BATCH`/`ACK` сессия использует один reader pump, который распределяет полные кадры только типов `0x09` и `0x0B` по отдельным очередям. `PushBatchAsync` сериализует транзакцию send→ACK; `ReceiveBatchAsync` сериализует применение входящих batch и отправку ACK. Это позволяет одновременно отправлять и принимать batch на одном `SyncSession`, не позволяя операциям перехватывать чужие кадры. Остальные протокольные receive-операции используют эксклюзивное чтение и не могут выполняться одновременно с batch dispatcher или raw fragment reassembly; попытка смешать режимы завершается локальным `InvalidOperationException`. Неизвестный/неожиданный тип кадра в batch dispatcher завершает receive pump с `FRAME_REJECTED`.
 
 Для каждой пары NodeId допускается ровно одна активная протокольная сессия. Оба конца вызывают симметричный Connect/Accept-neutral метод EstablishAsync: каждый отправляет HELLO и получает HELLO другой стороны. Сторона с меньшим NodeId становится логическим инициатором и отправляет ALIAS_MAP после HELLO_ACK; сторона с большим NodeId отвечает HELLO_ACK и согласованной ALIAS_MAP. Сравниваются 16 байт NodeId в wire-порядке. Направление открытия TCP/WebRTC/другого транспортного канала не определяет протокольную роль.
 

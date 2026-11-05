@@ -4,7 +4,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 
 | Artifact | Path |
 |---|---|
-| Spec (v2.4.9) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
+| Spec (v2.4.10) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
 | Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
 | Public API surface (2.2) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
