@@ -152,8 +152,8 @@ public class ReconcileExchangeTests
         await Task.WhenAll(autoA, autoB, pushA, receiveA, pushB, receiveB)
             .WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.True(pushA.Result);
-        Assert.True(pushB.Result);
+        Assert.True(await pushA);
+        Assert.True(await pushB);
         Assert.True(b.TryGetRecord(2, Fix.Rid(811), out _));
         Assert.True(a.TryGetRecord(2, Fix.Rid(821), out _));
         Assert.True(a.TryGetRecord(1, Fix.Rid(820), out _));
