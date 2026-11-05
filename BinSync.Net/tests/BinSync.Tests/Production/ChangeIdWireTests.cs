@@ -74,4 +74,50 @@ public class ChangeIdWireTests
         Assert.Equal(entry.OpKind, decoded[0].Kind);
         Assert.Equal(entry.Payload.ToArray(), decoded[0].Payload);
     }
+    [Fact]
+    public void Change_id_survives_A_to_B_to_C_to_A_and_duplicate_arrival_from_second_peer()
+    {
+        var a = Fix.MakeNode(41);
+        var b = Fix.MakeNode(42);
+        var c = Fix.MakeNode(43);
+
+        // Establish all three sessions before the write so A retains its outbox
+        // entry until both B and C have acknowledged it.
+        Transport.MakeSession(a, b);
+        Transport.MakeSession(b, c);
+        Transport.MakeSession(a, c);
+
+        Assert.True(a.WriteField(1, Fix.Rid(0x41), 0x100, new byte[] { 0xCA, 0xFE }));
+        var originalChangeId = Assert.Single(a.Outbox[1]).ChangeId;
+        Assert.False(originalChangeId.IsZero);
+
+        // A -> B: first network hop.
+        Assert.NotNull(Transport.DeliverBatch(a, b, 1));
+        var bRelay = Assert.Single(b.Outbox[1]);
+        Assert.Equal(originalChangeId, bRelay.ChangeId);
+
+        // B -> C: second hop. The issuer changes to B, but ChangeId must not.
+        Assert.NotNull(Transport.DeliverBatch(b, c, 1));
+        var cRelay = Assert.Single(c.Outbox[1]);
+        Assert.Equal(originalChangeId, cRelay.ChangeId);
+
+        // A -> C: the same logical mutation reaches C through a second peer.
+        // It must be applied idempotently and must not be queued for relay twice.
+        Assert.NotNull(Transport.DeliverBatch(a, c, 1));
+        Assert.Single(c.Outbox[1]);
+        Assert.Equal(originalChangeId, c.Outbox[1][0].ChangeId);
+        Assert.Contains((a.NodeId, 1, originalChangeId), c.SeenChanges);
+
+        // C -> A closes the mesh loop. A already owns this ChangeId, so it must
+        // not create a second outbox item or invent a replacement identity.
+        Assert.NotNull(Transport.DeliverBatch(c, a, 1));
+        Assert.Single(a.Outbox[1]);
+        Assert.Equal(originalChangeId, a.Outbox[1][0].ChangeId);
+        Assert.Contains((c.NodeId, 1, originalChangeId), a.SeenChanges);
+
+        Assert.True(a.Storage[1].ContainsKey(Fix.Rid(0x41)));
+        Assert.True(b.Storage[1].ContainsKey(Fix.Rid(0x41)));
+        Assert.True(c.Storage[1].ContainsKey(Fix.Rid(0x41)));
+    }
+
 }
