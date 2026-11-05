@@ -27,6 +27,9 @@ public sealed class Wal : IDisposable
     private FileStream? _fs;
     private readonly object _lock = new();
     private long _sequence;
+    // An I/O error during append/truncate has an indeterminate durability outcome.
+    // The instance must be reopened and replayed before it can accept more work.
+    private bool _faulted;
 
     /// <summary>Filesystem path of the write-ahead log.</summary>
     public string Path => _path;
@@ -148,14 +151,26 @@ public sealed class Wal : IDisposable
         lock (_lock)
         {
             if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
-            Span<byte> lenBuf = stackalloc byte[4];
-            WriteBEInt32(lenBuf, payload.Length);
-            _fs.Write(lenBuf);
-            _fs.Write(payload);
-            _fs.Write(ComputeRecordDigest(payload));
-            _fs.Flush(flushToDisk: true);
-            _sequence++;
-            return _sequence;
+            if (_faulted)
+                throw new InvalidOperationException("WAL is faulted after an earlier I/O error; reopen and replay it before further use.");
+            try
+            {
+                Span<byte> lenBuf = stackalloc byte[4];
+                WriteBEInt32(lenBuf, payload.Length);
+                _fs.Write(lenBuf);
+                _fs.Write(payload);
+                _fs.Write(ComputeRecordDigest(payload));
+                _fs.Flush(flushToDisk: true);
+                _sequence++;
+                return _sequence;
+            }
+            catch
+            {
+                // Flush failures are ambiguous: the complete record may already be
+                // durable. Never append another record behind an uncertain outcome.
+                _faulted = true;
+                throw;
+            }
         }
     }
 
@@ -168,6 +183,8 @@ public sealed class Wal : IDisposable
         lock (_lock)
         {
             if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
+            if (_faulted)
+                throw new InvalidOperationException("WAL is faulted after an earlier I/O error; reopen it before replay.");
             long end = _fs.Length;
             long pos = 6;
             var records = new List<byte[]>();
@@ -252,10 +269,20 @@ public sealed class Wal : IDisposable
         lock (_lock)
         {
             if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
-            _fs.SetLength(0);
-            WriteHeader(_fs);
-            _fs.Flush(flushToDisk: true);
-            _sequence = 0;
+            if (_faulted)
+                throw new InvalidOperationException("WAL is faulted after an earlier I/O error; reopen and replay it before truncating.");
+            try
+            {
+                _fs.SetLength(0);
+                WriteHeader(_fs);
+                _fs.Flush(flushToDisk: true);
+                _sequence = 0;
+            }
+            catch
+            {
+                _faulted = true;
+                throw;
+            }
         }
     }
 
@@ -271,6 +298,8 @@ public sealed class Wal : IDisposable
             lock (_lock)
             {
                 if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
+                if (_faulted)
+                    throw new InvalidOperationException("WAL is faulted after an earlier I/O error; reopen it before checkpointing.");
                 // The node state cannot change, and no WAL append can interleave,
                 // between the snapshot and truncation.
                 NodePersistence.Save(node, snapshotPath);
