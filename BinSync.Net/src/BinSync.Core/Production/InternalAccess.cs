@@ -47,8 +47,36 @@ public sealed partial class Node
             var store = NsInternal(namespaceId);
             if (!store.TryGetValue(recordId, out var rec))
                 store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            if (fieldId == Model.LifecycleFieldId)
+                return Merge.ApplyLifecycle(rec, hlc, authorNodeId, value.Length > 0 ? value[0] : Model.Alive);
             var fs = new FieldState(value, hlc, authorNodeId, keyEpoch);
             return Merge.ApplyFieldWrite(rec, fieldId, fs);
+        }
+    }
+
+    /// <summary>Apply a remote field tombstone from a snapshot without creating an Outbox entry.</summary>
+    public bool ApplyRemoteFieldTombstone(int namespaceId, RecordId recordId, ushort fieldId,
+        Hlc hlc, NodeId authorNodeId, ushort keyEpoch = 0)
+    {
+        lock (_lockStorage)
+        {
+            var store = NsInternal(namespaceId);
+            if (!store.TryGetValue(recordId, out var rec))
+                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            return Merge.ApplyFieldTomb(rec, fieldId, new FieldState(Array.Empty<byte>(), hlc, authorNodeId, keyEpoch));
+        }
+    }
+
+    /// <summary>Apply a remote record lifecycle from a snapshot without creating an Outbox entry.</summary>
+    public bool ApplyRemoteLifecycle(int namespaceId, RecordId recordId, Hlc hlc,
+        NodeId authorNodeId, byte lifecycleValue)
+    {
+        lock (_lockStorage)
+        {
+            var store = NsInternal(namespaceId);
+            if (!store.TryGetValue(recordId, out var rec))
+                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            return Merge.ApplyLifecycle(rec, hlc, authorNodeId, lifecycleValue);
         }
     }
 }

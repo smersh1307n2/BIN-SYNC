@@ -19,6 +19,7 @@ public class SnapshotTests
         Assert.Equal(snap.Records.Count, back.Records.Count);
         Assert.True(Fix.Eq(rid, back.Records[0].RecordId));
         Assert.Equal(new byte[] { 3, 4 }, back.Records[0].Fields[0].Value);
+        Assert.Equal(snap.Records[0].HasLifecycle, back.Records[0].HasLifecycle);
     }
 
     [Fact]
@@ -32,6 +33,35 @@ public class SnapshotTests
         int n = Reconcile.ApplySnapshot(b, snap);
         Assert.True(n >= 1);
         Assert.Equal(new byte[] { 9 }, b.Storage[1][rid].State[0x100].Value);
+    }
+
+    [Fact]
+    public void Snapshot_roundtrip_and_apply_preserve_field_and_record_tombstones()
+    {
+        var source = Fix.MakeNode(58);
+        var target = Fix.MakeNode(59);
+        var rid = Fix.Rid(74);
+        source.WriteField(1, rid, 0x100, new byte[] { 1 });
+        source.TombField(1, rid, 0x100);
+        source.DeleteRecord(1, rid);
+
+        var encoded = Reconcile.EncodeSnapshotChunk(Reconcile.BuildSnapshot(source, 1));
+        var decoded = Reconcile.DecodeSnapshotChunk(encoded);
+        Assert.Contains(decoded.Records[0].Fields, f => f.IsTombstone && f.FieldId == 0x100);
+        Assert.True(decoded.Records[0].HasLifecycle);
+        Reconcile.ApplySnapshot(target, decoded);
+
+        Assert.True(target.Storage[1][rid].HasFieldTombs);
+        Assert.Equal(Model.Dead, target.Storage[1][rid].LifecycleValue);
+    }
+
+    [Fact]
+    public void Snapshot_fails_closed_instead_of_silently_truncating_records()
+    {
+        var source = Fix.MakeNode(60);
+        for (int i = 0; i < 3; i++)
+            source.WriteField(1, Fix.Rid(100 + i), 0x100, new byte[] { (byte)i });
+        Assert.Throws<InvalidOperationException>(() => Reconcile.BuildSnapshot(source, 1, maxRecords: 2));
     }
 
     [Fact]

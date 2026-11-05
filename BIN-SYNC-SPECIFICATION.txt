@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.0 FINAL
+# BIN-SYNC CORE v2.4.1 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.0 FINAL (peer-relative stream cursors and immutable Outbox sequence)  
+**Версия:** 2.4.1 FINAL (complete snapshot record state and fail-closed bounds)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -809,6 +809,10 @@ batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
 ```
 
 ## 12.18. SNAPSHOT_CHUNK
+
+`SNAPSHOT_CHUNK` передаёт полный LWW-срез записи: `recordId`, список полей и явное состояние lifecycle. Каждая строка поля содержит `fieldId`, `isTombstone` (u8: 0 — значение, 1 — tombstone), HLC, `authorNodeId`, `keyEpoch` и значение (пустое для tombstone). После списка полей передаётся `hasLifecycle` (u8: 0/1), `lifecycleValue`, lifecycle HLC и `lifecycleAuthor`. Поля-tombstone и lifecycle применяются через те же LWW merge primitives, что и DELTA_BATCH, без создания локальных Outbox entries. Неинициализированный lifecycle (`hasLifecycle=0`) не применяется.
+
+`ChunkIndex` должен быть меньше `ChunkCount`; нулевой `ChunkCount` запрещён. До реализации многочанкового transfer отправитель обязан завершить операцию ошибкой `SNAPSHOT_REQUIRES_CHUNKING`, если выборка превышает лимит одного чанка. Запрещено выдавать усечённый snapshot как полный. Построение чанка выполняется под общей блокировкой Storage → Outbox → Meta.
 
 Последний чанк содержит `SnapshotTail` (80 байт): `snapshotDigest`, `snapshotStateDigest`, `outboxCheckpointDigest`.
 
@@ -2050,7 +2054,8 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 | **2.3.6** | **2026-09-09** | **Укрепление реализации: (1) порядок проверок в применении батча — идемпотентность до проверки дайджеста предыдущего батча (инвариант П7); (2) трансляция псевдонима при ретрансляции через карту псевдонимов получателя (инвариант Р4); (3) побайтовые диаграммы формата кадров с явным указанием смещения псевдонима равного семнадцать (инвариант К11); (4) подавление кольцевого эха через проверку идентичности время+автор+значение (инвариант Ш2); (5) добавлены девятнадцать новых сценариев верификации (двадцать четыре-сорок два).** |
 | **2.3.8** | **2026-11-05** | **Сквозная provenance-идентичность: ChangeId включён в wire records, RecordsRoot и batch digest; обязательная проверка ChangeId и целостности snapshot до apply; mesh regression-сценарий 43.** |
 | **2.3.9** | **2026-11-05** | **ACK hardening: per-author pushed watermarks, contiguous-range validation, exact TCP ACK binding, persisted InboxAuthors for duplicate replay; node-state v3.** |
-| **2.4.0** | **2026-11-05** | **Immutable Outbox sequence and per-peer/per-author cursor offsets; ACK and compaction coordinate conversion; node-state v4 with v3 reader compatibility; scenario 44.** |
+| **2.4.0** | **2026-11-05** | **Immutable Outbox sequence and per-peer/per-author cursor offsets; ACK and compaction coordinate conversion; node-state v4 with v3 reader compatibility; scenario 44.**
+| **2.4.1** | **2026-11-05** | **Snapshot now preserves field tombstones and explicit lifecycle state; applies both through LWW merge; takes a consistent node snapshot under ordered gates; oversized single-chunk snapshots fail closed instead of silently truncating.** |
 
 ---
 
