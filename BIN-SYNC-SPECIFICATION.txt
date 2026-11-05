@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.3 FINAL
+# BIN-SYNC CORE v2.4.4 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.3 FINAL (transport-independent session API and explicit delivery guarantees)  
+**Версия:** 2.4.4 FINAL (bidirectional baseline commit and atomic state digest)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -2199,3 +2199,18 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 7. Offset сохраняется вместе с PeerState. Node-state повышен до v4 (`BIN-SYNC/NODESTATE/v4`); v3 читается с нулевым offset, v1/v2 не поддерживаются.
 
 **Инвариант:** изменение cursor mapping одного peer не может изменить cursor, batch-id, ACK или видимость записей для любого другого peer.
+
+
+# ERRATA v2.4.4
+
+## E-18. §13.1 — двустороннее подтверждение baseline и атомарный STATE_DIGEST
+
+**Дефект:** после одного направления AutoReconcile принимающая сторона могла выставить `InitialSyncComplete`, хотя обратная передача snapshot ещё не завершилась. При разрыве между раундами это разрешало инициализацию peer-relative `StreamOffset` до подтверждения baseline в обоих направлениях.
+
+**Нормативно:**
+1. `InitialSyncComplete` устанавливается только после успешного завершения обоих направлений reconciliation в рамках одной операции AutoReconcile. Получатель snapshot подтверждает его применение завершающим пустым `NEED_RANGE`; отправитель считает свою сторону подтверждённой только после получения этого terminator.
+2. Завершение только одного направления, ошибка передачи, отмена или разрыв соединения до завершения второго направления не устанавливают `InitialSyncComplete`. Повторное подключение должно продолжить reconciliation; уже применённые snapshot chunks безопасно объединяются по LWW.
+3. Если количество расходящихся prefix достигло `maxPrefixes`, раунд считается ограниченным и не подтверждает полный baseline. Узлы повторяют AutoReconcile до раунда, в котором число divergent prefixes строго меньше лимита. Это консервативно трактует точное совпадение с лимитом как потенциально усечённый результат.
+4. `STATE_DIGEST` строится под упорядоченными node gates: bucket digest и Outbox high-water cursor должны соответствовать одному атомарному view. Снимок, используемый для digest, не должен перечислять изменяемые Storage/Outbox коллекции без синхронизации.
+
+**Wire format:** без изменений. Изменение уточняет локальную commit-семантику baseline и согласованность вычисления digest.
