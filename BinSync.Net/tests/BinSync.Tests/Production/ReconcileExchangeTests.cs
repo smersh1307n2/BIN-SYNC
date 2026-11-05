@@ -99,6 +99,31 @@ public class ReconcileExchangeTests
     }
 
     [Fact]
+    public async Task Concurrent_AutoReconcile_calls_are_serialized_per_session()
+    {
+        var a = Fix.MakeNode(45);
+        var b = Fix.MakeNode(46);
+        a.WriteField(1, Fix.Rid(450), 0x100, new byte[] { 1 });
+        b.WriteField(1, Fix.Rid(460), 0x100, new byte[] { 2 });
+
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        // Invoke in the same order on both peers. Each session must keep the two
+        // directional rounds of one operation contiguous before starting the next.
+        var a1 = client.AutoReconcileAsync(a, 1, initiate: true);
+        var a2 = client.AutoReconcileAsync(a, 1, initiate: true);
+        var b1 = server.AutoReconcileAsync(b, 1, initiate: false);
+        var b2 = server.AutoReconcileAsync(b, 1, initiate: false);
+
+        await Task.WhenAll(a1, a2, b1, b2);
+        Assert.True(a.PeerStates[(b.NodeId, 1)].InitialSyncComplete);
+        Assert.True(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
+    }
+
+    [Fact]
     public async Task AutoReconcile_does_not_commit_baseline_when_second_direction_fails()
     {
         var a = Fix.MakeNode(41);

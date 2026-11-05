@@ -178,19 +178,26 @@ public partial class SyncSession
     {
         if (maxPrefixes <= 0) throw new ArgumentOutOfRangeException(nameof(maxPrefixes));
 
-        // Both directions must exchange a complete baseline before peer-relative
-        // Outbox offsets can be initialized safely.
-        var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct)
-            .ConfigureAwait(false);
-        var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
-            .ConfigureAwait(false);
+        // The wire format has no reconciliation operation ID. Keep both directional
+        // rounds together so another AutoReconcile call cannot consume their frames.
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // Both directions must exchange a complete baseline before peer-relative
+            // Outbox offsets can be initialized safely.
+            var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct)
+                .ConfigureAwait(false);
+            var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
+                .ConfigureAwait(false);
 
-        // A single completed direction is not a baseline: the peer may still not
-        // have received our state. Commit only after both directional rounds finish.
-        if (first.Complete && second.Complete)
-            local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
+            // A single completed direction is not a baseline: the peer may still not
+            // have received our state. Commit only after both directional rounds finish.
+            if (first.Complete && second.Complete)
+                local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
 
-        return (first.Prefixes + second.Prefixes, first.FieldsApplied + second.FieldsApplied);
+            return (first.Prefixes + second.Prefixes, first.FieldsApplied + second.FieldsApplied);
+        }
+        finally { _reconcileGate.Release(); }
     }
 
     private async Task<(int Prefixes, int FieldsApplied, bool Complete)> AutoReconcileRoundAsync(
