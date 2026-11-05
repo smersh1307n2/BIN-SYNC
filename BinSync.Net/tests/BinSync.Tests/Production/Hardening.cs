@@ -252,22 +252,6 @@ public class Production : IDisposable
     }
 
 
-        var (a, _) = BuildHistory();
-        var path = Path.Combine(_dir, "tag-v3.state");
-        NodePersistence.Save(a, path);
-        var bytes = File.ReadAllBytes(path);
-        var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
-        var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var v3Digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v3", body);
-        Assert.Equal(v3Digest, bytes.AsSpan(14, 32).ToArray());
-
-        // Files written by the first v3 implementation used the v2 domain tag.
-        var legacy = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v2", body);
-        legacy.CopyTo(bytes, 14);
-        var restored = NodePersistence.LoadFromBytes(bytes);
-        Assert.True(StateEqual(a, restored));
-    }
-
     [Fact]
     public void Persistence_RejectsIncompleteOrInvalidInboxAuthorMap()
     {

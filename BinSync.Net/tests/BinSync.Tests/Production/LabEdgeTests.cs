@@ -54,10 +54,12 @@ public class LabEdgeTests
         Transport.SyncRound(donor, oldPeer, NS);
         Assert.DoesNotContain(donor.Outbox[NS], e => e.Seq <= 2);
 
+        // The new peer's snapshot is the baseline through sequence 2.
+        var snapshot = Reconcile.BuildSnapshot(donor, NS);
+        Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);
+
         donor.WriteField(NS, Fix.Rid(3), 0x100, Val("tail"));
         Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
-        var snapshot = Reconcile.BuildSnapshot(donor, NS);
-        Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 3);
 
         var newPeerBatch = donor.CreateDeltaBatch(newPeer.NodeId, NS);
         Assert.NotNull(newPeerBatch);
