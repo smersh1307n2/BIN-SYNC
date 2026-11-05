@@ -74,6 +74,31 @@ public class TransportFoundationTests
             FrameCodec.BuildFrame(SessionWire.TypeAliasMap, 1, parsed.FrameSeq, parsed.Payload)));
     }
 
+
+    [Fact]
+    public void MergeAliasMap_rejects_endpoint_epoch_mismatch_from_peer()
+    {
+        using var local = new Node(Fix.Nid(31));
+        var peerId = Fix.Nid(32);
+        const int peerEpoch = 5;
+
+        var staleLocal = new List<AliasMapEntry>
+        {
+            new(1, peerId, peerEpoch),
+            new(2, local.NodeId, local.Epoch + 1),
+        };
+        var stalePeer = new List<AliasMapEntry>
+        {
+            new(1, peerId, peerEpoch - 1),
+            new(2, local.NodeId, local.Epoch),
+        };
+
+        Assert.Throws<FrameException>(() =>
+            SyncSession.MergeAliasMap(local, peerId, peerEpoch, staleLocal));
+        Assert.Throws<FrameException>(() =>
+            SyncSession.MergeAliasMap(local, peerId, peerEpoch, stalePeer));
+    }
+
     [Fact]
     public async Task GenericSyncSession_UsesPipeTransport_WithoutTcpHost()
     {

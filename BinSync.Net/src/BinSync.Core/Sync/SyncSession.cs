@@ -142,6 +142,16 @@ public partial class SyncSession : IAsyncDisposable
     internal static List<AliasMapEntry> MergeAliasMap(Node local, NodeId peerNodeId, int peerEpoch,
         IReadOnlyList<AliasMapEntry> remote)
     {
+        // HELLO establishes the current incarnation of both session endpoints.
+        // An ALIAS_MAP may add third parties, but it must not silently downgrade or
+        // replace either endpoint's identity/epoch binding.
+        foreach (var entry in remote)
+        {
+            if ((entry.NodeId == local.NodeId && entry.Epoch != local.Epoch) ||
+                (entry.NodeId == peerNodeId && entry.Epoch != peerEpoch))
+                throw new FrameException("FRAME_REJECTED");
+        }
+
         var result = new List<AliasMapEntry>(remote);
         var known = new HashSet<NodeId>(result.Select(x => x.NodeId));
         var extras = new List<(NodeId Id, int Epoch)>();
