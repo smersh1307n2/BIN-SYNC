@@ -144,7 +144,7 @@ public partial class SyncSession : IAsyncDisposable
 
         // Commit the new session only after the complete peer map was decoded and
         // our response was sent. Failed handshakes leave the previous session intact.
-        local.ResetSession(peer.NodeId);
+        local.ResetSession(peer.NodeId, peer.Epoch);
         local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
         SessionWire.ApplyAliasMap(local, peer.NodeId, merged);
         return peer;
