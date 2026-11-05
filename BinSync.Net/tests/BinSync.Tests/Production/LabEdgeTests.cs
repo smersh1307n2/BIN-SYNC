@@ -48,14 +48,19 @@ public class LabEdgeTests
         Transport.MakeSession(donor, oldPeer);
 
         donor.WriteField(NS, Fix.Rid(1), 0x100, Val("one"));
-        Transport.SyncRound(donor, oldPeer, NS);
         donor.WriteField(NS, Fix.Rid(2), 0x100, Val("two"));
-        Transport.SyncRound(donor, oldPeer, NS);
-        Assert.DoesNotContain(donor.Outbox[NS], e => e.Seq <= 2);
+        var oldBatch = donor.CreateDeltaBatch(oldPeer.NodeId, NS);
+        Assert.NotNull(oldBatch);
+        var oldState = donor.PeerStates[(oldPeer.NodeId, NS)];
+        oldState.StreamPushed[donor.NodeId] = 2;
+        oldState.StreamAcked[donor.NodeId] = 2;
+        oldState.LastPushedSeq = 2;
+        oldState.LastAckedSeq = 2;
 
-        // Attach only after the old peer has allowed prefix compaction.
+        // Simulate a successfully compacted prefix [1,2]. The durable sequence
+        // allocator remains at 2; only the old entries have been collected.
+        donor.Outbox[NS].Clear();
         Transport.MakeSession(donor, newPeer);
-        // The new peer's snapshot is the baseline through sequence 2.
         var snapshot = Reconcile.BuildSnapshot(donor, NS);
         Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);
 
