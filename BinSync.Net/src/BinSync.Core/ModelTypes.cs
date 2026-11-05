@@ -201,6 +201,8 @@ public sealed partial class PeerState
     public Dictionary<(NodeId Peer, int Epoch, int Ns, NodeId Author), long> ReceivedStreams { get; } = new();
     /// <summary>Per-author ACK watermarks used when building the next delta.</summary>
     public Dictionary<NodeId, long> StreamAcked { get; } = new();
+    /// <summary>Highest sequence successfully handed to this peer for each author stream.</summary>
+    public Dictionary<NodeId, long> StreamPushed { get; } = new();
     /// <summary>Gets or sets initial sync complete.</summary>
     public bool InitialSyncComplete { get; set; }
     /// <summary>Gets or sets membership epoch.</summary>

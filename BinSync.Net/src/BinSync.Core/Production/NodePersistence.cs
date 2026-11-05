@@ -27,10 +27,10 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v1";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 1;
+    private const ushort Version = 2;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -212,6 +212,9 @@ public static class NodePersistence
                 w.Varint((ulong)ps.StreamAcked.Count);
                 foreach (var (author, seq) in ps.StreamAcked.OrderBy(k => k.Key.ToString()))
                 { w.B128(author.ToArray()); w.U64((ulong)seq); }
+                w.Varint((ulong)ps.StreamPushed.Count);
+                foreach (var (author, seq) in ps.StreamPushed.OrderBy(k => k.Key.ToString()))
+                { w.B128(author.ToArray()); w.U64((ulong)seq); }
                 w.Varint((ulong)ps.Ids.Count);
                 foreach (var ((author, start, end), (id, prev)) in ps.Ids
                            .OrderBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi)
@@ -379,6 +382,12 @@ public static class NodePersistence
             {
                 var author = r.B128(); var seq = (long)r.U64();
                 ps.StreamAcked[(NodeId)author] = seq;
+            }
+            int spCount = (int)r.Varint();
+            for (int j = 0; j < spCount; j++)
+            {
+                var author = r.B128(); var seq = (long)r.U64();
+                ps.StreamPushed[(NodeId)author] = seq;
             }
             int idsCount = (int)r.Varint();
             for (int j = 0; j < idsCount; j++)

@@ -318,6 +318,14 @@ public sealed partial class Node
     internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch)
     {
         LastStreamDigest[((NodeId, namespaceId, batch.IssuerEpoch), targetPeer)] = batch.BatchDigest;
+        if (!PeerStates.TryGetValue((targetPeer, namespaceId), out var ps))
+            PeerStates[(targetPeer, namespaceId)] = ps = new PeerState(targetPeer, namespaceId);
+        var author = batch.AuthorStreamId();
+        if (author.IsZero || batch.CursorStart <= 0 || batch.CursorEnd < batch.CursorStart)
+            throw new SyncException("ACK_OUT_OF_RANGE", batch.BatchId);
+        ps.StreamPushed[author] = Math.Max(ps.StreamPushed.TryGetValue(author, out var pushed) ? pushed : 0,
+                                           batch.CursorEnd);
+        ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, batch.CursorEnd);
     }
     // EncodeBatchPayload / DecodeBatchPayload → Production/Node.BatchCodec.cs
 
