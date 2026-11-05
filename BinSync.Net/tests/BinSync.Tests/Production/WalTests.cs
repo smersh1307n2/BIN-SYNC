@@ -9,10 +9,20 @@ public class WalTests
     [Fact]
     public void Node_snapshot_rejects_trailing_bytes()
     {
-        var node = Fix.MakeNode(131);
-        var bytes = NodePersistence.SaveToBytes(node);
-        var corrupted = bytes.Concat(new byte[] { 0xA5 }).ToArray();
-        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(corrupted));
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-state-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "node.state");
+            NodePersistence.Save(Fix.MakeNode(131), path);
+            var bytes = File.ReadAllBytes(path);
+            var corrupted = bytes.Concat(new byte[] { 0xA5 }).ToArray();
+            Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(corrupted));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
     }
 
     [Fact]

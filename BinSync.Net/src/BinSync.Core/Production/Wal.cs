@@ -146,8 +146,10 @@ public sealed class Wal : IDisposable
             {
                 _fs.Position = pos;
                 int len = ReadBEInt32(_fs);
-                if (len < 1 || pos + 4L + len > end)
-                    throw new InvalidDataException("WAL contains an incomplete record.");
+                if (len < 1)
+                    throw new InvalidDataException("Invalid WAL record length.");
+                if (pos + 4L + len > end)
+                    break; // Ignore a torn final record; complete records are validated below.
                 var payload = new byte[len];
                 int read = _fs.Read(payload, 0, len);
                 if (read != len)
@@ -178,8 +180,10 @@ public sealed class Wal : IDisposable
         while (fs.Position + 4 <= fs.Length)
         {
             int len = ReadBEInt32(fs);
-            if (len < 1 || fs.Position + len > fs.Length)
-                throw new InvalidDataException("WAL contains an incomplete record.");
+            if (len < 1)
+                throw new InvalidDataException("Invalid WAL record length.");
+            if (fs.Position + len > fs.Length)
+                break; // Ignore a torn final record.
             var payload = br.ReadBytes(len);
             if (payload.Length != len)
                 throw new InvalidDataException("WAL record is truncated.");
