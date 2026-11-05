@@ -5,7 +5,7 @@ namespace BinSync;
 /// reconciliation frame types reserved for the duration of a custom exchange.
 /// Batch push/receive remains independent.
 /// </summary>
-public sealed partial class SyncSession
+public partial class SyncSession
 {
     /// <summary>
     /// Executes a custom multi-frame reconciliation exchange while reserving all
