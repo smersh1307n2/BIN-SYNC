@@ -210,6 +210,7 @@ public sealed class Wal : IDisposable
                 records.Add(payload);
             }
 
+            ValidateReplaySequence(node, records);
             int applied = 0;
             foreach (var payload in records)
                 applied += ApplyRecord(node, payload);
@@ -255,11 +256,16 @@ public sealed class Wal : IDisposable
         }
 
         // Do not mutate the target node until every complete record has passed
-        // structural validation. This prevents partial replay on malformed tails.
+        // structural and sequence validation. This prevents partial replay when
+        // a later, well-formed frame has an impossible Outbox sequence.
+        using (node.EnterAllGates())
+        {
+        ValidateReplaySequence(node, records);
         int applied = 0;
         foreach (var payload in records)
             applied += ApplyRecord(node, payload);
         return applied;
+        }
         }
     }
 
@@ -356,6 +362,44 @@ public sealed class Wal : IDisposable
 
         if (!r.Eof())
             throw new InvalidDataException("WAL record contains trailing bytes.");
+    }
+
+    // Validate local Outbox continuity for the whole WAL before applying any
+    // mutation. Structural frame validation alone cannot catch a later sequence gap.
+    private static void ValidateReplaySequence(Node node, IReadOnlyList<byte[]> records)
+    {
+        var initialSeen = new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>(node.SeenChanges);
+        var seenInWal = new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>();
+        var outboxIds = new HashSet<(int Ns, BatchId ChangeId)>();
+        foreach (var (ns, entries) in node.Outbox)
+            foreach (var entry in entries)
+                outboxIds.Add((ns, entry.ChangeId));
+
+        var sequenceByNamespace = new Dictionary<int, long>();
+        foreach (var payload in records)
+        {
+            var reader = new Reader(payload);
+            var type = (WalRecordType)reader.U8();
+            if (type != WalRecordType.LocalMutation) continue;
+
+            var (_, entry) = ReadLocalMutation(reader);
+            if (entry.AuthorNodeId != node.NodeId)
+                throw new InvalidDataException("WAL local mutation belongs to a different node identity.");
+
+            var key = (node.NodeId, entry.NamespaceId, entry.ChangeId);
+            if (initialSeen.Contains(key)) continue; // already represented by the loaded snapshot
+            if (!seenInWal.Add(key))
+                throw new InvalidDataException("WAL contains a duplicate local ChangeId.");
+            if (outboxIds.Contains((entry.NamespaceId, entry.ChangeId)))
+                throw new InvalidDataException("WAL local mutation duplicates an existing Outbox entry.");
+
+            long current = sequenceByNamespace.TryGetValue(entry.NamespaceId, out var simulated)
+                ? simulated
+                : node._outboxSeq.TryGetValue((node.NodeId, entry.NamespaceId), out var persisted) ? persisted : 0;
+            if (current == long.MaxValue || entry.Seq != current + 1)
+                throw new InvalidDataException("WAL local-mutation sequence is not continuous with the loaded snapshot.");
+            sequenceByNamespace[entry.NamespaceId] = entry.Seq;
+        }
     }
 
     private static int ApplyRecord(Node node, byte[] payload)

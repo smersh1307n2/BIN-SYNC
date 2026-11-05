@@ -355,6 +355,38 @@ public class WalTests
     }
 
     [Fact]
+    public void Wal_replay_validates_all_local_sequences_before_mutating_node()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-sequence-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "node.wal");
+            var source = Fix.MakeNode(141);
+            using (var wal = Wal.Open(path))
+            {
+                var first = MakeLocalFieldEntry(source, Fix.Rid(9101), 0x100,
+                    new byte[] { 1 }, new Hlc(100, 0), seq: 1);
+                var gap = MakeLocalFieldEntry(source, Fix.Rid(9102), 0x100,
+                    new byte[] { 2 }, new Hlc(200, 0), seq: 3);
+                wal.AppendLocalMutation(first, applyToStorage: true);
+                wal.AppendLocalMutation(gap, applyToStorage: true);
+            }
+
+            var target = Fix.MakeNode(141);
+            Assert.Throws<InvalidDataException>(() => Wal.ReplayFile(path, target));
+            Assert.False(target.TryGetRecord(1, Fix.Rid(9101), out _));
+            Assert.False(target.TryGetRecord(1, Fix.Rid(9102), out _));
+            Assert.Empty(target.Outbox);
+            Assert.Empty(target.SeenChanges);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_replay_validates_entire_log_before_mutating_node()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
