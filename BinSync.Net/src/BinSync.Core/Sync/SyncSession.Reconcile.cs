@@ -1,7 +1,7 @@
 // STATE_DIGEST / NEED_RANGE / SNAPSHOT / AutoReconcile (§13.1).
 namespace BinSync;
 
-/// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
+/// <summary>Transport-independent reconciliation operations for a sync session.</summary>
 public partial class SyncSession
 {
     /// <summary>
@@ -144,8 +144,8 @@ public partial class SyncSession
     }
 
     /// <summary>
-    /// One-shot reconcile for a namespace: exchange digests, then NEED_RANGE + SNAPSHOT.
-    /// Initiator requests; acceptor serves. Empty-prefix NEED_RANGE terminates acceptor.
+    /// Reconcile both directions for a namespace. Initial baseline is committed only
+    /// after both directions completed and each sent snapshot set was confirmed applied.
     /// </summary>
     public async Task<(int Prefixes, int FieldsApplied)> AutoReconcileAsync(
         Node local, int namespaceId, bool initiate, int maxPrefixes = 16, CancellationToken ct = default)
@@ -158,10 +158,16 @@ public partial class SyncSession
             .ConfigureAwait(false);
         var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
             .ConfigureAwait(false);
+
+        // A single completed direction is not a baseline: the peer may still not
+        // have received our state. Commit only after both directional rounds finish.
+        if (first.Complete && second.Complete)
+            local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
+
         return (first.Prefixes + second.Prefixes, first.FieldsApplied + second.FieldsApplied);
     }
 
-    private async Task<(int Prefixes, int FieldsApplied)> AutoReconcileRoundAsync(
+    private async Task<(int Prefixes, int FieldsApplied, bool Complete)> AutoReconcileRoundAsync(
         Node local, int namespaceId, bool initiate, int maxPrefixes, CancellationToken ct)
     {
         var (_, _, diverged) = await ExchangeStateDigestAsync(local, namespaceId, initiate, ct)
@@ -177,7 +183,7 @@ public partial class SyncSession
                 fields += await ReceiveSnapshotAsync(local, ct).ConfigureAwait(false);
             }
             await SendNeedRangeAsync(namespaceId, Array.Empty<byte>(), ct).ConfigureAwait(false);
-            return (n, fields);
+            return (n, fields, diverged.Count < maxPrefixes);
         }
 
         int handled = 0;
@@ -187,14 +193,14 @@ public partial class SyncSession
             if (need.Prefix.Length == 0)
             {
                 // The initiator sends this terminator only after every requested
-                // snapshot was fully received and atomically applied.
-                if (handled < maxPrefixes)
-                    local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
+                // snapshot was fully received and atomically applied. This confirms
+                // our outbound baseline, but not the reverse direction; the outer
+                // two-round operation commits InitialSyncComplete after both finish.
                 break;
             }
             await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
             handled++;
         }
-        return (handled, 0);
+        return (handled, 0, diverged.Count < maxPrefixes);
     }
 }

@@ -123,4 +123,49 @@ public class SnapshotTests
         Assert.True(a.PeerStates[(b.NodeId, 1)].InitialSyncComplete);
         Assert.True(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
     }
+
+    [Fact]
+    public async Task AutoReconcile_does_not_commit_baseline_after_only_one_direction()
+    {
+        var a = Fix.MakeNode(62);
+        var b = Fix.MakeNode(63);
+        a.WriteField(1, Fix.Rid(201), 0x100, new byte[] { 0xA1 });
+        b.WriteField(1, Fix.Rid(202), 0x100, new byte[] { 0xB2 });
+
+        await using var listener = TcpSyncListener.Start();
+        var accept = listener.AcceptAsync(b);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var server = await accept;
+
+        // Complete only the first direction: A requests B's divergent snapshots.
+        var serverDigestTask = server.ExchangeStateDigestAsync(b, 1, initiate: false);
+        var (_, _, diverged) = await client.ExchangeStateDigestAsync(a, 1, initiate: true);
+        await serverDigestTask;
+
+        foreach (var prefix in diverged)
+        {
+            var needTask = server.ReceiveNeedRangeAsync();
+            await client.SendNeedRangeAsync(1, prefix);
+            var need = await needTask;
+            var sendTask = server.FulfillNeedRangeWithSnapshotAsync(b, need);
+            await client.ReceiveSnapshotAsync(a);
+            await sendTask;
+        }
+
+        await client.SendNeedRangeAsync(1, Array.Empty<byte>());
+        var terminator = await server.ReceiveNeedRangeAsync();
+        Assert.Empty(terminator.Prefix);
+
+        Assert.False(a.PeerStates.TryGetValue((b.NodeId, 1), out var aState) && aState.InitialSyncComplete);
+        Assert.False(b.PeerStates.TryGetValue((a.NodeId, 1), out var bState) && bState.InitialSyncComplete);
+
+        // Only the full two-direction operation may commit the baseline.
+        var serverReconcile = server.AutoReconcileAsync(b, 1, initiate: false);
+        await client.AutoReconcileAsync(a, 1, initiate: true);
+        await serverReconcile;
+
+        Assert.True(a.PeerStates[(b.NodeId, 1)].InitialSyncComplete);
+        Assert.True(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
+    }
+
 }
