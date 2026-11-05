@@ -98,7 +98,7 @@ public static class TcpSync
             }
 
             var transport = new StreamSyncTransport(stream, ownsStream: true);
-            return await SyncSession.ConnectAsync(local, transport, caps, ownsTransport: true, ct).ConfigureAwait(false);
+            return await SyncSession.EstablishAsync(local, transport, caps, ownsTransport: true, ct).ConfigureAwait(false);
         }
         catch
         {
