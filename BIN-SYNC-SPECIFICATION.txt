@@ -2227,6 +2227,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 2. Один chunk содержит не более 100 000 records и 250 000 fields. Счётчики проверяются как `ulong` до преобразования к `int`.
 3. Длина каждого field value должна быть не больше оставшегося payload и `Int32.MaxValue`.
 4. После декодирования chunk reader обязан находиться в EOF; trailing bytes запрещены.
-5. Те же ограничения chunk count применяются к прямому атомарному `ApplySnapshotChunks`.
+5. Отправитель формирует chunks, соблюдая те же лимиты records/fields, абсолютный `MAX_PAYLOAD_SIZE` и `ChunkCount <= 4096`; если отдельная запись не помещается в один frame, отправка завершается `PAYLOAD_TOO_LARGE` до начала передачи.
+6. Те же ограничения chunk count применяются к прямому атомарному `ApplySnapshotChunks`.
 
 **Wire format:** без изменений. Ограничения являются parser/resource bounds и не меняют кодирование корректных snapshot chunks в пределах установленных лимитов.
