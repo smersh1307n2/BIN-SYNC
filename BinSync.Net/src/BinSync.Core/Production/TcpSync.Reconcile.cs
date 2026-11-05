@@ -130,11 +130,7 @@ public sealed partial class TcpSyncSession
         }
 
         // Do not publish any part of the baseline until every chunk has arrived and validated.
-        using var gates = local.EnterAllGates();
-        int fieldsApplied = 0;
-        foreach (var chunk in chunks)
-            fieldsApplied += Reconcile.ApplySnapshot(local, chunk);
-        return fieldsApplied;
+        return Reconcile.ApplySnapshotChunks(local, chunks);
     }
 
     /// <summary>

@@ -67,6 +67,11 @@ public class SnapshotTests
         Assert.Equal(new uint[] { 0, 1, 2 }, chunks.Select(c => c.ChunkIndex));
         Assert.All(chunks, c => Assert.Equal(3u, c.ChunkCount));
         Assert.Equal(5, chunks.Sum(c => c.Records.Count));
+        var target = Fix.MakeNode(61);
+        Assert.Throws<InvalidOperationException>(() => Reconcile.ApplySnapshot(target, chunks[0]));
+        Assert.Empty(target.Storage);
+        Assert.True(Reconcile.ApplySnapshotChunks(target, chunks) > 0);
+        Assert.Equal(5, target.GetRecordCount(1));
     }
 
     [Fact]

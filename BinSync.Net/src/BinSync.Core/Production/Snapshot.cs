@@ -206,27 +206,47 @@ public static partial class Reconcile
     /// </summary>
     public static int ApplySnapshot(Node node, SnapshotChunkMessage chunk)
     {
-        if (chunk.ChunkCount == 0 || chunk.ChunkIndex >= chunk.ChunkCount)
-            throw new FormatException("Invalid snapshot chunk coordinates");
+        if (chunk.ChunkCount != 1 || chunk.ChunkIndex != 0)
+            throw new InvalidOperationException("MULTI_CHUNK_SNAPSHOT_REQUIRES_COMPLETE_TRANSFER");
+        return ApplySnapshotChunks(node, new[] { chunk });
+    }
+
+    /// <summary>Validate and atomically publish a complete ordered snapshot transfer.</summary>
+    public static int ApplySnapshotChunks(Node node, IReadOnlyList<SnapshotChunkMessage> chunks)
+    {
+        if (chunks.Count == 0) throw new FormatException("Snapshot transfer is empty");
+        var first = chunks[0];
+        if (first.ChunkCount == 0 || chunks.Count != first.ChunkCount)
+            throw new FormatException("Snapshot transfer is incomplete");
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            var chunk = chunks[i];
+            if (chunk.NamespaceId != first.NamespaceId ||
+                chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != (uint)i)
+                throw new FormatException("Snapshot chunk sequence mismatch");
+        }
+
         using var gates = node.EnterAllGates();
         int applied = 0;
-        foreach (var rec in chunk.Records)
+        foreach (var chunk in chunks)
         {
-            foreach (var f in rec.Fields)
+            foreach (var rec in chunk.Records)
             {
-                var hlc = new Hlc(f.Wall, f.Logical);
-                var author = NodeId.From(f.AuthorNodeId);
-                bool changed = f.IsTombstone
-                    ? node.ApplyRemoteFieldTombstone(chunk.NamespaceId, RecordId.From(rec.RecordId), f.FieldId, hlc, author, f.KeyEpoch)
-                    : node.ApplyRemoteField(chunk.NamespaceId, RecordId.From(rec.RecordId), f.FieldId, f.Value, hlc, author, f.KeyEpoch);
-                if (changed) applied++;
+                var recordId = RecordId.From(rec.RecordId);
+                foreach (var f in rec.Fields)
+                {
+                    var hlc = new Hlc(f.Wall, f.Logical);
+                    var author = NodeId.From(f.AuthorNodeId);
+                    bool changed = f.IsTombstone
+                        ? node.ApplyRemoteFieldTombstone(chunk.NamespaceId, recordId, f.FieldId, hlc, author, f.KeyEpoch)
+                        : node.ApplyRemoteField(chunk.NamespaceId, recordId, f.FieldId, f.Value, hlc, author, f.KeyEpoch);
+                    if (changed) applied++;
+                }
+                if (rec.HasLifecycle && node.ApplyRemoteLifecycle(
+                        chunk.NamespaceId, recordId, new Hlc(rec.LifecycleWall, rec.LifecycleLogical),
+                        NodeId.From(rec.LifecycleAuthor), rec.LifecycleValue))
+                    applied++;
             }
-            if (rec.HasLifecycle && node.ApplyRemoteLifecycle(
-                    chunk.NamespaceId, RecordId.From(rec.RecordId),
-                    new Hlc(rec.LifecycleWall, rec.LifecycleLogical),
-                    NodeId.From(rec.LifecycleAuthor), rec.LifecycleValue))
-                applied++;
         }
         return applied;
-    }
-}
+    }}
