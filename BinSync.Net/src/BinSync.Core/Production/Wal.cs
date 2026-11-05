@@ -341,6 +341,9 @@ public sealed class Wal : IDisposable
                     };
                     if (entry.OpKind != expectedKind)
                         throw new InvalidDataException("WAL local-mutation operation tag mismatch.");
+                    if (decoded is OpRecordTombstone tombstone &&
+                        !RecordId.From(tombstone.RecordId).Equals(entry.RecordId))
+                        throw new InvalidDataException("WAL record-tombstone identity does not match its Outbox entry.");
                     break;
                 }
             default:

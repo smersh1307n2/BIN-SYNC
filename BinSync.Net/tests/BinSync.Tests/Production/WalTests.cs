@@ -193,6 +193,85 @@ public class WalTests
     }
 
     [Fact]
+    public void Node_attached_wal_replays_field_and_record_lifecycle_with_exact_outbox()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-lifecycle-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "node.wal");
+        var snapshotPath = Path.Combine(dir, "node.state");
+        try
+        {
+            var node = Fix.MakeNode(137);
+            var rid = Fix.Rid(333);
+            node.WriteField(1, rid, 0x100, new byte[] { 0x01 });
+            NodePersistence.Save(node, snapshotPath);
+
+            using (var wal = Wal.Open(path))
+            {
+                node.AttachWal(wal);
+                Assert.True(node.TombField(1, rid, 0x101));
+                Assert.True(node.DeleteRecord(1, rid));
+                Assert.True(node.UndeleteRecord(1, rid));
+                var outboxOnly = new OpFieldWrite
+                {
+                    FieldId = 0x102, KeyEpoch = 0, Wall = 999, Logical = 1,
+                    Origin = 1, AuthorNodeId = node.NodeId, Value = new byte[] { 0x7A }
+                };
+                Assert.NotNull(node.PushOutbox(1, rid, outboxOnly, node.NodeId));
+                Assert.Equal(4, wal.Sequence);
+            }
+
+            var recovered = NodePersistence.Load(snapshotPath);
+            Assert.Equal(4, Wal.ReplayFile(path, recovered));
+            Assert.True(recovered.TryGetRecord(1, rid, out var record));
+            Assert.True(record!.FieldTombs.ContainsKey(0x101));
+            Assert.False(record.IsDead);
+            Assert.False(record.State.ContainsKey(0x102)); // PushOutbox is Outbox-only.
+            Assert.Equal(4, recovered.Outbox[1].Count);
+            Assert.Equal(new long[] { 1, 2, 3, 4 }, recovered.Outbox[1].Select(x => x.Seq).ToArray());
+            Assert.Equal(4, recovered.OutboxSeqRef[(recovered.NodeId, 1)]);
+            Assert.Equal(4, recovered.SeenChanges.Count);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task Attached_wal_checkpoint_is_consistent_with_concurrent_local_writes()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-attached-checkpoint-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var walPath = Path.Combine(dir, "node.wal");
+        var snapshotPath = Path.Combine(dir, "node.state");
+        try
+        {
+            var node = Fix.MakeNode(138);
+            using var wal = Wal.Open(walPath);
+            node.AttachWal(wal);
+            var writer = Task.Run(() =>
+            {
+                for (int i = 0; i < 96; i++)
+                    node.WriteField(1, Fix.Rid(4000 + i), 0x100, new byte[] { (byte)i });
+            });
+            var checkpoint = Task.Run(() => wal.Checkpoint(node, snapshotPath));
+            await Task.WhenAll(writer, checkpoint).WaitAsync(TimeSpan.FromSeconds(10));
+
+            var recovered = NodePersistence.Load(snapshotPath);
+            Wal.ReplayFile(walPath, recovered);
+            for (int i = 0; i < 96; i++)
+                Assert.True(recovered.TryGetRecord(1, Fix.Rid(4000 + i), out _), $"Lost attached-WAL record {i}");
+            Assert.Equal(96, recovered.Outbox[1].Count);
+            Assert.Equal(96, recovered.OutboxSeqRef[(recovered.NodeId, 1)]);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Node_attached_wal_failure_does_not_publish_local_write()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-fail-" + Guid.NewGuid().ToString("N"));
