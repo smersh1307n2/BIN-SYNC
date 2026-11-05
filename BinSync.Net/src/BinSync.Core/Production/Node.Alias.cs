@@ -91,7 +91,25 @@ public sealed partial class Node
     /// and delegates to <c>EnsureAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int? EnsureAlias(Node peer, NodeId nodeId, int epoch)
     {
-        lock (_lockMeta) return EnsureAliasInternal(peer, nodeId, epoch);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        // Never block while acquiring another node's metadata gate: two nodes may
+        // negotiate aliases in opposite directions while each holds its own gate.
+        // A transient conflict is fail-closed (caller may retry on the next exchange).
+        lock (_lockMeta)
+        {
+            if (!Monitor.TryEnter(peer._lockMeta))
+                return null;
+
+            try
+            {
+                return EnsureAliasInternal(peer, nodeId, epoch);
+            }
+            finally
+            {
+                Monitor.Exit(peer._lockMeta);
+            }
+        }
     }
 
     internal int? EnsureAliasInternal(Node peer, NodeId nodeId, int epoch)

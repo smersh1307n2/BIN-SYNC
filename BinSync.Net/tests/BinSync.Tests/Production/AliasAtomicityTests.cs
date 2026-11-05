@@ -1,4 +1,4 @@
-using BinSync;
+using System.Threading;\nusing BinSync;
 using Xunit;
 
 namespace BinSync.Tests;
@@ -29,5 +29,48 @@ public sealed class AliasAtomicityTests
         // The failed peer-side registration may not leave an empty forward map behind.
         Assert.False(peer.AliasToNode.ContainsKey(local.NodeId));
         Assert.Equal(99, peer.NodeToAlias[local.NodeId][(author, 7)]);
+    }
+
+    [Fact]
+    public void Opposite_direction_alias_negotiation_does_not_deadlock()
+    {
+        using var a = new Node(Fix.Nid(81));
+        using var b = new Node(Fix.Nid(82));
+        using var rendezvous = new Barrier(2);
+
+        Exception? errorA = null;
+        Exception? errorB = null;
+
+        var threadA = new Thread(() =>
+        {
+            try
+            {
+                using var gates = a.EnterAllGates();
+                if (!rendezvous.SignalAndWait(TimeSpan.FromSeconds(3)))
+                    throw new TimeoutException("A rendezvous timed out");
+                _ = a.EnsureAlias(b, Fix.Nid(83), 1);
+            }
+            catch (Exception ex) { errorA = ex; }
+        }) { IsBackground = true };
+
+        var threadB = new Thread(() =>
+        {
+            try
+            {
+                using var gates = b.EnterAllGates();
+                if (!rendezvous.SignalAndWait(TimeSpan.FromSeconds(3)))
+                    throw new TimeoutException("B rendezvous timed out");
+                _ = b.EnsureAlias(a, Fix.Nid(84), 1);
+            }
+            catch (Exception ex) { errorB = ex; }
+        }) { IsBackground = true };
+
+        threadA.Start();
+        threadB.Start();
+
+        Assert.True(threadA.Join(TimeSpan.FromSeconds(3)), "A→B alias negotiation deadlocked");
+        Assert.True(threadB.Join(TimeSpan.FromSeconds(3)), "B→A alias negotiation deadlocked");
+        Assert.Null(errorA);
+        Assert.Null(errorB);
     }
 }
