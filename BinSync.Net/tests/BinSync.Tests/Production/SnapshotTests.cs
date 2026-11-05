@@ -303,6 +303,25 @@ public class SnapshotTests
         var firstId = Fix.Rid(251);
         var secondId = Fix.Rid(252);
         target.WriteField(1, existingId, 0x100, new byte[] { 0x5A });
+
+        // Snapshot transfer must not advance or rewrite peer-relative delta cursors.
+        var peerState = new PeerState(source.NodeId, 1)
+        {
+            InitialSyncComplete = false,
+        };
+        peerState.StreamOffsets[source.NodeId] = 4;
+        peerState.StreamAcked[source.NodeId] = 7;
+        peerState.StreamPushed[source.NodeId] = 9;
+        target.PeerStates[(source.NodeId, 1)] = peerState;
+
+        void AssertPeerCursorsUnchanged()
+        {
+            Assert.Same(peerState, target.PeerStates[(source.NodeId, 1)]);
+            Assert.False(peerState.InitialSyncComplete);
+            Assert.Equal(4, peerState.StreamOffsets[source.NodeId]);
+            Assert.Equal(7, peerState.StreamAcked[source.NodeId]);
+            Assert.Equal(9, peerState.StreamPushed[source.NodeId]);
+        }
         source.WriteField(1, firstId, 0x100, new byte[9 * 1024 * 1024]);
         source.WriteField(1, secondId, 0x100, new byte[9 * 1024 * 1024]);
 
@@ -322,6 +341,7 @@ public class SnapshotTests
         Assert.Equal(new byte[] { 0x5A }, target.Storage[1][existingId].State[0x100].Value);
         Assert.False(target.Storage[1].ContainsKey(firstId));
         Assert.False(target.Storage[1].ContainsKey(secondId));
+        AssertPeerCursorsUnchanged();
 
         // Reconnect with fresh transports and retry the complete snapshot from chunk zero.
         var (retrySenderPipe, retryReceiverPipe) = PipeTransport.CreatePair();
@@ -337,6 +357,7 @@ public class SnapshotTests
         Assert.Equal(9 * 1024 * 1024, target.Storage[1][firstId].State[0x100].Value.Length);
         Assert.Equal(9 * 1024 * 1024, target.Storage[1][secondId].State[0x100].Value.Length);
         Assert.Equal(new byte[] { 0x5A }, target.Storage[1][existingId].State[0x100].Value);
+        AssertPeerCursorsUnchanged();
     }
 
     private sealed class FailAfterFirstSnapshotChunkTransport : ISyncTransport
