@@ -1,8 +1,8 @@
-// SCHEMA_MAP (0x04) exchange on TcpSyncSession (§18.3).
+// SCHEMA_MAP (0x04) exchange on SyncSession (§18.3).
 namespace BinSync;
 
 /// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
-public sealed partial class TcpSyncSession
+public sealed partial class SyncSession
 {
     /// <summary>Send the local schema map to the peer.</summary>
     public async Task SendSchemaMapAsync(Node local, CancellationToken ct = default)

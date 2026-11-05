@@ -6,7 +6,7 @@ namespace BinSync;
 /// using self-describing frames (§3.4). Dispose closes the stream only when the
 /// constructor was given ownsStream=true.
 /// </summary>
-public sealed class StreamSyncTransport : ISyncTransport
+public sealed class StreamSyncTransport : IPeerAwareSyncTransport
 {
     private readonly Stream _stream;
     private readonly bool _ownsStream;

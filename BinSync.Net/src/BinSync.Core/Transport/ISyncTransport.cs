@@ -3,7 +3,7 @@ namespace BinSync;
 
 /// <summary>
 /// Transport-agnostic byte channel between this replica and one peer (§3.1–3.2).
-/// Implementations: <see cref="PipeTransport"/> (tests), TCP/WebSocket adapters, files.
+/// Implementations include in-memory pipes, TCP streams, UDP datagrams and WebRTC data channels.
 /// Frames are self-describing (§3.4 / §12.2); the transport only moves raw bytes.
 /// </summary>
 public interface ISyncTransport : IAsyncDisposable
@@ -22,4 +22,11 @@ public interface ISyncTransport : IAsyncDisposable
 
     /// <summary>Optional max packet size advertised by the channel (§3.2).</summary>
     int? MaxPacketSize => null;
+}
+
+/// <summary>Optional peer-identity binding for channels that expose the negotiated peer.</summary>
+public interface IPeerAwareSyncTransport : ISyncTransport
+{
+    /// <summary>Remote peer identity, set after the BIN-SYNC handshake.</summary>
+    new NodeId PeerNodeId { get; set; }
 }

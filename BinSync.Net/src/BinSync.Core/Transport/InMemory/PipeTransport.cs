@@ -7,7 +7,7 @@ namespace BinSync;
 /// Pair of linked transports: bytes written on one side appear on the other.
 /// Suitable for unit tests and for driving <see cref="SessionWire.HandshakeAsync"/>.
 /// </summary>
-public sealed class PipeTransport : ISyncTransport
+public sealed class PipeTransport : IPeerAwareSyncTransport
 {
     private readonly ChannelReader<byte[]> _reader;
     private readonly ChannelWriter<byte[]> _writer;

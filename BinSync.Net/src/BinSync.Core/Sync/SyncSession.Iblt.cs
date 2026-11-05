@@ -1,8 +1,8 @@
-// IBLT exchange over TcpSyncSession (§13.2 set-diff under a prefix).
+// IBLT exchange over SyncSession (§13.2 set-diff under a prefix).
 namespace BinSync;
 
 /// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
-public sealed partial class TcpSyncSession
+public sealed partial class SyncSession
 {
     /// <summary>Send local IBLT for namespace (optional prefix filter).</summary>
     public async Task SendIbltAsync(

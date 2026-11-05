@@ -1,8 +1,8 @@
-// KEY_ROTATION (0x11) exchange on TcpSyncSession (§14.9).
+// KEY_ROTATION (0x11) exchange on SyncSession (§14.9).
 namespace BinSync;
 
 /// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
-public sealed partial class TcpSyncSession
+public sealed partial class SyncSession
 {
     /// <summary>Send a signed KEY_ROTATION notice to the peer.</summary>
     public async Task SendKeyRotationAsync(KeyRotationNotice notice, CancellationToken ct = default)

@@ -1,8 +1,8 @@
-// GC_NOTICE exchange on TcpSyncSession.
+// GC_NOTICE exchange on SyncSession.
 namespace BinSync;
 
 /// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
-public sealed partial class TcpSyncSession
+public sealed partial class SyncSession
 {
     /// <summary>Send a GC notice frame to the peer.</summary>
     public async Task SendGcNoticeAsync(
