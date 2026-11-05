@@ -202,7 +202,6 @@ public static class StateHash
     }
 
     /// <summary>Compatibility overload. Outbox cursors are not part of replicated state.</summary>
-    [Obsolete("Outbox cursors are per-author transport state and are excluded from STATE_ROOT. Use the overload without outboxCursor.")]
     public static byte[] StateRootDigest(ushort namespaceId, ulong outboxCursor, List<BucketAccumulator> buckets) =>
         StateRootDigest(namespaceId, buckets);
 
