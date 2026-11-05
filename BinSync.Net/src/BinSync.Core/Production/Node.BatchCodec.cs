@@ -13,7 +13,7 @@ public sealed partial class Node
         var entries = batch.Entries;
         int est = 108 + 2 * Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 17 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
+            est += 33 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
         return est;
     }
 
