@@ -1,17 +1,17 @@
-# BIN-SYNC CORE v2.3.9 FINAL
+# BIN-SYNC CORE v2.4.0 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.3.9 FINAL (ChangeId provenance and ACK watermark hardening)  
+**Версия:** 2.4.0 FINAL (peer-relative stream cursors and immutable Outbox sequence)  
 **Дата:** 2026-11-05  
-**Изменения относительно v2.3.8:**
+**Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
 - `recordsRoot`, `batchDigest` и подпись связывают исходный `changeId`; relay сохраняет его побайтно
 - Нулевые и повторяющиеся `changeId` отклоняются до мутации; snapshot дополнительно проверяет `recordsRoot` и `batchDigest`
 - Добавлен mesh-сценарий A→B→C→A с повторной доставкой через независимый маршрут
 - ACK ограничен фактически отправленным cursor по каждому author stream; добавлен ACK_OUT_OF_RANGE (0x0018)
 - Дубликат batch подтверждается автором, сохранённым по ключу Inbox, а не последним автором сессии
-- Node-state v3 сохраняет StreamPushed и InboxAuthors
+- Node-state v4 сохраняет StreamPushed, InboxAuthors и per-peer/per-author StreamOffsets; чтение v3 сохранено
 - Сохранены wire-format изменения ChangeId из v2.3.8
 
 ---
@@ -1612,6 +1612,30 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 ---
 
+## Сценарий 44. Snapshot-tail после compaction не перенумеровывает общий Outbox
+
+**Инварианты:** E-15 (ACK watermark), E-17 (peer-relative cursor), S2 (непрерывность author stream), П7 (детерминированный replay).
+
+**Описание:** Peer A подтверждает локальные cursor 1 и 2. После этого общий Outbox компактизирует префикс. Новый peer B получает snapshot, а затем delta-tail, начинающийся с wire cursor 1, хотя локальный cursor этой записи равен 3.
+
+**Шаги:**
+1. A получает и подтверждает изменения author stream с локальными cursor 1 и 2.
+2. Outbox удаляет подтверждённый префикс; следующий локальный cursor остаётся равным 3.
+3. B присоединяется и получает snapshot состояния, включающего изменения 1 и 2.
+4. Для B строится delta-tail: локальный cursor 3 отображается в wire cursor 1 с offset 2.
+5. Для A одновременно строится следующий batch: он обязан сохранить wire cursor 3.
+6. Проверяется, что построение и доставка batch B не меняет Outbox.Seq, batch-id mapping и ACK watermark A.
+7. Offset сохраняется, узел перезапускается, и следующий cursor 4 отображается в wire cursor 2.
+
+**Критерий успешности:**
+- B получает cursor 1, A получает cursor 3 для одной и той же локальной записи.
+- Общий Outbox.Seq остаётся равным 3 до и после построения обоих batch.
+- ACK B=1 преобразуется в local ACK=3; ACK A=3 остаётся local ACK=3.
+- После restart offset B=2 сохраняется; local cursor 4 становится wire cursor 2.
+- Ни один peer не теряет запись и не получает повторно уже подтверждённый диапазон.
+
+---
+
 ## Сценарий 43. Сквозное сохранение ChangeId в mesh и защита snapshot
 
 **Инварианты:** И4 (неизменность авторства/provenance), E-8 (relay eligibility), E-13 (подавление кольцевого эха), T1 (атомарность применения).
@@ -1772,7 +1796,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 Снапшот с привязкой к дайджесту состояния.
 Атомарные батчи, цепочка дайджестов батчей.
 Модель доверия: при первом использовании / заранее согласованные / центр сертификации.
-Сорок три лабораторных сценария покрывают все выявленные режимы отказов.
+Сорок четыре лабораторных сценария покрывают все выявленные режимы отказов.
 ```
 
 ---
@@ -2026,6 +2050,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 | **2.3.6** | **2026-09-09** | **Укрепление реализации: (1) порядок проверок в применении батча — идемпотентность до проверки дайджеста предыдущего батча (инвариант П7); (2) трансляция псевдонима при ретрансляции через карту псевдонимов получателя (инвариант Р4); (3) побайтовые диаграммы формата кадров с явным указанием смещения псевдонима равного семнадцать (инвариант К11); (4) подавление кольцевого эха через проверку идентичности время+автор+значение (инвариант Ш2); (5) добавлены девятнадцать новых сценариев верификации (двадцать четыре-сорок два).** |
 | **2.3.8** | **2026-11-05** | **Сквозная provenance-идентичность: ChangeId включён в wire records, RecordsRoot и batch digest; обязательная проверка ChangeId и целостности snapshot до apply; mesh regression-сценарий 43.** |
 | **2.3.9** | **2026-11-05** | **ACK hardening: per-author pushed watermarks, contiguous-range validation, exact TCP ACK binding, persisted InboxAuthors for duplicate replay; node-state v3.** |
+| **2.4.0** | **2026-11-05** | **Immutable Outbox sequence and per-peer/per-author cursor offsets; ACK and compaction coordinate conversion; node-state v4 with v3 reader compatibility; scenario 44.** |
 
 ---
 
@@ -2047,7 +2072,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 **Конец спецификации.**
 
-Документ самодостаточен и готов к промышленной реализации. В версии 2.3.6 закрыты все четыре критические проблемы, выявленные при практической реализации:
+Документ самодостаточен и описывает текущую реализацию BIN-SYNC CORE v2.4.0. В версиях 2.3.6–2.4.0 последовательно закрыты критические проблемы, выявленные при практической реализации:
 
 1. **Порядок проверок** в применении батча предотвращает ложные отказы при потерянных подтверждениях.
 2. **Трансляция псевдонимов** гарантирует корректную идентификацию автора в ячеистых топологиях.
@@ -2056,7 +2081,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 Сорок два лабораторных сценария покрывают все выявленные режимы отказов.
 
-**Следующий шаг — Фаза один реализации** с критерием приёма: сто тысяч случайных слияний + тысяча повреждённых кадров + тысяча тестов ретрансляции проходят все инварианты.
+**Следующий шаг — продолжение crash/restart и compaction fault-injection испытаний** с критерием приёма: сто тысяч случайных слияний + тысяча повреждённых кадров + тысяча тестов ретрансляции проходят все инварианты.
 
 ---
 
@@ -2130,7 +2155,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 **Нормативно:** каждая запись wire-массива имеет порядок `recordId b128 | changeId b128 | opKind u8 | payloadLen varint | payload`. `changeId` — обязательный ненулевой 128-битный идентификатор исходного изменения; ретранслятор сохраняет его побайтно. `recordsRoot` считается по полному каноническому массиву и тем самым связывает `changeId` с `batchDigest` и подписью. Нулевые и повторяющиеся в одном батче идентификаторы отвергаются до commit; то же правило применяется к snapshot batches. Старый wire-layout без `changeId` несовместим с v2.3.8 и не поддерживается этой версией протокола.
 
-# ERRATA v2.3.9
+# ERRATA v2.4.0
 
 ## E-15. §10.4 / §12.23 — ACK не может продвигать watermark за отправленный stream
 
@@ -2145,3 +2170,18 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 **Дефект:** LastStreamAuthor хранит только последнего автора, принятого от peer в namespace. Если peer передавал несколько author streams, повтор старого batch после более нового мог получить ACK с чужим автором.
 
 **Нормативно:** при первом принятии узел сохраняет durable author отдельно для ключа Inbox (issuer, namespace, epoch, batchId). При duplicate replay ACK строится по этой записи, а не по последнему автору сессии. Соответствие InboxAuthors сохраняется в node-state; восстановление не меняет автора ACK.
+
+## E-17. §10.5 / §12.17.2 — sequence Outbox неизменяема; cursor offset принадлежит peer
+
+**Дефект:** нормализация разрыва после compaction изменяла `OutboxEntry.Seq` непосредственно при построении DELTA_BATCH для одного получателя. Outbox общий для всех peers, тогда как ACK-watermark индивидуален. Поэтому нормализация для нового peer могла перенумеровать запись ниже watermark старого peer; старый peer переставал видеть ещё не подтверждённое изменение.
+
+**Нормативно:**
+1. `OutboxEntry.Seq` — неизменяемый локальный durable cursor в пределах author stream. Построение батча не изменяет запись Outbox.
+2. Для каждой пары (peer, namespace, author stream) хранится `StreamOffset >= 0`: `localCursor = wireCursor + StreamOffset`.
+3. Если новый peer начинает delta-tail после уже скомпактированного префикса, его первый доступный local cursor `L` отображается в wire cursor 1; начальный offset равен `L - 1`. Это отображение действует только для данного peer и author stream.
+4. `CreateDeltaBatch` формирует peer-relative sequence в лёгких копиях записей; payload и ChangeId остаются неизменными. Диапазон batch cursor и batch-id cache используют wire cursor.
+5. ACK сначала проверяется по StreamPushed в wire coordinate, затем contiguous-range validation выполняется в local coordinate через offset. StreamAcked хранится в wire coordinate.
+6. Compaction сравнивает local Outbox.Seq с `StreamAcked + StreamOffset` каждого заинтересованного peer. Отсутствие PeerState означает отсутствие ACK и не разрешает удаление.
+7. Offset сохраняется вместе с PeerState. Node-state повышен до v4 (`BIN-SYNC/NODESTATE/v4`); v3 читается с нулевым offset, v1/v2 не поддерживаются.
+
+**Инвариант:** изменение cursor mapping одного peer не может изменить cursor, batch-id, ACK или видимость записей для любого другого peer.
