@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.8 FINAL
+# BIN-SYNC CORE v2.4.9 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.8 FINAL (bounded reconciliation request parsing)  
+**Версия:** 2.4.9 FINAL (symmetric peer-session establishment)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -14,6 +14,7 @@
 - Node-state v4 сохраняет StreamPushed, InboxAuthors и per-peer/per-author StreamOffsets; чтение v3 сохранено
 - Сохранены wire-format изменения ChangeId из v2.3.8
 - `STATE_ROOT` больше не включает агрегированный Outbox cursor: sequence numbers независимы по author stream; legacy `OutboxCursor` в `STATE_DIGEST` зарезервирован и передаётся как zero
+- Определены единственная активная сессия на пару peer, симметричный HELLO и детерминированная роль по NodeId; TCP/WebRTC transport direction не влияет на роль, wire layout не изменён
 
 ---
 
