@@ -73,8 +73,8 @@ public sealed class PipeTransport : IPeerAwareSyncTransport
         ObjectDisposedException.ThrowIf(_disposed, this);
         try
         {
-            if (_reader.Completion.IsCompleted && !_reader.TryRead(out _))
-                return null;
+            // ReadAsync drains packets already queued before reporting channel closure.
+            // Do not probe with TryRead(out _): that would silently discard a packet.
             return await _reader.ReadAsync(ct).ConfigureAwait(false);
         }
         catch (ChannelClosedException)
