@@ -158,6 +158,7 @@ public class WalTests
                 System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, validPayload.Length);
                 fs.Write(length);
                 fs.Write(validPayload);
+                fs.Write(Blake3Core.TaggedHash("BIN-SYNC/WAL-RECORD/v1", validPayload).AsSpan(0, 16));
                 System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, 1);
                 fs.Write(length);
                 fs.Write(new byte[] { 0xFF });
