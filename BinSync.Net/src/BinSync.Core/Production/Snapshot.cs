@@ -87,14 +87,14 @@ public static partial class Reconcile
                     LifecycleValue = rec.LifecycleValue,
                     LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
                     LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
-                    LifecycleAuthor = rec.LifecycleAuthor ?? Node.Zero128,
+                    LifecycleAuthor = (rec.LifecycleAuthor ?? Node.Zero128).ToArray(),
                 };
                 foreach (var (fid, fs) in rec.State)
                 {
                     sr.Fields.Add(new SnapshotField
                     {
                         FieldId = fid, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical,
-                        AuthorNodeId = fs.AuthorNodeId, KeyEpoch = fs.KeyEpoch, Value = fs.Value,
+                        AuthorNodeId = fs.AuthorNodeId.ToArray(), KeyEpoch = fs.KeyEpoch, Value = fs.Value.ToArray(),
                     });
                 }
                 if (rec.HasFieldTombs)
@@ -104,7 +104,7 @@ public static partial class Reconcile
                         sr.Fields.Add(new SnapshotField
                         {
                             FieldId = fid, IsTombstone = true, Wall = fs.Timestamp.Wall,
-                            Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId,
+                            Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId.ToArray(),
                             KeyEpoch = fs.KeyEpoch, Value = Array.Empty<byte>(),
                         });
                     }
@@ -208,6 +208,7 @@ public static partial class Reconcile
     {
         if (chunk.ChunkCount == 0 || chunk.ChunkIndex >= chunk.ChunkCount)
             throw new FormatException("Invalid snapshot chunk coordinates");
+        using var gates = node.EnterAllGates();
         int applied = 0;
         foreach (var rec in chunk.Records)
         {

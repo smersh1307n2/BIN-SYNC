@@ -114,7 +114,7 @@ public sealed partial class TcpSyncSession
         var first = Reconcile.DecodeSnapshotChunk(frame.Payload);
         if (first.ChunkCount == 0 || first.ChunkIndex != 0)
             throw new FormatException("Snapshot must begin with chunk zero");
-        int fieldsApplied = Reconcile.ApplySnapshot(local, first);
+        var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
         for (uint expected = 1; expected < first.ChunkCount; expected++)
         {
             raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
@@ -126,8 +126,14 @@ public sealed partial class TcpSyncSession
             if (chunk.NamespaceId != first.NamespaceId ||
                 chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != expected)
                 throw new FormatException("Snapshot chunk sequence mismatch");
-            fieldsApplied += Reconcile.ApplySnapshot(local, chunk);
+            chunks.Add(chunk);
         }
+
+        // Do not publish any part of the baseline until every chunk has arrived and validated.
+        using var gates = local.EnterAllGates();
+        int fieldsApplied = 0;
+        foreach (var chunk in chunks)
+            fieldsApplied += Reconcile.ApplySnapshot(local, chunk);
         return fieldsApplied;
     }
 
