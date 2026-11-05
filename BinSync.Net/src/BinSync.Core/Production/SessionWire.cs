@@ -189,7 +189,7 @@ public static class SessionWire
             [local.NodeId] = local.Epoch,
             [peerNodeId] = peerEpoch,
         };
-        foreach (var (nid, ep) in local.DurableAuthors)
+        foreach (var (nid, ep) in local.DurableAuthorsSnapshot())
             if (!authors.ContainsKey(nid)) authors[nid] = ep;
 
         var ordered = authors.OrderBy(kv => kv.Key.ToString()).ToList();

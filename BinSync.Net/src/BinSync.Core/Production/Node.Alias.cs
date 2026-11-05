@@ -7,6 +7,12 @@ namespace BinSync;
 public sealed partial class Node
 {
     // ------------------------------------------------------------------ aliases
+    /// <summary>Take a stable copy of the durable author registry under the metadata gate.</summary>
+    internal KeyValuePair<NodeId, int>[] DurableAuthorsSnapshot()
+    {
+        lock (_lockMeta) return DurableAuthors.ToArray();
+    }
+
     /// §4.4 HELLO carries the sender's incarnation epoch; the receiver stores it as the
     /// per-session watermark used by STEP 0.5 (errata E-2/E-3). A NEW session resets the
     /// peer's watermark first (§4.3: reconnect = fresh exchange), then raises it.

@@ -120,8 +120,9 @@ public partial class SyncSession : IAsyncDisposable
             {
                 await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
                 raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
-                var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
+                var remoteAliases = SessionWire.DecodeAliasMap(raw);
                 lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
+                var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, remoteAliases);
                 await transport.SendAsync(SessionWire.EncodeAliasMap(merged), ct).ConfigureAwait(false);
                 local.CommitSession(peer.NodeId, peer.Epoch, merged);
             }
@@ -249,10 +250,11 @@ public partial class SyncSession : IAsyncDisposable
         EnsureHandshakeRole(local.NodeId, peer.NodeId, initiator: false);
         await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
-        var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
+        var remoteAliases = SessionWire.DecodeAliasMap(raw);
         var lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
         try
         {
+        var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, remoteAliases);
         await transport.SendAsync(SessionWire.EncodeAliasMap(merged), ct).ConfigureAwait(false);
 
         // Commit the new session only after the complete peer map was decoded and
@@ -301,7 +303,7 @@ public partial class SyncSession : IAsyncDisposable
         var extras = new List<(NodeId Id, int Epoch)>();
         void Add(NodeId id, int epoch) { if (known.Add(id)) extras.Add((id, epoch)); }
         Add(local.NodeId, local.Epoch); Add(peerNodeId, peerEpoch);
-        foreach (var (id, epoch) in local.DurableAuthors) Add(id, epoch);
+        foreach (var (id, epoch) in local.DurableAuthorsSnapshot()) Add(id, epoch);
         extras.Sort(static (a, b) =>
         {
             Span<byte> left = stackalloc byte[16]; Span<byte> right = stackalloc byte[16];
