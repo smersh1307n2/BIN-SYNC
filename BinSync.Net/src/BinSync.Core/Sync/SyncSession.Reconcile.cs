@@ -34,8 +34,8 @@ public partial class SyncSession
         if (initiate)
         {
             await SendFrameAsync(ReconcileFrames.StateDigest, streamId, 10ul, Reconcile.EncodeStateDigest(mine), ct).ConfigureAwait(false);
-            var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                ?? throw new IOException("peer closed during STATE_DIGEST");
+            var raw = await ReceivePacketAsync(ReconcileFrames.StateDigest, ct).ConfigureAwait(false)
+               ;
             var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.StateDigest);
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
             ValidateNamespaceStream(frame, peer.NamespaceId);
@@ -45,8 +45,8 @@ public partial class SyncSession
         }
         else
         {
-            var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                ?? throw new IOException("peer closed during STATE_DIGEST");
+            var raw = await ReceivePacketAsync(ReconcileFrames.StateDigest, ct).ConfigureAwait(false)
+               ;
             var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.StateDigest);
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
             ValidateNamespaceStream(frame, peer.NamespaceId);
@@ -68,8 +68,8 @@ public partial class SyncSession
     /// <summary>Receive a NEED_RANGE reconcile message.</summary>
     public async Task<NeedRangeMessage> ReceiveNeedRangeAsync(CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during NEED_RANGE");
+        var raw = await ReceivePacketAsync(ReconcileFrames.NeedRange, ct).ConfigureAwait(false)
+           ;
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedRange);
         var need = Reconcile.DecodeNeedRange(frame.Payload);
         ValidateNamespaceStream(frame, need.NamespaceId);
@@ -86,8 +86,8 @@ public partial class SyncSession
     /// <summary>Receive a NEED_KEYS reconcile message.</summary>
     public async Task<NeedKeysMessage> ReceiveNeedKeysAsync(CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during NEED_KEYS");
+        var raw = await ReceivePacketAsync(ReconcileFrames.NeedKeys, ct).ConfigureAwait(false)
+           ;
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedKeys);
         var need = Reconcile.DecodeNeedKeys(frame.Payload);
         ValidateNamespaceStream(frame, need.NamespaceId);
@@ -126,8 +126,8 @@ public partial class SyncSession
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>
     public async Task<int> ReceiveSnapshotAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during SNAPSHOT_CHUNK");
+        var raw = await ReceivePacketAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
+           ;
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
         var first = Reconcile.DecodeSnapshotChunk(frame.Payload);
         ValidateNamespaceStream(frame, first.NamespaceId);
@@ -136,8 +136,8 @@ public partial class SyncSession
         var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
         for (uint expected = 1; expected < first.ChunkCount; expected++)
         {
-            raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                ?? throw new IOException("peer closed during multi-chunk SNAPSHOT_CHUNK");
+            raw = await ReceivePacketAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
+               ;
             frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
             var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
             ValidateNamespaceStream(frame, chunk.NamespaceId);

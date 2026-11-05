@@ -23,8 +23,8 @@ public partial class SyncSession
     /// </summary>
     public async Task<bool> ReceiveKeyRotationAsync(KeyEpochStore store, Node? local, CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during KEY_ROTATION");
+        var raw = await ReceivePacketAsync(KeyRotation.FrameType, ct).ConfigureAwait(false)
+           ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != KeyRotation.FrameType)
             throw new FrameException("FRAME_REJECTED");

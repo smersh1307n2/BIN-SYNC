@@ -127,6 +127,33 @@ public class TransportFoundationTests
 
 
     [Fact]
+    public async Task Full_duplex_batch_exchange_dispatches_data_and_ack_to_the_correct_operations()
+    {
+        using var low = Fix.MakeNode(1);
+        using var high = Fix.MakeNode(2);
+        var (toLow, toHigh) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(high, toHigh);
+        var connectTask = SyncSession.ConnectAsync(low, toLow);
+        await using var lowSession = await connectTask;
+        await using var highSession = await acceptTask;
+
+        low.WriteField(1, Fix.Rid(101), 0x100, new byte[] { 1, 2, 3 });
+        high.WriteField(1, Fix.Rid(202), 0x100, new byte[] { 4, 5, 6 });
+
+        var lowPush = lowSession.PushBatchAsync(low, 1);
+        var lowReceive = lowSession.ReceiveBatchAsync(low);
+        var highPush = highSession.PushBatchAsync(high, 1);
+        var highReceive = highSession.ReceiveBatchAsync(high);
+        await Task.WhenAll(lowPush, lowReceive, highPush, highReceive).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(await lowPush);
+        Assert.True(await highPush);
+        Assert.True(high.Storage[1].ContainsKey(Fix.Rid(101)));
+        Assert.True(low.Storage[1].ContainsKey(Fix.Rid(202)));
+    }
+
+
+    [Fact]
     public async Task Same_peer_sessions_are_serialized_until_the_active_session_is_disposed()
     {
         using var low = new Node(Fix.Nid(1));

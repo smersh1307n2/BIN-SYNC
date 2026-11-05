@@ -24,11 +24,15 @@ public partial class SyncSession
     /// </summary>
     public async Task<byte[]> ReceiveReassembledAsync(CancellationToken ct = default)
     {
+        await _rawReceiveGate.WaitAsync(ct).ConfigureAwait(false);
+        BeginRawReceiveMode();
         var re = new FragmentReassembler();
+        try
+        {
         while (true)
         {
             var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                ?? throw new IOException("peer closed during fragment reassembly");
+               ;
             var (frame, _) = FrameCodec.ParseFrame(raw);
             if ((frame.Flags & Frames.FLAG_FRAGMENT) == 0)
                 return frame.Payload;

@@ -17,8 +17,8 @@ public partial class SyncSession
     /// <summary>Receive one IBLT frame and decode.</summary>
     public async Task<Iblt> ReceiveIbltAsync(CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during IBLT");
+        var raw = await ReceivePacketAsync(ReconcileFrames.Iblt, ct).ConfigureAwait(false)
+           ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != ReconcileFrames.Iblt)
             throw new FrameException("FRAME_REJECTED");

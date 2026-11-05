@@ -16,8 +16,8 @@ public partial class SyncSession
     /// <summary>Receive and apply a GC notice; returns how many entries were learned.</summary>
     public async Task<int> ReceiveGcNoticeAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during GC_NOTICE");
+        var raw = await ReceivePacketAsync(ReconcileFrames.GcNotice, ct).ConfigureAwait(false)
+           ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != ReconcileFrames.GcNotice)
             throw new FrameException("FRAME_REJECTED");

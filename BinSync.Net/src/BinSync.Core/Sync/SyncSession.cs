@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 
 namespace BinSync;
 
@@ -11,6 +12,17 @@ public partial class SyncSession : IAsyncDisposable
     private readonly bool _ownsTransport;
     private IDisposable? _sessionLease;
     private int _disposed;
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+    private readonly SemaphoreSlim _pushGate = new(1, 1);
+    private readonly SemaphoreSlim _batchReceiveGate = new(1, 1);
+    private readonly SemaphoreSlim _rawReceiveGate = new(1, 1);
+    private readonly object _receiveSync = new();
+    private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();
+    private readonly CancellationTokenSource _receiveCts = new();
+    private Task? _receivePump;
+    private bool _rawReceiveActive;
+    private bool _receiveCompleted;
+    private Exception? _receiveFailure;
     /// <summary>Remote peer identity established by HELLO.</summary>
     public NodeId PeerNodeId { get; }
     /// <summary>Peer incarnation epoch established by HELLO.</summary>
@@ -142,12 +154,15 @@ public partial class SyncSession : IAsyncDisposable
     /// <summary>Push one pending delta and wait for its ACK.</summary>
     public async Task<bool> PushBatchAsync(Node sender, int namespaceId, int schemaVersion = 1, CancellationToken ct = default)
     {
+        await _pushGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
         var batch = sender.CreateDeltaBatch(PeerNodeId, namespaceId, schemaVersion: schemaVersion);
         if (batch is null) return false;
         sender.SignBatchFor(batch, PeerNodeId);
         var payload = sender.EncodeBatchPayload(batch);
         await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1, payload, ct).ConfigureAwait(false);
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed before ACK");
+        var raw = await ReceivePacketAsync(0x0B, ct).ConfigureAwait(false);
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != 0x0B) throw new FrameException("FRAME_REJECTED");
         var (id, seq, author) = Transport.DecodeAck(frame.Payload);
@@ -157,18 +172,25 @@ public partial class SyncSession : IAsyncDisposable
         sender.AdvanceStream(PeerNodeId, namespaceId, batch);
         sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: NodeId.From(author));
         return true;
+        }
+        finally { _pushGate.Release(); }
     }
 
     /// <summary>Receive one DELTA_BATCH, apply it and return the ACK.</summary>
     public async Task<BatchResult> ReceiveBatchAsync(Node receiver, CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed");
+        await _batchReceiveGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+        var raw = await ReceivePacketAsync(0x09, ct).ConfigureAwait(false);
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != 0x09) throw new FrameException("FRAME_REJECTED");
         var result = receiver.ApplyBatchPayload(frame.Payload, PeerNodeId);
         var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
         await SendFrameAsync(0x0B, 0x0002_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
         return result;
+        }
+        finally { _batchReceiveGate.Release(); }
     }
 
     /// <summary>Build and send one framed packet through the configured channel.</summary>
@@ -180,7 +202,9 @@ public partial class SyncSession : IAsyncDisposable
         try
         {
             int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
-            await _transport.SendAsync(rented.AsMemory(0, length), ct).ConfigureAwait(false);
+            await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+            try { await _transport.SendAsync(rented.AsMemory(0, length), ct).ConfigureAwait(false); }
+            finally { _sendGate.Release(); }
         }
         finally { ArrayPool<byte>.Shared.Return(rented); }
     }
@@ -189,13 +213,97 @@ public partial class SyncSession : IAsyncDisposable
     public virtual async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _receiveCts.Cancel();
         try
         {
+            Task? pump;
+            lock (_receiveSync) pump = _receivePump;
+            if (pump is not null)
+            {
+                try { await pump.ConfigureAwait(false); }
+                catch (OperationCanceledException) { }
+            }
             if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
             Interlocked.Exchange(ref _sessionLease, null)?.Dispose();
+            _receiveCts.Dispose();
+        }
+    }
+
+    /// <summary>Receive a specific frame type through the session's single-reader dispatcher.</summary>
+    private async Task<byte[]> ReceivePacketAsync(byte expectedType, CancellationToken ct)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        Channel<byte[]> channel;
+        lock (_receiveSync)
+        {
+            if (_rawReceiveActive)
+                throw new InvalidOperationException("Raw receive mode is already active on this session");
+            channel = _receiveChannels.GetOrAdd(expectedType, static _ =>
+                Channel.CreateBounded<byte[]>(new BoundedChannelOptions(64)
+                {
+                    SingleReader = true, SingleWriter = true,
+                    FullMode = BoundedChannelFullMode.Wait,
+                    AllowSynchronousContinuations = false,
+                }));
+            if (_receiveCompleted) channel.Writer.TryComplete(_receiveFailure);
+            _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
+        }
+        try { return await channel.Reader.ReadAsync(ct).ConfigureAwait(false); }
+        catch (ChannelClosedException) when (_receiveFailure is not null)
+        { throw new IOException("Session receive pump failed", _receiveFailure); }
+        catch (ChannelClosedException)
+        { throw new IOException("Peer closed the session"); }
+    }
+
+    private async Task ReceivePumpAsync(CancellationToken ct)
+    {
+        Exception? failure = null;
+        try
+        {
+            while (true)
+            {
+                var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
+                    ?? throw new IOException("Peer closed the session");
+                var (frame, consumed) = FrameCodec.ParseFrame(raw);
+                if (consumed != raw.Length) throw new FrameException("FRAME_REJECTED");
+                Channel<byte[]> channel;
+                lock (_receiveSync)
+                {
+                    channel = _receiveChannels.GetOrAdd(frame.FrameType, static _ =>
+                        Channel.CreateBounded<byte[]>(new BoundedChannelOptions(64)
+                        {
+                            SingleReader = true, SingleWriter = true,
+                            FullMode = BoundedChannelFullMode.Wait,
+                            AllowSynchronousContinuations = false,
+                        }));
+                }
+                await channel.Writer.WriteAsync(raw, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex) { failure = ex; }
+        finally
+        {
+            lock (_receiveSync)
+            {
+                _receiveFailure = failure;
+                _receiveCompleted = true;
+                foreach (var channel in _receiveChannels.Values)
+                    channel.Writer.TryComplete(failure);
+            }
+        }
+    }
+
+    private void BeginRawReceiveMode()
+    {
+        lock (_receiveSync)
+        {
+            if (_receivePump is not null)
+                throw new InvalidOperationException("Raw receive cannot be mixed with typed session receive operations");
+            _rawReceiveActive = true;
         }
     }
 

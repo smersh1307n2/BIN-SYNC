@@ -14,8 +14,8 @@ public partial class SyncSession
     /// <summary>Receive a schema map and learn unknown schemas; returns how many were learned.</summary>
     public async Task<int> ReceiveSchemaMapAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during SCHEMA_MAP");
+        var raw = await ReceivePacketAsync(SchemaMap.FrameType, ct).ConfigureAwait(false)
+           ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != SchemaMap.FrameType)
             throw new FrameException("FRAME_REJECTED");

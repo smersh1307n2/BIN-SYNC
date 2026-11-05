@@ -16,8 +16,8 @@ public partial class SyncSession
     /// <summary>Receive MEMBERSHIP and merge into local durable authors.</summary>
     public async Task<int> ReceiveMembershipAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new IOException("peer closed during MEMBERSHIP");
+        var raw = await ReceivePacketAsync(MembershipFrames.Membership, ct).ConfigureAwait(false)
+           ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != MembershipFrames.Membership)
             throw new FrameException("FRAME_REJECTED");
