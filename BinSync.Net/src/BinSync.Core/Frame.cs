@@ -84,6 +84,7 @@ public static class Frames
         ["CORRUPTED_FRAME"] = 0x0015,
         ["FRAME_REJECTED"] = 0x0016,
         ["BATCH_CHAIN_BROKEN"] = 0x0017,
+        ["ACK_OUT_OF_RANGE"] = 0x0018,
     };
 
     private static readonly uint[] CrcTable = BuildTable();
