@@ -6,6 +6,23 @@ namespace BinSync.Tests;
 
 public class WalTests
 {
+    private static OutboxEntry MakeLocalFieldEntry(Node node, RecordId rid, ushort fieldId,
+        byte[] value, Hlc hlc, long seq)
+    {
+        var op = new OpFieldWrite
+        {
+            FieldId = fieldId, KeyEpoch = 0, Wall = hlc.Wall, Logical = hlc.Logical,
+            Origin = 1, AuthorNodeId = node.NodeId, Value = value
+        };
+        return new OutboxEntry
+        {
+            NamespaceId = 1, Seq = seq, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            RecordId = rid, OpKind = OpsConst.TagFieldWrite,
+            Payload = Ops.EncodeOp(op, fullAuthor: false), AuthorNodeId = node.NodeId,
+            CreatedAt = (long)hlc.Wall
+        };
+    }
+
     [Fact]
     public void Node_snapshot_rejects_trailing_bytes()
     {
@@ -26,30 +43,31 @@ public class WalTests
     }
 
     [Fact]
-    public void Wal_append_and_replay_restores_field()
+    [Fact]
+    public void Wal_append_and_replay_restores_field_and_outbox()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         try
         {
             var walPath = Path.Combine(dir, "node.wal");
-            var a = Fix.MakeNode(120);
+            var source = Fix.MakeNode(120);
             var rid = Fix.Rid(300);
-            var hlc = new Hlc(12345, 7);
-
             using (var wal = Wal.Open(walPath))
             {
-                wal.AppendFieldWrite(1, rid, 0x100, new byte[] { 0x42 }, hlc, a.NodeId);
-                Assert.True(wal.Sequence >= 1);
+                source.AttachWal(wal);
+                Assert.True(source.WriteField(1, rid, 0x100, new byte[] { 0x42 }, new Hlc(12345, 7)));
+                Assert.Equal(1, wal.Sequence);
             }
 
-            var b = Fix.MakeNode(121);
-            int applied = Wal.ReplayFile(walPath, b);
+            var recovered = Fix.MakeNode(120);
+            int applied = Wal.ReplayFile(walPath, recovered);
             Assert.Equal(1, applied);
-            Assert.True(b.Storage.ContainsKey(1) && b.Storage[1].ContainsKey(rid));
-            Assert.Equal(new byte[] { 0x42 }, b.Storage[1][rid].State[0x100].Value);
-            Assert.Equal(12345u, b.Storage[1][rid].State[0x100].Timestamp.Wall);
-            Assert.Equal(7u, b.Storage[1][rid].State[0x100].Timestamp.Logical);
+            Assert.True(recovered.Storage.ContainsKey(1) && recovered.Storage[1].ContainsKey(rid));
+            Assert.Equal(new byte[] { 0x42 }, recovered.Storage[1][rid].State[0x100].Value);
+            Assert.Equal(12345u, recovered.Storage[1][rid].State[0x100].Timestamp.Wall);
+            Assert.Equal(7u, recovered.Storage[1][rid].State[0x100].Timestamp.Logical);
+            Assert.Single(recovered.Outbox[1]);
         }
         finally
         {
@@ -57,6 +75,7 @@ public class WalTests
         }
     }
 
+    [Fact]
     [Fact]
     public void Wal_open_truncates_torn_tail_before_accepting_new_appends()
     {
@@ -66,14 +85,13 @@ public class WalTests
         {
             var walPath = Path.Combine(dir, "node.wal");
             var first = Fix.MakeNode(125);
-            var second = Fix.MakeNode(126);
             var firstRid = Fix.Rid(304);
             var secondRid = Fix.Rid(305);
 
             using (var wal = Wal.Open(walPath))
             {
-                wal.AppendFieldWrite(1, firstRid, 0x100, new byte[] { 1 },
-                    new Hlc(100, 0), first.NodeId);
+                first.AttachWal(wal);
+                first.WriteField(1, firstRid, 0x100, new byte[] { 1 }, new Hlc(100, 0));
             }
 
             // Simulate a process/power failure after the length prefix and only
@@ -87,15 +105,18 @@ public class WalTests
                 fs.Flush(flushToDisk: true);
             }
 
+            // Reopen the WAL and append the next sequence using a fresh process view.
+            var second = Fix.MakeNode(125);
+            second.NextOutboxSeq(second.NodeId, 1); // sequence 1 is already in the first WAL record
             using (var wal = Wal.Open(walPath))
             {
                 Assert.Equal(1, wal.Sequence);
-                wal.AppendFieldWrite(1, secondRid, 0x100, new byte[] { 2 },
-                    new Hlc(200, 0), second.NodeId);
+                second.AttachWal(wal);
+                second.WriteField(1, secondRid, 0x100, new byte[] { 2 }, new Hlc(200, 0));
                 Assert.Equal(2, wal.Sequence);
             }
 
-            var recovered = Fix.MakeNode(127);
+            var recovered = Fix.MakeNode(125);
             Assert.Equal(2, Wal.ReplayFile(walPath, recovered));
             Assert.True(recovered.TryGetRecord(1, firstRid, out _));
             Assert.True(recovered.TryGetRecord(1, secondRid, out _));
@@ -297,6 +318,7 @@ public class WalTests
     }
 
     [Fact]
+    [Fact]
     public void Wal_v2_detects_payload_corruption_before_replay()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
@@ -307,14 +329,16 @@ public class WalTests
             var source = Fix.MakeNode(132);
             var rid = Fix.Rid(307);
             using (var wal = Wal.Open(path))
-                wal.AppendFieldWrite(1, rid, 0x100, new byte[] { 0x42 },
-                    new Hlc(12345, 7), source.NodeId);
+            {
+                source.AttachWal(wal);
+                source.WriteField(1, rid, 0x100, new byte[] { 0x42 }, new Hlc(12345, 7));
+            }
 
             var bytes = File.ReadAllBytes(path);
-            bytes[6 + 4 + 1 + 1 + 16 + 2 + 1] ^= 0x01;
+            bytes[bytes.Length - 17] ^= 0x01; // last payload byte, immediately before the digest
             File.WriteAllBytes(path, bytes);
 
-            var target = Fix.MakeNode(133);
+            var target = Fix.MakeNode(132);
             Assert.Throws<InvalidDataException>(() => Wal.ReplayFile(path, target));
             Assert.False(target.TryGetRecord(1, rid, out _));
             Assert.Throws<InvalidDataException>(() => Wal.Open(path));
@@ -326,6 +350,7 @@ public class WalTests
     }
 
     [Fact]
+    [Fact]
     public void Wal_replay_validates_entire_log_before_mutating_node()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
@@ -335,20 +360,16 @@ public class WalTests
             var walPath = Path.Combine(dir, "node.wal");
             var source = Fix.MakeNode(129);
             var rid = Fix.Rid(306);
-            var validPayload = new Writer().U8((byte)WalRecordType.FieldWrite)
-                .Varint(1).B128(rid).U16(0x100).Bytes(new byte[] { 0x42 })
-                .U64(300).U32(0).B128(source.NodeId).Value();
-
-            // WAL v2 is used to construct a complete malformed frame
-            // without bypassing v2's mandatory record digest.
-            using (var fs = new FileStream(walPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var wal = Wal.Open(walPath))
             {
-                fs.Write(new byte[] { 0x42, 0x53, 0x57, 0x4C, 0x00, 0x02 });
+                source.AttachWal(wal);
+                source.WriteField(1, rid, 0x100, new byte[] { 0x42 }, new Hlc(300, 0));
+            }
+
+            // Append a complete unknown record with a valid v2 digest.
+            using (var fs = new FileStream(walPath, FileMode.Append, FileAccess.Write, FileShare.None))
+            {
                 Span<byte> length = stackalloc byte[4];
-                System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, validPayload.Length);
-                fs.Write(length);
-                fs.Write(validPayload);
-                fs.Write(Blake3Core.TaggedHash("BIN-SYNC/WAL-RECORD/v1", validPayload).AsSpan(0, 16));
                 System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, 1);
                 fs.Write(length);
                 var malformed = new byte[] { 0xFF };
@@ -357,7 +378,7 @@ public class WalTests
                 fs.Flush(flushToDisk: true);
             }
 
-            var target = Fix.MakeNode(130);
+            var target = Fix.MakeNode(129);
             Assert.Throws<InvalidDataException>(() => Wal.ReplayFile(walPath, target));
             Assert.False(target.TryGetRecord(1, rid, out _));
         }
@@ -368,6 +389,7 @@ public class WalTests
     }
 
     [Fact]
+    [Fact]
     public void Wal_checkpoint_truncates_after_snapshot()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
@@ -376,23 +398,21 @@ public class WalTests
         {
             var walPath = Path.Combine(dir, "node.wal");
             var snapPath = Path.Combine(dir, "node.state");
-            var a = Fix.MakeNode(122);
+            var node = Fix.MakeNode(122);
             var rid = Fix.Rid(301);
-            a.WriteField(1, rid, 0x100, new byte[] { 1 });
 
             using var wal = Wal.Open(walPath);
-            wal.AppendFieldWrite(1, rid, 0x100, new byte[] { 1 },
-                a.Storage[1][rid].State[0x100].Timestamp, a.NodeId);
-            Assert.True(wal.Sequence >= 1);
+            node.AttachWal(wal);
+            node.WriteField(1, rid, 0x100, new byte[] { 1 });
+            Assert.Equal(1, wal.Sequence);
 
-            wal.Checkpoint(a, snapPath);
+            wal.Checkpoint(node, snapPath);
             Assert.Equal(0, wal.Sequence);
             Assert.True(File.Exists(snapPath));
 
             var loaded = NodePersistence.Load(snapPath);
             Assert.True(loaded.Storage.ContainsKey(1) && loaded.Storage[1].ContainsKey(rid));
-
-            var empty = Fix.MakeNode(123);
+            var empty = Fix.MakeNode(122);
             Assert.Equal(0, Wal.ReplayFile(walPath, empty));
         }
         finally
@@ -401,6 +421,7 @@ public class WalTests
         }
     }
 
+    [Fact]
     [Fact]
     public async Task Wal_checkpoint_preserves_writes_racing_with_snapshot_and_truncate()
     {
@@ -412,6 +433,7 @@ public class WalTests
             var snapPath = Path.Combine(dir, "node.state");
             var node = Fix.MakeNode(128);
             using var wal = Wal.Open(walPath);
+            node.AttachWal(wal);
 
             var writer = Task.Run(() =>
             {
@@ -419,9 +441,6 @@ public class WalTests
                 {
                     var rid = Fix.Rid(2000 + i);
                     node.WriteField(1, rid, 0x100, new byte[] { (byte)i });
-                    Assert.True(node.TryGetField(1, rid, 0x100, out var field));
-                    wal.AppendFieldWrite(1, rid, 0x100, field!.Value,
-                        field.Timestamp, node.NodeId.ToArray());
                 }
             });
 
@@ -432,6 +451,7 @@ public class WalTests
             Wal.ReplayFile(walPath, recovered);
             for (int i = 0; i < 128; i++)
                 Assert.True(recovered.TryGetRecord(1, Fix.Rid(2000 + i), out _), $"Lost record {i}");
+            Assert.Equal(128, recovered.Outbox[1].Count);
         }
         finally
         {
@@ -439,6 +459,7 @@ public class WalTests
         }
     }
 
+    [Fact]
     [Fact]
     public void Wal_replay_after_snapshot_applies_delta()
     {
@@ -448,17 +469,16 @@ public class WalTests
         {
             var walPath = Path.Combine(dir, "node.wal");
             var snapPath = Path.Combine(dir, "node.state");
-            var a = Fix.MakeNode(124);
+            var node = Fix.MakeNode(124);
             var rid1 = Fix.Rid(302);
             var rid2 = Fix.Rid(303);
-            a.WriteField(1, rid1, 0x100, new byte[] { 10 });
-            NodePersistence.Save(a, snapPath);
+            node.WriteField(1, rid1, 0x100, new byte[] { 10 });
+            NodePersistence.Save(node, snapPath);
 
             using (var wal = Wal.Open(walPath))
             {
-                a.WriteField(1, rid2, 0x100, new byte[] { 20 });
-                var fs = a.Storage[1][rid2].State[0x100];
-                wal.AppendFieldWrite(1, rid2, 0x100, fs.Value, fs.Timestamp, a.NodeId);
+                node.AttachWal(wal);
+                node.WriteField(1, rid2, 0x100, new byte[] { 20 });
             }
 
             var recovered = NodePersistence.Load(snapPath);
@@ -467,10 +487,13 @@ public class WalTests
             Assert.True(recovered.Storage[1].ContainsKey(rid1));
             Assert.True(recovered.Storage[1].ContainsKey(rid2));
             Assert.Equal(new byte[] { 20 }, recovered.Storage[1][rid2].State[0x100].Value);
+            Assert.Equal(2, recovered.Outbox[1].Count);
         }
         finally
         {
             try { Directory.Delete(dir, true); } catch { /* best effort */ }
         }
     }
+
+
 }

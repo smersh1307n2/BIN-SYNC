@@ -7,7 +7,6 @@ namespace BinSync;
 /// <summary>WAL record type tags.</summary>
 public enum WalRecordType : byte
 {
-    FieldWrite = 0x01,
     Checkpoint = 0x02,
     LocalMutation = 0x03,
 }
@@ -107,23 +106,6 @@ public sealed class Wal : IDisposable
             fs.Dispose();
             throw;
         }
-    }
-
-    /// <summary>Append a field-write record to the WAL and return its sequence.</summary>
-    public long AppendFieldWrite(
-        int namespaceId, byte[] recordId, ushort fieldId, byte[] value,
-        Hlc hlc, byte[] authorNodeId)
-    {
-        var w = new Writer();
-        w.U8((byte)WalRecordType.FieldWrite);
-        w.Varint((ulong)namespaceId);
-        w.B128(Codec.CanonicalB128(recordId));
-        w.U16(fieldId);
-        w.Bytes(value ?? Array.Empty<byte>()); // variable-length payload, not B128
-        w.U64(hlc.Wall);
-        w.U32(hlc.Logical);
-        w.B128(Codec.CanonicalB128(authorNodeId));
-        return AppendRaw(w.Value());
     }
 
     /// <summary>
@@ -310,19 +292,6 @@ public sealed class Wal : IDisposable
         var type = (WalRecordType)r.U8();
         switch (type)
         {
-            case WalRecordType.FieldWrite:
-                {
-                    ulong ns = r.Varint();
-                    if (ns > int.MaxValue)
-                        throw new InvalidDataException("WAL namespace id is out of range.");
-                    _ = r.B128();
-                    _ = r.U16();
-                    _ = r.Bytes();
-                    _ = r.U64();
-                    _ = r.U32();
-                    _ = r.B128();
-                    break;
-                }
             case WalRecordType.Checkpoint:
                 _ = r.U64();
                 break;
@@ -360,18 +329,6 @@ public sealed class Wal : IDisposable
         var type = (WalRecordType)r.U8();
         switch (type)
         {
-            case WalRecordType.FieldWrite:
-                {
-                    int ns = (int)r.Varint();
-                    var rid = r.B128();
-                    ushort fid = r.U16();
-                    var value = r.Bytes();
-                    ulong wall = r.U64();
-                    uint logical = r.U32();
-                    var author = r.B128();
-                    node.ApplyRemoteField(ns, rid, fid, value, new Hlc(wall, logical), author);
-                    return 1;
-                }
             case WalRecordType.Checkpoint:
                 return 0;
             case WalRecordType.LocalMutation:
