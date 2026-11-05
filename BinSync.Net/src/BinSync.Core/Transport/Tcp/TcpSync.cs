@@ -53,7 +53,7 @@ public sealed class TcpSyncListener : IAsyncDisposable
             }
 
             var transport = new StreamSyncTransport(stream, ownsStream: true);
-            return await SyncSession.AcceptAsync(local, transport, caps, ownsTransport: true, ct).ConfigureAwait(false);
+            return await SyncSession.AcceptAsync(local, transport, caps, ownsTransport: true, ct: ct).ConfigureAwait(false);
         }
         catch
         {
