@@ -481,7 +481,7 @@ public class WalTests
             using (target.EnterAllGates())
             {
                 replay = Task.Run(() => Wal.ReplayFile(path, target));
-                await Task.Delay(100);
+                Thread.Sleep(100); // Keep the Monitor-owning thread synchronous until disposal.
                 Assert.False(replay.IsCompleted);
             }
 
