@@ -231,9 +231,6 @@ public static class SessionWire
         var helloAb = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("peer closed during HELLO");
         var remoteHello = DecodeHello(helloAb);
-        remote.RegisterSessionEpoch(local.NodeId, local.Epoch);
-        local.RegisterSessionEpoch(remote.NodeId, remoteHello.Epoch);
-
         await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
             .ConfigureAwait(false);
         var ackBa = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
@@ -249,8 +246,18 @@ public static class SessionWire
             ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
         var mapOnRemote = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
-        ApplyAliasMap(local, remote.NodeId, DecodeAliasMap(mapOnLocal));
-        ApplyAliasMap(remote, local.NodeId, DecodeAliasMap(mapOnRemote));
+        var localMap = DecodeAliasMap(mapOnLocal);
+        var remoteMap = DecodeAliasMap(mapOnRemote);
+
+        // Commit only after both complete maps are decoded. Preserve peer-relative
+        // replication cursors for a reconnect to the same incarnation; an epoch change
+        // invalidates the old receive-side stream state.
+        local.ResetSession(remote.NodeId, remoteHello.Epoch);
+        remote.ResetSession(local.NodeId, local.Epoch);
+        local.RegisterSessionEpoch(remote.NodeId, remoteHello.Epoch);
+        remote.RegisterSessionEpoch(local.NodeId, local.Epoch);
+        ApplyAliasMap(local, remote.NodeId, localMap);
+        ApplyAliasMap(remote, local.NodeId, remoteMap);
 
         local.PeersByNid ??= new Dictionary<NodeId, Node>();
         remote.PeersByNid ??= new Dictionary<NodeId, Node>();

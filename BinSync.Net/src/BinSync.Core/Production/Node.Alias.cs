@@ -66,13 +66,34 @@ public sealed partial class Node
     /// and delegates to <c>ResetSessionInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void ResetSession(NodeId peer)
     {
-        lock (_lockMeta) ResetSessionInternal(peer);
+        lock (_lockMeta) ResetSessionInternal(peer, resetReceiveState: true);
     }
 
-    internal void ResetSessionInternal(NodeId peer)
+    /// <summary>
+    /// Start a fresh alias session while retaining peer replication cursors when the
+    /// peer incarnation is unchanged. A changed HELLO epoch invalidates receive-side
+    /// cursors and chain checkpoints from the previous incarnation.
+    /// </summary>
+    public void ResetSession(NodeId peer, int newEpoch)
+    {
+        lock (_lockMeta)
+        {
+            bool incarnationChanged =
+                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch) &&
+                previousEpoch != newEpoch;
+            ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
+        }
+    }
+
+    internal void ResetSessionInternal(NodeId peer) =>
+        ResetSessionInternal(peer, resetReceiveState: true);
+
+    internal void ResetSessionInternal(NodeId peer, bool resetReceiveState)
     {
         AliasToNode.Remove(peer);
         NodeToAlias.Remove(peer);
+        if (!resetReceiveState) return;
+
         foreach (var k in PeerStates.Keys.Where(k => k.Item1 == peer).ToList())
             PeerStates.Remove(k);
         foreach (var k in LastBatchDigest.Keys.Where(k => k.Issuer == peer).ToList())

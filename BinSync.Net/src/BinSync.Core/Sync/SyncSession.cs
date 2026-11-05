@@ -114,9 +114,7 @@ public partial class SyncSession : IAsyncDisposable
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != SessionWire.TypeHelloAck) throw new FrameException("FRAME_REJECTED");
         var peer = SessionWire.DecodeHelloAck(raw);
-        local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
         var aliases = SessionWire.BuildAliasMapTable(local, peer.NodeId, peer.Epoch, selfAlias: 1, peerAlias: 2);
-        SessionWire.ApplyAliasMap(local, peer.NodeId, aliases);
         await transport.SendAsync(SessionWire.EncodeAliasMap(aliases), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
         var remoteAliases = SessionWire.DecodeAliasMap(raw);
@@ -124,7 +122,7 @@ public partial class SyncSession : IAsyncDisposable
         // A completed handshake starts a fresh session. Delay reset until the peer's
         // complete map has been decoded, so a failed/incomplete handshake preserves
         // the previous live session state.
-        local.ResetSession(peer.NodeId);
+        local.ResetSession(peer.NodeId, peer.Epoch);
         local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
         // The acceptor's returned map is the negotiated union; do not first
         // publish our proposal because its alias numbering may differ.
@@ -139,7 +137,6 @@ public partial class SyncSession : IAsyncDisposable
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != SessionWire.TypeHello) throw new FrameException("FRAME_REJECTED");
         var peer = SessionWire.DecodeHello(raw);
-        local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
         await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
         var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
