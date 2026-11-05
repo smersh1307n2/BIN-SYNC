@@ -786,11 +786,15 @@ DELTA_BATCH {
     prevBatchDigest : b128
     recordsRoot     : b128
     batchDigest     : b128
-    records         : bytes
+    records         : bytes  // count varint, then recordId b128 | changeId b128 | opKind u8 | payloadLen varint | payload
 }
 ```
 
-### 12.17.1. Атомарность
+### 12.17.0. Каноническая запись и provenance
+
+Каждая запись массива `records` имеет фиксированный 32-байтовый префикс: `recordId` (b128), затем исходный `changeId` (b128), затем `opKind` (u8), `payloadLen` (varint) и `payload`. `changeId` обязателен и сохраняется без изменения при ретрансляции через любое число узлов. Нулевой `changeId` запрещён для исходящих DELTA_BATCH; при приёме нулевой идентификатор отклоняется как `BATCH_TRANSACTION_FAILED`. `recordsRoot` вычисляется по полному каноническому массиву, включая `changeId`; следовательно, `batchDigest` и подпись автоматически связывают provenance.
+
+## 12.17.1. Атомарность
 
 [T1] Батч либо применяется целиком, либо не применяется.
 

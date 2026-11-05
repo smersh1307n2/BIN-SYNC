@@ -57,7 +57,7 @@ public sealed partial class Node
     }
 
     /// Canonical records array: count varint, then per entry:
-    /// recordId b128 | opKind u8 | payloadLen varint | payload.
+    /// recordId b128 | changeId b128 | opKind u8 | payloadLen varint | payload.
     /// <summary>Write canonical records array into an existing Writer (no intermediate buffer).</summary>
     public static void WriteRecordsArray(Writer w, List<OutboxEntry> entries)
     {
@@ -65,7 +65,7 @@ public sealed partial class Node
         for (int i = 0; i < entries.Count; i++)
         {
             var e = entries[i];
-            w.B128(e.RecordId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
+            w.B128(e.RecordId).B128(e.ChangeId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
         }
     }
 
@@ -74,7 +74,7 @@ public sealed partial class Node
     {
         int est = 8;
         for (int i = 0; i < entries.Count; i++)
-            est += 24 + entries[i].Payload.Length;
+            est += 40 + entries[i].Payload.Length;
         var dest = new byte[Math.Max(est, 16)];
         var w = new Writer(dest);
         WriteRecordsArray(w, entries);
@@ -91,6 +91,7 @@ public sealed partial class Node
         for (int i = 0; i < n; i++)
         {
             byte[] rid = r.B128();
+            _ = r.ReadBatchId(); // ChangeId is part of the canonical records entry.
             byte kind = r.U8();
             byte[] payload = r.Bytes();
             outp.Add((rid, kind, payload));
@@ -127,7 +128,7 @@ public sealed partial class Node
     {
         int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 17 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
+            est += 33 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
         try
         {
