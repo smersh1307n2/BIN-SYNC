@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.4 FINAL
+# BIN-SYNC CORE v2.4.5 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.4 FINAL (bidirectional baseline commit and atomic state digest)  
+**Версия:** 2.4.5 FINAL (bounded snapshot decoding)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -2214,3 +2214,19 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 4. `STATE_DIGEST` строится под упорядоченными node gates: bucket digest и Outbox high-water cursor должны соответствовать одному атомарному view. Снимок, используемый для digest, не должен перечислять изменяемые Storage/Outbox коллекции без синхронизации.
 
 **Wire format:** без изменений. Изменение уточняет локальную commit-семантику baseline и согласованность вычисления digest.
+
+
+# ERRATA v2.4.5
+
+## E-19. §12.6 / §13.1 — ограничение ресурсов при разборе SNAPSHOT_CHUNK
+
+**Дефект:** недоверенный `ChunkCount` напрямую использовался как capacity для списка чанков. Значение до `uint.MaxValue` могло вызвать чрезмерное выделение памяти ещё до проверки целостности snapshot. Счётчики records/fields также приводились из varint к `int` без предварительной проверки, а остаточные байты payload игнорировались.
+
+**Нормативно:**
+1. Получатель отклоняет `ChunkCount = 0`, `ChunkIndex >= ChunkCount` и `ChunkCount > 4096` до выделения коллекций.
+2. Один chunk содержит не более 100 000 records и 250 000 fields. Счётчики проверяются как `ulong` до преобразования к `int`.
+3. Длина каждого field value должна быть не больше оставшегося payload и `Int32.MaxValue`.
+4. После декодирования chunk reader обязан находиться в EOF; trailing bytes запрещены.
+5. Те же ограничения chunk count применяются к прямому атомарному `ApplySnapshotChunks`.
+
+**Wire format:** без изменений. Ограничения являются parser/resource bounds и не меняют кодирование корректных snapshot chunks в пределах установленных лимитов.
