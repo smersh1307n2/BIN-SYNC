@@ -46,7 +46,6 @@ public class LabEdgeTests
         var oldPeer = Fix.MakeNode(806);
         var newPeer = Fix.MakeNode(807);
         Transport.MakeSession(donor, oldPeer);
-        Transport.MakeSession(donor, newPeer);
 
         donor.WriteField(NS, Fix.Rid(1), 0x100, Val("one"));
         Transport.SyncRound(donor, oldPeer, NS);
@@ -54,6 +53,8 @@ public class LabEdgeTests
         Transport.SyncRound(donor, oldPeer, NS);
         Assert.DoesNotContain(donor.Outbox[NS], e => e.Seq <= 2);
 
+        // Attach only after the old peer has allowed prefix compaction.
+        Transport.MakeSession(donor, newPeer);
         // The new peer's snapshot is the baseline through sequence 2.
         var snapshot = Reconcile.BuildSnapshot(donor, NS);
         Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);

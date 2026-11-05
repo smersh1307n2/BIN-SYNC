@@ -237,7 +237,7 @@ public class Production : IDisposable
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
-        var author = a.Outbox[NS].First().AuthorNodeId;
+        var author = a.NodeId;
         peer.StreamOffsets[author] = 17;
         var path = Path.Combine(_dir, "tag-v4.state");
         NodePersistence.Save(a, path);
