@@ -27,7 +27,10 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v2";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v3";
+    // Version 3 was initially emitted with the v2 domain tag. Accept those files
+    // during this transition, but all newly saved files use the normative v3 tag.
+    private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
     private const ushort Version = 3;
@@ -107,7 +110,14 @@ public static class NodePersistence
             throw new InvalidDataException("State file truncated mid-body.");
 
         var actual = Blake3Core.TaggedHash(StateTag, body);
-        if (!actual.AsSpan().SequenceEqual(storedDigest))
+        bool validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        if (!validDigest)
+        {
+            // Compatibility for v3 images created before the domain tag was corrected.
+            var legacy = Blake3Core.TaggedHash(LegacyVersion3StateTag, body);
+            validDigest = legacy.AsSpan().SequenceEqual(storedDigest);
+        }
+        if (!validDigest)
             throw new InvalidDataException("State digest mismatch — file corrupted (tagged BLAKE3 " + StateTag + ").");
 
         return DeserializeBody(body);
@@ -471,6 +481,38 @@ public static class NodePersistence
 
         if (!r.Eof())
             throw new InvalidDataException("Trailing bytes in node-state body.");
+
+        // v3 ACK replay depends on an exact Inbox -> durable-author mapping. Never
+        // restore a partially populated map and fall back to the session's last author:
+        // that can acknowledge a duplicate on the wrong author stream.
+        if (n.InboxAuthors.Count != n.Inbox.Count)
+            throw new InvalidDataException("Inbox author map does not match the inbox.");
+        foreach (var inboxKey in n.Inbox)
+        {
+            if (!n.InboxAuthors.TryGetValue(inboxKey, out var author) || author.IsZero)
+                throw new InvalidDataException("Inbox author map is missing or contains a zero author.");
+        }
+        foreach (var (inboxKey, author) in n.InboxAuthors)
+        {
+            if (!n.Inbox.Contains(inboxKey) || author.IsZero)
+                throw new InvalidDataException("Inbox author map contains an orphan or zero author.");
+        }
+
+        foreach (var ps in n.PeerStates.Values)
+        {
+            foreach (var (author, acked) in ps.StreamAcked)
+            {
+                if (author.IsZero || acked < 0 ||
+                    !ps.StreamPushed.TryGetValue(author, out var pushed) || pushed < acked)
+                    throw new InvalidDataException("Invalid persisted ACK/pushed watermark.");
+            }
+            foreach (var (author, pushed) in ps.StreamPushed)
+            {
+                if (author.IsZero || pushed < 0)
+                    throw new InvalidDataException("Invalid persisted pushed watermark.");
+            }
+        }
+
         return n;
     }
 
