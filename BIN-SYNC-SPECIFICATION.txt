@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.7 FINAL
+# BIN-SYNC CORE v2.4.8 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.7 FINAL (bounded canonical STATE_DIGEST)  
+**Версия:** 2.4.8 FINAL (bounded reconciliation request parsing)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -2266,3 +2266,20 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 7. Локальный builder принимает только byte-aligned RadixBits 8..256 и namespace в диапазоне u16.
 
 **Wire layout:** не меняется для корректных сообщений. Ограничения фиксируют единственную каноническую форму STATE_DIGEST и ограничивают работу декодера по недоверенному payload.
+
+
+# ERRATA v2.4.8
+
+## E-22. §13.1–13.2 — resource bounds и полная проверка NEED_RANGE / NEED_KEYS
+
+**Дефект:** NEED_RANGE принимал prefix произвольной длины и игнорировал trailing bytes. NEED_KEYS приводил varint count к `int` без проверки диапазона, не проверял соответствие количества оставшемуся payload, допускал повторные record IDs и также игнорировал trailing bytes.
+
+**Нормативно:**
+1. NEED_RANGE prefix имеет длину от 0 до 32 байт включительно. Пустой prefix сохраняет значение terminator в AutoReconcile. Более длинные prefix отвергаются до чтения/использования.
+2. NEED_RANGE decoder обязан потребить payload полностью; trailing bytes запрещены.
+3. NEED_KEYS содержит не более 100 000 record IDs. Count проверяется как `ulong` до итерации и обязан быть не больше `remainingPayloadBytes / 16`.
+4. Каждый NEED_KEYS record ID — ровно 16 байт; повторяющиеся IDs отвергаются. Encoder также отвергает повторные ID после canonical B128 normalization.
+5. NEED_KEYS decoder обязан потребить payload полностью; trailing bytes запрещены.
+6. Encoder NEED_RANGE/NEED_KEYS обязан проверять диапазон namespace u16 и установленные ограничения до сериализации.
+
+**Wire layout:** без изменений для корректных сообщений.

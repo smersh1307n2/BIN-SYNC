@@ -73,6 +73,9 @@ public static partial class Reconcile
     /// <summary>Hard upper bound for bucket rows accepted in one STATE_DIGEST.</summary>
     public const int MaxStateDigestBuckets = 100_000;
 
+    /// <summary>Hard upper bound for record IDs accepted in one NEED_KEYS message.</summary>
+    public const int MaxNeedKeysRecordIds = 100_000;
+
     private static int PrefixLengthForRadix(int radixBits)
     {
         if (radixBits < 8 || radixBits > 256 || (radixBits & 7) != 0)
@@ -249,6 +252,11 @@ public static partial class Reconcile
     /// <summary>Encode need range into canonical wire bytes.</summary>
     public static byte[] EncodeNeedRange(NeedRangeMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        if (m.NamespaceId < 0 || m.NamespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(m.NamespaceId));
+        if (m.Prefix is null || m.Prefix.Length > 32)
+            throw new FormatException("NEED_RANGE prefix must contain at most 32 bytes");
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U8((byte)m.Prefix.Length);
@@ -259,31 +267,63 @@ public static partial class Reconcile
     /// <summary>Decode need range from canonical wire bytes.</summary>
     public static NeedRangeMessage DecodeNeedRange(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         int ns = r.U16();
         int plen = r.U8();
-        return new NeedRangeMessage { NamespaceId = ns, Prefix = r.Raw(plen) };
+        if (plen > 32)
+            throw new FormatException("NEED_RANGE prefix must contain at most 32 bytes");
+        var prefix = r.Raw(plen);
+        if (!r.Eof())
+            throw new FormatException("NEED_RANGE contains trailing bytes");
+        return new NeedRangeMessage { NamespaceId = ns, Prefix = prefix };
     }
 
     /// <summary>Encode need keys into canonical wire bytes.</summary>
     public static byte[] EncodeNeedKeys(NeedKeysMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        if (m.NamespaceId < 0 || m.NamespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(m.NamespaceId));
+        if (m.RecordIds is null || m.RecordIds.Count > MaxNeedKeysRecordIds)
+            throw new FormatException("NEED_KEYS record count exceeds limit");
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.Varint((ulong)m.RecordIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var id in m.RecordIds)
-            w.B128(Codec.CanonicalB128(id));
+        {
+            if (id is null)
+                throw new FormatException("NEED_KEYS record ID cannot be null");
+            var canonical = Codec.CanonicalB128(id);
+            if (!seen.Add(Convert.ToHexString(canonical)))
+                throw new FormatException("NEED_KEYS contains a duplicate record ID");
+            w.B128(canonical);
+        }
         return w.Value();
     }
 
     /// <summary>Decode need keys from canonical wire bytes.</summary>
     public static NeedKeysMessage DecodeNeedKeys(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var m = new NeedKeysMessage { NamespaceId = r.U16() };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
-            m.RecordIds.Add(r.B128());
+        ulong count = r.Varint();
+        if (count > MaxNeedKeysRecordIds)
+            throw new FormatException("NEED_KEYS record count exceeds limit");
+        if (count > (ulong)(r.Remaining / 16))
+            throw new FormatException("NEED_KEYS record count exceeds remaining payload");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (ulong i = 0; i < count; i++)
+        {
+            var id = r.B128();
+            if (!seen.Add(Convert.ToHexString(id)))
+                throw new FormatException("NEED_KEYS contains a duplicate record ID");
+            m.RecordIds.Add(id);
+        }
+        if (!r.Eof())
+            throw new FormatException("NEED_KEYS contains trailing bytes");
         return m;
     }
 

@@ -166,6 +166,47 @@ public class ReconcileTests
         Assert.True(Fix.Eq(Fix.Rid(3), nk2.RecordIds[0]));
     }
 
+
+    [Fact]
+    public void NeedRange_decoder_rejects_oversized_prefix_and_trailing_bytes()
+    {
+        var oversized = new Writer();
+        oversized.U16(1).U8(33).Raw(new byte[33]);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeNeedRange(oversized.Value()));
+
+        var valid = Reconcile.EncodeNeedRange(new NeedRangeMessage { NamespaceId = 1, Prefix = new byte[] { 0xAB } });
+        Assert.Throws<FormatException>(() => Reconcile.DecodeNeedRange(valid.Concat(new byte[] { 0 }).ToArray()));
+        Assert.Throws<FormatException>(() => Reconcile.EncodeNeedRange(new NeedRangeMessage { NamespaceId = 1, Prefix = new byte[33] }));
+    }
+
+    [Fact]
+    public void NeedKeys_decoder_rejects_excessive_count_truncation_duplicates_and_trailing_bytes()
+    {
+        var excessive = new Writer();
+        excessive.U16(1).Varint((ulong)Reconcile.MaxNeedKeysRecordIds + 1);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeNeedKeys(excessive.Value()));
+
+        var truncated = new Writer();
+        truncated.U16(1).Varint(2).Raw(new byte[16]);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeNeedKeys(truncated.Value()));
+
+        var duplicate = new Writer();
+        duplicate.U16(1).Varint(2).Raw(new byte[16]).Raw(new byte[16]);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeNeedKeys(duplicate.Value()));
+
+        var trailing = new Writer();
+        trailing.U16(1).Varint(0).U8(0xFF);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeNeedKeys(trailing.Value()));
+    }
+
+    [Fact]
+    public void NeedKeys_encoder_rejects_duplicate_ids()
+    {
+        var id = Fix.Rid(55);
+        var message = new NeedKeysMessage { NamespaceId = 1, RecordIds = { id, id } };
+        Assert.Throws<FormatException>(() => Reconcile.EncodeNeedKeys(message));
+    }
+
     [Fact]
     public void LocalKeysUnderPrefix_finds_record()
     {
