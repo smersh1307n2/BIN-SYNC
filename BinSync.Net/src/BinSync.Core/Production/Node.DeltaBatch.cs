@@ -125,7 +125,7 @@ public sealed partial class Node
                 if (peerNode is not null && e.AuthorNodeId != NodeId)
                 {
                     int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAliasInternal(peerNode, e.AuthorNodeId, epTry);
+                    alias = EnsureAlias(peerNode, e.AuthorNodeId, epTry);
                 }
                 else if (peerNode is null)
                 {
