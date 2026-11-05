@@ -288,8 +288,10 @@ public class Production : IDisposable
         var path = Path.Combine(_dir, "stream-offset-restart.state");
         NodePersistence.Save(donor, path);
         var resumed = NodePersistence.Load(path);
-        Transport.MakeSession(resumed, newPeer);
+        Assert.Equal(2L, resumed.PeerStates[(newPeer.NodeId, NS)].StreamOffsets[donor.NodeId]);
 
+        // The persisted alias table is sufficient for a resumed sender to rebuild
+        // the exact peer-relative cursor before a live session is reattached.
         resumed.WriteField(NS, Fix.Rid(864), 0x100, Val("tail-4"));
         var next = resumed.CreateDeltaBatch(newPeer.NodeId, NS)!;
         Assert.Equal(2L, next.CursorStart);
