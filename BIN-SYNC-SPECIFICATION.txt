@@ -108,17 +108,17 @@ BIN-SYNC CORE — компактный бинарный протокол для 
 
 ```csharp
 var (left, right) = PipeTransport.CreatePair();
-var acceptTask = SyncSession.AcceptAsync(remoteNode, right);
-var connectTask = SyncSession.ConnectAsync(localNode, left);
-await using var acceptor = await acceptTask;
-await using var initiator = await connectTask;
+var leftTask = SyncSession.EstablishAsync(localNode, left);
+var rightTask = SyncSession.EstablishAsync(remoteNode, right);
+await using var leftSession = await leftTask;
+await using var rightSession = await rightTask;
 ```
 
 Пользовательский транспорт реализует `ISyncTransport`, объявляет свои гарантии и передаёт полные frames. `IPeerAwareSyncTransport` — необязательное расширение для записи peer NodeId после HELLO.
 
-Для каждой пары NodeId допускается ровно одна активная протокольная сессия. Роль handshake определяется детерминированно сравнением 16 байт NodeId в wire-порядке: узел с меньшим NodeId выполняет ConnectAsync (отправляет HELLO), узел с большим NodeId — AcceptAsync. Нарушение роли отклоняется до отправки HELLO_ACK. Это правило относится к ролям BIN-SYNC, а не к направлению открытия TCP/WebRTC/другого транспортного канала: транспортный адаптер может передать канал любой физической стороной.
+Для каждой пары NodeId допускается ровно одна активная протокольная сессия. Оба конца вызывают симметричный Connect/Accept-neutral метод EstablishAsync: каждый отправляет HELLO и получает HELLO другой стороны. Сторона с меньшим NodeId становится логическим инициатором и отправляет ALIAS_MAP после HELLO_ACK; сторона с большим NodeId отвечает HELLO_ACK и согласованной ALIAS_MAP. Сравниваются 16 байт NodeId в wire-порядке. Направление открытия TCP/WebRTC/другого транспортного канала не определяет протокольную роль.
 
-После определения peer каждая сторона резервирует локальный слот (local Node instance, peer NodeId) до завершения handshake и удерживает его до DisposeAsync сессии. Повторные подключения той же пары ожидают освобождения слота; конкурентные сессии с одним peer запрещены, поскольку alias map и связанные cursors хранятся на уровне peer, а не transport connection. Отмена или ошибка handshake освобождает резервирование.
+Низший NodeId резервирует локальный слот (local Node instance, peer NodeId) после HELLO_ACK и удерживает его до DisposeAsync сессии, прежде чем отправить ALIAS_MAP. Высший NodeId резервирует свой слот после получения и проверки ALIAS_MAP инициатора, до отправки согласованной карты. Такой порядок исключает встречное удержание двух peer-locks. Повторные подключения той же пары ожидают освобождения слота; конкурентные сессии с одним peer запрещены, поскольку alias map и связанные cursors хранятся на уровне peer, а не transport connection. Отмена или ошибка handshake освобождает резервирование.
 
 ## 3.3. Требования к каналам
 
@@ -221,8 +221,8 @@ ALIAS_MAP:
 - Переиспользование алиаса для другого `nodeId` или `epoch` внутри сессии запрещено.
 - При reconnect алиасы перепривязываются заново.
 - Между одной парой NodeId одновременно существует не более одной активной сессии; конкурентные transport connections к тому же peer должны ожидать освобождения сессионного слота.
-- Инициатором BIN-SYNC handshake всегда является узел с лексикографически меньшим 16-байтовым NodeId (сравнение wire bytes); узел с большим NodeId принимает handshake. Неверная роль отклоняется до HELLO_ACK. Это устраняет встречные handshake и распределённый deadlock без введения connection nonce в wire format.
-- Сессионный слот удерживается на обеих сторонах от handshake до закрытия SyncSession; только после его освобождения разрешено публиковать следующую alias map для этого peer.
+- При симметричном EstablishAsync узел с лексикографически меньшим 16-байтовым NodeId является логическим инициатором, а узел с большим NodeId — отвечающей стороной. Оба конца отправляют HELLO; физическая сторона открытия транспорта роли не задаёт.
+- Нижний NodeId резервирует слот перед отправкой ALIAS_MAP, верхний — после её получения и проверки; оба удерживают слот до закрытия SyncSession. Только после освобождения обоих слотов разрешено завершить следующий handshake и опубликовать новую alias map для этого peer.
 
 ## 4.4. Epoch реплики
 

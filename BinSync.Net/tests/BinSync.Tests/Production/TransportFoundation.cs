@@ -168,6 +168,70 @@ public class TransportFoundationTests
         await Assert.ThrowsAnyAsync<Exception>(() => wrongInitiator);
     }
 
+
+    [Fact]
+    public async Task Symmetric_establish_chooses_protocol_roles_independently_of_transport_side()
+    {
+        using var low = new Node(Fix.Nid(1));
+        using var high = new Node(Fix.Nid(2));
+        var (left, right) = PipeTransport.CreatePair();
+
+        var leftTask = SyncSession.EstablishAsync(low, left);
+        var rightTask = SyncSession.EstablishAsync(high, right);
+        var leftSession = await leftTask.WaitAsync(TimeSpan.FromSeconds(3));
+        var rightSession = await rightTask.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.Equal(high.NodeId, leftSession.PeerNodeId);
+        Assert.Equal(low.NodeId, rightSession.PeerNodeId);
+        await leftSession.DisposeAsync();
+        await rightSession.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Crossed_transport_connections_do_not_deadlock_or_publish_mixed_sessions()
+    {
+        using var low = new Node(Fix.Nid(1));
+        using var high = new Node(Fix.Nid(2));
+        var (low1, high1) = PipeTransport.CreatePair();
+        var (low2, high2) = PipeTransport.CreatePair();
+
+        var pair1 = Task.WhenAll(
+            SyncSession.EstablishAsync(low, low1),
+            SyncSession.EstablishAsync(high, high1));
+        var pair2 = Task.WhenAll(
+            SyncSession.EstablishAsync(low, low2),
+            SyncSession.EstablishAsync(high, high2));
+
+        var first = await Task.WhenAny(pair1, pair2).WaitAsync(TimeSpan.FromSeconds(3));
+        var firstSessions = await first;
+        var second = ReferenceEquals(first, pair1) ? pair2 : pair1;
+        Assert.False(second.IsCompleted);
+
+        await firstSessions[0].DisposeAsync();
+        await firstSessions[1].DisposeAsync();
+
+        var secondSessions = await second.WaitAsync(TimeSpan.FromSeconds(3));
+        await secondSessions[0].DisposeAsync();
+        await secondSessions[1].DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Tcp_adapter_uses_symmetric_role_negotiation_when_higher_node_opens_socket()
+    {
+        using var low = new Node(Fix.Nid(1));
+        using var high = new Node(Fix.Nid(2));
+        await using var listener = TcpSyncListener.Start();
+        var acceptTask = listener.AcceptAsync(low);
+        var connectTask = TcpSync.ConnectAsync(high, "127.0.0.1", listener.Port);
+
+        var accepted = await acceptTask.WaitAsync(TimeSpan.FromSeconds(5));
+        var connected = await connectTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(high.NodeId, accepted.PeerNodeId);
+        Assert.Equal(low.NodeId, connected.PeerNodeId);
+        await accepted.DisposeAsync();
+        await connected.DisposeAsync();
+    }
+
     [Fact]
     public async Task FrameStream_MemoryStream_Roundtrip()
     {

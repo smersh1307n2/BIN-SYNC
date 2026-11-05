@@ -77,6 +77,67 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Establish a session symmetrically. Both transport endpoints call this method;
+    /// the lower NodeId becomes the protocol initiator regardless of which endpoint
+    /// opened the underlying transport connection.
+    /// </summary>
+    public static async Task<SyncSession> EstablishAsync(Node local, ISyncTransport transport,
+        SessionCapabilities caps = SessionCapabilities.None, bool ownsTransport = true, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(local);
+        ArgumentNullException.ThrowIfNull(transport);
+        IDisposable? lease = null;
+        try
+        {
+            EnsureTransportCapabilities(transport);
+            await transport.SendAsync(SessionWire.EncodeHello(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
+            var raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during HELLO");
+            var (helloFrame, _) = FrameCodec.ParseFrame(raw);
+            if (helloFrame.FrameType != SessionWire.TypeHello) throw new FrameException("FRAME_REJECTED");
+            var peer = SessionWire.DecodeHello(raw);
+
+            int order = CompareNodeIds(local.NodeId, peer.NodeId);
+            if (order == 0) throw new FrameException("FRAME_REJECTED");
+
+            if (order < 0)
+            {
+                raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during HELLO_ACK");
+                var (ackFrame, _) = FrameCodec.ParseFrame(raw);
+                if (ackFrame.FrameType != SessionWire.TypeHelloAck) throw new FrameException("FRAME_REJECTED");
+                var ack = SessionWire.DecodeHelloAck(raw);
+                if (ack.NodeId != peer.NodeId || ack.Epoch != peer.Epoch)
+                    throw new FrameException("FRAME_REJECTED");
+
+                lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
+                var aliases = SessionWire.BuildAliasMapTable(local, peer.NodeId, peer.Epoch, selfAlias: 1, peerAlias: 2);
+                await transport.SendAsync(SessionWire.EncodeAliasMap(aliases), ct).ConfigureAwait(false);
+                raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
+                var remoteAliases = SessionWire.DecodeAliasMap(raw);
+                local.CommitSession(peer.NodeId, peer.Epoch, remoteAliases);
+            }
+            else
+            {
+                await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
+                raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
+                var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
+                lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
+                await transport.SendAsync(SessionWire.EncodeAliasMap(merged), ct).ConfigureAwait(false);
+                local.CommitSession(peer.NodeId, peer.Epoch, merged);
+            }
+
+            var session = new SyncSession(transport, peer, ownsTransport, lease!);
+            lease = null;
+            return session;
+        }
+        catch
+        {
+            lease?.Dispose();
+            if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
     /// <summary>Push one pending delta and wait for its ACK.</summary>
     public async Task<bool> PushBatchAsync(Node sender, int namespaceId, int schemaVersion = 1, CancellationToken ct = default)
     {
@@ -186,12 +247,12 @@ public partial class SyncSession : IAsyncDisposable
         if (frame.FrameType != SessionWire.TypeHello) throw new FrameException("FRAME_REJECTED");
         var peer = SessionWire.DecodeHello(raw);
         EnsureHandshakeRole(local.NodeId, peer.NodeId, initiator: false);
-        var lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
-        try
-        {
         await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
         var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
+        var lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
+        try
+        {
         await transport.SendAsync(SessionWire.EncodeAliasMap(merged), ct).ConfigureAwait(false);
 
         // Commit the new session only after the complete peer map was decoded and
@@ -206,13 +267,18 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
+    private static int CompareNodeIds(NodeId left, NodeId right)
+    {
+        Span<byte> leftBytes = stackalloc byte[16];
+        Span<byte> rightBytes = stackalloc byte[16];
+        left.WriteTo(leftBytes);
+        right.WriteTo(rightBytes);
+        return leftBytes.SequenceCompareTo(rightBytes);
+    }
+
     private static void EnsureHandshakeRole(NodeId local, NodeId peer, bool initiator)
     {
-        Span<byte> localBytes = stackalloc byte[16];
-        Span<byte> peerBytes = stackalloc byte[16];
-        local.WriteTo(localBytes);
-        peer.WriteTo(peerBytes);
-        int order = localBytes.SequenceCompareTo(peerBytes);
+        int order = CompareNodeIds(local, peer);
         if (order == 0 || (initiator ? order >= 0 : order <= 0))
             throw new FrameException("FRAME_REJECTED");
     }
