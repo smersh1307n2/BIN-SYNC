@@ -37,6 +37,30 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
+    /// <summary>
+    /// Preflight a complete inbound batch before ApplyBatch publishes storage, cursors,
+    /// provenance or relay entries. Counts are deltas computed from the staged batch.
+    /// </summary>
+    internal void EnsureCanApplyBatch(Node node, int namespaceId, int newRecords,
+        int relayEntries, int newSeenChanges)
+    {
+        if (MaxOutboxEntriesPerNamespace > 0 &&
+            (long)node.OutboxSizeInternal(namespaceId) + relayEntries > MaxOutboxEntriesPerNamespace)
+            throw new SyncException("INTERNAL");
+
+        if (MaxSeenChanges > 0 &&
+            (long)node.SeenChanges.Count + newSeenChanges > MaxSeenChanges)
+            throw new SyncException("INTERNAL");
+
+        if (MaxRecords > 0)
+        {
+            long total = 0;
+            foreach (var ns in node.Storage.Values) total += ns.Count;
+            if (total + newRecords > MaxRecords)
+                throw new SyncException("INTERNAL");
+        }
+    }
+
     /// <summary>Throw if storage would exceed configured record/namespace limits.</summary>
     public void EnsureStorageCapacity(Node node)
     {

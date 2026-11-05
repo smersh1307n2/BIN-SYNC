@@ -57,7 +57,8 @@ public sealed partial class Node
         }
         // STEP 2: cursor check [S2]/[П2] — errata E-3: keyed per SESSION stream.
         var pkey = (batch.IssuerNodeId, batch.NamespaceId);
-        if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(batch.IssuerNodeId, batch.NamespaceId);
+        // Do not publish a new peer-state row until validation and resource preflight pass.
+        PeerState? ps = PeerStates.TryGetValue(pkey, out var existingPs) ? existingPs : null;
         // Errata E-4: resolve the batch's AUTHOR STREAM durably and key the receive cursor
         // per stream — §13.6.1 [Р3] makes seq numbering per-author.
         // BUGFIX (persistence resume): restored ops carry Origin=0 as a stale sentinel but
@@ -85,9 +86,8 @@ public sealed partial class Node
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
         result.DurableAuthor = batch.DurableAuthor;
-        LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
         var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
-        long expected = (ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
+        long expected = (ps is not null && ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
         // STEP 3: batch digest chain (§12.17.2, [Т3]).
@@ -112,7 +112,8 @@ public sealed partial class Node
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         // STEP 4: atomic application [T1] — copy-on-write only for touched records.
         // Untouched records stay as shared references in nsStore; overlays discard on throw.
-        var nsStore = Ns(batch.NamespaceId);
+        bool hadNamespace = Storage.TryGetValue(batch.NamespaceId, out var nsStore);
+        nsStore ??= new Dictionary<RecordId, Record>();
         var overlays = new Dictionary<RecordId, Record>();
         int applied = 0;
         int nEnt = nEntEarly;
@@ -140,32 +141,27 @@ public sealed partial class Node
             bool changed = ApplyOp(rec, op, opAuthor);
             if (changed) { applied++; changedFlags[idx] = true; }
         }
-        // commit atomically (rollback path: exceptions above leave storage untouched [Т1])
-        foreach (var (rid, rec) in overlays)
-            nsStore[rid] = rec;
-        Inbox.Add(key);
-        ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
-        ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
-        LastBatchDigest[chain] = batch.BatchDigest;
-        // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns); the
-        // commit path only ever RAISES the watermark for batches that pass every gate.
-        int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
-        KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
-        AcksOut.Add(batch.BatchId);
-        result.Applied = applied;
-        result.Acked = true;
-        // Relay [Р1, Р2]: ONLY entries that actually changed state are appended to OUR
-        // outbox under the ORIGINAL authorNodeId (SPEC HARDENING §8.3 [E2] + Errata E-10:
-        // provenance-based relay eligibility — FULL rationale in the Python port).
+        // Stage provenance and relay decisions BEFORE publishing any state. This is
+        // required so configured resource limits cannot reject after storage/cursors commit.
+        var relayChangeIds = batch.IssuerNodeId != NodeId && nEnt > 0
+            ? new BatchId[nEnt]
+            : Array.Empty<BatchId>();
+        var relayIndices = batch.IssuerNodeId != NodeId
+            ? new List<int>(Math.Min(nEnt, 16))
+            : new List<int>(0);
+        var newSeenKeys = batch.IssuerNodeId != NodeId
+            ? new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>()
+            : null;
+
         if (batch.IssuerNodeId != NodeId)
         {
             for (int idx = 0; idx < nEnt; idx++)
             {
                 var e = batch.Entries[idx];
                 var cid = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId;
+                relayChangeIds[idx] = cid;
                 var ck = (senderPeer, batch.NamespaceId, cid);
-                bool known = SeenChanges.Contains(ck);
-                SeenChanges.Add(ck);
+                bool known = SeenChanges.Contains(ck) || !newSeenKeys!.Add(ck);
                 if (!known && !changedFlags[idx])
                 {
                     bool relayOk = true;
@@ -173,61 +169,104 @@ public sealed partial class Node
                     ushort? rfid = rop switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
                     if (rfid is not null)
                     {
-                        byte[]? rAuthor = null;
+                        NodeId? rAuthor = null;
                         try { rAuthor = ResolveAuthor(rop); }
                         catch (SyncException)
                         {
-                            // On-purpose: unknown alias / origin during relay-eligibility
-                            // check must not fail the batch — treat as non-own, allow relay.
+                            // Unknown alias / origin during relay-eligibility check is
+                            // treated as non-own, matching the established relay policy.
                         }
-                        // After CompactOutbox, the un-acked queue copy may be gone; any
-                        // self-authored field already in storage is an echo ([E2]/[Ш2]) —
-                        // never re-queue it solely because OwnQueueHolds is false.
-                        if (rAuthor is not null && rAuthor.AsSpan().SequenceEqual(NodeId) &&
-                            SeenState(batch.NamespaceId, e.RecordId, rfid.Value) is not null)
+                        // Evaluate against the staged post-apply record, not the live map.
+                        Record? staged = overlays.TryGetValue(e.RecordId, out var stagedRec)
+                            ? stagedRec
+                            : (nsStore.TryGetValue(e.RecordId, out var liveRec) ? liveRec : null);
+                        bool hasState = staged is not null &&
+                            (staged.State.ContainsKey(rfid.Value) ||
+                             (staged.HasFieldTombs && staged.FieldTombs.ContainsKey(rfid.Value)));
+                        if (rAuthor is not null && rAuthor.Value == NodeId && hasState)
                             relayOk = false;
                     }
                     if (relayOk) changedFlags[idx] = true; // new provenance ⇒ relay even as loser
                 }
             }
+
             for (int idx = 0; idx < nEnt; idx++)
             {
-                if (!changedFlags[idx]) continue;
+                if (!changedFlags[idx] || GetAuthor(decodedOps[idx]) is not null)
+                    continue; // full-author mode already carries its durable author
+                relayIndices.Add(idx);
+            }
+        }
+
+        // Count only genuinely new records and provenance keys. Limits are checked
+        // against the complete batch, before any record, cursor, inbox or relay mutation.
+        int newRecordCount = 0;
+        foreach (var rid in overlays.Keys)
+            if (!nsStore.ContainsKey(rid)) newRecordCount++;
+        Limits?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
+            relayIndices.Count, newSeenKeys?.Count ?? 0);
+
+        // Commit: all deterministic validation and resource checks have succeeded.
+        if (!hadNamespace && overlays.Count > 0)
+            Storage[batch.NamespaceId] = nsStore;
+        foreach (var (rid, rec) in overlays)
+            nsStore[rid] = rec;
+
+        if (ps is null)
+            PeerStates[pkey] = ps = new PeerState(batch.IssuerNodeId, batch.NamespaceId);
+        LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
+        Inbox.Add(key);
+        ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
+        ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
+        LastBatchDigest[chain] = batch.BatchDigest;
+        // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns).
+        int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
+        KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
+        AcksOut.Add(batch.BatchId);
+        result.Applied = applied;
+        result.Acked = true;
+
+        // Relay only the entries selected during preflight. Change IDs are reused for
+        // SeenChanges and Outbox so zero-ID entries cannot diverge between the two.
+        if (batch.IssuerNodeId != NodeId)
+        {
+            foreach (var ck in newSeenKeys!)
+                SeenChanges.Add(ck);
+
+            foreach (int idx in relayIndices)
+            {
                 var e = batch.Entries[idx];
                 var op = decodedOps[idx];
-                if (GetAuthor(op) is not null) continue;   // full-author mode keeps durable author
                 var resolved = ResolveAuthor(op);
-                // BUGFIX (scenario 23): the relay keeps the op payload VERBATIM (§13.5 [Р1]/[И4]).
                 var entry = new OutboxEntry
                 {
                     NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
                     Seq = NextOutboxSeq(resolved, batch.NamespaceId),
-                    ChangeId = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId,
+                    ChangeId = relayChangeIds[idx],
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
                     Payload = e.Payload,
                     AuthorNodeId = resolved,
-                    CreatedAt = (long)WallOf(op),   // BUGFIX: stamp the OP's own HLC wall time
+                    CreatedAt = (long)WallOf(op),
                 };
                 if (!Outbox.TryGetValue(batch.NamespaceId, out var ol)) Outbox[batch.NamespaceId] = ol = new();
                 ol.Add(entry);
-                // Errata E-10/E-11: propagate the third-party binding learned through THIS
-                // session to our OTHER live sessions AND mirror it into the sender's copy
-                // (incremental ALIAS_MAP update, §4.3/§12.7). FULL comment in Python port.
+
+                // Propagate the third-party binding learned through this session.
                 int? epm = null;
                 var smap = AliasToNode.TryGetValue(senderPeer, out var ss) ? ss : new Dictionary<int, (NodeId Id, int Epoch)>();
                 foreach (var (_al, (n, epv)) in smap)
-                    if (n == (NodeId)resolved) { epm = epv; break; }
+                    if (n == resolved) { epm = epv; break; }
                 if (epm is not null)
                 {
                     foreach (var otherPeerKv in AliasToNode.Keys.ToList())
                     {
                         var otherPeer = PeersByNid is not null && PeersByNid.TryGetValue(otherPeerKv, out var on) ? on : null;
-                        if (otherPeer is not null && !(otherPeerKv == (NodeId)senderPeer))
+                        if (otherPeer is not null && otherPeerKv != senderPeer)
                             EnsureAlias(otherPeer, resolved, epm.Value);
                     }
                     var senderNode = PeersByNid is not null && PeersByNid.TryGetValue(senderPeer, out var sn) ? sn : null;
-                    if (senderNode is not null && !(resolved == (NodeId)NodeId))
+                    if (senderNode is not null && resolved != NodeId)
                         EnsureAlias(senderNode, resolved, epm.Value);
                 }
             }

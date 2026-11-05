@@ -89,4 +89,76 @@ public sealed class ResourceLimitsAtomicityTests
         Assert.False(node.TryGetRecord(3, Rid(2), out _));
         Assert.Equal(1, node.GetRecordCount(3));
     }
+    [Fact]
+    public void Apply_batch_rejects_full_relay_outbox_before_any_commit()
+    {
+        var sender = Fix.MakeNode(41);
+        var receiver = new Node(Fix.Nid(42), epoch: 1, nowFn: () => 42_000_000,
+            limits: new ResourceLimits { MaxOutboxEntriesPerNamespace = 1 });
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x101, [2]));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+
+        Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Empty(receiver.Inbox);
+        Assert.Empty(receiver.SeenChanges);
+        Assert.Empty(receiver.PeerStates);
+        Assert.Empty(receiver.LastStreamAuthor);
+
+        // The exact same batch/cursor/digest remains applicable after capacity is freed.
+        receiver.Limits = null;
+        var applied = receiver.ApplyBatch(batch, sender.NodeId);
+        Assert.Equal(2, applied.Applied);
+        Assert.True(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
+        Assert.Equal(2, receiver.GetOutboxCount(3));
+    }
+
+    [Fact]
+    public void Apply_batch_rejects_seen_change_overflow_before_any_commit()
+    {
+        var sender = Fix.MakeNode(43);
+        var receiver = new Node(Fix.Nid(44), epoch: 1, nowFn: () => 44_000_000,
+            limits: new ResourceLimits { MaxSeenChanges = 1 });
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        Assert.True(sender.WriteField(3, Fix.Rid(2), 0x100, [2]));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+
+        Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
+        Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(2)), out _));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Empty(receiver.Inbox);
+        Assert.Empty(receiver.SeenChanges);
+        Assert.Empty(receiver.PeerStates);
+    }
+
+    [Fact]
+    public void Apply_batch_rejects_record_limit_for_whole_batch_atomically()
+    {
+        var sender = Fix.MakeNode(45);
+        var receiver = new Node(Fix.Nid(46), epoch: 1, nowFn: () => 46_000_000,
+            limits: new ResourceLimits { MaxRecords = 1 });
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        Assert.True(sender.WriteField(3, Fix.Rid(2), 0x100, [2]));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+
+        Assert.Equal(0, receiver.GetRecordCount(3));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Empty(receiver.Inbox);
+        Assert.Empty(receiver.SeenChanges);
+        Assert.Empty(receiver.PeerStates);
+    }
+
 }
