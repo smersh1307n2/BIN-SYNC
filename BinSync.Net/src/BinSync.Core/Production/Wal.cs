@@ -204,6 +204,11 @@ public sealed class Wal : IDisposable
     /// <summary>Open a WAL file and replay it into a node.</summary>
     public static int ReplayFile(string path, Node node)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        // Acquire Node gates before observing the file so the replay sees a stable
+        // WAL boundary and cannot race an attached local mutation or checkpoint.
+        using (node.EnterAllGates())
+        {
         if (!File.Exists(path)) return 0;
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         if (fs.Length < 6) return 0;
@@ -238,6 +243,7 @@ public sealed class Wal : IDisposable
         foreach (var payload in records)
             applied += ApplyRecord(node, payload);
         return applied;
+        }
     }
 
     /// <summary>Truncate the WAL after a successful checkpoint.</summary>

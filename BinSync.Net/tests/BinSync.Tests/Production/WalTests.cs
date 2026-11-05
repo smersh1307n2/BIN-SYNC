@@ -462,6 +462,39 @@ public class WalTests
     }
 
     [Fact]
+    public async Task ReplayFile_waits_for_node_gates_before_reading_wal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-replay-gate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "node.wal");
+            var source = Fix.MakeNode(139);
+            using (var wal = Wal.Open(path))
+            {
+                source.AttachWal(wal);
+                source.WriteField(1, Fix.Rid(9001), 0x100, new byte[] { 1 });
+            }
+
+            var target = Fix.MakeNode(139);
+            Task<int> replay;
+            using (target.EnterAllGates())
+            {
+                replay = Task.Run(() => Wal.ReplayFile(path, target));
+                await Task.Delay(100);
+                Assert.False(replay.IsCompleted);
+            }
+
+            Assert.Equal(1, await replay.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(target.TryGetRecord(1, Fix.Rid(9001), out _));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_replay_after_snapshot_applies_delta()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
