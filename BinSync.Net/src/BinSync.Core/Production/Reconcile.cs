@@ -74,9 +74,8 @@ public static partial class Reconcile
     /// <summary>Compute a STATE_DIGEST view of <paramref name="node"/> for one namespace.</summary>
     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
     {
-        // Digest buckets and OutboxHighWater must describe one atomic node view.
-        // Without the ordered gates, a concurrent write can race dictionary enumeration
-        // or produce a digest whose records and cursor come from different instants.
+        // Build the bucket digest from one atomic storage view. The legacy cursor field
+        // is reserved and is deliberately excluded from replicated state.
         using var gates = node.EnterAllGates();
         if (!node.Storage.TryGetValue(namespaceId, out var records))
             records = new Dictionary<RecordId, Record>();
@@ -147,10 +146,12 @@ public static partial class Reconcile
     public static StateDigestMessage DecodeStateDigest(byte[] payload)
     {
         var r = new Reader(payload);
+        int namespaceId = r.U16();
+        _ = r.U64(); // Consume the reserved legacy cursor field.
         var m = new StateDigestMessage
         {
-            NamespaceId = r.U16(),
-            OutboxCursor = 0, // Consume the legacy field but do not treat it as synchronization state.
+            NamespaceId = namespaceId,
+            OutboxCursor = 0, // Normalize legacy values; they are not synchronization state.
             RadixBits = r.U8(),
             RootDigest = r.Raw(32),
         };
