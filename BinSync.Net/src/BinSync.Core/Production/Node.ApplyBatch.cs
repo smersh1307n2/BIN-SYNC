@@ -175,11 +175,10 @@ public sealed partial class Node
                 var cid = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId;
                 relayChangeIds[idx] = cid;
                 var ck = (senderPeer, batch.NamespaceId, cid);
-                bool alreadySeen = SeenChanges.Contains(ck);
-                bool duplicateInBatch = !newSeenKeys!.Add(ck);
-                bool known = alreadySeen || duplicateInBatch;
-                if (known)
-                    continue; // already accepted provenance must never be relayed again
+                if (SeenChanges.Contains(ck))
+                    continue; // already accepted provenance consumes no new capacity
+                if (!newSeenKeys!.Add(ck))
+                    continue; // duplicate provenance within this batch
 
                 bool relayOk = true;
                 if (!changedFlags[idx])
