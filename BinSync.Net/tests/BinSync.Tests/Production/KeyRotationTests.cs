@@ -125,22 +125,31 @@ public class KeyRotationTests
     }
 
     [Fact]
-    public async Task Tcp_KEY_ROTATION_frame_rejected_when_type_wrong()
+    public async Task Tcp_KEY_ROTATION_wait_preserves_other_frame_types_for_their_receivers()
     {
         var a = Fix.MakeNode(112);
         var b = Fix.MakeNode(113);
+        var (seedA, pubA) = BatchSignature.GenerateKeyPair();
+        var idA = Id(0xA1);
+
+        var store = new KeyEpochStore();
+        store.TrustIdentity(idA, pubA);
+        var notice = KeyRotation.Create(1, 0, 1, idA, seedA);
+
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
         await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
-        // Send a PING instead of KEY_ROTATION
-        var ping = FrameCodec.BuildFrame(0x0F, 0, 1, Array.Empty<byte>());
-        // Use reflection-free path: send via public Push won't work; use Receive expecting KEY_ROTATION
-        // Push raw through a second connection pattern — send GC then expect KEY_ROTATION fail on peer
+        // A valid GC_NOTICE must not be consumed by the KEY_ROTATION waiter.
         await client.SendGcNoticeAsync(a, 1);
-        var store = new KeyEpochStore();
-        await Assert.ThrowsAsync<FrameException>(async () =>
-            await server.ReceiveKeyRotationAsync(store));
+        var keyRotationTask = server.ReceiveKeyRotationAsync(store);
+
+        await client.SendKeyRotationAsync(notice);
+        Assert.True(await keyRotationTask.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(1, store.GetEpoch(1, idA));
+
+        // The earlier unrelated frame remains queued and is delivered to its own receiver.
+        _ = await server.ReceiveGcNoticeAsync(b).WaitAsync(TimeSpan.FromSeconds(3));
     }
 }
