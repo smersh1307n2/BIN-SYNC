@@ -29,6 +29,17 @@ public partial class SyncSession
     public async Task<(StateDigestMessage Local, StateDigestMessage Remote, List<byte[]> Diverged)>
         ExchangeStateDigestAsync(Node local, int namespaceId, bool initiate, CancellationToken ct = default)
     {
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await ExchangeStateDigestCoreAsync(local, namespaceId, initiate, ct).ConfigureAwait(false);
+        }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task<(StateDigestMessage Local, StateDigestMessage Remote, List<byte[]> Diverged)>
+        ExchangeStateDigestCoreAsync(Node local, int namespaceId, bool initiate, CancellationToken ct)
+    {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var mine = Reconcile.BuildStateDigest(local, namespaceId);
         if (initiate)
@@ -203,7 +214,7 @@ public partial class SyncSession
     private async Task<(int Prefixes, int FieldsApplied, bool Complete)> AutoReconcileRoundAsync(
         Node local, int namespaceId, bool initiate, int maxPrefixes, CancellationToken ct)
     {
-        var (_, _, diverged) = await ExchangeStateDigestAsync(local, namespaceId, initiate, ct)
+        var (_, _, diverged) = await ExchangeStateDigestCoreAsync(local, namespaceId, initiate, ct)
             .ConfigureAwait(false);
 
         if (initiate)
