@@ -154,35 +154,117 @@ public sealed partial class Node
     private void CommitLocalMutationInternal(
         OutboxEntry entry, Record? stagedRecord, bool applyToStorage, bool preserveRecordIdentity = false)
     {
-        _wal?.AppendLocalMutation(entry, applyToStorage);
-        if (stagedRecord is not null)
+        // Stage every in-memory publication while the caller holds Storage → Outbox.
+        // Other Node operations cannot observe these changes until the gates are released.
+        // If the durable append fails, roll the staged changes back before releasing them.
+        Dictionary<RecordId, Record>? store = null;
+        bool storageNamespaceAdded = false;
+        bool storageRecordChanged = false;
+        Record? previousRecord = null;
+        bool previousRecordExisted = false;
+        Record? identityRecord = null;
+        List<(ushort FieldId, bool Existed, FieldState? Previous)>? fieldUndo = null;
+
+        List<OutboxEntry>? outboxList = null;
+        bool outboxNamespaceAdded = false;
+        bool outboxEntryAdded = false;
+        bool sequenceChanged = false;
+        bool sequenceExisted = false;
+        long previousSequence = 0;
+        bool seenAdded = false;
+
+        try
         {
-            var store = Ns(entry.NamespaceId);
-            if (preserveRecordIdentity && store.TryGetValue(entry.RecordId, out var current))
+            if (applyToStorage && stagedRecord is not null)
             {
-                // WriteField historically updates the live Record and its State map in
-                // place. Keep references returned by TryGetRecord and State usable.
-                // WriteField only changes/adds one field and leaves lifecycle and
-                // tombstones untouched. Do not clear/rebuild State: callers may be
-                // enumerating this live map (e.g. NEED_RANGE republish).
-                foreach (var pair in stagedRecord.State)
+                if (!Storage.TryGetValue(entry.NamespaceId, out store))
                 {
-                    if (!current.State.TryGetValue(pair.Key, out var existing) ||
-                        !ReferenceEquals(existing, pair.Value))
+                    store = new Dictionary<RecordId, Record>();
+                    Storage.Add(entry.NamespaceId, store);
+                    storageNamespaceAdded = true;
+                }
+
+                if (preserveRecordIdentity && store.TryGetValue(entry.RecordId, out var current))
+                {
+                    identityRecord = current;
+                    fieldUndo = new List<(ushort, bool, FieldState?)>();
+                    foreach (var pair in stagedRecord.State)
+                    {
+                        bool existed = current.State.TryGetValue(pair.Key, out var previous);
+                        if (existed && ReferenceEquals(previous, pair.Value)) continue;
+                        // Record the inverse before changing the live map so even an
+                        // allocation failure during insertion can be rolled back.
+                        fieldUndo.Add((pair.Key, existed, previous));
                         current.State[pair.Key] = pair.Value;
+                    }
+                }
+                else
+                {
+                    previousRecordExisted = store.TryGetValue(entry.RecordId, out previousRecord);
+                    store[entry.RecordId] = stagedRecord;
+                    storageRecordChanged = true;
                 }
             }
-            else
-            {
-                store[entry.RecordId] = stagedRecord;
-            }
-        }
 
-        _outboxSeq[(NodeId, entry.NamespaceId)] = entry.Seq;
-        if (!Outbox.TryGetValue(entry.NamespaceId, out var list))
-            Outbox[entry.NamespaceId] = list = new List<OutboxEntry>();
-        list.Add(entry);
-        SeenChanges.Add((NodeId, entry.NamespaceId, entry.ChangeId));
+            if (!Outbox.TryGetValue(entry.NamespaceId, out outboxList))
+            {
+                outboxList = new List<OutboxEntry>();
+                Outbox.Add(entry.NamespaceId, outboxList);
+                outboxNamespaceAdded = true;
+            }
+            outboxList.Add(entry);
+            outboxEntryAdded = true;
+
+            var sequenceKey = (NodeId, entry.NamespaceId);
+            sequenceExisted = _outboxSeq.TryGetValue(sequenceKey, out previousSequence);
+            _outboxSeq[sequenceKey] = entry.Seq;
+            sequenceChanged = true;
+
+            seenAdded = SeenChanges.Add((NodeId, entry.NamespaceId, entry.ChangeId));
+            if (!seenAdded)
+                throw new InvalidOperationException("Local Outbox ChangeId is already present in SeenChanges.");
+
+            // The single WAL frame is the commit point. On failure the staged state
+            // is invisible to other Node operations and is rolled back below.
+            _wal?.AppendLocalMutation(entry, applyToStorage);
+        }
+        catch
+        {
+            if (seenAdded)
+                SeenChanges.Remove((NodeId, entry.NamespaceId, entry.ChangeId));
+
+            if (sequenceChanged)
+            {
+                var key = (NodeId, entry.NamespaceId);
+                if (sequenceExisted) _outboxSeq[key] = previousSequence;
+                else _outboxSeq.Remove(key);
+            }
+
+            if (outboxEntryAdded)
+                outboxList!.RemoveAt(outboxList.Count - 1);
+            if (outboxNamespaceAdded && outboxList!.Count == 0)
+                Outbox.Remove(entry.NamespaceId);
+
+            if (storageRecordChanged)
+            {
+                if (previousRecordExisted) store![entry.RecordId] = previousRecord!;
+                else store!.Remove(entry.RecordId);
+            }
+
+            if (fieldUndo is not null && identityRecord is not null)
+            {
+                for (int i = fieldUndo.Count - 1; i >= 0; i--)
+                {
+                    var undo = fieldUndo[i];
+                    if (undo.Existed) identityRecord.State[undo.FieldId] = undo.Previous!;
+                    else identityRecord.State.Remove(undo.FieldId);
+                }
+            }
+
+            if (storageNamespaceAdded && store!.Count == 0)
+                Storage.Remove(entry.NamespaceId);
+            throw;
+        }
     }
 
     private static byte TagOf(object op) => op switch
