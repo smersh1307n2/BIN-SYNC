@@ -74,6 +74,10 @@ public static partial class Reconcile
     /// <summary>Compute a STATE_DIGEST view of <paramref name="node"/> for one namespace.</summary>
     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
     {
+        // Digest buckets and OutboxHighWater must describe one atomic node view.
+        // Without the ordered gates, a concurrent write can race dictionary enumeration
+        // or produce a digest whose records and cursor come from different instants.
+        using var gates = node.EnterAllGates();
         if (!node.Storage.TryGetValue(namespaceId, out var records))
             records = new Dictionary<RecordId, Record>();
 
