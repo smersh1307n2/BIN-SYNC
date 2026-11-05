@@ -4,6 +4,24 @@ namespace BinSync;
 /// <summary>Transport-independent reconciliation operations for a sync session.</summary>
 public partial class SyncSession
 {
+    private static Frame ParseExpectedSessionFrame(byte[] raw, byte expectedType)
+    {
+        ArgumentNullException.ThrowIfNull(raw);
+        var (frame, consumed) = FrameCodec.ParseFrame(raw);
+        if (consumed != raw.Length || frame.FrameType != expectedType)
+            throw new FrameException("FRAME_REJECTED");
+        return frame;
+    }
+
+    private static void ValidateNamespaceStream(Frame frame, int namespaceId)
+    {
+        if (namespaceId < 0 || namespaceId > ushort.MaxValue)
+            throw new FormatException("Namespace is outside u16 range");
+        uint expectedStreamId = 0x0001_0000u | (uint)namespaceId;
+        if (frame.StreamId != expectedStreamId)
+            throw new FrameException("FRAME_REJECTED");
+    }
+
     /// <summary>
     /// Send our STATE_DIGEST and receive the peer's. When initiate is true we send first;
     /// otherwise we wait then reply (matching pair on the other side).
@@ -18,20 +36,22 @@ public partial class SyncSession
             await SendFrameAsync(ReconcileFrames.StateDigest, streamId, 10ul, Reconcile.EncodeStateDigest(mine), ct).ConfigureAwait(false);
             var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("peer closed during STATE_DIGEST");
-            var (frame, _) = FrameCodec.ParseFrame(raw);
-            if (frame.FrameType != ReconcileFrames.StateDigest)
-                throw new FrameException("FRAME_REJECTED");
+            var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.StateDigest);
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
+            ValidateNamespaceStream(frame, peer.NamespaceId);
+            if (peer.NamespaceId != namespaceId)
+                throw new FormatException("STATE_DIGEST namespace does not match requested namespace");
             return (mine, peer, Reconcile.DivergentPrefixes(mine, peer));
         }
         else
         {
             var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("peer closed during STATE_DIGEST");
-            var (frame, _) = FrameCodec.ParseFrame(raw);
-            if (frame.FrameType != ReconcileFrames.StateDigest)
-                throw new FrameException("FRAME_REJECTED");
+            var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.StateDigest);
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
+            ValidateNamespaceStream(frame, peer.NamespaceId);
+            if (peer.NamespaceId != namespaceId)
+                throw new FormatException("STATE_DIGEST namespace does not match requested namespace");
             await SendFrameAsync(ReconcileFrames.StateDigest, streamId, 10ul, Reconcile.EncodeStateDigest(mine), ct).ConfigureAwait(false);
             return (mine, peer, Reconcile.DivergentPrefixes(mine, peer));
         }
@@ -50,10 +70,10 @@ public partial class SyncSession
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("peer closed during NEED_RANGE");
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != ReconcileFrames.NeedRange)
-            throw new FrameException("FRAME_REJECTED");
-        return Reconcile.DecodeNeedRange(frame.Payload);
+        var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedRange);
+        var need = Reconcile.DecodeNeedRange(frame.Payload);
+        ValidateNamespaceStream(frame, need.NamespaceId);
+        return need;
     }
 
     /// <summary>Send a NEED_KEYS reconcile message listing missing keys.</summary>
@@ -68,10 +88,10 @@ public partial class SyncSession
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("peer closed during NEED_KEYS");
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != ReconcileFrames.NeedKeys)
-            throw new FrameException("FRAME_REJECTED");
-        return Reconcile.DecodeNeedKeys(frame.Payload);
+        var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedKeys);
+        var need = Reconcile.DecodeNeedKeys(frame.Payload);
+        ValidateNamespaceStream(frame, need.NamespaceId);
+        return need;
     }
 
     /// <summary>
@@ -108,10 +128,9 @@ public partial class SyncSession
     {
         var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new IOException("peer closed during SNAPSHOT_CHUNK");
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != ReconcileFrames.SnapshotChunk)
-            throw new FrameException("FRAME_REJECTED");
+        var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
         var first = Reconcile.DecodeSnapshotChunk(frame.Payload);
+        ValidateNamespaceStream(frame, first.NamespaceId);
         if (first.ChunkCount == 0 || first.ChunkIndex != 0)
             throw new FormatException("Snapshot must begin with chunk zero");
         var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
@@ -119,10 +138,9 @@ public partial class SyncSession
         {
             raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("peer closed during multi-chunk SNAPSHOT_CHUNK");
-            (frame, _) = FrameCodec.ParseFrame(raw);
-            if (frame.FrameType != ReconcileFrames.SnapshotChunk)
-                throw new FrameException("FRAME_REJECTED");
+            frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
             var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
+            ValidateNamespaceStream(frame, chunk.NamespaceId);
             if (chunk.NamespaceId != first.NamespaceId ||
                 chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != expected)
                 throw new FormatException("Snapshot chunk sequence mismatch");

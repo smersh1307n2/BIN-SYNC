@@ -6,6 +6,48 @@ namespace BinSync.Tests;
 
 public class ReconcileExchangeTests
 {
+
+    [Fact]
+    public async Task ExchangeStateDigest_rejects_frame_on_wrong_namespace_stream()
+    {
+        var a = Fix.MakeNode(71);
+        var b = Fix.MakeNode(72);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var peerDigest = Reconcile.EncodeStateDigest(Reconcile.BuildStateDigest(b, 1));
+        var wrongStreamFrame = FrameCodec.BuildFrame(
+            ReconcileFrames.StateDigest, 0x0001_0002u, 10ul, peerDigest);
+        await bPipe.SendAsync(wrongStreamFrame);
+
+        await Assert.ThrowsAsync<FrameException>(async () =>
+            await client.ExchangeStateDigestAsync(a, 1, initiate: false));
+    }
+
+    [Fact]
+    public async Task ReceiveNeedRange_rejects_frame_on_wrong_namespace_stream()
+    {
+        var a = Fix.MakeNode(73);
+        var b = Fix.MakeNode(74);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var payload = Reconcile.EncodeNeedRange(new NeedRangeMessage
+        {
+            NamespaceId = 1,
+            Prefix = new byte[] { 0x12 }
+        });
+        await bPipe.SendAsync(FrameCodec.BuildFrame(
+            ReconcileFrames.NeedRange, 0x0001_0002u, 11ul, payload));
+
+        await Assert.ThrowsAsync<FrameException>(async () =>
+            await client.ReceiveNeedRangeAsync());
+    }
+
     [Fact]
     public async Task Tcp_Exchange_StateDigest_converged()
     {
