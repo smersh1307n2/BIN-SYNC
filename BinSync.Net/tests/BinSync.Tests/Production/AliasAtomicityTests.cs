@@ -1,4 +1,5 @@
-using System.Threading;\nusing BinSync;
+using System.Threading;
+using BinSync;
 using Xunit;
 
 namespace BinSync.Tests;
