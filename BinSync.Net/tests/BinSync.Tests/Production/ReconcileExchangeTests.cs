@@ -127,6 +127,40 @@ public class ReconcileExchangeTests
     }
 
     [Fact]
+    public async Task RunReconciliation_releases_all_gates_when_callback_is_cancelled()
+    {
+        var a = Fix.MakeNode(85);
+        var b = Fix.MakeNode(86);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        using var cts = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = client.RunReconciliationAsync(async (_, token) =>
+        {
+            entered.SetResult();
+            await Task.Delay(Timeout.Infinite, token);
+            return true;
+        }, cts.Token);
+
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+
+        var expected = new NeedKeysMessage
+        {
+            NamespaceId = 1,
+            RecordIds = new List<byte[]> { Fix.Rid(850) }
+        };
+        var receive = server.ReceiveNeedKeysAsync();
+        await client.SendNeedKeysAsync(expected);
+        var actual = await receive.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(expected.RecordIds[0], actual.RecordIds[0]);
+    }
+
+    [Fact]
     public async Task AutoReconcile_runs_concurrently_with_full_duplex_batch_exchange()
     {
         using var a = Fix.MakeNode(81);
