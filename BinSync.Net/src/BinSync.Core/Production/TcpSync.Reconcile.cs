@@ -97,8 +97,10 @@ public sealed partial class TcpSyncSession
         Node local, int namespaceId, byte[]? prefix = null, CancellationToken ct = default)
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
-        var chunk = Reconcile.BuildSnapshot(local, namespaceId, prefix);
-        await SendFrameAsync(ReconcileFrames.SnapshotChunk, streamId, 13ul, Reconcile.EncodeSnapshotChunk(chunk), ct).ConfigureAwait(false);
+        var chunks = Reconcile.BuildSnapshotChunks(local, namespaceId, prefix);
+        for (int i = 0; i < chunks.Count; i++)
+            await SendFrameAsync(ReconcileFrames.SnapshotChunk, streamId, 13ul,
+                Reconcile.EncodeSnapshotChunk(chunks[i]), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>
@@ -109,8 +111,24 @@ public sealed partial class TcpSyncSession
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != ReconcileFrames.SnapshotChunk)
             throw new FrameException("FRAME_REJECTED");
-        var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
-        return Reconcile.ApplySnapshot(local, chunk);
+        var first = Reconcile.DecodeSnapshotChunk(frame.Payload);
+        if (first.ChunkCount == 0 || first.ChunkIndex != 0)
+            throw new FormatException("Snapshot must begin with chunk zero");
+        int fieldsApplied = Reconcile.ApplySnapshot(local, first);
+        for (uint expected = 1; expected < first.ChunkCount; expected++)
+        {
+            raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during multi-chunk SNAPSHOT_CHUNK");
+            (frame, _) = FrameCodec.ParseFrame(raw);
+            if (frame.FrameType != ReconcileFrames.SnapshotChunk)
+                throw new FrameException("FRAME_REJECTED");
+            var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
+            if (chunk.NamespaceId != first.NamespaceId ||
+                chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != expected)
+                throw new FormatException("Snapshot chunk sequence mismatch");
+            fieldsApplied += Reconcile.ApplySnapshot(local, chunk);
+        }
+        return fieldsApplied;
     }
 
     /// <summary>

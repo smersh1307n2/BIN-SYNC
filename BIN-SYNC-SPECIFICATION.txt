@@ -812,7 +812,7 @@ batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
 
 `SNAPSHOT_CHUNK` передаёт полный LWW-срез записи: `recordId`, список полей и явное состояние lifecycle. Каждая строка поля содержит `fieldId`, `isTombstone` (u8: 0 — значение, 1 — tombstone), HLC, `authorNodeId`, `keyEpoch` и значение (пустое для tombstone). После списка полей передаётся `hasLifecycle` (u8: 0/1), `lifecycleValue`, lifecycle HLC и `lifecycleAuthor`. Поля-tombstone и lifecycle применяются через те же LWW merge primitives, что и DELTA_BATCH, без создания локальных Outbox entries. Неинициализированный lifecycle (`hasLifecycle=0`) не применяется.
 
-`ChunkIndex` должен быть меньше `ChunkCount`; нулевой `ChunkCount` запрещён. До реализации многочанкового transfer отправитель обязан завершить операцию ошибкой `SNAPSHOT_REQUIRES_CHUNKING`, если выборка превышает лимит одного чанка. Запрещено выдавать усечённый snapshot как полный. Построение чанка выполняется под общей блокировкой Storage → Outbox → Meta.
+`ChunkIndex` должен быть меньше `ChunkCount`; нулевой `ChunkCount` запрещён. Snapshot разбивается на `ChunkCount = max(1, ceil(recordCount / maxRecords))` чанков с индексами `0..ChunkCount-1`. Все чанки одного transfer строятся из одного согласованного копирования состояния под общей блокировкой Storage → Outbox → Meta; сетевую отправку выполняют уже после освобождения блокировок. Получатель требует chunk 0 первым, затем строго последовательные индексы с одинаковыми NamespaceId и ChunkCount. Пропуск, повтор, перестановка или несовпадение метаданных чанков отклоняются. Обрыв до последнего чанка не считается успешным завершением snapshot.
 
 Последний чанк содержит `SnapshotTail` (80 байт): `snapshotDigest`, `snapshotStateDigest`, `outboxCheckpointDigest`.
 

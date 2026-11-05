@@ -56,12 +56,17 @@ public class SnapshotTests
     }
 
     [Fact]
-    public void Snapshot_fails_closed_instead_of_silently_truncating_records()
+    public void Snapshot_chunks_cover_the_complete_record_set()
     {
         var source = Fix.MakeNode(60);
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 5; i++)
             source.WriteField(1, Fix.Rid(100 + i), 0x100, new byte[] { (byte)i });
-        Assert.Throws<InvalidOperationException>(() => Reconcile.BuildSnapshot(source, 1, maxRecords: 2));
+
+        var chunks = Reconcile.BuildSnapshotChunks(source, 1, maxRecords: 2);
+        Assert.Equal(3, chunks.Count);
+        Assert.Equal(new uint[] { 0, 1, 2 }, chunks.Select(c => c.ChunkIndex));
+        Assert.All(chunks, c => Assert.Equal(3u, c.ChunkCount));
+        Assert.Equal(5, chunks.Sum(c => c.Records.Count));
     }
 
     [Fact]

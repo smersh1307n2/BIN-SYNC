@@ -55,70 +55,80 @@ public sealed class SnapshotChunkMessage
 /// <summary>State-digest / NEED_RANGE / NEED_KEYS anti-entropy helpers.</summary>
 public static partial class Reconcile
 {
-    /// <summary>Build a bounded single-chunk snapshot of records under <paramref name="prefix"/>.</summary>
+    /// <summary>Build the first bounded chunk of a consistent snapshot under <paramref name="prefix"/>.</summary>
     public static SnapshotChunkMessage BuildSnapshot(
+        Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000) =>
+        BuildSnapshotChunks(node, namespaceId, prefix, maxRecords)[0];
+
+    /// <summary>
+    /// Capture one consistent record view and partition it into bounded chunks.
+    /// The ordered node gates are held only while copying state, never while sending over the network.
+    /// </summary>
+    public static IReadOnlyList<SnapshotChunkMessage> BuildSnapshotChunks(
         Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000)
     {
         if (maxRecords <= 0) throw new ArgumentOutOfRangeException(nameof(maxRecords));
         using var gates = node.EnterAllGates();
-        var msg = new SnapshotChunkMessage
+        var records = new List<SnapshotRecord>();
+        if (node.Storage.TryGetValue(namespaceId, out var map))
         {
-            NamespaceId = namespaceId,
-            ChunkIndex = 0,
-            ChunkCount = 1,
-        };
-        if (!node.Storage.TryGetValue(namespaceId, out var map)) return msg;
-
-        foreach (var (rid, rec) in map)
-        {
-            if (prefix is { Length: > 0 })
+            foreach (var (rid, rec) in map)
             {
-                var key = BucketAccumulator.BucketKey(rid);
-                if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
-                    continue;
-            }
-            var sr = new SnapshotRecord
-            {
-                RecordId = rid.ToArray(),
-                HasLifecycle = rec.LifecycleHlc is not null,
-                LifecycleValue = rec.LifecycleValue,
-                LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
-                LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
-                LifecycleAuthor = rec.LifecycleAuthor ?? Node.Zero128,
-            };
-            foreach (var (fid, fs) in rec.State)
-            {
-                sr.Fields.Add(new SnapshotField
+                if (prefix is { Length: > 0 })
                 {
-                    FieldId = fid,
-                    Wall = fs.Timestamp.Wall,
-                    Logical = fs.Timestamp.Logical,
-                    AuthorNodeId = fs.AuthorNodeId,
-                    KeyEpoch = fs.KeyEpoch,
-                    Value = fs.Value,
-                });
-            }
-            if (rec.HasFieldTombs)
-            {
-                foreach (var (fid, fs) in rec.FieldTombs)
+                    var key = BucketAccumulator.BucketKey(rid);
+                    if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
+                        continue;
+                }
+                var sr = new SnapshotRecord
+                {
+                    RecordId = rid.ToArray(),
+                    HasLifecycle = rec.LifecycleHlc is not null,
+                    LifecycleValue = rec.LifecycleValue,
+                    LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
+                    LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
+                    LifecycleAuthor = rec.LifecycleAuthor ?? Node.Zero128,
+                };
+                foreach (var (fid, fs) in rec.State)
                 {
                     sr.Fields.Add(new SnapshotField
                     {
-                        FieldId = fid,
-                        IsTombstone = true,
-                        Wall = fs.Timestamp.Wall,
-                        Logical = fs.Timestamp.Logical,
-                        AuthorNodeId = fs.AuthorNodeId,
-                        KeyEpoch = fs.KeyEpoch,
-                        Value = Array.Empty<byte>(),
+                        FieldId = fid, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical,
+                        AuthorNodeId = fs.AuthorNodeId, KeyEpoch = fs.KeyEpoch, Value = fs.Value,
                     });
                 }
+                if (rec.HasFieldTombs)
+                {
+                    foreach (var (fid, fs) in rec.FieldTombs)
+                    {
+                        sr.Fields.Add(new SnapshotField
+                        {
+                            FieldId = fid, IsTombstone = true, Wall = fs.Timestamp.Wall,
+                            Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId,
+                            KeyEpoch = fs.KeyEpoch, Value = Array.Empty<byte>(),
+                        });
+                    }
+                }
+                records.Add(sr);
             }
-            if (msg.Records.Count == maxRecords)
-                throw new InvalidOperationException("SNAPSHOT_REQUIRES_CHUNKING");
-            msg.Records.Add(sr);
         }
-        return msg;
+
+        int chunkCount = Math.Max(1, (int)(((long)records.Count + maxRecords - 1) / maxRecords));
+        var chunks = new List<SnapshotChunkMessage>(chunkCount);
+        for (int i = 0; i < chunkCount; i++)
+        {
+            int offset = i * maxRecords;
+            int count = Math.Min(maxRecords, records.Count - offset);
+            var chunk = new SnapshotChunkMessage
+            {
+                NamespaceId = namespaceId,
+                ChunkIndex = (uint)i,
+                ChunkCount = (uint)chunkCount,
+                Records = count == 0 ? new List<SnapshotRecord>() : records.GetRange(offset, count),
+            };
+            chunks.Add(chunk);
+        }
+        return chunks;
     }
 
     /// <summary>Encode snapshot chunk into canonical wire bytes.</summary>
