@@ -227,10 +227,10 @@ public class WalTests
             Assert.True(record!.FieldTombs.ContainsKey(0x101));
             Assert.False(record.IsDead);
             Assert.False(record.State.ContainsKey(0x102)); // PushOutbox is Outbox-only.
-            Assert.Equal(4, recovered.Outbox[1].Count);
-            Assert.Equal(new long[] { 1, 2, 3, 4 }, recovered.Outbox[1].Select(x => x.Seq).ToArray());
-            Assert.Equal(4, recovered.OutboxSeqRef[(recovered.NodeId, 1)]);
-            Assert.Equal(4, recovered.SeenChanges.Count);
+            Assert.Equal(5, recovered.Outbox[1].Count); // includes the snapshot's pre-WAL entry
+            Assert.Equal(new long[] { 1, 2, 3, 4, 5 }, recovered.Outbox[1].Select(x => x.Seq).ToArray());
+            Assert.Equal(5, recovered.OutboxSeqRef[(recovered.NodeId, 1)]);
+            Assert.Equal(5, recovered.SeenChanges.Count);
         }
         finally
         {
