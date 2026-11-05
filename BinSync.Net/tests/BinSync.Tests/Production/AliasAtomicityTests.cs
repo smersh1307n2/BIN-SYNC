@@ -59,6 +59,57 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
+    public void CommitSession_rejects_invalid_map_without_mutating_previous_session()
+    {
+        using var local = new Node(Fix.Nid(111));
+        var peer = Fix.Nid(112);
+        var oldAuthor = Fix.Nid(113);
+        var newAuthor = Fix.Nid(114);
+
+        local.RegisterAlias(peer, 7, oldAuthor, 3);
+        local.RegisterSessionEpoch(peer, 5);
+
+        var invalid = new List<AliasMapEntry>
+        {
+            new(1, local.NodeId, local.Epoch),
+            new(2, peer, 6),
+            new(2, newAuthor, 1),
+        };
+
+        Assert.Throws<FrameException>(() => local.CommitSession(peer, 6, invalid));
+
+        Assert.Equal(5, local.SessionEpoch(peer, 0));
+        Assert.Equal(oldAuthor, local.ResolveAlias(peer, 7));
+        Assert.False(local.AliasToNode[peer].ContainsKey(1));
+        Assert.False(local.DurableAuthors.ContainsKey(newAuthor));
+    }
+
+    [Fact]
+    public void CommitSession_replaces_aliases_and_preserves_state_for_same_epoch()
+    {
+        using var local = new Node(Fix.Nid(121));
+        var peer = Fix.Nid(122);
+        var oldAuthor = Fix.Nid(123);
+        var newAuthor = Fix.Nid(124);
+
+        local.RegisterAlias(peer, 7, oldAuthor, 3);
+        local.RegisterSessionEpoch(peer, 5);
+
+        var entries = new List<AliasMapEntry>
+        {
+            new(1, local.NodeId, local.Epoch),
+            new(2, peer, 5),
+            new(3, newAuthor, 1),
+        };
+        local.CommitSession(peer, 5, entries);
+
+        Assert.Throws<SyncException>(() => local.ResolveAlias(peer, 7));
+        Assert.Equal(2, local.AliasOf(peer, peer));
+        Assert.Equal(3, local.AliasOf(peer, newAuthor));
+        Assert.Equal(5, local.SessionEpoch(peer, 0));
+    }
+
+    [Fact]
     public void Opposite_direction_alias_negotiation_does_not_deadlock()
     {
         using var a = new Node(Fix.Nid(81));

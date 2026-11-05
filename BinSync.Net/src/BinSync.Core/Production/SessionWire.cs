@@ -252,12 +252,8 @@ public static class SessionWire
         // Commit only after both complete maps are decoded. Preserve peer-relative
         // replication cursors for a reconnect to the same incarnation; an epoch change
         // invalidates the old receive-side stream state.
-        local.ResetSession(remote.NodeId, remoteHello.Epoch);
-        remote.ResetSession(local.NodeId, local.Epoch);
-        local.RegisterSessionEpoch(remote.NodeId, remoteHello.Epoch);
-        remote.RegisterSessionEpoch(local.NodeId, local.Epoch);
-        ApplyAliasMap(local, remote.NodeId, localMap);
-        ApplyAliasMap(remote, local.NodeId, remoteMap);
+        local.CommitSession(remote.NodeId, remoteHello.Epoch, localMap);
+        remote.CommitSession(local.NodeId, local.Epoch, remoteMap);
 
         local.PeersByNid ??= new Dictionary<NodeId, Node>();
         remote.PeersByNid ??= new Dictionary<NodeId, Node>();

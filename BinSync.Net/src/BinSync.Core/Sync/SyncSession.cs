@@ -122,11 +122,8 @@ public partial class SyncSession : IAsyncDisposable
         // A completed handshake starts a fresh session. Delay reset until the peer's
         // complete map has been decoded, so a failed/incomplete handshake preserves
         // the previous live session state.
-        local.ResetSession(peer.NodeId, peer.Epoch);
-        local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
-        // The acceptor's returned map is the negotiated union; do not first
-        // publish our proposal because its alias numbering may differ.
-        SessionWire.ApplyAliasMap(local, peer.NodeId, remoteAliases);
+        // The acceptor's returned map is the negotiated union; commit it atomically.
+        local.CommitSession(peer.NodeId, peer.Epoch, remoteAliases);
         return peer;
     }
 
@@ -144,9 +141,7 @@ public partial class SyncSession : IAsyncDisposable
 
         // Commit the new session only after the complete peer map was decoded and
         // our response was sent. Failed handshakes leave the previous session intact.
-        local.ResetSession(peer.NodeId, peer.Epoch);
-        local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
-        SessionWire.ApplyAliasMap(local, peer.NodeId, merged);
+        local.CommitSession(peer.NodeId, peer.Epoch, merged);
         return peer;
     }
 

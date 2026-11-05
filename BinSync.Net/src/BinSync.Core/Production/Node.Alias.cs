@@ -104,6 +104,45 @@ public sealed partial class Node
             LastStreamAuthor.Remove(k);
     }
 
+    /// <summary>
+    /// Atomically publish a completed peer session. Validation happens before any
+    /// prior session state is changed; reset, epoch registration and alias publication
+    /// then run under one metadata gate so readers cannot observe a half-committed session.
+    /// </summary>
+    internal void CommitSession(NodeId peer, int peerEpoch, IReadOnlyList<AliasMapEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        lock (_lockMeta)
+        {
+            var aliases = new HashSet<int>();
+            var authors = new HashSet<NodeId>();
+            bool hasLocal = false;
+            bool hasPeer = false;
+
+            foreach (var entry in entries)
+            {
+                if (entry.Alias <= 0 || entry.NodeId.IsZero || entry.Epoch < 0 ||
+                    !aliases.Add(entry.Alias) || !authors.Add(entry.NodeId))
+                    throw new FrameException("FRAME_REJECTED");
+
+                if (entry.NodeId == NodeId && entry.Epoch == Epoch) hasLocal = true;
+                if (entry.NodeId == peer && entry.Epoch == peerEpoch) hasPeer = true;
+            }
+
+            if (!hasLocal || !hasPeer)
+                throw new FrameException("FRAME_REJECTED");
+
+            bool incarnationChanged =
+                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch) &&
+                previousEpoch != peerEpoch;
+
+            ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
+            RegisterSessionEpochInternal(peer, peerEpoch);
+            foreach (var entry in entries)
+                RegisterAliasInternal(peer, entry.Alias, entry.NodeId, entry.Epoch);
+        }
+    }
+
     /// Errata E-10 (scenario 23 relay): modelled incremental ALIAS_MAP update (§4.3/§12.7):
     /// register one entry in BOTH peers' copies of the session map under the SAME alias
     /// when possible. Returns the alias valid on both ends, or None when no collision-free
