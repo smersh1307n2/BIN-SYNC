@@ -95,7 +95,8 @@ public class InvariantsAndAdvanced
     {
         Assert.Equal((ushort)0x0001, Frames.ErrorCodes["UNKNOWN_ALIAS"]);
         Assert.Equal((ushort)0x0017, Frames.ErrorCodes["BATCH_CHAIN_BROKEN"]);
-        Assert.Equal(23, Frames.ErrorCodes.Count);
+        Assert.Equal((ushort)0x0018, Frames.ErrorCodes["ACK_OUT_OF_RANGE"]);
+        Assert.Equal(24, Frames.ErrorCodes.Count);
     }
 
     // ------------------------------------------------------------ advanced sync
