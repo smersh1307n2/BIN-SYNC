@@ -120,6 +120,24 @@ public class E2eeWriteTests
     }
 
     [Fact]
+    public void TryGet_returns_an_owned_copy_not_the_internal_key_buffer()
+    {
+        var ring = new E2eeKeyRing();
+        var original = Enumerable.Range(0, E2ee.KeySize).Select(i => (byte)i).ToArray();
+        ring.Set(7, original, keyEpoch: 2);
+
+        Assert.True(ring.TryGet(7, out var copy, out var epoch));
+        Assert.Equal((ushort)2, epoch);
+        Assert.NotSame(original, copy);
+        copy[0] ^= 0xFF;
+
+        Assert.True(ring.TryGet(7, out var secondCopy, out _));
+        Assert.Equal(original, secondCopy);
+        CryptographicOperations.ZeroMemory(copy);
+        CryptographicOperations.ZeroMemory(secondCopy);
+    }
+
+    [Fact]
     public void Shared_key_opens_peer_ciphertext()
     {
         var key = E2ee.GenerateNamespaceKey();

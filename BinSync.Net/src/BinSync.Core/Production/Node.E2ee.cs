@@ -18,40 +18,58 @@ public sealed partial class Node
     public bool WriteFieldSealed(
         int namespaceId, RecordId recordId, int fieldId, byte[] plaintext, Hlc? hlc = null)
     {
-        lock (_lockMeta)
+        ArgumentNullException.ThrowIfNull(plaintext);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out var epoch))
                 throw new InvalidOperationException($"no E2EE key for namespace {namespaceId}");
 
-            var store = NsInternal(namespaceId);
-            if (!store.TryGetValue(recordId, out var rec))
-                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
-
-            var h = hlc ?? Clock.SendTick();
-            Span<byte> ridBuf = stackalloc byte[16];
-            recordId.WriteTo(ridBuf);
-            Span<byte> authorBuf = stackalloc byte[16];
-            NodeId.WriteTo(authorBuf);
-            var sealedValue = E2ee.SealField(
-                key, ridBuf, (ushort)fieldId, h.Wall, h.Logical, authorBuf, epoch, plaintext);
-
-            var fs = new FieldState(sealedValue, h, NodeId, KeyEpoch: epoch);
-            var op = new OpFieldWrite
+            try
             {
-                FieldId = (ushort)fieldId,
-                KeyEpoch = epoch,
-                Wall = h.Wall,
-                Logical = h.Logical,
-                Origin = 0,
-                AuthorNodeId = NodeId,
-                Value = sealedValue,
-            };
-            bool changed = Merge.ApplyFieldWrite(rec, (ushort)fieldId, fs);
-            if (changed)
+                var store = NsInternal(namespaceId);
+                bool exists = store.TryGetValue(recordId, out var current);
+                var rec = exists ? current! : new Record(recordId, (ushort)namespaceId);
+
+                var h = hlc ?? Clock.SendTick();
+                Span<byte> ridBuf = stackalloc byte[16];
+                recordId.WriteTo(ridBuf);
+                Span<byte> authorBuf = stackalloc byte[16];
+                NodeId.WriteTo(authorBuf);
+                var sealedValue = E2ee.SealField(
+                    key, ridBuf, (ushort)fieldId, h.Wall, h.Logical, authorBuf, epoch, plaintext);
+
+                var fs = new FieldState(sealedValue, h, NodeId, KeyEpoch: epoch);
+                var (winner, changed) = Merge.MergeFieldWithPolicy(
+                    rec.State.TryGetValue((ushort)fieldId, out var old) ? old : null,
+                    fs,
+                    MergePolicy.LwwField);
+                if (!changed)
+                    return false;
+
+                EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
+                var op = new OpFieldWrite
+                {
+                    FieldId = (ushort)fieldId,
+                    KeyEpoch = epoch,
+                    Wall = h.Wall,
+                    Logical = h.Logical,
+                    Origin = 1,
+                    AuthorNodeId = NodeId,
+                    Value = sealedValue,
+                };
+
+                if (!exists)
+                    store.Add(recordId, rec);
+                rec.State[(ushort)fieldId] = winner;
                 PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
-            return changed;
+                return true;
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            }
         }
     }
 
@@ -66,28 +84,35 @@ public sealed partial class Node
     /// </summary>
     public byte[]? ReadFieldOpen(int namespaceId, RecordId recordId, int fieldId)
     {
-        lock (_lockMeta)
+        lock (_lockStorage) lock (_lockMeta)
         {
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out _))
                 throw new InvalidOperationException($"no E2EE key for namespace {namespaceId}");
 
-            if (!Storage.TryGetValue(namespaceId, out var map))
-                return null;
-            if (!map.TryGetValue(recordId, out var rec))
-                return null;
-            if (!rec.State.TryGetValue((ushort)fieldId, out var fs))
-                return null;
+            try
+            {
+                if (!Storage.TryGetValue(namespaceId, out var map))
+                    return null;
+                if (!map.TryGetValue(recordId, out var rec))
+                    return null;
+                if (!rec.State.TryGetValue((ushort)fieldId, out var fs))
+                    return null;
 
-            Span<byte> ridBuf = stackalloc byte[16];
-            recordId.WriteTo(ridBuf);
-            Span<byte> authorBuf = stackalloc byte[16];
-            fs.AuthorNodeId.WriteTo(authorBuf);
-            return E2ee.OpenField(
-                key, ridBuf, (ushort)fieldId,
-                fs.Timestamp.Wall, fs.Timestamp.Logical,
-                authorBuf, fs.KeyEpoch, fs.Value.AsSpan());
+                Span<byte> ridBuf = stackalloc byte[16];
+                recordId.WriteTo(ridBuf);
+                Span<byte> authorBuf = stackalloc byte[16];
+                fs.AuthorNodeId.WriteTo(authorBuf);
+                return E2ee.OpenField(
+                    key, ridBuf, (ushort)fieldId,
+                    fs.Timestamp.Wall, fs.Timestamp.Logical,
+                    authorBuf, fs.KeyEpoch, fs.Value.AsSpan());
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            }
         }
     }
 

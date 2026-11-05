@@ -40,7 +40,7 @@ public sealed class E2eeKeyRing
         }
     }
 
-    /// <summary>Try to get the E2EE key and epoch for a namespace.</summary>
+    /// <summary>Try to get an owned key copy and epoch. The caller must zero the copy.</summary>
     public bool TryGet(int namespaceId, out byte[] key, out ushort keyEpoch)
     {
         lock (_gate)
@@ -51,6 +51,7 @@ public sealed class E2eeKeyRing
                 return false;
             }
             keyEpoch = _epochs.TryGetValue(namespaceId, out var e) ? e : (ushort)0;
+            key = key.ToArray();
             return true;
         }
     }

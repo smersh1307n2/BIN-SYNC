@@ -161,7 +161,6 @@ public sealed partial class Node
     /// and delegates to <c>WriteFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool WriteField(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
-        Limits?.EnsureStorageCapacity(this);
         bool changed;
         lock (_lockStorage) lock (_lockOutbox)
             changed = WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
@@ -172,16 +171,48 @@ public sealed partial class Node
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        bool exists = store.TryGetValue(recordId, out var rec);
+        rec ??= new Record(recordId, (ushort)namespaceId);
+
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(value, h, NodeId);
-        // Origin is rewritten per target session in CreateDeltaBatch (§13.6.2 [R4]).
-        // 1 matches the writer's own alias in the common session (MakeSession: first node = 1),
-        // so that path can share the outbox buffer instead of cloning it to patch two bytes.
-        var op = new OpFieldWrite { FieldId = (ushort)fieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId, Value = value };
-        bool changed = Merge.ApplyFieldWrite(rec, (ushort)fieldId, fs);
-        if (changed) PushOutbox(namespaceId, recordId, op, NodeId);
-        return changed;
+        var (winner, changed) = Merge.MergeFieldWithPolicy(
+            rec.State.TryGetValue((ushort)fieldId, out var current) ? current : null,
+            fs,
+            MergePolicy.LwwField);
+        if (!changed)
+            return false;
+
+        // Validate limits before publishing the record. A rejected Outbox append
+        // must not leave a local state mutation without a sync event.
+        EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
+
+        // Alias 1 matches the common two-node session and avoids a payload rewrite.
+        var op = new OpFieldWrite
+        {
+            FieldId = (ushort)fieldId,
+            KeyEpoch = 0,
+            Wall = h.Wall,
+            Logical = h.Logical,
+            Origin = 1,
+            AuthorNodeId = NodeId,
+            Value = value
+        };
+
+        if (!exists)
+            store.Add(recordId, rec);
+        rec.State[(ushort)fieldId] = winner;
+        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        return true;
+    }
+
+    private void EnsureLocalWriteCapacity(int namespaceId, bool isNewRecord)
+    {
+        // MaxRecords applies to record creation, not updates of an existing record.
+        if (isNewRecord)
+            Limits?.EnsureStorageCapacity(this);
+        Limits?.EnsureCanEnqueueOutbox(this, namespaceId);
+        Limits?.EnsureSeenChangesCapacity(this);
     }
 
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
@@ -194,13 +225,29 @@ public sealed partial class Node
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        bool exists = store.TryGetValue(recordId, out var current);
+        var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         var fs = new FieldState(Array.Empty<byte>(), h, NodeId);
-        var op = new OpFieldTomb { FieldId = (ushort)fieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
+        var op = new OpFieldTomb
+        {
+            FieldId = (ushort)fieldId,
+            KeyEpoch = 0,
+            Wall = h.Wall,
+            Logical = h.Logical,
+            Origin = 1,
+            AuthorNodeId = NodeId
+        };
+
         bool changed = Merge.ApplyFieldTomb(rec, (ushort)fieldId, fs);
-        if (changed) PushOutbox(namespaceId, recordId, op, NodeId);
-        return changed;
+        if (!changed)
+            return false;
+
+        EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
+        if (exists) store[recordId] = rec;
+        else store.Add(recordId, rec);
+        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        return true;
     }
 
     /// Lifecycle → dead (delete-wins).
@@ -214,12 +261,26 @@ public sealed partial class Node
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        bool exists = store.TryGetValue(recordId, out var current);
+        var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         bool changed = Merge.ApplyLifecycle(rec, h, NodeId, Model.Dead);
-        var op = new OpRecordTombstone { RecordId = recordId.ToArray(), Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId };
-        if (changed) PushOutbox(namespaceId, recordId, op, NodeId);
-        return changed;
+        if (!changed)
+            return false;
+
+        EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
+        var op = new OpRecordTombstone
+        {
+            RecordId = recordId.ToArray(),
+            Wall = h.Wall,
+            Logical = h.Logical,
+            Origin = 1,
+            AuthorNodeId = NodeId
+        };
+        if (exists) store[recordId] = rec;
+        else store.Add(recordId, rec);
+        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
+        return true;
     }
 
     /// Undelete only via explicit lifecycle write value=0x00 (§7.4).
@@ -233,15 +294,29 @@ public sealed partial class Node
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         var store = Ns(namespaceId);
-        if (!store.TryGetValue(recordId, out var rec)) store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+        bool exists = store.TryGetValue(recordId, out var current);
+        var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
         var h = hlc ?? Clock.SendTick();
         bool changed = Merge.ApplyLifecycle(rec, h, NodeId, Model.Alive);
-        // encode as FieldWrite on reserved field 0x0000 with value 0x00
-        var op = new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = h.Wall, Logical = h.Logical, Origin = 1, AuthorNodeId = NodeId, Value = new[] { Model.Alive } };
-        if (changed) PushOutbox(namespaceId, recordId, op, NodeId);
-        else
-            // SPEC HARDENING: propagate the no-op revive anyway ([П7]/anti-entropy; scenario 38 step 5).
-            PushOutbox(namespaceId, recordId, op, NodeId);
+
+        // Explicit revive is propagated even if it is locally a no-op.
+        EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
+        var op = new OpFieldWrite
+        {
+            FieldId = Model.LifecycleFieldId,
+            KeyEpoch = 0,
+            Wall = h.Wall,
+            Logical = h.Logical,
+            Origin = 1,
+            AuthorNodeId = NodeId,
+            Value = [Model.Alive]
+        };
+        if (changed)
+        {
+            if (exists) store[recordId] = rec;
+            else store.Add(recordId, rec);
+        }
+        PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
         return changed;
     }
 
