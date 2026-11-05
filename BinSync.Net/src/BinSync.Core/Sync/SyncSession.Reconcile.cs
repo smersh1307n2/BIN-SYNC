@@ -103,6 +103,13 @@ public partial class SyncSession
     /// <summary>Send a NEED_KEYS reconcile message listing missing keys.</summary>
     public async Task SendNeedKeysAsync(NeedKeysMessage keys, CancellationToken ct = default)
     {
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try { await SendNeedKeysCoreAsync(keys, ct).ConfigureAwait(false); }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task SendNeedKeysCoreAsync(NeedKeysMessage keys, CancellationToken ct)
+    {
         uint streamId = 0x0001_0000u | (uint)keys.NamespaceId;
         await SendFrameAsync(ReconcileFrames.NeedKeys, streamId, 12ul, Reconcile.EncodeNeedKeys(keys), ct).ConfigureAwait(false);
     }
@@ -110,8 +117,14 @@ public partial class SyncSession
     /// <summary>Receive a NEED_KEYS reconcile message.</summary>
     public async Task<NeedKeysMessage> ReceiveNeedKeysAsync(CancellationToken ct = default)
     {
-        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.NeedKeys, ct).ConfigureAwait(false)
-           ;
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await ReceiveNeedKeysCoreAsync(ct).ConfigureAwait(false); }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task<NeedKeysMessage> ReceiveNeedKeysCoreAsync(CancellationToken ct)
+    {
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.NeedKeys, ct).ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedKeys);
         var need = Reconcile.DecodeNeedKeys(frame.Payload);
         ValidateNamespaceStream(frame, need.NamespaceId);

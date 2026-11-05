@@ -49,6 +49,31 @@ public class ReconcileExchangeTests
     }
 
     [Fact]
+    public async Task NeedKeys_roundtrip_preserves_namespace_and_keys()
+    {
+        var a = Fix.MakeNode(75);
+        var b = Fix.MakeNode(76);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var expected = new NeedKeysMessage
+        {
+            NamespaceId = 7,
+            Keys = new List<byte[]> { Fix.Rid(750), Fix.Rid(751) }
+        };
+        var receive = server.ReceiveNeedKeysAsync();
+        await client.SendNeedKeysAsync(expected);
+        var actual = await receive;
+
+        Assert.Equal(expected.NamespaceId, actual.NamespaceId);
+        Assert.Equal(expected.Keys.Count, actual.Keys.Count);
+        for (int i = 0; i < expected.Keys.Count; i++)
+            Assert.Equal(expected.Keys[i], actual.Keys[i]);
+    }
+
+    [Fact]
     public async Task Tcp_Exchange_StateDigest_converged()
     {
         var a = Fix.MakeNode(31);
