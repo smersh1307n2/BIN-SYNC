@@ -37,22 +37,28 @@ public class TransportFoundationTests
     }
 
     [Fact]
-    public async Task PipeTransport_Handshake_Then_SyncRound()
+    public async Task GenericSyncSession_UsesPipeTransport_WithoutTcpHost()
     {
         var a = Fix.MakeNode(1);
         var b = Fix.MakeNode(2);
         var (ta, tb) = PipeTransport.CreatePair();
-        ta.PeerNodeId = b.NodeId;
-        tb.PeerNodeId = a.NodeId;
 
-        await SessionWire.HandshakeAsync(a, ta, b, tb);
+        var acceptTask = SyncSession.AcceptAsync(b, tb);
+        var connectTask = SyncSession.ConnectAsync(a, ta);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
 
+        Assert.Equal(b.NodeId, initiator.PeerNodeId);
+        Assert.Equal(a.NodeId, acceptor.PeerNodeId);
         Assert.NotNull(a.SessionEpoch(b.NodeId, 0));
         Assert.NotNull(b.SessionEpoch(a.NodeId, 0));
         Assert.Equal(1, a.AliasOf(b.NodeId, a.NodeId));
+
         a.WriteField(1, Fix.Rid(10), 0x100, new byte[] { 1, 2, 3 });
-        int n = Transport.SyncRound(a, b, 1);
-        Assert.True(n >= 1);
+        var receiveTask = acceptor.ReceiveBatchAsync(b);
+        Assert.True(await initiator.PushBatchAsync(a, 1));
+        var received = await receiveTask;
+        Assert.Equal(1, received.Applied);
         Assert.True(b.Storage[1].ContainsKey(Fix.Rid(10)));
     }
 
