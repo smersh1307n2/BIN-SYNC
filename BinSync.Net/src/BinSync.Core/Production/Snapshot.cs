@@ -282,39 +282,105 @@ public static partial class Reconcile
     /// <summary>Validate and atomically publish a complete ordered snapshot transfer.</summary>
     public static int ApplySnapshotChunks(Node node, IReadOnlyList<SnapshotChunkMessage> chunks)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(chunks);
         if (chunks.Count == 0) throw new FormatException("Snapshot transfer is empty");
         var first = chunks[0];
         if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || chunks.Count != first.ChunkCount)
             throw new FormatException("Snapshot transfer is incomplete or exceeds protocol limits");
+
+        // Validate the complete object graph before taking locks or touching live state.
+        // Public DTOs can be constructed in-process and are not necessarily decoder output.
         for (int i = 0; i < chunks.Count; i++)
         {
-            var chunk = chunks[i];
+            var chunk = chunks[i] ?? throw new FormatException("Snapshot chunk is null");
             if (chunk.NamespaceId != first.NamespaceId ||
                 chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != (uint)i)
                 throw new FormatException("Snapshot chunk sequence mismatch");
+            if (chunk.Records is null || chunk.Records.Count > MaxSnapshotRecordsPerChunk)
+                throw new FormatException("Snapshot chunk has too many or missing records");
+
+            int totalFields = 0;
+            foreach (var rec in chunk.Records)
+            {
+                if (rec is null || rec.RecordId is null || rec.RecordId.Length != 16 || rec.Fields is null)
+                    throw new FormatException("Invalid snapshot record");
+                if (rec.Fields.Count > MaxSnapshotFieldsPerChunk - totalFields)
+                    throw new FormatException("Snapshot chunk has too many fields");
+                totalFields += rec.Fields.Count;
+
+                foreach (var field in rec.Fields)
+                {
+                    if (field is null || field.AuthorNodeId is null || field.AuthorNodeId.Length != 16 ||
+                        field.Value is null || (field.IsTombstone && field.Value.Length != 0) ||
+                        (!field.IsTombstone && field.FieldId == Model.LifecycleFieldId &&
+                         field.Value.Length > 0 && field.Value[0] is not Model.Alive and not Model.Dead))
+                        throw new FormatException("Invalid snapshot field");
+                }
+
+                if (rec.HasLifecycle &&
+                    (rec.LifecycleAuthor is null || rec.LifecycleAuthor.Length != 16 ||
+                     rec.LifecycleValue is not Model.Alive and not Model.Dead))
+                    throw new FormatException("Invalid snapshot lifecycle");
+            }
         }
 
+        // Stage a copy-on-write view of every touched record. No live dictionary or
+        // Record instance is mutated until all merges have completed successfully.
         using var gates = node.EnterAllGates();
+        var staged = new Dictionary<RecordId, Record>();
         int applied = 0;
         foreach (var chunk in chunks)
         {
             foreach (var rec in chunk.Records)
             {
                 var recordId = RecordId.From(rec.RecordId);
-                foreach (var f in rec.Fields)
+                if (!staged.TryGetValue(recordId, out var target))
                 {
-                    var hlc = new Hlc(f.Wall, f.Logical);
-                    var author = NodeId.From(f.AuthorNodeId);
-                    bool changed = f.IsTombstone
-                        ? node.ApplyRemoteFieldTombstone(chunk.NamespaceId, recordId, f.FieldId, hlc, author, f.KeyEpoch)
-                        : node.ApplyRemoteField(chunk.NamespaceId, recordId, f.FieldId, f.Value, hlc, author, f.KeyEpoch);
+                    target = node.Storage.TryGetValue(chunk.NamespaceId, out var liveStore) &&
+                             liveStore.TryGetValue(recordId, out var existing)
+                        ? Node.Clone(existing)
+                        : new Record(recordId, (ushort)chunk.NamespaceId);
+                    staged.Add(recordId, target);
+                }
+
+                foreach (var field in rec.Fields)
+                {
+                    var hlc = new Hlc(field.Wall, field.Logical);
+                    var author = NodeId.From(field.AuthorNodeId);
+                    bool changed;
+                    if (field.IsTombstone)
+                    {
+                        changed = Merge.ApplyFieldTomb(target, field.FieldId,
+                            new FieldState(Array.Empty<byte>(), hlc, author, field.KeyEpoch));
+                    }
+                    else if (field.FieldId == Model.LifecycleFieldId)
+                    {
+                        changed = Merge.ApplyLifecycle(target, hlc, author,
+                            field.Value.Length > 0 ? field.Value[0] : Model.Alive);
+                    }
+                    else
+                    {
+                        changed = Merge.ApplyFieldWrite(target, field.FieldId,
+                            new FieldState(field.Value, hlc, author, field.KeyEpoch));
+                    }
                     if (changed) applied++;
                 }
-                if (rec.HasLifecycle && node.ApplyRemoteLifecycle(
-                        chunk.NamespaceId, recordId, new Hlc(rec.LifecycleWall, rec.LifecycleLogical),
-                        NodeId.From(rec.LifecycleAuthor), rec.LifecycleValue))
+
+                if (rec.HasLifecycle && Merge.ApplyLifecycle(target,
+                    new Hlc(rec.LifecycleWall, rec.LifecycleLogical),
+                    NodeId.From(rec.LifecycleAuthor), rec.LifecycleValue))
                     applied++;
             }
+        }
+
+        // Single publication phase while all node gates remain held.
+        if (staged.Count > 0)
+        {
+            if (!node.Storage.TryGetValue(first.NamespaceId, out var store))
+                node.Storage[first.NamespaceId] = store = new Dictionary<RecordId, Record>();
+            foreach (var (recordId, record) in staged)
+                store[recordId] = record;
         }
         return applied;
     }

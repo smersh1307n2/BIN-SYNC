@@ -212,4 +212,85 @@ public class SnapshotTests
             Reconcile.BuildSnapshotChunks(source, 1, maxRecords: Reconcile.MaxSnapshotRecordsPerChunk + 1));
     }
 
+    [Fact]
+    public void ApplySnapshotChunks_is_atomic_when_a_late_record_is_invalid()
+    {
+        var target = Fix.MakeNode(66);
+        var existingId = Fix.Rid(240);
+        target.WriteField(1, existingId, 0x100, new byte[] { 0x11 });
+        var original = target.Storage[1][existingId].State[0x100].Value.ToArray();
+        var newId = Fix.Rid(241);
+        var author = Fix.MakeNode(67).NodeId.ToArray();
+
+        var chunks = new[]
+        {
+            new SnapshotChunkMessage
+            {
+                NamespaceId = 1, ChunkIndex = 0, ChunkCount = 2,
+                Records = new List<SnapshotRecord>
+                {
+                    new()
+                    {
+                        RecordId = existingId.ToArray(),
+                        Fields = new List<SnapshotField>
+                        {
+                            new() { FieldId = 0x100, Wall = 10, AuthorNodeId = author, Value = new byte[] { 0x22 } }
+                        }
+                    }
+                }
+            },
+            new SnapshotChunkMessage
+            {
+                NamespaceId = 1, ChunkIndex = 1, ChunkCount = 2,
+                Records = new List<SnapshotRecord>
+                {
+                    new()
+                    {
+                        RecordId = newId.ToArray(),
+                        Fields = new List<SnapshotField>
+                        {
+                            new() { FieldId = 0x100, Wall = 11, AuthorNodeId = new byte[15], Value = new byte[] { 0x33 } }
+                        }
+                    }
+                }
+            }
+        };
+
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, chunks));
+        Assert.Equal(original, target.Storage[1][existingId].State[0x100].Value);
+        Assert.False(target.Storage[1].ContainsKey(newId));
+    }
+
+    [Fact]
+    public void ApplySnapshotChunks_rejects_incomplete_or_reordered_transfer_without_mutation()
+    {
+        var target = Fix.MakeNode(68);
+        var rid = Fix.Rid(242);
+        var chunk0 = new SnapshotChunkMessage
+        {
+            NamespaceId = 1, ChunkIndex = 0, ChunkCount = 2,
+            Records = new List<SnapshotRecord>
+            {
+                new()
+                {
+                    RecordId = rid.ToArray(),
+                    Fields = new List<SnapshotField>
+                    {
+                        new() { FieldId = 0x100, Wall = 1, AuthorNodeId = Fix.MakeNode(69).NodeId.ToArray(), Value = new byte[] { 1 } }
+                    }
+                }
+            }
+        };
+
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[] { chunk0 }));
+        Assert.Empty(target.Storage);
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[]
+        {
+            chunk0,
+            new SnapshotChunkMessage { NamespaceId = 1, ChunkIndex = 0, ChunkCount = 2 }
+        }));
+        Assert.Empty(target.Storage);
+    }
+
+
 }
