@@ -162,15 +162,15 @@ public sealed partial class Node
             {
                 // WriteField historically updates the live Record and its State map in
                 // place. Keep references returned by TryGetRecord and State usable.
-                current.RecordId = stagedRecord.RecordId;
-                current.NamespaceId = stagedRecord.NamespaceId;
-                current.LifecycleValue = stagedRecord.LifecycleValue;
-                current.LifecycleHlc = stagedRecord.LifecycleHlc;
-                current.LifecycleAuthor = stagedRecord.LifecycleAuthor;
-                current.State.Clear();
-                foreach (var pair in stagedRecord.State) current.State.Add(pair.Key, pair.Value);
-                current.FieldTombs.Clear();
-                foreach (var pair in stagedRecord.FieldTombs) current.FieldTombs.Add(pair.Key, pair.Value);
+                // WriteField only changes/adds one field and leaves lifecycle and
+                // tombstones untouched. Do not clear/rebuild State: callers may be
+                // enumerating this live map (e.g. NEED_RANGE republish).
+                foreach (var pair in stagedRecord.State)
+                {
+                    if (!current.State.TryGetValue(pair.Key, out var existing) ||
+                        !ReferenceEquals(existing, pair.Value))
+                        current.State[pair.Key] = pair.Value;
+                }
             }
             else
             {
