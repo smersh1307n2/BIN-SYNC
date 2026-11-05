@@ -71,6 +71,13 @@ public partial class SyncSession
     /// <summary>Send a NEED_RANGE reconcile message for a bucket prefix.</summary>
     public async Task SendNeedRangeAsync(int namespaceId, byte[] prefix, CancellationToken ct = default)
     {
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try { await SendNeedRangeCoreAsync(namespaceId, prefix, ct).ConfigureAwait(false); }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task SendNeedRangeCoreAsync(int namespaceId, byte[] prefix, CancellationToken ct)
+    {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var payload = Reconcile.EncodeNeedRange(new NeedRangeMessage { NamespaceId = namespaceId, Prefix = prefix });
         await SendFrameAsync(ReconcileFrames.NeedRange, streamId, 11ul, payload, ct).ConfigureAwait(false);
@@ -133,6 +140,14 @@ public partial class SyncSession
     public async Task SendSnapshotAsync(
         Node local, int namespaceId, byte[]? prefix = null, CancellationToken ct = default)
     {
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try { await SendSnapshotCoreAsync(local, namespaceId, prefix, ct).ConfigureAwait(false); }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task SendSnapshotCoreAsync(
+        Node local, int namespaceId, byte[]? prefix, CancellationToken ct)
+    {
         await _snapshotSendGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -147,6 +162,13 @@ public partial class SyncSession
 
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>
     public async Task<int> ReceiveSnapshotAsync(Node local, CancellationToken ct = default)
+    {
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await ReceiveSnapshotCoreAsync(local, ct).ConfigureAwait(false); }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task<int> ReceiveSnapshotCoreAsync(Node local, CancellationToken ct)
     {
         await _snapshotReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -229,10 +251,10 @@ public partial class SyncSession
             int n = Math.Min(diverged.Count, maxPrefixes);
             for (int i = 0; i < n; i++)
             {
-                await SendNeedRangeAsync(namespaceId, diverged[i], ct).ConfigureAwait(false);
-                fields += await ReceiveSnapshotAsync(local, ct).ConfigureAwait(false);
+                await SendNeedRangeCoreAsync(namespaceId, diverged[i], ct).ConfigureAwait(false);
+                fields += await ReceiveSnapshotCoreAsync(local, ct).ConfigureAwait(false);
             }
-            await SendNeedRangeAsync(namespaceId, Array.Empty<byte>(), ct).ConfigureAwait(false);
+            await SendNeedRangeCoreAsync(namespaceId, Array.Empty<byte>(), ct).ConfigureAwait(false);
             return (n, fields, diverged.Count <= maxPrefixes);
         }
 
@@ -270,7 +292,7 @@ public partial class SyncSession
             if (!remainingPrefixes.Remove(prefixKey))
                 throw new FormatException("NEED_RANGE prefix is unexpected or duplicated");
 
-            await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
+            await SendSnapshotCoreAsync(local, need.NamespaceId, need.Prefix, ct).ConfigureAwait(false);
             handled++;
         }
 
