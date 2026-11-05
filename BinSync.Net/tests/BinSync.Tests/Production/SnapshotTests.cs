@@ -293,4 +293,80 @@ public class SnapshotTests
     }
 
 
+
+    [Fact]
+    public async Task Snapshot_transfer_disconnect_mid_stream_is_atomic_and_full_retry_succeeds()
+    {
+        var source = Fix.MakeNode(70);
+        var target = Fix.MakeNode(71);
+        var existingId = Fix.Rid(250);
+        var firstId = Fix.Rid(251);
+        var secondId = Fix.Rid(252);
+        target.WriteField(1, existingId, 0x100, new byte[] { 0x5A });
+        source.WriteField(1, firstId, 0x100, new byte[9 * 1024 * 1024]);
+        source.WriteField(1, secondId, 0x100, new byte[9 * 1024 * 1024]);
+
+        // First connection: deliver chunk zero, then close the sender before chunk one.
+        var (brokenSenderPipe, brokenReceiverPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(target, brokenReceiverPipe);
+        await using (var sender = await SyncSession.ConnectAsync(
+            source, new FailAfterFirstSnapshotChunkTransport(brokenSenderPipe)))
+        await using (var receiver = await acceptTask)
+        {
+            var receiveTask = receiver.ReceiveSnapshotAsync(target);
+            await Assert.ThrowsAsync<IOException>(() => sender.SendSnapshotAsync(source, 1));
+            await Assert.ThrowsAsync<IOException>(() => receiveTask);
+        }
+
+        Assert.Single(target.Storage[1]);
+        Assert.Equal(new byte[] { 0x5A }, target.Storage[1][existingId].State[0x100].Value);
+        Assert.False(target.Storage[1].ContainsKey(firstId));
+        Assert.False(target.Storage[1].ContainsKey(secondId));
+
+        // Reconnect with fresh transports and retry the complete snapshot from chunk zero.
+        var (retrySenderPipe, retryReceiverPipe) = PipeTransport.CreatePair();
+        var retryAcceptTask = SyncSession.AcceptAsync(target, retryReceiverPipe);
+        await using var retrySender = await SyncSession.ConnectAsync(source, retrySenderPipe);
+        await using var retryReceiver = await retryAcceptTask;
+        var retrySendTask = retrySender.SendSnapshotAsync(source, 1);
+        var applied = await retryReceiver.ReceiveSnapshotAsync(target);
+        await retrySendTask;
+
+        Assert.True(applied >= 2);
+        Assert.Equal(3, target.Storage[1].Count);
+        Assert.Equal(9 * 1024 * 1024, target.Storage[1][firstId].State[0x100].Value.Length);
+        Assert.Equal(9 * 1024 * 1024, target.Storage[1][secondId].State[0x100].Value.Length);
+        Assert.Equal(new byte[] { 0x5A }, target.Storage[1][existingId].State[0x100].Value);
+    }
+
+    private sealed class FailAfterFirstSnapshotChunkTransport : ISyncTransport
+    {
+        private readonly PipeTransport _inner;
+        private int _snapshotChunks;
+
+        public FailAfterFirstSnapshotChunkTransport(PipeTransport inner) => _inner = inner;
+
+        public NodeId PeerNodeId => _inner.PeerNodeId;
+        public SyncTransportCapabilities Capabilities => _inner.Capabilities;
+        public int? MaxPacketSize => _inner.MaxPacketSize;
+
+        public async ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
+        {
+            var frame = FrameCodec.ParseFrame(packet.ToArray()).Frame;
+            if (frame.FrameType == ReconcileFrames.SnapshotChunk &&
+                Interlocked.Increment(ref _snapshotChunks) == 2)
+            {
+                await _inner.DisposeAsync();
+                throw new IOException("Injected disconnect after first snapshot chunk");
+            }
+
+            await _inner.SendAsync(packet, ct);
+        }
+
+        public ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default) =>
+            _inner.ReceiveAsync(ct);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
 }
