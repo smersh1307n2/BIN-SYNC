@@ -30,6 +30,36 @@ public sealed class ResourceLimitsAtomicityTests
     }
 
     [Fact]
+    public void Rejected_direct_outbox_push_does_not_consume_author_sequence()
+    {
+        using var node = new Node(limits: new ResourceLimits
+        {
+            MaxOutboxEntriesPerNamespace = 1
+        });
+
+        Assert.True(node.WriteField(3, Rid(1), 0x100, [1]));
+
+        var op = new OpFieldWrite
+        {
+            FieldId = 0x101,
+            KeyEpoch = 0,
+            Wall = 2,
+            Logical = 0,
+            Origin = 1,
+            AuthorNodeId = node.NodeId,
+            Value = [2]
+        };
+
+        Assert.Throws<SyncException>(() =>
+            node.PushOutbox(3, Rid(1), op, node.NodeId));
+
+        // The next allocation must be exactly the next sequence after the
+        // existing queued entry; the rejected push must not leave a hole.
+        Assert.Equal(2, node.NextOutboxSeq(node.NodeId, 3));
+        Assert.Equal(1, node.GetOutboxCount(3));
+    }
+
+    [Fact]
     public void Max_records_does_not_block_updates_to_existing_record()
     {
         using var node = new Node(limits: new ResourceLimits

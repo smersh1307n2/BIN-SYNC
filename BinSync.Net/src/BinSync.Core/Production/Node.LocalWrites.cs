@@ -118,6 +118,10 @@ public sealed partial class Node
         // when the session alias differs; TryCloneWithOrigin then shares the buffer.
         SetOrigin(op, 1);
         var payload = Ops.EncodeOp(op, fullAuthor: false);
+        // Capacity checks must precede sequence allocation: a rejected enqueue
+        // must not consume a per-author sequence and create an unrecoverable stream gap.
+        Limits?.EnsureCanEnqueueOutbox(this, ns);
+        Limits?.EnsureSeenChangesCapacity(this);
         var entry = new OutboxEntry
         {
             NamespaceId = ns,
@@ -129,8 +133,6 @@ public sealed partial class Node
             AuthorNodeId = NodeId.From(author),
             CreatedAt = (long)Clock.SendTick().Wall,
         };
-        Limits?.EnsureCanEnqueueOutbox(this, ns);
-        Limits?.EnsureSeenChangesCapacity(this);
         if (!Outbox.TryGetValue(ns, out var ol)) Outbox[ns] = ol = new();
         ol.Add(entry);
         // Errata E-13 follow-up: register our own changeId under our OWN channel key so
