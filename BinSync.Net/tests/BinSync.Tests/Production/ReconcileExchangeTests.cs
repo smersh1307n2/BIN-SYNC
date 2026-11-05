@@ -106,6 +106,27 @@ public class ReconcileExchangeTests
     }
 
     [Fact]
+    public async Task Reconciliation_operations_cannot_escape_scope()
+    {
+        var a = Fix.MakeNode(79);
+        var b = Fix.MakeNode(80);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        SyncSession.ReconciliationOperations? escaped = null;
+        await client.RunReconciliationAsync((ops, _) =>
+        {
+            escaped = ops;
+            return Task.FromResult(true);
+        });
+
+        Assert.NotNull(escaped);
+        Assert.Throws<ObjectDisposedException>(() => escaped!.ReceiveNeedKeysAsync());
+    }
+
+    [Fact]
     public async Task Tcp_Exchange_StateDigest_converged()
     {
         var a = Fix.MakeNode(31);
