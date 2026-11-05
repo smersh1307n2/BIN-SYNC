@@ -61,16 +61,16 @@ public class ReconcileExchangeTests
         var expected = new NeedKeysMessage
         {
             NamespaceId = 7,
-            Keys = new List<byte[]> { Fix.Rid(750), Fix.Rid(751) }
+            RecordIds = new List<byte[]> { Fix.Rid(750), Fix.Rid(751) }
         };
         var receive = server.ReceiveNeedKeysAsync();
         await client.SendNeedKeysAsync(expected);
         var actual = await receive;
 
         Assert.Equal(expected.NamespaceId, actual.NamespaceId);
-        Assert.Equal(expected.Keys.Count, actual.Keys.Count);
-        for (int i = 0; i < expected.Keys.Count; i++)
-            Assert.Equal(expected.Keys[i], actual.Keys[i]);
+        Assert.Equal(expected.RecordIds.Count, actual.RecordIds.Count);
+        for (int i = 0; i < expected.RecordIds.Count; i++)
+            Assert.Equal(expected.RecordIds[i], actual.RecordIds[i]);
     }
 
     [Fact]
