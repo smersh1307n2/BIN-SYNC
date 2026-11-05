@@ -183,7 +183,7 @@ public partial class SyncSession
                 fields += await ReceiveSnapshotAsync(local, ct).ConfigureAwait(false);
             }
             await SendNeedRangeAsync(namespaceId, Array.Empty<byte>(), ct).ConfigureAwait(false);
-            return (n, fields, diverged.Count < maxPrefixes);
+            return (n, fields, diverged.Count <= maxPrefixes);
         }
 
         int handled = 0;
@@ -201,6 +201,6 @@ public partial class SyncSession
             await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
             handled++;
         }
-        return (handled, 0, diverged.Count < maxPrefixes);
+        return (handled, 0, diverged.Count <= maxPrefixes);
     }
 }
