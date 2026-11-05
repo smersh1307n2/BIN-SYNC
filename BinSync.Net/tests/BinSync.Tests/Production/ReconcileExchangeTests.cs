@@ -128,6 +128,9 @@ public class ReconcileExchangeTests
         a.WriteField(1, rid, 0x100, new byte[] { 1 });
         b.WriteField(1, rid, 0x100, new byte[] { 2 });
 
+        var bPeerState = new PeerState(a.NodeId, 1);
+        b.PeerStates[(a.NodeId, 1)] = bPeerState;
+
         var (aPipe, bPipe) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(b, bPipe);
         await using var client = await SyncSession.ConnectAsync(a, aPipe);
@@ -144,7 +147,7 @@ public class ReconcileExchangeTests
         await client.SendNeedRangeAsync(1, divergent[0]);
 
         await Assert.ThrowsAsync<FormatException>(async () => await serverTask);
-        Assert.False(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
+        Assert.False(bPeerState.InitialSyncComplete);
     }
 
     private sealed class FailOnSecondStateDigestTransport : ISyncTransport
