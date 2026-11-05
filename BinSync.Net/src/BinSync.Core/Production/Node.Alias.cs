@@ -170,20 +170,73 @@ public sealed partial class Node
                 if (!freeA || !freeB) continue;   // occupied by another author — [А3] skip
                 try
                 {
-                    RegisterAlias(peer.NodeId, cand, nodeId, epoch);
-                    peer.RegisterAlias(NodeId, cand, nodeId, epoch);
-                    return cand;
+                    if (TryRegisterAliasPairInternal(peer, cand, nodeId, epoch))
+                        return cand;
+                    // The candidate was not safe on both sides; try a fresh collision-free alias.
                 }
                 catch (SyncException) { /* reverse-map conflict — fall through to fresh allocation */ }
             }
         }
+        if (!TryRegisterAliasPairInternal(peer, nxt, nodeId, epoch))
+            return null;
+        return nxt;
+    }
+
+    /// <summary>
+    /// Register a negotiated alias on both ends. If the peer rejects its half,
+    /// roll back the local half so the session cannot retain a one-sided binding.
+    /// Caller holds this node's metadata gate; RegisterAlias acquires the peer gate.
+    /// </summary>
+    private bool TryRegisterAliasPairInternal(Node peer, int alias, NodeId nodeId, int epoch)
+    {
+        bool hadDurable = DurableAuthors.TryGetValue(nodeId, out int priorDurable);
         try
         {
-            RegisterAlias(peer.NodeId, nxt, nodeId, epoch);
-            peer.RegisterAlias(NodeId, nxt, nodeId, epoch);
+            RegisterAliasInternal(peer.NodeId, alias, nodeId, epoch);
         }
-        catch (SyncException) { return null; }
-        return nxt;
+        catch (SyncException)
+        {
+            RemoveEmptyAliasMapsInternal(peer.NodeId);
+            return false;
+        }
+
+        try
+        {
+            peer.RegisterAlias(NodeId, alias, nodeId, epoch);
+            return true;
+        }
+        catch
+        {
+            // The first registration succeeded, the second did not. Undo only the
+            // exact binding inserted above; preserve any pre-existing durable epoch.
+            if (AliasToNode.TryGetValue(peer.NodeId, out var fwd) &&
+                fwd.TryGetValue(alias, out var binding) &&
+                binding.Id == nodeId && binding.Epoch == epoch)
+                fwd.Remove(alias);
+
+            if (NodeToAlias.TryGetValue(peer.NodeId, out var rev) &&
+                rev.TryGetValue((nodeId, epoch), out var reverseAlias) &&
+                reverseAlias == alias)
+                rev.Remove((nodeId, epoch));
+
+            if (hadDurable) DurableAuthors[nodeId] = priorDurable;
+            else DurableAuthors.Remove(nodeId);
+            RemoveEmptyAliasMapsInternal(peer.NodeId);
+
+            // RegisterAliasInternal on the peer creates maps before validating
+            // conflicts. Remove only those now-empty containers, under its own gate.
+            lock (peer._lockMeta)
+                peer.RemoveEmptyAliasMapsInternal(NodeId);
+            throw;
+        }
+    }
+
+    private void RemoveEmptyAliasMapsInternal(NodeId peer)
+    {
+        if (AliasToNode.TryGetValue(peer, out var fwd) && fwd.Count == 0)
+            AliasToNode.Remove(peer);
+        if (NodeToAlias.TryGetValue(peer, out var rev) && rev.Count == 0)
+            NodeToAlias.Remove(peer);
     }
 
     private static IEnumerable<int> EnumerateCandidateAliases(
