@@ -85,7 +85,7 @@ public sealed partial class Node
         for (int di = 0; di < nEntEarly; di++)
         {
             var changeId = batch.Entries[di].ChangeId;
-            if (!changeId.IsZero && !batchChangeIds.Add(changeId))
+            if (changeId.IsZero || !batchChangeIds.Add(changeId))
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         }
 
@@ -172,7 +172,7 @@ public sealed partial class Node
             for (int idx = 0; idx < nEnt; idx++)
             {
                 var e = batch.Entries[idx];
-                var cid = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId;
+                var cid = e.ChangeId; // mandatory provenance identity; never synthesize on receive
                 relayChangeIds[idx] = cid;
                 var ck = (senderPeer, batch.NamespaceId, cid);
                 if (SeenChanges.Contains(ck))
