@@ -1,15 +1,18 @@
-# BIN-SYNC CORE v2.3.8 FINAL
+# BIN-SYNC CORE v2.3.9 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.3.8 FINAL (ChangeId provenance wire-format correction)  
+**Версия:** 2.3.9 FINAL (ChangeId provenance and ACK watermark hardening)  
 **Дата:** 2026-11-05  
-**Изменения относительно v2.3.7:**
+**Изменения относительно v2.3.8:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
 - `recordsRoot`, `batchDigest` и подпись связывают исходный `changeId`; relay сохраняет его побайтно
 - Нулевые и повторяющиеся `changeId` отклоняются до мутации; snapshot дополнительно проверяет `recordsRoot` и `batchDigest`
 - Добавлен mesh-сценарий A→B→C→A с повторной доставкой через независимый маршрут
-- Сохранены все нормативные исправления v2.3.6 и ERRATA v2.3.7
+- ACK ограничен фактически отправленным cursor по каждому author stream; добавлен ACK_OUT_OF_RANGE (0x0018)
+- Дубликат batch подтверждается автором, сохранённым по ключу Inbox, а не последним автором сессии
+- Node-state v3 сохраняет StreamPushed и InboxAuthors
+- Сохранены wire-format изменения ChangeId из v2.3.8
 
 ---
 
@@ -819,7 +822,7 @@ batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
 
 ## 12.23. ERROR
 
-Коды ошибок: `UNKNOWN_ALIAS` (0x0001), `EPOCH_REGRESSION` (0x0002), `CLOCK_DRIFT` (0x0003), `INVALID_VARINT` (0x0004), `INVALID_FLOAT` (0x0005), `SCHEMA_MISMATCH` (0x0006), `SEQ_GAP` (0x0007), `DUPLICATE_BATCH` (0x0008), `NAMESPACE_FORBIDDEN` (0x0009), `INTERNAL` (0x000A), `OUTDATED_WATERMARK` (0x000B), `DECOMPRESSION_LIMIT_EXCEEDED` (0x000C), `BATCH_TRANSACTION_FAILED` (0x000D), `PAYLOAD_TOO_LARGE` (0x000E), `FLOW_CONTROL_VIOLATION` (0x000F), `UNKNOWN_KEY_EPOCH` (0x0010), `SCHEMA_PENDING` (0x0011), `CAUSAL_DEP_MISSING` (0x0012), `SIGNATURE_INVALID` (0x0013), `TRUST_REVOKED` (0x0014), `CORRUPTED_FRAME` (0x0015), `FRAME_REJECTED` (0x0016).
+Коды ошибок: `UNKNOWN_ALIAS` (0x0001), `EPOCH_REGRESSION` (0x0002), `CLOCK_DRIFT` (0x0003), `INVALID_VARINT` (0x0004), `INVALID_FLOAT` (0x0005), `SCHEMA_MISMATCH` (0x0006), `SEQ_GAP` (0x0007), `DUPLICATE_BATCH` (0x0008), `NAMESPACE_FORBIDDEN` (0x0009), `INTERNAL` (0x000A), `OUTDATED_WATERMARK` (0x000B), `DECOMPRESSION_LIMIT_EXCEEDED` (0x000C), `BATCH_TRANSACTION_FAILED` (0x000D), `PAYLOAD_TOO_LARGE` (0x000E), `FLOW_CONTROL_VIOLATION` (0x000F), `UNKNOWN_KEY_EPOCH` (0x0010), `SCHEMA_PENDING` (0x0011), `CAUSAL_DEP_MISSING` (0x0012), `SIGNATURE_INVALID` (0x0013), `TRUST_REVOKED` (0x0014), `CORRUPTED_FRAME` (0x0015), `FRAME_REJECTED` (0x0016), `BATCH_CHAIN_BROKEN` (0x0017), `ACK_OUT_OF_RANGE` (0x0018).
 
 ## 12.24. Байтовая раскладка операций
 
@@ -2022,6 +2025,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 | 2.3.5 | 2026-09-09 | Рецензионные исправления: разделение времени и авторства, каузальные зависимости переведены в экспериментальный статус, инвертируемый фильтр переведён в статус черновика, запрет коалесцирования ретранслятором, оптимизация дайджестов, таймауты схем, двести пятьдесят шесть битный дайджест чанка, динамическая свёртка, аутентификационная нагрузка, унификация размеров дайджестов, сквозной пример, семантика мета-разрешения. |
 | **2.3.6** | **2026-09-09** | **Укрепление реализации: (1) порядок проверок в применении батча — идемпотентность до проверки дайджеста предыдущего батча (инвариант П7); (2) трансляция псевдонима при ретрансляции через карту псевдонимов получателя (инвариант Р4); (3) побайтовые диаграммы формата кадров с явным указанием смещения псевдонима равного семнадцать (инвариант К11); (4) подавление кольцевого эха через проверку идентичности время+автор+значение (инвариант Ш2); (5) добавлены девятнадцать новых сценариев верификации (двадцать четыре-сорок два).** |
 | **2.3.8** | **2026-11-05** | **Сквозная provenance-идентичность: ChangeId включён в wire records, RecordsRoot и batch digest; обязательная проверка ChangeId и целостности snapshot до apply; mesh regression-сценарий 43.** |
+| **2.3.9** | **2026-11-05** | **ACK hardening: per-author pushed watermarks, contiguous-range validation, exact TCP ACK binding, persisted InboxAuthors for duplicate replay; node-state v3.** |
 
 ---
 
@@ -2126,13 +2130,15 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 **Нормативно:** каждая запись wire-массива имеет порядок `recordId b128 | changeId b128 | opKind u8 | payloadLen varint | payload`. `changeId` — обязательный ненулевой 128-битный идентификатор исходного изменения; ретранслятор сохраняет его побайтно. `recordsRoot` считается по полному каноническому массиву и тем самым связывает `changeId` с `batchDigest` и подписью. Нулевые и повторяющиеся в одном батче идентификаторы отвергаются до commit; то же правило применяется к snapshot batches. Старый wire-layout без `changeId` несовместим с v2.3.8 и не поддерживается этой версией протокола.
 
+# ERRATA v2.3.9
+
 ## E-15. §10.4 / §12.23 — ACK не может продвигать watermark за отправленный stream
 
 **Дефект:** полученный ackedSeq без проверки повышал StreamAcked, что позволяло некорректному ACK преждевременно очистить Outbox.
 
 **Нормативно:** отправитель фиксирует максимальный cursor, реально переданный каждому peer отдельно по author stream. ACK с author stream принимается только если его cursor не выше зафиксированного pushed cursor и покрывает непрерывный диапазон записей Outbox. Legacy ACK без author ограничивается общим максимальным pushed cursor и продвигает каждый stream только по непрерывному диапазону. TCP ACK дополнительно обязан точно совпадать с BatchId, CursorEnd и DurableAuthor отправленного батча. Некорректный ACK отклоняется с ACK_OUT_OF_RANGE (0x0018) без изменения watermark и Outbox.
 
-**Persistence:** per-peer/per-author StreamPushed сохраняется вместе с StreamAcked; формат node-state повышен до версии 3 (BIN-SYNC/NODESTATE/v3). Файлы state v1 отвергаются как несовместимые, а не интерпретируются частично.
+**Persistence:** per-peer/per-author StreamPushed сохраняется вместе с StreamAcked; формат node-state повышен до версии 3 (BIN-SYNC/NODESTATE/v3). Файлы state v1/v2 отвергаются как несовместимые, а не интерпретируются частично.
 
 ## E-16. §10.2.2 / §12.11 — author stream дубликата ACK привязан к BatchId
 
