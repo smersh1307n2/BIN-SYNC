@@ -29,12 +29,12 @@ public partial class SyncSession
     public async Task<(StateDigestMessage Local, StateDigestMessage Remote, List<byte[]> Diverged)>
         ExchangeStateDigestAsync(Node local, int namespaceId, bool initiate, CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _stateDigestGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             return await ExchangeStateDigestCoreAsync(local, namespaceId, initiate, ct).ConfigureAwait(false);
         }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task<(StateDigestMessage Local, StateDigestMessage Remote, List<byte[]> Diverged)>
@@ -71,9 +71,9 @@ public partial class SyncSession
     /// <summary>Send a NEED_RANGE reconcile message for a bucket prefix.</summary>
     public async Task SendNeedRangeAsync(int namespaceId, byte[] prefix, CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _needRangeGate.WaitAsync(ct).ConfigureAwait(false);
         try { await SendNeedRangeCoreAsync(namespaceId, prefix, ct).ConfigureAwait(false); }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task SendNeedRangeCoreAsync(int namespaceId, byte[] prefix, CancellationToken ct)
@@ -86,9 +86,9 @@ public partial class SyncSession
     /// <summary>Receive a NEED_RANGE reconcile message.</summary>
     public async Task<NeedRangeMessage> ReceiveNeedRangeAsync(CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _needRangeGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await ReceiveNeedRangeCoreAsync(ct).ConfigureAwait(false); }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task<NeedRangeMessage> ReceiveNeedRangeCoreAsync(CancellationToken ct)
@@ -103,9 +103,9 @@ public partial class SyncSession
     /// <summary>Send a NEED_KEYS reconcile message listing missing keys.</summary>
     public async Task SendNeedKeysAsync(NeedKeysMessage keys, CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _needKeysGate.WaitAsync(ct).ConfigureAwait(false);
         try { await SendNeedKeysCoreAsync(keys, ct).ConfigureAwait(false); }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task SendNeedKeysCoreAsync(NeedKeysMessage keys, CancellationToken ct)
@@ -117,9 +117,9 @@ public partial class SyncSession
     /// <summary>Receive a NEED_KEYS reconcile message.</summary>
     public async Task<NeedKeysMessage> ReceiveNeedKeysAsync(CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _needKeysGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await ReceiveNeedKeysCoreAsync(ct).ConfigureAwait(false); }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task<NeedKeysMessage> ReceiveNeedKeysCoreAsync(CancellationToken ct)
@@ -153,9 +153,9 @@ public partial class SyncSession
     public async Task SendSnapshotAsync(
         Node local, int namespaceId, byte[]? prefix = null, CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _snapshotGate.WaitAsync(ct).ConfigureAwait(false);
         try { await SendSnapshotCoreAsync(local, namespaceId, prefix, ct).ConfigureAwait(false); }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task SendSnapshotCoreAsync(
@@ -176,9 +176,9 @@ public partial class SyncSession
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>
     public async Task<int> ReceiveSnapshotAsync(Node local, CancellationToken ct = default)
     {
-        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        await _snapshotGate.WaitAsync(ct).ConfigureAwait(false);
         try { return await ReceiveSnapshotCoreAsync(local, ct).ConfigureAwait(false); }
-        finally { _reconcileGate.Release(); }
+        finally { _stateDigestGate.Release(); }
     }
 
     private async Task<int> ReceiveSnapshotCoreAsync(Node local, CancellationToken ct)
@@ -231,23 +231,35 @@ public partial class SyncSession
         if (maxPrefixes <= 0) throw new ArgumentOutOfRangeException(nameof(maxPrefixes));
 
         // The wire format has no reconciliation operation ID. Keep both directional
-        // rounds together so another AutoReconcile call cannot consume their frames.
+        // rounds contiguous, and reserve the frame types they use. NEED_KEYS remains
+        // independent because §12.6 permits concurrent operations of different types.
         await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            // Both directions must exchange a complete baseline before peer-relative
-            // Outbox offsets can be initialized safely.
-            var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct)
-                .ConfigureAwait(false);
-            var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
-                .ConfigureAwait(false);
+            await _stateDigestGate.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                await _needRangeGate.WaitAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    await _snapshotGate.WaitAsync(ct).ConfigureAwait(false);
+                    try
+                    {
+                        var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct)
+                            .ConfigureAwait(false);
+                        var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
+                            .ConfigureAwait(false);
 
-            // A single completed direction is not a baseline: the peer may still not
-            // have received our state. Commit only after both directional rounds finish.
-            if (first.Complete && second.Complete)
-                local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
+                        if (first.Complete && second.Complete)
+                            local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
 
-            return (first.Prefixes + second.Prefixes, first.FieldsApplied + second.FieldsApplied);
+                        return (first.Prefixes + second.Prefixes, first.FieldsApplied + second.FieldsApplied);
+                    }
+                    finally { _snapshotGate.Release(); }
+                }
+                finally { _needRangeGate.Release(); }
+            }
+            finally { _stateDigestGate.Release(); }
         }
         finally { _reconcileGate.Release(); }
     }

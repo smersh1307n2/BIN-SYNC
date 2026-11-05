@@ -74,6 +74,38 @@ public class ReconcileExchangeTests
     }
 
     [Fact]
+    public async Task NeedKeys_exchange_can_run_during_auto_reconcile()
+    {
+        var a = Fix.MakeNode(77);
+        var b = Fix.MakeNode(78);
+        a.WriteField(1, Fix.Rid(770), 0x100, new byte[] { 1 });
+        b.WriteField(1, Fix.Rid(780), 0x100, new byte[] { 2 });
+
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var autoA = client.AutoReconcileAsync(a, 1, initiate: true);
+        var autoB = server.AutoReconcileAsync(b, 1, initiate: false);
+
+        var expected = new NeedKeysMessage
+        {
+            NamespaceId = 1,
+            RecordIds = new List<byte[]> { Fix.Rid(771) }
+        };
+        var receiveKeys = server.ReceiveNeedKeysAsync();
+        await client.SendNeedKeysAsync(expected);
+        var actual = await receiveKeys;
+
+        Assert.Equal(expected.NamespaceId, actual.NamespaceId);
+        Assert.Equal(expected.RecordIds.Count, actual.RecordIds.Count);
+        Assert.Equal(expected.RecordIds[0], actual.RecordIds[0]);
+
+        await Task.WhenAll(autoA, autoB);
+    }
+
+    [Fact]
     public async Task Tcp_Exchange_StateDigest_converged()
     {
         var a = Fix.MakeNode(31);
