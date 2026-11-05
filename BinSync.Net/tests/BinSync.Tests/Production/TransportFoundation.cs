@@ -125,6 +125,49 @@ public class TransportFoundationTests
         Assert.True(b.Storage[1].ContainsKey(Fix.Rid(10)));
     }
 
+
+    [Fact]
+    public async Task Same_peer_sessions_are_serialized_until_the_active_session_is_disposed()
+    {
+        using var low = new Node(Fix.Nid(1));
+        using var high = new Node(Fix.Nid(2));
+        var (low1, high1) = PipeTransport.CreatePair();
+        var accept1Task = SyncSession.AcceptAsync(high, high1);
+        var connect1Task = SyncSession.ConnectAsync(low, low1);
+        var accept1 = await accept1Task;
+        var connect1 = await connect1Task;
+
+        var (low2, high2) = PipeTransport.CreatePair();
+        var accept2Task = SyncSession.AcceptAsync(high, high2);
+        var connect2Task = SyncSession.ConnectAsync(low, low2);
+
+        await Task.Delay(100);
+        Assert.False(accept2Task.IsCompleted);
+        Assert.False(connect2Task.IsCompleted);
+
+        await connect1.DisposeAsync();
+        await accept1.DisposeAsync();
+
+        var accept2 = await accept2Task.WaitAsync(TimeSpan.FromSeconds(3));
+        var connect2 = await connect2Task.WaitAsync(TimeSpan.FromSeconds(3));
+        await connect2.DisposeAsync();
+        await accept2.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Handshake_roles_are_deterministic_from_node_id_order()
+    {
+        using var low = new Node(Fix.Nid(1));
+        using var high = new Node(Fix.Nid(2));
+        var (outbound, inbound) = PipeTransport.CreatePair();
+
+        var wrongAcceptor = SyncSession.AcceptAsync(low, inbound);
+        var wrongInitiator = SyncSession.ConnectAsync(high, outbound);
+
+        await Assert.ThrowsAsync<FrameException>(() => wrongAcceptor);
+        await Assert.ThrowsAnyAsync<Exception>(() => wrongInitiator);
+    }
+
     [Fact]
     public async Task FrameStream_MemoryStream_Roundtrip()
     {

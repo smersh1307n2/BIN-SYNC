@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 
 namespace BinSync;
 
@@ -7,6 +9,8 @@ public partial class SyncSession : IAsyncDisposable
 {
     protected readonly ISyncTransport _transport;
     private readonly bool _ownsTransport;
+    private IDisposable? _sessionLease;
+    private int _disposed;
     /// <summary>Remote peer identity established by HELLO.</summary>
     public NodeId PeerNodeId { get; }
     /// <summary>Peer incarnation epoch established by HELLO.</summary>
@@ -14,10 +18,11 @@ public partial class SyncSession : IAsyncDisposable
     /// <summary>Capabilities advertised by the peer.</summary>
     public SessionCapabilities PeerCapabilities { get; }
 
-    protected SyncSession(ISyncTransport transport, HelloPayload peer, bool ownsTransport)
+    protected SyncSession(ISyncTransport transport, HelloPayload peer, bool ownsTransport, IDisposable sessionLease)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ownsTransport = ownsTransport;
+        _sessionLease = sessionLease ?? throw new ArgumentNullException(nameof(sessionLease));
         PeerNodeId = peer.NodeId;
         PeerEpoch = peer.Epoch;
         PeerCapabilities = peer.Capabilities;
@@ -30,8 +35,22 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
-        try { EnsureTransportCapabilities(transport); return new SyncSession(transport, await InitiateAsync(local, transport, caps, ct).ConfigureAwait(false), ownsTransport); }
-        catch { if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false); throw; }
+        IDisposable? lease = null;
+        try
+        {
+            EnsureTransportCapabilities(transport);
+            var handshake = await InitiateAsync(local, transport, caps, ct).ConfigureAwait(false);
+            lease = handshake.Lease;
+            var session = new SyncSession(transport, handshake.Peer, ownsTransport, lease);
+            lease = null;
+            return session;
+        }
+        catch
+        {
+            lease?.Dispose();
+            if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <summary>Establish a session as acceptor over a caller-provided channel.</summary>
@@ -40,8 +59,22 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
-        try { EnsureTransportCapabilities(transport); return new SyncSession(transport, await AcceptHandshakeAsync(local, transport, caps, ct).ConfigureAwait(false), ownsTransport); }
-        catch { if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false); throw; }
+        IDisposable? lease = null;
+        try
+        {
+            EnsureTransportCapabilities(transport);
+            var handshake = await AcceptHandshakeAsync(local, transport, caps, ct).ConfigureAwait(false);
+            lease = handshake.Lease;
+            var session = new SyncSession(transport, handshake.Peer, ownsTransport, lease);
+            lease = null;
+            return session;
+        }
+        catch
+        {
+            lease?.Dispose();
+            if (ownsTransport) await transport.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <summary>Push one pending delta and wait for its ACK.</summary>
@@ -93,7 +126,15 @@ public partial class SyncSession : IAsyncDisposable
     /// <summary>Dispose the underlying channel when this session owns it.</summary>
     public virtual async ValueTask DisposeAsync()
     {
-        if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try
+        {
+            if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _sessionLease, null)?.Dispose();
+        }
     }
 
     private static void EnsureTransportCapabilities(ISyncTransport transport)
@@ -106,7 +147,7 @@ public partial class SyncSession : IAsyncDisposable
                 nameof(transport));
     }
 
-    internal static async Task<HelloPayload> InitiateAsync(Node local, ISyncTransport transport,
+    internal static async Task<SessionHandshakeResult> InitiateAsync(Node local, ISyncTransport transport,
         SessionCapabilities caps, CancellationToken ct)
     {
         await transport.SendAsync(SessionWire.EncodeHello(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
@@ -114,6 +155,10 @@ public partial class SyncSession : IAsyncDisposable
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != SessionWire.TypeHelloAck) throw new FrameException("FRAME_REJECTED");
         var peer = SessionWire.DecodeHelloAck(raw);
+        EnsureHandshakeRole(local.NodeId, peer.NodeId, initiator: true);
+        var lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
+        try
+        {
         var aliases = SessionWire.BuildAliasMapTable(local, peer.NodeId, peer.Epoch, selfAlias: 1, peerAlias: 2);
         await transport.SendAsync(SessionWire.EncodeAliasMap(aliases), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
@@ -124,16 +169,26 @@ public partial class SyncSession : IAsyncDisposable
         // the previous live session state.
         // The acceptor's returned map is the negotiated union; commit it atomically.
         local.CommitSession(peer.NodeId, peer.Epoch, remoteAliases);
-        return peer;
+        return new SessionHandshakeResult(peer, lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
     }
 
-    internal static async Task<HelloPayload> AcceptHandshakeAsync(Node local, ISyncTransport transport,
+    internal static async Task<SessionHandshakeResult> AcceptHandshakeAsync(Node local, ISyncTransport transport,
         SessionCapabilities caps, CancellationToken ct)
     {
         var raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during HELLO");
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != SessionWire.TypeHello) throw new FrameException("FRAME_REJECTED");
         var peer = SessionWire.DecodeHello(raw);
+        EnsureHandshakeRole(local.NodeId, peer.NodeId, initiator: false);
+        var lease = await PeerSessionLease.AcquireAsync(local, peer.NodeId, ct).ConfigureAwait(false);
+        try
+        {
         await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
         var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
@@ -142,7 +197,24 @@ public partial class SyncSession : IAsyncDisposable
         // Commit the new session only after the complete peer map was decoded and
         // our response was sent. Failed handshakes leave the previous session intact.
         local.CommitSession(peer.NodeId, peer.Epoch, merged);
-        return peer;
+        return new SessionHandshakeResult(peer, lease);
+        }
+        catch
+        {
+            lease.Dispose();
+            throw;
+        }
+    }
+
+    private static void EnsureHandshakeRole(NodeId local, NodeId peer, bool initiator)
+    {
+        Span<byte> localBytes = stackalloc byte[16];
+        Span<byte> peerBytes = stackalloc byte[16];
+        local.WriteTo(localBytes);
+        peer.WriteTo(peerBytes);
+        int order = localBytes.SequenceCompareTo(peerBytes);
+        if (order == 0 || (initiator ? order >= 0 : order <= 0))
+            throw new FrameException("FRAME_REJECTED");
     }
 
     internal static List<AliasMapEntry> MergeAliasMap(Node local, NodeId peerNodeId, int peerEpoch,
@@ -176,5 +248,29 @@ public partial class SyncSession : IAsyncDisposable
             result.Add(new AliasMapEntry((ushort)next, item.Id, item.Epoch)); next++;
         }
         return result;
+    }
+}
+
+
+internal readonly record struct SessionHandshakeResult(HelloPayload Peer, IDisposable Lease);
+
+/// <summary>Reserves the peer-scoped alias/session slot for the lifetime of a SyncSession.</summary>
+internal static class PeerSessionLease
+{
+    private static readonly ConditionalWeakTable<Node, ConcurrentDictionary<NodeId, SemaphoreSlim>> Gates = new();
+
+    internal static async ValueTask<IDisposable> AcquireAsync(Node local, NodeId peer, CancellationToken ct)
+    {
+        var perPeer = Gates.GetValue(local, static _ => new ConcurrentDictionary<NodeId, SemaphoreSlim>());
+        var gate = perPeer.GetOrAdd(peer, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        return new Lease(gate);
+    }
+
+    private sealed class Lease : IDisposable
+    {
+        private SemaphoreSlim? _gate;
+        internal Lease(SemaphoreSlim gate) => _gate = gate;
+        public void Dispose() => Interlocked.Exchange(ref _gate, null)?.Release();
     }
 }
