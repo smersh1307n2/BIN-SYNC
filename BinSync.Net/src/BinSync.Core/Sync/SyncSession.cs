@@ -119,7 +119,15 @@ public partial class SyncSession : IAsyncDisposable
         SessionWire.ApplyAliasMap(local, peer.NodeId, aliases);
         await transport.SendAsync(SessionWire.EncodeAliasMap(aliases), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
-        SessionWire.ApplyAliasMap(local, peer.NodeId, SessionWire.DecodeAliasMap(raw));
+        var remoteAliases = SessionWire.DecodeAliasMap(raw);
+
+        // A completed handshake starts a fresh session. Delay reset until the peer's
+        // complete map has been decoded, so a failed/incomplete handshake preserves
+        // the previous live session state.
+        local.ResetSession(peer.NodeId);
+        local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
+        SessionWire.ApplyAliasMap(local, peer.NodeId, aliases);
+        SessionWire.ApplyAliasMap(local, peer.NodeId, remoteAliases);
         return peer;
     }
 
@@ -134,8 +142,13 @@ public partial class SyncSession : IAsyncDisposable
         await transport.SendAsync(SessionWire.EncodeHelloAck(new HelloPayload(local.NodeId, local.Epoch, caps)), ct).ConfigureAwait(false);
         raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during ALIAS_MAP");
         var merged = MergeAliasMap(local, peer.NodeId, peer.Epoch, SessionWire.DecodeAliasMap(raw));
-        SessionWire.ApplyAliasMap(local, peer.NodeId, merged);
         await transport.SendAsync(SessionWire.EncodeAliasMap(merged), ct).ConfigureAwait(false);
+
+        // Commit the new session only after the complete peer map was decoded and
+        // our response was sent. Failed handshakes leave the previous session intact.
+        local.ResetSession(peer.NodeId);
+        local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
+        SessionWire.ApplyAliasMap(local, peer.NodeId, merged);
         return peer;
     }
 
