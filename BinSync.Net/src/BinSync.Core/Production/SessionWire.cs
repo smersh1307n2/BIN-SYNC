@@ -55,13 +55,35 @@ public static class SessionWire
     }
 
     /// <summary>Decode hello from canonical wire bytes.</summary>
-    public static HelloPayload DecodeHello(byte[] frameBytes)
+    public static HelloPayload DecodeHello(byte[] frameBytes) => DecodeHelloPayload(frameBytes, TypeHello);
+
+    /// <summary>Decode HELLO_ACK; HELLO and HELLO_ACK are not interchangeable.</summary>
+    public static HelloPayload DecodeHelloAck(byte[] frameBytes) => DecodeHelloPayload(frameBytes, TypeHelloAck);
+
+    private static HelloPayload DecodeHelloPayload(byte[] frameBytes, byte expectedType)
     {
-        var (frame, _) = FrameCodec.ParseFrame(frameBytes);
-        if (frame.FrameType is not TypeHello and not TypeHelloAck)
+        var frame = ParseControlFrame(frameBytes, expectedType);
+        if (frame.Payload.Length != 24)
             throw new FrameException("FRAME_REJECTED");
         var r = new Reader(frame.Payload);
-        return new HelloPayload(NodeId.From(r.B128()), (int)r.U32(), (SessionCapabilities)r.U32());
+        var nodeId = NodeId.From(r.B128());
+        uint epoch = r.U32();
+        uint capabilities = r.U32();
+        if (epoch > int.MaxValue)
+            throw new FrameException("FRAME_REJECTED");
+        return new HelloPayload(nodeId, (int)epoch, (SessionCapabilities)capabilities);
+    }
+
+    private static Frame ParseControlFrame(byte[] frameBytes, byte expectedType)
+    {
+        if (frameBytes is null || frameBytes.Length < Frames.HEADER_SIZE ||
+            frameBytes[2] != Frames.VERSION)
+            throw new FrameException("FRAME_REJECTED");
+        var (frame, consumed) = FrameCodec.ParseFrame(frameBytes);
+        if (consumed != frameBytes.Length || frame.FrameType != expectedType ||
+            frame.StreamId != ControlStreamId || frame.Flags != 0)
+            throw new FrameException("FRAME_REJECTED");
+        return frame;
     }
 
     /// <summary>Encode hello ack into canonical wire bytes.</summary>
@@ -102,14 +124,28 @@ public static class SessionWire
     /// <summary>Decode alias map from canonical wire bytes.</summary>
     public static List<AliasMapEntry> DecodeAliasMap(byte[] frameBytes)
     {
-        var (frame, _) = FrameCodec.ParseFrame(frameBytes);
-        if (frame.FrameType != TypeAliasMap)
-            throw new FrameException("FRAME_REJECTED");
+        var frame = ParseControlFrame(frameBytes, TypeAliasMap);
         var r = new Reader(frame.Payload);
-        int n = (int)r.Varint();
+        ulong count = r.Varint();
+        // Each entry is exactly 22 bytes: alias u16, nodeId b128, epoch u32.
+        if (count > ushort.MaxValue || count > (ulong)(r.Remaining / 22))
+            throw new FrameException("FRAME_REJECTED");
+        int n = (int)count;
         var list = new List<AliasMapEntry>(n);
+        var aliases = new HashSet<ushort>();
+        var nodes = new HashSet<NodeId>();
         for (int i = 0; i < n; i++)
-            list.Add(new AliasMapEntry(r.U16(), NodeId.From(r.B128()), (int)r.U32()));
+        {
+            ushort alias = r.U16();
+            var nodeId = NodeId.From(r.B128());
+            uint epoch = r.U32();
+            if (alias == 0 || epoch > int.MaxValue ||
+                !aliases.Add(alias) || !nodes.Add(nodeId))
+                throw new FrameException("FRAME_REJECTED");
+            list.Add(new AliasMapEntry(alias, nodeId, (int)epoch));
+        }
+        if (r.Remaining != 0)
+            throw new FrameException("FRAME_REJECTED");
         return list;
     }
 
@@ -203,7 +239,7 @@ public static class SessionWire
             .ConfigureAwait(false);
         var ackBa = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("peer closed during HELLO_ACK");
-        _ = DecodeHello(ackBa);
+        _ = DecodeHelloAck(ackBa);
 
         var table = BuildAliasMapTable(local, remote.NodeId, remote.Epoch);
         var mapFrame = EncodeAliasMap(table);

@@ -36,6 +36,44 @@ public class TransportFoundationTests
         Assert.Equal(5, got[1].Epoch);
     }
 
+
+    [Fact]
+    public void SessionWire_Hello_decoders_reject_wrong_type_stream_flags_and_trailing_bytes()
+    {
+        var hello = SessionWire.EncodeHello(new HelloPayload(Fix.Nid(11), 2, SessionCapabilities.None));
+        var ack = SessionWire.EncodeHelloAck(new HelloPayload(Fix.Nid(12), 3, SessionCapabilities.None));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHello(ack));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHelloAck(hello));
+
+        var parsed = FrameCodec.ParseFrame(hello).Frame;
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHello(
+            FrameCodec.BuildFrame(SessionWire.TypeHello, 7, parsed.FrameSeq, parsed.Payload)));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHello(
+            FrameCodec.BuildFrame(SessionWire.TypeHello, 0, parsed.FrameSeq, parsed.Payload, flags: Frames.FLAG_SIGNED)));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHello(
+            FrameCodec.BuildFrame(SessionWire.TypeHello, 0, parsed.FrameSeq, parsed.Payload.Concat(new byte[] { 0 }).ToArray())));
+    }
+
+    [Fact]
+    public void SessionWire_AliasMap_rejects_duplicate_alias_node_and_trailing_bytes()
+    {
+        var id1 = Fix.Nid(21);
+        var id2 = Fix.Nid(22);
+        var duplicateAlias = new List<AliasMapEntry> { new(1, id1, 1), new(1, id2, 1) };
+        var duplicateNode = new List<AliasMapEntry> { new(1, id1, 1), new(2, id1, 2) };
+
+        Assert.Throws<FrameException>(() => SessionWire.DecodeAliasMap(SessionWire.EncodeAliasMap(duplicateAlias)));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeAliasMap(SessionWire.EncodeAliasMap(duplicateNode)));
+
+        var valid = SessionWire.EncodeAliasMap(new List<AliasMapEntry> { new(1, id1, 1) });
+        var parsed = FrameCodec.ParseFrame(valid).Frame;
+        Assert.Throws<FrameException>(() => SessionWire.DecodeAliasMap(
+            FrameCodec.BuildFrame(SessionWire.TypeAliasMap, 0, parsed.FrameSeq,
+                parsed.Payload.Concat(new byte[] { 0 }).ToArray())));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeAliasMap(
+            FrameCodec.BuildFrame(SessionWire.TypeAliasMap, 1, parsed.FrameSeq, parsed.Payload)));
+    }
+
     [Fact]
     public async Task GenericSyncSession_UsesPipeTransport_WithoutTcpHost()
     {

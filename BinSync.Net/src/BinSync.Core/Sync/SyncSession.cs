@@ -113,7 +113,7 @@ public partial class SyncSession : IAsyncDisposable
         var raw = await transport.ReceiveAsync(ct).ConfigureAwait(false) ?? throw new IOException("peer closed during HELLO_ACK");
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != SessionWire.TypeHelloAck) throw new FrameException("FRAME_REJECTED");
-        var peer = SessionWire.DecodeHello(raw);
+        var peer = SessionWire.DecodeHelloAck(raw);
         local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
         var aliases = SessionWire.BuildAliasMapTable(local, peer.NodeId, peer.Epoch, selfAlias: 1, peerAlias: 2);
         SessionWire.ApplyAliasMap(local, peer.NodeId, aliases);
