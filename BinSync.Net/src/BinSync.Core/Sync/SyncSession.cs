@@ -126,7 +126,8 @@ public partial class SyncSession : IAsyncDisposable
         // the previous live session state.
         local.ResetSession(peer.NodeId);
         local.RegisterSessionEpoch(peer.NodeId, peer.Epoch);
-        SessionWire.ApplyAliasMap(local, peer.NodeId, aliases);
+        // The acceptor's returned map is the negotiated union; do not first
+        // publish our proposal because its alias numbering may differ.
         SessionWire.ApplyAliasMap(local, peer.NodeId, remoteAliases);
         return peer;
     }

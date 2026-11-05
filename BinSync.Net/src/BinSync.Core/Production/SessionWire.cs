@@ -231,6 +231,8 @@ public static class SessionWire
         var helloAb = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("peer closed during HELLO");
         var remoteHello = DecodeHello(helloAb);
+        remote.RegisterSessionEpoch(local.NodeId, local.Epoch);
+        local.RegisterSessionEpoch(remote.NodeId, remoteHello.Epoch);
 
         await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
             .ConfigureAwait(false);
@@ -247,17 +249,8 @@ public static class SessionWire
             ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
         var mapOnRemote = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
             ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
-        var localMap = DecodeAliasMap(mapOnLocal);
-        var remoteMap = DecodeAliasMap(mapOnRemote);
-
-        // Both complete maps are available: atomically begin the new session on
-        // each endpoint before publishing either alias table.
-        local.ResetSession(remote.NodeId);
-        remote.ResetSession(local.NodeId);
-        remote.RegisterSessionEpoch(local.NodeId, local.Epoch);
-        local.RegisterSessionEpoch(remote.NodeId, remoteHello.Epoch);
-        ApplyAliasMap(local, remote.NodeId, localMap);
-        ApplyAliasMap(remote, local.NodeId, remoteMap);
+        ApplyAliasMap(local, remote.NodeId, DecodeAliasMap(mapOnLocal));
+        ApplyAliasMap(remote, local.NodeId, DecodeAliasMap(mapOnRemote));
 
         local.PeersByNid ??= new Dictionary<NodeId, Node>();
         remote.PeersByNid ??= new Dictionary<NodeId, Node>();

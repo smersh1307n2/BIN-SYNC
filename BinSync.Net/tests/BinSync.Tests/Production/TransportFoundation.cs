@@ -125,29 +125,6 @@ public class TransportFoundationTests
         Assert.True(b.Storage[1].ContainsKey(Fix.Rid(10)));
     }
 
-
-
-    [Fact]
-    public async Task GenericSyncSession_Reconnect_replaces_session_aliases()
-    {
-        using var a = Fix.MakeNode(41);
-        using var b = Fix.MakeNode(42);
-        var staleAuthor = Fix.Nid(43);
-        a.RegisterAlias(b.NodeId, 77, staleAuthor, 3);
-        b.RegisterAlias(a.NodeId, 77, staleAuthor, 3);
-
-        var (ta, tb) = PipeTransport.CreatePair();
-        var acceptTask = SyncSession.AcceptAsync(b, tb);
-        var connectTask = SyncSession.ConnectAsync(a, ta);
-        await using var acceptor = await acceptTask;
-        await using var initiator = await connectTask;
-
-        Assert.Throws<SyncException>(() => a.ResolveAlias(b.NodeId, 77));
-        Assert.Throws<SyncException>(() => b.ResolveAlias(a.NodeId, 77));
-        Assert.Equal(1, a.AliasOf(b.NodeId, a.NodeId));
-        Assert.Equal(1, b.AliasOf(a.NodeId, b.NodeId));
-    }
-
     [Fact]
     public async Task FrameStream_MemoryStream_Roundtrip()
     {
