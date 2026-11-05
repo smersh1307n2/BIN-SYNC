@@ -2,7 +2,7 @@
 namespace BinSync;
 
 /// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
-public sealed partial class SyncSession
+public partial class SyncSession
 {
     /// <summary>
     /// Send our STATE_DIGEST and receive the peer's. When initiate is true we send first;

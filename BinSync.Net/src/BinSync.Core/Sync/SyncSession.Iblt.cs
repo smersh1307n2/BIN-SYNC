@@ -2,7 +2,7 @@
 namespace BinSync;
 
 /// <summary>Established TCP (optionally TLS) sync session with a peer.</summary>
-public sealed partial class SyncSession
+public partial class SyncSession
 {
     /// <summary>Send local IBLT for namespace (optional prefix filter).</summary>
     public async Task SendIbltAsync(
