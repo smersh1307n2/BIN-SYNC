@@ -2132,4 +2132,10 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 **Нормативно:** отправитель фиксирует максимальный cursor, реально переданный каждому peer отдельно по author stream. ACK с author stream принимается только если его cursor не выше зафиксированного pushed cursor и покрывает непрерывный диапазон записей Outbox. Legacy ACK без author ограничивается общим максимальным pushed cursor и продвигает каждый stream только по непрерывному диапазону. TCP ACK дополнительно обязан точно совпадать с BatchId, CursorEnd и DurableAuthor отправленного батча. Некорректный ACK отклоняется с ACK_OUT_OF_RANGE (0x0018) без изменения watermark и Outbox.
 
-**Persistence:** per-peer/per-author StreamPushed сохраняется вместе с StreamAcked; формат node-state повышен до версии 2 (BIN-SYNC/NODESTATE/v2). Файлы state v1 отвергаются как несовместимые, а не интерпретируются частично.
+**Persistence:** per-peer/per-author StreamPushed сохраняется вместе с StreamAcked; формат node-state повышен до версии 3 (BIN-SYNC/NODESTATE/v3). Файлы state v1 отвергаются как несовместимые, а не интерпретируются частично.
+
+## E-16. §10.2.2 / §12.11 — author stream дубликата ACK привязан к BatchId
+
+**Дефект:** LastStreamAuthor хранит только последнего автора, принятого от peer в namespace. Если peer передавал несколько author streams, повтор старого batch после более нового мог получить ACK с чужим автором.
+
+**Нормативно:** при первом принятии узел сохраняет durable author отдельно для ключа Inbox (issuer, namespace, epoch, batchId). При duplicate replay ACK строится по этой записи, а не по последнему автору сессии. Соответствие InboxAuthors сохраняется в node-state; восстановление не меняет автора ACK.

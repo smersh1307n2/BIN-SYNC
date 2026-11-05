@@ -15,7 +15,7 @@
 //  -> Record with FieldState/HLC/ghost lifecycle + FieldTombs), Outbox per namespace,
 //  per-(author,ns) outbox seq counters, Inbox idempotency set, LastBatchDigest and
 //  LastStreamDigest chain checkpoints, AliasToNode/NodeToAlias, DurableAuthors,
-//  PeerStates (cursors + ReceivedStreams/StreamAcked/StreamPushed/Ids caches), SeenChanges,
+//  InboxAuthors (accepted batch -> durable author), PeerStates (cursors + ReceivedStreams/StreamAcked/StreamPushed/Ids caches), SeenChanges,
 //  LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
 //
 // Wire format: big-endian header (magic/version/bodyLen/digest), LE canonical body
