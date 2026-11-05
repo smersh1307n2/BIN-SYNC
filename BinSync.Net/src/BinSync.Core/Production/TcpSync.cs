@@ -183,6 +183,9 @@ public sealed partial class TcpSyncSession : IAsyncDisposable
         var (bid, seq, author) = Transport.DecodeAck(ackFrame.Payload);
         if (!batch.BatchId.EqualsBytes(bid))
             throw new InvalidOperationException("ACK batch id mismatch");
+        if (seq != batch.CursorEnd || author is null ||
+            NodeId.From(author) != batch.DurableAuthor)
+            throw new SyncException("ACK_OUT_OF_RANGE", batch.BatchId);
         sender.AdvanceStream(PeerNodeId, namespaceId, batch);
         sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: NodeId.From(author));
         return true;

@@ -28,6 +28,7 @@ public enum SyncErrorCode : ushort
     CorruptedFrame = 0x0015,
     FrameRejected = 0x0016,
     BatchChainBroken = 0x0017,
+    AckOutOfRange = 0x0018,
 }
 
 /// <summary>Helpers mapping symbolic names ↔ <see cref="SyncErrorCode"/>.</summary>
@@ -59,6 +60,7 @@ public static class SyncErrorCodes
             ["CORRUPTED_FRAME"] = SyncErrorCode.CorruptedFrame,
             ["FRAME_REJECTED"] = SyncErrorCode.FrameRejected,
             ["BATCH_CHAIN_BROKEN"] = SyncErrorCode.BatchChainBroken,
+            ["ACK_OUT_OF_RANGE"] = SyncErrorCode.AckOutOfRange,
         };
 
     private static readonly Dictionary<SyncErrorCode, string> ToName = ByName

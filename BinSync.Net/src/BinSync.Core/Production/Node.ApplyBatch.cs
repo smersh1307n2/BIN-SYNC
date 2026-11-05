@@ -397,30 +397,65 @@ public sealed partial class Node
 
     internal void ProcessAckInternal(NodeId peerNode, int namespaceId, long ackedSeq, NodeId? authorStream = null)
     {
+        if (ackedSeq < 0 || (authorStream is not null && authorStream.Value.IsZero))
+            throw new SyncException("ACK_OUT_OF_RANGE");
         if (!PeerStates.TryGetValue((peerNode, namespaceId), out var ps)) return;
+
+        var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : null;
         if (authorStream is not null)
         {
-            var a = authorStream.Value;
-            ps.StreamAcked[a] = Math.Max(ps.StreamAcked.TryGetValue(a, out var cur) ? cur : 0, ackedSeq);
+            var author = authorStream.Value;
+            var current = ps.AckedFor(author);
+            if (ackedSeq > current)
+            {
+                if (!ps.StreamPushed.TryGetValue(author, out var pushed) || ackedSeq > pushed ||
+                    !HasContiguousOutboxRange(entries, author, current, ackedSeq))
+                    throw new SyncException("ACK_OUT_OF_RANGE");
+                ps.StreamAcked[author] = ackedSeq;
+            }
         }
         else
         {
-            var entries = Outbox.TryGetValue(namespaceId, out var es) ? es : new List<OutboxEntry>();
-            var heads = new Dictionary<NodeId, long>();
-            foreach (var e in entries)
+            // Legacy ACKs have no author key. Bound them by the greatest sequence
+            // actually handed to this peer, then advance each stream only through
+            // a contiguous range still present in the outbox.
+            if (ackedSeq > ps.LastPushedSeq)
+                throw new SyncException("ACK_OUT_OF_RANGE");
+            foreach (var (author, pushed) in ps.StreamPushed)
             {
-                var authorKey = e.AuthorNodeId;
-                if (!heads.TryGetValue(authorKey, out var cur) || e.Seq < cur)
-                    heads[authorKey] = e.Seq;
+                var current = ps.AckedFor(author);
+                var target = Math.Min(ackedSeq, pushed);
+                if (target <= current) continue;
+                var contiguous = ContiguousOutboxEnd(entries, author, current, target);
+                if (contiguous > current)
+                    ps.StreamAcked[author] = contiguous;
             }
-            foreach (var (author, firstSeq) in heads)
-                if (firstSeq <= ackedSeq)
-                    ps.StreamAcked[author] = Math.Max(ps.StreamAcked.TryGetValue(author, out var c2) ? c2 : 0, ackedSeq);
         }
+
         // legacy mirror: monotone scalar = min over known streams' watermarks.
         if (ps.StreamAcked.Count > 0)
             ps.LastAckedSeq = ps.StreamAcked.Values.Min();
         CompactOutbox(namespaceId);
+    }
+
+    private static bool HasContiguousOutboxRange(List<OutboxEntry>? entries, NodeId author,
+        long current, long requested) =>
+        requested <= current || ContiguousOutboxEnd(entries, author, current, requested) == requested;
+
+    private static long ContiguousOutboxEnd(List<OutboxEntry>? entries, NodeId author,
+        long current, long requested)
+    {
+        if (requested <= current) return current;
+        if (entries is null) return current;
+        long next = current + 1;
+        for (int i = 0; i < entries.Count && next <= requested; i++)
+        {
+            var entry = entries[i];
+            if (entry.AuthorNodeId != author || entry.Seq < next) continue;
+            if (entry.Seq != next) break;
+            next++;
+        }
+        return next - 1;
     }
 
 
