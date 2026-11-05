@@ -122,6 +122,44 @@ public class WalTests
     }
 
     [Fact]
+    public async Task Wal_checkpoint_preserves_writes_racing_with_snapshot_and_truncate()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var walPath = Path.Combine(dir, "node.wal");
+            var snapPath = Path.Combine(dir, "node.state");
+            var node = Fix.MakeNode(128);
+            using var wal = Wal.Open(walPath);
+
+            var writer = Task.Run(() =>
+            {
+                for (int i = 0; i < 128; i++)
+                {
+                    var rid = Fix.Rid(2000 + i);
+                    node.WriteField(1, rid, 0x100, new byte[] { (byte)i });
+                    Assert.True(node.TryGetField(1, rid, 0x100, out var field));
+                    wal.AppendFieldWrite(1, rid, 0x100, field!.Value,
+                        field.Timestamp, node.NodeId.ToArray());
+                }
+            });
+
+            var checkpoint = Task.Run(() => wal.Checkpoint(node, snapPath));
+            await Task.WhenAll(writer, checkpoint).WaitAsync(TimeSpan.FromSeconds(10));
+
+            var recovered = NodePersistence.Load(snapPath);
+            Wal.ReplayFile(walPath, recovered);
+            for (int i = 0; i < 128; i++)
+                Assert.True(recovered.TryGetRecord(1, Fix.Rid(2000 + i), out _), $"Lost record {i}");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_replay_after_snapshot_applies_delta()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
