@@ -110,6 +110,43 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
+    public void Concurrent_session_commits_never_publish_a_mixed_alias_table()
+    {
+        using var local = new Node(Fix.Nid(131));
+        var peer = Fix.Nid(132);
+        var authorA = Fix.Nid(133);
+        var authorB = Fix.Nid(134);
+
+        var mapA = new List<AliasMapEntry>
+        {
+            new(1, local.NodeId, local.Epoch),
+            new(2, peer, 5),
+            new(3, authorA, 1),
+        };
+        var mapB = new List<AliasMapEntry>
+        {
+            new(10, local.NodeId, local.Epoch),
+            new(20, peer, 5),
+            new(30, authorB, 2),
+        };
+
+        Parallel.For(0, 128, i =>
+            local.CommitSession(peer, 5, (i & 1) == 0 ? mapA : mapB));
+
+        var final = local.AliasToNode[peer];
+        bool isA = final.Count == 3 &&
+            final.TryGetValue(1, out var aLocal) && aLocal.Id == local.NodeId &&
+            final.TryGetValue(2, out var aPeer) && aPeer.Id == peer &&
+            final.TryGetValue(3, out var aAuthor) && aAuthor.Id == authorA;
+        bool isB = final.Count == 3 &&
+            final.TryGetValue(10, out var bLocal) && bLocal.Id == local.NodeId &&
+            final.TryGetValue(20, out var bPeer) && bPeer.Id == peer &&
+            final.TryGetValue(30, out var bAuthor) && bAuthor.Id == authorB;
+
+        Assert.True(isA || isB, "Concurrent commits exposed a mixed or partial alias table");
+    }
+
+    [Fact]
     public void Opposite_direction_alias_negotiation_does_not_deadlock()
     {
         using var a = new Node(Fix.Nid(81));
