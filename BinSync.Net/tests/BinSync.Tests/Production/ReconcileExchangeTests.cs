@@ -119,6 +119,34 @@ public class ReconcileExchangeTests
         Assert.Same(bPeerState, b.PeerStates[(a.NodeId, 1)]);
     }
 
+    [Fact]
+    public async Task AutoReconcile_rejects_duplicate_need_range_prefix()
+    {
+        var a = Fix.MakeNode(61);
+        var b = Fix.MakeNode(62);
+        var rid = Fix.Rid(610);
+        a.WriteField(1, rid, 0x100, new byte[] { 1 });
+        b.WriteField(1, rid, 0x100, new byte[] { 2 });
+
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var serverTask = server.AutoReconcileAsync(b, 1, initiate: false, maxPrefixes: 2);
+        var (_, _, divergent) = await client.ExchangeStateDigestAsync(a, 1, initiate: true);
+        Assert.Single(divergent);
+
+        // Fulfill the one legitimate request, then repeat it instead of requesting
+        // a different divergent prefix. The responder must reject the duplicate.
+        await client.SendNeedRangeAsync(1, divergent[0]);
+        await client.ReceiveSnapshotAsync(a);
+        await client.SendNeedRangeAsync(1, divergent[0]);
+
+        await Assert.ThrowsAsync<FormatException>(async () => await serverTask);
+        Assert.False(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
+    }
+
     private sealed class FailOnSecondStateDigestTransport : ISyncTransport
     {
         private readonly PipeTransport _inner;
