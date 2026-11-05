@@ -79,8 +79,14 @@ public partial class SyncSession
     /// <summary>Receive a NEED_RANGE reconcile message.</summary>
     public async Task<NeedRangeMessage> ReceiveNeedRangeAsync(CancellationToken ct = default)
     {
-        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.NeedRange, ct).ConfigureAwait(false)
-           ;
+        await _reconcileGate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await ReceiveNeedRangeCoreAsync(ct).ConfigureAwait(false); }
+        finally { _reconcileGate.Release(); }
+    }
+
+    private async Task<NeedRangeMessage> ReceiveNeedRangeCoreAsync(CancellationToken ct)
+    {
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.NeedRange, ct).ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.NeedRange);
         var need = Reconcile.DecodeNeedRange(frame.Payload);
         ValidateNamespaceStream(frame, need.NamespaceId);
@@ -240,7 +246,7 @@ public partial class SyncSession
         // for the counter so maxPrefixes == int.MaxValue cannot overflow.
         for (long i = 0; i <= maxPrefixes; i++)
         {
-            var need = await ReceiveNeedRangeAsync(ct).ConfigureAwait(false);
+            var need = await ReceiveNeedRangeCoreAsync(ct).ConfigureAwait(false);
             if (need.NamespaceId != namespaceId)
                 throw new FormatException("NEED_RANGE namespace does not match STATE_DIGEST");
 
