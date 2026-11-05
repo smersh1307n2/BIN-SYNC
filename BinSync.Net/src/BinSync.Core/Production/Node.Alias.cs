@@ -205,7 +205,7 @@ public sealed partial class Node
             peer.RegisterAlias(NodeId, alias, nodeId, epoch);
             return true;
         }
-        catch
+        catch (SyncException)
         {
             // The first registration succeeded, the second did not. Undo only the
             // exact binding inserted above; preserve any pre-existing durable epoch.
@@ -225,6 +225,26 @@ public sealed partial class Node
 
             // RegisterAliasInternal on the peer creates maps before validating
             // conflicts. Remove only those now-empty containers, under its own gate.
+            lock (peer._lockMeta)
+                peer.RemoveEmptyAliasMapsInternal(NodeId);
+            return false;
+        }
+        catch
+        {
+            // Unexpected failures must also leave no one-sided alias binding.
+            if (AliasToNode.TryGetValue(peer.NodeId, out var fwd) &&
+                fwd.TryGetValue(alias, out var binding) &&
+                binding.Id == nodeId && binding.Epoch == epoch)
+                fwd.Remove(alias);
+
+            if (NodeToAlias.TryGetValue(peer.NodeId, out var rev) &&
+                rev.TryGetValue((nodeId, epoch), out var reverseAlias) &&
+                reverseAlias == alias)
+                rev.Remove((nodeId, epoch));
+
+            if (hadDurable) DurableAuthors[nodeId] = priorDurable;
+            else DurableAuthors.Remove(nodeId);
+            RemoveEmptyAliasMapsInternal(peer.NodeId);
             lock (peer._lockMeta)
                 peer.RemoveEmptyAliasMapsInternal(NodeId);
             throw;
