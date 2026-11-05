@@ -116,39 +116,47 @@ public partial class SyncSession
     public async Task SendSnapshotAsync(
         Node local, int namespaceId, byte[]? prefix = null, CancellationToken ct = default)
     {
-        uint streamId = 0x0001_0000u | (uint)namespaceId;
-        var chunks = Reconcile.BuildSnapshotChunks(local, namespaceId, prefix);
-        for (int i = 0; i < chunks.Count; i++)
-            await SendFrameAsync(ReconcileFrames.SnapshotChunk, streamId, 13ul,
-                Reconcile.EncodeSnapshotChunk(chunks[i]), ct).ConfigureAwait(false);
+        await _snapshotSendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            uint streamId = 0x0001_0000u | (uint)namespaceId;
+            var chunks = Reconcile.BuildSnapshotChunks(local, namespaceId, prefix);
+            for (int i = 0; i < chunks.Count; i++)
+                await SendFrameAsync(ReconcileFrames.SnapshotChunk, streamId, 13ul,
+                    Reconcile.EncodeSnapshotChunk(chunks[i]), ct).ConfigureAwait(false);
+        }
+        finally { _snapshotSendGate.Release(); }
     }
 
     /// <summary>Receive and apply one SNAPSHOT_CHUNK. Returns fields applied.</summary>
     public async Task<int> ReceiveSnapshotAsync(Node local, CancellationToken ct = default)
     {
-        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
-           ;
-        var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
-        var first = Reconcile.DecodeSnapshotChunk(frame.Payload);
-        ValidateNamespaceStream(frame, first.NamespaceId);
-        if (first.ChunkCount == 0 || first.ChunkIndex != 0)
-            throw new FormatException("Snapshot must begin with chunk zero");
-        var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
-        for (uint expected = 1; expected < first.ChunkCount; expected++)
+        await _snapshotReceiveGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
-               ;
-            frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
-            var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
-            ValidateNamespaceStream(frame, chunk.NamespaceId);
-            if (chunk.NamespaceId != first.NamespaceId ||
-                chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != expected)
-                throw new FormatException("Snapshot chunk sequence mismatch");
-            chunks.Add(chunk);
-        }
+            var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false);
+            var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
+            var first = Reconcile.DecodeSnapshotChunk(frame.Payload);
+            ValidateNamespaceStream(frame, first.NamespaceId);
+            if (first.ChunkCount == 0 || first.ChunkIndex != 0)
+                throw new FormatException("Snapshot must begin with chunk zero");
+            var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
+            for (uint expected = 1; expected < first.ChunkCount; expected++)
+            {
+                raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false);
+                frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
+                var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
+                ValidateNamespaceStream(frame, chunk.NamespaceId);
+                if (chunk.NamespaceId != first.NamespaceId ||
+                    chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != expected)
+                    throw new FormatException("Snapshot chunk sequence mismatch");
+                chunks.Add(chunk);
+            }
 
-        // Do not publish any part of the baseline until every chunk has arrived and validated.
-        return Reconcile.ApplySnapshotChunks(local, chunks);
+            // Do not publish any part of the baseline until every chunk has arrived and validated.
+            return Reconcile.ApplySnapshotChunks(local, chunks);
+        }
+        finally { _snapshotReceiveGate.Release(); }
     }
 
     /// <summary>

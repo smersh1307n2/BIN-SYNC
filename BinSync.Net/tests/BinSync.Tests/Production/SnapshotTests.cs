@@ -95,6 +95,35 @@ public class SnapshotTests
     }
 
     [Fact]
+    public async Task Concurrent_snapshot_transfers_are_serialized_as_complete_sequences()
+    {
+        var source = Fix.MakeNode(80);
+        var target = Fix.MakeNode(81);
+        var firstId = Fix.Rid(800);
+        var secondId = Fix.Rid(801);
+        source.WriteField(1, firstId, 0x100, new byte[9 * 1024 * 1024]);
+        source.WriteField(1, secondId, 0x100, new byte[9 * 1024 * 1024]);
+
+        var (senderPipe, receiverPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(target, receiverPipe);
+        await using var sender = await SyncSession.ConnectAsync(source, senderPipe);
+        await using var receiver = await acceptTask;
+
+        var receiveOne = receiver.ReceiveSnapshotAsync(target);
+        var receiveTwo = receiver.ReceiveSnapshotAsync(target);
+        var sendOne = sender.SendSnapshotAsync(source, 1);
+        var sendTwo = sender.SendSnapshotAsync(source, 1);
+
+        var applied = await Task.WhenAll(receiveOne, receiveTwo).WaitAsync(TimeSpan.FromSeconds(15));
+        await Task.WhenAll(sendOne, sendTwo).WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.All(applied, count => Assert.Equal(2, count));
+        Assert.Equal(2, target.GetRecordCount(1));
+        Assert.Equal(9 * 1024 * 1024, target.Storage[1][firstId].State[0x100].Value.Length);
+        Assert.Equal(9 * 1024 * 1024, target.Storage[1][secondId].State[0x100].Value.Length);
+    }
+
+    [Fact]
     public async Task Tcp_AutoReconcile_converges_divergent_field()
     {
         var a = Fix.MakeNode(56);

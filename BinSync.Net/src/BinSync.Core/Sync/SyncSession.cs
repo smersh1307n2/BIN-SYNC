@@ -15,6 +15,9 @@ public partial class SyncSession : IAsyncDisposable
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly SemaphoreSlim _pushGate = new(1, 1);
     private readonly SemaphoreSlim _batchReceiveGate = new(1, 1);
+    // SNAPSHOT_CHUNK has no transfer/correlation ID: serialize complete multi-frame transfers.
+    private readonly SemaphoreSlim _snapshotSendGate = new(1, 1);
+    private readonly SemaphoreSlim _snapshotReceiveGate = new(1, 1);
     private readonly SemaphoreSlim _exclusiveReceiveGate = new(1, 1);
     private readonly object _receiveSync = new();
     private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();
