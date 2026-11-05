@@ -46,7 +46,7 @@ public sealed class ResourceLimitsAtomicityTests
             Wall = 2,
             Logical = 0,
             Origin = 1,
-            AuthorNodeId = node.NodeId,
+            AuthorNodeId = node.NodeId.ToArray(),
             Value = [2]
         };
 
