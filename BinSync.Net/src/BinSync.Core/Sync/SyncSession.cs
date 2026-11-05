@@ -3,7 +3,7 @@ using System.Buffers;
 namespace BinSync;
 
 /// <summary>Transport-independent BIN-SYNC session over any complete-packet channel.</summary>
-public sealed partial class SyncSession : IAsyncDisposable
+public partial class SyncSession : IAsyncDisposable
 {
     protected readonly ISyncTransport _transport;
     private readonly bool _ownsTransport;
