@@ -45,7 +45,7 @@ public partial class SyncSession
         }
         else
         {
-            var raw = await ReceivePacketAsync(ReconcileFrames.StateDigest, ct).ConfigureAwait(false)
+            var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.StateDigest, ct).ConfigureAwait(false)
                ;
             var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.StateDigest);
             var peer = Reconcile.DecodeStateDigest(frame.Payload);
@@ -136,7 +136,7 @@ public partial class SyncSession
         var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
         for (uint expected = 1; expected < first.ChunkCount; expected++)
         {
-            raw = await ReceivePacketAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
+            raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.SnapshotChunk, ct).ConfigureAwait(false)
                ;
             frame = ParseExpectedSessionFrame(raw, ReconcileFrames.SnapshotChunk);
             var chunk = Reconcile.DecodeSnapshotChunk(frame.Payload);
