@@ -101,8 +101,8 @@ public static class NodePersistence
             throw new InvalidDataException($"Unsupported state version {ver} (expected {Version} or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
-        if (bodyLen > (ulong)(bytes.Length - 14 - DigestLen))
-            throw new InvalidDataException("State file truncated (body length out of bounds).");
+        if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
+            throw new InvalidDataException("State file length does not match the declared body length.");
         var storedDigest = r.ReadBytes(DigestLen);
         var body = r.ReadBytes((int)bodyLen);
         if (body.Length != (int)bodyLen)

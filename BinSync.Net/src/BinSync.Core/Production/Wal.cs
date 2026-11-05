@@ -72,7 +72,11 @@ public sealed class Wal : IDisposable
                     throw new InvalidDataException("Invalid WAL record length.");
                 if (fs.Position + len > fs.Length)
                     break; // Torn final record: discard it before accepting new appends.
-                validEnd = fs.Position + len;
+                var payload = new byte[len];
+                int read = fs.Read(payload, 0, len);
+                if (read != len) break;
+                ValidateRecord(payload);
+                validEnd = fs.Position;
                 seq++;
             }
 
@@ -137,18 +141,25 @@ public sealed class Wal : IDisposable
             if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
             long end = _fs.Length;
             long pos = 6;
-            int applied = 0;
-            while (pos + 5 <= end)
+            var records = new List<byte[]>();
+            while (pos + 4 <= end)
             {
                 _fs.Position = pos;
                 int len = ReadBEInt32(_fs);
-                if (len < 1 || pos + 4 + len > end) break;
+                if (len < 1 || pos + 4L + len > end)
+                    throw new InvalidDataException("WAL contains an incomplete record.");
                 var payload = new byte[len];
                 int read = _fs.Read(payload, 0, len);
-                if (read != len) break;
+                if (read != len)
+                    throw new InvalidDataException("WAL record is truncated.");
+                ValidateRecord(payload);
                 pos = _fs.Position;
-                applied += ApplyRecord(node, payload);
+                records.Add(payload);
             }
+
+            int applied = 0;
+            foreach (var payload in records)
+                applied += ApplyRecord(node, payload);
             _fs.Position = end;
             return applied;
         }
@@ -163,15 +174,24 @@ public sealed class Wal : IDisposable
         using var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true);
         if (ReadBEU32(br) != Magic) throw new InvalidDataException("Not a BinSync WAL.");
         if (ReadBEU16(br) != Version) throw new InvalidDataException("Unsupported WAL version.");
-        int applied = 0;
-        while (fs.Position + 5 <= fs.Length)
+        var records = new List<byte[]>();
+        while (fs.Position + 4 <= fs.Length)
         {
             int len = ReadBEInt32(fs);
-            if (len < 1 || fs.Position + len > fs.Length) break;
+            if (len < 1 || fs.Position + len > fs.Length)
+                throw new InvalidDataException("WAL contains an incomplete record.");
             var payload = br.ReadBytes(len);
-            if (payload.Length != len) break;
-            applied += ApplyRecord(node, payload);
+            if (payload.Length != len)
+                throw new InvalidDataException("WAL record is truncated.");
+            ValidateRecord(payload);
+            records.Add(payload);
         }
+
+        // Do not mutate the target node until every complete record has passed
+        // structural validation. This prevents partial replay on malformed tails.
+        int applied = 0;
+        foreach (var payload in records)
+            applied += ApplyRecord(node, payload);
         return applied;
     }
 
@@ -200,6 +220,38 @@ public sealed class Wal : IDisposable
             AppendCheckpoint();
             Truncate();
         }
+    }
+
+    // Validate framing and the complete payload before any replay mutation.
+    // A complete but malformed record is corruption, not a torn tail.
+    private static void ValidateRecord(byte[] payload)
+    {
+        var r = new Reader(payload);
+        var type = (WalRecordType)r.U8();
+        switch (type)
+        {
+            case WalRecordType.FieldWrite:
+                {
+                    ulong ns = r.Varint();
+                    if (ns > int.MaxValue)
+                        throw new InvalidDataException("WAL namespace id is out of range.");
+                    _ = r.B128();
+                    _ = r.U16();
+                    _ = r.Bytes();
+                    _ = r.U64();
+                    _ = r.U32();
+                    _ = r.B128();
+                    break;
+                }
+            case WalRecordType.Checkpoint:
+                _ = r.U64();
+                break;
+            default:
+                throw new InvalidDataException($"Unknown WAL record type 0x{(byte)type:X2}.");
+        }
+
+        if (!r.Eof())
+            throw new InvalidDataException("WAL record contains trailing bytes.");
     }
 
     private static int ApplyRecord(Node node, byte[] payload)
