@@ -17,7 +17,7 @@ public enum WalRecordType : byte
 public sealed class Wal : IDisposable
 {
     /// <summary>WAL format identifier string written at the start of a log segment.</summary>
-    public const string Tag = "BIN-SYNC/WAL/v1";
+    public const string Tag = "BIN-SYNC/WAL/v2";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
     private const ushort Version = 2;
     private const ushort LegacyVersion = 1;
@@ -52,6 +52,8 @@ public sealed class Wal : IDisposable
 
         var fs = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Read,
             4096, FileOptions.WriteThrough);
+        try
+        {
         long seq = 0;
         ushort version;
         if (fs.Length == 0)
@@ -104,6 +106,12 @@ public sealed class Wal : IDisposable
             fs.Position = fs.Length;
         }
         return new Wal(path, fs, seq, version);
+        }
+        catch
+        {
+            fs.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Append a field-write record to the WAL and return its sequence.</summary>

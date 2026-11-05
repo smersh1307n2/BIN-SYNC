@@ -183,16 +183,22 @@ public class WalTests
             var walPath = Path.Combine(dir, "node.wal");
             var source = Fix.MakeNode(129);
             var rid = Fix.Rid(306);
-            using (var wal = Wal.Open(walPath))
-                wal.AppendFieldWrite(1, rid, 0x100, new byte[] { 0x42 },
-                    new Hlc(300, 0), source.NodeId);
+            var validPayload = new Writer().U8((byte)WalRecordType.FieldWrite)
+                .Varint(1).B128(rid).U16(0x100).Bytes(new byte[] { 0x42 })
+                .U64(300).U32(0).B128(source.NodeId).Value();
 
-            using (var fs = new FileStream(walPath, FileMode.Append, FileAccess.Write, FileShare.None))
+            // Legacy v1 is used to construct a complete malformed frame
+            // without bypassing v2's mandatory record digest.
+            using (var fs = new FileStream(walPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                Span<byte> frame = stackalloc byte[5];
-                System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(frame, 1);
-                frame[4] = 0xFF; // unknown complete record type
-                fs.Write(frame);
+                fs.Write(new byte[] { 0x42, 0x53, 0x57, 0x4C, 0x00, 0x01 });
+                Span<byte> length = stackalloc byte[4];
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, validPayload.Length);
+                fs.Write(length);
+                fs.Write(validPayload);
+                System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(length, 1);
+                fs.Write(length);
+                fs.Write(new byte[] { 0xFF });
                 fs.Flush(flushToDisk: true);
             }
 
