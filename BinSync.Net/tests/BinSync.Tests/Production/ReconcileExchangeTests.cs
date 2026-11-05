@@ -99,7 +99,7 @@ public class ReconcileExchangeTests
 
         public NodeId PeerNodeId => _inner.PeerNodeId;
         public SyncTransportCapabilities Capabilities => _inner.Capabilities;
-        public int? MaxPacketSize => _inner.MaxPacketSize;
+        public int? MaxPacketSize => null;
 
         public async ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
         {
