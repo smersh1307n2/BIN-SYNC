@@ -136,14 +136,20 @@ public sealed partial class Node
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)
         {
+            var recordId = RecordId.From(r.B128());
+            var changeId = BatchId.From(r.B128());
+            if (changeId.IsZero)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
+            byte opKind = r.U8();
+            var payload = r.BytesMemory();
             entries.Add(new OutboxEntry
             {
                 NamespaceId = ns,
                 Seq = 0,
-                ChangeId = default,
-                RecordId = r.ReadRecordId(),
-                OpKind = r.U8(),
-                Payload = r.BytesMemory(),
+                ChangeId = changeId,
+                RecordId = recordId,
+                OpKind = opKind,
+                Payload = payload,
                 AuthorNodeId = issuer,
                 CreatedAt = 0,
             });
