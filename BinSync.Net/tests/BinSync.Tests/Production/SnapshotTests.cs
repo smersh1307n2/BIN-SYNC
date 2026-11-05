@@ -191,4 +191,25 @@ public class SnapshotTests
         Assert.Throws<FormatException>(() => Reconcile.DecodeSnapshotChunk(oversizedFields));
     }
 
+    [Fact]
+    public void Snapshot_builder_splits_chunks_by_wire_payload_size()
+    {
+        var source = Fix.MakeNode(64);
+        source.WriteField(1, Fix.Rid(230), 0x100, new byte[9 * 1024 * 1024]);
+        source.WriteField(1, Fix.Rid(231), 0x100, new byte[9 * 1024 * 1024]);
+
+        var chunks = Reconcile.BuildSnapshotChunks(source, 1);
+        Assert.Equal(2, chunks.Count);
+        Assert.All(chunks, chunk =>
+            Assert.True(Reconcile.EncodeSnapshotChunk(chunk).Length <= Frames.MAX_PAYLOAD_SIZE));
+    }
+
+    [Fact]
+    public void Snapshot_builder_rejects_record_limit_above_parser_bound()
+    {
+        var source = Fix.MakeNode(65);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Reconcile.BuildSnapshotChunks(source, 1, maxRecords: Reconcile.MaxSnapshotRecordsPerChunk + 1));
+    }
+
 }

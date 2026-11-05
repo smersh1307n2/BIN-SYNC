@@ -71,7 +71,8 @@ public static partial class Reconcile
     public static IReadOnlyList<SnapshotChunkMessage> BuildSnapshotChunks(
         Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000)
     {
-        if (maxRecords <= 0) throw new ArgumentOutOfRangeException(nameof(maxRecords));
+        if (maxRecords <= 0 || maxRecords > MaxSnapshotRecordsPerChunk)
+            throw new ArgumentOutOfRangeException(nameof(maxRecords));
         using var gates = node.EnterAllGates();
         var records = new List<SnapshotRecord>();
         if (node.Storage.TryGetValue(namespaceId, out var map))
@@ -117,22 +118,63 @@ public static partial class Reconcile
             }
         }
 
-        int chunkCount = Math.Max(1, (int)(((long)records.Count + maxRecords - 1) / maxRecords));
-        var chunks = new List<SnapshotChunkMessage>(chunkCount);
-        for (int i = 0; i < chunkCount; i++)
+        // Pack by all parser/frame bounds, not just record count. A single dense
+        // record or large field value must never create a chunk the receiver rejects.
+        var partitions = new List<List<SnapshotRecord>>();
+        var current = new List<SnapshotRecord>();
+        int currentFields = 0;
+        long currentRecordBytes = 0;
+        foreach (var record in records)
         {
-            int offset = i * maxRecords;
-            int count = Math.Min(maxRecords, records.Count - offset);
-            var chunk = new SnapshotChunkMessage
+            int recordFields = record.Fields.Count;
+            long recordBytes = SnapshotRecordEncodedSize(record);
+            if (recordFields > MaxSnapshotFieldsPerChunk ||
+                recordBytes + 10 + Codec.VarintLength(1) > Frames.MAX_PAYLOAD_SIZE)
+                throw new SyncException("PAYLOAD_TOO_LARGE");
+
+            bool mustFlush = current.Count > 0 &&
+                (current.Count >= maxRecords ||
+                 currentFields + recordFields > MaxSnapshotFieldsPerChunk ||
+                 10L + Codec.VarintLength((ulong)(current.Count + 1)) +
+                    currentRecordBytes + recordBytes > Frames.MAX_PAYLOAD_SIZE);
+            if (mustFlush)
+            {
+                partitions.Add(current);
+                current = new List<SnapshotRecord>();
+                currentFields = 0;
+                currentRecordBytes = 0;
+            }
+
+            current.Add(record);
+            currentFields += recordFields;
+            currentRecordBytes += recordBytes;
+        }
+        if (current.Count > 0 || partitions.Count == 0)
+            partitions.Add(current);
+        if (partitions.Count > MaxSnapshotChunks)
+            throw new SyncException("PAYLOAD_TOO_LARGE");
+
+        uint chunkCount = (uint)partitions.Count;
+        var chunks = new List<SnapshotChunkMessage>(partitions.Count);
+        for (int i = 0; i < partitions.Count; i++)
+        {
+            chunks.Add(new SnapshotChunkMessage
             {
                 NamespaceId = namespaceId,
                 ChunkIndex = (uint)i,
-                ChunkCount = (uint)chunkCount,
-                Records = count == 0 ? new List<SnapshotRecord>() : records.GetRange(offset, count),
-            };
-            chunks.Add(chunk);
+                ChunkCount = chunkCount,
+                Records = partitions[i],
+            });
         }
         return chunks;
+    }
+
+    private static long SnapshotRecordEncodedSize(SnapshotRecord record)
+    {
+        long size = 16 + Codec.VarintLength((ulong)record.Fields.Count) + 30;
+        foreach (var field in record.Fields)
+            size += 33 + Codec.VarintLength((ulong)field.Value.Length) + field.Value.Length;
+        return size;
     }
 
     /// <summary>Encode snapshot chunk into canonical wire bytes.</summary>
