@@ -51,7 +51,20 @@ public class ChangeIdWireTests
             Payload = entry.Payload,
             AuthorNodeId = entry.AuthorNodeId,
         };
-        Assert.NotEqual(root, Node.ComputeRecordsRoot(new List<OutboxEntry> { changedIdEntry }));
+        var changedRoot = Node.ComputeRecordsRoot(new List<OutboxEntry> { changedIdEntry });
+        Assert.NotEqual(root, changedRoot);
+
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        var signature = BatchSignature.SignBatch(seed, batch);
+        Assert.True(BatchSignature.VerifyBatch(publicKey, batch, signature));
+        var changedDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            changedRoot, batch.PrevBatchDigest);
+        var changedBatch = new Batch(batch.NamespaceId, batch.SchemaId, batch.SchemaVersion,
+            batch.MergePolicy, batch.Flags, batch.IssuerNodeId, batch.IssuerEpoch,
+            batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.PrevBatchDigest,
+            changedRoot, changedDigest, new List<OutboxEntry> { changedIdEntry });
+        Assert.False(BatchSignature.VerifyBatch(publicKey, changedBatch, signature));
     }
 
     [Fact]
