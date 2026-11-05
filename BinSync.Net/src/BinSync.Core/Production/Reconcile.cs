@@ -70,10 +70,61 @@ public static partial class Reconcile
 {
     /// <summary>Constant default radix bits.</summary>
     public const int DefaultRadixBits = 8;
+    /// <summary>Hard upper bound for bucket rows accepted in one STATE_DIGEST.</summary>
+    public const int MaxStateDigestBuckets = 100_000;
+
+    private static int PrefixLengthForRadix(int radixBits)
+    {
+        if (radixBits < 8 || radixBits > 256 || (radixBits & 7) != 0)
+            throw new FormatException("STATE_DIGEST RadixBits must be byte-aligned from 8 through 256");
+        return radixBits / 8;
+    }
+
+    private static int ComparePrefix(byte[] left, byte[] right)
+    {
+        int length = Math.Min(left.Length, right.Length);
+        for (int i = 0; i < length; i++)
+        {
+            int diff = left[i].CompareTo(right[i]);
+            if (diff != 0) return diff;
+        }
+        return left.Length.CompareTo(right.Length);
+    }
+
+    private static void ValidateStateDigest(StateDigestMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        int prefixLength = PrefixLengthForRadix(message.RadixBits);
+        if (message.NamespaceId < 0 || message.NamespaceId > ushort.MaxValue)
+            throw new FormatException("STATE_DIGEST namespace is outside u16 range");
+        if (message.RootDigest is null || message.RootDigest.Length != 32)
+            throw new FormatException("STATE_DIGEST root digest must be 32 bytes");
+        if (message.Buckets is null || message.Buckets.Count > MaxStateDigestBuckets)
+            throw new FormatException("STATE_DIGEST bucket count exceeds limit");
+
+        byte[]? previous = null;
+        foreach (var bucket in message.Buckets)
+        {
+            if (bucket is null || bucket.Prefix is null || bucket.Prefix.Length != prefixLength)
+                throw new FormatException("STATE_DIGEST bucket prefix length does not match RadixBits");
+            if (bucket.Count <= 0)
+                throw new FormatException("STATE_DIGEST bucket count must be positive");
+            if (bucket.Xor16 is null || bucket.Xor16.Length != 16 ||
+                bucket.Sum16 is null || bucket.Sum16.Length != 16 ||
+                bucket.Rollup32 is null || bucket.Rollup32.Length != 32)
+                throw new FormatException("STATE_DIGEST bucket accumulator has an invalid length");
+            if (previous is not null && ComparePrefix(previous, bucket.Prefix) >= 0)
+                throw new FormatException("STATE_DIGEST bucket prefixes must be strictly increasing");
+            previous = bucket.Prefix;
+        }
+    }
 
     /// <summary>Compute a STATE_DIGEST view of <paramref name="node"/> for one namespace.</summary>
     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
     {
+        _ = PrefixLengthForRadix(radixBits);
+        if (namespaceId < 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
         // Build the bucket digest from one atomic storage view. The legacy cursor field
         // is reserved and is deliberately excluded from replicated state.
         using var gates = node.EnterAllGates();
@@ -145,30 +196,53 @@ public static partial class Reconcile
     /// <summary>Decode state digest from canonical wire bytes.</summary>
     public static StateDigestMessage DecodeStateDigest(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         int namespaceId = r.U16();
         _ = r.U64(); // Consume the reserved legacy cursor field.
+        int radixBits = r.U8();
+        int expectedPrefixLength = PrefixLengthForRadix(radixBits);
+        var rootDigest = r.Raw(32);
+        ulong bucketCount = r.Varint();
+        if (bucketCount > MaxStateDigestBuckets)
+            throw new FormatException("STATE_DIGEST bucket count exceeds limit");
+
+        // Each row has a one-byte prefix length, prefix bytes, and 68 fixed bytes.
+        int minimumRowLength = 1 + expectedPrefixLength + 4 + 16 + 16 + 32;
+        if (bucketCount > (ulong)(r.Remaining / minimumRowLength))
+            throw new FormatException("STATE_DIGEST bucket count exceeds remaining payload");
+
         var m = new StateDigestMessage
         {
             NamespaceId = namespaceId,
-            OutboxCursor = 0, // Normalize legacy values; they are not synchronization state.
-            RadixBits = r.U8(),
-            RootDigest = r.Raw(32),
+            OutboxCursor = 0,
+            RadixBits = radixBits,
+            RootDigest = rootDigest,
         };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
+        byte[]? previousPrefix = null;
+        for (ulong i = 0; i < bucketCount; i++)
         {
-            int plen = r.U8();
-            var bucket = new DigestBucket
+            int prefixLength = r.U8();
+            if (prefixLength != expectedPrefixLength)
+                throw new FormatException("STATE_DIGEST bucket prefix length does not match RadixBits");
+            var prefix = r.Raw(prefixLength);
+            if (previousPrefix is not null && ComparePrefix(previousPrefix, prefix) >= 0)
+                throw new FormatException("STATE_DIGEST bucket prefixes must be strictly increasing");
+            uint count = r.U32();
+            if (count == 0)
+                throw new FormatException("STATE_DIGEST bucket count must be positive");
+            m.Buckets.Add(new DigestBucket
             {
-                Prefix = r.Raw(plen),
-                Count = r.U32(),
+                Prefix = prefix,
+                Count = count,
                 Xor16 = r.Raw(16),
                 Sum16 = r.Raw(16),
                 Rollup32 = r.Raw(32),
-            };
-            m.Buckets.Add(bucket);
+            });
+            previousPrefix = prefix;
         }
+        if (!r.Eof())
+            throw new FormatException("STATE_DIGEST contains trailing bytes");
         return m;
     }
 
@@ -216,6 +290,10 @@ public static partial class Reconcile
     /// <summary>Compute bucket prefixes that differ between local and remote state digests.</summary>
     public static List<byte[]> DivergentPrefixes(StateDigestMessage local, StateDigestMessage remote)
     {
+        ValidateStateDigest(local);
+        ValidateStateDigest(remote);
+        if (local.NamespaceId != remote.NamespaceId || local.RadixBits != remote.RadixBits)
+            throw new FormatException("STATE_DIGEST namespace or RadixBits mismatch");
         var result = new List<byte[]>();
         var remoteBy = remote.Buckets.ToDictionary(
             b => Convert.ToHexString(b.Prefix), b => b, StringComparer.Ordinal);

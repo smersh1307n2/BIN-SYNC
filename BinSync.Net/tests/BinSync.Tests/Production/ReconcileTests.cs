@@ -93,6 +93,60 @@ public class ReconcileTests
         Assert.Equal(msg.Buckets.Count, back.Buckets.Count);
     }
 
+
+    [Fact]
+    public void StateDigest_decoder_rejects_invalid_radix_and_prefix_shape()
+    {
+        var invalidRadix = new Writer();
+        invalidRadix.U16(1).U64(0).U8(7).Raw(new byte[32]).Varint(0);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeStateDigest(invalidRadix.Value()));
+
+        var invalidPrefix = new Writer();
+        invalidPrefix.U16(1).U64(0).U8(8).Raw(new byte[32]).Varint(1);
+        invalidPrefix.U8(2).Raw(new byte[2]).U32(1).Raw(new byte[16]).Raw(new byte[16]).Raw(new byte[32]);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeStateDigest(invalidPrefix.Value()));
+    }
+
+    [Fact]
+    public void StateDigest_decoder_rejects_duplicate_or_unsorted_buckets()
+    {
+        var duplicate = new Writer();
+        duplicate.U16(1).U64(0).U8(8).Raw(new byte[32]).Varint(2);
+        foreach (byte prefix in new byte[] { 0x10, 0x10 })
+            duplicate.U8(1).U8(prefix).U32(1).Raw(new byte[16]).Raw(new byte[16]).Raw(new byte[32]);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeStateDigest(duplicate.Value()));
+
+        var unsorted = new Writer();
+        unsorted.U16(1).U64(0).U8(8).Raw(new byte[32]).Varint(2);
+        foreach (byte prefix in new byte[] { 0x20, 0x10 })
+            unsorted.U8(1).U8(prefix).U32(1).Raw(new byte[16]).Raw(new byte[16]).Raw(new byte[32]);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeStateDigest(unsorted.Value()));
+    }
+
+    [Fact]
+    public void StateDigest_decoder_rejects_excessive_bucket_count_and_trailing_bytes()
+    {
+        var excessive = new Writer();
+        excessive.U16(1).U64(0).U8(8).Raw(new byte[32]).Varint((ulong)Reconcile.MaxStateDigestBuckets + 1);
+        Assert.Throws<FormatException>(() => Reconcile.DecodeStateDigest(excessive.Value()));
+
+        var node = Fix.MakeNode(10);
+        var valid = Reconcile.EncodeStateDigest(Reconcile.BuildStateDigest(node, 1));
+        Assert.Throws<FormatException>(() => Reconcile.DecodeStateDigest(valid.Concat(new byte[] { 0x00 }).ToArray()));
+    }
+
+    [Fact]
+    public void DivergentPrefixes_rejects_incompatible_digest_metadata()
+    {
+        var node = Fix.MakeNode(11);
+        var local = Reconcile.BuildStateDigest(node, 1);
+        var remote = Reconcile.BuildStateDigest(node, 2);
+        Assert.Throws<FormatException>(() => Reconcile.DivergentPrefixes(local, remote));
+
+        remote = Reconcile.BuildStateDigest(node, 1, 16);
+        Assert.Throws<FormatException>(() => Reconcile.DivergentPrefixes(local, remote));
+    }
+
     [Fact]
     public void NeedRange_and_NeedKeys_roundtrip()
     {

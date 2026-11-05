@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.6 FINAL
+# BIN-SYNC CORE v2.4.7 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.6 FINAL (STATE_ROOT excludes transport cursors)  
+**Версия:** 2.4.7 FINAL (bounded canonical STATE_DIGEST)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -2248,3 +2248,21 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 5. Смена domain tag с `BIN-SYNC/STATE/v1` на `BIN-SYNC/STATE/v2` отражает новую формулу root. При несовпадении root реализации продолжают сравнение bucket entries; несовпадение одного root без bucket divergence не требует snapshot.
 
 **Wire layout:** размер и порядок полей `STATE_DIGEST` не меняются. Legacy ненулевой `OutboxCursor` принимается и игнорируется; новые отправители кодируют ноль.
+
+
+# ERRATA v2.4.7
+
+## E-21. §13.1 — каноническая структура и resource bounds для STATE_DIGEST
+
+**Дефект:** декодер STATE_DIGEST приводил объявленное количество bucket rows из varint к `int` без предварительного ограничения, принимал произвольную длину prefix и не требовал уникального/упорядоченного набора bucket rows или EOF после последней строки. Некорректные строки могли вызвать чрезмерную аллокацию, неоднозначное представление одного digest и расхождение поведения реализаций.
+
+**Нормативно:**
+1. `RadixBits` обязан быть кратен 8 и находиться в диапазоне 8..256. Длина каждого bucket prefix строго равна `RadixBits / 8`.
+2. `bucketCount` не превышает 100 000 и до итерации дополнительно проверяется на возможность размещения всех минимальных строк в оставшемся payload. Каждая строка содержит `prefixLen u8 | prefix | count u32 | xor16 | sum16 | rollup32`.
+3. Bucket rows передаются в строго возрастающем лексикографическом порядке по байтам prefix. Дубликаты и неупорядоченные строки отвергаются.
+4. `count` каждой передаваемой bucket row должен быть положительным; пустые bucket rows не кодируются.
+5. После последней bucket row reader обязан находиться в EOF; trailing bytes запрещены.
+6. Перед вычислением divergent prefixes обе структуры проверяются на корректные длины root/accumulators, допустимый radix, положительные counts и строго упорядоченные уникальные prefixes. Namespace и RadixBits двух сообщений обязаны совпадать.
+7. Локальный builder принимает только byte-aligned RadixBits 8..256 и namespace в диапазоне u16.
+
+**Wire layout:** не меняется для корректных сообщений. Ограничения фиксируют единственную каноническую форму STATE_DIGEST и ограничивают работу декодера по недоверенному payload.
