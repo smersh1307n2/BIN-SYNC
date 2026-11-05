@@ -126,6 +126,7 @@ public class ChangeIdWireTests
         var source = Fix.MakeNode(51);
         var target = Fix.MakeNode(52);
         Assert.True(source.WriteField(1, Fix.Rid(0x51), 0x100, new byte[] { 7 }));
+        Assert.True(source.WriteField(1, Fix.Rid(0x51), 0x101, new byte[] { 8 }));
         var snapshot = Assert.Single(source.BuildSnapshot(1));
 
         var zeroIdBatch = new Batch(snapshot.NamespaceId, snapshot.SchemaId, snapshot.SchemaVersion,
