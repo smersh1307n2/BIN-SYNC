@@ -77,7 +77,14 @@ public sealed partial class Node
             wm = ps.AckedFor(stream);
         }
 
-        if (!ps.StreamOffsets.TryGetValue(stream, out var streamOffset))
+        long streamOffset;
+        if (ps.StreamOffsets.TryGetValue(stream, out var savedStreamOffset))
+        {
+            if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
+                throw new SyncException("SNAPSHOT_REQUIRED");
+            streamOffset = savedStreamOffset;
+        }
+        else
         {
             streamOffset = 0;
             if (!ps.StreamAcked.ContainsKey(stream))
@@ -85,6 +92,8 @@ public sealed partial class Node
                 long firstLocal = long.MaxValue;
                 foreach (var e in all)
                     if (e.AuthorNodeId == stream && e.Seq < firstLocal) firstLocal = e.Seq;
+                if (firstLocal > 1 && !ps.InitialSyncComplete)
+                    throw new SyncException("SNAPSHOT_REQUIRED");
                 if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
             }
             ps.StreamOffsets[stream] = streamOffset;

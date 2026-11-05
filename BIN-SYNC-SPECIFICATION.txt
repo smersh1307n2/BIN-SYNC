@@ -1,8 +1,8 @@
-# BIN-SYNC CORE v2.4.1 FINAL
+# BIN-SYNC CORE v2.4.2 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.1 FINAL (complete snapshot record state and fail-closed bounds)  
+**Версия:** 2.4.2 FINAL (bidirectional baseline confirmation and guarded cursor offsets)  
 **Дата:** 2026-11-05  
 **Изменения относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
@@ -826,7 +826,7 @@ batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
 
 ## 12.23. ERROR
 
-Коды ошибок: `UNKNOWN_ALIAS` (0x0001), `EPOCH_REGRESSION` (0x0002), `CLOCK_DRIFT` (0x0003), `INVALID_VARINT` (0x0004), `INVALID_FLOAT` (0x0005), `SCHEMA_MISMATCH` (0x0006), `SEQ_GAP` (0x0007), `DUPLICATE_BATCH` (0x0008), `NAMESPACE_FORBIDDEN` (0x0009), `INTERNAL` (0x000A), `OUTDATED_WATERMARK` (0x000B), `DECOMPRESSION_LIMIT_EXCEEDED` (0x000C), `BATCH_TRANSACTION_FAILED` (0x000D), `PAYLOAD_TOO_LARGE` (0x000E), `FLOW_CONTROL_VIOLATION` (0x000F), `UNKNOWN_KEY_EPOCH` (0x0010), `SCHEMA_PENDING` (0x0011), `CAUSAL_DEP_MISSING` (0x0012), `SIGNATURE_INVALID` (0x0013), `TRUST_REVOKED` (0x0014), `CORRUPTED_FRAME` (0x0015), `FRAME_REJECTED` (0x0016), `BATCH_CHAIN_BROKEN` (0x0017), `ACK_OUT_OF_RANGE` (0x0018).
+Коды ошибок: `UNKNOWN_ALIAS` (0x0001), `EPOCH_REGRESSION` (0x0002), `CLOCK_DRIFT` (0x0003), `INVALID_VARINT` (0x0004), `INVALID_FLOAT` (0x0005), `SCHEMA_MISMATCH` (0x0006), `SEQ_GAP` (0x0007), `DUPLICATE_BATCH` (0x0008), `NAMESPACE_FORBIDDEN` (0x0009), `INTERNAL` (0x000A), `OUTDATED_WATERMARK` (0x000B), `DECOMPRESSION_LIMIT_EXCEEDED` (0x000C), `BATCH_TRANSACTION_FAILED` (0x000D), `PAYLOAD_TOO_LARGE` (0x000E), `FLOW_CONTROL_VIOLATION` (0x000F), `UNKNOWN_KEY_EPOCH` (0x0010), `SCHEMA_PENDING` (0x0011), `CAUSAL_DEP_MISSING` (0x0012), `SIGNATURE_INVALID` (0x0013), `TRUST_REVOKED` (0x0014), `CORRUPTED_FRAME` (0x0015), `FRAME_REJECTED` (0x0016), `BATCH_CHAIN_BROKEN` (0x0017), `ACK_OUT_OF_RANGE` (0x0018), `SNAPSHOT_REQUIRED` (0x0019).
 
 ## 12.24. Байтовая раскладка операций
 
@@ -2055,7 +2055,8 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 | **2.3.8** | **2026-11-05** | **Сквозная provenance-идентичность: ChangeId включён в wire records, RecordsRoot и batch digest; обязательная проверка ChangeId и целостности snapshot до apply; mesh regression-сценарий 43.** |
 | **2.3.9** | **2026-11-05** | **ACK hardening: per-author pushed watermarks, contiguous-range validation, exact TCP ACK binding, persisted InboxAuthors for duplicate replay; node-state v3.** |
 | **2.4.0** | **2026-11-05** | **Immutable Outbox sequence and per-peer/per-author cursor offsets; ACK and compaction coordinate conversion; node-state v4 with v3 reader compatibility; scenario 44.**
-| **2.4.1** | **2026-11-05** | **Snapshot now preserves field tombstones and explicit lifecycle state; applies both through LWW merge; takes a consistent node snapshot under ordered gates; oversized single-chunk snapshots fail closed instead of silently truncating.** |
+| **2.4.1** | **2026-11-05** | **Snapshot preserves field tombstones and explicit lifecycle state; applies both through LWW merge; takes a consistent node snapshot under ordered gates; supports complete multi-chunk transfer and atomic publication after all chunks validate.**
+| **2.4.2** | **2026-11-05** | **AutoReconcile exchanges snapshot baselines in both directions; InitialSyncComplete is set only after the peer confirms receipt; peer-relative Outbox offset initialization fails closed with SNAPSHOT_REQUIRED until the baseline is complete.** |
 
 ---
 

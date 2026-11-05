@@ -154,6 +154,20 @@ public sealed partial class TcpSyncSession
     public async Task<(int Prefixes, int FieldsApplied)> AutoReconcileAsync(
         Node local, int namespaceId, bool initiate, int maxPrefixes = 16, CancellationToken ct = default)
     {
+        if (maxPrefixes <= 0) throw new ArgumentOutOfRangeException(nameof(maxPrefixes));
+
+        // Both directions must exchange a complete baseline before peer-relative
+        // Outbox offsets can be initialized safely.
+        var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct)
+            .ConfigureAwait(false);
+        var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
+            .ConfigureAwait(false);
+        return (first.Prefixes + second.Prefixes, first.FieldsApplied + second.FieldsApplied);
+    }
+
+    private async Task<(int Prefixes, int FieldsApplied)> AutoReconcileRoundAsync(
+        Node local, int namespaceId, bool initiate, int maxPrefixes, CancellationToken ct)
+    {
         var (_, _, diverged) = await ExchangeStateDigestAsync(local, namespaceId, initiate, ct)
             .ConfigureAwait(false);
 
@@ -169,17 +183,22 @@ public sealed partial class TcpSyncSession
             await SendNeedRangeAsync(namespaceId, Array.Empty<byte>(), ct).ConfigureAwait(false);
             return (n, fields);
         }
-        else
+
+        int handled = 0;
+        for (int i = 0; i < maxPrefixes + 1; i++)
         {
-            int handled = 0;
-            for (int i = 0; i < maxPrefixes + 1; i++)
+            var need = await ReceiveNeedRangeAsync(ct).ConfigureAwait(false);
+            if (need.Prefix.Length == 0)
             {
-                var need = await ReceiveNeedRangeAsync(ct).ConfigureAwait(false);
-                if (need.Prefix.Length == 0) break;
-                await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
-                handled++;
+                // The initiator sends this terminator only after every requested
+                // snapshot was fully received and atomically applied.
+                if (handled < maxPrefixes)
+                    local.MarkInitialSyncComplete(PeerNodeId, namespaceId);
+                break;
             }
-            return (handled, 0);
+            await FulfillNeedRangeWithSnapshotAsync(local, need, ct).ConfigureAwait(false);
+            handled++;
         }
+        return (handled, 0);
     }
 }

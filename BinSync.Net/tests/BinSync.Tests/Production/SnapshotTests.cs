@@ -97,6 +97,10 @@ public class SnapshotTests
         var rid = Fix.Rid(73);
         a.WriteField(1, rid, 0x100, new byte[] { 1 });
         b.WriteField(1, rid, 0x100, new byte[] { 2 });
+        var onlyA = Fix.Rid(75);
+        var onlyB = Fix.Rid(76);
+        a.WriteField(1, onlyA, 0x100, new byte[] { 0xA1 });
+        b.WriteField(1, onlyB, 0x100, new byte[] { 0xB1 });
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
@@ -107,9 +111,11 @@ public class SnapshotTests
         var (prefixes, fields) = await client.AutoReconcileAsync(a, 1, initiate: true);
         await serverTask;
 
-        Assert.True(prefixes >= 1 || fields >= 0);
-        Assert.True(a.Storage.ContainsKey(1) && a.Storage[1].ContainsKey(rid));
-        var val = a.Storage[1][rid].State[0x100].Value;
-        Assert.Equal(new byte[] { 2 }, val);
+        Assert.True(prefixes >= 1);
+        Assert.True(fields > 0);
+        Assert.True(a.Storage[1].ContainsKey(onlyB));
+        Assert.True(b.Storage[1].ContainsKey(onlyA));
+        Assert.True(a.PeerStates[(b.NodeId, 1)].InitialSyncComplete);
+        Assert.True(b.PeerStates[(a.NodeId, 1)].InitialSyncComplete);
     }
 }

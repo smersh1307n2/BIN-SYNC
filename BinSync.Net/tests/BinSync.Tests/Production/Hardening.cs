@@ -276,6 +276,8 @@ public class Production : IDisposable
         Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);
 
         donor.WriteField(NS, Fix.Rid(863), 0x100, Val("tail-3"));
+        Assert.Throws<SyncException>(() => donor.CreateDeltaBatch(newPeer.NodeId, NS));
+        donor.PeerStates[(newPeer.NodeId, NS)].InitialSyncComplete = true; // simulate completed snapshot receipt
         var tail = donor.CreateDeltaBatch(newPeer.NodeId, NS)!;
         Assert.Equal(1L, tail.CursorStart);
         Assert.Equal(1L, tail.CursorEnd);

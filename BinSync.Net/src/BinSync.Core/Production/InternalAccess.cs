@@ -79,6 +79,18 @@ public sealed partial class Node
             return Merge.ApplyLifecycle(rec, hlc, authorNodeId, lifecycleValue);
         }
     }
+
+    /// <summary>Record that the peer has applied our complete snapshot baseline for this namespace.</summary>
+    internal void MarkInitialSyncComplete(NodeId peer, int namespaceId)
+    {
+        lock (_lockMeta)
+        {
+            var key = (peer, namespaceId);
+            if (!PeerStates.TryGetValue(key, out var state))
+                PeerStates[key] = state = new PeerState(peer, namespaceId);
+            state.InitialSyncComplete = true;
+        }
+    }
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
