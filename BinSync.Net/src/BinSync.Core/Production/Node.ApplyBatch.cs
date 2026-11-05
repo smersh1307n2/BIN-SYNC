@@ -166,6 +166,14 @@ public sealed partial class Node
         var newSeenKeys = batch.IssuerNodeId != NodeId
             ? new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>()
             : null;
+        // The same provenance can arrive through different peers. Keep the
+        // per-peer SeenChanges keys for echo detection, but enqueue a ChangeId
+        // for relay at most once in this namespace.
+        var queuedChangeIds = new HashSet<BatchId>();
+        if (Outbox.TryGetValue(batch.NamespaceId, out var queuedEntries))
+            for (int qi = 0; qi < queuedEntries.Count; qi++)
+                if (!queuedEntries[qi].ChangeId.IsZero)
+                    queuedChangeIds.Add(queuedEntries[qi].ChangeId);
 
         if (batch.IssuerNodeId != NodeId)
         {
@@ -179,6 +187,8 @@ public sealed partial class Node
                     continue; // already accepted provenance consumes no new capacity
                 if (!newSeenKeys!.Add(ck))
                     continue; // duplicate provenance within this batch
+                if (!queuedChangeIds.Add(cid))
+                    continue; // this logical change is already queued from another peer
 
                 bool relayOk = true;
                 if (!changedFlags[idx])
