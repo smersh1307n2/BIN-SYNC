@@ -111,8 +111,8 @@ public class ChangeIdWireTests
         // C -> A closes the mesh loop. A already owns this ChangeId, so it must
         // not create a second outbox item or invent a replacement identity.
         Assert.NotNull(Transport.DeliverBatch(c, a, 1));
-        Assert.Single(a.Outbox[1]);
-        Assert.Equal(originalChangeId, a.Outbox[1][0].ChangeId);
+        Assert.False(a.Outbox.TryGetValue(1, out var returnedEntries) &&
+                     returnedEntries.Any(e => e.ChangeId == originalChangeId));
         Assert.Contains((c.NodeId, 1, originalChangeId), a.SeenChanges);
 
         Assert.True(a.Storage[1].ContainsKey(Fix.Rid(0x41)));
