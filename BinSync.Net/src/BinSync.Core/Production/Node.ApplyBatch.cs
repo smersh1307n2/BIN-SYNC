@@ -432,12 +432,12 @@ public sealed partial class Node
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId.ToArray(), Value = fs.Value.ToArray() };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             foreach (var (fid, fs) in rec.FieldTombs.OrderBy(kv => kv.Key))
             {
                 var op = new OpFieldTomb { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId };
-                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
+                entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             if (rec.LifecycleHlc is not null)
             {
@@ -448,10 +448,10 @@ public sealed partial class Node
                     // SPEC HARDENING: snapshots must carry an explicit REVIVE lifecycle op
                     // so the receiver un-ghosts historical fields (§7.4 У4).
                     var opw = new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor, Value = new[] { Model.Alive } };
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
                 }
                 else
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = default, RecordId = rid, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
             }
             if (entries.Count > 0)
                 batches.Add(new Batch(namespaceId, 0, 1, 0x02, 0, NodeId, Epoch, 0, 0,
