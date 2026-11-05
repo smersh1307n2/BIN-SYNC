@@ -215,10 +215,8 @@ public static class SessionWire
     }
 
     /// <summary>
-    /// Two-node in-process handshake over <see cref="ISyncTransport"/> pairs:
-    /// HELLO ↔ HELLO_ACK, then mutual ALIAS_MAP, then register session epochs.
-    /// Does not replace <see cref="Transport.MakeSession"/> for unit tests; this is the
-    /// byte-level path production hosts should use.
+    /// Two-node in-process handshake helper for loopback/test setups. Production
+    /// transport hosts should use <see cref="SyncSession.EstablishAsync"/>.
     /// </summary>
     public static async Task HandshakeAsync(
         Node local, ISyncTransport toPeer,
@@ -279,4 +277,5 @@ public static class SessionWire
             remoteLease?.Dispose();
             localLease?.Dispose();
         }
-    }}
+    }
+}
