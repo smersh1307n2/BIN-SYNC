@@ -127,6 +127,65 @@ public class ReconcileExchangeTests
     }
 
     [Fact]
+    public async Task AutoReconcile_runs_concurrently_with_full_duplex_batch_exchange()
+    {
+        using var a = Fix.MakeNode(81);
+        using var b = Fix.MakeNode(82);
+        a.WriteField(1, Fix.Rid(810), 0x100, new byte[] { 1 });
+        b.WriteField(1, Fix.Rid(820), 0x100, new byte[] { 2 });
+        a.WriteField(2, Fix.Rid(811), 0x100, new byte[] { 3 });
+        b.WriteField(2, Fix.Rid(821), 0x100, new byte[] { 4 });
+
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        var autoA = client.AutoReconcileAsync(a, 1, initiate: true);
+        var autoB = server.AutoReconcileAsync(b, 1, initiate: false);
+
+        var pushA = client.PushBatchAsync(a, 2);
+        var receiveA = client.ReceiveBatchAsync(a);
+        var pushB = server.PushBatchAsync(b, 2);
+        var receiveB = server.ReceiveBatchAsync(b);
+
+        await Task.WhenAll(autoA, autoB, pushA, receiveA, pushB, receiveB)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(pushA.Result);
+        Assert.True(pushB.Result);
+        Assert.True(b.TryGetRecord(2, Fix.Rid(811), out _));
+        Assert.True(a.TryGetRecord(2, Fix.Rid(821), out _));
+        Assert.True(a.TryGetRecord(1, Fix.Rid(820), out _));
+        Assert.True(b.TryGetRecord(1, Fix.Rid(810), out _));
+    }
+
+    [Fact]
+    public async Task RunReconciliation_releases_all_gates_when_callback_throws()
+    {
+        var a = Fix.MakeNode(83);
+        var b = Fix.MakeNode(84);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await acceptTask;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.RunReconciliationAsync<int>((_, _) =>
+                Task.FromException<int>(new InvalidOperationException("Injected callback failure"))));
+
+        var expected = new NeedKeysMessage
+        {
+            NamespaceId = 1,
+            RecordIds = new List<byte[]> { Fix.Rid(830) }
+        };
+        var receive = server.ReceiveNeedKeysAsync();
+        await client.SendNeedKeysAsync(expected);
+        var actual = await receive.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(expected.RecordIds[0], actual.RecordIds[0]);
+    }
+
+    [Fact]
     public async Task Tcp_Exchange_StateDigest_converged()
     {
         var a = Fix.MakeNode(31);
