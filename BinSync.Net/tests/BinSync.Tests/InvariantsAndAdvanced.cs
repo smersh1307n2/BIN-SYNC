@@ -637,6 +637,11 @@ public class InvariantsAndAdvanced
         Transport.SyncRound(e1, b, NS);
         var e2 = new Node(nodeId, epoch: 2, nowFn: () => 2_000_000);
         Transport.MakeSession(e2, b);                       // reconnect with bumped epoch
+        // The restarted incarnation must receive the existing peer baseline before
+        // the peer can resume compacted author streams.
+        var baseline = Reconcile.BuildSnapshot(b, NS);
+        Reconcile.ApplySnapshot(e2, baseline);
+        b.MarkInitialSyncComplete(e2.NodeId, NS);
         e2.WriteField(NS, Rid(2), 0x0100, Asc("gen-2"), new Hlc(20, 0));
         Transport.SyncRound(e2, b, NS);
         Assert.Contains(Rid(1), b.Storage[NS]);

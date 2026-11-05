@@ -223,10 +223,13 @@ public class Production : IDisposable
 
         // A fresh write on the restored node must continue the durable per-author stream
         // (OutboxSeqRef). Cursor span for a brand-new peer is gap-normalised independently.
+        var freshPeer = Fix.MakeNode(99);
+        Transport.MakeSession(restored, freshPeer);
+        restored.MarkInitialSyncComplete(freshPeer.NodeId, NS); // test resumes after a completed snapshot baseline
         restored.WriteField(NS, Fix.Rid(300), 0x101, Val("post-restart"));
         long after = restored.OutboxSeqRef[(restored.NodeId, NS)];
         Assert.Equal(before + 1, after);
-        var batch = restored.CreateDeltaBatch(Fix.Nid(99), NS);
+        var batch = restored.CreateDeltaBatch(freshPeer.NodeId, NS);
         Assert.NotNull(batch);
         Assert.True(batch!.Entries.Count >= 1);
         Assert.Contains(batch.Entries, e => e.RecordId == Fix.Rid(300));

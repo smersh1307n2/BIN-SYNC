@@ -63,6 +63,7 @@ public class LabEdgeTests
         Transport.MakeSession(donor, newPeer);
         var snapshot = Reconcile.BuildSnapshot(donor, NS);
         Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);
+        donor.MarkInitialSyncComplete(newPeer.NodeId, NS);
 
         donor.WriteField(NS, Fix.Rid(3), 0x100, Val("tail"));
         Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
