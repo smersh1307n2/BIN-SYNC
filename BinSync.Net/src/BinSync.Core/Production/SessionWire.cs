@@ -244,7 +244,7 @@ public static class SessionWire
             var helloBytes = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
                 ?? throw new IOException("peer closed during HELLO");
             var remoteHello = DecodeHello(helloBytes);
-            if (remoteHello.NodeId != remote.NodeId || remoteHello.Epoch != remote.Epoch)
+            if (remoteHello.NodeId != local.NodeId || remoteHello.Epoch != local.Epoch)
                 throw new FrameException("FRAME_REJECTED");
 
             await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
