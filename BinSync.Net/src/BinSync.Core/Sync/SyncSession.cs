@@ -278,7 +278,7 @@ public partial class SyncSession : IAsyncDisposable
         return leftBytes.SequenceCompareTo(rightBytes);
     }
 
-    private static void EnsureHandshakeRole(NodeId local, NodeId peer, bool initiator)
+    internal static void EnsureHandshakeRole(NodeId local, NodeId peer, bool initiator)
     {
         int order = CompareNodeIds(local, peer);
         if (order == 0 || (initiator ? order >= 0 : order <= 0))

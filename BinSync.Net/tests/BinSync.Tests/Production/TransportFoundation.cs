@@ -232,6 +232,26 @@ public class TransportFoundationTests
         await connected.DisposeAsync();
     }
 
+
+    [Fact]
+    public async Task In_process_handshake_negotiates_the_union_of_both_durable_author_registries()
+    {
+        using var low = Fix.MakeNode(1);
+        using var high = Fix.MakeNode(2);
+        var lowOnly = Fix.Nid(30);
+        var highOnly = Fix.Nid(40);
+        low.RegisterAlias(high.NodeId, 3, lowOnly, 1);
+        high.RegisterAlias(low.NodeId, 3, highOnly, 2);
+        var (toLow, toHigh) = PipeTransport.CreatePair();
+
+        await SessionWire.HandshakeAsync(low, toLow, high, toHigh);
+
+        Assert.NotNull(low.AliasOf(high.NodeId, highOnly));
+        Assert.NotNull(high.AliasOf(low.NodeId, lowOnly));
+        Assert.Equal(low.AliasOf(high.NodeId, lowOnly), high.AliasOf(low.NodeId, lowOnly));
+        Assert.Equal(low.AliasOf(high.NodeId, highOnly), high.AliasOf(low.NodeId, highOnly));
+    }
+
     [Fact]
     public async Task FrameStream_MemoryStream_Roundtrip()
     {

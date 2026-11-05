@@ -226,38 +226,57 @@ public static class SessionWire
         SessionCapabilities caps = SessionCapabilities.None,
         CancellationToken ct = default)
     {
-        await toPeer.SendAsync(EncodeHello(new HelloPayload(local.NodeId, local.Epoch, caps)), ct)
-            .ConfigureAwait(false);
-        var helloAb = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during HELLO");
-        var remoteHello = DecodeHello(helloAb);
-        await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
-            .ConfigureAwait(false);
-        var ackBa = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during HELLO_ACK");
-        _ = DecodeHelloAck(ackBa);
+        ArgumentNullException.ThrowIfNull(local);
+        ArgumentNullException.ThrowIfNull(remote);
+        ArgumentNullException.ThrowIfNull(toPeer);
+        ArgumentNullException.ThrowIfNull(toLocal);
+        SyncSession.EnsureHandshakeRole(local.NodeId, remote.NodeId, initiator: true);
 
-        var table = BuildAliasMapTable(local, remote.NodeId, remote.Epoch);
-        var mapFrame = EncodeAliasMap(table);
-        await toPeer.SendAsync(mapFrame, ct).ConfigureAwait(false);
-        await toLocal.SendAsync(mapFrame, ct).ConfigureAwait(false);
+        IDisposable? localLease = null;
+        IDisposable? remoteLease = null;
+        try
+        {
+            // Acquire in protocol-role order (lower NodeId first) to match the
+            // transport-independent session path and prevent lock-order inversion.
+            localLease = await PeerSessionLease.AcquireAsync(local, remote.NodeId, ct).ConfigureAwait(false);
+            remoteLease = await PeerSessionLease.AcquireAsync(remote, local.NodeId, ct).ConfigureAwait(false);
 
-        var mapOnLocal = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
-        var mapOnRemote = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
-        var localMap = DecodeAliasMap(mapOnLocal);
-        var remoteMap = DecodeAliasMap(mapOnRemote);
+            await toPeer.SendAsync(EncodeHello(new HelloPayload(local.NodeId, local.Epoch, caps)), ct)
+                .ConfigureAwait(false);
+            var helloBytes = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during HELLO");
+            var remoteHello = DecodeHello(helloBytes);
+            if (remoteHello.NodeId != remote.NodeId || remoteHello.Epoch != remote.Epoch)
+                throw new FrameException("FRAME_REJECTED");
 
-        // Commit only after both complete maps are decoded. Preserve peer-relative
-        // replication cursors for a reconnect to the same incarnation; an epoch change
-        // invalidates the old receive-side stream state.
-        local.CommitSession(remote.NodeId, remoteHello.Epoch, localMap);
-        remote.CommitSession(local.NodeId, local.Epoch, remoteMap);
+            await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
+                .ConfigureAwait(false);
+            var ackBytes = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during HELLO_ACK");
+            var ack = DecodeHelloAck(ackBytes);
+            if (ack.NodeId != remote.NodeId || ack.Epoch != remote.Epoch)
+                throw new FrameException("FRAME_REJECTED");
 
-        local.PeersByNid ??= new Dictionary<NodeId, Node>();
-        remote.PeersByNid ??= new Dictionary<NodeId, Node>();
-        local.PeersByNid[remote.NodeId] = remote;
-        remote.PeersByNid[local.NodeId] = local;
-    }
-}
+            var proposal = BuildAliasMapTable(local, remote.NodeId, remote.Epoch);
+            await toPeer.SendAsync(EncodeAliasMap(proposal), ct).ConfigureAwait(false);
+            var proposalBytes = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during ALIAS_MAP");
+            var remoteProposal = DecodeAliasMap(proposalBytes);
+            var negotiated = SyncSession.MergeAliasMap(remote, local.NodeId, local.Epoch, remoteProposal);
+
+            await toLocal.SendAsync(EncodeAliasMap(negotiated), ct).ConfigureAwait(false);
+            var negotiatedBytes = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during negotiated ALIAS_MAP");
+            var localMap = DecodeAliasMap(negotiatedBytes);
+
+            local.CommitSession(remote.NodeId, remoteHello.Epoch, localMap);
+            remote.CommitSession(local.NodeId, local.Epoch, negotiated);
+            local.RegisterLoopbackPeer(remote);
+            remote.RegisterLoopbackPeer(local);
+        }
+        finally
+        {
+            remoteLease?.Dispose();
+            localLease?.Dispose();
+        }
+    }}
