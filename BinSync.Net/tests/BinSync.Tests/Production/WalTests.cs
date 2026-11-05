@@ -43,7 +43,6 @@ public class WalTests
     }
 
     [Fact]
-    [Fact]
     public void Wal_append_and_replay_restores_field_and_outbox()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
@@ -75,7 +74,6 @@ public class WalTests
         }
     }
 
-    [Fact]
     [Fact]
     public void Wal_open_truncates_torn_tail_before_accepting_new_appends()
     {
@@ -318,7 +316,6 @@ public class WalTests
     }
 
     [Fact]
-    [Fact]
     public void Wal_v2_detects_payload_corruption_before_replay()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
@@ -349,7 +346,6 @@ public class WalTests
         }
     }
 
-    [Fact]
     [Fact]
     public void Wal_replay_validates_entire_log_before_mutating_node()
     {
@@ -389,7 +385,6 @@ public class WalTests
     }
 
     [Fact]
-    [Fact]
     public void Wal_checkpoint_truncates_after_snapshot()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-" + Guid.NewGuid().ToString("N"));
@@ -421,7 +416,6 @@ public class WalTests
         }
     }
 
-    [Fact]
     [Fact]
     public async Task Wal_checkpoint_preserves_writes_racing_with_snapshot_and_truncate()
     {
@@ -459,7 +453,6 @@ public class WalTests
         }
     }
 
-    [Fact]
     [Fact]
     public void Wal_replay_after_snapshot_applies_delta()
     {

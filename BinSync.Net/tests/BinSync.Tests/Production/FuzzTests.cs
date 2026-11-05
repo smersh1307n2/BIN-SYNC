@@ -88,7 +88,6 @@ public class FuzzTests
 
     /// <summary>WAL: random field writes survive close/reopen + ReplayFile.</summary>
     [Fact]
-    [Fact]
     public void Fuzz_Wal_replay_matches_in_memory()
     {
         var rng = new Random(99);
