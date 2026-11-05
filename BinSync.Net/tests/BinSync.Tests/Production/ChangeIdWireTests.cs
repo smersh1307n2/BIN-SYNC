@@ -120,4 +120,41 @@ public class ChangeIdWireTests
         Assert.True(c.Storage[1].ContainsKey(Fix.Rid(0x41)));
     }
 
+    [Fact]
+    public void Snapshot_apply_rejects_zero_or_duplicate_change_ids_before_mutating_storage()
+    {
+        var source = Fix.MakeNode(51);
+        var target = Fix.MakeNode(52);
+        Assert.True(source.WriteField(1, Fix.Rid(0x51), 0x100, new byte[] { 7 }));
+        var snapshot = Assert.Single(source.BuildSnapshot(1));
+
+        var zeroIdBatch = new Batch(snapshot.NamespaceId, snapshot.SchemaId, snapshot.SchemaVersion,
+            snapshot.MergePolicy, snapshot.Flags, snapshot.IssuerNodeId, snapshot.IssuerEpoch,
+            snapshot.CursorStart, snapshot.CursorEnd, snapshot.BatchId, snapshot.PrevBatchDigest,
+            snapshot.RecordsRoot, snapshot.BatchDigest,
+            snapshot.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = default,
+                RecordId = e.RecordId, OpKind = e.OpKind, Payload = e.Payload,
+                AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
+            }).ToList());
+
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(zeroIdBatch, source.NodeId.ToArray()));
+        Assert.Empty(target.Storage);
+
+        var duplicateEntries = snapshot.Entries.Select(e => new OutboxEntry
+        {
+            NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = snapshot.Entries[0].ChangeId,
+            RecordId = e.RecordId, OpKind = e.OpKind, Payload = e.Payload,
+            AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
+        }).ToList();
+        var duplicateBatch = new Batch(snapshot.NamespaceId, snapshot.SchemaId, snapshot.SchemaVersion,
+            snapshot.MergePolicy, snapshot.Flags, snapshot.IssuerNodeId, snapshot.IssuerEpoch,
+            snapshot.CursorStart, snapshot.CursorEnd, snapshot.BatchId, snapshot.PrevBatchDigest,
+            snapshot.RecordsRoot, snapshot.BatchDigest, duplicateEntries);
+
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(duplicateBatch, source.NodeId.ToArray()));
+        Assert.Empty(target.Storage);
+    }
+
 }

@@ -484,6 +484,13 @@ public sealed partial class Node
 
     internal int ApplySnapshotInternal(Batch batch, byte[] senderPeer)
     {
+        // Snapshot batches use the same canonical records array as DELTA_BATCH.
+        // Validate provenance for the complete snapshot before mutating storage.
+        var snapshotChangeIds = new HashSet<BatchId>();
+        foreach (var entry in batch.Entries)
+            if (entry.ChangeId.IsZero || !snapshotChangeIds.Add(entry.ChangeId))
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+
         int applied = 0;
         foreach (var e in batch.Entries)
         {
