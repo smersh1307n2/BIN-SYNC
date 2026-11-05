@@ -22,7 +22,6 @@ public partial class SyncSession : IAsyncDisposable
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
     private bool _rawReceiveActive;
-    private bool _exclusiveReceiveActive;
     private bool _receiveCompleted;
     private Exception? _receiveFailure;
     /// <summary>Remote peer identity established by HELLO.</summary>
@@ -243,7 +242,7 @@ public partial class SyncSession : IAsyncDisposable
         Channel<byte[]> channel;
         lock (_receiveSync)
         {
-            if (_rawReceiveActive || _exclusiveReceiveActive)
+            if (_rawReceiveActive)
                 throw new InvalidOperationException("An exclusive receive operation is already active on this session");
             channel = _receiveChannels.GetOrAdd(expectedType, static _ =>
                 Channel.CreateBounded<byte[]>(new BoundedChannelOptions(64)
@@ -317,7 +316,7 @@ public partial class SyncSession : IAsyncDisposable
     {
         lock (_receiveSync)
         {
-            if (_receivePump is not null || _exclusiveReceiveActive)
+            if (_receivePump is not null)
                 throw new InvalidOperationException("Raw receive cannot be mixed with another receive mode");
             _rawReceiveActive = true;
         }
