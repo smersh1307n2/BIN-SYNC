@@ -70,6 +70,7 @@ public class ChangeIdWireTests
 
         Assert.Single(decoded);
         Assert.Equal(entry.RecordId.ToArray(), decoded[0].Rid);
+        Assert.Equal(entry.ChangeId.ToArray(), decoded[0].ChangeId);
         Assert.Equal(entry.OpKind, decoded[0].Kind);
         Assert.Equal(entry.Payload.ToArray(), decoded[0].Payload);
     }

@@ -83,17 +83,17 @@ public sealed partial class Node
     }
 
     /// <summary>Decode records array from canonical wire bytes.</summary>
-    public static List<(byte[] Rid, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
+    public static List<(byte[] Rid, byte[] ChangeId, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
     {
         var r = new Reader(data);
         int n = (int)r.Varint();
-        var outp = new List<(byte[], byte, byte[])>();
+        var outp = new List<(byte[], byte[], byte, byte[])>();
         for (int i = 0; i < n; i++)
         {
             byte[] rid = r.B128();
             byte kind = r.U8();
             byte[] payload = r.Bytes();
-            outp.Add((rid, kind, payload));
+            outp.Add((rid, changeId, kind, payload));
         }
         return outp;
     }
