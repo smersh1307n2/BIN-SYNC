@@ -78,6 +78,17 @@ public sealed partial class Node
         var decodedOps = nEntEarly > 0 ? new object[nEntEarly] : Array.Empty<object>();
         for (int di = 0; di < nEntEarly; di++)
             decodedOps[di] = Ops.DecodeOp(batch.Entries[di].Payload).Op;
+
+        // A non-zero ChangeId identifies one logical mutation. Reusing it for
+        // different entries makes provenance/relay deduplication ambiguous.
+        var batchChangeIds = new HashSet<BatchId>();
+        for (int di = 0; di < nEntEarly; di++)
+        {
+            var changeId = batch.Entries[di].ChangeId;
+            if (!changeId.IsZero && !batchChangeIds.Add(changeId))
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+        }
+
         NodeId streamAuthor;
         try
         {
@@ -118,6 +129,8 @@ public sealed partial class Node
         int applied = 0;
         int nEnt = nEntEarly;
         var changedFlags = nEnt > 0 ? new bool[nEnt] : Array.Empty<bool>();
+        var relayFlags = nEnt > 0 ? new bool[nEnt] : Array.Empty<bool>();
+        var resolvedAuthors = nEnt > 0 ? new NodeId[nEnt] : Array.Empty<NodeId>();
         // One wall sample for the whole batch (skew window is large vs apply latency).
         long nowWall = Clock.Now();
         long maxSkew = Clock.MaxSkewUs;
@@ -126,6 +139,7 @@ public sealed partial class Node
             var e = batch.Entries[idx];
             var op = decodedOps[idx];
             var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
+            resolvedAuthors[idx] = opAuthor; // reuse after commit; no post-commit resolution
             // clock skew clamp on incoming HLC wall (§5.3)
             if ((long)WallOf(op) > nowWall + maxSkew)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
@@ -161,21 +175,20 @@ public sealed partial class Node
                 var cid = e.ChangeId.IsZero ? BatchId.From(Guid.NewGuid().ToByteArray()) : e.ChangeId;
                 relayChangeIds[idx] = cid;
                 var ck = (senderPeer, batch.NamespaceId, cid);
-                bool known = SeenChanges.Contains(ck) || !newSeenKeys!.Add(ck);
-                if (!known && !changedFlags[idx])
+                bool alreadySeen = SeenChanges.Contains(ck);
+                bool duplicateInBatch = !newSeenKeys!.Add(ck);
+                bool known = alreadySeen || duplicateInBatch;
+                if (known)
+                    continue; // already accepted provenance must never be relayed again
+
+                bool relayOk = true;
+                if (!changedFlags[idx])
                 {
-                    bool relayOk = true;
                     var rop = decodedOps[idx];
                     ushort? rfid = rop switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
                     if (rfid is not null)
                     {
-                        NodeId? rAuthor = null;
-                        try { rAuthor = ResolveAuthor(rop); }
-                        catch (SyncException)
-                        {
-                            // Unknown alias / origin during relay-eligibility check is
-                            // treated as non-own, matching the established relay policy.
-                        }
+                        var rAuthor = resolvedAuthors[idx];
                         // Evaluate against the staged post-apply record, not the live map.
                         Record? staged = overlays.TryGetValue(e.RecordId, out var stagedRec)
                             ? stagedRec
@@ -183,16 +196,16 @@ public sealed partial class Node
                         bool hasState = staged is not null &&
                             (staged.State.ContainsKey(rfid.Value) ||
                              (staged.HasFieldTombs && staged.FieldTombs.ContainsKey(rfid.Value)));
-                        if (rAuthor is not null && rAuthor.Value == NodeId && hasState)
+                        if (rAuthor == NodeId && hasState)
                             relayOk = false;
                     }
-                    if (relayOk) changedFlags[idx] = true; // new provenance ⇒ relay even as loser
                 }
+                if (relayOk) relayFlags[idx] = true; // new provenance ⇒ relay, including a losing op
             }
 
             for (int idx = 0; idx < nEnt; idx++)
             {
-                if (!changedFlags[idx] || GetAuthor(decodedOps[idx]) is not null)
+                if (!relayFlags[idx] || GetAuthor(decodedOps[idx]) is not null)
                     continue; // full-author mode already carries its durable author
                 relayIndices.Add(idx);
             }
@@ -237,7 +250,7 @@ public sealed partial class Node
             {
                 var e = batch.Entries[idx];
                 var op = decodedOps[idx];
-                var resolved = ResolveAuthor(op);
+                var resolved = resolvedAuthors[idx];
                 var entry = new OutboxEntry
                 {
                     NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,

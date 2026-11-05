@@ -161,4 +161,47 @@ public sealed class ResourceLimitsAtomicityTests
         Assert.Empty(receiver.PeerStates);
     }
 
+
+    [Fact]
+    public void Apply_batch_rejects_duplicate_nonzero_change_ids_before_commit()
+    {
+        var sender = Fix.MakeNode(51);
+        using var receiver = new Node(Fix.Nid(52), epoch: 1, nowFn: () => 52_000_000);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        Assert.True(sender.WriteField(3, Fix.Rid(2), 0x100, [2]));
+        var duplicateId = BatchId.From(Fix.Nid(53));
+        sender.Outbox[3][^2].ChangeId = duplicateId;
+        sender.Outbox[3][^1].ChangeId = duplicateId;
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+        Assert.Equal(0, receiver.GetRecordCount(3));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Empty(receiver.Inbox);
+        Assert.Empty(receiver.SeenChanges);
+        Assert.Empty(receiver.PeerStates);
+    }
+
+    [Fact]
+    public void Apply_batch_does_not_count_already_seen_change_ids_against_capacity()
+    {
+        var sender = Fix.MakeNode(54);
+        using var receiver = new Node(Fix.Nid(55), epoch: 1, nowFn: () => 55_000_000,
+            limits: new ResourceLimits { MaxSeenChanges = 1 });
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        var changeId = BatchId.From(Fix.Nid(56));
+        sender.Outbox[3][^1].ChangeId = changeId;
+        receiver.SeenChanges.Add((sender.NodeId, 3, changeId));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        var result = receiver.ApplyBatch(batch, sender.NodeId);
+        Assert.Equal(1, result.Applied);
+        Assert.Equal(1, receiver.GetRecordCount(3));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Single(receiver.SeenChanges);
+    }
 }
