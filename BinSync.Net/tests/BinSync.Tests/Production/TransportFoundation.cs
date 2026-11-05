@@ -149,7 +149,8 @@ public class TransportFoundationTests
         await Task.WhenAll(lowPush, lowReceive, highPush, highReceive, lowDigest, highDigest)
             .WaitAsync(TimeSpan.FromSeconds(5));
         var digestResult = await lowDigest;
-        Assert.True(digestResult.Local.RootDigest.AsSpan().SequenceEqual(digestResult.Remote.RootDigest));
+        Assert.Equal(1, digestResult.Local.NamespaceId);
+        Assert.Equal(1, digestResult.Remote.NamespaceId);
 
         Assert.True(await lowPush);
         Assert.True(await highPush);

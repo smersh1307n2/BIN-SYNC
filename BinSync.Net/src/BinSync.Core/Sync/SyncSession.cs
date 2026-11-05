@@ -284,7 +284,8 @@ public partial class SyncSession : IAsyncDisposable
                             AllowSynchronousContinuations = false,
                         }));
                 }
-                await channel.Writer.WriteAsync(raw, ct).ConfigureAwait(false);
+                if (!channel.Writer.TryWrite(raw))
+                    throw new FrameException("FLOW_CONTROL_VIOLATION");
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
