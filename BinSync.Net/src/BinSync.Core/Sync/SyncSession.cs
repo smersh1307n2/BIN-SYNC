@@ -29,7 +29,7 @@ public partial class SyncSession : IAsyncDisposable
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
     }
 
-    /// <summary>Establish a session as initiator over a caller-provided channel.</summary>
+    /// <summary>Establish as initiator; local NodeId must be lower than the peer NodeId.</summary>
     public static async Task<SyncSession> ConnectAsync(Node local, ISyncTransport transport,
         SessionCapabilities caps = SessionCapabilities.None, bool ownsTransport = true, CancellationToken ct = default)
     {
@@ -53,7 +53,7 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Establish a session as acceptor over a caller-provided channel.</summary>
+    /// <summary>Establish as acceptor; local NodeId must be higher than the peer NodeId.</summary>
     public static async Task<SyncSession> AcceptAsync(Node local, ISyncTransport transport,
         SessionCapabilities caps = SessionCapabilities.None, bool ownsTransport = true, CancellationToken ct = default)
     {
