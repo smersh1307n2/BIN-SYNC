@@ -5,7 +5,7 @@ namespace BinSync;
 public static partial class ReconcileFrames
 {
     /// <summary>GC notice messages and purge helpers for outdated records.</summary>
-    public const byte GcNotice = 0x0B;
+    public const byte GcNotice = 0x0C;
 }
 
 /// <summary>One quarantined author advertised in GC_NOTICE.</summary>

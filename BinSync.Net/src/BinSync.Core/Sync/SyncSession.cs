@@ -18,6 +18,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly SemaphoreSlim _exclusiveReceiveGate = new(1, 1);
     private readonly object _receiveSync = new();
     private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();
+    private readonly ConcurrentDictionary<byte, SemaphoreSlim> _receiveTypeGates = new();
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
     private bool _rawReceiveActive;
@@ -237,8 +238,8 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceivePacketAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (expectedType != 0x09 && expectedType != 0x0B)
-            throw new InvalidOperationException("The concurrent dispatcher is reserved for DELTA_BATCH and ACK");
+        if (expectedType < 0x04 || expectedType > 0x13)
+            throw new InvalidOperationException("Only established-session frame types can be dispatched");
         Channel<byte[]> channel;
         lock (_receiveSync)
         {
@@ -271,7 +272,7 @@ public partial class SyncSession : IAsyncDisposable
                 var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                     ?? throw new IOException("Peer closed the session");
                 var (frame, consumed) = FrameCodec.ParseFrame(raw);
-                if (consumed != raw.Length || (frame.FrameType != 0x09 && frame.FrameType != 0x0B))
+                if (consumed != raw.Length || frame.FrameType < 0x04 || frame.FrameType > 0x13)
                     throw new FrameException("FRAME_REJECTED");
                 Channel<byte[]> channel;
                 lock (_receiveSync)
@@ -304,30 +305,12 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceiveExpectedExclusiveAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        await _exclusiveReceiveGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            lock (_receiveSync)
-            {
-                if (_receivePump is not null || _rawReceiveActive || _exclusiveReceiveActive)
-                    throw new InvalidOperationException("Exclusive protocol reads cannot overlap with batch multiplexing or raw receive mode");
-                _exclusiveReceiveActive = true;
-            }
-            try
-            {
-                var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                    ?? throw new IOException("Peer closed the session");
-                var (frame, consumed) = FrameCodec.ParseFrame(raw);
-                if (consumed != raw.Length || frame.FrameType != expectedType)
-                    throw new FrameException("FRAME_REJECTED");
-                return raw;
-            }
-            finally
-            {
-                lock (_receiveSync) _exclusiveReceiveActive = false;
-            }
-        }
-        finally { _exclusiveReceiveGate.Release(); }
+        if (expectedType < 0x04 || expectedType > 0x13)
+            throw new ArgumentOutOfRangeException(nameof(expectedType));
+        var gate = _receiveTypeGates.GetOrAdd(expectedType, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try { return await ReceivePacketAsync(expectedType, ct).ConfigureAwait(false); }
+        finally { gate.Release(); }
     }
 
     private void BeginRawReceiveMode()

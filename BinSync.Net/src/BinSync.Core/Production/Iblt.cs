@@ -6,7 +6,9 @@ namespace BinSync;
 public static partial class ReconcileFrames
 {
     /// <summary>Frame type constant identifying an IBLT payload.</summary>
-    public const byte Iblt = 0x09;
+    public const byte IbltRequest = 0x12;
+    /// <summary>Frame type constant identifying an IBLT response.</summary>
+    public const byte IbltResponse = 0x13;
 }
 
 /// <summary>One IBLT cell: count + XOR of keys + XOR of key hashes.</summary>

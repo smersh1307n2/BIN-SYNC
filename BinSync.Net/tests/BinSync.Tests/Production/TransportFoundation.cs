@@ -144,7 +144,12 @@ public class TransportFoundationTests
         var lowReceive = lowSession.ReceiveBatchAsync(low);
         var highPush = highSession.PushBatchAsync(high, 1);
         var highReceive = highSession.ReceiveBatchAsync(high);
-        await Task.WhenAll(lowPush, lowReceive, highPush, highReceive).WaitAsync(TimeSpan.FromSeconds(5));
+        var lowDigest = lowSession.ExchangeStateDigestAsync(low, 1, initiate: true);
+        var highDigest = highSession.ExchangeStateDigestAsync(high, 1, initiate: false);
+        await Task.WhenAll(lowPush, lowReceive, highPush, highReceive, lowDigest, highDigest)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        var digestResult = await lowDigest;
+        Assert.True(digestResult.Local.RootDigest.AsSpan().SequenceEqual(digestResult.Remote.RootDigest));
 
         Assert.True(await lowPush);
         Assert.True(await highPush);

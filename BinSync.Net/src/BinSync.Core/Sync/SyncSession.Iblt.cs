@@ -11,17 +11,25 @@ public partial class SyncSession
     {
         uint streamId = 0x0001_0000u | (uint)namespaceId;
         var table = Iblt.BuildFromNode(local, namespaceId, prefix, cellCount);
-        await SendFrameAsync(ReconcileFrames.Iblt, streamId, 15, Iblt.Encode(table), ct).ConfigureAwait(false);
+        await SendFrameAsync(ReconcileFrames.IbltRequest, streamId, 15, Iblt.Encode(table), ct).ConfigureAwait(false);
     }
 
     /// <summary>Receive one IBLT frame and decode.</summary>
     public async Task<Iblt> ReceiveIbltAsync(CancellationToken ct = default)
     {
-        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.Iblt, ct).ConfigureAwait(false)
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.IbltResponse, ct).ConfigureAwait(false)
            ;
         var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != ReconcileFrames.Iblt)
+        if (frame.FrameType != ReconcileFrames.IbltResponse)
             throw new FrameException("FRAME_REJECTED");
+        return Iblt.Decode(frame.Payload);
+    }
+
+    private async Task<Iblt> ReceiveExpectedIbltAsync(byte frameType, CancellationToken ct)
+    {
+        var raw = await ReceiveExpectedExclusiveAsync(frameType, ct).ConfigureAwait(false);
+        var (frame, _) = FrameCodec.ParseFrame(raw);
+        if (frame.FrameType != frameType) throw new FrameException("FRAME_REJECTED");
         return Iblt.Decode(frame.Payload);
     }
 
@@ -36,16 +44,16 @@ public partial class SyncSession
         if (initiate)
         {
             var mine = Iblt.BuildFromNode(local, namespaceId, prefix, cellCount);
-            await SendFrameAsync(ReconcileFrames.Iblt, 0x0001_0000u | (uint)namespaceId, 15, Iblt.Encode(mine), ct).ConfigureAwait(false);
-            var peer = await ReceiveIbltAsync(ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.IbltRequest, 0x0001_0000u | (uint)namespaceId, 15, Iblt.Encode(mine), ct).ConfigureAwait(false);
+            var peer = await ReceiveExpectedIbltAsync(ReconcileFrames.IbltResponse, ct).ConfigureAwait(false);
             mine.Subtract(peer);
             return mine.Peel();
         }
         else
         {
-            var peer = await ReceiveIbltAsync(ct).ConfigureAwait(false);
+            var peer = await ReceiveExpectedIbltAsync(ReconcileFrames.IbltRequest, ct).ConfigureAwait(false);
             var mine = Iblt.BuildFromNode(local, namespaceId, prefix, cellCount);
-            await SendFrameAsync(ReconcileFrames.Iblt, 0x0001_0000u | (uint)namespaceId, 15, Iblt.Encode(mine), ct).ConfigureAwait(false);
+            await SendFrameAsync(ReconcileFrames.IbltResponse, 0x0001_0000u | (uint)namespaceId, 15, Iblt.Encode(mine), ct).ConfigureAwait(false);
             mine.Subtract(peer);
             return mine.Peel();
         }
