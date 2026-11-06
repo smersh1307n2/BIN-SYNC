@@ -106,6 +106,93 @@ public class E2eeWriteTests
     }
 
     [Fact]
+    public void WriteFieldSealed_wal_failure_does_not_publish_storage_or_outbox()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-e2ee-wal-fail-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var node = Fix.MakeNode(210);
+            node.E2eeKeys = new E2eeKeyRing();
+            node.E2eeKeys.Set(1, E2ee.GenerateNamespaceKey());
+            var wal = Wal.Open(Path.Combine(dir, "node.wal"));
+            node.AttachWal(wal);
+            wal.Dispose();
+
+            var recordId = RecordId.From(Rid(8));
+            Assert.Throws<ObjectDisposedException>(() =>
+                node.WriteFieldSealed(1, recordId, 0x800, new byte[] { 1, 2, 3 }));
+
+            Assert.False(node.TryGetField(1, recordId, 0x800, out _));
+            Assert.False(node.Storage.ContainsKey(1));
+            Assert.Equal(0, node.GetOutboxCount(1));
+            Assert.False(node.OutboxSeqRef.ContainsKey((node.NodeId, 1)));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void WriteFieldSealed_wal_replay_restores_ciphertext_and_key_epoch()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-e2ee-wal-replay-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var node = Fix.MakeNode(212);
+            var key = E2ee.GenerateNamespaceKey();
+            node.E2eeKeys = new E2eeKeyRing();
+            node.E2eeKeys.Set(1, key, keyEpoch: 4);
+            var path = Path.Combine(dir, "node.wal");
+            var wal = Wal.Open(path);
+            node.AttachWal(wal);
+            var recordId = RecordId.From(Rid(10));
+            var plaintext = new byte[] { 7, 8, 9 };
+
+            Assert.True(node.WriteFieldSealed(1, recordId, 0x802, plaintext));
+            wal.Dispose();
+
+            var recovered = new Node(node.NodeId, epoch: node.Epoch)
+            {
+                E2eeKeys = new E2eeKeyRing(),
+            };
+            recovered.E2eeKeys!.Set(1, key, keyEpoch: 4);
+            Assert.Equal(1, Wal.ReplayFile(path, recovered));
+            Assert.True(recovered.TryGetField(1, recordId, 0x802, out var field));
+            Assert.Equal((ushort)4, field!.KeyEpoch);
+            Assert.Equal(plaintext, recovered.ReadFieldOpen(1, recordId, 0x802));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void WriteFieldSealed_raises_field_written_after_releasing_node_gates()
+    {
+        var node = Fix.MakeNode(211);
+        node.E2eeKeys = new E2eeKeyRing();
+        node.E2eeKeys.Set(1, E2ee.GenerateNamespaceKey());
+        int events = 0;
+
+        node.FieldWritten += (_, _, _) =>
+        {
+            if (Interlocked.Increment(ref events) == 1)
+            {
+                var writer = Task.Run(() =>
+                    node.WriteField(1, RecordId.From(Rid(9)), 0x801, new byte[] { 4 }));
+                Assert.True(writer.Wait(TimeSpan.FromSeconds(3)));
+            }
+        };
+
+        Assert.True(node.WriteFieldSealed(1, RecordId.From(Rid(9)), 0x800, new byte[] { 1, 2, 3 }));
+        Assert.Equal(2, events);
+    }
+
+    [Fact]
     public void Wrong_key_cannot_open()
     {
         var n = Fix.MakeNode(207);

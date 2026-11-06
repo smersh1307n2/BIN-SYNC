@@ -284,24 +284,28 @@ public sealed partial class Node
         }
     }
 
-    /// Local FieldWrite. Returns true if state changed (and outbox grew).
-    /// <summary>Thread-safe entry point (production hardening): takes the node gate
-    /// and delegates to <c>WriteFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-
+    /// <summary>
+    /// Thread-safe bounded write. Resource preflight and mutation share the node gates;
+    /// the public event is raised only after all gates are released.
+    /// </summary>
     internal bool WriteFieldBounded(ResourceLimits limits, int namespaceId,
         RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         ArgumentNullException.ThrowIfNull(limits);
         ArgumentNullException.ThrowIfNull(value);
+        bool changed;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             limits.EnsureStorageCapacity(this);
             limits.EnsureCanEnqueueOutbox(this, namespaceId);
             limits.EnsureSeenChangesCapacity(this);
-            return WriteField(namespaceId, recordId, fieldId, value, hlc);
+            changed = WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
         }
+        if (changed) RaiseFieldWritten(namespaceId, recordId, fieldId);
+        return changed;
     }
 
+    /// <summary>Local FieldWrite. Returns true if state changed (and Outbox grew).</summary>
     public bool WriteField(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         bool changed;

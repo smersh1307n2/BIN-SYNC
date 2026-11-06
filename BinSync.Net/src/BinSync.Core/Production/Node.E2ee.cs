@@ -35,9 +35,10 @@ public sealed partial class Node
 
             try
             {
-                var store = NsInternal(namespaceId);
-                bool exists = store.TryGetValue(recordId, out var current);
-                var rec = exists ? current! : new Record(recordId, (ushort)namespaceId);
+                Storage.TryGetValue(namespaceId, out var store);
+                Record? current = null;
+                bool exists = store is not null && store.TryGetValue(recordId, out current);
+                var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
 
                 var h = hlc ?? Clock.SendTick();
                 Span<byte> ridBuf = stackalloc byte[16];
@@ -67,17 +68,21 @@ public sealed partial class Node
                     Value = sealedValue,
                 };
 
-                if (!exists)
-                    store.Add(recordId, rec);
                 rec.State[(ushort)fieldId] = winner;
-                PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
-                return true;
+                var entry = PrepareOutboxEntryInternal(
+                    namespaceId, recordId, op, NodeId.ToArray(), suppressRestoredEcho: false)
+                    ?? throw new InvalidOperationException("A changed sealed write must produce an Outbox entry.");
+                // Use the same stage → durable WAL append → publish sequence as ordinary writes.
+                CommitLocalMutationInternal(entry, rec, applyToStorage: true, preserveRecordIdentity: true);
             }
             finally
             {
                 System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
             }
         }
+
+        RaiseFieldWritten(namespaceId, recordId, fieldId);
+        return true;
     }
 
     /// <summary>

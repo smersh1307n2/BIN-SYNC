@@ -257,6 +257,27 @@ public sealed class ResourceLimitsAtomicityTests
     }
 
     [Fact]
+    public void BoundedNode_raises_field_written_after_releasing_node_gates()
+    {
+        using var node = new Node(Fix.Nid(173));
+        var limits = new ResourceLimits();
+        int events = 0;
+
+        node.FieldWritten += (_, _, _) =>
+        {
+            if (Interlocked.Increment(ref events) == 1)
+            {
+                var writer = Task.Run(() =>
+                    node.WriteField(3, Rid(3), 0x101, new byte[] { 2 }));
+                Assert.True(writer.Wait(TimeSpan.FromSeconds(3)));
+            }
+        };
+
+        Assert.True(BoundedNode.WriteField(node, limits, 3, Rid(3), 0x100, new byte[] { 1 }));
+        Assert.Equal(2, events);
+    }
+
+    [Fact]
     public void BoundedNode_preflight_is_atomic_with_the_write()
     {
         using var node = new Node(Fix.Nid(172));
