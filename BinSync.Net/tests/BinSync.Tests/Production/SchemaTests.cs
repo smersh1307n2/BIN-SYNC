@@ -53,6 +53,22 @@ public class SchemaTests
     }
 
     [Fact]
+    public void Legacy_zero_policy_normalizes_to_lww_field_without_bypassing_schema_gate()
+    {
+        var lww = new SchemaRegistry();
+        lww.Register(Desc(1, 9, 1, 0x02, 0x100));
+        Assert.Equal(SchemaOutcome.Ok, lww.Evaluate(1, 9, 1, 0, out _));
+
+        var counter = new SchemaRegistry();
+        counter.Register(Desc(1, 10, 1, 0x03, 0x100));
+        Assert.Equal(SchemaOutcome.Mismatch, counter.Evaluate(1, 10, 1, 0, out _));
+
+        var legacyDescriptor = new SchemaRegistry();
+        legacyDescriptor.Register(Desc(1, 11, 1, 0, 0x100));
+        Assert.Equal(SchemaOutcome.Ok, legacyDescriptor.Evaluate(1, 11, 1, 0x02, out _));
+    }
+
+    [Fact]
     public void Field_id_reuse_after_retire_throws()
     {
         var reg = new SchemaRegistry();

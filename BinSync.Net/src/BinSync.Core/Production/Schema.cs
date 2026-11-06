@@ -186,9 +186,13 @@ public sealed class SchemaRegistry
                 : $"unknown version {schemaVersion}";
             return SchemaOutcome.Pending;
         }
-        if (desc.MergePolicy != mergePolicy && mergePolicy != 0)
+        // Policy 0 is the legacy/default spelling of LWW_FIELD (wire code 0x02),
+        // not a wildcard that may bypass schema compatibility checks.
+        int registeredPolicy = desc.MergePolicy == 0 ? 0x02 : desc.MergePolicy;
+        int incomingPolicy = mergePolicy == 0 ? 0x02 : mergePolicy;
+        if (registeredPolicy != incomingPolicy)
         {
-            detail = $"policy {mergePolicy} != registered {desc.MergePolicy}";
+            detail = $"policy {incomingPolicy} != registered {registeredPolicy}";
             return SchemaOutcome.Mismatch;
         }
         return SchemaOutcome.Ok;
