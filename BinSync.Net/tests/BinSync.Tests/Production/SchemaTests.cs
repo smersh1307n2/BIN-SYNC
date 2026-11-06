@@ -351,25 +351,21 @@ public class SchemaTests
     [Fact]
     public void ApplyBatchWithSchema_ok_when_registered()
     {
-        var n = Fix.MakeNode(301);
-        n.RegisterSchema(Desc(1, 0, 1, 0x02, 0x100));
-        var batch = new Batch(
-            1, 0, 1, 0x02, 0, n.NodeId, n.Epoch, 1, 1,
-            Fix.Nid(0xBC), Node.Zero128, Node.Zero128, Node.Zero128,
-            new List<OutboxEntry>());
-        // Empty batch may still hit SEQ path — assert not SCHEMA_*
-        try
-        {
-            n.ApplyBatchWithSchema(batch, Fix.Nid(2));
-        }
-        catch (SyncException ex)
-        {
-            Assert.DoesNotContain("SCHEMA", ex.CodeName);
-        }
-        catch
-        {
-            // other engine errors acceptable
-        }
+        using var sender = Fix.MakeNode(301);
+        using var receiver = Fix.MakeNode(302);
+        Transport.MakeSession(sender, receiver);
+        receiver.RegisterSchema(Desc(1, 0, 1, 0x02, 0x100));
+
+        var recordId = Fix.Rid(301);
+        Assert.True(sender.WriteField(1, recordId, 0x100, new byte[] { 0xA5 }));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1);
+        Assert.NotNull(batch);
+
+        var result = receiver.ApplyBatchWithSchema(batch!, sender.NodeId);
+
+        Assert.Equal(1, result.Applied);
+        Assert.True(receiver.TryGetField(1, recordId, 0x100, out var field));
+        Assert.Equal(new byte[] { 0xA5 }, field!.Value);
     }
 
     [Fact]
