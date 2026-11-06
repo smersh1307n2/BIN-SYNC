@@ -79,6 +79,10 @@ public sealed class OutboxEntry
     public long CreatedAt { get; set; }
     /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
     public List<BatchId> CausalDeps { get; set; } = new();
+
+    // True only while a public delta batch still references an engine-owned outbox buffer.
+    // Cleared as soon as the payload is detached into caller-owned storage.
+    internal bool PayloadNeedsDetachment;
 }
 
 /// <summary>DELTA_BATCH logical unit: headers, digests, and <see cref="OutboxEntry"/> list.</summary>
