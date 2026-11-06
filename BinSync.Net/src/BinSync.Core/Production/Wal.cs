@@ -251,7 +251,9 @@ public sealed class Wal : IDisposable
         {
         if (!File.Exists(path)) return 0;
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        if (fs.Length < 6) return 0;
+        if (fs.Length == 0) return 0;
+        if (fs.Length < 6)
+            throw new InvalidDataException("WAL header is truncated.");
         using var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true);
         if (ReadBEU32(br) != Magic) throw new InvalidDataException("Not a BinSync WAL.");
         var version = ReadBEU16(br);

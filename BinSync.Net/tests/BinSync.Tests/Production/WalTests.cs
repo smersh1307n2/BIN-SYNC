@@ -106,6 +106,31 @@ public class WalTests
         }
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void Wal_replay_file_rejects_a_truncated_nonempty_header(int length)
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-header-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "node.wal");
+            File.WriteAllBytes(path, new byte[length]);
+            using var target = Fix.MakeNode(125);
+
+            Assert.Throws<InvalidDataException>(() => Wal.ReplayFile(path, target));
+            Assert.Equal(0, target.GetRecordCount(1));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
     [Fact]
     public void Wal_open_truncates_torn_tail_before_accepting_new_appends()
     {
