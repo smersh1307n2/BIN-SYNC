@@ -8,26 +8,26 @@ public sealed partial class Node
     // ---------------------------------------------------------------------- helpers
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RecordDigestOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public byte[]? RecordDigestOf(int namespaceId, byte[] recordId)
+    public byte[]? RecordDigestOf(int namespaceId, RecordId recordId)
     {
         lock (_lockStorage) return RecordDigestOfInternal(namespaceId, recordId);
     }
 
-    internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
+    internal byte[]? RecordDigestOfInternal(int namespaceId, RecordId recordId)
     { return Storage.TryGetValue(namespaceId, out var s) && s.TryGetValue(recordId, out var rec) ? Digests.RecordDigest(rec) : null; }
 
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AllRecordDigestsInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public Dictionary<byte[], byte[]> AllRecordDigests(int namespaceId)
+    public Dictionary<RecordId, byte[]> AllRecordDigests(int namespaceId)
     {
         lock (_lockStorage) return AllRecordDigestsInternal(namespaceId);
     }
 
-    internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
+    internal Dictionary<RecordId, byte[]> AllRecordDigestsInternal(int namespaceId)
     {
-        var d = new Dictionary<byte[], byte[]>(BytesEq.Instance);
+        var d = new Dictionary<RecordId, byte[]>();
         if (Storage.TryGetValue(namespaceId, out var s))
-            foreach (var (rid, rec) in s) d[rid.ToArray()] = Digests.RecordDigest(rec);
+            foreach (var (rid, rec) in s) d[rid] = Digests.RecordDigest(rec);
         return d;
     }
 
@@ -174,11 +174,6 @@ public sealed partial class Node
             System.Buffers.ArrayPool<byte>.Shared.Return(buf);
         }
     }
-
-    public static Digest16 ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
-        int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest) =>
-        ComputeBatchDigest(BatchId.From(batchId), namespaceId, NodeId.From(issuerNode),
-            issuerEpoch, cursorStart, cursorEnd, Digest16.Truncate(recordsRoot), Digest16.Truncate(prevBatchDigest));
 
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
     public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries)

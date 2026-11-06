@@ -178,6 +178,19 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void RecordDigestAndBoundedWriteHelpers_UseTypedRecordIds()
+    {
+        var digest = typeof(Node).GetMethod(nameof(Node.RecordDigestOf))!;
+        Assert.Equal(typeof(RecordId), digest.GetParameters()[1].ParameterType);
+
+        var allDigests = typeof(Node).GetMethod(nameof(Node.AllRecordDigests))!;
+        Assert.Equal(typeof(Dictionary<RecordId, byte[]>), allDigests.ReturnType);
+
+        var boundedWrite = typeof(BoundedNode).GetMethod(nameof(BoundedNode.WriteField))!;
+        Assert.Equal(typeof(RecordId), boundedWrite.GetParameters()[2].ParameterType);
+    }
+
+    [Fact]
     public void ModelIdentityConstructors_UseTypedIds()
     {
         Assert.DoesNotContain(typeof(Record).GetConstructors(),

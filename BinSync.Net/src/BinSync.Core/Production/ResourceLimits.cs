@@ -79,7 +79,7 @@ public static class BoundedNode
 {
     /// <summary>Record a local field write into storage and outbox.</summary>
     public static bool WriteField(Node node, ResourceLimits limits,
-        int namespaceId, byte[] recordId, int fieldId, byte[] value, Hlc? hlc = null)
+        int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         limits.EnsureStorageCapacity(node);
         limits.EnsureCanEnqueueOutbox(node, namespaceId);

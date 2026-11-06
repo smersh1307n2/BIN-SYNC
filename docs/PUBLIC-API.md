@@ -75,7 +75,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
 | `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
-| `GetRecordCount` | Records in a namespace |
+| `GetRecordCount` / `RecordDigestOf(RecordId)` / `AllRecordDigests` | Typed record lookup, count and detached digest map |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
 | `BatchApplied` / `FieldWritten` | Events (handlers run outside engine locks) |
 | `Dispose` | Clear maps / detach events |
@@ -87,7 +87,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `NodeBuilder` | Fluent construction with typed `WithNodeId(NodeId)` |
 | `TrustPeer` / `RevokeTrust` (`NodeId`) | Typed trust pins |
 
-**Resource bounds:** `ResourceLimits`, `BoundedNode` factory helpers.
+**Resource bounds:** `ResourceLimits`, `BoundedNode.WriteField(Node, ResourceLimits, ns, RecordId, …)`.
 
 ### Apply result — `BatchResult` (**struct**)
 
