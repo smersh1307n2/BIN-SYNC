@@ -17,29 +17,12 @@ public class SyncException : Exception
         : (Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0);
 
     private readonly BatchId? _batchId;
+
     /// <summary>Optional typed batch id associated with the error.</summary>
     public BatchId? BatchId => _batchId;
 
     /// <summary>Create with code name used as the exception message.</summary>
-    public SyncException(string codeName, byte[]? batchId = null)
-        : base(codeName)
-    {
-        CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
-        ErrorCode = SyncErrorCodes.Parse(CodeName);
-        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
-    }
-
-    /// <summary>Create with typed error code (message = symbolic name when known).</summary>
-    public SyncException(SyncErrorCode errorCode, byte[]? batchId = null)
-        : base(SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString())
-    {
-        ErrorCode = errorCode;
-        CodeName = SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString();
-        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
-    }
-
-    /// <summary>Create with code name and typed batch id.</summary>
-    public SyncException(string codeName, BatchId batchId)
+    public SyncException(string codeName, BatchId? batchId = null)
         : base(codeName)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
@@ -47,22 +30,31 @@ public class SyncException : Exception
         _batchId = batchId;
     }
 
+    /// <summary>Create with typed error code (message = symbolic name when known).</summary>
+    public SyncException(SyncErrorCode errorCode, BatchId? batchId = null)
+        : base(SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString())
+    {
+        ErrorCode = errorCode;
+        CodeName = SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString();
+        _batchId = batchId;
+    }
+
     /// <summary>Create with a distinct human-readable message.</summary>
-    public SyncException(string codeName, string message, byte[]? batchId = null)
+    public SyncException(string codeName, string message, BatchId? batchId = null)
         : base(message)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
+        _batchId = batchId;
     }
 
     /// <summary>Create with message and inner exception.</summary>
-    public SyncException(string codeName, string message, Exception innerException, byte[]? batchId = null)
+    public SyncException(string codeName, string message, Exception innerException, BatchId? batchId = null)
         : base(message, innerException)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
+        _batchId = batchId;
     }
 }
 

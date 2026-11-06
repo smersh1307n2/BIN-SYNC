@@ -118,7 +118,7 @@ public sealed class PublicApiIsolationTests
         var input = new byte[16];
         input[0] = 0x42;
         var expected = BatchId.From(input);
-        var exception = new SyncException("SEQ_GAP", input);
+        var exception = new SyncException("SEQ_GAP", expected);
         input[0] = 0x11;
 
         Assert.Equal(expected, exception.BatchId);
