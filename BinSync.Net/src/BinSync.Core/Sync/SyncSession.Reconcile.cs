@@ -206,7 +206,7 @@ public partial class SyncSession
             }
 
             // Do not publish any part of the baseline until every chunk has arrived and validated.
-            return Reconcile.ApplySnapshotChunks(local, chunks);
+            return Reconcile.ApplySnapshotChunksOwned(local, chunks);
         }
         finally { _snapshotReceiveGate.Release(); }
     }
