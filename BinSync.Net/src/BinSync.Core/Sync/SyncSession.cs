@@ -332,7 +332,8 @@ public partial class SyncSession : IAsyncDisposable
     public virtual async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _sendFlowControl.Fail(new ObjectDisposedException(nameof(SyncSession)));\n        _typedFragmentState.Clear();
+        _sendFlowControl.Fail(new ObjectDisposedException(nameof(SyncSession)));
+        _typedFragmentState.Clear();
         _receiveCts.Cancel();
         try
         {
