@@ -131,32 +131,57 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
-    public void RegisterSessionEpoch_allows_new_session_to_publish_its_hello_epoch()
+    public void RegisterSessionEpoch_rejects_regression_of_the_current_peer_session()
     {
         using var node = new Node(Fix.Nid(108));
         var peer = Fix.Nid(109);
 
         node.RegisterSessionEpoch(peer, 5);
-        node.RegisterSessionEpoch(peer, 3);
+        var ex = Assert.Throws<SyncException>(() => node.RegisterSessionEpoch(peer, 3));
 
-        Assert.Equal(3, node.SessionEpoch(peer, 0));
+        Assert.Equal("EPOCH_REGRESSION", ex.CodeName);
+        Assert.Equal(5, node.SessionEpoch(peer, 0));
     }
 
     [Fact]
-    public void Durable_author_epoch_is_monotonic_metadata_not_a_session_watermark()
+    public void Durable_author_epoch_is_not_a_peer_session_regression_watermark()
     {
         using var local = new Node(Fix.Nid(115));
         var peer = Fix.Nid(116);
-        var author = Fix.Nid(117);
+        local.LearnAuthorEpoch(peer, 10);
+
+        var entries = new List<AliasMapEntry>
+        {
+            new(1, local.NodeId, local.Epoch),
+            new(2, peer, 5),
+        };
+
+        local.CommitSession(peer, 5, entries);
+
+        Assert.Equal(10, local.KnownAuthorEpoch(peer));
+        Assert.Equal(5, local.SessionEpoch(peer, 0));
+    }
+
+    [Fact]
+    public void CommitSession_rejects_peer_epoch_regression_without_mutating_previous_session()
+    {
+        using var local = new Node(Fix.Nid(110));
+        var peer = Fix.Nid(111);
+        var oldAuthor = Fix.Nid(112);
         local.RegisterSessionEpoch(peer, 5);
-        local.LearnAuthorEpoch(author, 2);
+        local.RegisterAlias(peer, 7, oldAuthor, 3);
 
-        Assert.Equal(2, local.KnownAuthorEpoch(author));
-        Assert.Equal(5, local.SessionEpoch(peer, 0));
+        var regressed = new List<AliasMapEntry>
+        {
+            new(1, local.NodeId, local.Epoch),
+            new(2, peer, 4),
+        };
 
-        local.LearnAuthorEpoch(author, 1);
-        Assert.Equal(2, local.KnownAuthorEpoch(author));
+        var ex = Assert.Throws<SyncException>(() => local.CommitSession(peer, 4, regressed));
+
+        Assert.Equal("EPOCH_REGRESSION", ex.CodeName);
         Assert.Equal(5, local.SessionEpoch(peer, 0));
+        Assert.Equal(oldAuthor, local.ResolveAlias(peer, 7));
     }
 
     [Fact]
