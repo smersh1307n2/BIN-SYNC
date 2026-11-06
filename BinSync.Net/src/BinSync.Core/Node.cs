@@ -23,7 +23,7 @@ public sealed partial class Node : IDisposable
     internal static void ValidateUserFieldId(int fieldId)
     {
         ValidateFieldId(fieldId);
-        if (fieldId < Model.UserFieldMin)
+        if (fieldId < Model.UserFieldMin && fieldId != Model.FieldResolveId)
             throw new ArgumentOutOfRangeException(nameof(fieldId), "Field ids below 0x0100 are reserved for system use.");
     }
 

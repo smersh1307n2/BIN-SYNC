@@ -18,7 +18,7 @@ public class InvariantsAndAdvanced
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
-    [InlineData(255)]
+    [InlineData(254)]
     public void Public_field_mutations_reject_reserved_system_field_ids(int fieldId)
     {
         using var node = Fix.MakeNode(979);
