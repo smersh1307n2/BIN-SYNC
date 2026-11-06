@@ -93,6 +93,31 @@ public class TrustStoreTests
     }
 
     [Fact]
+    public void Trust_change_events_run_outside_node_locks()
+    {
+        using var node = Fix.MakeNode(915);
+        var peer = NodeId.From(Id(0x15));
+        var (_, publicKey) = BatchSignature.GenerateKeyPair();
+        int trusted = 0, revoked = 0, probeRecord = 915;
+
+        node.TrustChanged += (changedPeer, isTrusted) =>
+        {
+            Assert.Equal(peer, changedPeer);
+            var probeId = Fix.Rid(Interlocked.Increment(ref probeRecord));
+            var write = Task.Run(() => node.WriteField(7, probeId, 0x101, new byte[] { 1 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "Trust event ran while node locks were held.");
+            Assert.True(write.Result);
+            if (isTrusted) trusted++;
+            else revoked++;
+        };
+
+        node.TrustPeer(peer, publicKey, TrustMode.PreShared);
+        node.RevokeTrust(peer);
+        Assert.Equal(1, trusted);
+        Assert.Equal(1, revoked);
+    }
+
+    [Fact]
     public void Revoke_blocks_verify()
     {
         var store = new TrustStore { DefaultMode = TrustMode.PreShared };

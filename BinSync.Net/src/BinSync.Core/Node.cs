@@ -94,6 +94,8 @@ public sealed partial class Node : IDisposable
     public event Action<GcNoticeMessage, int>? GcNoticeApplied;
     /// <summary>Raised after tombstones are purged (outside engine locks).</summary>
     public event Action<int, int, ulong>? GarbageCollected;
+    /// <summary>Raised after a peer trust pin is added or revoked (outside node locks; control plane only).</summary>
+    public event Action<NodeId, bool>? TrustChanged;
 
     private int _disposed;
 
@@ -115,8 +117,8 @@ public sealed partial class Node : IDisposable
     /// <summary>Optional resource caps; configuration access is serialized with Node metadata operations.</summary>
     public ResourceLimits? Limits
     {
-        get { lock (_lockMeta) return _limits; }
-        set { lock (_lockMeta) _limits = value; }
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _limits; } }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _limits = value; } }
     }
 
     /// <summary>Look up a record in the live store.</summary>
@@ -357,6 +359,7 @@ public sealed partial class Node : IDisposable
             SchemaMapLearned = null;
             GcNoticeApplied = null;
             GarbageCollected = null;
+            TrustChanged = null;
         }
         GC.SuppressFinalize(this);
     }

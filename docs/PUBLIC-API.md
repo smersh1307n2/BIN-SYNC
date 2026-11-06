@@ -82,7 +82,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
 | `GetRecordCount` / `RecordDigestOf(RecordId)` / `AllRecordDigests` | Typed record lookup, count and detached digest map |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
-| `BatchApplied` / `FieldWritten` / `FieldTombstoned` / `RecordDeleted` / `RecordUndeleted` / `SchemaRegistered` / `SchemaMapLearned` / `GcNoticeApplied` / `GarbageCollected` | Data and lifecycle events (handlers run outside engine locks) |
+| `BatchApplied` / `FieldWritten` / `FieldTombstoned` / `RecordDeleted` / `RecordUndeleted` / `SchemaRegistered` / `SchemaMapLearned` / `GcNoticeApplied` / `GarbageCollected` / `TrustChanged` | Data and lifecycle events (handlers run outside engine locks) |
 | `Dispose` | Clear maps / detach events |
 | `NodeOptions` | Structured construction with typed `NodeId?` (limits at create) |
 | `SyncErrorCode` / `SyncException.ErrorCode` | Typed error codes |

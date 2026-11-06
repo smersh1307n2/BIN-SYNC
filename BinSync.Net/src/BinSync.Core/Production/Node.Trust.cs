@@ -67,12 +67,21 @@ public sealed partial class Node
             EnsureTrust(mode == TrustMode.Tofu ? TrustMode.Tofu : mode)
                 .Allow(nodeId, publicKey, mode);
         }
+        TrustChanged?.Invoke(nodeId, true);
     }
 
     /// <summary>Revoke a previously trusted peer.</summary>
     public void RevokeTrust(NodeId nodeId)
     {
-        lock (_lockMeta) { ThrowIfDisposed(); Trust?.Revoke(nodeId); }
+        bool revoked;
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var store = Trust;
+            revoked = store is not null && store.TryGet(nodeId, out _);
+            store?.Revoke(nodeId);
+        }
+        if (revoked) TrustChanged?.Invoke(nodeId, false);
     }
 
     /// <summary>Persist <see cref="Trust"/> (creating a TOFU store if missing).</summary>
