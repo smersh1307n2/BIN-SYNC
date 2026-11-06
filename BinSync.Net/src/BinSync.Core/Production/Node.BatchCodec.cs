@@ -7,6 +7,44 @@ namespace BinSync;
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node
 {
+    // Compact transport-only record representation. It intentionally has no mutable
+    // public DTO members and carries no per-entry CausalDeps collection.
+    internal static Digest16 ComputeTransportRecordsRoot(TransportDeltaEntry[] entries)
+    {
+        int size = checked(Domains.DomainRecordsBytes.Length +
+            Codec.VarintLength((ulong)entries.Length));
+        for (int i = 0; i < entries.Length; i++)
+            size = checked(size + 33 +
+                Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
+
+        var rented = ArrayPool<byte>.Shared.Rent(size);
+        try
+        {
+            var writer = new Writer(rented);
+            writer.Raw(Domains.DomainRecordsBytes);
+            WriteTransportRecordsArray(writer, entries);
+            return Digests.Blake3Digest16(writer.WrittenSpan);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    internal static void WriteTransportRecordsArray(Writer writer, TransportDeltaEntry[] entries)
+    {
+        writer.Varint((ulong)entries.Length);
+        for (int i = 0; i < entries.Length; i++)
+        {
+            ref readonly var entry = ref entries[i];
+            if (entry.ChangeId.IsZero)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
+            writer.B128(entry.RecordId).B128(entry.ChangeId).U8(entry.OpKind)
+                .Varint((ulong)entry.Payload.Length).Raw(entry.Payload.Span);
+        }
+    }
+
+
     /// <summary>Upper bound on encoded DELTA_BATCH payload size for <paramref name="batch"/>.</summary>
     public static int EstimateBatchPayloadSize(Batch batch)
     {
@@ -189,5 +227,23 @@ public sealed partial class Node
         if (!r.Eof()) throw new SyncException("BATCH_TRANSACTION_FAILED");
         return new Batch(ns, schemaId, schemaVer, policy, flags, issuer, epoch,
                          cstart, cend, batchId, prev, root, digest, entries);
+    }
+}
+
+/// <summary>Compact immutable record used only while building an outbound transport packet.</summary>
+internal readonly struct TransportDeltaEntry
+{
+    internal RecordId RecordId { get; }
+    internal BatchId ChangeId { get; }
+    internal byte OpKind { get; }
+    internal ReadOnlyMemory<byte> Payload { get; }
+
+    internal TransportDeltaEntry(RecordId recordId, BatchId changeId, byte opKind,
+        ReadOnlyMemory<byte> payload)
+    {
+        RecordId = recordId;
+        ChangeId = changeId;
+        OpKind = opKind;
+        Payload = payload;
     }
 }

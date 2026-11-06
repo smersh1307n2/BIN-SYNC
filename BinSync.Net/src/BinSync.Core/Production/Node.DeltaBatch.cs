@@ -48,6 +48,9 @@ public sealed partial class Node
     // The session transport only needs the encoded packet and ACK/stream metadata.
     // Keep payload references to the Outbox while encoding under the node gates; unlike
     // the public Batch API, this temporary graph never escapes the protected operation.
+    // Build the transport packet directly. Unlike the public Batch API this path
+    // owns only a compact value array for the selected records; it never constructs
+    // Batch, OutboxEntry, or per-entry CausalDeps objects.
     internal OutboundBatchPayload? CreateDeltaBatchPayloadForTransport(
         NodeId targetPeer, int namespaceId, NodeId? filterAuthorNodeId = null,
         int schemaId = 0, int schemaVersion = 1)
@@ -55,14 +58,207 @@ public sealed partial class Node
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             ThrowIfDisposed();
-            var batch = CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId,
-                schemaId, schemaVersion, detachPublicBuffers: false);
-            if (batch is null) return null;
+            ValidateNamespaceId(namespaceId);
+            if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
+            if ((uint)schemaVersion > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
 
-            // CreateDeltaBatchInternal already binds the stream id and digest chain.
-            // Encode before releasing the gates so shared Outbox payloads remain stable.
-            var payload = EncodeBatchPayloadInternal(batch);
-            return new OutboundBatchPayload(batch, payload);
+            var pkey = (targetPeer, namespaceId);
+            if (!PeerStates.TryGetValue(pkey, out var ps))
+                PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
+
+            long wm;
+            NodeId stream;
+            List<OutboxEntry>? all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : null;
+            if (filterAuthorNodeId is not null)
+            {
+                stream = filterAuthorNodeId.Value;
+                wm = ps.AckedFor(stream);
+            }
+            else
+            {
+                var firstPending = new Dictionary<NodeId, long>();
+                if (all is not null)
+                {
+                    foreach (var e in all)
+                    {
+                        long offset = ps.StreamOffsets.TryGetValue(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                        long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
+                        if (e.Seq > localAck &&
+                            (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
+                            firstPending[e.AuthorNodeId] = e.Seq;
+                    }
+                }
+
+                bool found = false;
+                stream = default;
+                foreach (var kv in firstPending)
+                {
+                    long offset = ps.StreamOffsets.TryGetValue(kv.Key, out var savedOffset) ? savedOffset : 0;
+                    long localAck = checked(ps.AckedFor(kv.Key) + offset);
+                    if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
+                }
+                if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
+                if (!found) return null;
+                wm = ps.AckedFor(stream);
+            }
+
+            long streamOffset;
+            if (ps.StreamOffsets.TryGetValue(stream, out var savedStreamOffset))
+            {
+                if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
+                    throw new SyncException("SNAPSHOT_REQUIRED");
+                streamOffset = savedStreamOffset;
+            }
+            else
+            {
+                streamOffset = 0;
+                if (!ps.StreamAcked.ContainsKey(stream))
+                {
+                    long firstLocal = long.MaxValue;
+                    if (all is not null)
+                    {
+                        foreach (var e in all)
+                            if (e.AuthorNodeId == stream && e.Seq < firstLocal) firstLocal = e.Seq;
+                    }
+                    if (firstLocal > 1 && !ps.InitialSyncComplete)
+                        throw new SyncException("SNAPSHOT_REQUIRED");
+                    if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
+                }
+                ps.StreamOffsets[stream] = streamOffset;
+            }
+
+            long localWm = checked(wm + streamOffset);
+            int selectedCount = 0;
+            long cursorStart = 0, cursorEnd = 0;
+            if (all is not null)
+            {
+                for (int i = 0; i < all.Count; i++)
+                {
+                    var source = all[i];
+                    if (source.AuthorNodeId != stream || source.Seq <= localWm) continue;
+                    long seq = checked(source.Seq - streamOffset);
+                    if (selectedCount == 0) cursorStart = seq;
+                    cursorEnd = seq;
+                    selectedCount++;
+                }
+            }
+            if (selectedCount == 0) return null;
+
+            int? streamAlias = stream == NodeId
+                ? AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1
+                : AliasOfInternal(targetPeer, stream, Epoch);
+            if (streamAlias is null)
+            {
+                var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
+                if (peerNode is not null && stream != NodeId)
+                {
+                    int epTry = KnownAuthorEpoch(stream) ?? Epoch;
+                    streamAlias = EnsureAlias(peerNode, stream, epTry);
+                }
+                else if (peerNode is null && AliasToNode.TryGetValue(targetPeer, out var existingMap))
+                {
+                    foreach (var (alias, (nid, _)) in existingMap)
+                        if (nid == stream) { streamAlias = alias; break; }
+                }
+            }
+            if (streamAlias is null)
+                throw new SyncException("UNKNOWN_ALIAS");
+
+            var entries = new TransportDeltaEntry[selectedCount];
+            ushort origin = (ushort)streamAlias.Value;
+            int entryIndex = 0;
+            if (all is not null)
+            {
+                for (int i = 0; i < all.Count; i++)
+                {
+                    var e = all[i];
+                    if (e.AuthorNodeId != stream || e.Seq <= localWm) continue;
+
+                    ReadOnlyMemory<byte> wirePayload;
+                    var stamped = Ops.TryCloneWithOriginShared(e.Payload, origin);
+                    if (stamped is not null)
+                    {
+                        bool shared = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(e.Payload, out var paySeg)
+                            && object.ReferenceEquals(paySeg.Array, stamped)
+                            && paySeg.Offset == 0 && paySeg.Count == stamped.Length;
+                        wirePayload = shared ? e.Payload : stamped;
+                    }
+                    else
+                    {
+                        var op = Ops.DecodeOp(e.Payload).Op;
+                        SetOrigin(op, origin);
+                        // Persisted field-write payloads may contain only their fixed header;
+                        // restore the current value exactly as the public builder does.
+                        if (op is OpFieldWrite fw && fw.ValueLenPos >= 0 && fw.Value.Length == 0 &&
+                            Ns(e.NamespaceId).TryGetValue(e.RecordId, out var wrec) &&
+                            wrec.State.TryGetValue(fw.FieldId, out var wfld))
+                        {
+                            fw.Value = wfld.Value ?? Array.Empty<byte>();
+                            fw.ValueLenPos = -1;
+                        }
+                        wirePayload = Ops.EncodeOp(op, fullAuthor: false);
+                    }
+
+                    entries[entryIndex++] = new TransportDeltaEntry(
+                        e.RecordId, e.ChangeId, e.OpKind, wirePayload);
+                }
+            }
+
+            int issuerEpoch = Epoch;
+            if (stream != NodeId)
+            {
+                if (AliasToNode.TryGetValue(targetPeer, out var map) &&
+                    map.TryGetValue(streamAlias.Value, out var binding) &&
+                    binding.Id == stream)
+                {
+                    issuerEpoch = binding.Epoch;
+                }
+                else
+                {
+                    foreach (var kv in KnownEpochs)
+                        if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
+                            issuerEpoch = Math.Max(issuerEpoch, kv.Value);
+                }
+            }
+
+            var recordsRoot = ComputeTransportRecordsRoot(entries);
+            var chainKey = (NodeId, namespaceId, issuerEpoch);
+            var streamKey = (chainKey, targetPeer);
+            var idKey = (stream, cursorStart, cursorEnd);
+            if (!ps.Ids.TryGetValue(idKey, out var cached))
+            {
+                Span<byte> gbuf = stackalloc byte[16];
+                Guid.NewGuid().TryWriteBytes(gbuf);
+                cached = (BatchId.From(gbuf),
+                    LastStreamDigest.TryGetValue(streamKey, out var previous) ? previous : default);
+                ps.Ids[idKey] = cached;
+            }
+
+            var (batchId, previousDigest) = cached;
+            var batchDigest = ComputeBatchDigest(batchId, namespaceId, NodeId, issuerEpoch,
+                cursorStart, cursorEnd, recordsRoot, previousDigest);
+
+            int payloadSize = checked(108 + 2 * Codec.VarintLength((ulong)selectedCount));
+            for (int i = 0; i < entries.Length; i++)
+                payloadSize = checked(payloadSize + 33 +
+                    Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
+
+            var payload = new byte[payloadSize];
+            var writer = new Writer(payload);
+            writer.U16((ushort)namespaceId).U16((ushort)schemaId).U16((ushort)schemaVersion);
+            writer.U8(0x02).U8(0);
+            writer.B128(NodeId).U32((uint)issuerEpoch);
+            writer.U64((ulong)cursorStart).U64((ulong)cursorEnd);
+            writer.Varint((ulong)selectedCount);
+            writer.B128(batchId).B128(previousDigest);
+            writer.B128(recordsRoot).B128(batchDigest);
+            WriteTransportRecordsArray(writer, entries);
+            if (writer.Length != payload.Length)
+                throw new InvalidOperationException("Transport batch size estimate mismatch");
+
+            ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
+            return new OutboundBatchPayload(payload, batchId, stream, stream, namespaceId,
+                issuerEpoch, cursorStart, cursorEnd, batchDigest);
         }
     }
 
@@ -449,17 +645,19 @@ internal readonly struct OutboundBatchPayload
     public long CursorEnd { get; }
     public Digest16 BatchDigest { get; }
 
-    public OutboundBatchPayload(Batch batch, byte[] payload)
+    public OutboundBatchPayload(byte[] payload, BatchId batchId, NodeId authorStreamId,
+        NodeId durableAuthor, int namespaceId, int issuerEpoch, long cursorStart,
+        long cursorEnd, Digest16 batchDigest)
     {
         Payload = payload;
-        BatchId = batch.BatchId;
-        AuthorStreamId = batch.AuthorStreamId();
-        DurableAuthor = batch.DurableAuthor;
-        NamespaceId = batch.NamespaceId;
-        IssuerEpoch = batch.IssuerEpoch;
-        CursorStart = batch.CursorStart;
-        CursorEnd = batch.CursorEnd;
-        BatchDigest = batch.BatchDigest;
+        BatchId = batchId;
+        AuthorStreamId = authorStreamId;
+        DurableAuthor = durableAuthor;
+        NamespaceId = namespaceId;
+        IssuerEpoch = issuerEpoch;
+        CursorStart = cursorStart;
+        CursorEnd = cursorEnd;
+        BatchDigest = batchDigest;
     }
 }
 
