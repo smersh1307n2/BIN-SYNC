@@ -1,5 +1,6 @@
 // Frame format (§12.2): 25-byte header, magic 0x4253, CRC32C, hard limits; flow control (§3.6).
 using System.Buffers.Binary;
+using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Arm;
@@ -34,7 +35,7 @@ public static class Frames
     public const byte FLAG_ENCRYPTED = 0x08;
 
     /// <summary>Map of frame type byte to symbolic name (DELTA_BATCH, ACK, …).</summary>
-    public static readonly Dictionary<int, string> FrameTypes = new()
+    private static readonly Dictionary<int, string> FrameTypeMap = new()
     {
         [0x01] = "HELLO",
         [0x02] = "HELLO_ACK",
@@ -57,9 +58,12 @@ public static class Frames
         [0x13] = "IBLT_RESPONSE",
     };
 
+    /// <summary>Read-only map of frame type byte to symbolic name.</summary>
+    public static IReadOnlyDictionary<int, string> FrameTypes { get; } =
+        new ReadOnlyDictionary<int, string>(FrameTypeMap);
+
     // §12.23 error codes (canonical numeric values)
-    /// <summary>Map of symbolic error names to numeric wire codes.</summary>
-    public static readonly Dictionary<string, ushort> ErrorCodes = new()
+    private static readonly Dictionary<string, ushort> ErrorCodeMap = new()
     {
         ["UNKNOWN_ALIAS"] = 0x0001,
         ["EPOCH_REGRESSION"] = 0x0002,
@@ -86,6 +90,10 @@ public static class Frames
         ["BATCH_CHAIN_BROKEN"] = 0x0017,
         ["ACK_OUT_OF_RANGE"] = 0x0018,
     };
+
+    /// <summary>Read-only map of symbolic error names to numeric wire codes.</summary>
+    public static IReadOnlyDictionary<string, ushort> ErrorCodes { get; } =
+        new ReadOnlyDictionary<string, ushort>(ErrorCodeMap);
 
     private static readonly uint[] CrcTable = BuildTable();
     private static uint[] BuildTable()

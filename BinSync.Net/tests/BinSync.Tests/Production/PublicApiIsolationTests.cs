@@ -192,6 +192,19 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void ProtocolLookupTables_AreReadOnly()
+    {
+        Assert.IsAssignableFrom<IReadOnlyDictionary<int, string>>(Frames.FrameTypes);
+        Assert.IsAssignableFrom<IReadOnlyDictionary<string, ushort>>(Frames.ErrorCodes);
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<int, string>)Frames.FrameTypes)[0x01] = "CORRUPTED");
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, ushort>)Frames.ErrorCodes)["INTERNAL"] = 0xFFFF);
+        Assert.Equal("HELLO", Frames.FrameTypes[0x01]);
+        Assert.Equal((ushort)0x000A, Frames.ErrorCodes["INTERNAL"]);
+    }
+
+    [Fact]
     public void NodeConstruction_UsesTypedIdentityContract()
     {
         var constructor = typeof(Node).GetConstructors()
