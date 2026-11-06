@@ -10,7 +10,7 @@ public readonly struct FrameFragment
     public byte[] MsgId { get; }
     /// <summary>Zero-based index of this fragment within the message.</summary>
     public ushort Index { get; }
-    /// <summary>Signed multiplicity of digests folded into this cell.</summary>
+    /// <summary>Total number of fragments in the logical message.</summary>
     public ushort Count { get; }
     /// <summary>Fragment payload body bytes.</summary>
     public byte[] Body { get; }
