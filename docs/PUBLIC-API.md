@@ -69,7 +69,8 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
 | `EncodeBatchPayload` / `EncodeBatchPayload(…, Span<byte>)` | Batch → payload bytes |
-| `EncodeRecordsArray` / `DecodeRecordsArray` | Canonical records codec; decoded identities are typed `RecordId` / `BatchId`, trailing bytes rejected |
+| `WriteRecordsArray` / `EncodeRecordsArray` / `DecodeRecordsArray` | Canonical records codec; decoded identities are typed `RecordId` / `BatchId`, trailing bytes rejected |
+| `ComputeBatchDigest` / `ComputeRecordsRoot` | Public digest helpers for canonical batch headers and ordered records |
 | `DecodeBatchPayload` | Payload → `Batch` with **owned** entry buffers |
 | `ApplyBatch(Batch, NodeId sender)` | Apply + inbox idempotency |
 | `ApplyBatchPayload(byte[], NodeId sender)` | Decode+apply (preferred on the wire path) |
@@ -79,7 +80,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / `KnownAuthorEpoch` / `SessionEpoch` | Session & alias registry |
 | `DurableId` / `WriteDurableId` | Encode the typed node identity and epoch into the durable identity representation |
 | `RepublishUnderPrefix` / `RepublishRecords` | Re-enqueue visible record state for a namespace, by digest prefix or typed record IDs |
-| `GetOutboxCount` | Read-only pending Outbox count for a namespace |
+| `OutboxSize` / `GetOutboxCount` | Read-only pending Outbox count for a namespace |
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
 | `GetRecordCount` / `RecordDigestOf(RecordId)` / `AllRecordDigests` | Typed record lookup, count and detached digest map |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
@@ -140,7 +141,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 `SyncSession.RunReconciliationAsync<TResult>` provides an exclusive transaction for custom multi-frame reconciliation protocols. Its `ReconciliationOperations` context exposes digest, NEED_RANGE, NEED_KEYS, and snapshot primitives without reacquiring their frame gates. The context is valid only during the callback; using it afterward throws `ObjectDisposedException`. Batch push/receive remains independent.
 
-`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific). Snapshot DTOs use `RecordId` / `NodeId`; `ApplySnapshotChunks` detaches caller-owned DTO graphs before validation and publication.
+`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific). `WatermarkGate` exposes the stale-watermark check used by safe GC coordination. Snapshot DTOs use `RecordId` / `NodeId`; `ApplySnapshotChunks` detaches caller-owned DTO graphs before validation and publication.
 
 ### Session / transport
 
@@ -150,9 +151,10 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `IPeerAwareSyncTransport` | Optional mutable peer identity binding for transports that learn the peer during HELLO |
 | `PipeTransport` | In-memory paired transport for tests and embedded scenarios; `CreatePair()` returns peer-aware endpoints |
 | `StreamSyncTransport` | Complete-packet adapter over a caller-supplied `Stream`; `ownsStream` controls whether disposal closes that stream; peer identity is bound after HELLO |
-| `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`** |
+| `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`**; includes low-level `HandshakeAsync` for role-specific setup |
 | `SyncSession` | Transport-independent protocol session; `ConnectAsync` / `AcceptAsync` use role-specific handshakes, while `EstablishAsync` lets both endpoints start symmetrically and selects the initiator by `NodeId`; `ownsTransport` controls transport disposal |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; listener defaults to loopback unless an address is supplied; TLS is enabled by supplying server/client authentication options; both create generic `SyncSession` instances |
+| `AsyncTransport` | Async batch delivery, sync-round orchestration, and async Node save/load helpers |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
 | `LoopbackTransport` | Lab loopback with `NodeId` peer routing; routing dictionaries are private to the adapter |
 
@@ -188,8 +190,7 @@ the WAL. If replay fails, the WAL is not attached.
 
 `AttachWal` does not take ownership of the WAL; keep it alive for as long as the
 Node uses it. `Wal.Checkpoint(node, snapshotPath)` saves the full snapshot and
-atomically replaces the active WAL segment. Do not dispose the WAL while it remains
-attached to a live Node.
+atomically replaces the active WAL segment. `Wal.Replay(node)` and `Wal.ReplayFile(path, node)` are explicit standalone replay entry points; do not manually replay the same log after `AttachWal` has already performed recovery. Do not dispose the WAL while it remains attached to a live Node.
 
 ### Schema (§18, opt-in)
 
@@ -203,7 +204,6 @@ attached to a live Node.
 | `Node.Causal` | Optional tracker |
 | `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `Node.ApplyBatchCausal` / `DrainCausal` (released items are not known until applied) / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
-| `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `CausalWire` | CCD1 trailer encode/decode |
 | `CAUSAL_DEP_MISSING` | 0x0012 |
 
