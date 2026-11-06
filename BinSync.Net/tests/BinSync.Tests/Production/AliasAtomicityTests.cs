@@ -47,7 +47,7 @@ public sealed class AliasAtomicityTests
         using var local = new Node(Fix.Nid(151));
         using var peer = new Node(Fix.Nid(152));
         var author = Fix.Nid(153);
-        local.PeersByNid[peer.NodeId] = peer;
+        local.RegisterLoopbackPeer(peer);
         peer.AliasToNode[local.NodeId] = new Dictionary<int, (NodeId Id, int Epoch)>
         {
             [77] = (author, 4)
