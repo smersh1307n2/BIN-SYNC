@@ -17,6 +17,7 @@ public sealed class KeyEpochStore
     /// <summary>Store or update trusted public-key material for a node id.</summary>
     public void TrustIdentity(NodeId nodeId, ReadOnlySpan<byte> publicKey)
     {
+        if (nodeId.IsZero) throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
         if (publicKey.Length != BatchSignature.PublicKeySize)
             throw new ArgumentException($"public key must be {BatchSignature.PublicKeySize} bytes");
         lock (_gate) _identityKeys[Hex(nodeId)] = publicKey.ToArray();
@@ -66,7 +67,7 @@ public sealed class KeyEpochStore
         };
         lock (_gate)
         {
-            if (ownedNotice.NewKeyEpoch <= ownedNotice.OldKeyEpoch) return false;
+            if (ownedNotice.NodeId.IsZero || ownedNotice.NewKeyEpoch <= ownedNotice.OldKeyEpoch) return false;
             var hex = Hex(ownedNotice.NodeId);
             if (!_identityKeys.TryGetValue(hex, out var pub))
                 return false; // UNKNOWN identity → drop (caller may surface UNKNOWN_KEY_EPOCH)
@@ -91,6 +92,7 @@ public sealed class KeyEpochStore
     /// <summary>Force-set epoch without proof (bootstrap / tests). Prefer <see cref="TryApply"/>.</summary>
     public void SeedEpoch(int namespaceId, NodeId nodeId, ushort epoch)
     {
+        if (nodeId.IsZero) throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
         lock (_gate)
         {
             if (!_epochs.TryGetValue(namespaceId, out var map))

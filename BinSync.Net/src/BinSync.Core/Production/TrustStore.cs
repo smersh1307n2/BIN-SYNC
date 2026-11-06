@@ -38,7 +38,12 @@ public sealed partial class TrustStore
     public TrustMode DefaultMode
     {
         get { lock (_gate) return _defaultMode; }
-        set { lock (_gate) _defaultMode = value; }
+        set
+        {
+            if (value is not (TrustMode.Tofu or TrustMode.PreShared or TrustMode.CertificateAuthority))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            lock (_gate) _defaultMode = value;
+        }
     }
 
     /// <summary>Number of peers currently present in the trust store.</summary>
@@ -52,6 +57,10 @@ public sealed partial class TrustStore
     /// <summary>Pin a peer public key under the given trust mode.</summary>
     public void Allow(NodeId nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
+        if (nodeId.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(nodeId));
+        ArgumentNullException.ThrowIfNull(publicKey);
+        if (mode is not (TrustMode.Tofu or TrustMode.PreShared or TrustMode.CertificateAuthority))
+            throw new ArgumentOutOfRangeException(nameof(mode));
         if (publicKey.Length != BatchSignature.PublicKeySize)
             throw new ArgumentException("public key must be 32 bytes");
         var id = nodeId;
@@ -71,6 +80,7 @@ public sealed partial class TrustStore
     /// <summary>Mark a node id as a certificate-authority root.</summary>
     public void AddCaRoot(NodeId caNodeId)
     {
+        if (caNodeId.IsZero) throw new ArgumentException("CA identity must be non-zero.", nameof(caNodeId));
         lock (_gate) _caRoots.Add(Key(caNodeId));
     }
 
@@ -120,6 +130,7 @@ public sealed partial class TrustStore
     /// </summary>
     public byte[]? ResolvePublicKey(NodeId nodeId, byte[]? candidatePublicKey = null)
     {
+        if (nodeId.IsZero) return null;
         if (candidatePublicKey is not null &&
             candidatePublicKey.Length != BatchSignature.PublicKeySize)
             return null;

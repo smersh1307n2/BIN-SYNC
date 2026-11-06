@@ -53,6 +53,22 @@ public class TrustStoreTests
     }
 
     [Fact]
+    public void Trust_store_rejects_zero_identities_null_keys_and_unknown_modes()
+    {
+        var store = new TrustStore();
+        var (_, publicKey) = BatchSignature.GenerateKeyPair();
+        var peer = NodeId.From(Id(8));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.DefaultMode = (TrustMode)0xFF);
+        Assert.Throws<ArgumentException>(() => store.Allow(default, publicKey));
+        Assert.Throws<ArgumentNullException>(() => store.Allow(peer, null!));
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.Allow(peer, publicKey, (TrustMode)0xFF));
+        Assert.Throws<ArgumentException>(() => store.AddCaRoot(default));
+        Assert.Null(store.ResolvePublicKey(default, publicKey));
+        Assert.Equal(0, store.PeerCount);
+    }
+
+    [Fact]
     public void Tofu_invalid_signature_does_not_poison_peer_identity()
     {
         var store = new TrustStore { DefaultMode = TrustMode.Tofu };

@@ -108,7 +108,7 @@ public static class TrustPersistence
         for (int i = 0; i < peerCount; i++)
         {
             var id = NodeId.From(r.B128());
-            if (!peerIds.Add(id))
+            if (id.IsZero || !peerIds.Add(id))
                 throw new InvalidDataException("Trust file contains a duplicate peer identity.");
             var pk = r.Raw(BatchSignature.PublicKeySize);
             var peerMode = ReadTrustMode(r.U8(), "peer trust mode");
@@ -127,7 +127,7 @@ public static class TrustPersistence
         for (int i = 0; i < rootCount; i++)
         {
             var id = NodeId.From(r.B128());
-            if (!rootIds.Add(id))
+            if (id.IsZero || !rootIds.Add(id))
                 throw new InvalidDataException("Trust file contains a duplicate CA root.");
             roots.Add(id.ToArray());
         }

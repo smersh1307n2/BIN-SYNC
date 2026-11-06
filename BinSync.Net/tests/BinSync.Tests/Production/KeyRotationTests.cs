@@ -37,6 +37,24 @@ public class KeyRotationTests
     }
 
     [Fact]
+    public void Key_epoch_store_rejects_zero_identity_bootstrap()
+    {
+        var (_, publicKey) = BatchSignature.GenerateKeyPair();
+        var store = new KeyEpochStore();
+
+        Assert.Throws<ArgumentException>(() => store.TrustIdentity(default, publicKey));
+        Assert.Throws<ArgumentException>(() => store.SeedEpoch(1, default, 1));
+        Assert.False(store.TryApply(new KeyRotationNotice
+        {
+            NamespaceId = 1,
+            OldKeyEpoch = 0,
+            NewKeyEpoch = 1,
+            NodeId = default,
+            Proof = new byte[BatchSignature.SignatureSize],
+        }));
+    }
+
+    [Fact]
     public void KeyEpochStore_rejects_untrusted_publisher()
     {
         var (seed, _) = BatchSignature.GenerateKeyPair();
