@@ -28,15 +28,18 @@ public sealed partial class Node
     public BatchResult VerifyAndApplyBatch(
         Batch batch, NodeId senderPeer, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
-        BatchResult result;
+        ArgumentNullException.ThrowIfNull(batch);
+        var ownedBatch = CloneBatchForPublicRead(batch);
+        var ownedSignature = signature.ToArray();
+        var ownedCandidateKey = candidatePublicKey?.ToArray();
         lock (_lockMeta)
         {
             var store = Trust ?? throw new InvalidOperationException("Trust store not configured");
-            store.VerifyBatchOrThrow(batch, signature, candidatePublicKey);
-            // Apply under full gates (trust check already done under Meta)
+            // Verify and apply the same detached batch snapshot; never verify one DTO
+            // and later apply a caller-mutated version of it.
+            store.VerifyBatchOrThrow(ownedBatch, ownedSignature, ownedCandidateKey);
         }
-        result = ApplyBatch(batch, senderPeer);
-        return result;
+        return ApplyBatch(ownedBatch, senderPeer);
     }
 
     /// <summary>Pin or pre-share a peer key.</summary>

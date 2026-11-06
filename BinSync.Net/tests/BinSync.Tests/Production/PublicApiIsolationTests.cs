@@ -57,6 +57,43 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void SchemaAndTrustGatedApply_DoNotMutateCallerBatch()
+    {
+        using var sender = Fix.MakeNode(908);
+        using var schemaReceiver = Fix.MakeNode(909);
+        using var trustReceiver = Fix.MakeNode(910);
+        Transport.MakeSession(sender, schemaReceiver);
+        Transport.MakeSession(sender, trustReceiver);
+        var recordId = RecordId.From(Fix.Rid(908));
+        Assert.True(sender.WriteField(7, recordId, 0x101, new byte[] { 4, 5, 6 }));
+
+        var schemaBatch = sender.CreateDeltaBatch(schemaReceiver.NodeId, 7)!;
+        var schemaAuthor = schemaBatch.AuthorStreamNodeId;
+        schemaReceiver.RegisterSchema(new SchemaDescriptor
+        {
+            NamespaceId = schemaBatch.NamespaceId,
+            SchemaId = schemaBatch.SchemaId,
+            Version = schemaBatch.SchemaVersion,
+            MergePolicy = schemaBatch.MergePolicy,
+            FieldIds = new HashSet<ushort> { 0x101 },
+        });
+        schemaReceiver.ApplyBatchWithSchema(schemaBatch, sender.NodeId);
+        Assert.Equal(schemaAuthor, schemaBatch.AuthorStreamNodeId);
+        Assert.True(schemaReceiver.TryGetField(7, recordId, 0x101, out var schemaField));
+        Assert.Equal(new byte[] { 4, 5, 6 }, schemaField!.Value);
+
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        trustReceiver.TrustPeer(sender.NodeId, publicKey, TrustMode.PreShared);
+        var trustBatch = sender.CreateDeltaBatch(trustReceiver.NodeId, 7)!;
+        var trustAuthor = trustBatch.AuthorStreamNodeId;
+        var signature = BatchSignature.SignBatch(seed, trustBatch);
+        trustReceiver.VerifyAndApplyBatch(trustBatch, sender.NodeId, signature, publicKey);
+        Assert.Equal(trustAuthor, trustBatch.AuthorStreamNodeId);
+        Assert.True(trustReceiver.TryGetField(7, recordId, 0x101, out var trustField));
+        Assert.Equal(new byte[] { 4, 5, 6 }, trustField!.Value);
+    }
+
+    [Fact]
     public void SnapshotDtos_UseTypedIdentitiesAndProperties()
     {
         Assert.Equal(typeof(RecordId), typeof(SnapshotRecord).GetProperty(nameof(SnapshotRecord.RecordId))!.PropertyType);

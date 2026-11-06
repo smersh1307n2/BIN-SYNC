@@ -16,27 +16,30 @@ public sealed partial class Node
     /// </summary>
     public BatchResult ApplyBatchWithSchema(Batch batch, NodeId senderPeer)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+        // Schema validation and application must observe the same caller-independent DTO.
+        var ownedBatch = CloneBatchForPublicRead(batch);
         lock (_lockMeta)
         {
             var reg = Schemas;
             if (reg is not null)
             {
                 var outcome = reg.Evaluate(
-                    batch.NamespaceId, batch.SchemaId, batch.SchemaVersion, batch.MergePolicy,
+                    ownedBatch.NamespaceId, ownedBatch.SchemaId, ownedBatch.SchemaVersion, ownedBatch.MergePolicy,
                     out var detail);
                 if (outcome == SchemaOutcome.Pending)
                 {
                     ErrorsOut.Add($"SCHEMA_PENDING:{detail}");
-                    throw new SyncException("SCHEMA_PENDING", batch.BatchId);
+                    throw new SyncException("SCHEMA_PENDING", ownedBatch.BatchId);
                 }
                 if (outcome == SchemaOutcome.Mismatch || outcome == SchemaOutcome.FieldReuse)
                 {
                     ErrorsOut.Add($"SCHEMA_MISMATCH:{detail}");
-                    throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
+                    throw new SyncException("SCHEMA_MISMATCH", ownedBatch.BatchId);
                 }
             }
         }
-        return ApplyBatch(batch, senderPeer);
+        return ApplyBatch(ownedBatch, senderPeer);
     }
 
     /// <summary>Publish local schemas into the registry (convenience).</summary>
