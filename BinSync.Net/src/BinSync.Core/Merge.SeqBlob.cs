@@ -71,7 +71,10 @@ public static class SeqFractional
         if (local is null || local.Length == 0) return remote;
         var a = Decode(local);
         var b = Decode(remote);
-        return Compare(b, a) > 0 ? remote : local;
+        int order = Compare(b, a);
+        if (order == 0 && !a.Value.AsSpan().SequenceEqual(b.Value))
+            throw new InvalidDataException("Conflicting SEQ_FRACTIONAL values share the same item identity.");
+        return order > 0 ? remote : local;
     }
 }
 
@@ -134,7 +137,13 @@ public static class BlobRef
         var b = Decode(remote);
         int cmp = a.BlobId.AsSpan().SequenceCompareTo(b.BlobId);
         if (cmp == 0)
-            return local; // identical identity — no rewrite
+        {
+            if (a.Size != b.Size ||
+                !string.Equals(a.ContentType, b.ContentType, StringComparison.Ordinal) ||
+                !a.Hash.AsSpan().SequenceEqual(b.Hash))
+                throw new InvalidDataException("Conflicting BLOB_REF descriptors share the same blobId.");
+            return local; // identical immutable descriptor — no rewrite
+        }
         return cmp < 0 ? remote : local;
     }
 }
