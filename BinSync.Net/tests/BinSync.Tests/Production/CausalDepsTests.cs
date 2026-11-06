@@ -89,7 +89,8 @@ public class CausalDepsTests
             tracker.UtcNowMs = null!);
 
         tracker.DepTimeout = TimeSpan.Zero;
-        tracker.UtcNowMs = () => 123;
+        long now = 123;
+        tracker.UtcNowMs = () => now++;
         tracker.EnqueuePending(Id(2), new[] { Id(1) });
         Assert.Single(tracker.Drain());
     }
