@@ -31,13 +31,19 @@ public readonly partial struct NodeId : IEquatable<NodeId>
     }
 
     /// <summary>Create an id from a 16-byte sequence.</summary>
-    public static NodeId From(byte[] bytes)
-    {
-        ArgumentNullException.ThrowIfNull(bytes);
-        return From(bytes.AsSpan());
-    }
+    public static NodeId From(byte[]? bytes) =>
+        bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
+
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
+    public static implicit operator NodeId(byte[]? bytes) => From(bytes);
     /// <summary>Create an id from a 16-byte sequence.</summary>
     public static NodeId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
+    /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
+    public static implicit operator NodeId(ReadOnlyMemory<byte> bytes) => From(bytes);
+
+    /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
+    public static implicit operator byte[](NodeId id) => id.ToArray();
+
     /// <summary>Write the 16 bytes into a destination span.</summary>
     public void WriteTo(Span<byte> dest)
     {
@@ -110,13 +116,19 @@ public readonly partial struct RecordId : IEquatable<RecordId>
     }
 
     /// <summary>Create an id from a 16-byte sequence.</summary>
-    public static RecordId From(byte[] bytes)
-    {
-        ArgumentNullException.ThrowIfNull(bytes);
-        return From(bytes.AsSpan());
-    }
+    public static RecordId From(byte[]? bytes) =>
+        bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
+
+    /// <summary>128-bit record identity with value equality.</summary>
+    public static implicit operator RecordId(byte[]? bytes) => From(bytes);
     /// <summary>Create an id from a 16-byte sequence.</summary>
     public static RecordId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
+    /// <summary>128-bit record identity with value equality.</summary>
+    public static implicit operator RecordId(ReadOnlyMemory<byte> bytes) => From(bytes);
+
+    /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
+    public static implicit operator byte[](RecordId id) => id.ToArray();
+
     /// <summary>Write the 16 bytes into a destination span.</summary>
     public void WriteTo(Span<byte> dest)
     {
@@ -190,13 +202,16 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     }
 
     /// <summary>Create an id from a 16-byte sequence.</summary>
-    public static BatchId From(byte[] bytes)
-    {
-        ArgumentNullException.ThrowIfNull(bytes);
-        return From(bytes.AsSpan());
-    }
+    public static BatchId From(byte[]? bytes) =>
+        bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
+    /// <summary>128-bit batch identity with value equality.</summary>
+    public static implicit operator BatchId(byte[]? bytes) => From(bytes);
     public static BatchId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
+    public static implicit operator BatchId(ReadOnlyMemory<byte> bytes) => From(bytes);
+
+    /// <summary>Wire form (b128). Allocates; prefer <see cref="WriteTo"/> on hot paths.</summary>
+    public static implicit operator byte[](BatchId id) => id.ToArray();
 
     /// <summary>Content equality against a 16-byte span.</summary>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
@@ -280,6 +295,10 @@ public readonly partial struct Digest16 : IEquatable<Digest16>
             throw new ArgumentException("At least 16 bytes are required to truncate a digest.", nameof(bytes));
         return From(bytes[..16]);
     }
+
+    public static implicit operator Digest16(byte[]? bytes) =>
+        bytes is null ? throw new ArgumentNullException(nameof(bytes)) : From(bytes);
+    public static implicit operator byte[](Digest16 d) => d.ToArray();
 
     public void WriteTo(Span<byte> dest)
     {

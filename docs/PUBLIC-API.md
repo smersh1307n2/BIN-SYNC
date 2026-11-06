@@ -31,7 +31,7 @@ Breaking hygiene (no wire/protocol change):
 | Area | Contract |
 |------|----------|
 | DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `PeerState`, `Record`, … |
-| Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Byte buffers cross the boundary only through explicit `From(...)` / `ToArray()` conversions; there are no implicit `byte[]` conversions. |
+| Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains available for identity types; use `From(...)` / `ToArray()` when an explicit boundary is clearer. |
 | `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
 | Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`PeerState.PeerNodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. |
 | Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, `TryGetRecord` / `TryGetField`, …). Test assemblies use `InternalsVisibleTo`. |
