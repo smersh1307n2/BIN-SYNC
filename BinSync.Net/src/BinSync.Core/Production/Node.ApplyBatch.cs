@@ -170,6 +170,15 @@ public sealed partial class Node
         }
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
         batch.AuthorStreamNodeId = streamAuthor;
+        // [Р3]/errata E-4: a delta batch is one author stream. Validate every
+        // decoded operation before cursor checks or any staging/WAL/state mutation;
+        // otherwise a mixed-author batch could consume one stream's cursor while
+        // applying changes belonging to another stream.
+        for (int di = 1; di < nEntEarly; di++)
+        {
+            if (ResolveAuthor(decodedOps[di]) != streamAuthor)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+        }
         result.DurableAuthor = batch.DurableAuthor;
         var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
         long expected = (ps is not null && ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
