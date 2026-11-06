@@ -490,7 +490,7 @@ public class Production : IDisposable
             Parallel.For(0, threads, t =>
             {
                 n.WriteFields(NS, Enumerable.Range(0, perThread)
-                    .Select(i => (Fix.Rid(t * 1000 + i), 0x101, Val($"t{t}-{i}"))));
+                    .Select(i => (RecordId.From(Fix.Rid(t * 1000 + i)), 0x101, Val($"t{t}-{i}"))));
             });
         });
         Assert.Null(ex);

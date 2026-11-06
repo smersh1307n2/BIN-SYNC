@@ -47,6 +47,15 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void WriteFields_UsesTypedRecordIdentity()
+    {
+        var method = typeof(Node).GetMethod(nameof(Node.WriteFields));
+        Assert.NotNull(method);
+        var tupleType = method!.GetParameters()[1].ParameterType.GenericTypeArguments[0];
+        Assert.Equal(typeof(RecordId), tupleType.GenericTypeArguments[0]);
+    }
+
+    [Fact]
     public void GcNoticeDtos_UseTypedIdsAndProperties()
     {
         Assert.Equal(typeof(NodeId), typeof(GcQuarantineEntry).GetProperty(nameof(GcQuarantineEntry.NodeId))!.PropertyType);

@@ -62,7 +62,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | API | Role |
 |-----|------|
 | `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
-| `WriteFields(...)` | Batch of writes under one lock (distinct HLC stamps) |
+| `WriteFields(IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)>)` | Batch of writes under one lock (distinct HLC stamps) |
 | typed `PushOutbox` overloads | Low-level outbox helpers |
 | `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |

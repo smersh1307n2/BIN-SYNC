@@ -26,7 +26,7 @@ public sealed partial class Node
     /// observe equal (wall, logical) pairs because SendTick and PushOutbox are separate
     /// critical sections.
     /// </summary>
-    public void WriteFields(int namespaceId, IEnumerable<(byte[] RecordId, int FieldId, byte[] Value)> writes)
+    public void WriteFields(int namespaceId, IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)> writes)
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
