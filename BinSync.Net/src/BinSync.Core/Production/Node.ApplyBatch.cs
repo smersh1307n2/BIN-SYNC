@@ -154,7 +154,7 @@ public sealed partial class Node
                     rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
                 overlays[recId] = rec;
             }
-            bool changed = ApplyOp(rec, op, opAuthor);
+            bool changed = ApplyOpInternal(rec, op, opAuthor);
             if (changed) { applied++; changedFlags[idx] = true; }
         }
         // Stage provenance and relay decisions BEFORE publishing any state. This is
