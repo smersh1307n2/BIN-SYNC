@@ -63,15 +63,7 @@ public sealed partial class Node : IDisposable
     {
         if (System.Threading.Volatile.Read(ref _disposed) != 0)
             throw new ObjectDisposedException(nameof(Node));
-        if (System.Threading.Volatile.Read(ref _replayFaulted) != 0)
-            throw new InvalidOperationException(
-                "Node is unusable after an incomplete WAL replay; discard it and reload from a valid snapshot.");
     }
-
-    // A semantic WAL failure can occur only after earlier records have been replayed.
-    // Fail closed so callers cannot accidentally use or persist a partially restored node.
-    internal void MarkReplayFaulted() =>
-        System.Threading.Volatile.Write(ref _replayFaulted, 1);
 
     /// <summary>Raised after a batch is applied or accepted as a duplicate (outside engine locks).</summary>
     public event Action<BatchResult, NodeId>? BatchApplied;
@@ -110,7 +102,6 @@ public sealed partial class Node : IDisposable
     public event Action<int, int>? SnapshotApplied;
 
     private int _disposed;
-    private int _replayFaulted;
 
     /// <summary>Stable node identity; set only in the constructor.</summary>
     public NodeId NodeId { get; }
