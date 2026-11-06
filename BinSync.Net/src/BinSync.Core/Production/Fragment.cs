@@ -125,7 +125,6 @@ public sealed class FragmentReassembler
     private const int MaxPendingBytes = Frames.MAX_WINDOW_SIZE;
     private const int MaxPendingMessages = 64;
     private const int MaxPendingFragments = 262_144;
-    private const int MaxPendingBytes = Frames.MAX_WINDOW_SIZE;
 
     /// <summary>In-progress fragment reassembly keyed by message id.</summary>
     public int PendingMessages => _pending.Count;
