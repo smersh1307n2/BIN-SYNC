@@ -17,6 +17,22 @@ public class SchemaTests
         };
 
     [Fact]
+    public void Register_rejects_mutating_an_existing_schema_version_but_allows_identical_republication()
+    {
+        var registry = new SchemaRegistry();
+        registry.Register(Desc(1, 30, 1, 0x02, 0x100));
+        registry.Register(Desc(1, 30, 1, 0x02, 0x100));
+
+        Assert.Throws<ArgumentException>(() =>
+            registry.Register(Desc(1, 30, 1, 0x03, 0x100)));
+        Assert.Throws<ArgumentException>(() =>
+            registry.Register(Desc(1, 30, 1, 0x02, 0x100, 0x101)));
+
+        Assert.Equal(1, registry.MaxVersion(1, 30));
+        Assert.Equal(SchemaOutcome.Ok, registry.Evaluate(1, 30, 1, 0x02, out _));
+    }
+
+    [Fact]
     public void Register_and_evaluate_ok()
     {
         var reg = new SchemaRegistry();

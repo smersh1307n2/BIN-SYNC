@@ -89,6 +89,10 @@ public sealed class SchemaRegistry
             var key = (owned.NamespaceId, owned.SchemaId);
             bool hadHistory = _map.TryGetValue(key, out var existingHistory);
             var byVer = existingHistory ?? new Dictionary<int, SchemaDescriptor>();
+            if (byVer.TryGetValue(owned.Version, out var sameVersion) &&
+                !DescriptorsEqual(sameVersion, owned))
+                throw new ArgumentException(
+                    $"Schema version {owned.Version} is immutable; publish a new version for descriptor changes.");
 
             // Validate the complete known version history in version order. Once a field
             // disappears from a later descriptor (or is explicitly retired), its id
