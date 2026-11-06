@@ -83,7 +83,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `GetRecordCount` / `RecordDigestOf(RecordId)` / `AllRecordDigests` | Typed record lookup, count and detached digest map |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
 | `BatchApplied` / `FieldWritten` / `FieldTombstoned` / `RecordDeleted` / `RecordUndeleted` / `SchemaRegistered` / `SchemaMapLearned` / `GcNoticeApplied` / `GarbageCollected` / `TrustChanged` / `SnapshotApplied` | Data and lifecycle events (handlers run outside engine locks) |
-| `Dispose` | Clear maps / detach events |
+| `Dispose` | Idempotently clear engine state and detach caller-owned services/events; subsequent stateful calls throw `ObjectDisposedException` |
 | `NodeOptions` | Structured construction with typed `NodeId?` (limits at create) |
 | `SyncErrorCode` / `SyncException.ErrorCode` | Typed error codes |
 | `AckProcessed` | ACK watermark advanced |

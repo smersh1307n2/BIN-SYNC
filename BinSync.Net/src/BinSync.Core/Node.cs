@@ -320,7 +320,7 @@ public sealed partial class Node : IDisposable
         return true;
     }
 
-    /// <summary>Release large engine maps; safe to call multiple times.</summary>
+    /// <summary>Release engine state and detach caller-owned services; safe to call multiple times. Stateful API calls after disposal throw <see cref="ObjectDisposedException"/>.</summary>
     public void Dispose()
     {
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
