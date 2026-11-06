@@ -1,5 +1,18 @@
 # Changelog — BinSync.Core
 
+## 3.0.0 — 2026-11-06
+
+**Public API hardening and cleanup.**
+
+- Removed standalone `NextOutboxSeq`; sequence allocation is committed only with its Outbox mutation.
+- Removed untyped public `SeenState`; internal merge logic uses the gated internal accessor.
+- Replaced `PushOutbox(object, ...)` and the legacy `byte[]` author overload with typed operation overloads (`OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone`) and `NodeId`.
+- Public read methods return detached snapshots; `PushOutbox` returns a detached entry.
+- Package version advanced to `3.0.0` for the breaking API cleanup.
+
+---
+
+
 ## 2.6.5 — 2026-11-04
 
 **Outbox compaction (safe)**

@@ -12,44 +12,15 @@ public sealed partial class Node
         return BatchId.From(g);
     }
 
-    /// §10.1: `seq` is monotonic per (authorNodeId, namespaceId).
-    /// <summary>Thread-safe entry point (production hardening): takes the node gate
-    /// and delegates to <c>NextOutboxSeqInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public long NextOutboxSeq(NodeId author, int namespaceId)
+    internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, RecordId recordId, int fieldId)
     {
-        lock (_lockOutbox)
-        {
-            // With an attached WAL, local sequence allocation is part of the
-            // atomic LocalMutation frame and cannot be reserved independently.
-            if (_wal is not null && author == NodeId)
-                throw new InvalidOperationException("Local Outbox sequence allocation is committed with the mutation while WAL is attached.");
-            return NextOutboxSeqInternal(author, namespaceId);
-        }
-    }
-
-    internal long NextOutboxSeqInternal(NodeId author, int namespaceId)
-    {
-        var key = (author, namespaceId);
-        long current = _outboxSeq.TryGetValue(key, out var v) ? v : 0;
-        if (current == long.MaxValue)
-            throw new SyncException("INTERNAL");
-        long s = current + 1;
-        _outboxSeq[key] = s;
-        return s;
-    }
-
-    /// Current durable (wall, logical, author, value|"TOMB") of one field, straight from storage.
-    /// <summary>Thread-safe entry point (production hardening): takes the node gate
-    /// and delegates to <c>SeenStateInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public (ulong Wall, uint Logical, byte[] Author, object Val)? SeenState(int ns, RecordId recordId, int fieldId)
-    {
-        lock (_lockStorage)
-        {
-            var state = SeenStateInternal(ns, recordId, fieldId);
-            if (state is not { } value) return null;
-            return (value.Wall, value.Logical, value.Author,
-                value.Val is byte[] bytes ? bytes.ToArray() : value.Val);
-        }
+        if (!Storage.TryGetValue(ns, out var store)) return null;
+        if (!store.TryGetValue(recordId, out var rec)) return null;
+        FieldState? fs = rec.State.TryGetValue((ushort)fieldId, out var w) ? w :
+                         (rec.FieldTombs.TryGetValue((ushort)fieldId, out var t) ? t : null);
+        if (fs is null) return null;
+        bool tomb = rec.FieldTombs.ContainsKey((ushort)fieldId);
+        return (fs.Timestamp.Wall, fs.Timestamp.Logical, fs.AuthorNodeId.ToArray(), tomb ? "TOMB" : fs.Value);
     }
 
     internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, RecordId recordId, int fieldId)
@@ -65,24 +36,27 @@ public sealed partial class Node
 
     /// Append a LOCAL write to outbox ONLY if merge reported changed (echo [E2]).
     /// Errata E-13 (scenario 37): restored-echo suppression — see Python port docstring.
-    /// <summary>Thread-safe entry point (production hardening): takes the node gate
-    /// and delegates to <c>PushOutboxInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, NodeId author, NodeId? peer = null)
+    /// <summary>
+    /// Append a local operation to the durable Outbox. Prefer <see cref="WriteField"/>
+    /// and the other typed mutation APIs for ordinary application writes.
+    /// </summary>
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpFieldWrite op, NodeId author, NodeId? peer = null) =>
+        PushOutboxCore(ns, recordId, op, author, peer);
+
+    /// <summary>Append a local field tombstone to the durable Outbox.</summary>
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpFieldTomb op, NodeId author, NodeId? peer = null) =>
+        PushOutboxCore(ns, recordId, op, author, peer);
+
+    /// <summary>Append a local record tombstone to the durable Outbox.</summary>
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpRecordTombstone op, NodeId author, NodeId? peer = null) =>
+        PushOutboxCore(ns, recordId, op, author, peer);
+
+    private OutboxEntry? PushOutboxCore(int ns, RecordId recordId, object op, NodeId author, NodeId? peer)
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
             var entry = PushOutboxInternal(ns, recordId, op, author.ToArray(),
                 peer is { } p ? p.ToArray() : null);
-            return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
-        }
-    }
-
-    /// <summary>Legacy byte[] author/peer.</summary>
-    public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
-    {
-        lock (_lockStorage) lock (_lockOutbox)
-        {
-            var entry = PushOutboxInternal(ns, recordId, op, author, peer);
             return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
         }
     }
@@ -106,7 +80,7 @@ public sealed partial class Node
         ushort? fid = op switch { OpFieldWrite fw => fw.FieldId, OpFieldTomb ft => ft.FieldId, _ => (ushort?)null };
         if (suppressRestoredEcho && fid is not null && op is not OpRecordTombstone)
         {
-            var st = SeenState(ns, recordId, fid.Value);
+            var st = SeenStateInternal(ns, recordId, fid.Value);
             if (st is not null)
             {
                 var (wall, logical, sAuthor, val) = st.Value;

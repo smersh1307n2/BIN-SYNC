@@ -1,13 +1,13 @@
-**Current package: 2.6.5** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
+**Current package: 3.0.0** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
 
 # BinSync.Core — Public API surface
 
-**Package:** `BinSync.Core` **`2.6.5`** · **Target:** `net10.0`  
+**Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
 Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.5**.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
 
-## SemVer policy (2.x)
+## SemVer policy (3.x)
 
 | Change | Version impact |
 |--------|----------------|
@@ -24,7 +24,7 @@ Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them i
 
 ---
 
-## Shape of the 2.2 API (vs early 2.x / 1.x)
+## Shape of the 3.0 API (vs early 2.x / 1.x)
 
 Breaking hygiene (no wire/protocol change):
 
@@ -63,7 +63,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 |-----|------|
 | `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
 | `WriteFields(...)` | Batch of writes under one lock (distinct HLC stamps) |
-| `PushOutbox` / `NextOutboxSeq` | Low-level outbox helpers |
+| typed `PushOutbox` overloads | Low-level outbox helpers |
 | `CreateDeltaBatch(NodeId target, ns, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
 | `EncodeBatchPayload` / `EncodeBatchPayload(…, Span<byte>)` | Batch → payload bytes |
@@ -74,7 +74,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `ApplyRemoteField` / `ApplySnapshot` | Snapshot / anti-entropy apply paths |
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
 | `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
-| `TryGetRecord` / `TryGetField` | Read live store without exposing internal maps |
+| `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
 | `GetRecordCount` | Records in a namespace |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
 | `BatchApplied` / `FieldWritten` | Events (handlers run outside engine locks) |

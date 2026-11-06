@@ -22,11 +22,6 @@ public sealed class PublicApiIsolationTests
         Assert.NotNull(field);
         field!.Value[0] = (byte)'Y';
 
-        var seen = node.SeenState(7, recordId, 0x101);
-        Assert.NotNull(seen);
-        Assert.IsType<byte[]>(seen!.Value.Val);
-        ((byte[])seen.Value.Val)[0] = (byte)'Z';
-
         Assert.True(node.TryGetRecord(7, recordId, out var current));
         Assert.NotNull(current);
         Assert.Equal(Model.Alive, current!.LifecycleValue);
@@ -34,10 +29,20 @@ public sealed class PublicApiIsolationTests
         Assert.True(node.TryGetField(7, recordId, 0x101, out var currentField));
         Assert.NotNull(currentField);
         Assert.Equal(original, currentField!.Value);
-        var currentSeen = node.SeenState(7, recordId, 0x101);
-        Assert.NotNull(currentSeen);
-        Assert.Equal(original, Assert.IsType<byte[]>(currentSeen!.Value.Val));
     }
+    [Fact]
+    public void Node_DoesNotExposeSequenceReservationOrUntypedReadHelpers()
+    {
+        Assert.Null(typeof(Node).GetMethod("NextOutboxSeq"));
+        Assert.Null(typeof(Node).GetMethod("SeenState"));
+        Assert.DoesNotContain(typeof(Node).GetMethods(),
+            method => method.Name == "PushOutbox" &&
+                      method.GetParameters().Any(parameter => parameter.ParameterType == typeof(object)));
+        Assert.DoesNotContain(typeof(Node).GetMethods(),
+            method => method.Name == "PushOutbox" &&
+                      method.GetParameters().Any(parameter => parameter.ParameterType == typeof(byte[])));
+    }
+
     [Fact]
     public void PushOutbox_ReturnsDetachedEntry()
     {
