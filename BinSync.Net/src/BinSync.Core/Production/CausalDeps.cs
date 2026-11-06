@@ -111,7 +111,12 @@ public sealed class CausalTracker
     private CausalOutcome EvaluateLocked(BatchId changeId, IReadOnlyList<BatchId> deps, out string? detail)
     {
         detail = null;
-        if (deps.Count == 0)
+        if (_lost.Contains(changeId))
+        {
+            detail = Key(changeId);
+            return CausalOutcome.LostDep;
+        }
+        if (deps.Count == 0 || _known.Contains(changeId))
             return CausalOutcome.Ready;
 
         foreach (var dep in deps)
@@ -307,24 +312,42 @@ public sealed class CausalTracker
                 CausalOutcome memberOutcome = CausalOutcome.Ready;
                 string? memberDetail = null;
 
-                for (int j = 0; j < deps.Count; j++)
+                if (_lost.Contains(cid))
                 {
-                    var dep = deps[j];
-                    if (dep == cid || (positions.TryGetValue(dep, out int parentIndex) && parentIndex >= i))
+                    memberOutcome = CausalOutcome.LostDep;
+                    memberDetail = Key(cid);
+                }
+                else if (!_known.Contains(cid))
+                {
+                    for (int j = 0; j < deps.Count; j++)
                     {
-                        memberOutcome = CausalOutcome.Cycle;
-                        memberDetail = Key(dep);
-                        break;
+                        var dep = deps[j];
+                        if (dep == cid)
+                        {
+                            memberOutcome = CausalOutcome.Cycle;
+                            memberDetail = Key(dep);
+                            break;
+                        }
+                        if (_lost.Contains(dep))
+                        {
+                            memberOutcome = CausalOutcome.LostDep;
+                            memberDetail = Key(dep);
+                            break;
+                        }
+                        if (_known.Contains(dep))
+                            continue;
+                        if (positions.TryGetValue(dep, out int parentIndex))
+                        {
+                            if (parentIndex >= i)
+                            {
+                                memberOutcome = CausalOutcome.Cycle;
+                                memberDetail = Key(dep);
+                                break;
+                            }
+                            continue;
+                        }
+                        (externalMissing ??= new List<BatchId>()).Add(dep);
                     }
-                    if (_lost.Contains(dep))
-                    {
-                        memberOutcome = CausalOutcome.LostDep;
-                        memberDetail = Key(dep);
-                        break;
-                    }
-                    if (positions.ContainsKey(dep) || _known.Contains(dep))
-                        continue;
-                    (externalMissing ??= new List<BatchId>()).Add(dep);
                 }
 
                 if (memberOutcome == CausalOutcome.Ready && externalMissing is not null)

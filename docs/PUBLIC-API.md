@@ -204,11 +204,13 @@ atomically replaces the active WAL segment. `Wal.Replay(node)` and `Wal.ReplayFi
 
 | API | Role |
 |-----|------|
-| `CausalTracker` | Typed `BatchId` known/pending/lost sets; cycle, timeout and lost-dependency outcomes; lost IDs propagate to transitive dependents; `DepTimeout` and `UtcNowMs` configure expiry |
+| `CausalTracker` | Process-local typed `BatchId` known/pending/lost sets; cycle, timeout and lost-dependency outcomes; lost IDs propagate to transitive dependents; restore known/lost state after restart; `DepTimeout` and `UtcNowMs` configure expiry |
 | `Node.Causal` | Optional tracker |
 | `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs; batch flags are set on an encoded copy, not by mutating the caller's batch |
 | `Node.ApplyBatchCausal` / `DrainCausal` (released items are not known until applied) / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
 | `CausalWire` | CCD1 trailer with footer-length framing, sorted unique dependencies, bounded counts and atomic decode |
+
+**Causal mode constraints:** `CausalTracker` state is not persisted by Node WAL/snapshot; the application must rebuild it after restart. The CCD1 trailer is outside `RecordsRoot`/`BatchDigest` and must only be used over an integrity-authenticated channel.
 | `CAUSAL_DEP_MISSING` | 0x0012 |
 
 `ApplyBatch` ignores causal; use `ApplyBatchCausal` when enabled.

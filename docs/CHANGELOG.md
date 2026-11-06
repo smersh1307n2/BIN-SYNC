@@ -39,6 +39,7 @@
 - Harden SCHEMA_MAP against duplicate versions/field IDs, noncanonical field order, active/retired overlap and malformed learned descriptors.
 - Normative protocol specification advanced to v2.4.17; §§8.4–8.8 and §18.4 now define the canonical CRDT and schema-map payload contracts.
 - Causal tracking now remembers lost IDs and transitively drops dependent pending changes; CCD1 trailers use footer-length framing, canonical dependency order and atomic validation without scanning user payload bytes.
+- Causal batches now resolve dependencies on earlier members atomically, reject forward references/duplicate ChangeIds, and reject attempts to reapply a permanently lost ChangeId.
 
 ---
 

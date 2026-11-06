@@ -207,6 +207,34 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void Lost_change_id_cannot_be_reapplied_or_reintroduced_in_a_batch()
+    {
+        var tracker = new CausalTracker();
+        tracker.MarkLost(Id(1));
+
+        Assert.Equal(CausalOutcome.LostDep,
+            tracker.Evaluate(Id(1), Array.Empty<BatchId>(), out _));
+        var members = new List<(BatchId, IReadOnlyList<BatchId>?)>
+        {
+            (Id(1), Array.Empty<BatchId>()),
+        };
+        Assert.Equal(CausalOutcome.LostDep, tracker.EvaluateBatch(members, out _));
+    }
+
+    [Fact]
+    public void Known_parent_satisfies_dependency_even_if_it_appears_later_in_batch()
+    {
+        var tracker = new CausalTracker();
+        tracker.NoteApplied(Id(2));
+        var members = new List<(BatchId, IReadOnlyList<BatchId>?)>
+        {
+            (Id(1), new[] { Id(2) }),
+            (Id(2), Array.Empty<BatchId>()),
+        };
+        Assert.Equal(CausalOutcome.Ready, tracker.EvaluateBatch(members, out _));
+    }
+
+    [Fact]
     public void Batch_gate_accepts_dependencies_on_earlier_members_atomically()
     {
         var tracker = new CausalTracker();
