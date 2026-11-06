@@ -156,8 +156,6 @@ public class BucketAccumulator
     public BucketAccumulator(byte[]? prefix = null) => Prefix = prefix ?? Array.Empty<byte>();
 
     /// <summary>Derive the bucket key for a record id (BLAKE3 over the id).</summary>
-    public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);
-    /// <summary>Derive the bucket key for a record id (BLAKE3 over the id).</summary>
     public static byte[] BucketKey(RecordId recordId)
     {
         Span<byte> id = stackalloc byte[16];

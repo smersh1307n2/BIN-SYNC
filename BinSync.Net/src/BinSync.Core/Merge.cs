@@ -217,9 +217,6 @@ public static class Merge
         return changed;
     }
 
-    public static bool ApplyLifecycle(Record record, Hlc hlc, byte[] author, byte value) =>
-        ApplyLifecycle(record, hlc, NodeId.From(author), value);
-
     /// <summary>Equality comparer for byte arrays by content.</summary>
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
     public static bool BytesEq(ReadOnlyMemory<byte> a, ReadOnlyMemory<byte> b) => a.Span.SequenceEqual(b.Span);

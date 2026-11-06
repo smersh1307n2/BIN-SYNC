@@ -176,6 +176,17 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void MergeAndBucketHelpers_UseTypedIdentities()
+    {
+        Assert.DoesNotContain(typeof(Merge).GetMethods(),
+            method => method.Name == nameof(Merge.ApplyLifecycle) &&
+                      method.GetParameters()[2].ParameterType == typeof(byte[]));
+        Assert.DoesNotContain(typeof(BucketAccumulator).GetMethods(),
+            method => method.Name == nameof(BucketAccumulator.BucketKey) &&
+                      method.GetParameters()[0].ParameterType == typeof(byte[]));
+    }
+
+    [Fact]
     public void RecordDigestAndBoundedWriteHelpers_UseTypedRecordIds()
     {
         var digest = typeof(Node).GetMethod(nameof(Node.RecordDigestOf))!;
