@@ -9,10 +9,19 @@ public sealed partial class TrustStore
     {
         lock (_gate)
         {
-            return _peers.Values
-                .Select(p => (p.NodeId.ToArray(), p.PublicKey.ToArray(), p.Mode, p.Revoked, p.PinnedAtUnixMs))
-                .OrderBy(p => Convert.ToHexString(p.NodeId), StringComparer.Ordinal)
-                .ToList();
+            var snapshot = new List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)>(_peers.Count);
+            foreach (var peer in _peers.Values)
+            {
+                snapshot.Add((
+                    NodeId: peer.NodeId.ToArray(),
+                    PublicKey: peer.PublicKey.ToArray(),
+                    Mode: peer.Mode,
+                    Revoked: peer.Revoked,
+                    PinnedAt: peer.PinnedAtUnixMs));
+            }
+            snapshot.Sort((left, right) =>
+                StringComparer.Ordinal.Compare(Convert.ToHexString(left.NodeId), Convert.ToHexString(right.NodeId)));
+            return snapshot;
         }
     }
 
