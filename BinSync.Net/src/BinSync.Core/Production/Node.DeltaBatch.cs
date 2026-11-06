@@ -246,7 +246,11 @@ public sealed partial class Node
         if (totalLength == 0)
         {
             for (int i = 0; i < entries.Count; i++)
+            {
+                if (!entries[i].PayloadNeedsDetachment) continue;
+                entries[i].Payload = ReadOnlyMemory<byte>.Empty;
                 entries[i].PayloadNeedsDetachment = false;
+            }
             return;
         }
 
