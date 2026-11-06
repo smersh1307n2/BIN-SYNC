@@ -119,6 +119,48 @@ public sealed class ResourceLimitsAtomicityTests
     }
 
     [Fact]
+    public void Apply_batch_rejects_mixed_author_stream_before_any_commit()
+    {
+        var sender = Fix.MakeNode(39);
+        using var receiver = new Node(Fix.Nid(40), epoch: 1, nowFn: () => 40_000_000);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        Assert.True(sender.WriteField(3, Fix.Rid(2), 0x100, [2]));
+
+        // Keep the outbox stream metadata intact, but make the second wire
+        // operation explicitly identify a different durable author.
+        var second = Ops.DecodeOp(sender.Outbox[3][^1].Payload).Op;
+        switch (second)
+        {
+            case OpFieldWrite write:
+                write.AuthorNodeId = Fix.Nid(99);
+                break;
+            case OpFieldTomb tomb:
+                tomb.AuthorNodeId = Fix.Nid(99);
+                break;
+            case OpRecordTombstone recordTomb:
+                recordTomb.AuthorNodeId = Fix.Nid(99);
+                break;
+            default:
+                throw new InvalidOperationException("Unexpected test operation type.");
+        }
+        sender.Outbox[3][^1].Payload = Ops.EncodeOpFull(second);
+
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+        var error = Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.Code);
+
+        Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
+        Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(2)), out _));
+        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Empty(receiver.Inbox);
+        Assert.Empty(receiver.SeenChanges);
+        Assert.Empty(receiver.PeerStates);
+        Assert.Empty(receiver.LastStreamAuthor);
+    }
+
+    [Fact]
     public void Apply_batch_rejects_seen_change_overflow_before_any_commit()
     {
         var sender = Fix.MakeNode(43);
