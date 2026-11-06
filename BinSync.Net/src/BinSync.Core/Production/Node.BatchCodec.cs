@@ -99,17 +99,19 @@ public sealed partial class Node
     /// <summary>Decode batch payload. Lock-free; materializes owned entry buffers.</summary>
     public Batch DecodeBatchPayload(byte[] data)
     {
-        var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
-        batch.MaterializeEntries();
-        return batch;
+        ArgumentNullException.ThrowIfNull(data);
+        // One contiguous ownership copy lets every decoded entry reference its own
+        // immutable slice. Materializing every payload separately creates N arrays
+        // and copies the same bytes again.
+        var owned = data.ToArray();
+        return DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)owned);
     }
 
-    /// <summary>Decode from memory; entries are owned copies (safe after <paramref name="data"/> is dropped). Lock-free.</summary>
+    /// <summary>Decode from memory; returned entry slices are backed by one owned copy. Lock-free.</summary>
     public Batch DecodeBatchPayload(ReadOnlyMemory<byte> data)
     {
-        var batch = DecodeBatchPayloadInternal(data);
-        batch.MaterializeEntries();
-        return batch;
+        var owned = data.ToArray();
+        return DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)owned);
     }
 
     /// <summary>
