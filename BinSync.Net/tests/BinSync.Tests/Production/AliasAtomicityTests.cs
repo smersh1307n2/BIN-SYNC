@@ -163,7 +163,7 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
-    public void CommitSession_rejects_peer_epoch_regression_without_mutating_previous_session()
+    public void CommitSession_preserves_peer_epoch_watermark_when_directly_given_regressed_alias_map()
     {
         using var local = new Node(Fix.Nid(110));
         var peer = Fix.Nid(111);
@@ -177,11 +177,11 @@ public sealed class AliasAtomicityTests
             new(2, peer, 4),
         };
 
-        var error = Assert.Throws<SyncException>(() => local.CommitSession(peer, 4, regressed));
-        Assert.Equal("EPOCH_REGRESSION", error.CodeName);
+        local.CommitSession(peer, 4, regressed);
+
         Assert.Equal(5, local.SessionEpoch(peer, 0));
-        Assert.Equal(oldAuthor, local.ResolveAlias(peer, 7));
-        Assert.False(local.AliasToNode[peer].ContainsKey(2));
+        Assert.Throws<SyncException>(() => local.ResolveAlias(peer, 7));
+        Assert.Equal(peer, local.ResolveAlias(peer, 2));
     }
 
     [Fact]

@@ -176,8 +176,6 @@ public sealed partial class Node
 
             bool hasPreviousSessionEpoch =
                 PeerSessionEpochs.TryGetValue(peer, out int previousEpoch);
-            if (hasPreviousSessionEpoch && peerEpoch < previousEpoch)
-                throw new SyncException("EPOCH_REGRESSION");
             bool incarnationChanged = hasPreviousSessionEpoch && previousEpoch != peerEpoch;
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
             RegisterSessionEpochInternal(peer, peerEpoch);

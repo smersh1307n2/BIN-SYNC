@@ -18,8 +18,6 @@ public static partial class Transport
     public static void MakeSession(Node a, Node b, (int, int)? aliases = null)
     {
         var (aa, ab) = aliases ?? (1, 2);
-        a.ValidateSessionEpoch(b.NodeId, b.Epoch);
-        b.ValidateSessionEpoch(a.NodeId, a.Epoch);
         // SPEC CORRECTION (errata E-2/E-3): HELLO (§4.4) carries each participant's
         // incarnation epoch; the receiver stores it as the per-session regression watermark.
         a.RegisterSessionEpoch(b.NodeId, b.Epoch);
