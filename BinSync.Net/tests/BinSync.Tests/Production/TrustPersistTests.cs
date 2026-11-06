@@ -61,6 +61,50 @@ public class TrustPersistTests
     }
 
     [Fact]
+    public void Trust_file_rejects_trailing_bytes_and_impossible_entry_counts()
+    {
+        var valid = TrustPersistence.Serialize(new TrustStore());
+        Assert.Throws<InvalidDataException>(() =>
+            TrustPersistence.Deserialize(valid.Concat(new byte[] { 0 }).ToArray()));
+
+        var impossibleCount = new Writer()
+            .U32(TrustPersistence.Magic)
+            .U16(TrustPersistence.Version)
+            .U8((byte)TrustMode.Tofu)
+            .Varint(1)
+            .Value();
+        Assert.Throws<InvalidDataException>(() =>
+            TrustPersistence.Deserialize(impossibleCount));
+    }
+
+    [Fact]
+    public void Trust_file_rejects_invalid_modes_and_flags()
+    {
+        var invalidDefaultMode = new Writer()
+            .U32(TrustPersistence.Magic)
+            .U16(TrustPersistence.Version)
+            .U8(0xFF)
+            .Varint(0)
+            .Varint(0)
+            .Value();
+        Assert.Throws<InvalidDataException>(() =>
+            TrustPersistence.Deserialize(invalidDefaultMode));
+
+        var store = new TrustStore();
+        var (_, publicKey) = BatchSignature.GenerateKeyPair();
+        store.Allow(NodeId.From(Id(8)), publicKey);
+        var invalidPeerMode = TrustPersistence.Serialize(store);
+        invalidPeerMode[56] = 0xFF;
+        Assert.Throws<InvalidDataException>(() =>
+            TrustPersistence.Deserialize(invalidPeerMode));
+
+        var invalidRevokedFlag = TrustPersistence.Serialize(store);
+        invalidRevokedFlag[57] = 2;
+        Assert.Throws<InvalidDataException>(() =>
+            TrustPersistence.Deserialize(invalidRevokedFlag));
+    }
+
+    [Fact]
     public void OutdatedWatermark_throws()
     {
         var ex = Assert.Throws<SyncException>(() => WatermarkGate.RequireCurrent(10, 100));

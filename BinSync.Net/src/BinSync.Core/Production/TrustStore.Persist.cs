@@ -70,6 +70,7 @@ public static class TrustPersistence
     /// <summary>Serialize the object to a durable byte encoding.</summary>
     public static byte[] Serialize(TrustStore store)
     {
+        ArgumentNullException.ThrowIfNull(store);
         var w = new Writer();
         var snapshot = store.Snapshot();
         w.U32(Magic).U16(Version).U8((byte)snapshot.DefaultMode);
@@ -93,31 +94,65 @@ public static class TrustPersistence
     /// <summary>Deserialize an instance from a durable byte encoding.</summary>
     public static TrustStore Deserialize(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
         var r = new Reader(data);
         if (r.U32() != Magic)
             throw new InvalidDataException("Not a BIN-SYNC trust file.");
         var ver = r.U16();
         if (ver != Version)
             throw new InvalidDataException($"Unsupported trust file version {ver}.");
-        var mode = (TrustMode)r.U8();
-        int n = (int)r.Varint();
-        var peers = new List<(byte[], byte[], TrustMode, bool, long)>(n);
-        for (int i = 0; i < n; i++)
+        var mode = ReadTrustMode(r.U8(), "default trust mode");
+        int peerCount = ReadBoundedCount(r, 58, "peer");
+        var peers = new List<(byte[], byte[], TrustMode, bool, long)>(peerCount);
+        var peerIds = new HashSet<NodeId>();
+        for (int i = 0; i < peerCount; i++)
         {
-            var id = r.B128();
+            var id = NodeId.From(r.B128());
+            if (!peerIds.Add(id))
+                throw new InvalidDataException("Trust file contains a duplicate peer identity.");
             var pk = r.Raw(BatchSignature.PublicKeySize);
-            var pm = (TrustMode)r.U8();
-            bool revoked = r.U8() != 0;
-            long pinned = unchecked((long)r.U64());
-            peers.Add((id, pk, pm, revoked, pinned));
+            var peerMode = ReadTrustMode(r.U8(), "peer trust mode");
+            byte revokedFlag = r.U8();
+            if (revokedFlag > 1)
+                throw new InvalidDataException("Trust file contains an invalid revoked flag.");
+            ulong rawPinnedAt = r.U64();
+            if (rawPinnedAt > long.MaxValue)
+                throw new InvalidDataException("Trust file contains an invalid pin timestamp.");
+            peers.Add((id.ToArray(), pk, peerMode, revokedFlag == 1, (long)rawPinnedAt));
         }
-        int c = (int)r.Varint();
-        var roots = new List<byte[]>(c);
-        for (int i = 0; i < c; i++)
-            roots.Add(r.B128());
+
+        int rootCount = ReadBoundedCount(r, 16, "CA root");
+        var roots = new List<byte[]>(rootCount);
+        var rootIds = new HashSet<NodeId>();
+        for (int i = 0; i < rootCount; i++)
+        {
+            var id = NodeId.From(r.B128());
+            if (!rootIds.Add(id))
+                throw new InvalidDataException("Trust file contains a duplicate CA root.");
+            roots.Add(id.ToArray());
+        }
+        if (!r.Eof())
+            throw new InvalidDataException("Trust file contains trailing bytes.");
+
         var store = new TrustStore { DefaultMode = mode };
         store.Restore(mode, peers, roots);
         return store;
+    }
+
+    private static TrustMode ReadTrustMode(byte raw, string description)
+    {
+        var mode = (TrustMode)raw;
+        if (mode is not (TrustMode.Tofu or TrustMode.PreShared or TrustMode.CertificateAuthority))
+            throw new InvalidDataException($"Trust file contains an invalid {description}.");
+        return mode;
+    }
+
+    private static int ReadBoundedCount(Reader reader, int minimumEntrySize, string description)
+    {
+        ulong count = reader.Varint();
+        if (count > int.MaxValue || count > (ulong)(reader.Remaining / minimumEntrySize))
+            throw new InvalidDataException($"Trust file {description} count exceeds the remaining data.");
+        return (int)count;
     }
 
     /// <summary>Write the object to a file path on disk.</summary>
@@ -130,7 +165,12 @@ public static class TrustPersistence
         var tmp = Path.Combine(dir, $".{Path.GetFileName(path)}.tmp-{Guid.NewGuid():N}");
         try
         {
-            File.WriteAllBytes(tmp, image);
+            using (var stream = new FileStream(
+                tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                stream.Write(image);
+                stream.Flush(flushToDisk: true);
+            }
             File.Move(tmp, path, overwrite: true);
         }
         finally
@@ -140,5 +180,10 @@ public static class TrustPersistence
     }
 
     /// <summary>Load an instance from a file path on disk.</summary>
-    public static TrustStore Load(string path) => Deserialize(File.ReadAllBytes(path));
+    public static TrustStore Load(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path required.", nameof(path));
+        return Deserialize(File.ReadAllBytes(path));
+    }
 }
