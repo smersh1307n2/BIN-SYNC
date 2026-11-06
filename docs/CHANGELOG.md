@@ -4,6 +4,11 @@
 
 **Public API hardening and cleanup.**
 
+- Reject peer HELLO incarnation epochs below the stored peer-wide watermark before alias-map exchange; preserve the in-process stale-epoch path used to test data-plane rejection.
+- Keep HLC send ticks monotonic when restored wall values exceed Int64 and validate non-negative wall-clock sources.
+- Bound length-prefixed reader allocations by remaining input and reject malformed UTF-8 instead of silently substituting replacement characters.
+- Return receive-window credit independently of caller cancellation once a frame has been dequeued; validate WINDOW_UPDATE sequence monotonicity atomically with credit application.
+
 - Negotiated per-stream Flow Control: additive payload credits, canonical four-byte LE WINDOW_UPDATE, inline update dispatch, and strict over-credit rejection.
 - Oversized flow-controlled frames are automatically fragmented and reassembled by typed receive paths; fragment memory and queued receive memory have explicit bounds.
 - Flow-control send waiters are awakened on peer/session failure; the send fast path reserves credit without allocating wait state when the window is available.

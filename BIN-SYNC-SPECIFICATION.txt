@@ -1,10 +1,17 @@
-# BIN-SYNC CORE v2.4.15 FINAL
+# BIN-SYNC CORE v2.4.16 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.15 FINAL (negotiated per-stream flow control; WINDOW_UPDATE wire format; bounded fragment reassembly)  
+**Версия:** 2.4.16 FINAL (flow-control replay protection; HELLO epoch regression; canonical HLC and codec hardening)  
 **Дата:** 2026-11-06  
-**Изменения v2.4.15 относительно v2.4.14:**
+**Изменения v2.4.16 относительно v2.4.15:**
+- WINDOW_UPDATE.frameSeq строго возрастает в направлении сессии; повторные и переставленные назад обновления отклоняются.
+- Реальный HELLO handshake отклоняет incarnation epoch ниже сохранённого peer-wide watermark до обмена ALIAS_MAP; прямой in-process test helper сохраняет возможность проверять поздний EPOCH_REGRESSION на data plane.
+- HLC сравнивает unsigned wall без сужения до Int64; отрицательный источник времени отклоняется, skew boundary вычисляется без signed overflow.
+- Reader проверяет длину length-prefixed значения относительно оставшихся байт до выделения массива; отрицательные позиции varint отклоняются.
+- UTF-8 encoder использует строгую проверку UTF-16; decoder отвергает malformed UTF-8, сохраняя совместимость со снятием одного начального BOM.
+
+**Исторические изменения v2.4.15 относительно v2.4.14:**
 - Определён канонический payload `WINDOW_UPDATE`: положительный `credits: u32 LE`, точная длина 4 байта, target stream в заголовке; обновление выше `MAX_WINDOW_SIZE` отклоняется.
 - Получатель проверяет, что возвращаемый кредит не превышает фактически зарезервированные и ещё не возвращённые payload bytes на соответствующем потоке; незапрошенные WINDOW_UPDATE не увеличивают окно.
 - Flow Control активируется только при согласии обеих сторон; кредиты учитывают payload, а `streamId=0` и сам `WINDOW_UPDATE` исключены из учёта.
@@ -390,7 +397,7 @@ Lo — первые 8 wire-байт NodeId, интерпретированные
 
 **TLV:** `tag: u8, len: varint, value: bytes`.
 
-**Строки:** `len: varint`, UTF-8 без BOM.
+**Строки:** `len: varint`, UTF-8 без BOM. Encoder не добавляет BOM и отвергает некорректные UTF-16 последовательности; decoder отвергает malformed UTF-8. Для совместимости decoder удаляет ровно один ведущий UTF-8 BOM.
 
 **Массивы:** предваряются `count: varint`.
 
