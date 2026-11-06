@@ -9,6 +9,10 @@ public partial class SyncSession
         byte logicalType, uint streamId, ulong baseSeq, byte[] logicalPayload, int maxBody,
         CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        ArgumentNullException.ThrowIfNull(logicalPayload);
+        if (logicalType < 0x04 || logicalType > 0x13 || logicalType == Frames.TYPE_WINDOW_UPDATE)
+            throw new ArgumentOutOfRangeException(nameof(logicalType));
         if (logicalPayload.Length > Frames.MAX_PAYLOAD_SIZE)
             throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         var parts = FragmentCodec.Split(logicalPayload, maxBody);
@@ -28,6 +32,7 @@ public partial class SyncSession
     /// </summary>
     public async Task<Frame> ReceiveReassembledAsync(CancellationToken ct = default)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         await _exclusiveReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
