@@ -30,10 +30,10 @@ Breaking hygiene (no wire/protocol change):
 
 | Area | Contract |
 |------|----------|
-| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `PeerState`, `Record`, … |
+| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `Record`, … |
 | Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains available for identity types; use `From(...)` / `ToArray()` when an explicit boundary is clearer. |
 | `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
-| Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`PeerState.PeerNodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. |
+| Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. Internal peer cursor state is not exposed. |
 | Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, `TryGetRecord` / `TryGetField`, …). Test assemblies use `InternalsVisibleTo`. |
 | `Zero128` | Returns a **fresh copy** each access (callers cannot corrupt a shared buffer). |
 | Locks | Prefer **`EnterAllGates()`** (`AllGateScope`). `Node.Gate` is **obsolete** (Meta only). |
@@ -107,7 +107,6 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 |------|--------|
 | `OutboxEntry` | `RecordId`, `BatchId ChangeId`, `NodeId AuthorNodeId`, `ReadOnlyMemory<byte> Payload`, … |
 | `Batch` | Typed issuer/id/digests; `Entries`; `MaterializeEntries()` for owned payloads |
-| `PeerState` | `NodeId` constructor and `PeerNodeId`; stream ACK maps keyed by `NodeId` |
 | `Record` / `FieldState` | In-memory record model; `Record` is constructed with `RecordId` (reached via engine apply paths; maps are internal on `Node`) |
 
 ### Wire & codecs (§6, §12)

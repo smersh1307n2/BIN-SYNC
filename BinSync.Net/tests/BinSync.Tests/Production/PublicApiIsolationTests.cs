@@ -47,6 +47,13 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void PeerCursorState_IsNotPartOfThePublicApi()
+    {
+        Assert.False(typeof(PeerState).IsPublic);
+        Assert.Null(typeof(Node).GetProperty("PeerStates"));
+    }
+
+    [Fact]
     public void Node_DoesNotExposeSequenceReservationOrUntypedReadHelpers()
     {
         Assert.Null(typeof(Node).GetMethod("NextOutboxSeq"));

@@ -183,7 +183,7 @@ public sealed partial class Batch
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
-public sealed partial class PeerState
+internal sealed partial class PeerState
 {
     /// <summary>Remote peer node id this state is tracked for.</summary>
     public NodeId PeerNodeId { get; set; }
