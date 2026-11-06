@@ -148,6 +148,10 @@ public sealed class ResourceLimitsAtomicityTests
         sender.Outbox[3][^1].Payload = Ops.EncodeOpFull(second);
 
         var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+        Assert.Equal(2, batch.Entries.Count);
+        var wireSecond = Assert.IsType<OpFieldWrite>(Ops.DecodeOp(batch.Entries[1].Payload).Op);
+        Assert.True(wireSecond.FullAuthorMode);
+        Assert.Equal(Fix.Nid(99), wireSecond.AuthorNodeId);
         Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
 
         Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
