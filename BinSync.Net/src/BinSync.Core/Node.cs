@@ -60,6 +60,11 @@ public sealed partial class Node : IDisposable
 
     /// <summary>Raised after a KEY_ROTATION notice is accepted.</summary>
     public event Action<KeyRotationNotice>? KeyRotationApplied;
+    
+    /// <summary>Raised when a local schema is registered (outside node locks; control plane only).</summary>
+    public event Action<int, int, int>? SchemaRegistered;
+    /// <summary>Raised when a SCHEMA_MAP teaches at least one new schema version (outside node locks).</summary>
+    public event Action<int>? SchemaMapLearned;
 
     private int _disposed;
 
@@ -287,6 +292,8 @@ public sealed partial class Node : IDisposable
             AckProcessed = null;
             MembershipApplied = null;
             KeyRotationApplied = null;
+            SchemaRegistered = null;
+            SchemaMapLearned = null;
         }
         GC.SuppressFinalize(this);
     }

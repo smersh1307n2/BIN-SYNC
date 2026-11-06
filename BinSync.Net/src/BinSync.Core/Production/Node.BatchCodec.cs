@@ -10,11 +10,31 @@ public sealed partial class Node
     /// <summary>Upper bound on encoded DELTA_BATCH payload size for <paramref name="batch"/>.</summary>
     public static int EstimateBatchPayloadSize(Batch batch)
     {
+        ValidateBatchForWire(batch);
         var entries = batch.Entries;
         int est = 108 + 2 * Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 33 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
+        {
+            var payload = entries[i].Payload;
+            est = checked(est + 33 + Codec.VarintLength((ulong)payload.Length) + payload.Length);
+        }
         return est;
+    }
+
+    private static void ValidateBatchForWire(Batch batch)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ValidateNamespaceId(batch.NamespaceId);
+        if ((uint)batch.SchemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(batch.SchemaId));
+        if ((uint)batch.SchemaVersion > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(batch.SchemaVersion));
+        if ((uint)batch.MergePolicy > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(batch.MergePolicy));
+        if ((uint)batch.Flags > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(batch.Flags));
+        if (batch.IssuerEpoch < 0) throw new ArgumentOutOfRangeException(nameof(batch.IssuerEpoch));
+        if (batch.CursorStart < 0 || batch.CursorEnd < batch.CursorStart)
+            throw new ArgumentOutOfRangeException(nameof(batch.CursorStart), "Batch cursors must be non-negative and ordered.");
+        ArgumentNullException.ThrowIfNull(batch.Entries);
+        for (int i = 0; i < batch.Entries.Count; i++)
+            ArgumentNullException.ThrowIfNull(batch.Entries[i].Payload);
     }
 
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>
@@ -123,16 +143,25 @@ public sealed partial class Node
         byte policy = r.U8();
         byte flags = r.U8();
         var issuer = r.ReadNodeId();
-        int epoch = (int)r.U32();
-        long cstart = (long)r.U64();
-        long cend = (long)r.U64();
-        int count = (int)r.Varint();
+        uint epochWire = r.U32();
+        ulong cstartWire = r.U64();
+        ulong cendWire = r.U64();
+        ulong countWire = r.Varint();
+        if (epochWire > int.MaxValue || cstartWire > long.MaxValue || cendWire > long.MaxValue || countWire > int.MaxValue)
+            throw new SyncException("BATCH_TRANSACTION_FAILED");
+        int epoch = (int)epochWire;
+        long cstart = (long)cstartWire;
+        long cend = (long)cendWire;
+        int count = (int)countWire;
+        if (cend < cstart) throw new SyncException("BATCH_TRANSACTION_FAILED");
         var batchId = r.ReadBatchId();
         var prev = r.ReadDigest16();
         var root = r.ReadDigest16();
         var digest = r.ReadDigest16();
-        int recCount = (int)r.Varint();
-        if (recCount != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
+        ulong recCountWire = r.Varint();
+        if (recCountWire > int.MaxValue || (int)recCountWire != count)
+            throw new SyncException("BATCH_TRANSACTION_FAILED");
+        int recCount = (int)recCountWire;
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)
         {

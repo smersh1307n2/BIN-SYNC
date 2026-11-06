@@ -162,6 +162,20 @@ public class SchemaTests
     }
 
     [Fact]
+    public void Schema_events_are_raised_only_for_control_plane_changes()
+    {
+        var node = Fix.MakeNode(309);
+        int registered = 0, learned = 0;
+        node.SchemaRegistered += (ns, sid, version) => { Assert.Equal(1, ns); registered++; };
+        node.SchemaMapLearned += count => learned += count;
+        node.RegisterSchema(Desc(1, 7, 1, 2, 0x100));
+        var payload = SchemaMap.Encode(new[] { Desc(1, 8, 1, 2, 0x101) });
+        Assert.Equal(1, node.LearnSchemaMap(payload));
+        Assert.Equal(1, registered);
+        Assert.Equal(1, learned);
+    }
+
+    [Fact]
     public void ApplyBatchWithSchema_pending_throws()
     {
         var n = Fix.MakeNode(300);

@@ -48,6 +48,14 @@ public sealed class SchemaRegistry
         get { lock (_gate) return _map.Sum(kv => kv.Value.Count); }
     }
 
+    private static void ValidateDescriptorRange(SchemaDescriptor descriptor)
+    {
+        Node.ValidateNamespaceId(descriptor.NamespaceId);
+        if ((uint)descriptor.SchemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.SchemaId));
+        if ((uint)descriptor.Version > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.Version));
+        if ((uint)descriptor.MergePolicy > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.MergePolicy));
+    }
+
     private static SchemaDescriptor CloneDescriptor(SchemaDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
@@ -68,7 +76,7 @@ public sealed class SchemaRegistry
     {
         ArgumentNullException.ThrowIfNull(desc);
         var owned = CloneDescriptor(desc);
-        if (owned.Version < 0) throw new ArgumentException("version must be non-negative");
+        ValidateDescriptorRange(owned);
         if (owned.FieldIds.Overlaps(owned.RetiredFieldIds))
             throw new ArgumentException("a field cannot be both active and retired");
         lock (_gate)
@@ -149,35 +157,44 @@ public sealed class SchemaRegistry
     /// Gate a batch against the registry (§18.2–18.3).
     /// Unknown schema/version → Pending; lower-than-known with different policy → Mismatch.
     /// </summary>
-    public SchemaOutcome Evaluate(int namespaceId, int schemaId, int schemaVersion, int mergePolicy, out string? detail)
+    private SchemaOutcome EvaluateLocked(int namespaceId, int schemaId, int schemaVersion, int mergePolicy, out string? detail)
     {
         detail = null;
+        if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
+        {
+            detail = "unknown schema";
+            return SchemaOutcome.Pending;
+        }
+        if (!byVer.TryGetValue(schemaVersion, out var desc))
+        {
+            int max = byVer.Keys.Max();
+            detail = schemaVersion > max
+                ? $"pending version {schemaVersion} (have ≤{max})"
+                : $"unknown version {schemaVersion}";
+            return SchemaOutcome.Pending;
+        }
+        if (desc.MergePolicy != mergePolicy && mergePolicy != 0)
+        {
+            detail = $"policy {mergePolicy} != registered {desc.MergePolicy}";
+            return SchemaOutcome.Mismatch;
+        }
+        return SchemaOutcome.Ok;
+    }
+
+    public SchemaOutcome Evaluate(int namespaceId, int schemaId, int schemaVersion, int mergePolicy, out string? detail)
+    {
+        lock (_gate)
+            return EvaluateLocked(namespaceId, schemaId, schemaVersion, mergePolicy, out detail);
+    }
+
+    internal (SchemaOutcome Outcome, string? Detail, BatchResult? Result) EvaluateAndApply(
+        int namespaceId, int schemaId, int schemaVersion, int mergePolicy, Func<BatchResult> apply)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
         lock (_gate)
         {
-            if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
-            {
-                detail = "unknown schema";
-                return SchemaOutcome.Pending;
-            }
-            if (!byVer.TryGetValue(schemaVersion, out var desc))
-            {
-                // Future version we have not learned yet
-                int max = byVer.Keys.Max();
-                if (schemaVersion > max)
-                {
-                    detail = $"pending version {schemaVersion} (have ≤{max})";
-                    return SchemaOutcome.Pending;
-                }
-                detail = $"unknown version {schemaVersion}";
-                return SchemaOutcome.Pending;
-            }
-            if (desc.MergePolicy != mergePolicy && mergePolicy != 0)
-            {
-                // Allow mergePolicy=0 as "unspecified / inherit"
-                detail = $"policy {mergePolicy} != registered {desc.MergePolicy}";
-                return SchemaOutcome.Mismatch;
-            }
-            return SchemaOutcome.Ok;
+            var outcome = EvaluateLocked(namespaceId, schemaId, schemaVersion, mergePolicy, out var detail);
+            return (outcome, detail, outcome == SchemaOutcome.Ok ? apply() : null);
         }
     }
 
@@ -247,6 +264,12 @@ public static class SchemaMap
         w.Varint((ulong)list.Count);
         foreach (var d in list)
         {
+            ArgumentNullException.ThrowIfNull(d);
+            ValidateDescriptorRange(d);
+            ArgumentNullException.ThrowIfNull(d.FieldIds);
+            ArgumentNullException.ThrowIfNull(d.RetiredFieldIds);
+            if (d.FieldIds.Overlaps(d.RetiredFieldIds))
+                throw new ArgumentException("a field cannot be both active and retired", nameof(list));
             w.U16((ushort)d.NamespaceId);
             w.U16((ushort)d.SchemaId);
             w.U16((ushort)d.Version);
