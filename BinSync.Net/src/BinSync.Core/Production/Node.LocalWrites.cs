@@ -413,7 +413,7 @@ public sealed partial class Node
     private void EnsureLocalWriteCapacity(int namespaceId, bool isNewRecord)
     {
         // MaxRecords applies to record creation, not updates of an existing record.
-        var limits = System.Threading.Volatile.Read(ref _limits);
+        var limits = Limits;
         if (isNewRecord)
             limits?.EnsureStorageCapacity(this);
         limits?.EnsureCanEnqueueOutbox(this, namespaceId);
