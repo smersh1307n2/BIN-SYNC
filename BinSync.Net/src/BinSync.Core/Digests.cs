@@ -219,7 +219,17 @@ public static class StateHash
         StateRootDigest(namespaceId, buckets);
 
     /// <summary>Partition record digests into bucket accumulators for anti-entropy.</summary>
-    public static List<BucketAccumulator> BuildBuckets(Dictionary<RecordId, Record> records, int radixBits = 8)
+    public static List<BucketAccumulator> BuildBuckets(Dictionary<RecordId, Record> records, int radixBits = 8) =>
+        BuildBucketsCore(records, radixBits);
+
+    // Internal view overload avoids copying the node's record dictionary merely to
+    // satisfy the public Dictionary-based helper. The caller holds the storage gate.
+    internal static List<BucketAccumulator> BuildBucketsFromView(
+        IEnumerable<KeyValuePair<RecordId, Record>> records, int radixBits = 8) =>
+        BuildBucketsCore(records, radixBits);
+
+    private static List<BucketAccumulator> BuildBucketsCore(
+        IEnumerable<KeyValuePair<RecordId, Record>> records, int radixBits)
     {
         var buckets = new Dictionary<string, BucketAccumulator>();
         foreach (var (rid, rec) in records)
