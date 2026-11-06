@@ -27,6 +27,9 @@ public sealed partial class Node
     {
         if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
         if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+        if (KnownEpochs.TryGetValue((peer, 0), out int knownSessionEpoch) &&
+            epoch < knownSessionEpoch)
+            throw new SyncException("EPOCH_REGRESSION");
 
         foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer).ToList())
             KnownEpochs.Remove(k);
@@ -159,10 +162,12 @@ public sealed partial class Node
             if (!hasLocal || !hasPeer)
                 throw new FrameException("FRAME_REJECTED");
 
-            bool incarnationChanged =
-                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch) &&
-                previousEpoch != peerEpoch;
+            bool hasPreviousSessionEpoch =
+                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch);
+            if (hasPreviousSessionEpoch && peerEpoch < previousEpoch)
+                throw new SyncException("EPOCH_REGRESSION");
 
+            bool incarnationChanged = hasPreviousSessionEpoch && previousEpoch != peerEpoch;
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
             RegisterSessionEpochInternal(peer, peerEpoch);
             foreach (var entry in entries)
