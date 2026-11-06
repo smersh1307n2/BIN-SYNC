@@ -230,9 +230,6 @@ public sealed class CausalTracker
 
                 if (lostDependency)
                     outcome = CausalOutcome.LostDep;
-                else if (now >= op.EnqueuedUtcMs &&
-                         (double)now - op.EnqueuedUtcMs > _depTimeout.TotalMilliseconds)
-                    outcome = CausalOutcome.TimedOut;
                 else
                 {
                     var parents = _edges.GetValueOrDefault(cid);
@@ -243,7 +240,17 @@ public sealed class CausalTracker
                         bool allKnown = true;
                         for (int i = 0; i < op.Deps.Length; i++)
                             if (!_known.Contains(op.Deps[i])) { allKnown = false; break; }
-                        outcome = allKnown ? CausalOutcome.Ready : CausalOutcome.Pending;
+
+                        // Timeout applies only while causal parents are still missing.
+                        // A released batch may be requeued after a normal stream gate
+                        // failure; once its parents are known it must not later become
+                        // LostDep merely because that unrelated gate stayed blocked.
+                        outcome = allKnown
+                            ? CausalOutcome.Ready
+                            : now >= op.EnqueuedUtcMs &&
+                              (double)now - op.EnqueuedUtcMs > _depTimeout.TotalMilliseconds
+                                ? CausalOutcome.TimedOut
+                                : CausalOutcome.Pending;
                     }
                 }
 

@@ -132,6 +132,30 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void Timeout_does_not_expire_a_requeued_op_after_all_parents_are_known()
+    {
+        long now = 1_000_000;
+        var tracker = new CausalTracker
+        {
+            DepTimeout = TimeSpan.FromMilliseconds(100),
+            UtcNowMs = () => now,
+        };
+        var child = BatchId.From(Id(2));
+        var parent = BatchId.From(Id(1));
+        tracker.EnqueuePending(child, new[] { parent });
+        tracker.NoteApplied(parent);
+
+        var released = Assert.Single(tracker.Drain());
+        Assert.Equal(CausalOutcome.Ready, released.Outcome);
+        tracker.RequeuePending(released.Op);
+
+        now += 500; // Beyond the original dependency timeout, but no dep is missing.
+        var retried = Assert.Single(tracker.Drain());
+        Assert.Equal(CausalOutcome.Ready, retried.Outcome);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
     public void Causal_policy_rejects_invalid_configuration()
     {
         var tracker = new CausalTracker();

@@ -2,6 +2,8 @@
 
 ## 3.0.0 — 2026-11-06
 
+- Apply causal timeout only while parents remain missing; a batch requeued after a normal stream-gate failure stays retryable once its dependencies are already known.
+
 - Continue causal draining after successful applies so batches unlocked by a parent within the same drain call are retried immediately; stop when a pass makes no progress.
 
 - Reject zero ChangeIds and causal dependency IDs at CausalTracker public entry points, preventing invalid identities from entering known/lost/pending state outside the batch API.
