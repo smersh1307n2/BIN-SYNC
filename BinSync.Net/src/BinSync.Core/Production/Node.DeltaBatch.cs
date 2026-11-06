@@ -196,6 +196,7 @@ public sealed partial class Node
                 Payload = shared ? e.Payload : newPayload,
                 AuthorNodeId = e.AuthorNodeId,
                 CreatedAt = e.CreatedAt,
+                PayloadNeedsDetachment = shared,
             });
         }
         if (detachPublicBuffers)
@@ -229,18 +230,23 @@ public sealed partial class Node
 
 
     // Public Batch payloads must not alias mutable engine-owned outbox arrays.
-    // A single packed backing array avoids one byte[] allocation per entry and avoids
-    // copying payloads that origin translation has already rewritten.
+    // Payloads already rewritten into fresh arrays are caller-owned and need no copy.
+    // Pack only the still-shared payloads into one backing array, avoiding a second
+    // copy of every payload that origin translation has already materialized.
     private static void DetachPublicBatchPayloads(List<OutboxEntry> entries)
     {
         int totalLength = 0;
         for (int i = 0; i < entries.Count; i++)
-            totalLength = checked(totalLength + entries[i].Payload.Length);
+        {
+            var entry = entries[i];
+            if (entry.PayloadNeedsDetachment)
+                totalLength = checked(totalLength + entry.Payload.Length);
+        }
 
         if (totalLength == 0)
         {
             for (int i = 0; i < entries.Count; i++)
-                entries[i].Payload = ReadOnlyMemory<byte>.Empty;
+                entries[i].PayloadNeedsDetachment = false;
             return;
         }
 
@@ -248,11 +254,22 @@ public sealed partial class Node
         int offset = 0;
         for (int i = 0; i < entries.Count; i++)
         {
-            var payload = entries[i].Payload;
+            var entry = entries[i];
+            if (!entry.PayloadNeedsDetachment) continue;
+
+            var payload = entry.Payload;
             int length = payload.Length;
-            payload.Span.CopyTo(backing.AsSpan(offset, length));
-            entries[i].Payload = new ReadOnlyMemory<byte>(backing, offset, length);
-            offset += length;
+            if (length != 0)
+            {
+                payload.Span.CopyTo(backing.AsSpan(offset, length));
+                entry.Payload = new ReadOnlyMemory<byte>(backing, offset, length);
+                offset += length;
+            }
+            else
+            {
+                entry.Payload = ReadOnlyMemory<byte>.Empty;
+            }
+            entry.PayloadNeedsDetachment = false;
         }
     }
 
