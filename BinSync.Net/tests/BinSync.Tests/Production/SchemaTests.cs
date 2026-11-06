@@ -90,13 +90,17 @@ public class SchemaTests
     [Fact]
     public void Schema_history_validation_is_independent_of_registration_order()
     {
-        var registry = new SchemaRegistry();
-        registry.Register(Desc(1, 3, 3, 0x02, 0x100));
-        registry.Register(Desc(1, 3, 1, 0x02, 0x100));
-        registry.Register(Desc(1, 3, 2, 0x02));
-
+        var reverse = new SchemaRegistry();
+        reverse.Register(Desc(1, 3, 3, 0x02, 0x100));
+        reverse.Register(Desc(1, 3, 1, 0x02, 0x100));
         Assert.Throws<ArgumentException>(() =>
-            registry.Register(Desc(1, 3, 4, 0x02, 0x100)));
+            reverse.Register(Desc(1, 3, 2, 0x02)));
+
+        var ordered = new SchemaRegistry();
+        ordered.Register(Desc(1, 3, 1, 0x02, 0x100));
+        ordered.Register(Desc(1, 3, 2, 0x02));
+        Assert.Throws<ArgumentException>(() =>
+            ordered.Register(Desc(1, 3, 3, 0x02, 0x100)));
     }
 
     [Fact]
