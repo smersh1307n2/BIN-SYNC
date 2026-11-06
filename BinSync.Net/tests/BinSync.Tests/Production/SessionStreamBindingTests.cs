@@ -10,19 +10,26 @@ public sealed class SessionStreamBindingTests
     {
         using var a = Fix.MakeNode(301);
         using var b = Fix.MakeNode(302);
-        b.DurableAuthors[Fix.Nid(303)] = 2;
         var (aPipe, bPipe) = PipeTransport.CreatePair();
         var accept = SyncSession.AcceptAsync(b, bPipe);
         await using var client = await SyncSession.ConnectAsync(a, aPipe);
         await using var server = await accept;
 
-        var payload = Membership.Encode(Membership.Build(b, 1));
+        var unannouncedAuthor = NodeId.From(Fix.Nid(303));
+        var payload = Membership.Encode(new MembershipMessage
+        {
+            NamespaceId = 1,
+            Members = new List<MembershipEntry>
+            {
+                new() { NodeId = unannouncedAuthor, Epoch = 2, Flags = Membership.FlagActive }
+            }
+        });
         var receive = client.ReceiveMembershipAsync(a);
         await bPipe.SendAsync(FrameCodec.BuildFrame(MembershipFrames.Membership,
             0x0001_0001u, 14, payload));
 
         await Assert.ThrowsAsync<FrameException>(() => receive);
-        Assert.DoesNotContain(a.DurableAuthors.Keys, id => id == Fix.Nid(303));
+        Assert.DoesNotContain(unannouncedAuthor, a.DurableAuthors.Keys);
     }
 
     [Fact]
