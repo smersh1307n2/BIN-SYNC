@@ -141,7 +141,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 `SyncSession.RunReconciliationAsync<TResult>` provides an exclusive transaction for custom multi-frame reconciliation protocols. Its `ReconciliationOperations` context exposes digest, NEED_RANGE, NEED_KEYS, and snapshot primitives without reacquiring their frame gates. The context is valid only during the callback; using it afterward throws `ObjectDisposedException`. Batch push/receive remains independent.
 
-`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific). `WatermarkGate` exposes the stale-watermark check used by safe GC coordination. Snapshot DTOs use `RecordId` / `NodeId`; `ApplySnapshotChunks` detaches caller-owned DTO graphs before validation and publication.
+`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific). `WatermarkGate` rejects incremental batches from peers behind the local safe watermark; such peers require a full resynchronization. Snapshot DTOs use `RecordId` / `NodeId`; `ApplySnapshotChunks` detaches caller-owned DTO graphs before validation and publication.
 
 ### Session / transport
 
