@@ -62,7 +62,6 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | API | Role |
 |-----|------|
 | `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
-| `WriteFields(IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)>)` | Batch of typed-record writes under one lock (distinct HLC stamps) |
 | `TombField` / `DeleteRecord` / `UndeleteRecord` | Local field and record lifecycle mutations → outbox |
 | `RepublishRecords(ns, IEnumerable<RecordId>)` | Re-enqueue visible record state for a namespace |
 | `PushOutbox(ns, RecordId, OpFieldWrite / OpFieldTomb / OpRecordTombstone)` | Low-level local Outbox enqueue; the node supplies its own author identity and session peer routing is not an enqueue argument |
@@ -77,8 +76,10 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `ProcessAck(NodeId, …)` | Advance per-author watermarks |
 | `ApplySnapshot(Batch)` / `BuildSnapshot(ns)` | Apply or build a validated snapshot baseline |
 | `EnterAllGates()` | Acquire Storage → Outbox → Meta gates; dispose on the acquiring thread (idempotent) |
-| `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
-| `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
+| `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / `KnownAuthorEpoch` / `SessionEpoch` | Session & alias registry |
+| `DurableId` / `WriteDurableId` | Encode the typed node identity and epoch into the durable identity representation |
+| `RepublishUnderPrefix` / `RepublishRecords` | Re-enqueue visible record state for a namespace, by digest prefix or typed record IDs |
+| `GetOutboxCount` | Read-only pending Outbox count for a namespace |
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
 | `GetRecordCount` / `RecordDigestOf(RecordId)` / `AllRecordDigests` | Typed record lookup, count and detached digest map |
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
