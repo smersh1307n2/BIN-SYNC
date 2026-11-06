@@ -541,6 +541,13 @@ public sealed class PublicApiIsolationTests
         });
         Assert.Equal(128, consumed);
         Assert.Equal(0, flow.Balance(1));
+
+        var bounded = new FlowControl(initial: 128, maxWindow: 256);
+        Assert.Throws<ArgumentOutOfRangeException>(() => bounded.ApplyUpdate(7, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => bounded.ApplyUpdate(7, -1));
+        Assert.Equal(128, bounded.Balance(7));
+        Assert.Equal(256, bounded.ApplyUpdate(7, long.MaxValue));
+        Assert.Equal(256, bounded.ApplyUpdate(7, 1));
     }
 
     [Fact]

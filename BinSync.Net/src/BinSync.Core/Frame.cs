@@ -381,12 +381,15 @@ public class FlowControl
         }
     }
 
-    /// <summary>Apply a window update (positive or negative) and return the new balance.</summary>
+    /// <summary>Apply positive additive credits and return the new balance, capped at <see cref="MaxWindow"/>.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
+        if (credits <= 0) throw new ArgumentOutOfRangeException(nameof(credits));
         lock (_gate)
         {
-            long next = Math.Min(BalanceInternal(streamId) + credits, MaxWindow);
+            long balance = BalanceInternal(streamId);
+            long room = MaxWindow - balance;
+            long next = credits >= room ? MaxWindow : balance + credits;
             _credit[streamId] = next;
             return next;
         }
