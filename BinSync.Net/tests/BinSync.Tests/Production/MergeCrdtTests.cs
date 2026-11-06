@@ -84,6 +84,21 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void SetOr_merge_rejects_same_add_dot_for_different_elements_across_replicas()
+    {
+        var actor = Author(7);
+        var local = SetOr.Encode(
+            new[] { new SetOr.Add { Element = new byte[] { 0xA1 }, Actor = actor, Seq = 42 } },
+            Array.Empty<SetOr.Dot>());
+        var remote = SetOr.Encode(
+            new[] { new SetOr.Add { Element = new byte[] { 0xB2 }, Actor = actor, Seq = 42 } },
+            Array.Empty<SetOr.Dot>());
+
+        Assert.Throws<InvalidDataException>(() => SetOr.Merge(local, remote));
+        Assert.Throws<InvalidDataException>(() => SetOr.Merge(remote, local));
+    }
+
+    [Fact]
     public void SetOr_merge_unions_adds_and_removes()
     {
         var a1 = Author(1);

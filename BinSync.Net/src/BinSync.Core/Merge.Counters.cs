@@ -304,8 +304,24 @@ public static class SetOr
         {
             if (addKey.Add((a.Actor, a.Seq, a.Element))) mergedAdds.Add(a);
         }
-        foreach (var a in la) AddOne(a);
-        foreach (var a in ra) AddOne(a);
+        // A dot identifies exactly one logical add. Two replicas presenting the
+        // same (actor, seq) for different elements is a protocol conflict, not
+        // two independent adds. Reject it as malformed remote state before canonical encoding.
+        var dotElements = new Dictionary<(byte[] Actor, ulong Seq), byte[]>(ActorSeqEq.Instance);
+        void AddValidated(Add add)
+        {
+            var dot = (add.Actor, add.Seq);
+            if (dotElements.TryGetValue(dot, out var existing))
+            {
+                if (!existing.AsSpan().SequenceEqual(add.Element))
+                    throw new InvalidDataException("SET_OR add dot identifies conflicting elements.");
+                return;
+            }
+            dotElements.Add(dot, add.Element);
+            AddOne(add);
+        }
+        foreach (var a in la) AddValidated(a);
+        foreach (var a in ra) AddValidated(a);
 
         var remKey = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
         var mergedRem = new List<Dot>();
