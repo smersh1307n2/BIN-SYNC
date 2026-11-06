@@ -318,8 +318,11 @@ public sealed class PublicApiIsolationTests
     {
         Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.NowFn))!.GetSetMethod());
         Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.MaxSkewUs))!.GetSetMethod());
-        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.LastWall))!.GetSetMethod());
-        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.LastLogical))!.GetSetMethod());
+        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.LastWall),
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance));
+        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.LastLogical),
+            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance));
+        Assert.NotNull(typeof(HlcClock).GetMethod(nameof(HlcClock.Snapshot)));
     }
 
     [Fact]
