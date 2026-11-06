@@ -117,7 +117,10 @@ public static class Digests
     {
         var parts = new List<byte[]>();
         var allFields = new List<(ushort, FieldState)>(rec.State.Select(kv => (kv.Key, kv.Value)));
-        foreach (var t in rec.FieldTombs) allFields.Add((t.Key, t.Value));
+        // Most records have no field tombstones. Do not invoke the lazy getter on
+        // the digest hot path unless the record actually owns tomb entries.
+        if (rec.HasFieldTombs)
+            foreach (var t in rec.FieldTombs) allFields.Add((t.Key, t.Value));
         allFields.Sort((x, y) => x.Item1.CompareTo(y.Item1));
         foreach (var (fid, fs) in allFields)
             parts.Add(FieldDigestPayload(fid, fs.KeyEpoch, fs.Timestamp.Wall,

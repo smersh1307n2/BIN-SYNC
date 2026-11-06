@@ -167,45 +167,73 @@ public static class Merge
     public static bool ApplyFieldWrite(Record record, ushort fieldId, FieldState op,
         MergePolicy policy = MergePolicy.LwwField)
     {
+        // A newer tombstone is a version of this field, not a separate side channel:
+        // stale writes must not resurrect it. Keep the lazy tomb map cold on the
+        // common no-tomb path.
+        bool removedTomb = false;
+        if (record.HasFieldTombs &&
+            record.FieldTombs.TryGetValue(fieldId, out var tomb))
+        {
+            if (HlcOps.CompareHlc(op.Timestamp, op.AuthorNodeId,
+                                  tomb.Timestamp, tomb.AuthorNodeId) <= 0)
+                return false;
+
+            removedTomb = record.FieldTombs.Remove(fieldId);
+        }
+
         var local = record.State.TryGetValue(fieldId, out var l) ? l : null;
         var (winner, changed) = MergeFieldWithPolicy(local, op, policy);
         if (changed) record.State[fieldId] = winner;
-        return changed;
+        return changed || removedTomb;
     }
 
     /// <summary>Apply a field tombstone into a record; returns whether state changed.</summary>
     public static bool ApplyFieldTomb(Record record, ushort fieldId, FieldState op)
     {
-        record.State.TryGetValue(fieldId, out var local);
-        record.FieldTombs.TryGetValue(fieldId, out var tombLocal);
-        bool changed;
-        if (tombLocal is not null)
+        bool hadTomb = record.HasFieldTombs &&
+                       record.FieldTombs.TryGetValue(fieldId, out var previousTomb);
+        FieldState winner = op;
+        bool tombChanged = !hadTomb;
+
+        if (hadTomb)
         {
-            var (winner, ch) = MergeField(tombLocal, op);
-            if (ch) record.FieldTombs[fieldId] = winner;
-            tombLocal = winner;
-            changed = ch;
+            var (merged, changed) = MergeField(previousTomb!, op);
+            winner = merged;
+            tombChanged = changed;
+        }
+
+        if (record.State.TryGetValue(fieldId, out var local))
+        {
+            int order = HlcOps.CompareHlc(winner.Timestamp, winner.AuthorNodeId,
+                                          local.Timestamp, local.AuthorNodeId);
+            if (order < 0)
+            {
+                // The live value is newer. An older tombstone is redundant and
+                // must not be retained in the canonical field state.
+                return hadTomb && record.FieldTombs.Remove(fieldId);
+            }
+
+            bool removedValue = record.State.Remove(fieldId);
+            if (hadTomb)
+            {
+                if (tombChanged) record.FieldTombs[fieldId] = winner;
+            }
+            else
+            {
+                record.FieldTombs[fieldId] = winner;
+            }
+            return removedValue || tombChanged;
+        }
+
+        if (hadTomb)
+        {
+            if (tombChanged) record.FieldTombs[fieldId] = winner;
         }
         else
         {
-            record.FieldTombs[fieldId] = op;
-            tombLocal = op;
-            changed = true;
+            record.FieldTombs[fieldId] = winner;
         }
-        if (local is not null)
-        {
-            var (keep, _) = MergeField(local, tombLocal);
-            bool keepIsTomb = ReferenceEquals(keep, tombLocal);
-            if (keepIsTomb ||
-                (HlcOps.CompareHlc(tombLocal.Timestamp, tombLocal.AuthorNodeId,
-                                   local.Timestamp, local.AuthorNodeId) >= 0 &&
-                 tombLocal.Value.Length == 0))
-            {
-                record.State.Remove(fieldId);
-                changed = true;
-            }
-        }
-        return changed;
+        return tombChanged;
     }
 
     /// <summary>Apply a record lifecycle change; returns whether state changed.</summary>
