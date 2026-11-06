@@ -98,7 +98,7 @@ public partial class SyncSession : IAsyncDisposable
             EnsureTransportCapabilities(transport);
             var handshake = await AcceptHandshakeAsync(local, transport, caps, ct).ConfigureAwait(false);
             lease = handshake.Lease;
-            var session = new SyncSession(transport, handshake.Peer, ownsTransport, lease);
+            var session = new SyncSession(transport, handshake.Peer, caps, ownsTransport, lease);
             lease = null;
             return session;
         }
