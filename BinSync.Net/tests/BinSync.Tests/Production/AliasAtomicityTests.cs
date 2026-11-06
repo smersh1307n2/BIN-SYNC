@@ -131,15 +131,14 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
-    public void RegisterSessionEpoch_rejects_regression_of_the_current_peer_session()
+    public void RegisterSessionEpoch_preserves_highest_peer_epoch_across_reconnects()
     {
         using var node = new Node(Fix.Nid(108));
         var peer = Fix.Nid(109);
 
         node.RegisterSessionEpoch(peer, 5);
-        var ex = Assert.Throws<SyncException>(() => node.RegisterSessionEpoch(peer, 3));
+        node.RegisterSessionEpoch(peer, 3);
 
-        Assert.Equal("EPOCH_REGRESSION", ex.CodeName);
         Assert.Equal(5, node.SessionEpoch(peer, 0));
     }
 
@@ -163,7 +162,7 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
-    public void CommitSession_rejects_peer_epoch_regression_without_mutating_previous_session()
+    public void CommitSession_replaces_aliases_but_preserves_peer_epoch_watermark_on_regression()
     {
         using var local = new Node(Fix.Nid(110));
         var peer = Fix.Nid(111);
@@ -177,11 +176,11 @@ public sealed class AliasAtomicityTests
             new(2, peer, 4),
         };
 
-        var ex = Assert.Throws<SyncException>(() => local.CommitSession(peer, 4, regressed));
+        local.CommitSession(peer, 4, regressed);
 
-        Assert.Equal("EPOCH_REGRESSION", ex.CodeName);
         Assert.Equal(5, local.SessionEpoch(peer, 0));
-        Assert.Equal(oldAuthor, local.ResolveAlias(peer, 7));
+        Assert.Throws<SyncException>(() => local.ResolveAlias(peer, 7));
+        Assert.Equal(peer, local.ResolveAlias(peer, 2));
     }
 
     [Fact]
