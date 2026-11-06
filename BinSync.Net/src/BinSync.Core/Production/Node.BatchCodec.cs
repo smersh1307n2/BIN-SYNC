@@ -9,11 +9,11 @@ public sealed partial class Node
 {
     // Compact transport-only record representation. It intentionally has no mutable
     // public DTO members and carries no per-entry CausalDeps collection.
-    internal static Digest16 ComputeTransportRecordsRoot(TransportDeltaEntry[] entries)
+    internal static Digest16 ComputeTransportRecordsRoot(TransportDeltaEntry[] entries, int count)
     {
         int size = checked(Domains.DomainRecordsBytes.Length +
-            Codec.VarintLength((ulong)entries.Length));
-        for (int i = 0; i < entries.Length; i++)
+            Codec.VarintLength((ulong)count));
+        for (int i = 0; i < count; i++)
             size = checked(size + 33 +
                 Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
 
@@ -22,7 +22,7 @@ public sealed partial class Node
         {
             var writer = new Writer(rented);
             writer.Raw(Domains.DomainRecordsBytes);
-            WriteTransportRecordsArray(writer, entries);
+            WriteTransportRecordsArray(writer, entries, count);
             return Digests.Blake3Digest16(writer.WrittenSpan);
         }
         finally
@@ -31,10 +31,10 @@ public sealed partial class Node
         }
     }
 
-    internal static void WriteTransportRecordsArray(Writer writer, TransportDeltaEntry[] entries)
+    internal static void WriteTransportRecordsArray(Writer writer, TransportDeltaEntry[] entries, int count)
     {
-        writer.Varint((ulong)entries.Length);
-        for (int i = 0; i < entries.Length; i++)
+        writer.Varint((ulong)count);
+        for (int i = 0; i < count; i++)
         {
             ref readonly var entry = ref entries[i];
             if (entry.ChangeId.IsZero)
