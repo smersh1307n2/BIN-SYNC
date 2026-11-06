@@ -26,6 +26,11 @@ public sealed partial class Node
     {
         ThrowIfDisposed();
         ValidateBatchForWire(batch);
+        // This runtime currently applies LWW_FIELD only. Zero is accepted as the
+        // legacy/default spelling; the canonical wire code is 0x02. Never silently
+        // apply a different advertised policy using LWW semantics.
+        if (batch.MergePolicy != 0 && batch.MergePolicy != 0x02)
+            throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
         var result = new BatchResult(batch.BatchId)
         {
             CursorEnd = batch.CursorEnd,

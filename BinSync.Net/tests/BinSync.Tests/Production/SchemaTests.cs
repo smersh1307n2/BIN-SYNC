@@ -191,6 +191,33 @@ public class SchemaTests
         Assert.Equal(1, learned);
     }
 
+    [Theory]
+    [InlineData(0x01)] // LWW_RECORD is not implemented by this runtime.
+    [InlineData(0x03)] // COUNTER_G helper exists, but is not wired into ApplyBatch.
+    [InlineData(0x04)]
+    [InlineData(0x05)]
+    [InlineData(0x06)]
+    [InlineData(0x07)] // SEQ_CRDT is not implemented.
+    [InlineData(0x08)]
+    [InlineData(0x09)] // MANUAL helper does not provide a runtime conflict workflow.
+    [InlineData(0x81)]
+    [InlineData(0x82)]
+    [InlineData(0x83)]
+    [InlineData(0x84)]
+    public void ApplyBatch_rejects_merge_policies_not_supported_by_runtime(int policy)
+    {
+        using var receiver = Fix.MakeNode(390);
+        var batch = new Batch(
+            1, 0, 1, policy, 0, NodeId.From(Fix.Nid(391)), 1, 1, 1,
+            BatchId.From(Fix.Nid(392)), Digest16.From(new byte[16]),
+            Digest16.From(new byte[16]), Digest16.From(new byte[16]),
+            new List<OutboxEntry>());
+
+        var ex = Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, Fix.Nid(391)));
+        Assert.Equal("SCHEMA_MISMATCH", ex.CodeName);
+        Assert.Equal(0, receiver.GetRecordCount(1));
+    }
+
     [Fact]
     public void ApplyBatchWithSchema_pending_throws()
     {
