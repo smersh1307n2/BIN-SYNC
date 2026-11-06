@@ -14,21 +14,31 @@ public sealed class AliasAtomicityTests
         var author = Fix.Nid(143);
 
         var gates = node.EnterAllGates();
-        var started = new ManualResetEventSlim();
-        var reader = Task.Run(() =>
+        using var started = new ManualResetEventSlim();
+        using var completed = new ManualResetEventSlim();
+        (int? AuthorEpoch, int? SessionEpoch) result = default;
+        Exception? error = null;
+        var reader = new Thread(() =>
         {
             started.Set();
-            return (node.KnownAuthorEpoch(author), node.SessionEpoch(peer, 7));
-        });
+            try
+            {
+                result = (node.KnownAuthorEpoch(author), node.SessionEpoch(peer, 7));
+            }
+            catch (Exception ex) { error = ex; }
+            finally { completed.Set(); }
+        }) { IsBackground = true };
 
+        reader.Start();
         Assert.True(started.Wait(TimeSpan.FromSeconds(3)));
-        Assert.False(reader.Wait(TimeSpan.FromMilliseconds(100)),
+        Assert.False(completed.Wait(TimeSpan.FromMilliseconds(100)),
             "Public epoch readers must wait for the metadata gate.");
 
         gates.Dispose();
-        var result = reader.GetAwaiter().GetResult();
-        Assert.Null(result.Item1);
-        Assert.Null(result.Item2);
+        Assert.True(reader.Join(TimeSpan.FromSeconds(3)));
+        Assert.Null(error);
+        Assert.Null(result.AuthorEpoch);
+        Assert.Null(result.SessionEpoch);
     }
 
     [Fact]
