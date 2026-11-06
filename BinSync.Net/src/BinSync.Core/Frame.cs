@@ -344,6 +344,7 @@ public sealed class FlowControl
 {
     private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
+    private readonly Dictionary<uint, long> _inFlight = new();
     private readonly Dictionary<uint, TaskCompletionSource> _waiters = new();
     private Exception? _failure;
 
@@ -382,6 +383,8 @@ public sealed class FlowControl
             var balance = BalanceInternal(streamId);
             if (balance < payloadBytes) return false;
             _credit[streamId] = balance - payloadBytes;
+            _inFlight.TryGetValue(streamId, out long inFlight);
+            _inFlight[streamId] = checked(inFlight + payloadBytes);
             return true;
         }
     }
@@ -432,6 +435,8 @@ public sealed class FlowControl
             long room = MaxWindow - balance;
             next = credits >= room ? MaxWindow : balance + credits;
             _credit[streamId] = next;
+            _inFlight.TryGetValue(streamId, out long inFlight);
+            _inFlight[streamId] = credits >= inFlight ? 0 : inFlight - credits;
             _waiters.Remove(streamId, out waiter);
         }
         waiter?.TrySetResult();
@@ -463,7 +468,10 @@ public sealed class FlowControl
             if (_failure is not null) return false;
             long balance = BalanceInternal(streamId);
             if (credits > MaxWindow - balance) return false;
+            if (!_inFlight.TryGetValue(streamId, out long inFlight) || credits > inFlight)
+                return false;
             _credit[streamId] = balance + credits;
+            _inFlight[streamId] = inFlight - credits;
             _waiters.Remove(streamId, out waiter);
         }
         waiter?.TrySetResult();

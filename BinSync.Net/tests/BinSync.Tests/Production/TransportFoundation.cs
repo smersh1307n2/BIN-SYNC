@@ -159,6 +159,27 @@ public class TransportFoundationTests
     }
 
     [Fact]
+    public async Task Flow_control_rejects_unsolicited_window_update_credit()
+    {
+        using var low = Fix.MakeNode(41);
+        using var high = Fix.MakeNode(42);
+        var (toLow, toHigh) = PipeTransport.CreatePair();
+        var caps = SessionCapabilities.FlowControl;
+        var acceptTask = SyncSession.AcceptAsync(high, toHigh, caps);
+        var connectTask = SyncSession.ConnectAsync(low, toLow, caps);
+        await using var lowSession = await connectTask;
+        await using var highSession = await acceptTask;
+
+        var waiting = highSession.ReceiveBatchAsync(high);
+        var excessive = Frames.MAX_WINDOW_SIZE - Frames.INITIAL_WINDOW + 1;
+        await toLow.SendAsync(FrameCodec.BuildFrame(Frames.TYPE_WINDOW_UPDATE, 0x0001_0001u,
+            1, SessionWire.EncodeWindowUpdate((uint)excessive)));
+        var error = await Assert.ThrowsAsync<IOException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.IsType<FrameException>(error.InnerException);
+        Assert.Equal("FLOW_CONTROL_VIOLATION", ((FrameException)error.InnerException!).Code);
+    }
+
+    [Fact]
     public async Task Full_duplex_batch_exchange_dispatches_data_and_ack_to_the_correct_operations()
     {
         using var low = Fix.MakeNode(1);

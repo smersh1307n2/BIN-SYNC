@@ -557,9 +557,11 @@ public sealed class PublicApiIsolationTests
         var flow = new FlowControl(initial: 8, maxWindow: 16);
         Assert.False(flow.TryApplyUpdate(1, 0));
         Assert.False(flow.TryApplyUpdate(1, 9));
+        Assert.False(flow.TryApplyUpdate(1, 8)); // no bytes were sent on this stream
         Assert.Equal(8, flow.Balance(1));
+        Assert.True(flow.TryConsume(1, 8));
         Assert.True(flow.TryApplyUpdate(1, 8));
-        Assert.Equal(16, flow.Balance(1));
+        Assert.Equal(8, flow.Balance(1));
         Assert.False(flow.TryApplyUpdate(1, 1));
     }
 
