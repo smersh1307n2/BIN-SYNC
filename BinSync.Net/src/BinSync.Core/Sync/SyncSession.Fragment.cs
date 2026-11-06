@@ -40,11 +40,11 @@ public partial class SyncSession
                 byte[] payload = raw.AsSpan(Frames.HEADER_SIZE, payloadLength).ToArray();
                 if ((flags & Frames.FLAG_FRAGMENT) == 0)
                 {
-                    await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
+                    await CompleteReceiveAsync(raw).ConfigureAwait(false);
                     return payload;
                 }
                 var complete = reassembler.Accept(payload);
-                await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
+                await CompleteReceiveAsync(raw).ConfigureAwait(false);
                 if (complete is not null)
                     return complete;
             }
