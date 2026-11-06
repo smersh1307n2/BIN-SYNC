@@ -53,11 +53,28 @@ public sealed class AliasAtomicityTests
             [77] = (author, 4)
         };
 
-        var peerGates = peer.EnterAllGates();
-        var error = Assert.Throws<SyncException>(() => local.ResolveAlias(peer.NodeId, 77));
-        Assert.Equal("UNKNOWN_ALIAS", error.CodeName);
-        peerGates.Dispose();
+        using var peerLocked = new ManualResetEventSlim();
+        using var releasePeer = new ManualResetEventSlim();
+        var peerThread = new Thread(() =>
+        {
+            using var peerGates = peer.EnterAllGates();
+            peerLocked.Set();
+            releasePeer.Wait();
+        }) { IsBackground = true };
 
+        peerThread.Start();
+        try
+        {
+            Assert.True(peerLocked.Wait(TimeSpan.FromSeconds(3)));
+            var error = Assert.Throws<SyncException>(() => local.ResolveAlias(peer.NodeId, 77));
+            Assert.Equal("UNKNOWN_ALIAS", error.CodeName);
+        }
+        finally
+        {
+            releasePeer.Set();
+        }
+
+        Assert.True(peerThread.Join(TimeSpan.FromSeconds(3)));
         Assert.Equal(author, local.ResolveAlias(peer.NodeId, 77));
     }
 
