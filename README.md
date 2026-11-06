@@ -7,7 +7,7 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | Spec (v2.4.11) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
 | Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
-| Public API surface (2.2) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
+| Public API surface (3.0.0) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
 | Changelog | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | License | [`LICENSE.md`](LICENSE.md) |
 | Crypto notice | [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md) |
@@ -16,8 +16,8 @@ Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference imp
 | .NET engine | [`BinSync.Net/`](BinSync.Net/) |
 | Two-node sample | [`samples/TwoNodeLoopback/`](samples/TwoNodeLoopback/) |
 
-**Package:** `BinSync.Core` **`2.6.5`** · **Target:** `net10.0`  
-**Branch:** `main` · **Tests:** 276 (CI)  
+**Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0`  
+**Branch:** `feature/fld-external-storage` (PR #16) · **Tests:** 456 (CI) · **Coverage:** 68.3%  
 **Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
 
 ---
