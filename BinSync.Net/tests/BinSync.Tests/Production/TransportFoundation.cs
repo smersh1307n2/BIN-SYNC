@@ -186,7 +186,10 @@ public class TransportFoundationTests
         var receive = highSession.ReceiveReassembledAsync();
         var send = lowSession.SendFragmentedAsync(0x09, 0x0001_0001u, 1, payload, 128 * 1024);
         await send.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(payload, await receive.WaitAsync(TimeSpan.FromSeconds(5)));
+        var received = await receive.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0x09, received.FrameType);
+        Assert.Equal(0x0001_0001u, received.StreamId);
+        Assert.Equal(payload, received.Payload);
     }
 
     [Fact]
