@@ -217,8 +217,8 @@ public class ChangeIdWireTests
         Assert.True(source.WriteField(1, recordId, 0x100, new byte[] { 1 }));
         Assert.True(source.DeleteRecord(1, recordId));
         var batch = Assert.Single(source.BuildSnapshot(1));
-        var tombstone = Assert.Single(batch.Entries.Where(e =>
-            Ops.DecodeOp(e.Payload).Op is OpRecordTombstone));
+        var tombstone = Assert.Single(batch.Entries, e =>
+            Ops.DecodeOp(e.Payload).Op is OpRecordTombstone);
         tombstone.RecordId = RecordId.From(Id(0xFE));
         Rehash(batch);
 
@@ -252,8 +252,8 @@ public class ChangeIdWireTests
         Assert.True(source.WriteField(1, recordId, 0x100, new byte[] { 1 }));
         Assert.True(source.DeleteRecord(1, recordId));
         var batch = source.CreateDeltaBatch(target.NodeId, 1)!;
-        var tombstone = Assert.Single(batch.Entries.Where(e =>
-            Ops.DecodeOp(e.Payload).Op is OpRecordTombstone));
+        var tombstone = Assert.Single(batch.Entries, e =>
+            Ops.DecodeOp(e.Payload).Op is OpRecordTombstone);
         tombstone.RecordId = RecordId.From(Id(0xFD));
         Rehash(batch);
 
