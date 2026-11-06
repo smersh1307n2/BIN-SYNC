@@ -152,7 +152,7 @@ public sealed class CausalTracker
     {
         lock (_gate)
         {
-            var depArr = deps is BatchId[] a ? a : deps.ToArray();
+            var depArr = deps.ToArray();
             _pending[changeId] = new PendingCausalOp
             {
                 ChangeId = changeId,

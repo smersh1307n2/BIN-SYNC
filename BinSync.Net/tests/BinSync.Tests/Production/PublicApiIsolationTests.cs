@@ -148,7 +148,7 @@ public sealed class PublicApiIsolationTests
 
         Assert.True(store.TryGet(nodeId, out var peer));
         peer!.PublicKey[0] ^= 0xFF;
-        peer.NodeId[0] ^= 0xFF;
+        Assert.Equal(NodeId.From(nodeId), peer.NodeId);
         var resolved = store.ResolvePublicKey(NodeId.From(nodeId));
         Assert.Equal(expectedKey, resolved);
         resolved![0] ^= 0xFF;

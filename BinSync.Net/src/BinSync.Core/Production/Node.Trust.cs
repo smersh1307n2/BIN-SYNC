@@ -45,14 +45,14 @@ public sealed partial class Node
         lock (_lockMeta)
         {
             EnsureTrust(mode == TrustMode.Tofu ? TrustMode.Tofu : mode)
-                .Allow(nodeId.ToArray(), publicKey, mode);
+                .Allow(nodeId, publicKey, mode);
         }
     }
 
     /// <summary>Revoke a previously trusted peer.</summary>
     public void RevokeTrust(NodeId nodeId)
     {
-        lock (_lockMeta) Trust?.Revoke(nodeId.ToArray());
+        lock (_lockMeta) Trust?.Revoke(nodeId);
     }
 
     /// <summary>Persist <see cref="Trust"/> (creating a TOFU store if missing).</summary>

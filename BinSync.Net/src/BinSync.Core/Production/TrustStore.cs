@@ -13,7 +13,7 @@ public enum TrustMode : byte
 public sealed class TrustedPeer
 {
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
-    public byte[] NodeId { get; init; } = Array.Empty<byte>();
+    public NodeId NodeId { get; init; }
     /// <summary>Ed25519 public key bytes pinned for this trusted peer.</summary>
     public byte[] PublicKey { get; init; } = Array.Empty<byte>();
     /// <summary>Trust mode controlling how signatures from this peer are validated.</summary>
@@ -40,14 +40,14 @@ public sealed partial class TrustStore
         get { lock (_gate) return _peers.Count; }
     }
 
-    static string Key(byte[] nodeId) => Convert.ToHexString(Codec.CanonicalB128(nodeId));
+    static string Key(NodeId nodeId) => Convert.ToHexString(nodeId.ToArray());
 
     /// <summary>Pin a peer public key under the given trust mode.</summary>
-    public void Allow(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
+    public void Allow(NodeId nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
             throw new ArgumentException("public key must be 32 bytes");
-        var id = Codec.CanonicalB128(nodeId);
+        var id = nodeId;
         lock (_gate)
         {
             _peers[Key(id)] = new TrustedPeer
@@ -62,19 +62,19 @@ public sealed partial class TrustStore
     }
 
     /// <summary>Mark a node id as a certificate-authority root.</summary>
-    public void AddCaRoot(byte[] caNodeId)
+    public void AddCaRoot(NodeId caNodeId)
     {
         lock (_gate) _caRoots.Add(Key(caNodeId));
     }
 
     /// <summary>True when the node is listed as a certificate-authority root.</summary>
-    public bool IsCaRoot(byte[] nodeId)
+    public bool IsCaRoot(NodeId nodeId)
     {
         lock (_gate) return _caRoots.Contains(Key(nodeId));
     }
 
     /// <summary>Revoke trust for a node id (signatures will no longer verify).</summary>
-    public void Revoke(byte[] nodeId)
+    public void Revoke(NodeId nodeId)
     {
         lock (_gate)
         {
@@ -84,7 +84,7 @@ public sealed partial class TrustStore
     }
 
     /// <summary>Try to get detached trusted-peer metadata for a node id.</summary>
-    public bool TryGet(byte[] nodeId, out TrustedPeer? peer)
+    public bool TryGet(NodeId nodeId, out TrustedPeer? peer)
     {
         lock (_gate)
         {
@@ -100,7 +100,7 @@ public sealed partial class TrustStore
 
     private static TrustedPeer ClonePeer(TrustedPeer peer) => new()
     {
-        NodeId = peer.NodeId.ToArray(),
+        NodeId = peer.NodeId,
         PublicKey = peer.PublicKey.ToArray(),
         Mode = peer.Mode,
         Revoked = peer.Revoked,
@@ -108,10 +108,7 @@ public sealed partial class TrustStore
     };
 
     /// <summary>Resolve the public key to use for a node, optionally checking a candidate.</summary>
-    public byte[]? ResolvePublicKey(NodeId nodeId, byte[]? candidatePublicKey = null) =>
-        ResolvePublicKey(nodeId.ToArray(), candidatePublicKey);
-
-    public byte[]? ResolvePublicKey(byte[] nodeId, byte[]? candidatePublicKey = null)
+    public byte[]? ResolvePublicKey(NodeId nodeId, byte[]? candidatePublicKey = null)
     {
         lock (_gate)
         {
@@ -128,7 +125,7 @@ public sealed partial class TrustStore
             if (DefaultMode == TrustMode.Tofu &&
                 candidatePublicKey is { Length: BatchSignature.PublicKeySize })
             {
-                var id = Codec.CanonicalB128(nodeId);
+                var id = nodeId;
                 _peers[k] = new TrustedPeer
                 {
                     NodeId = id,

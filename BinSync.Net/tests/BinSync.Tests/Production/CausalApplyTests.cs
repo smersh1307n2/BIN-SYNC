@@ -185,7 +185,9 @@ public class CausalApplyTests
         var n = new Node(Id(1), epoch: 1) { Causal = tracker };
         var child = Id(0x20);
         var parent = Id(0x10);
-        tracker.EnqueuePending(child, new[] { parent }, payload: "held");
+        var dependencies = new[] { BatchId.From(parent) };
+        tracker.EnqueuePending(BatchId.From(child), dependencies, payload: "held");
+        dependencies[0] = BatchId.From(Id(0x11));
         Assert.Empty(n.DrainCausal());
 
         tracker.NoteApplied(parent);

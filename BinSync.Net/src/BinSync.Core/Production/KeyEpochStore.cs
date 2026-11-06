@@ -8,36 +8,43 @@ namespace BinSync;
 public sealed class KeyEpochStore
 {
     // namespaceId → nodeId-hex → epoch
+    private readonly object _gate = new();
     private readonly Dictionary<int, Dictionary<string, ushort>> _epochs = new();
 
     /// <summary>Trusted identity public keys (32-byte Ed25519) keyed by nodeId hex.</summary>
     private readonly Dictionary<string, byte[]> _identityKeys = new();
 
     /// <summary>Store or update trusted public-key material for a node id.</summary>
-    public void TrustIdentity(ReadOnlySpan<byte> nodeId, ReadOnlySpan<byte> publicKey)
+    public void TrustIdentity(NodeId nodeId, ReadOnlySpan<byte> publicKey)
     {
         if (publicKey.Length != BatchSignature.PublicKeySize)
             throw new ArgumentException($"public key must be {BatchSignature.PublicKeySize} bytes");
-        _identityKeys[Hex(nodeId)] = publicKey.ToArray();
+        lock (_gate) _identityKeys[Hex(nodeId)] = publicKey.ToArray();
     }
 
     /// <summary>Try to load stored public identity material for a node id.</summary>
-    public bool TryGetIdentity(ReadOnlySpan<byte> nodeId, out byte[] publicKey)
+    public bool TryGetIdentity(NodeId nodeId, out byte[] publicKey)
     {
-        if (_identityKeys.TryGetValue(Hex(nodeId), out var stored))
+        lock (_gate)
         {
-            publicKey = stored.ToArray();
-            return true;
+            if (_identityKeys.TryGetValue(Hex(nodeId), out var stored))
+            {
+                publicKey = stored.ToArray();
+                return true;
+            }
+            publicKey = Array.Empty<byte>();
+            return false;
         }
-        publicKey = Array.Empty<byte>();
-        return false;
     }
 
     /// <summary>Current known key epoch for a publisher (0 if never rotated).</summary>
-    public ushort GetEpoch(int namespaceId, ReadOnlySpan<byte> nodeId)
+    public ushort GetEpoch(int namespaceId, NodeId nodeId)
     {
-        if (!_epochs.TryGetValue(namespaceId, out var map)) return 0;
-        return map.TryGetValue(Hex(nodeId), out var e) ? e : (ushort)0;
+        lock (_gate)
+        {
+            if (!_epochs.TryGetValue(namespaceId, out var map)) return 0;
+            return map.TryGetValue(Hex(nodeId), out var e) ? e : (ushort)0;
+        }
     }
 
     /// <summary>
@@ -46,38 +53,43 @@ public sealed class KeyEpochStore
     /// </summary>
     public bool TryApply(KeyRotationNotice notice)
     {
-        if (notice.NewKeyEpoch <= notice.OldKeyEpoch) return false;
-        var hex = Hex(notice.NodeId.ToArray());
-        if (!_identityKeys.TryGetValue(hex, out var pub))
-            return false; // UNKNOWN identity → drop (caller may surface UNKNOWN_KEY_EPOCH)
-        if (!KeyRotation.VerifyProof(notice, pub))
-            return false;
-
-        if (!_epochs.TryGetValue(notice.NamespaceId, out var map))
+        lock (_gate)
         {
-            map = new Dictionary<string, ushort>();
-            _epochs[notice.NamespaceId] = map;
+            if (notice.NewKeyEpoch <= notice.OldKeyEpoch) return false;
+            var hex = Hex(notice.NodeId);
+            if (!_identityKeys.TryGetValue(hex, out var pub))
+                return false; // UNKNOWN identity → drop (caller may surface UNKNOWN_KEY_EPOCH)
+            if (!KeyRotation.VerifyProof(notice, pub))
+                return false;
+
+            if (!_epochs.TryGetValue(notice.NamespaceId, out var map))
+            {
+                map = new Dictionary<string, ushort>();
+                _epochs[notice.NamespaceId] = map;
+            }
+            ushort current = map.TryGetValue(hex, out var cur) ? cur : (ushort)0;
+            if (current != 0 && notice.OldKeyEpoch != current)
+                return false;
+            if (notice.NewKeyEpoch <= current)
+                return false;
+            map[hex] = notice.NewKeyEpoch;
+            return true;
         }
-        ushort current = map.TryGetValue(hex, out var cur) ? cur : (ushort)0;
-        // Accept only when old matches current (or current is 0 and old is 0) and new advances.
-        if (current != 0 && notice.OldKeyEpoch != current)
-            return false;
-        if (notice.NewKeyEpoch <= current)
-            return false;
-        map[hex] = notice.NewKeyEpoch;
-        return true;
     }
 
     /// <summary>Force-set epoch without proof (bootstrap / tests). Prefer <see cref="TryApply"/>.</summary>
-    public void SeedEpoch(int namespaceId, ReadOnlySpan<byte> nodeId, ushort epoch)
+    public void SeedEpoch(int namespaceId, NodeId nodeId, ushort epoch)
     {
-        if (!_epochs.TryGetValue(namespaceId, out var map))
+        lock (_gate)
         {
-            map = new Dictionary<string, ushort>();
-            _epochs[namespaceId] = map;
+            if (!_epochs.TryGetValue(namespaceId, out var map))
+            {
+                map = new Dictionary<string, ushort>();
+                _epochs[namespaceId] = map;
+            }
+            map[Hex(nodeId)] = epoch;
         }
-        map[Hex(nodeId)] = epoch;
     }
 
-    static string Hex(ReadOnlySpan<byte> id) => Convert.ToHexString(id);
+    static string Hex(NodeId id) => Convert.ToHexString(id.ToArray());
 }
