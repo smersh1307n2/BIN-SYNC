@@ -8,7 +8,7 @@ public partial class SyncSession
     public async Task SendMembershipAsync(
         Node local, int namespaceId, uint membershipEpoch = 0, CancellationToken ct = default)
     {
-        uint streamId = 0x0001_0000u | (uint)namespaceId;
+        uint streamId = 0u;
         var msg = Membership.Build(local, namespaceId, membershipEpoch);
         await SendFrameAsync(MembershipFrames.Membership, streamId, 14, Membership.Encode(msg), ct).ConfigureAwait(false);
     }
@@ -18,9 +18,8 @@ public partial class SyncSession
     {
         var raw = await ReceiveExpectedExclusiveAsync(MembershipFrames.Membership, ct).ConfigureAwait(false)
            ;
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != MembershipFrames.Membership)
-            throw new FrameException("FRAME_REJECTED");
+        var frame = ParseExpectedSessionFrame(raw, MembershipFrames.Membership);
+        ValidateControlStream(frame);
         var msg = Membership.Decode(frame.Payload);
         return Membership.Apply(local, msg);
     }
