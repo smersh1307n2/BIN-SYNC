@@ -40,7 +40,7 @@ public static class CausalWire
         foreach (var entry in entries)
         {
             ArgumentNullException.ThrowIfNull(entry);
-            var changeId = BatchId.From(entry.ChangeId);
+            var changeId = entry.ChangeId;
             if (changeId.IsZero)
                 throw new ArgumentException("Causal trailer changeId cannot be zero.", nameof(entries));
 
@@ -128,7 +128,7 @@ public static class CausalWire
         for (int i = 0; i < entries.Count; i++)
         {
             var changeId = BatchId.From(r.B128());
-            var expectedChangeId = BatchId.From(entries[i].ChangeId);
+            var expectedChangeId = entries[i].ChangeId;
             if (changeId.IsZero || changeId != expectedChangeId)
                 throw new InvalidDataException("Causal trailer changeId does not match its batch entry.");
 
