@@ -237,8 +237,16 @@ public sealed class Wal : IDisposable
 
             ValidateReplaySequence(node, records);
             int applied = 0;
-            foreach (var payload in records)
-                applied += ApplyRecord(node, payload);
+            try
+            {
+                foreach (var payload in records)
+                    applied += ApplyRecord(node, payload);
+            }
+            catch
+            {
+                node.MarkReplayFaulted();
+                throw;
+            }
             _fs.Position = end;
             return applied;
         }
@@ -285,8 +293,16 @@ public sealed class Wal : IDisposable
         // a later, well-formed frame has an impossible Outbox sequence.
         ValidateReplaySequence(node, records);
         int applied = 0;
-        foreach (var payload in records)
-            applied += ApplyRecord(node, payload);
+        try
+        {
+            foreach (var payload in records)
+                applied += ApplyRecord(node, payload);
+        }
+        catch
+        {
+            node.MarkReplayFaulted();
+            throw;
+        }
         return applied;
         }
     }
