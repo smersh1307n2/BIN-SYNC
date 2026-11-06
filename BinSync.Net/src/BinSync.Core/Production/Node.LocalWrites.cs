@@ -23,17 +23,6 @@ public sealed partial class Node
         return (fs.Timestamp.Wall, fs.Timestamp.Logical, fs.AuthorNodeId.ToArray(), tomb ? "TOMB" : fs.Value);
     }
 
-    internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, RecordId recordId, int fieldId)
-    {
-        if (!Storage.TryGetValue(ns, out var store)) return null;
-        if (!store.TryGetValue(recordId, out var rec)) return null;
-        FieldState? fs = rec.State.TryGetValue((ushort)fieldId, out var w) ? w :
-                         (rec.FieldTombs.TryGetValue((ushort)fieldId, out var t) ? t : null);
-        if (fs is null) return null;
-        bool tomb = rec.FieldTombs.ContainsKey((ushort)fieldId);
-        return (fs.Timestamp.Wall, fs.Timestamp.Logical, fs.AuthorNodeId.ToArray(), tomb ? "TOMB" : fs.Value);
-    }
-
     /// Append a LOCAL write to outbox ONLY if merge reported changed (echo [E2]).
     /// Errata E-13 (scenario 37): restored-echo suppression — see Python port docstring.
     /// <summary>
