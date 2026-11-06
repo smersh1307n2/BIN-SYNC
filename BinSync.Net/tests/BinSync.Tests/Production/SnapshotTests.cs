@@ -471,4 +471,55 @@ public class SnapshotTests
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
     }
 
+
+    [Fact]
+    public void ApplySnapshotChunks_enforces_record_limit_before_publishing_any_record()
+    {
+        var source = Fix.MakeNode(931);
+        source.WriteField(1, Fix.Rid(931), 0x100, new byte[] { 1 });
+        source.WriteField(1, Fix.Rid(932), 0x100, new byte[] { 2 });
+        var chunks = Reconcile.BuildSnapshotChunks(source, 1);
+
+        using var target = new Node(Fix.Nid(933), epoch: 1,
+            limits: new ResourceLimits { MaxRecords = 1 });
+
+        Assert.Throws<SyncException>(() => Reconcile.ApplySnapshotChunks(target, chunks));
+        Assert.Equal(0, target.GetRecordCount(1));
+        Assert.Empty(target.Storage);
+    }
+
+    [Fact]
+    public void ApplySnapshotChunks_rejects_namespace_outside_wire_range_before_mutation()
+    {
+        using var target = Fix.MakeNode(934);
+        var chunk = new SnapshotChunkMessage
+        {
+            NamespaceId = -1,
+            ChunkIndex = 0,
+            ChunkCount = 1,
+            Records = new List<SnapshotRecord>
+            {
+                new()
+                {
+                    RecordId = RecordId.From(Fix.Rid(934)),
+                    Fields = new List<SnapshotField>
+                    {
+                        new()
+                        {
+                            FieldId = 0x100,
+                            Wall = 1,
+                            AuthorNodeId = Fix.Nid(935),
+                            Value = new byte[] { 1 }
+                        }
+                    }
+                }
+            }
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Reconcile.ApplySnapshotChunks(target, new[] { chunk }));
+        Assert.Empty(target.Storage);
+    }
+
+
 }
