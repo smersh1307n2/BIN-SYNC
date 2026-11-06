@@ -166,8 +166,10 @@ public sealed partial class Node
         var entries = new List<OutboxEntry>(recCount);
         for (int i = 0; i < recCount; i++)
         {
-            var recordId = RecordId.From(r.B128());
-            var changeId = BatchId.From(r.B128());
+            // Read fixed-width identities directly into value types; B128() would
+            // allocate an intermediate 16-byte array for each identity.
+            var recordId = r.ReadRecordId();
+            var changeId = r.ReadBatchId();
             if (changeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
             byte opKind = r.U8();
