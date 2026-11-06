@@ -113,4 +113,39 @@ public sealed class RemoteBatchWalAtomicityTests
         Assert.Same(peer, restoredPeer);
     }
 
+    [Fact]
+    public void Wal_replay_accounts_for_remote_relay_sequences_before_later_local_mutations()
+    {
+        using var origin = Fix.MakeNode(967);
+        using var relay = Fix.MakeNode(968);
+        using var receiver = new Node(origin.NodeId, origin.Epoch);
+
+        Transport.MakeSession(origin, relay);
+        var relayedRecordId = Fix.Rid(967);
+        Assert.True(origin.WriteField(3, relayedRecordId, 0x100, new byte[] { 0xC1 }));
+        var originBatch = origin.CreateDeltaBatch(relay.NodeId, 3)!;
+        Assert.Equal(1, relay.ApplyBatch(originBatch, origin.NodeId).Applied);
+
+        Transport.MakeSession(relay, receiver);
+        var forwardedBatch = relay.CreateDeltaBatch(receiver.NodeId, 3, origin.NodeId)!;
+        var walPath = Path.Combine(Path.GetTempPath(),
+            "binsync-wal-relay-sequence-" + Guid.NewGuid().ToString("N") + ".wal");
+        using var wal = Wal.Open(walPath);
+        receiver.AttachWal(wal);
+
+        Assert.Equal(1, receiver.ApplyBatch(forwardedBatch, relay.NodeId).Applied);
+        Assert.Single(receiver.Outbox[3]);
+        Assert.Equal(1, receiver.Outbox[3][0].Seq);
+
+        var localRecordId = Fix.Rid(969);
+        Assert.True(receiver.WriteField(3, localRecordId, 0x101, new byte[] { 0xC2 }));
+        Assert.Equal(2, receiver.Outbox[3][1].Seq);
+
+        using var recovered = new Node(receiver.NodeId, receiver.Epoch);
+        Assert.Equal(2, wal.Replay(recovered));
+        Assert.Equal(new long[] { 1, 2 }, recovered.Outbox[3].Select(entry => entry.Seq).ToArray());
+        Assert.True(recovered.TryGetRecord(3, relayedRecordId, out _));
+        Assert.True(recovered.TryGetRecord(3, localRecordId, out _));
+    }
+
 }
