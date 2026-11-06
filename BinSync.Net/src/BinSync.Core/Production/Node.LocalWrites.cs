@@ -406,7 +406,7 @@ public sealed partial class Node
         EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
         var op = new OpRecordTombstone
         {
-            RecordId = recordId.ToArray(),
+            RecordId = recordId,
             Wall = h.Wall,
             Logical = h.Logical,
             Origin = 1,

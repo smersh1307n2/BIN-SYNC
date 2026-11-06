@@ -71,9 +71,9 @@ public sealed partial class Node
         {
             bool full = op switch { OpFieldWrite x => x.FullAuthorMode, OpFieldTomb x => x.FullAuthorMode, OpRecordTombstone x => x.FullAuthorMode, _ => false };
             var emb = GetAuthor(op);
-            if (full && emb is not null && emb.Length == 16) return NodeId.From(emb);
+            if (full && emb.HasValue) return emb.Value;
             try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
-            catch (SyncException) when (full && emb is not null && emb.Length == 16) { return NodeId.From(emb); }
+            catch (SyncException) when (full && emb.HasValue) { return emb.Value; }
         }
         // Decode ops once — reused for stream author, apply loop, and relay (no batch.Ops()).
         int nEntEarly = batch.Entries.Count;
@@ -145,7 +145,7 @@ public sealed partial class Node
             // clock skew clamp on incoming HLC wall (§5.3)
             if ((long)WallOf(op) > nowWall + maxSkew)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
-            RecordId recId = op is OpRecordTombstone rt ? RecordId.From(rt.RecordId) : e.RecordId;
+            RecordId recId = op is OpRecordTombstone rt ? rt.RecordId : e.RecordId;
             if (!overlays.TryGetValue(recId, out var rec))
             {
                 if (nsStore.TryGetValue(recId, out var existing))
@@ -360,7 +360,7 @@ public sealed partial class Node
 
     private static ushort GetOrigin(object op) => op switch
     { OpFieldWrite x => x.Origin, OpFieldTomb x => x.Origin, OpRecordTombstone x => x.Origin, _ => (ushort)0 };
-    private static byte[]? GetAuthor(object op) => op switch
+    private static NodeId? GetAuthor(object op) => op switch
     { OpFieldWrite x => x.AuthorNodeId, OpFieldTomb x => x.AuthorNodeId, OpRecordTombstone x => x.AuthorNodeId, _ => null };
 
     /// Apply one resolved op to a staged record. Echo suppression happens inside
@@ -486,7 +486,7 @@ public sealed partial class Node
             var entries = new List<OutboxEntry>();
             foreach (var (fid, fs) in rec.State.OrderBy(kv => kv.Key))
             {
-                var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId.ToArray(), Value = fs.Value.ToArray() };
+                var op = new OpFieldWrite { FieldId = fid, KeyEpoch = fs.KeyEpoch, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical, Origin = 1, AuthorNodeId = fs.AuthorNodeId, Value = fs.Value.ToArray() };
                 entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(op), AuthorNodeId = fs.AuthorNodeId, CreatedAt = 0 });
             }
             foreach (var (fid, fs) in rec.FieldTombs.OrderBy(kv => kv.Key))
@@ -503,10 +503,10 @@ public sealed partial class Node
                     // SPEC HARDENING: snapshots must carry an explicit REVIVE lifecycle op
                     // so the receiver un-ghosts historical fields (§7.4 У4).
                     var opw = new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = rec.LifecycleHlc.Wall, Logical = rec.LifecycleHlc.Logical, Origin = 1, AuthorNodeId = lcAuthor, Value = new[] { Model.Alive } };
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOpFull(opw), AuthorNodeId = opw.AuthorNodeId!.Value, CreatedAt = 0 });
                 }
                 else
-                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!, CreatedAt = 0 });
+                    entries.Add(new OutboxEntry { NamespaceId = namespaceId, Seq = 0, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()), RecordId = rid, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOpFull(op), AuthorNodeId = op.AuthorNodeId!.Value, CreatedAt = 0 });
             }
             if (entries.Count > 0)
                 batches.Add(new Batch(namespaceId, 0, 1, 0x02, 0, NodeId, Epoch, 0, 0,

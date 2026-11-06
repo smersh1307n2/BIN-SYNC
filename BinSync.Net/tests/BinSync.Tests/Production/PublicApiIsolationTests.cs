@@ -176,6 +176,15 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void OperationDtos_UseTypedIdentityFields()
+    {
+        Assert.Equal(typeof(NodeId?), typeof(OpFieldWrite).GetField(nameof(OpFieldWrite.AuthorNodeId))!.FieldType);
+        Assert.Equal(typeof(NodeId?), typeof(OpFieldTomb).GetField(nameof(OpFieldTomb.AuthorNodeId))!.FieldType);
+        Assert.Equal(typeof(NodeId?), typeof(OpRecordTombstone).GetField(nameof(OpRecordTombstone.AuthorNodeId))!.FieldType);
+        Assert.Equal(typeof(RecordId), typeof(OpRecordTombstone).GetField(nameof(OpRecordTombstone.RecordId))!.FieldType);
+    }
+
+    [Fact]
     public void FlowControl_UsesImmutableConfigurationAndAtomicCredit()
     {
         Assert.Null(typeof(FlowControl).GetProperty(nameof(FlowControl.Initial))!.GetSetMethod());
