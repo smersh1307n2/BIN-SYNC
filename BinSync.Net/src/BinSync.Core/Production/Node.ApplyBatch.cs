@@ -24,6 +24,7 @@ public sealed partial class Node
 
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null)
     {
+        ThrowIfDisposed();
         ValidateBatchForWire(batch);
         var result = new BatchResult(batch.BatchId)
         {
@@ -406,6 +407,7 @@ public sealed partial class Node
 
     internal void ProcessAckInternal(NodeId peerNode, int namespaceId, long ackedSeq, NodeId? authorStream = null)
     {
+        ThrowIfDisposed();
         if (ackedSeq < 0 || (authorStream is not null && authorStream.Value.IsZero))
             throw new SyncException("ACK_OUT_OF_RANGE");
         if (!PeerStates.TryGetValue((peerNode, namespaceId), out var ps)) return;
@@ -484,6 +486,8 @@ public sealed partial class Node
 
     internal List<Batch> BuildSnapshotInternal(int namespaceId)
     {
+        ThrowIfDisposed();
+        ValidateNamespaceId(namespaceId);
         var batches = new List<Batch>();
         var nsStore = Ns(namespaceId);
         foreach (var (rid, rec) in nsStore.OrderBy(kv => kv.Key.ToString()))

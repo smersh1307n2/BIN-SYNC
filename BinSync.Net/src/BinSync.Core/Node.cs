@@ -44,7 +44,26 @@ public sealed partial class Node : IDisposable
     /// <summary>
     /// Acquire all domain locks (Storage → Outbox → Meta) for a point-in-time snapshot.
     /// </summary>
-    public AllGateScope EnterAllGates() => new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
+    public AllGateScope EnterAllGates()
+    {
+        var scope = new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
+        try
+        {
+            ThrowIfDisposed();
+            return scope;
+        }
+        catch
+        {
+            scope.Dispose();
+            throw;
+        }
+    }
+
+    internal void ThrowIfDisposed()
+    {
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(Node));
+    }
 
     /// <summary>Raised after a batch is applied or accepted as a duplicate (outside engine locks).</summary>
     public event Action<BatchResult, NodeId>? BatchApplied;
@@ -106,6 +125,7 @@ public sealed partial class Node : IDisposable
         ValidateNamespaceId(namespaceId);
         lock (_lockStorage)
         {
+            ThrowIfDisposed();
             if (_storage.TryGetValue(namespaceId, out var map) && map.TryGetValue(recordId, out var rec))
             {
                 record = CloneForPublicRead(rec);
@@ -123,6 +143,7 @@ public sealed partial class Node : IDisposable
         ValidateFieldId(fieldId);
         lock (_lockStorage)
         {
+            ThrowIfDisposed();
             if (_storage.TryGetValue(namespaceId, out var map)
                 && map.TryGetValue(recordId, out var rec)
                 && rec.State.TryGetValue((ushort)fieldId, out var fs))
@@ -140,7 +161,10 @@ public sealed partial class Node : IDisposable
     {
         ValidateNamespaceId(namespaceId);
         lock (_lockStorage)
+        {
+            ThrowIfDisposed();
             return _storage.TryGetValue(namespaceId, out var map) ? map.Count : 0;
+        }
     }
 
     /// <summary>Number of pending outbox entries for a namespace.</summary>
@@ -152,6 +176,7 @@ public sealed partial class Node : IDisposable
         ArgumentNullException.ThrowIfNull(peer);
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             PeersByNid ??= new Dictionary<NodeId, Node>();
             PeersByNid[peer.NodeId] = peer;
         }
@@ -300,8 +325,19 @@ public sealed partial class Node : IDisposable
             LastStreamDigest.Clear();
             DurableAuthors.Clear();
             KnownEpochs.Clear();
+            LastStreamAuthor.Clear();
+            Quarantined.Clear();
+            SchemaVersions.Clear();
+            ForbiddenNamespaces.Clear();
+            _outboxSeq.Clear();
             AcksOut.Clear();
             ErrorsOut.Clear();
+            _schemas = null;
+            _causal = null;
+            _e2eeKeys = null;
+            _trust = null;
+            _wal = null;
+            _limits = null;
             PeersByNid = null;
             BatchApplied = null;
             FieldWritten = null;

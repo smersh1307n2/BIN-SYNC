@@ -62,6 +62,7 @@ public sealed partial class Node
         ValidateNamespaceId(ns);
         lock (_lockStorage) lock (_lockOutbox)
         {
+            ThrowIfDisposed();
             // The node owns its author identity and stamps the local origin.
             // Never mutate a caller-owned operation DTO.
             var ownedOp = CloneOperationForPush(op);
@@ -360,6 +361,7 @@ public sealed partial class Node
 
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
+        ThrowIfDisposed();
         ValidateNamespaceId(namespaceId);
         ValidateFieldId(fieldId);
         ArgumentNullException.ThrowIfNull(value);
@@ -425,6 +427,7 @@ public sealed partial class Node
 
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
+        ThrowIfDisposed();
         ValidateNamespaceId(namespaceId);
         ValidateFieldId(fieldId);
         Storage.TryGetValue(namespaceId, out var store);
@@ -468,6 +471,7 @@ public sealed partial class Node
 
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
+        ThrowIfDisposed();
         ValidateNamespaceId(namespaceId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
@@ -509,6 +513,7 @@ public sealed partial class Node
 
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
+        ThrowIfDisposed();
         ValidateNamespaceId(namespaceId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();

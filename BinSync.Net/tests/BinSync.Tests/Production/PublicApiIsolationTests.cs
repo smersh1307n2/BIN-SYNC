@@ -47,6 +47,24 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void Dispose_is_idempotent_terminal_and_releases_engine_state()
+    {
+        var node = Fix.MakeNode(913);
+        node.WriteField(7, Fix.Rid(913), 0x101, new byte[] { 1 });
+        node.RegisterSchema(new SchemaDescriptor
+        {
+            NamespaceId = 7, SchemaId = 1, Version = 1, MergePolicy = 1,
+            FieldIds = new HashSet<ushort> { 0x101 },
+        });
+        node.Dispose();
+        node.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => node.WriteField(7, Fix.Rid(913), 0x101, new byte[] { 2 }));
+        Assert.Throws<ObjectDisposedException>(() => node.TryGetRecord(7, Fix.Rid(913), out _));
+        Assert.Throws<ObjectDisposedException>(() => node.EnterAllGates());
+    }
+
+    [Fact]
     public void Lifecycle_events_run_after_node_locks_are_released()
     {
         using var node = Fix.MakeNode(911);
