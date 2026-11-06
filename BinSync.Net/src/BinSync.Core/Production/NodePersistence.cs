@@ -139,7 +139,9 @@ public static class NodePersistence
         ArgumentNullException.ThrowIfNull(node);
         var body = SerializeBody(node);
         var clone = DeserializeBody(body, Version, node.Clock.NowFn, node.Clock.MaxSkewUs, node.Limits);
-        clone.PeersByNid = null;
+        if (clone.PeersByNid is not null)
+            foreach (var peerId in clone.PeersByNid.Keys.ToArray())
+                clone.PeersByNid[peerId] = null!;
         clone.ErrorsOut.AddRange(node.ErrorsOut);
         clone.AcksOut.AddRange(node.AcksOut);
         return clone;

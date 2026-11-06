@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using BinSync;
 using Xunit;
 
@@ -58,12 +57,10 @@ public sealed class RemoteBatchWalAtomicityTests
 
         var remoteRecordId = Fix.Rid(964);
         Assert.True(sender.WriteField(3, remoteRecordId, 0x100, [0xA4]));
-        var batch = sender.CreateDeltaBatch(target.NodeId, 3)!;
-        var invalidPayload = sender.EncodeBatchPayload(batch);
-        // Batch is immutable; alter only the wire cursor while keeping the frame
-        // structurally valid so semantic replay rejects it with SEQ_GAP.
-        BinaryPrimitives.WriteUInt64BigEndian(invalidPayload.AsSpan(28, 8), 2);
-        BinaryPrimitives.WriteUInt64BigEndian(invalidPayload.AsSpan(36, 8), 2);
+        var invalidBatch = sender.CreateDeltaBatch(target.NodeId, 3)!;
+        invalidBatch.CursorStart = 2;
+        invalidBatch.CursorEnd = 2;
+        var invalidPayload = sender.EncodeBatchPayload(invalidBatch);
         wal.AppendRemoteBatch(sender.NodeId, sender.Epoch,
             Array.Empty<AliasMapEntry>(), invalidPayload);
 
