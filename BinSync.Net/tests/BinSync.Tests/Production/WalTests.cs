@@ -24,6 +24,38 @@ public class WalTests
     }
 
     [Fact]
+    public void Local_wal_mutation_uses_compact_origin_when_framings_are_ambiguous()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-ambiguous-origin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var node = Fix.MakeNode(988);
+            var path = Path.Combine(dir, "node.wal");
+            using (var wal = Wal.Open(path))
+            {
+                node.AttachWal(wal);
+                var value = Enumerable.Range(0, 32).Select(i => (byte)(i + 1)).ToArray();
+                // For a compact FieldWrite, these bytes also form a valid full-author
+                // framing: the first 16 bytes after the fixed prefix consume origin,
+                // length and 13 value bytes; value[13] then declares the 18-byte tail.
+                value[13] = 18;
+                Assert.True(node.WriteField(7, RecordId.From(Fix.Rid(988)), 0x101, value));
+                Assert.Equal(1, wal.Sequence);
+            }
+
+            var recovered = new Node(node.NodeId, epoch: node.Epoch);
+            Assert.Equal(1, Wal.ReplayFile(path, recovered));
+            Assert.True(recovered.TryGetField(7, RecordId.From(Fix.Rid(988)), 0x101, out var field));
+            Assert.Equal(Enumerable.Range(0, 32).Select(i => (byte)(i == 13 ? 18 : i + 1)), field!.Value);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Node_snapshot_rejects_trailing_bytes()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-state-" + Guid.NewGuid().ToString("N"));

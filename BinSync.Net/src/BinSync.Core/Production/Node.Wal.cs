@@ -76,7 +76,7 @@ public sealed partial class Node
             if (entry.Seq <= currentSeq || entry.Seq != currentSeq + 1)
                 throw new InvalidDataException("WAL local-mutation sequence is not the next expected value.");
 
-            var decoded = Ops.DecodeOp(entry.Payload).Op;
+            var decoded = Ops.DecodeOp(entry.Payload, fullAuthor: false).Op;
             Hlc timestamp = decoded switch
             {
                 OpFieldWrite x => new Hlc(x.Wall, x.Logical),
