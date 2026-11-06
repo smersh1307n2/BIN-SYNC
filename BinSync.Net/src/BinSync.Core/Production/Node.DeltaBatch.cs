@@ -45,6 +45,27 @@ public sealed partial class Node
         }
     }
 
+    // The session transport only needs the encoded packet and ACK/stream metadata.
+    // Keep payload references to the Outbox while encoding under the node gates; unlike
+    // the public Batch API, this temporary graph never escapes the protected operation.
+    internal OutboundBatchPayload? CreateDeltaBatchPayloadForTransport(
+        NodeId targetPeer, int namespaceId, NodeId? filterAuthorNodeId = null,
+        int schemaId = 0, int schemaVersion = 1)
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var batch = CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId,
+                schemaId, schemaVersion, detachPublicBuffers: false);
+            if (batch is null) return null;
+
+            // CreateDeltaBatchInternal already binds the stream id and digest chain.
+            // Encode before releasing the gates so shared Outbox payloads remain stable.
+            var payload = EncodeBatchPayloadInternal(batch);
+            return new OutboundBatchPayload(batch, payload);
+        }
+    }
+
     internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,
                                        NodeId? filterAuthorNodeId = null,
                                        int schemaId = 0, int schemaVersion = 1,
@@ -384,18 +405,63 @@ public sealed partial class Node
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) { ThrowIfDisposed(); AdvanceStreamInternal(targetPeer, namespaceId, batch); }
     }
 
-    internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch)
+    internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch) =>
+        AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId(), batch.IssuerEpoch,
+            batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
+
+    internal void AdvanceStreamForTransport(NodeId targetPeer, int namespaceId, OutboundBatchPayload batch)
     {
-        var author = batch.AuthorStreamId();
-        if (author.IsZero || batch.CursorStart <= 0 || batch.CursorEnd < batch.CursorStart)
-            throw new SyncException("ACK_OUT_OF_RANGE", batch.BatchId);
-        LastStreamDigest[((NodeId, namespaceId, batch.IssuerEpoch), targetPeer)] = batch.BatchDigest;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId, batch.IssuerEpoch,
+                batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
+        }
+    }
+
+    private void AdvanceStreamCore(NodeId targetPeer, int namespaceId, NodeId author, int issuerEpoch,
+        long cursorStart, long cursorEnd, BatchId batchId, Digest16 batchDigest)
+    {
+        if (author.IsZero || cursorStart <= 0 || cursorEnd < cursorStart)
+            throw new SyncException("ACK_OUT_OF_RANGE", batchId);
+        LastStreamDigest[((NodeId, namespaceId, issuerEpoch), targetPeer)] = batchDigest;
         if (!PeerStates.TryGetValue((targetPeer, namespaceId), out var ps))
             PeerStates[(targetPeer, namespaceId)] = ps = new PeerState(targetPeer, namespaceId);
         ps.StreamPushed[author] = Math.Max(ps.StreamPushed.TryGetValue(author, out var pushed) ? pushed : 0,
-                                           batch.CursorEnd);
-        ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, batch.CursorEnd);
+                                           cursorEnd);
+        ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
     }
     // EncodeBatchPayload / DecodeBatchPayload → Production/Node.BatchCodec.cs
+
+/// <summary>
+/// Encoded outbound batch plus the immutable metadata needed to validate its ACK.
+/// This type is internal to the transport path; public callers continue receiving Batch.
+/// </summary>
+internal readonly struct OutboundBatchPayload
+{
+    public byte[] Payload { get; }
+    public BatchId BatchId { get; }
+    public NodeId AuthorStreamId { get; }
+    public NodeId DurableAuthor { get; }
+    public int NamespaceId { get; }
+    public int IssuerEpoch { get; }
+    public long CursorStart { get; }
+    public long CursorEnd { get; }
+    public Digest16 BatchDigest { get; }
+
+    public OutboundBatchPayload(Batch batch, byte[] payload)
+    {
+        Payload = payload;
+        BatchId = batch.BatchId;
+        AuthorStreamId = batch.AuthorStreamId();
+        DurableAuthor = batch.DurableAuthor;
+        NamespaceId = batch.NamespaceId;
+        IssuerEpoch = batch.IssuerEpoch;
+        CursorStart = batch.CursorStart;
+        CursorEnd = batch.CursorEnd;
+        BatchDigest = batch.BatchDigest;
+    }
+}
+
 
 }

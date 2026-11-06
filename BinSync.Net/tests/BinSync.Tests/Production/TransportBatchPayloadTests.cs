@@ -1,0 +1,64 @@
+using BinSync;
+using Xunit;
+
+namespace BinSync.Tests;
+
+public class TransportBatchPayloadTests
+{
+    [Fact]
+    public void Transport_payload_matches_public_batch_wire_bytes_and_ack_metadata()
+    {
+        var sender = Fix.MakeNode(211);
+        var receiver = Fix.MakeNode(212);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(7, Fix.Rid(0x71), 0x100, new byte[] { 0x10, 0x20, 0x30 }));
+        Assert.True(sender.WriteField(7, Fix.Rid(0x71), 0x101, new byte[] { 0x40, 0x50 }));
+
+        // Establish the public API's canonical encoding first. The transport path
+        // must produce exactly the same bytes for the same stream/cursor span.
+        var publicBatch = sender.CreateDeltaBatch(receiver.NodeId, 7)!;
+        var expectedPayload = sender.EncodeBatchPayload(publicBatch);
+
+        var outbound = sender.CreateDeltaBatchPayloadForTransport(receiver.NodeId, 7);
+        Assert.NotNull(outbound);
+        Assert.Equal(expectedPayload, outbound!.Value.Payload);
+        Assert.Equal(publicBatch.BatchId, outbound.Value.BatchId);
+        Assert.Equal(publicBatch.AuthorStreamId(), outbound.Value.AuthorStreamId);
+        Assert.Equal(publicBatch.DurableAuthor, outbound.Value.DurableAuthor);
+        Assert.Equal(publicBatch.NamespaceId, outbound.Value.NamespaceId);
+        Assert.Equal(publicBatch.IssuerEpoch, outbound.Value.IssuerEpoch);
+        Assert.Equal(publicBatch.CursorStart, outbound.Value.CursorStart);
+        Assert.Equal(publicBatch.CursorEnd, outbound.Value.CursorEnd);
+        Assert.Equal(publicBatch.BatchDigest, outbound.Value.BatchDigest);
+
+        // The transport-only metadata must drive the exact same pushed watermark
+        // and ACK compaction behavior as the public Batch path.
+        sender.AdvanceStreamForTransport(receiver.NodeId, 7, outbound.Value);
+        sender.ProcessAck(receiver.NodeId, 7, outbound.Value.CursorEnd,
+            authorStream: outbound.Value.DurableAuthor);
+
+        Assert.Equal(0, sender.OutboxSize(7));
+        Assert.Equal(outbound.Value.CursorEnd,
+            sender.PeerStates[(receiver.NodeId, 7)].StreamPushed[outbound.Value.AuthorStreamId]);
+        Assert.Equal(outbound.Value.CursorEnd,
+            sender.PeerStates[(receiver.NodeId, 7)].AckedFor(outbound.Value.AuthorStreamId));
+    }
+
+    [Fact]
+    public void Transport_payload_is_independent_of_outbox_after_encoding()
+    {
+        var sender = Fix.MakeNode(213);
+        var receiver = Fix.MakeNode(214);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(8, Fix.Rid(0x72), 0x100, new byte[] { 1, 2, 3, 4 }));
+        var outbound = sender.CreateDeltaBatchPayloadForTransport(receiver.NodeId, 8);
+        Assert.NotNull(outbound);
+
+        var expected = outbound!.Value.Payload.ToArray();
+        sender.Outbox[8][0].Payload = new byte[] { 9, 9, 9 };
+
+        Assert.Equal(expected, outbound.Value.Payload);
+    }
+}

@@ -168,19 +168,19 @@ public partial class SyncSession : IAsyncDisposable
         await _pushGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-        var batch = sender.CreateDeltaBatch(PeerNodeId, namespaceId, schemaVersion: schemaVersion);
+        var batch = sender.CreateDeltaBatchPayloadForTransport(PeerNodeId, namespaceId,
+            schemaVersion: schemaVersion);
         if (batch is null) return false;
-        sender.SignBatchFor(batch, PeerNodeId);
-        var payload = sender.EncodeBatchPayload(batch);
-        await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1, payload, ct).ConfigureAwait(false);
+        await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1,
+            batch.Value.Payload, ct).ConfigureAwait(false);
         var raw = await ReceivePacketAsync(0x0B, ct).ConfigureAwait(false);
         var (frame, _) = FrameCodec.ParseFrame(raw);
         if (frame.FrameType != 0x0B) throw new FrameException("FRAME_REJECTED");
         var (id, seq, author) = Transport.DecodeAck(frame.Payload);
-        if (!batch.BatchId.EqualsBytes(id)) throw new InvalidOperationException("ACK batch id mismatch");
-        if (seq != batch.CursorEnd || author is null || NodeId.From(author) != batch.DurableAuthor)
-            throw new SyncException("ACK_OUT_OF_RANGE", batch.BatchId);
-        sender.AdvanceStream(PeerNodeId, namespaceId, batch);
+        if (!batch.Value.BatchId.EqualsBytes(id)) throw new InvalidOperationException("ACK batch id mismatch");
+        if (seq != batch.Value.CursorEnd || author is null || NodeId.From(author) != batch.Value.DurableAuthor)
+            throw new SyncException("ACK_OUT_OF_RANGE", batch.Value.BatchId);
+        sender.AdvanceStreamForTransport(PeerNodeId, namespaceId, batch.Value);
         sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: NodeId.From(author));
         return true;
         }
