@@ -171,9 +171,9 @@ public class TransportFoundationTests
         await using var highSession = await acceptTask;
 
         var waiting = highSession.ReceiveBatchAsync(high);
-        var excessive = Frames.MAX_WINDOW_SIZE - Frames.INITIAL_WINDOW + 1;
+        const uint unsolicited = 1;
         await toLow.SendAsync(FrameCodec.BuildFrame(Frames.TYPE_WINDOW_UPDATE, 0x0001_0001u,
-            1, SessionWire.EncodeWindowUpdate((uint)excessive)));
+            1, SessionWire.EncodeWindowUpdate(unsolicited)));
         var error = await Assert.ThrowsAsync<IOException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.IsType<FrameException>(error.InnerException);
         Assert.Equal("FLOW_CONTROL_VIOLATION", ((FrameException)error.InnerException!).CodeName);
