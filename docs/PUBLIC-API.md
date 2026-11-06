@@ -70,6 +70,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
 | `EncodeBatchPayload` / `EncodeBatchPayload(…, Span<byte>)` | Batch → payload bytes |
+| `EncodeRecordsArray` / `DecodeRecordsArray` | Canonical records codec; decoded identities are typed `RecordId` / `BatchId`, trailing bytes rejected |
 | `DecodeBatchPayload` | Payload → `Batch` with **owned** entry buffers |
 | `ApplyBatch(Batch, NodeId sender)` | Apply + inbox idempotency |
 | `ApplyBatchPayload(byte[], NodeId sender)` | Decode+apply (preferred on the wire path) |

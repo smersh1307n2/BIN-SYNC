@@ -137,22 +137,27 @@ public sealed partial class Node
         return dest.AsSpan(0, w.Length).ToArray();
     }
 
-    /// <summary>Decode records array from canonical wire bytes.</summary>
-    public static List<(byte[] Rid, byte[] ChangeId, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
+    /// <summary>Decode records array from canonical wire bytes into typed, owned identities.</summary>
+    public static List<(RecordId Rid, BatchId ChangeId, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
         var r = new Reader(data);
-        int n = (int)r.Varint();
-        var outp = new List<(byte[], byte[], byte, byte[])>();
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(data.Length / 4))
+            throw new InvalidDataException("Records array count exceeds the available payload.");
+        var outp = new List<(RecordId, BatchId, byte, byte[])>((int)count);
+        for (int i = 0; i < (int)count; i++)
         {
-            byte[] rid = r.B128();
-            byte[] changeId = r.B128();
-            if (changeId.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            var rid = RecordId.From(r.B128());
+            var changeId = BatchId.From(r.B128());
+            if (changeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
             byte kind = r.U8();
             byte[] payload = r.Bytes();
             outp.Add((rid, changeId, kind, payload));
         }
+        if (!r.Eof())
+            throw new InvalidDataException("Records array contains trailing bytes.");
         return outp;
     }
 

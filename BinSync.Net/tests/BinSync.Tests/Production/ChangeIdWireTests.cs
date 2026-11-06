@@ -82,10 +82,11 @@ public class ChangeIdWireTests
         var decoded = Node.DecodeRecordsArray(bytes);
 
         Assert.Single(decoded);
-        Assert.Equal(entry.RecordId.ToArray(), decoded[0].Rid);
-        Assert.Equal(entry.ChangeId.ToArray(), decoded[0].ChangeId);
+        Assert.Equal(entry.RecordId, decoded[0].Rid);
+        Assert.Equal(entry.ChangeId, decoded[0].ChangeId);
         Assert.Equal(entry.OpKind, decoded[0].Kind);
         Assert.Equal(entry.Payload.ToArray(), decoded[0].Payload);
+        Assert.Throws<InvalidDataException>(() => Node.DecodeRecordsArray(bytes.Append((byte)0).ToArray()));
     }
     [Fact]
     public void Change_id_survives_A_to_B_to_C_to_A_and_duplicate_arrival_from_second_peer()
