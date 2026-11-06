@@ -146,6 +146,55 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void Lost_dependency_is_remembered_for_future_evaluations()
+    {
+        var tracker = new CausalTracker();
+        tracker.MarkLost(Id(1));
+
+        Assert.Equal(CausalOutcome.LostDep,
+            tracker.Evaluate(Id(2), new[] { Id(1) }, out _));
+        Assert.Throws<InvalidOperationException>(() => tracker.NoteApplied(Id(1)));
+    }
+
+    [Fact]
+    public void MarkLost_propagates_through_transitive_pending_dependents()
+    {
+        var tracker = new CausalTracker();
+        tracker.EnqueuePending(Id(2), new[] { Id(1) });
+        tracker.EnqueuePending(Id(3), new[] { Id(2) });
+        tracker.EnqueuePending(Id(4), new[] { Id(3) });
+
+        var dropped = tracker.MarkLost(Id(1));
+
+        Assert.Equal(3, dropped.Count);
+        Assert.Equal(0, tracker.PendingCount);
+        Assert.Equal(CausalOutcome.LostDep,
+            tracker.Evaluate(Id(5), new[] { Id(4) }, out _));
+    }
+
+    [Fact]
+    public void Drain_propagates_timeout_as_lost_dependency_to_descendants()
+    {
+        long now = 1_000;
+        var tracker = new CausalTracker
+        {
+            DepTimeout = TimeSpan.FromMilliseconds(100),
+            UtcNowMs = () => now,
+        };
+        tracker.EnqueuePending(Id(2), new[] { Id(1) });
+        tracker.EnqueuePending(Id(3), new[] { Id(2) });
+        now = 1_500;
+
+        var released = tracker.Drain();
+
+        Assert.Contains(released, x => x.Op.ChangeId == BatchId.From(Id(2)) &&
+            x.Outcome == CausalOutcome.TimedOut);
+        Assert.Contains(released, x => x.Op.ChangeId == BatchId.From(Id(3)) &&
+            x.Outcome == CausalOutcome.LostDep);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
     public void MarkLost_drops_dependents_KZ3()
     {
         var t = new CausalTracker();

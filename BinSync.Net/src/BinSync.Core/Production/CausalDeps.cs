@@ -41,6 +41,8 @@ public sealed class CausalTracker
     private readonly HashSet<BatchId> _known = new();
     private readonly Dictionary<BatchId, PendingCausalOp> _pending = new();
     private readonly Dictionary<BatchId, HashSet<BatchId>> _edges = new(); // child → parents
+    private readonly Dictionary<BatchId, HashSet<BatchId>> _dependents = new(); // parent → pending children
+    private readonly HashSet<BatchId> _lost = new(); // permanently unavailable change IDs
 
     private TimeSpan _depTimeout = TimeSpan.FromSeconds(30);
     private Func<long> _utcNowMs = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -92,9 +94,10 @@ public sealed class CausalTracker
     {
         lock (_gate)
         {
+            if (_lost.Contains(changeId))
+                throw new InvalidOperationException("A permanently lost change cannot be marked as applied.");
             _known.Add(changeId);
-            _pending.Remove(changeId);
-            _edges.Remove(changeId);
+            RemovePendingLocked(changeId);
         }
     }
 
@@ -117,6 +120,11 @@ public sealed class CausalTracker
             {
                 detail = "self-dep";
                 return CausalOutcome.Cycle;
+            }
+            if (_lost.Contains(dep))
+            {
+                detail = Key(dep);
+                return CausalOutcome.LostDep;
             }
         }
 
@@ -149,11 +157,17 @@ public sealed class CausalTracker
     /// <summary>Hold an op until parents arrive (or timeout).</summary>
     public void EnqueuePending(BatchId changeId, IReadOnlyList<BatchId> deps, object? payload = null)
     {
+        ArgumentNullException.ThrowIfNull(deps);
         lock (_gate)
         {
-            if (_known.Contains(changeId) || _pending.ContainsKey(changeId))
+            if (_known.Contains(changeId) || _lost.Contains(changeId) || _pending.ContainsKey(changeId))
                 return;
             var depArr = deps.ToArray();
+            if (depArr.Any(_lost.Contains))
+            {
+                _ = PropagateLostLocked(changeId);
+                return;
+            }
             _pending[changeId] = new PendingCausalOp
             {
                 ChangeId = changeId,
@@ -161,7 +175,7 @@ public sealed class CausalTracker
                 EnqueuedUtcMs = _utcNowMs(),
                 Payload = payload,
             };
-            _edges[changeId] = new HashSet<BatchId>(depArr);
+            AddPendingEdgesLocked(changeId, depArr);
         }
     }
 
@@ -175,37 +189,54 @@ public sealed class CausalTracker
         lock (_gate)
         {
             long now = _utcNowMs();
-            var done = new List<BatchId>();
-            foreach (var (cid, op) in _pending)
+            // Snapshot keys because dropping one lost/cyclic/timed-out parent can
+            // transitively remove other pending entries during this pass.
+            var candidates = _pending.Keys.ToArray();
+            foreach (var cid in candidates)
             {
-                if (now - op.EnqueuedUtcMs > _depTimeout.TotalMilliseconds)
-                {
-                    released.Add((op, CausalOutcome.TimedOut));
-                    done.Add(cid);
+                if (!_pending.TryGetValue(cid, out var op))
                     continue;
-                }
 
-                var parents = _edges.GetValueOrDefault(cid) ?? new HashSet<BatchId>();
-                if (WouldCycle(cid, parents))
-                {
-                    released.Add((op, CausalOutcome.Cycle));
-                    done.Add(cid);
-                    continue;
-                }
-
-                bool allKnown = true;
+                CausalOutcome outcome;
+                bool lostDependency = false;
                 for (int i = 0; i < op.Deps.Length; i++)
-                    if (!_known.Contains(op.Deps[i])) { allKnown = false; break; }
-                if (allKnown)
                 {
-                    released.Add((op, CausalOutcome.Ready));
-                    done.Add(cid);
+                    if (_lost.Contains(op.Deps[i]))
+                    {
+                        lostDependency = true;
+                        break;
+                    }
                 }
-            }
-            foreach (var cid in done)
-            {
-                _pending.Remove(cid);
-                _edges.Remove(cid);
+
+                if (lostDependency)
+                    outcome = CausalOutcome.LostDep;
+                else if (now >= op.EnqueuedUtcMs &&
+                         (double)now - op.EnqueuedUtcMs > _depTimeout.TotalMilliseconds)
+                    outcome = CausalOutcome.TimedOut;
+                else
+                {
+                    var parents = _edges.GetValueOrDefault(cid);
+                    if (parents is not null && WouldCycle(cid, parents))
+                        outcome = CausalOutcome.Cycle;
+                    else
+                    {
+                        bool allKnown = true;
+                        for (int i = 0; i < op.Deps.Length; i++)
+                            if (!_known.Contains(op.Deps[i])) { allKnown = false; break; }
+                        outcome = allKnown ? CausalOutcome.Ready : CausalOutcome.Pending;
+                    }
+                }
+
+                if (outcome == CausalOutcome.Pending)
+                    continue;
+
+                RemovePendingLocked(cid);
+                released.Add((op, outcome));
+                if (outcome != CausalOutcome.Ready)
+                {
+                    foreach (var dependent in PropagateLostLocked(cid))
+                        released.Add((dependent, CausalOutcome.LostDep));
+                }
             }
         }
         return released;
@@ -217,37 +248,36 @@ public sealed class CausalTracker
         ArgumentNullException.ThrowIfNull(op);
         lock (_gate)
         {
-            if (_known.Contains(op.ChangeId)) return;
+            if (_known.Contains(op.ChangeId) || _lost.Contains(op.ChangeId)) return;
+            if (_pending.ContainsKey(op.ChangeId))
+                RemovePendingLocked(op.ChangeId);
+            if (op.Deps.Any(_lost.Contains))
+            {
+                _ = PropagateLostLocked(op.ChangeId);
+                return;
+            }
             _pending[op.ChangeId] = op;
-            _edges[op.ChangeId] = new HashSet<BatchId>(op.Deps);
+            AddPendingEdgesLocked(op.ChangeId, op.Deps);
         }
     }
 
     /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>
     public List<PendingCausalOp> MarkLost(BatchId lostParent)
     {
-        var dropped = new List<PendingCausalOp>();
         lock (_gate)
         {
-            var toRemove = new List<BatchId>();
-            foreach (var (cid, op) in _pending)
+            if (_known.Contains(lostParent))
+                throw new InvalidOperationException("An applied change cannot be marked as lost.");
+
+            var dropped = new List<PendingCausalOp>();
+            if (_pending.TryGetValue(lostParent, out var root))
             {
-                bool hit = false;
-                for (int i = 0; i < op.Deps.Length; i++)
-                    if (op.Deps[i] == lostParent) { hit = true; break; }
-                if (hit)
-                {
-                    dropped.Add(op);
-                    toRemove.Add(cid);
-                }
+                RemovePendingLocked(lostParent);
+                dropped.Add(root);
             }
-            foreach (var cid in toRemove)
-            {
-                _pending.Remove(cid);
-                _edges.Remove(cid);
-            }
+            dropped.AddRange(PropagateLostLocked(lostParent));
+            return dropped;
         }
-        return dropped;
     }
 
     /// <summary>Batch gate with typed change ids.</summary>
@@ -270,6 +300,62 @@ public sealed class CausalTracker
             }
         }
         return worst;
+    }
+
+    private void AddPendingEdgesLocked(BatchId child, IReadOnlyList<BatchId> dependencies)
+    {
+        var parents = new HashSet<BatchId>(dependencies);
+        _edges[child] = parents;
+        foreach (var parent in parents)
+        {
+            if (!_dependents.TryGetValue(parent, out var children))
+                _dependents[parent] = children = new HashSet<BatchId>();
+            children.Add(child);
+        }
+    }
+
+    private void RemovePendingLocked(BatchId child)
+    {
+        _pending.Remove(child);
+        if (!_edges.Remove(child, out var parents))
+            return;
+        foreach (var parent in parents)
+        {
+            if (!_dependents.TryGetValue(parent, out var children))
+                continue;
+            children.Remove(child);
+            if (children.Count == 0)
+                _dependents.Remove(parent);
+        }
+    }
+
+    // Mark root permanently unavailable and recursively discard every pending
+    // operation that depends on it. The reverse index keeps this O(V + E).
+    private List<PendingCausalOp> PropagateLostLocked(BatchId root)
+    {
+        var dropped = new List<PendingCausalOp>();
+        var queue = new Queue<BatchId>();
+        var visited = new HashSet<BatchId>();
+        queue.Enqueue(root);
+        while (queue.Count > 0)
+        {
+            var lost = queue.Dequeue();
+            if (!visited.Add(lost))
+                continue;
+            _lost.Add(lost);
+
+            if (!_dependents.TryGetValue(lost, out var children) || children.Count == 0)
+                continue;
+            foreach (var child in children.ToArray())
+            {
+                if (!_pending.TryGetValue(child, out var op))
+                    continue;
+                RemovePendingLocked(child);
+                dropped.Add(op);
+                queue.Enqueue(child);
+            }
+        }
+        return dropped;
     }
 
     private bool WouldCycle(BatchId child, HashSet<BatchId> parents)
