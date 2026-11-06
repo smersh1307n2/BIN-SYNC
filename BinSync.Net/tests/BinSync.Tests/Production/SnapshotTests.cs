@@ -222,6 +222,32 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void ApplySnapshotChunks_preflights_aggregate_bytes_before_cloning()
+    {
+        var chunk = new SnapshotChunkMessage
+        {
+            NamespaceId = 1,
+            ChunkIndex = 0,
+            ChunkCount = 1,
+            Records = new List<SnapshotRecord>
+            {
+                new SnapshotRecord
+                {
+                    RecordId = Fix.Rid(650),
+                    Fields = new List<SnapshotField>
+                    {
+                        new SnapshotField { FieldId = 0x100, Value = new byte[50] }
+                    }
+                }
+            }
+        };
+
+        Assert.Equal(142L, Reconcile.EstimateSnapshotTransferBytes(new[] { chunk }, maxBytes: 142));
+        Assert.Throws<SyncException>(() =>
+            Reconcile.EstimateSnapshotTransferBytes(new[] { chunk }, maxBytes: 141));
+    }
+
+    [Fact]
     public void ApplySnapshotChunks_rejects_oversized_chunk_list_before_cloning()
     {
         var target = Fix.MakeNode(65);

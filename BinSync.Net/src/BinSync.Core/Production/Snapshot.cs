@@ -72,6 +72,44 @@ public static partial class Reconcile
             throw new SyncException("PAYLOAD_TOO_LARGE");
         return totalBytes + nextChunkBytes;
     }
+
+    // Public ApplySnapshotChunks accepts caller-owned DTO graphs. Estimate their
+    // canonical wire footprint before cloning so an oversized in-process transfer
+    // cannot double its memory use before the aggregate limit is checked.
+    internal static long EstimateSnapshotTransferBytes(
+        IReadOnlyList<SnapshotChunkMessage> chunks, long maxBytes = MaxSnapshotTransferBytes)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+        if (chunks.Count == 0 || chunks.Count > MaxSnapshotChunks)
+            throw new FormatException("Snapshot transfer has an invalid chunk count");
+
+        long totalBytes = 0;
+        foreach (var chunk in chunks)
+        {
+            if (chunk is null || chunk.Records is null ||
+                chunk.Records.Count > MaxSnapshotRecordsPerChunk)
+                throw new FormatException("Invalid snapshot chunk");
+
+            int totalFields = 0;
+            long chunkBytes = 10 + Codec.VarintLength((ulong)chunk.Records.Count);
+            foreach (var record in chunk.Records)
+            {
+                if (record is null || record.Fields is null ||
+                    record.Fields.Count > MaxSnapshotFieldsPerChunk - totalFields)
+                    throw new FormatException("Invalid snapshot record");
+                totalFields += record.Fields.Count;
+                foreach (var field in record.Fields)
+                    if (field is null || field.Value is null)
+                        throw new FormatException("Invalid snapshot field");
+                chunkBytes += SnapshotRecordEncodedSize(record);
+            }
+
+            if (chunkBytes > Frames.MAX_PAYLOAD_SIZE || chunkBytes > int.MaxValue)
+                throw new SyncException("PAYLOAD_TOO_LARGE");
+            totalBytes = AddSnapshotTransferBytes(totalBytes, (int)chunkBytes, maxBytes);
+        }
+        return totalBytes;
+    }
     /// <summary>Build the first bounded chunk of a consistent snapshot under <paramref name="prefix"/>.</summary>
     public static SnapshotChunkMessage BuildSnapshot(
         Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000) =>
@@ -364,6 +402,8 @@ public static partial class Reconcile
         // Reject an oversized public transfer before allocating its detached copy.
         if (chunkCount > MaxSnapshotChunks)
             throw new FormatException("Snapshot transfer exceeds the chunk-count limit");
+        if (cloneInput)
+            _ = EstimateSnapshotTransferBytes(chunks);
         // Public DTOs are detached before validation. Decoder-owned transfer graphs
         // are already private to this method and can be validated without deep copies.
         var ownedChunks = new SnapshotChunkMessage[chunkCount];
