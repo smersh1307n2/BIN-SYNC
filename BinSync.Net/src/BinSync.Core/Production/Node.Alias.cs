@@ -458,26 +458,35 @@ public sealed partial class Node
             }
             if (other is not null)
             {
-                var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (NodeId Id, int Epoch)>();
-                if (theirFwd.TryGetValue(alias, out var durThere))
+                // The peer's alias table is independently mutable. Never read it without
+                // its metadata gate; TryEnter avoids reversing the Node lock order while
+                // this node's metadata gate is already held. Contention fails closed so
+                // the caller can retry after the peer finishes its session update.
+                (NodeId Id, int Epoch)? peerBinding = null;
+                if (Monitor.TryEnter(other._lockMeta))
                 {
-                    try { RegisterAlias(peer, alias, durThere.Id, durThere.Epoch); return durThere.Id; } // E-1: bare nodeId
-                    catch (SyncException) { throw new SyncException("UNKNOWN_ALIAS"); } // genuine conflict — never guess
-                }
-                // BUGFIX (persistence resume, symmetric E-12): the wire alias is missing from
-                // OUR copy of the session map (a resumed node can lose per-peer maps while
-                // already-signed outbox batches still carry those aliases). The sender just
-                // resolved the SAME alias successfully in ITS own copy — consult the sender's
-                // forward map for this session and adopt its binding iff collision-free.
-                // §4.3 makes both copies of a session table identical, so this is knowledge
-                // exchange, not guessing [А3]; an alias unknown on BOTH ends still fails closed.
-                if (attached)
-                {
-                    var theirMapForUs = other.AliasToNode.TryGetValue(NodeId, out var tm) ? tm : null;
-                    if (theirMapForUs is not null && theirMapForUs.TryGetValue(alias, out var durTheir))
+                    try
                     {
-                        try { RegisterAlias(peer, alias, durTheir.Id, durTheir.Epoch); return durTheir.Id; }
-                        catch (SyncException) { /* real conflict — fail closed below */ }
+                        if (other.AliasToNode.TryGetValue(NodeId, out var theirForward) &&
+                            theirForward.TryGetValue(alias, out var known))
+                            peerBinding = known;
+                    }
+                    finally
+                    {
+                        Monitor.Exit(other._lockMeta);
+                    }
+                }
+
+                if (peerBinding is { } binding)
+                {
+                    try
+                    {
+                        RegisterAlias(peer, alias, binding.Id, binding.Epoch);
+                        return binding.Id;
+                    }
+                    catch (SyncException)
+                    {
+                        throw new SyncException("UNKNOWN_ALIAS"); // genuine conflict — never guess
                     }
                 }
             }

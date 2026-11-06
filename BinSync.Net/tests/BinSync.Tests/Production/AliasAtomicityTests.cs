@@ -42,6 +42,26 @@ public sealed class AliasAtomicityTests
     }
 
     [Fact]
+    public void Resolve_alias_fails_closed_while_peer_metadata_is_locked()
+    {
+        using var local = new Node(Fix.Nid(151));
+        using var peer = new Node(Fix.Nid(152));
+        var author = Fix.Nid(153);
+        local.PeersByNid[peer.NodeId] = peer;
+        peer.AliasToNode[local.NodeId] = new Dictionary<int, (NodeId Id, int Epoch)>
+        {
+            [77] = (author, 4)
+        };
+
+        var peerGates = peer.EnterAllGates();
+        var error = Assert.Throws<SyncException>(() => local.ResolveAlias(peer.NodeId, 77));
+        Assert.Equal("UNKNOWN_ALIAS", error.CodeName);
+        peerGates.Dispose();
+
+        Assert.Equal(author, local.ResolveAlias(peer.NodeId, 77));
+    }
+
+    [Fact]
     public void Ensure_alias_rolls_back_local_half_when_peer_reverse_map_rejects_binding()
     {
         using var local = new Node(Fix.Nid(71));
