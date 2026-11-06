@@ -292,6 +292,27 @@ public class WalTests
     }
 
     [Fact]
+    public void Attached_wal_rejects_unlogged_local_sequence_reservations()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-seq-reserve-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var node = Fix.MakeNode(143);
+            using var wal = Wal.Open(Path.Combine(dir, "node.wal"));
+            node.AttachWal(wal);
+
+            Assert.Throws<InvalidOperationException>(() => node.NextOutboxSeq(node.NodeId, 1));
+            Assert.Equal(0, wal.Sequence);
+            Assert.False(node.OutboxSeqRef.ContainsKey((node.NodeId, 1)));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Node_attached_wal_failure_does_not_publish_local_write()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-fail-" + Guid.NewGuid().ToString("N"));

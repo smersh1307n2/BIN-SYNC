@@ -17,7 +17,14 @@ public sealed partial class Node
     /// and delegates to <c>NextOutboxSeqInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public long NextOutboxSeq(NodeId author, int namespaceId)
     {
-        lock (_lockOutbox) return NextOutboxSeqInternal(author, namespaceId);
+        lock (_lockOutbox)
+        {
+            // With an attached WAL, local sequence allocation is part of the
+            // atomic LocalMutation frame and cannot be reserved independently.
+            if (_wal is not null && author == NodeId)
+                throw new InvalidOperationException("Local Outbox sequence allocation is committed with the mutation while WAL is attached.");
+            return NextOutboxSeqInternal(author, namespaceId);
+        }
     }
 
     internal long NextOutboxSeqInternal(NodeId author, int namespaceId)
