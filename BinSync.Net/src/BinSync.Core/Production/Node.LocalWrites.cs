@@ -61,11 +61,49 @@ public sealed partial class Node
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
-            var entry = PushOutboxInternal(ns, recordId, op, author.ToArray(),
+            // PushOutbox stamps the local origin. Never mutate a caller-owned operation DTO.
+            var ownedOp = CloneOperationForPush(op);
+            var entry = PushOutboxInternal(ns, recordId, ownedOp, author.ToArray(),
                 peer is { } p ? p.ToArray() : null);
             return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
         }
     }
+
+    private static object CloneOperationForPush(object op) => op switch
+    {
+        OpFieldWrite x => new OpFieldWrite
+        {
+            FieldId = x.FieldId,
+            KeyEpoch = x.KeyEpoch,
+            Wall = x.Wall,
+            Logical = x.Logical,
+            Origin = x.Origin,
+            AuthorNodeId = x.AuthorNodeId,
+            Value = x.Value.ToArray(),
+            FullAuthorMode = x.FullAuthorMode,
+            ValueLenPos = x.ValueLenPos,
+        },
+        OpFieldTomb x => new OpFieldTomb
+        {
+            FieldId = x.FieldId,
+            KeyEpoch = x.KeyEpoch,
+            Wall = x.Wall,
+            Logical = x.Logical,
+            Origin = x.Origin,
+            AuthorNodeId = x.AuthorNodeId,
+            FullAuthorMode = x.FullAuthorMode,
+        },
+        OpRecordTombstone x => new OpRecordTombstone
+        {
+            RecordId = x.RecordId,
+            Wall = x.Wall,
+            Logical = x.Logical,
+            Origin = x.Origin,
+            AuthorNodeId = x.AuthorNodeId,
+            FullAuthorMode = x.FullAuthorMode,
+        },
+        _ => throw new ArgumentException("Unsupported local Outbox operation.", nameof(op)),
+    };
 
     internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {

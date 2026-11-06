@@ -178,6 +178,31 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void PushOutbox_does_not_mutate_caller_owned_operation()
+    {
+        var node = Fix.MakeNode(911);
+        var value = new byte[] { 4, 5, 6 };
+        var op = new OpFieldWrite
+        {
+            FieldId = 0x101,
+            Wall = 123,
+            Logical = 7,
+            Origin = 0xBEEF,
+            Value = value,
+        };
+
+        var entry = node.PushOutbox(7, Fix.Rid(911), op, node.NodeId);
+
+        Assert.NotNull(entry);
+        Assert.Equal((ushort)0xBEEF, op.Origin);
+        Assert.Same(value, op.Value);
+        Assert.Equal(new byte[] { 4, 5, 6 }, op.Value);
+        var decoded = Assert.IsType<OpFieldWrite>(Ops.DecodeOp(entry!.Payload).Op);
+        Assert.Equal((ushort)1, decoded.Origin);
+        Assert.Equal(new byte[] { 4, 5, 6 }, decoded.Value);
+    }
+
+    [Fact]
     public void PushOutbox_ReturnsDetachedEntry()
     {
         var node = Fix.MakeNode(902);
