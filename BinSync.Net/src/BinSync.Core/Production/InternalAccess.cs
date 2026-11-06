@@ -94,7 +94,7 @@ public sealed partial class Node
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
-public sealed partial class PeerState
+internal sealed partial class PeerState
 {
     /// <summary>Read-only view of cached (batchId, prevDigest) triples (tests).</summary>
     internal IReadOnlyDictionary<(NodeId Author, long Start, long End), (BatchId Id, Digest16 Prev)> IdsRef => Ids;
