@@ -98,23 +98,79 @@ public class CausalApplyTests
     }
 
     [Fact]
-    public void Duplicate_batch_still_marks_its_changes_as_causally_known()
+    public void Duplicate_batch_bypasses_causal_gate_and_does_not_trust_replay_change_ids()
     {
         var sender = new Node(Id(0xA1), epoch: 1);
         var receiver = new Node(Id(0xB2), epoch: 1);
         Transport.MakeSession(sender, receiver);
         sender.WriteField(1, Rid(4), 0x0100, new byte[] { 0x44 });
-        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var accepted = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
 
-        var first = receiver.ApplyBatch(batch, sender.NodeId);
+        var first = receiver.ApplyBatch(accepted, sender.NodeId);
         Assert.False(first.Duplicate);
 
         var tracker = new CausalTracker();
         receiver.Causal = tracker;
-        var duplicate = receiver.ApplyBatchCausal(batch, sender.NodeId);
+        var replay = new Batch(
+            accepted.NamespaceId, accepted.SchemaId, accepted.SchemaVersion, accepted.MergePolicy,
+            accepted.Flags, accepted.IssuerNodeId, accepted.IssuerEpoch, accepted.CursorStart,
+            accepted.CursorEnd, accepted.BatchId, accepted.PrevBatchDigest, accepted.RecordsRoot,
+            accepted.BatchDigest, accepted.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = BatchId.From(Id(0xE1)),
+                RecordId = e.RecordId.ToArray(),
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId.ToArray(),
+                CausalDeps = new List<BatchId> { BatchId.From(Id(0xE1)) },
+            }).ToList());
+
+        var duplicate = receiver.ApplyBatchCausal(replay, sender.NodeId);
+
+        Assert.True(duplicate.Duplicate);
+        Assert.Equal(0, tracker.PendingCount);
+        Assert.False(tracker.IsKnown(BatchId.From(Id(0xE1))));
+        Assert.Equal(CausalOutcome.Ready,
+            tracker.Evaluate(BatchId.From(Id(0xE2)), Array.Empty<BatchId>(), out _));
+    }
+
+    [Fact]
+    public void Duplicate_causal_batch_preserves_existing_tracker_state_without_rechecking_dependencies()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(5), 0x0100, new byte[] { 0x55 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+
+        var first = receiver.ApplyBatchCausal(batch, sender.NodeId);
+        Assert.False(first.Duplicate);
+        Assert.All(batch.Entries, entry => Assert.True(tracker.IsKnown(entry.ChangeId)));
+
+        var replay = new Batch(
+            batch.NamespaceId, batch.SchemaId, batch.SchemaVersion, batch.MergePolicy,
+            batch.Flags, batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart,
+            batch.CursorEnd, batch.BatchId, batch.PrevBatchDigest, batch.RecordsRoot,
+            batch.BatchDigest, batch.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                RecordId = e.RecordId.ToArray(),
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId.ToArray(),
+                CausalDeps = new List<BatchId> { e.ChangeId },
+            }).ToList());
+        var duplicate = receiver.ApplyBatchCausal(replay, sender.NodeId);
 
         Assert.True(duplicate.Duplicate);
         Assert.All(batch.Entries, entry => Assert.True(tracker.IsKnown(entry.ChangeId)));
+        Assert.Equal(0, tracker.PendingCount);
     }
 
     [Fact]

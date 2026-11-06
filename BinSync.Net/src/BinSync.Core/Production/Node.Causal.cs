@@ -37,6 +37,15 @@ public sealed partial class Node
     public BatchResult ApplyBatchCausal(Batch batch, NodeId senderPeer)
     {
         ArgumentNullException.ThrowIfNull(batch);
+
+        // Preserve the normal ApplyBatch idempotency fast path: an already accepted
+        // batch must be ACKed before evaluating optional causal metadata on a replay.
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            if (TryGetDuplicateBatchResult(batch, senderPeer, out var duplicate))
+                return duplicate;
+        }
+
         // Causal evaluation, quarantine and apply operate on one detached object graph.
         return ApplyBatchCausalCore(CloneBatchForPublicRead(batch), senderPeer, expectedTracker: null);
     }
@@ -52,7 +61,16 @@ public sealed partial class Node
             if (expectedTracker is not null && !ReferenceEquals(tracker, expectedTracker))
                 throw new InvalidOperationException("Causal tracker changed while pending batches were being drained.");
 
-            if (tracker is null)
+            // A concurrent ApplyBatch/ApplyBatchCausal may have committed this batch
+            // after the public fast-path probe. Recheck under the same node gates and
+            // do not infer causal ChangeIds from an idempotent replay payload: the
+            // accepted batch may predate this tracker and duplicate contents are not
+            // authenticated by the inbox key.
+            if (TryGetDuplicateBatchResult(ownedBatch, senderPeer, out var duplicate))
+            {
+                result = duplicate;
+            }
+            else if (tracker is null)
             {
                 result = ApplyBatchInternal(ownedBatch, senderPeer);
             }
