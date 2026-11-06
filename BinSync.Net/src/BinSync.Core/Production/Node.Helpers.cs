@@ -10,6 +10,7 @@ public sealed partial class Node
     /// and delegates to <c>RecordDigestOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[]? RecordDigestOf(int namespaceId, RecordId recordId)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage) return RecordDigestOfInternal(namespaceId, recordId);
     }
 
@@ -20,6 +21,7 @@ public sealed partial class Node
     /// and delegates to <c>AllRecordDigestsInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Dictionary<RecordId, byte[]> AllRecordDigests(int namespaceId)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage) return AllRecordDigestsInternal(namespaceId);
     }
 
@@ -35,6 +37,7 @@ public sealed partial class Node
     /// and delegates to <c>OutboxSizeInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int OutboxSize(int namespaceId)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockOutbox) return OutboxSizeInternal(namespaceId);
     }
 

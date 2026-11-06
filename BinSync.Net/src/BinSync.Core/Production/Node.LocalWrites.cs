@@ -59,6 +59,7 @@ public sealed partial class Node
 
     private OutboxEntry? PushOutboxCore(int ns, RecordId recordId, object op)
     {
+        ValidateNamespaceId(ns);
         lock (_lockStorage) lock (_lockOutbox)
         {
             // The node owns its author identity and stamps the local origin.
@@ -359,6 +360,8 @@ public sealed partial class Node
 
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
         ArgumentNullException.ThrowIfNull(value);
         var ownedValue = value.ToArray();
         Storage.TryGetValue(namespaceId, out var store);
@@ -418,6 +421,8 @@ public sealed partial class Node
 
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);
@@ -455,6 +460,7 @@ public sealed partial class Node
 
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
+        ValidateNamespaceId(namespaceId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);
@@ -489,6 +495,7 @@ public sealed partial class Node
 
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
+        ValidateNamespaceId(namespaceId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);

@@ -177,6 +177,26 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(new byte[] { 4, 5, 6 }, field!.Value);
     }
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(65536)]
+    public void Node_rejects_namespace_and_field_ids_outside_the_wire_range(int invalid)
+    {
+        var node = new Node(Fix.Nid(912));
+        var recordId = Fix.Rid(912);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.WriteField(invalid, recordId, 0x0100, new byte[] { 1 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.WriteField(1, recordId, invalid, new byte[] { 1 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.TryGetRecord(invalid, recordId, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.TryGetField(1, recordId, invalid, out _));
+        Assert.Equal(0, node.GetRecordCount(1));
+        Assert.Equal(0, node.GetOutboxCount(1));
+    }
+
     [Fact]
     public void TryCloneWithOrigin_always_returns_owned_payloads()
     {

@@ -8,6 +8,18 @@ namespace BinSync;
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node : IDisposable
 {
+    internal static void ValidateNamespaceId(int namespaceId)
+    {
+        if ((uint)namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId), "Namespace id must fit the 16-bit wire field.");
+    }
+
+    internal static void ValidateFieldId(int fieldId)
+    {
+        if ((uint)fieldId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(fieldId), "Field id must fit the 16-bit wire field.");
+    }
+
     /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
     private static readonly byte[] Zero128Storage = new byte[16];
     /// <summary>16 zero bytes. Returns a fresh copy so callers cannot corrupt a shared buffer.</summary>
@@ -76,6 +88,7 @@ public sealed partial class Node : IDisposable
     /// <summary>Look up a record in the live store.</summary>
     public bool TryGetRecord(int namespaceId, RecordId recordId, out Record? record)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage)
         {
             if (_storage.TryGetValue(namespaceId, out var map) && map.TryGetValue(recordId, out var rec))
@@ -91,6 +104,8 @@ public sealed partial class Node : IDisposable
     /// <summary>Look up one field state inside a record.</summary>
     public bool TryGetField(int namespaceId, RecordId recordId, int fieldId, out FieldState? field)
     {
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
         lock (_lockStorage)
         {
             if (_storage.TryGetValue(namespaceId, out var map)
@@ -108,6 +123,7 @@ public sealed partial class Node : IDisposable
     /// <summary>Number of records currently stored in a namespace.</summary>
     public int GetRecordCount(int namespaceId)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage)
             return _storage.TryGetValue(namespaceId, out var map) ? map.Count : 0;
     }

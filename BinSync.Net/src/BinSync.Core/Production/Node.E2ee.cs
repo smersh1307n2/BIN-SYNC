@@ -25,6 +25,8 @@ public sealed partial class Node
     public bool WriteFieldSealed(
         int namespaceId, RecordId recordId, int fieldId, byte[] plaintext, Hlc? hlc = null)
     {
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
         ArgumentNullException.ThrowIfNull(plaintext);
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
@@ -91,6 +93,8 @@ public sealed partial class Node
     /// </summary>
     public byte[]? ReadFieldOpen(int namespaceId, RecordId recordId, int fieldId)
     {
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
         lock (_lockStorage) lock (_lockMeta)
         {
             var ring = E2eeKeys
