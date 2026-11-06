@@ -38,4 +38,32 @@ public sealed class PublicApiIsolationTests
         Assert.NotNull(currentSeen);
         Assert.Equal(original, Assert.IsType<byte[]>(currentSeen!.Value.Val));
     }
+    [Fact]
+    public void PushOutbox_ReturnsDetachedEntry()
+    {
+        var node = Fix.MakeNode(902);
+        var recordId = Fix.Rid(902);
+        var op = new OpFieldWrite
+        {
+            FieldId = 0x101,
+            Wall = 1,
+            Value = System.Text.Encoding.UTF8.GetBytes("payload"),
+        };
+
+        var returned = node.PushOutbox(7, recordId, op, node.NodeId);
+        Assert.NotNull(returned);
+        var stored = node.Outbox[7][0];
+        Assert.NotSame(stored, returned);
+
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+            returned!.Payload, out var payload));
+        payload.Array![payload.Offset] = (byte)'X';
+        returned.CausalDeps.Add(new BatchId(1, 2));
+        returned.Seq = 999;
+
+        Assert.Equal(1L, stored.Seq);
+        Assert.Empty(stored.CausalDeps);
+        Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(stored.Payload.Span));
+    }
+
 }

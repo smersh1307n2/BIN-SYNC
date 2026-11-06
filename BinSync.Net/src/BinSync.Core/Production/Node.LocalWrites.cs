@@ -70,14 +70,21 @@ public sealed partial class Node
     public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, NodeId author, NodeId? peer = null)
     {
         lock (_lockStorage) lock (_lockOutbox)
-            return PushOutboxInternal(ns, recordId, op, author.ToArray(),
+        {
+            var entry = PushOutboxInternal(ns, recordId, op, author.ToArray(),
                 peer is { } p ? p.ToArray() : null);
+            return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
+        }
     }
 
     /// <summary>Legacy byte[] author/peer.</summary>
     public OutboxEntry? PushOutbox(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
     {
-        lock (_lockStorage) lock (_lockOutbox) return PushOutboxInternal(ns, recordId, op, author, peer);
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            var entry = PushOutboxInternal(ns, recordId, op, author, peer);
+            return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
+        }
     }
 
     internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
