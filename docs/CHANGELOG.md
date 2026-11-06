@@ -41,6 +41,7 @@
 - Causal tracking now remembers lost IDs and transitively drops dependent pending changes; CCD1 trailers use footer-length framing, canonical dependency order and atomic validation without scanning user payload bytes.
 - Causal batches now resolve dependencies on earlier members atomically, reject forward references/duplicate ChangeIds, and reject attempts to reapply a permanently lost ChangeId.
 - Causal apply now preserves the durable Inbox duplicate fast path: duplicate batches are ACKed before optional dependency evaluation, and replay payloads cannot inject ChangeIds into process-local causal state.
+- PN-counter value calculation now accumulates unsigned components before narrowing, allowing large positive/negative totals to cancel while still rejecting an out-of-range final Int64 value.
 
 ---
 
