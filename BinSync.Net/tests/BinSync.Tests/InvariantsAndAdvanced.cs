@@ -76,12 +76,14 @@ public class InvariantsAndAdvanced
     [Fact]
     public void AckCodecRoundtrip()
     {
-        var (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(Rid(9), 12345));
-        Assert.Equal(Rid(9), bid); Assert.Equal(12345, seq); Assert.Null(author);
+        var expectedBatch = BatchId.From(Rid(9));
+        var (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(expectedBatch, 12345));
+        Assert.Equal(expectedBatch, bid); Assert.Equal(12345, seq); Assert.Null(author);
         // Errata E-4: optional author-stream trailer
-        var a16 = Rid(77);
-        (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(Rid(9), 12345, a16));
-        Assert.Equal(Rid(9), bid); Assert.Equal(12345, seq); Assert.Equal(a16, author);
+        var expectedAuthor = NodeId.From(Rid(77));
+        (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(expectedBatch, 12345, expectedAuthor));
+        Assert.Equal(expectedBatch, bid); Assert.Equal(12345, seq); Assert.Equal(expectedAuthor, author);
+        Assert.Throws<InvalidDataException>(() => Transport.DecodeAck(new byte[25]));
     }
 
     [Fact]

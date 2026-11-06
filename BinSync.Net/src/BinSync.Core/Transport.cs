@@ -116,22 +116,21 @@ public static partial class Transport
         }
     }
 
-    public static byte[] EncodeAck(byte[] batchId, long ackedSeq, byte[]? authorStream = null) =>
-        EncodeAck(BatchId.From(batchId), ackedSeq, authorStream is null ? default : NodeId.From(authorStream));
-
-    /// <summary>Decode an ACK payload; author stream is optional for legacy ACKs.</summary>
-    public static (byte[] BatchId, long Seq, byte[]? Author) DecodeAck(byte[] data)
+    /// <summary>Decode an ACK payload; the optional author stream is typed and malformed trailers are rejected.</summary>
+    public static (BatchId BatchId, long Seq, NodeId? Author) DecodeAck(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
         var r = new Reader(data);
-        byte[] batchId = r.B128();
-        long seq = (long)r.U64();
-        byte[]? author = null;
-        try { author = r.B128(); }   // optional trailer (E-4); absent ⇒ legacy ACK
-        catch
-        {
-            // Best-effort: truncated/legacy ACK without author stream — leave author null.
-        }
-        return (batchId, seq, author);
+        var batchId = BatchId.From(r.B128());
+        ulong rawSeq = r.U64();
+        if (rawSeq > long.MaxValue)
+            throw new InvalidDataException("ACK cursor exceeds Int64.");
+        NodeId? author = null;
+        if (r.Remaining == 16)
+            author = NodeId.From(r.B128());
+        else if (r.Remaining != 0)
+            throw new InvalidDataException("Invalid ACK author trailer length.");
+        return (batchId, (long)rawSeq, author);
     }
 
     /// Create DELTA_BATCH → wrap into frame → parse → apply on receiver → ACK back.
@@ -140,7 +139,7 @@ public static partial class Transport
     /// learn about the delivery, so a later CreateDeltaBatch replays the same batchId.
     /// <summary>Create, encode, apply one batch and ACK (optional dropAck).</summary>
     public static BatchResult? DeliverBatch(Node sender, Node receiver, int namespaceId,
-        byte[]? filterAuthor = null, int schemaVersion = 1, bool dropAck = false)
+        NodeId? filterAuthor = null, int schemaVersion = 1, bool dropAck = false)
     {
         var batch = sender.CreateDeltaBatch(receiver.NodeId, namespaceId,
                                            filterAuthorNodeId: filterAuthor,
@@ -154,10 +153,10 @@ public static partial class Transport
         // ACK payload only (no frame) — same semantics as wire ACK without CRC tax.
         var ackPayload = EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
         var (bid, ackSeq, ackAuthor) = DecodeAck(ackPayload);
-        if (!result.BatchId.EqualsBytes(bid))
+        if (result.BatchId != bid)
             throw new InvalidOperationException("ACK batch id mismatch");
         if (!dropAck)
-            sender.ProcessAck(receiver.NodeId, namespaceId, ackSeq, authorStream: NodeId.From(ackAuthor));
+            sender.ProcessAck(receiver.NodeId, namespaceId, ackSeq, authorStream: ackAuthor);
         return result;
     }
 
@@ -178,7 +177,7 @@ public static partial class Transport
 
     // ------------------------------------------------------------------ sneakernet (§3.5)
     /// <summary>Write pending DELTA_BATCH frames for a namespace to a binary file (sneakernet).</summary>
-    public static int ExportDelta(Node node, int namespaceId, byte[] targetHint, string path)
+    public static int ExportDelta(Node node, int namespaceId, NodeId targetHint, string path)
     {
         int count = 0;
         using (var f = File.Create(path))
@@ -190,15 +189,15 @@ public static partial class Transport
                 var payload = node.EncodeBatchPayload(batch);
                 f.Write(FrameCodec.BuildFrame(0x09, 0x0001_0000 | (uint)namespaceId, (ulong)(count + 1), payload));
                 count++;
-                node.AdvanceStream(NodeId.From(targetHint), namespaceId, batch);
-                node.ProcessAck(NodeId.From(targetHint), namespaceId, batch.CursorEnd, batch.DurableAuthor);
+                node.AdvanceStream(targetHint, namespaceId, batch);
+                node.ProcessAck(targetHint, namespaceId, batch.CursorEnd, batch.DurableAuthor);
             }
         }
         return count;
     }
 
     /// <summary>Read frames from a file and apply them as network delivery would.</summary>
-    public static int ImportDelta(Node node, string path, byte[] issuerHint)
+    public static int ImportDelta(Node node, string path, NodeId issuerHint)
     {
         var data = File.ReadAllBytes(path);
         int pos = 0, applied = 0;

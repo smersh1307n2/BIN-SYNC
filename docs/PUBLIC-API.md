@@ -64,14 +64,14 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
 | `WriteFields(...)` | Batch of writes under one lock (distinct HLC stamps) |
 | typed `PushOutbox` overloads | Low-level outbox helpers |
-| `CreateDeltaBatch(NodeId target, ns, …)` | Build one-author delta for peer |
+| `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
 | `EncodeBatchPayload` / `EncodeBatchPayload(…, Span<byte>)` | Batch → payload bytes |
 | `DecodeBatchPayload` | Payload → `Batch` with **owned** entry buffers |
 | `ApplyBatch(Batch, NodeId sender)` | Apply + inbox idempotency |
 | `ApplyBatchPayload(byte[], NodeId sender)` | Decode+apply (preferred on the wire path) |
-| `ProcessAck` | Advance per-author watermarks |
-| `ApplyRemoteField` / `ApplySnapshot` | Snapshot / anti-entropy apply paths |
+| `ProcessAck(NodeId, …)` | Advance per-author watermarks |
+| `ApplySnapshot(Batch)` | Apply a validated snapshot batch |
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
 | `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
@@ -144,7 +144,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`** |
 | `SyncSession` | Transport-independent protocol session; generic `ConnectAsync` / `AcceptAsync`, batch/ACK, reconciliation, snapshots, IBLT, membership, schema, key rotation, fragmentation |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; creates generic `SyncSession` instances |
-| `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, sneakernet helpers |
+| `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
 | `LoopbackTransport` | Lab loopback |
 
 ### Persistence
@@ -192,7 +192,7 @@ attached to a live Node.
 |-----|------|
 | `CausalTracker` | Known set, pending, KЗ1–KЗ5 |
 | `Node.Causal` | Optional tracker |
-| `Node.ApplyBatchCausal` / `DrainCausal` | Gate before apply |
+| `Node.ApplyBatchCausal` / `DrainCausal` / `NoteCausalApplied(BatchId)` | Gate before apply and note local causal commits |
 | `CausalWire` | CCD1 trailer encode/decode |
 | `CAUSAL_DEP_MISSING` | 0x0012 |
 

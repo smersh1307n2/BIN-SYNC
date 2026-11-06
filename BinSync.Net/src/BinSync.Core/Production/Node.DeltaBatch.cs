@@ -32,7 +32,7 @@ public sealed partial class Node
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>CreateDeltaBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch? CreateDeltaBatch(NodeId targetPeer, int namespaceId,
-                                   byte[]? filterAuthorNodeId = null,
+                                   NodeId? filterAuthorNodeId = null,
                                    int schemaId = 0, int schemaVersion = 1)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
@@ -43,7 +43,7 @@ public sealed partial class Node
     }
 
     internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,
-                                       byte[]? filterAuthorNodeId = null,
+                                       NodeId? filterAuthorNodeId = null,
                                        int schemaId = 0, int schemaVersion = 1)
     {
         var pkey = (targetPeer, namespaceId);
@@ -54,7 +54,7 @@ public sealed partial class Node
         var all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : new List<OutboxEntry>();
         if (filterAuthorNodeId is not null)
         {
-            stream = NodeId.From(filterAuthorNodeId);
+            stream = filterAuthorNodeId.Value;
             wm = ps.AckedFor(stream);
         }
         else
