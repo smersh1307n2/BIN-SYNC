@@ -355,6 +355,37 @@ public class WalTests
     }
 
     [Fact]
+    public void Wal_rejects_local_mutation_payload_with_nonlocal_origin()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-origin-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var node = Fix.MakeNode(142);
+            var op = new OpFieldWrite
+            {
+                FieldId = 0x100, KeyEpoch = 0, Wall = 100, Logical = 0,
+                Origin = 2, AuthorNodeId = node.NodeId, Value = new byte[] { 1 }
+            };
+            var entry = new OutboxEntry
+            {
+                NamespaceId = 1, Seq = 1, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+                RecordId = Fix.Rid(9201), OpKind = OpsConst.TagFieldWrite,
+                Payload = Ops.EncodeOp(op, fullAuthor: false), AuthorNodeId = node.NodeId,
+                CreatedAt = 100
+            };
+
+            using var wal = Wal.Open(Path.Combine(dir, "node.wal"));
+            Assert.Throws<InvalidDataException>(() => wal.AppendLocalMutation(entry, applyToStorage: true));
+            Assert.Equal(0, wal.Sequence);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
     public void Wal_replay_validates_all_local_sequences_before_mutating_node()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-sequence-" + Guid.NewGuid().ToString("N"));

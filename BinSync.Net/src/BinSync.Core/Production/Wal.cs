@@ -258,14 +258,11 @@ public sealed class Wal : IDisposable
         // Do not mutate the target node until every complete record has passed
         // structural and sequence validation. This prevents partial replay when
         // a later, well-formed frame has an impossible Outbox sequence.
-        using (node.EnterAllGates())
-        {
         ValidateReplaySequence(node, records);
         int applied = 0;
         foreach (var payload in records)
             applied += ApplyRecord(node, payload);
         return applied;
-        }
         }
     }
 
@@ -351,6 +348,15 @@ public sealed class Wal : IDisposable
                     };
                     if (entry.OpKind != expectedKind)
                         throw new InvalidDataException("WAL local-mutation operation tag mismatch.");
+                    ushort origin = decoded switch
+                    {
+                        OpFieldWrite x => x.Origin,
+                        OpFieldTomb x => x.Origin,
+                        OpRecordTombstone x => x.Origin,
+                        _ => 0
+                    };
+                    if (origin != 1)
+                        throw new InvalidDataException("WAL local-mutation payload must use local origin 1.");
                     if (decoded is OpRecordTombstone tombstone &&
                         !RecordId.From(tombstone.RecordId).Equals(entry.RecordId))
                         throw new InvalidDataException("WAL record-tombstone identity does not match its Outbox entry.");
