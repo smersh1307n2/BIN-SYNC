@@ -39,10 +39,6 @@ public sealed partial class Node
         return ApplyBatch(batch, senderPeer);
     }
 
-    /// <summary>Schema-gated apply (legacy byte[] sender id).</summary>
-    public BatchResult ApplyBatchWithSchema(Batch batch, byte[] senderPeer) =>
-        ApplyBatchWithSchema(batch, NodeId.From(senderPeer));
-
     /// <summary>Publish local schemas into the registry (convenience).</summary>
     public void RegisterSchema(SchemaDescriptor desc)
     {

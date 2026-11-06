@@ -73,11 +73,6 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>Sealed write with legacy byte[] record id.</summary>
-    public bool WriteFieldSealed(
-        int namespaceId, byte[] recordId, int fieldId, byte[] plaintext, Hlc? hlc = null) =>
-        WriteFieldSealed(namespaceId, RecordId.From(recordId), fieldId, plaintext, hlc);
-
     /// <summary>
     /// Read a field and open ciphertext with the namespace key.
     /// Returns null when the field is absent.
@@ -116,10 +111,6 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>Open field with legacy byte[] record id.</summary>
-    public byte[]? ReadFieldOpen(int namespaceId, byte[] recordId, int fieldId) =>
-        ReadFieldOpen(namespaceId, RecordId.From(recordId), fieldId);
-
     /// <summary>
     /// True when the stored field opens successfully under the configured key.
     /// </summary>
@@ -142,7 +133,4 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>Try-open with legacy byte[] record id.</summary>
-    public bool TryOpenField(int namespaceId, byte[] recordId, int fieldId, out byte[]? plaintext) =>
-        TryOpenField(namespaceId, RecordId.From(recordId), fieldId, out plaintext);
 }

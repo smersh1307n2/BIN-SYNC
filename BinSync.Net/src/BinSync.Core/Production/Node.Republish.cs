@@ -24,7 +24,7 @@ public sealed partial class Node
                 if (rec.IsDead) continue;
                 foreach (var (fid, fs) in rec.State)
                 {
-                    WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);
+                    WriteFieldInternal(namespaceId, rid, fid, fs.Value);
                     n++;
                 }
             }
@@ -33,7 +33,7 @@ public sealed partial class Node
     }
 
     /// <summary>Re-publish specific recordIds (NEED_KEYS path).</summary>
-    public int RepublishRecords(int namespaceId, IEnumerable<byte[]> recordIds)
+    public int RepublishRecords(int namespaceId, IEnumerable<RecordId> recordIds)
     {
         lock (_lockStorage) lock (_lockOutbox)
         {

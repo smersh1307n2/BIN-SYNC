@@ -26,9 +26,6 @@ public sealed partial class Node
     /// then throw <c>CAUSAL_DEP_MISSING</c>. On Cycle / LostDep / TimedOut: throw same code
     /// without enqueuing. On Ready: apply, then NoteApplied each changeId.
     /// </summary>
-    public BatchResult ApplyBatchCausal(Batch batch, byte[] senderPeer) =>
-        ApplyBatchCausal(batch, NodeId.From(senderPeer));
-
     /// <summary>Apply with typed sender peer.</summary>
     public BatchResult ApplyBatchCausal(Batch batch, NodeId senderPeer)
     {
@@ -123,7 +120,7 @@ public sealed partial class Node
     /// <summary>
     /// Mark a locally authored changeId as known (call after WriteField when using causal).
     /// </summary>
-    public void NoteCausalApplied(byte[] changeId)
+    public void NoteCausalApplied(BatchId changeId)
     {
         lock (_lockMeta)
         {
