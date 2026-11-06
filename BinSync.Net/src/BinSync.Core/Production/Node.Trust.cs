@@ -8,7 +8,14 @@ public sealed partial class Node
     /// When set, callers may use <see cref="VerifyAndApplyBatch(Batch, NodeId, ReadOnlySpan{byte}, byte[])"/> before apply.
     /// Plain <see cref="ApplyBatch"/> does not consult trust (backward compatible).
     /// </summary>
-    public TrustStore? Trust { get; set; }
+    private TrustStore? _trust;
+
+    /// <summary>Optional thread-safe trust store used by signature-gated operations.</summary>
+    public TrustStore? Trust
+    {
+        get { lock (_lockMeta) return _trust; }
+        set { lock (_lockMeta) _trust = value; }
+    }
 
     /// <summary>
     /// Ensure <see cref="Trust"/> exists (TOFU by default) and return it.

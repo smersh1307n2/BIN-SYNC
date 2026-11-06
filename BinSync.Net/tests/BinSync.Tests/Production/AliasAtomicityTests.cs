@@ -7,6 +7,29 @@ namespace BinSync.Tests;
 public sealed class AliasAtomicityTests
 {
     [Fact]
+    public void Public_epoch_readers_are_serialized_with_metadata_mutations()
+    {
+        using var node = new Node(Fix.Nid(141));
+        var peer = Fix.Nid(142);
+        var author = Fix.Nid(143);
+
+        using var gates = node.EnterAllGates();
+        var started = new ManualResetEventSlim();
+        var reader = Task.Run(() =>
+        {
+            started.Set();
+            return (node.KnownAuthorEpoch(author), node.SessionEpoch(peer, 7));
+        });
+
+        Assert.True(started.Wait(TimeSpan.FromSeconds(3)));
+        Assert.False(reader.Wait(TimeSpan.FromMilliseconds(100)),
+            "Public epoch readers must wait for the metadata gate.");
+
+        gates.Dispose();
+        Assert.Equal((null, null), reader.GetAwaiter().GetResult());
+    }
+
+    [Fact]
     public void Ensure_alias_rolls_back_local_half_when_peer_reverse_map_rejects_binding()
     {
         using var local = new Node(Fix.Nid(71));

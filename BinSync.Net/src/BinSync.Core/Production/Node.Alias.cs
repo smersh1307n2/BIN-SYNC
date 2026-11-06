@@ -47,16 +47,22 @@ public sealed partial class Node
     }
 
     /// <summary>Return the highest known epoch for an author, if any.</summary>
-    public int? KnownAuthorEpoch(NodeId author) =>
-        KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
+    public int? KnownAuthorEpoch(NodeId author)
+    {
+        lock (_lockMeta)
+            return KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
+    }
 
     /// <summary>Return the session epoch for a peer in a namespace, if any.</summary>
     public int? SessionEpoch(NodeId peer, int ns)
     {
-        int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;
-        int? d = KnownEpochs.TryGetValue((peer, 0), out var v0) ? v0 : null;
-        if (e is null && d is null) return null;
-        return Math.Max(e ?? 0, d ?? 0);
+        lock (_lockMeta)
+        {
+            int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;
+            int? d = KnownEpochs.TryGetValue((peer, 0), out var v0) ? v0 : null;
+            if (e is null && d is null) return null;
+            return Math.Max(e ?? 0, d ?? 0);
+        }
     }
 
     /// §4.3: ALIAS_MAP belongs to a SESSION — every new connection performs a fresh
