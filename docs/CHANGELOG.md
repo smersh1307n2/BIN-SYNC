@@ -16,6 +16,12 @@
 - Snapshot chunk packing runs after the consistent storage copy releases Node gates; STATE_DIGEST hashes the storage dictionary directly without a temporary record-map copy.
 - WAL replay marks a Node unusable if semantic replay fails after mutation, preventing accidental use of partially restored state.
 - Observer exceptions are isolated per subscriber and traced; event callbacks run outside engine gates and cannot change committed operation results.
+- HLC logical overflow is checked before increment in both send and receive paths.
+- Field tombstones participate in per-field version ordering; stale writes cannot resurrect a newer tombstone, and stale tombstones cannot erase newer values.
+- Record digests use BIN-SYNC/RECORD/v2 with an explicit live/tombstone kind byte; empty values no longer collide with tombstones.
+- CanonicalB128 now always returns exactly 16 bytes, including long-input domain-hash normalization.
+- ApplyBatch rejects merge policies not supported by the runtime; legacy policy 0 normalizes to LWW_FIELD for schema gating.
+- All three public samples were aligned to the current session API and are built/executed in CI.
 
 ---
 

@@ -1,88 +1,51 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
-**Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
+**Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
+**Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged)  
+**CI:** unit tests, fuzz/lab, and build/run of all three public samples are required checks.  
+**Audit status:** in progress; no percentage-based spec-parity claim is made.
 
-**Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0` · **Branch:** `feature/fld-external-storage` (PR #16)  
-**Status:** PR #16 open; latest audited commit `6451eff`  
-**Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** 456 green · **Coverage:** 68.3% · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
-
-**Spec parity:** **~95%+** — reference engine production-hardened.  
-**Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** → **1.0.1** → **2.1.0** (API shape major).
-
-Legend: **done** · **partial** · **missing**
-
----
-
-## Historical baseline — main at 2.6.5 (before the 3.0.0 branch audit)
-
-- Node engine split into partials (`Node.Alias` / `LocalWrites` / `DeltaBatch` / `ApplyBatch` / …)
-- Test warnings-as-errors; dead Diag harness and duplicate comparers removed
-- ApplyBatch: COW overlays + single DecodeOp pass (no public API change)
-- **CI soak:** `BinSync.Net` workflow green on recent `main` tips (`test` + `fuzz + lab`)
-
+Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
 ## Spec coverage
 
-| Area | Spec | Code |
-|------|------|------|
-| Goals / consistency | §1 | done |
-| Transport | §3 | done |
-| Identity / alias / epoch | §4 | done |
-| HLC | §5 | done (µs wall) |
-| Codec | §6 | **done** (capacity Writer, zero-alloc Reader fixed-width / Varint write) |
-| Data model / lifecycle | §7 | done (lazy FieldTombs) |
-| Merge policies | §8 | **done** (full) |
-| Digests | §9 | done (span Blake3 truncate path) |
-| Outbox / inbox | §10 | done |
-| Membership / GC | §11 | done |
-| Wire frames | §12 | done (+ fragments) |
-| Reconcile ladder | §13 | done |
-| E2EE | §14 | **done** (opt-in) |
-| Security | §15 | **done** (TOFU/PreShared/revoke; CA = node-id allow-list, not full X.509 PKI) |
-| Causal deps | §16.19 | **done** (opt-in) |
-| Lab / fuzz | §17 | **done** (in CI job) |
-| Schema evolution | §18 | **done** (opt-in) |
-| Errata E-1…E-13 | v2.3.7 | done |
+| Area | Spec | Current implementation status |
+|---|---|---|
+| Goals / consistency | §1 | implemented in the core model and apply path |
+| Transport | §3 | generic SyncSession, ISyncTransport, Pipe/Stream/TCP adapters implemented |
+| Identity / alias / epoch | §4 | implemented; b128 API normalization and wire width audited |
+| HLC | §5 | implemented in µs; overflow checked before logical increment |
+| Codec | §6 | implemented; b128 writer always emits exactly 16 bytes |
+| Data model / lifecycle | §7 | implemented; field tombstones are ordered against live values |
+| Merge policies | §8 | **partial** — Node apply path supports LWW_FIELD only; other merge helpers are standalone |
+| Digests | §9 | record digest v2 distinguishes live field values from tombstones |
+| Outbox / inbox | §10 | implemented |
+| Membership / GC | §11 | implemented |
+| Wire frames | §12 | implemented, including fragments |
+| Reconciliation ladder | §13 | implemented; CI lab/fuzz coverage |
+| E2EE | §14 | opt-in |
+| Security | §15 | TOFU / PreShared / revoke; CA mode is a node-id allow-list, not full X.509 PKI |
+| Causal dependencies | §16.19 | opt-in |
+| Lab / fuzz | §17 | in CI |
+| Schema evolution | §18 | **partial** — opt-in metadata compatibility gate; not a runtime merge-policy dispatcher |
+| Public examples | samples | all three build and execute in CI |
+| Errata E-1…E-13 | v2.3.7 | incorporated into the current specification |
 
----
+## Verified correctness fixes in this audit
 
-## Hot-path notes (on main since post-alpha.7)
+- HLC logical overflow is rejected before increment; no uint wrap to zero.
+- A stale field write cannot resurrect a newer field tombstone; a strictly newer write supersedes it.
+- A stale field tombstone cannot replace a newer live value.
+- Digest calculation does not materialize the lazy empty FieldTombs dictionary.
+- Record digest v2 includes a field-kind byte, so an empty live value and a tombstone with identical metadata produce different digests.
+- Long identity input is normalized to exactly 16 bytes before wire encoding.
+- Unsupported merge policy codes are rejected by ApplyBatch; legacy policy 0 is treated as LWW_FIELD, not as a schema-gate wildcard.
 
-- Domain sub-gates (`Storage` → `Outbox` → `Meta`) + `EnterAllGates`; alias maps keyed by `NodeId`
-- EncodeBatchPayload: single-pass records, Writer capacity
-- DecodeBatchPayload: in-place records parse
-- ApplyBatch: decode-once, O(1) changed flags, ComputeRecordsRoot single buffer
-- Reader U8/U16/U32/U64 without per-read heap Take
-- Ops FieldWrite framing probe zero-alloc
+## Release gates still open
 
----
+- Complete normative audit of §§4–18 and cross-check every normative scenario against executable tests.
+- Finish review of merge-policy helper/API boundaries and schema behavior.
+- Confirm final documentation/specification parity on the complete branch diff.
+- Review PR #16 diff and CI once more; only then request explicit approval to merge into main.
 
-## Trust model (§15.6) vs “X.509”
-
-1. **TOFU** — first seen Ed25519 pubkey for `nodeId` is pinned  
-2. **PreShared** — explicit allow-list of `(nodeId → pubkey)`  
-3. **CertificateAuthority** — lightweight CA allow-list (`TrustStore.AddCaRoot(nodeId)`): **node IDs**, not X.509 DER/chain  
-
-Full X.509 path validation remains **out of scope for 1.0**.
-
----
-
-## Release checklist
-
-- [x] BouncyCastle removed / Ed25519 vendored
-- [x] Merge §8 complete set
-- [x] Lab / fuzz in CI
-- [x] TrustStore §15.6 (TOFU / PreShared / CA-as-nodeId / revoke)
-- [x] License AGPL + commercial (crypto MIT)
-- [x] Branding BIN-SYNC
-- [x] Production comparer / codec / apply-decode hot paths on `main`
-- [x] Public API freeze doc for 1.0 (`PUBLIC-API.md`)
-- [x] Package version `1.0.0` (superseded by 2.1.0 on main)
-- [x] Tag `v1.0.0-rc.1` + GitHub prerelease
-- [x] Tag `v1.0.0-rc.2` + GitHub prerelease (domain gates + NodeId aliases)
-- [x] Soak / embedder feedback on rc.2 (274 tests + CI BinSync.Net green)
-- [x] Tag `v1.0.0` (stable)
-- [x] Package version `2.1.0` + tag `v2.1.0` (patch: hygiene + CI coverage + sample)
-- [ ] nuget.org push (optional)
-- [ ] Full X.509 (post-1.0, optional)
+**Merge status:** PR #16 remains Draft and unmerged. No merge is authorized by this status document.

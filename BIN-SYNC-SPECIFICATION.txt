@@ -1,10 +1,16 @@
-# BIN-SYNC CORE v2.4.11 FINAL
+# BIN-SYNC CORE v2.4.12 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.11 FINAL (multiplexed reconciliation receive dispatch)  
-**Дата:** 2026-11-05  
-**Изменения относительно v2.3.9:**
+**Версия:** 2.4.12 FINAL (record digest v2; implementation contract alignment)  
+**Дата:** 2026-11-06  
+**Изменения v2.4.12 относительно v2.4.11:**
+- RecordDigest использует домен BIN-SYNC/RECORD/v2 и kind 0=FieldWrite / 1=FieldTomb; пустое значение и tombstone больше не имеют одинаковый digest.
+- StateRootDigest использует BIN-SYNC/STATE/v2 и не включает агрегированный Outbox cursor.
+- Уточнены сравнение HLC author, field tombstones, нормализация b128 и runtime-профиль merge policies .NET 3.0.0.
+- Неподдерживаемые wire merge policies отклоняются, а не молча применяются как LWW_FIELD.
+
+**Исторические изменения v2.4.11 относительно v2.3.9:**
 - Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
 - `recordsRoot`, `batchDigest` и подпись связывают исходный `changeId`; relay сохраняет его побайтно
 - Нулевые и повторяющиеся `changeId` отклоняются до мутации; snapshot дополнительно проверяет `recordsRoot` и `batchDigest`
@@ -200,6 +206,8 @@ changeId  : 128-bit (idempotency key)
 batchId   : 128-bit
 ```
 
+**Wire contract:** каждое поле b128 занимает ровно 16 байт. На публичной API-границе NodeId.From, RecordId.From, BatchId.From и Writer.B128(byte[]) нормализуют вход: длина 16 — без изменений; длина менее 16 — дополняется нулями справа; длина более 16 — берутся первые 16 байт BLAKE3("BIN-SYNC/AUTHID/v1" || input). Digest16.From требует ровно 16 байт. Нормализация — удобство API, а не альтернативный wire-формат.
+
 ## 4.2. Иерархия
 
 | Уровень | Где живёт | Размер | Переиспользование |
@@ -333,7 +341,11 @@ Clamp применяется только к `wall`. Идентичность н
 compare(a, b):
     if a.wall != b.wall:       return cmp(a.wall, b.wall)
     if a.logical != b.logical: return cmp(a.logical, b.logical)
-    return cmp(a.authorNodeId, b.authorNodeId)   // 128-bit durable nodeId
+    if a.authorNodeId.Lo != b.authorNodeId.Lo:
+        return cmp_u64_le(a.authorNodeId.Lo, b.authorNodeId.Lo)
+    return cmp_u64_le(a.authorNodeId.Hi, b.authorNodeId.Hi)
+
+Lo — первые 8 wire-байт NodeId, интерпретированные как unsigned little-endian u64; Hi — следующие 8 байт. Этот порядок HLC tie-break отличается от лексикографического сравнения 16 wire-байт для выбора роли HELLO в §4.3. Неизвестный автор трактуется как нулевой NodeId и сортируется раньше ненулевого.
 ```
 
 ## 5.5. Использование
@@ -390,7 +402,8 @@ compare(a, b):
 Record = {
     recordId        : b128
     namespaceId     : u16
-    state           : { fieldId -> FieldState }
+    state           : { fieldId -> FieldState }       // live values
+    fieldTombs      : { fieldId -> FieldState }       // winning field tombstones
     lifecycleHlc    : HLC
     lifecycleAuthor : b128
     lifecycleValue  : u8           // 0x00=alive, 0x01=dead
@@ -401,6 +414,7 @@ FieldState = {
     value        : bytes
     hlc          : HLC
     authorNodeId : b128     // durable nodeId автора изменения поля
+    keyEpoch     : u16      // crypto key epoch (0 when not encrypted)
 }
 ```
 
@@ -419,6 +433,7 @@ FieldState = {
 ```
 FieldWrite {
     fieldId      : u16
+    keyEpoch     : u16
     hlc          : HLC
     authorNodeId : b128
     value        : canonical bytes
@@ -432,20 +447,24 @@ FieldWrite {
 ```
 FieldTomb {
     fieldId      : u16
+    keyEpoch     : u16
     hlc          : HLC
     authorNodeId : b128
 }
 ```
 
-Помечает поле как удалённое.
+Помечает поле как удалённое. Значение tombstone в модели пустое; digest отдельно кодирует kind операции.
 
-## 7.4. Lifecycle (delete-wins)
+**Порядок FieldWrite / FieldTomb:** обе операции сравниваются по (wall, logical, authorNodeId) (§5.4). Более новый tombstone удаляет live-значение и становится текущим состоянием поля. Более старый tombstone не заменяет более новое live-значение. Запись снимает tombstone только если её полный HLC+author порядок строго выше; при равенстве tombstone выигрывает. Для одного fieldId остаётся не более одного победителя — live value либо tombstone.
+
+## 7.4. Lifecycle (LWW; delete wins on an exact tie)
 
 - `value = 0x00` → alive, `value = 0x01` → dead.
 - Undelete только явным `FieldWrite(0x0000, hlc, 0x00)`.
 - Поля с `hlc <= lifecycle.hlc` при `isDead=true` хранятся как **ghost**.
 - Поля с `hlc > lifecycle.hlc` видны, но сущность считается удалённой до явного undelete.
 - Пустой документ ≠ удалённая сущность.
+- Lifecycle сначала сравнивается по (wall, logical, authorNodeId). Если полный ключ совпадает, но alive/dead конфликтуют, побеждает dead. Это точное tie-break правило, а не безусловное преимущество tombstone над операцией с более высоким author tie-break.
 
 **Инвариант [D7]:** ghost-статус вычисляется по `field.authorNodeId` против `record.lifecycleAuthor`, не по `origin`.
 
@@ -453,9 +472,9 @@ FieldTomb {
 
 Для `LWW_RECORD`: `{ recordId, hlc, authorNodeId }`.
 
-## 7.6. Типы сторов
+## 7.6. Логические профили хранения
 
-`RowKVStore`, `FieldDocStore`, `CounterStore`, `SetStore`, `SeqStore`, `BlobStore`.
+RowKVStore, FieldDocStore, CounterStore, SetStore, SeqStore, BlobStore — логические профили приложения. BinSync.Core 3.0.0 предоставляет общий Record с opaque byte payloads; специализированные runtime store-классы и typed CRUD API для этих профилей не входят в текущую реализацию.
 
 ---
 
@@ -470,6 +489,12 @@ FieldTomb {
 0x04 COUNTER_PN    0x09 MANUAL
 0x05 SET_OR
 ```
+
+### Профиль реализации BinSync.Core 3.0.0
+
+Нормативная таблица выше описывает protocol-level policy IDs. Текущий runtime Node.ApplyBatch / ApplyBatchPayload поддерживает только LWW_FIELD (0x02); значение 0 принимается как legacy/default spelling того же LWW_FIELD. Любой другой policy code отклоняется с SCHEMA_MISMATCH, а не молча применяется как LWW.
+
+MergeFieldWithPolicy, CRDT payload codecs и MergePolicyRegistry доступны как самостоятельные helper API, но MergePolicyRegistry не подключён к Node и не выбирает алгоритм в ApplyBatch. SchemaDescriptor.MergePolicy — metadata compatibility gate, а не runtime policy dispatcher. LWW_RECORD (0x01) и SEQ_CRDT (0x07) не реализованы в текущем runtime. MANUAL не предоставляет автоматический conflict workflow: FieldResolve (0x00FF) остаётся зарезервированным системным field ID без специальной обработки в ApplyBatch. MAX/MIN (0x81–0x84) — helper extensions, не wire policies runtime.
 
 ## 8.2. LWW_RECORD
 
@@ -563,9 +588,10 @@ applyFieldWrite(recordId, fieldId, fieldOp):
 ## 9.1. Record digest
 
 ```
-recordDigest = BLAKE3-N(
+recordDigest = BLAKE3-256(
+    domainTag("BIN-SYNC/RECORD/v2") ||
     recordId ||
-    sort_by_fieldId(FieldDigestPayload*) ||
+    sort_by_fieldId_then_kind(FieldDigestPayload*) ||
     LifecycleDigestPayload
 )
 ```
@@ -579,15 +605,15 @@ recordDigest = BLAKE3-N(
 ```
 FieldDigestPayload:
     fieldId      : u16 LE      // 2 bytes
+    kind         : u8          // 0=FieldWrite, 1=FieldTomb
     keyEpoch     : u16 LE      // 2 bytes
     wall         : u64 LE      // 8 bytes
     logical      : u32 LE      // 4 bytes
     authorNodeId : b128        // 16 bytes (DURABLE, НЕ origin!)
     valLen       : varint      // 1-10 bytes
     valueBytes   : bytes       // valLen bytes
-```
 
-Итого: 32 + varint + valLen байт на поле.
+Итого: 33 + varint + valLen байт на поле. Сортировка — (fieldId, kind); kind обязателен даже для пустого значения.
 
 ### 9.1.3. Точная формула LifecycleDigestPayload
 
@@ -597,10 +623,12 @@ FieldDigestPayload:
 
 ```
 StateRootDigest = BLAKE3-256(
-    domainTag("BIN-SYNC/STATE/v1") ||
-    namespaceId || outboxCursor || recordCount ||
+    domainTag("BIN-SYNC/STATE/v2") ||
+    namespaceId || recordCount ||
     sort_by_prefix_then_recordId(all BucketDigest canonical encodings)
 )
+
+Legacy OutboxCursor в кадре STATE_DIGEST зарезервирован и передаётся как zero; он не входит в StateRootDigest. Для reconciliation peers должны использовать один digest profile; смешивание v2.4.11/v2.4.12 record digest несовместимо.
 ```
 
 ## 9.2. Bucket digest

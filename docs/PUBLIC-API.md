@@ -4,7 +4,7 @@
 
 **Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
-Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.11**.  
+Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.12**.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
 
 ## SemVer policy (3.x)
@@ -49,7 +49,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 | Type | Role |
 |------|------|
-| `NodeId` | Fixed 16-byte node identity (`Lo`/`Hi`); `From` accepts b128 wire bytes and canonicalizes them, `WriteTo` / `ToArray` / `EqualsBytes` |
+| `NodeId` | Fixed 16-byte node identity (`Lo`/`Hi`); `From` canonicalizes short/long API input (wire remains exactly 16 bytes), `WriteTo` / `ToArray` / `EqualsBytes` |
 | `RecordId` | Fixed 16-byte record identity (same b128 normalization rules) |
 | `BatchId` | Fixed 16-byte batch identity (same b128 normalization rules) |
 | `Digest16` | 16-byte digest (records root, batch digests, stream chain); `From` requires exactly 16 bytes, `Truncate` explicitly takes the leading 16 bytes |
@@ -128,16 +128,18 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 | Policy | Code | API |
 |--------|------|-----|
-| LWW_FIELD | 0 / default | `WriteField`, `Merge` field write |
-| COUNTER_G | 0x03 | `CounterG` |
-| COUNTER_PN | 0x04 | `CounterPn` |
-| SET_OR | 0x05 | `SetOr` |
-| SEQ_FRACTIONAL | 0x06 | `SeqFractional` |
-| BLOB_REF | 0x08 | `BlobRef` |
-| MANUAL | 0x09 | `MergePolicy.Manual` + FieldResolve 0x00FF |
-| Max/Min bytes/u64 | 0x81–0x84 | engine extensions |
+| LWW_FIELD | wire 0x02; legacy 0 accepted | WriteField, Node.ApplyBatch |
+| COUNTER_G | helper 0x03 | CounterG, MergeFieldWithPolicy |
+| COUNTER_PN | helper 0x04 | CounterPn, MergeFieldWithPolicy |
+| SET_OR | helper 0x05 | SetOr, MergeFieldWithPolicy |
+| SEQ_FRACTIONAL | helper 0x06 | SeqFractional, MergeFieldWithPolicy |
+| BLOB_REF | helper 0x08 | BlobRef, MergeFieldWithPolicy |
+| MANUAL | helper 0x09 | MergePolicy.Manual; no runtime FieldResolve workflow |
+| Max/Min bytes/u64 | helper extensions 0x81–0x84 | MergeFieldWithPolicy |
 
-`MergePolicyRegistry` maps `(ns, fieldId)` → policy.
+MergePolicy.LwwField has enum value 0 for the helper API; it is not the canonical wire code. Node.CreateDeltaBatch emits LWW_FIELD wire code 0x02. The runtime accepts 0 only as a legacy spelling of 0x02 and rejects other policy codes with SCHEMA_MISMATCH.
+
+MergePolicyRegistry is a standalone helper registry; it is not connected to Node.ApplyBatch. SchemaDescriptor.MergePolicy gates metadata compatibility but does not select the merge algorithm.
 
 ### Reconcile (§13)
 
