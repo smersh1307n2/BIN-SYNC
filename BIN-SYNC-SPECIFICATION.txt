@@ -1,10 +1,13 @@
-# BIN-SYNC CORE v2.4.13 FINAL
+# BIN-SYNC CORE v2.4.14 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.13 FINAL (epoch watermark separation; node-state v5)  
+**Версия:** 2.4.14 FINAL (operation envelope integrity; epoch watermark separation; node-state v5)  
 **Дата:** 2026-11-06  
-**Изменения v2.4.13 относительно v2.4.12:**
+**Изменения v2.4.14 относительно v2.4.13:**
+- `opKind` обязан совпадать с wire tag payload; `RecordTombstone.recordId` обязан совпадать с envelope `recordId`; проверка выполняется до commit для DELTA_BATCH и snapshot batches.
+
+**Исторические изменения v2.4.13 относительно v2.4.12:**
 - HELLO incarnation watermark хранится отдельно от per-namespace batch watermarks; namespace `0` не используется как служебный ключ.
 - Node-state v5 сохраняет peer-wide HELLO epochs отдельно; reader сохраняет совместимость с v3/v4 и консервативно мигрирует legacy `(peer, 0)`. 
 
