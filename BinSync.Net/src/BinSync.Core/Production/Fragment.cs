@@ -31,18 +31,21 @@ public static class FragmentCodec
     /// <summary>Split <paramref name="logicalPayload"/> into fragments of at most <paramref name="maxBody"/> bytes.</summary>
     public static List<byte[]> Split(byte[] logicalPayload, int maxBody, byte[]? msgId = null)
     {
-        if (maxBody < 1) throw new ArgumentOutOfRangeException(nameof(maxBody));
+        if (maxBody < 1 || maxBody > Frames.MAX_PAYLOAD_SIZE - 24)
+            throw new ArgumentOutOfRangeException(nameof(maxBody));
         if (logicalPayload.Length > Frames.MAX_PAYLOAD_SIZE)
             throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         msgId ??= Guid.NewGuid().ToByteArray();
         if (msgId.Length != 16) msgId = Codec.CanonicalB128(msgId);
+        if (msgId.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            throw new ArgumentException("Fragment message id must be non-zero.", nameof(msgId));
 
         if (logicalPayload.Length == 0)
         {
             return new List<byte[]> { EncodeOne(msgId, 0, 1, Array.Empty<byte>()) };
         }
 
-        int count = (logicalPayload.Length + maxBody - 1) / maxBody;
+        int count = checked((int)(((long)logicalPayload.Length + maxBody - 1) / maxBody));
         if (count > ushort.MaxValue) throw new ArgumentException("too many fragments");
         var list = new List<byte[]>(count);
         for (int i = 0; i < count; i++)
@@ -61,6 +64,11 @@ public static class FragmentCodec
     /// <summary>Encode one fragment without requiring an owned body array.</summary>
     public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, ReadOnlySpan<byte> body)
     {
+        ArgumentNullException.ThrowIfNull(msgId);
+        if (msgId.Length != 16 || msgId.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            throw new ArgumentException("Fragment message id must be a non-zero 16-byte value.", nameof(msgId));
+        if (count == 0 || index >= count)
+            throw new ArgumentOutOfRangeException(nameof(index));
         int est = 24 + body.Length;
         var rented = ArrayPool<byte>.Shared.Rent(est);
         try
@@ -87,6 +95,8 @@ public static class FragmentCodec
         ushort idx = r.U16();
         ushort cnt = r.U16();
         var body = r.Bytes();
+        if (!r.Eof() || cnt == 0 || idx >= cnt || id.AsSpan().IndexOfAnyExcept((byte)0) < 0)
+            throw new FrameException("FRAME_REJECTED");
         return new FrameFragment(id, idx, cnt, body);
     }
 
@@ -141,12 +151,12 @@ public sealed class FragmentReassembler
     /// <summary>Accept an already decoded fragment without allocating a second body copy.</summary>
     public byte[]? Accept(FrameFragment f)
     {
-        if (f.Count == 0) throw new FrameException("FRAME_REJECTED");
-        if (f.Index >= f.Count) throw new FrameException("FRAME_REJECTED");
+        if (f.MsgId is null || f.MsgId.Length != 16 ||
+            f.MsgId.AsSpan().IndexOfAnyExcept((byte)0) < 0 ||
+            f.Body is null || f.Count == 0 || f.Index >= f.Count)
+            throw new FrameException("FRAME_REJECTED");
 
         var key = BatchId.From(f.MsgId);
-        if (f.Body.Length > MaxPendingBytes - _pendingBytes)
-            throw new FrameException("FLOW_CONTROL_VIOLATION");
         if (!_pending.TryGetValue(key, out var slot))
         {
             if (_pending.Count >= MaxPendingMessages || f.Count > MaxPendingFragments - _pendingSlots)
@@ -157,24 +167,33 @@ public sealed class FragmentReassembler
         }
         else if (slot.Count != f.Count)
         {
-            throw new FrameException("FRAME_REJECTED"); // count mismatch
+            RemoveSlot(key, slot);
+            throw new FrameException("FRAME_REJECTED");
         }
 
-        if (slot.Parts[f.Index] is null)
+        var existing = slot.Parts[f.Index];
+        if (existing is not null)
         {
-            slot.Parts[f.Index] = f.Body;
-            slot.Have++;
-            _pendingBytes += f.Body.Length;
+            if (!existing.AsSpan().SequenceEqual(f.Body))
+            {
+                RemoveSlot(key, slot);
+                throw new FrameException("FRAME_REJECTED");
+            }
+            return null;
         }
+
+        if (f.Body.Length > MaxPendingBytes - _pendingBytes)
+            throw new FrameException("FLOW_CONTROL_VIOLATION");
+        slot.Parts[f.Index] = f.Body;
+        slot.Have++;
+        _pendingBytes += f.Body.Length;
 
         if (slot.Have < slot.Count) return null;
 
         // Complete
-        _pending.Remove(key);
-        _pendingSlots -= slot.Parts.Length;
+        RemoveSlot(key, slot);
         int total = 0;
         foreach (var p in slot.Parts) total += p!.Length;
-        _pendingBytes -= total;
         var buf = new byte[total];
         int off = 0;
         foreach (var p in slot.Parts)
@@ -183,6 +202,14 @@ public sealed class FragmentReassembler
             off += p.Length;
         }
         return buf;
+    }
+
+    private void RemoveSlot(BatchId key, Slot slot)
+    {
+        _pending.Remove(key);
+        _pendingSlots -= slot.Parts.Length;
+        foreach (var part in slot.Parts)
+            if (part is not null) _pendingBytes -= part.Length;
     }
 
     /// <summary>Drop all pending reassembly state.</summary>
