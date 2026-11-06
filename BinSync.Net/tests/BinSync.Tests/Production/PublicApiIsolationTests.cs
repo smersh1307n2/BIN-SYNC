@@ -52,10 +52,12 @@ public sealed class PublicApiIsolationTests
         using var node = Fix.MakeNode(911);
         var recordId = Fix.Rid(911);
         int tombstones = 0, deletions = 0, revivals = 0;
+        int probeRecord = 912;
 
         void AssertCanWriteFromAnotherThread()
         {
-            var write = Task.Run(() => node.WriteField(7, Fix.Rid(912), 0x120, new byte[] { 1 }));
+            var probeId = Fix.Rid(Interlocked.Increment(ref probeRecord));
+            var write = Task.Run(() => node.WriteField(7, probeId, 0x120, new byte[] { 1 }));
             Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "Lifecycle event ran while node locks were held.");
             Assert.True(write.Result);
         }
