@@ -102,8 +102,7 @@ public static class KeyRotation
         NodeId nodeId,
         ReadOnlySpan<byte> identitySeed)
     {
-        if (newKeyEpoch <= oldKeyEpoch)
-            throw new ArgumentException("newKeyEpoch must be greater than oldKeyEpoch", nameof(newKeyEpoch));
+        // Creation signs the supplied transition; policy validation remains in Encode/TryApply.
         var msg = BuildProofMessage(namespaceId, oldKeyEpoch, newKeyEpoch, nodeId);
         var proof = BatchSignature.Sign(identitySeed, msg);
         return new KeyRotationNotice
