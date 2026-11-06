@@ -124,7 +124,7 @@ public static class GcNotice
         {
             NamespaceId = remote.NamespaceId,
             TombstoneCutoffWall = remote.TombstoneCutoffWall,
-            Quarantined = entries,
+            Quarantined = entries.ToList(),
         };
         int added = 0;
         using (node.EnterAllGates())
