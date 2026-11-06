@@ -147,10 +147,11 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 |-----|------|
 | `ISyncTransport` | `NodeId PeerNodeId`, `SyncTransportCapabilities`, optional `MaxPacketSize`, `SendAsync` / `ReceiveAsync` |
 | `IPeerAwareSyncTransport` | Optional mutable peer identity binding for transports that learn the peer during HELLO |
-| `PipeTransport` / `StreamSyncTransport` | Test / stream adapters implementing peer-aware transport |
+| `PipeTransport` | In-memory paired transport for tests and embedded scenarios; `CreatePair()` returns peer-aware endpoints |
+| `StreamSyncTransport` | Complete-packet adapter over a caller-supplied `Stream`; `ownsStream` controls whether disposal closes that stream; peer identity is bound after HELLO |
 | `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`** |
-| `SyncSession` | Transport-independent protocol session; generic `ConnectAsync` / `AcceptAsync`, batch/ACK, reconciliation, snapshots, IBLT, membership, schema, key rotation, fragmentation |
-| `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; creates generic `SyncSession` instances |
+| `SyncSession` | Transport-independent protocol session; `ConnectAsync` / `AcceptAsync` use role-specific handshakes, while `EstablishAsync` lets both endpoints start symmetrically and selects the initiator by `NodeId`; `ownsTransport` controls transport disposal |
+| `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; listener defaults to loopback unless an address is supplied; TLS is enabled by supplying server/client authentication options; both create generic `SyncSession` instances |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
 | `LoopbackTransport` | Lab loopback with `NodeId` peer routing; routing dictionaries are private to the adapter |
 
