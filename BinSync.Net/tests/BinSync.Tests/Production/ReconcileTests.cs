@@ -63,7 +63,7 @@ public class ReconcileTests
     public void DivergentPrefixes_does_not_trust_unverified_matching_root_digest()
     {
         var node = Fix.MakeNode(9);
-        node.WriteField(1, Fix.Rid(91), 0x10, new byte[] { 1 });
+        node.WriteField(1, Fix.Rid(91), 0x100, new byte[] { 1 });
         var local = Reconcile.BuildStateDigest(node, 1);
         var remote = new StateDigestMessage
         {
@@ -82,7 +82,7 @@ public class ReconcileTests
     public void StateDigest_wire_roundtrip()
     {
         var a = Fix.MakeNode(5);
-        a.WriteField(1, Fix.Rid(1), 0x10, new byte[] { 7, 7, 7 });
+        a.WriteField(1, Fix.Rid(1), 0x100, new byte[] { 7, 7, 7 });
         var msg = Reconcile.BuildStateDigest(a, 1);
         var raw = Reconcile.EncodeStateDigest(msg);
         var back = Reconcile.DecodeStateDigest(raw);
