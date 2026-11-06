@@ -243,6 +243,23 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void Unknown_merge_policy_is_rejected_by_helpers_and_registry()
+    {
+        var local = Fs(new byte[] { 1 }, wall: 1, authorTail: 1);
+        var remote = Fs(new byte[] { 2 }, wall: 2, authorTail: 2);
+        var unknown = (MergePolicy)0xFF;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Merge.MergeFieldWithPolicy(null, remote, unknown));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Merge.MergeFieldWithPolicy(local, remote, unknown));
+
+        var registry = new MergePolicyRegistry();
+        Assert.Throws<ArgumentOutOfRangeException>(() => registry.Set(1, 0x100, unknown));
+        Assert.Equal(MergePolicy.LwwField, registry.Get(1, 0x100));
+    }
+
+    [Fact]
     public void Spec_wire_codes_match()
     {
         Assert.Equal(0x03, (byte)MergePolicy.CounterG);
