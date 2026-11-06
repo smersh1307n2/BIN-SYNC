@@ -568,6 +568,30 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void FlowControl_zero_byte_frames_do_not_create_stream_state()
+    {
+        var flow = new FlowControl(initial: 8, maxWindow: 16);
+        for (uint stream = 1; stream <= 100_000; stream++)
+            Assert.True(flow.TryConsume(stream, 0));
+        Assert.Equal(8, flow.Balance(100_001));
+    }
+
+    [Fact]
+    public void FlowControl_reclaims_stream_state_after_all_credit_is_returned()
+    {
+        var flow = new FlowControl(initial: 8, maxWindow: 16);
+        for (uint stream = 1; stream <= 100_000; stream++)
+        {
+            Assert.True(flow.TryConsume(stream, 1));
+            Assert.True(flow.TryApplyUpdate(stream, 1));
+        }
+        Assert.Equal(8, flow.Balance(100_001));
+        Assert.True(flow.TryConsume(100_001, 8));
+        Assert.True(flow.TryApplyUpdate(100_001, 8));
+        Assert.Equal(8, flow.Balance(100_001));
+    }
+
+    [Fact]
     public void WindowUpdateWire_uses_exactly_four_little_endian_bytes()
     {
         Assert.Equal(new byte[] { 0x78, 0x56, 0x34, 0x12 },

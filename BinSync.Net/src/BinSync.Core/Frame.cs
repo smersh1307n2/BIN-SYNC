@@ -380,6 +380,7 @@ public sealed class FlowControl
         lock (_gate)
         {
             if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
+            if (payloadBytes == 0) return true;
             var balance = BalanceInternal(streamId);
             if (balance < payloadBytes) return false;
             _credit[streamId] = balance - payloadBytes;
@@ -425,6 +426,15 @@ public sealed class FlowControl
         }
     }
 
+    private void RemoveIdleStream(uint streamId, long balance, long inFlight)
+    {
+        if (balance == Initial && inFlight == 0 && !_waiters.ContainsKey(streamId))
+        {
+            _credit.Remove(streamId);
+            _inFlight.Remove(streamId);
+        }
+    }
+
     /// <summary>Apply positive additive credits, capped at the configured maximum.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
@@ -438,8 +448,10 @@ public sealed class FlowControl
             next = credits >= room ? MaxWindow : balance + credits;
             _credit[streamId] = next;
             _inFlight.TryGetValue(streamId, out long inFlight);
-            _inFlight[streamId] = credits >= inFlight ? 0 : inFlight - credits;
+            long remaining = credits >= inFlight ? 0 : inFlight - credits;
+            _inFlight[streamId] = remaining;
             _waiters.Remove(streamId, out waiter);
+            RemoveIdleStream(streamId, next, remaining);
         }
         waiter?.TrySetResult();
         return next;
@@ -472,9 +484,12 @@ public sealed class FlowControl
             if (credits > MaxWindow - balance) return false;
             if (!_inFlight.TryGetValue(streamId, out long inFlight) || credits > inFlight)
                 return false;
-            _credit[streamId] = balance + credits;
-            _inFlight[streamId] = inFlight - credits;
+            long next = balance + credits;
+            long remaining = inFlight - credits;
+            _credit[streamId] = next;
+            _inFlight[streamId] = remaining;
             _waiters.Remove(streamId, out waiter);
+            RemoveIdleStream(streamId, next, remaining);
         }
         waiter?.TrySetResult();
         return true;

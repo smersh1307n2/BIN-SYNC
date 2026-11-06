@@ -261,13 +261,11 @@ public partial class SyncSession : IAsyncDisposable
             }
             return;
         }
-        int size = Frames.HEADER_SIZE + payload.Length;
-        var rented = ArrayPool<byte>.Shared.Rent(size);
+        byte[]? rented = null;
         bool creditReserved = false;
         bool sendStarted = false;
         try
         {
-            int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
             if (flowControlled)
             {
                 if (payload.Length > _sendFlowControl.Initial)
@@ -276,6 +274,9 @@ public partial class SyncSession : IAsyncDisposable
                 await _sendFlowControl.WaitForCreditAsync(streamId, payload.Length, ct).ConfigureAwait(false);
                 creditReserved = true;
             }
+            int size = Frames.HEADER_SIZE + payload.Length;
+            rented = ArrayPool<byte>.Shared.Rent(size);
+            int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
             await _sendGate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
@@ -294,7 +295,7 @@ public partial class SyncSession : IAsyncDisposable
         {
             if (creditReserved && !sendStarted)
                 _sendFlowControl.ApplyUpdate(streamId, payload.Length);
-            ArrayPool<byte>.Shared.Return(rented);
+            if (rented is not null) ArrayPool<byte>.Shared.Return(rented);
         }
     }
 
