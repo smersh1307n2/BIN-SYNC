@@ -228,6 +228,44 @@ public sealed partial class Node
             }
         }
 
+        // Stage opportunistic alias propagation once per distinct durable author.
+        // The old per-entry loop repeatedly enumerated every peer and allocated a key
+        // snapshot, making relay cost O(relay entries × peers) with avoidable garbage.
+        var aliasPropagations = new List<(NodeId Author, int Epoch)>();
+        var aliasPropagationSet = new HashSet<(NodeId Author, int Epoch)>();
+        var aliasPeers = new List<Node>();
+        Node? senderAliasPeer = null;
+        if (relayIndices.Count > 0 &&
+            AliasToNode.TryGetValue(senderPeer, out var senderAliasMap))
+        {
+            var aliasEpochByAuthor = new Dictionary<NodeId, int>(senderAliasMap.Count);
+            foreach (var (_, (author, epoch)) in senderAliasMap)
+                aliasEpochByAuthor.TryAdd(author, epoch); // preserve first registered binding
+
+            foreach (int idx in relayIndices)
+            {
+                var author = resolvedAuthors[idx];
+                if (aliasEpochByAuthor.TryGetValue(author, out int epoch) &&
+                    aliasPropagationSet.Add((author, epoch)))
+                    aliasPropagations.Add((author, epoch));
+            }
+
+            if (aliasPropagations.Count > 0)
+            {
+                foreach (var otherPeerId in AliasToNode.Keys)
+                {
+                    if (otherPeerId == senderPeer) continue;
+                    if (PeersByNid is not null &&
+                        PeersByNid.TryGetValue(otherPeerId, out var otherPeer) &&
+                        otherPeer is not null)
+                        aliasPeers.Add(otherPeer);
+                }
+
+                if (PeersByNid is not null)
+                    PeersByNid.TryGetValue(senderPeer, out senderAliasPeer);
+            }
+        }
+
         // Reserve every relay sequence during preflight. Sequence exhaustion must
         // reject the batch before storage, cursors, Inbox or SeenChanges are published.
         var relaySequences = nEnt > 0 ? new long[nEnt] : Array.Empty<long>();
@@ -314,24 +352,18 @@ public sealed partial class Node
                 ol.Add(entry);
                 _outboxSeq[(resolved, batch.NamespaceId)] = relaySequences[idx];
 
-                // Propagate the third-party binding learned through this session.
-                int? epm = null;
-                var smap = AliasToNode.TryGetValue(senderPeer, out var ss) ? ss : new Dictionary<int, (NodeId Id, int Epoch)>();
-                foreach (var (_al, (n, epv)) in smap)
-                    if (n == resolved) { epm = epv; break; }
-                if (epm is not null)
-                {
-                    foreach (var otherPeerKv in AliasToNode.Keys.ToList())
-                    {
-                        var otherPeer = PeersByNid is not null && PeersByNid.TryGetValue(otherPeerKv, out var on) ? on : null;
-                        if (otherPeer is not null && otherPeerKv != senderPeer)
-                            EnsureAliasBestEffort(otherPeer, resolved, epm.Value);
-                    }
-                    var senderNode = PeersByNid is not null && PeersByNid.TryGetValue(senderPeer, out var sn) ? sn : null;
-                    if (senderNode is not null && resolved != NodeId)
-                        EnsureAliasBestEffort(senderNode, resolved, epm.Value);
-                }
             }
+        }
+
+        // Alias propagation is post-commit, best-effort control-plane work. Run it
+        // once per distinct author, reusing the pre-commit peer snapshot.
+        foreach (var (author, epoch) in aliasPropagations)
+        {
+            foreach (var peer in aliasPeers)
+                EnsureAliasBestEffort(peer, author, epoch);
+
+            if (senderAliasPeer is not null && author != NodeId)
+                EnsureAliasBestEffort(senderAliasPeer, author, epoch);
         }
         return result;
     }
