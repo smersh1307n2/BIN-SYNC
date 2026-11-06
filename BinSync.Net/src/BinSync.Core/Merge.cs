@@ -45,7 +45,10 @@ public static class Merge
         FieldState? local, FieldState remote, MergePolicy policy)
     {
         if (local is null)
+        {
+            ValidateInitialCrdtPayload(policy, remote.Value);
             return (remote, true);
+        }
 
         if (local.Timestamp.Wall == remote.Timestamp.Wall &&
             local.Timestamp.Logical == remote.Timestamp.Logical &&
@@ -67,6 +70,31 @@ public static class Merge
             MergePolicy.Manual => MergeManual(local, remote),
             _ => PickLww(local, remote),
         };
+    }
+
+    // A first value has no local operand to invoke the merge codec. Validate it
+    // explicitly so malformed canonical CRDT payloads cannot enter state through
+    // the local-null fast path.
+    private static void ValidateInitialCrdtPayload(MergePolicy policy, byte[] payload)
+    {
+        switch (policy)
+        {
+            case MergePolicy.CounterG:
+                _ = CounterG.Decode(payload);
+                break;
+            case MergePolicy.CounterPn:
+                _ = CounterPn.Decode(payload);
+                break;
+            case MergePolicy.SetOr:
+                _ = SetOr.Decode(payload);
+                break;
+            case MergePolicy.SeqFractional:
+                _ = SeqFractional.Decode(payload);
+                break;
+            case MergePolicy.BlobRef:
+                _ = BlobRef.Decode(payload);
+                break;
+        }
     }
 
     private static (FieldState Winner, bool Changed) MergeCrdtPayload(

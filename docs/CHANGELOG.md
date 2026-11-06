@@ -2,6 +2,8 @@
 
 ## 3.0.0 — 2026-11-06
 
+- Validate the first CRDT field payload when no local value exists; malformed initial CounterG/CounterPn/SetOr/SeqFractional/BlobRef data can no longer bypass merge-codec validation.
+
 - Reject SET_OR merges when the same add dot identifies different elements across replicas; classify the conflict as invalid remote data before canonical encoding.
 
 - Define SEQ_FRACTIONAL `orderKey` ordering as unsigned UTF-8 scalar order and use the same allocation-free comparison in the engine; add a supplementary-Unicode regression test.

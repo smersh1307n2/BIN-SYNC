@@ -31,6 +31,26 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void First_crdt_value_is_validated_when_local_state_is_missing()
+    {
+        var actor = Author(3);
+        var validPayloads = new (MergePolicy Policy, byte[] Payload)[]
+        {
+            (MergePolicy.CounterG, CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance) { [actor] = 1 })),
+            (MergePolicy.CounterPn, CounterPn.Encode(
+                new Dictionary<byte[], ulong>(BytesEq.Instance) { [actor] = 1 },
+                new Dictionary<byte[], ulong>(BytesEq.Instance))),
+            (MergePolicy.SetOr, SetOr.Encode(Array.Empty<SetOr.Add>(), Array.Empty<SetOr.Dot>())),
+            (MergePolicy.SeqFractional, SeqFractional.Encode(new SeqFractional.Item { ParentId = Author(0), AuthorNodeId = actor, Seq = 1 })),
+            (MergePolicy.BlobRef, BlobRef.Encode(new BlobRef.Descriptor { BlobId = actor, Hash = new byte[32] })),
+        };
+
+        foreach (var (policy, payload) in validPayloads)
+            Assert.Throws<InvalidDataException>(() =>
+                Merge.MergeFieldWithPolicy(null, Fs(payload.Concat(new byte[] { 0 }).ToArray(), 1, 3), policy));
+    }
+
+    [Fact]
     public void CounterG_field_merge_policy()
     {
         var a = Author(1);
