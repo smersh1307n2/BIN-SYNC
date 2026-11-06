@@ -343,6 +343,13 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void AllGateScope_IsCreatedOnlyThroughNode()
+    {
+        Assert.Null(typeof(AllGateScope).GetConstructor(new[] { typeof(object), typeof(object), typeof(object) }));
+        Assert.Equal(typeof(AllGateScope), typeof(Node).GetMethod(nameof(Node.EnterAllGates))!.ReturnType);
+    }
+
+    [Fact]
     public void NodePersistence_DoesNotExposePrivateFieldReflection()
     {
         Assert.Null(typeof(NodePersistence).GetMethod("GetField"));

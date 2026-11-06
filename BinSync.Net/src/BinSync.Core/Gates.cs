@@ -12,7 +12,7 @@ public readonly struct AllGateScope : IDisposable
     private readonly bool _held;
 
     /// <summary>Disposable scope holding Storage, Outbox, and Meta locks in order.</summary>
-    public AllGateScope(object storage, object outbox, object meta)
+    internal AllGateScope(object storage, object outbox, object meta)
     {
         _storage = storage;
         _outbox = outbox;
