@@ -20,11 +20,11 @@ public sealed partial class Node : IDisposable
             throw new ArgumentOutOfRangeException(nameof(fieldId), "Field id must fit the 16-bit wire field.");
     }
 
-    internal static void ValidateUserFieldId(int fieldId)
+    internal static void ValidateWritableFieldId(int fieldId)
     {
         ValidateFieldId(fieldId);
-        if (fieldId < Model.UserFieldMin && fieldId != Model.FieldResolveId)
-            throw new ArgumentOutOfRangeException(nameof(fieldId), "Field ids below 0x0100 are reserved for system use.");
+        if (fieldId == Model.LifecycleFieldId)
+            throw new ArgumentOutOfRangeException(nameof(fieldId), "Use DeleteRecord/UndeleteRecord for lifecycle changes.");
     }
 
 
