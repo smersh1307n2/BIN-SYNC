@@ -46,7 +46,7 @@ public sealed partial class Node
                     ErrorsOut.Add($"SCHEMA_MISMATCH:{gate.Detail}");
                     throw new SyncException("SCHEMA_MISMATCH", ownedBatch.BatchId);
                 }
-                result = gate.Result!;
+                result = gate.Result ?? throw new InvalidOperationException("Schema gate returned no apply result.");
             }
         }
         if (!result.Duplicate || result.Applied > 0)

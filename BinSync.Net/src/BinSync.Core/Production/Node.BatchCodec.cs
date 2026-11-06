@@ -33,11 +33,7 @@ public sealed partial class Node
         if (batch.CursorStart < 0 || batch.CursorEnd < batch.CursorStart)
             throw new ArgumentOutOfRangeException(nameof(batch.CursorStart), "Batch cursors must be non-negative and ordered.");
         ArgumentNullException.ThrowIfNull(batch.Entries);
-        for (int i = 0; i < batch.Entries.Count; i++)
-        {
-            ArgumentNullException.ThrowIfNull(batch.Entries[i]);
-            ArgumentNullException.ThrowIfNull(batch.Entries[i].Payload);
-        }
+
     }
 
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>

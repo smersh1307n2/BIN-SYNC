@@ -48,7 +48,7 @@ public sealed class SchemaRegistry
         get { lock (_gate) return _map.Sum(kv => kv.Value.Count); }
     }
 
-    private static void ValidateDescriptorRange(SchemaDescriptor descriptor)
+    internal static void ValidateDescriptorRange(SchemaDescriptor descriptor)
     {
         Node.ValidateNamespaceId(descriptor.NamespaceId);
         if ((uint)descriptor.SchemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.SchemaId));
@@ -266,7 +266,7 @@ public static class SchemaMap
         foreach (var d in list)
         {
             ArgumentNullException.ThrowIfNull(d);
-            ValidateDescriptorRange(d);
+            SchemaRegistry.ValidateDescriptorRange(d);
             ArgumentNullException.ThrowIfNull(d.FieldIds);
             ArgumentNullException.ThrowIfNull(d.RetiredFieldIds);
             if (d.FieldIds.Overlaps(d.RetiredFieldIds))
