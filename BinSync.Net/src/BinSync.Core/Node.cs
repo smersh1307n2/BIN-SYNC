@@ -275,37 +275,105 @@ public sealed partial class Node : IDisposable
     {
     }
 
-    /// <summary>Raise <see cref="BatchApplied"/> if handlers are attached (call outside locks).</summary>
-    internal void RaiseBatchApplied(BatchResult result, NodeId senderPeer)
+    private static void LogObserverFailure(string eventName, Exception exception) =>
+        System.Diagnostics.Trace.TraceError("BIN-SYNC observer for {0} failed: {1}", eventName, exception);
+
+    private static void InvokeSafely<T1>(Action<T1>? handlers, string eventName, T1 arg1)
     {
-        BatchApplied?.Invoke(result, senderPeer);
+        if (handlers is null) return;
+        foreach (Action<T1> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
     }
 
-    /// <summary>Raise <see cref="FieldWritten"/> if handlers are attached (call outside locks).</summary>
-    internal void RaiseFieldWritten(int namespaceId, RecordId recordId, int fieldId)
+    private static void InvokeSafely<T1, T2>(Action<T1, T2>? handlers, string eventName, T1 arg1, T2 arg2)
     {
-        FieldWritten?.Invoke(namespaceId, recordId, fieldId);
+        if (handlers is null) return;
+        foreach (Action<T1, T2> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1, arg2); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
     }
 
-    internal void RaiseAckProcessed(NodeId peer, int namespaceId, long ackedSeq, NodeId? authorStream)
+    private static void InvokeSafely<T1, T2, T3>(
+        Action<T1, T2, T3>? handlers, string eventName, T1 arg1, T2 arg2, T3 arg3)
     {
-        AckProcessed?.Invoke(peer, namespaceId, ackedSeq, authorStream);
+        if (handlers is null) return;
+        foreach (Action<T1, T2, T3> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1, arg2, arg3); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
     }
+
+    private static void InvokeSafely<T1, T2, T3, T4>(
+        Action<T1, T2, T3, T4>? handlers, string eventName, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
+    {
+        if (handlers is null) return;
+        foreach (Action<T1, T2, T3, T4> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1, arg2, arg3, arg4); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
+    }
+
+    /// <summary>Raise <see cref="BatchApplied"/> after commit and outside node gates.</summary>
+    internal void RaiseBatchApplied(BatchResult result, NodeId senderPeer) =>
+        InvokeSafely(BatchApplied, nameof(BatchApplied), result, senderPeer);
+
+    /// <summary>Raise <see cref="FieldWritten"/> after commit and outside node gates.</summary>
+    internal void RaiseFieldWritten(int namespaceId, RecordId recordId, int fieldId) =>
+        InvokeSafely(FieldWritten, nameof(FieldWritten), namespaceId, recordId, fieldId);
+
+    internal void RaiseFieldTombstoned(int namespaceId, RecordId recordId, int fieldId) =>
+        InvokeSafely(FieldTombstoned, nameof(FieldTombstoned), namespaceId, recordId, fieldId);
+
+    internal void RaiseRecordDeleted(int namespaceId, RecordId recordId) =>
+        InvokeSafely(RecordDeleted, nameof(RecordDeleted), namespaceId, recordId);
+
+    internal void RaiseRecordUndeleted(int namespaceId, RecordId recordId) =>
+        InvokeSafely(RecordUndeleted, nameof(RecordUndeleted), namespaceId, recordId);
+
+    internal void RaiseOutboxEntryPushed(OutboxEntry entry)
+    {
+        var handlers = OutboxEntryPushed;
+        if (handlers is null) return;
+        foreach (Action<OutboxEntry> handler in handlers.GetInvocationList())
+        {
+            try { handler(CloneOutboxEntryForPublicRead(entry)); }
+            catch (Exception ex) { LogObserverFailure(nameof(OutboxEntryPushed), ex); }
+        }
+    }
+
+    internal void RaiseAckProcessed(NodeId peer, int namespaceId, long ackedSeq, NodeId? authorStream) =>
+        InvokeSafely(AckProcessed, nameof(AckProcessed), peer, namespaceId, ackedSeq, authorStream);
 
     internal void RaiseMembershipApplied(MembershipMessage msg, int learned) =>
-        MembershipApplied?.Invoke(msg, learned);
+        InvokeSafely(MembershipApplied, nameof(MembershipApplied), msg, learned);
 
     internal void RaiseKeyRotationApplied(KeyRotationNotice notice) =>
-        KeyRotationApplied?.Invoke(notice);
+        InvokeSafely(KeyRotationApplied, nameof(KeyRotationApplied), notice);
+
+    internal void RaiseSchemaRegistered(int namespaceId, int schemaId, int version) =>
+        InvokeSafely(SchemaRegistered, nameof(SchemaRegistered), namespaceId, schemaId, version);
+
+    internal void RaiseSchemaMapLearned(int learned) =>
+        InvokeSafely(SchemaMapLearned, nameof(SchemaMapLearned), learned);
 
     internal void RaiseGcNoticeApplied(GcNoticeMessage notice, int added) =>
-        GcNoticeApplied?.Invoke(notice, added);
+        InvokeSafely(GcNoticeApplied, nameof(GcNoticeApplied), notice, added);
 
     internal void RaiseGarbageCollected(int namespaceId, int removed, ulong cutoffWall) =>
-        GarbageCollected?.Invoke(namespaceId, removed, cutoffWall);
+        InvokeSafely(GarbageCollected, nameof(GarbageCollected), namespaceId, removed, cutoffWall);
+
+    internal void RaiseTrustChanged(NodeId nodeId, bool trusted) =>
+        InvokeSafely(TrustChanged, nameof(TrustChanged), nodeId, trusted);
 
     internal void RaiseSnapshotApplied(int namespaceId, int applied) =>
-        SnapshotApplied?.Invoke(namespaceId, applied);
+        InvokeSafely(SnapshotApplied, nameof(SnapshotApplied), namespaceId, applied);
 
     /// <summary>Apply a verified KEY_ROTATION notice via <paramref name="store"/> and raise <see cref="KeyRotationApplied"/>.</summary>
     public bool ApplyKeyRotation(KeyRotationNotice notice, KeyEpochStore store)
