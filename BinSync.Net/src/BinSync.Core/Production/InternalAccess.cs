@@ -39,7 +39,7 @@ public sealed partial class Node
     /// Apply a remote field state (snapshot path): LWW merge with original author/HLC.
     /// Does not push outbox — peer already holds the op; local anti-entropy republishes separately.
     /// </summary>
-    public bool ApplyRemoteField(int namespaceId, RecordId recordId, ushort fieldId,
+    internal bool ApplyRemoteField(int namespaceId, RecordId recordId, ushort fieldId,
         byte[] value, Hlc hlc, NodeId authorNodeId, ushort keyEpoch = 0)
     {
         lock (_lockStorage)
@@ -55,7 +55,7 @@ public sealed partial class Node
     }
 
     /// <summary>Apply a remote field tombstone from a snapshot without creating an Outbox entry.</summary>
-    public bool ApplyRemoteFieldTombstone(int namespaceId, RecordId recordId, ushort fieldId,
+    internal bool ApplyRemoteFieldTombstone(int namespaceId, RecordId recordId, ushort fieldId,
         Hlc hlc, NodeId authorNodeId, ushort keyEpoch = 0)
     {
         lock (_lockStorage)
@@ -68,7 +68,7 @@ public sealed partial class Node
     }
 
     /// <summary>Apply a remote record lifecycle from a snapshot without creating an Outbox entry.</summary>
-    public bool ApplyRemoteLifecycle(int namespaceId, RecordId recordId, Hlc hlc,
+    internal bool ApplyRemoteLifecycle(int namespaceId, RecordId recordId, Hlc hlc,
         NodeId authorNodeId, byte lifecycleValue)
     {
         lock (_lockStorage)

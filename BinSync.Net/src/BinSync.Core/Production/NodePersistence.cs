@@ -646,7 +646,7 @@ public static class NodePersistence
         .Create((a, b) => HlcOps.BytesCompare(a, b));
 
     /// <summary>Read a private/public field by name via reflection (persistence helpers).</summary>
-    public static T GetField<T>(object obj, string name)
+    internal static T GetField<T>(object obj, string name)
     {
         var f = obj.GetType().GetField(name, System.Reflection.BindingFlags.Instance |
                                             System.Reflection.BindingFlags.NonPublic);

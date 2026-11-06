@@ -62,7 +62,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | API | Role |
 |-----|------|
 | `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
-| `WriteFields(IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)>)` | Batch of writes under one lock (distinct HLC stamps) |
+| `WriteFields(IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)>)` | Batch of typed-record writes under one lock (distinct HLC stamps) |
 | typed `PushOutbox` overloads | Low-level outbox helpers |
 | `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
@@ -185,7 +185,7 @@ attached to a live Node.
 
 ### Schema (§18, opt-in)
 
-`SchemaDescriptor`, `SchemaRegistry`, `Node.Schemas`, `ApplyBatchWithSchema`, SCHEMA_MAP frame 0x04.
+`SchemaDescriptor`, `SchemaRegistry`, `Node.Schemas`, `RegisterSchema`, `ApplyBatchWithSchema`, `LearnSchemaMap`, `ExportSchemaMap`, SCHEMA_MAP frame 0x04.
 
 ### Causal deps (§16.19, opt-in)
 
@@ -193,7 +193,8 @@ attached to a live Node.
 |-----|------|
 | `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; no byte-array identity overloads |
 | `Node.Causal` | Optional tracker |
-| `Node.ApplyBatchCausal` / `DrainCausal` / `NoteCausalApplied(BatchId)` | Gate before apply and note local causal commits |
+| `Node.ApplyBatchCausal` / `DrainCausal` / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
+| `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `CausalWire` | CCD1 trailer encode/decode |
 | `CAUSAL_DEP_MISSING` | 0x0012 |
 
@@ -205,7 +206,7 @@ attached to a live Node.
 |-----|------|
 | `E2ee.SealField` / `OpenField` | ChaCha20-Poly1305 |
 | `E2eeKeyRing` / `Node.EnsureE2ee` | Per-namespace keys + epochs |
-| `WriteFieldSealed` / `ReadFieldOpen` | Convenience |
+| `WriteFieldSealed` / `ReadFieldOpen` / `TryOpenField` | Convenience write and authenticated read helpers |
 | `KeyRotation` / `KeyRotationNotice` / `KeyEpochStore` | Frame 0x11 + proof |
 
 Blind merge compares ciphertext with open HLC + author.
@@ -216,7 +217,7 @@ Blind merge compares ciphertext with open HLC + author.
 |-----|------|
 | `BatchSignature` | Ed25519 sign/verify (vendored) |
 | `TrustStore` | TOFU / PreShared / CA roots / revoke |
-| `Node.TrustPeer` / `RevokeTrust` | Pin keys |
+| `Node.EnsureTrust` / `TrustPeer` / `RevokeTrust` / `SaveTrust` / `LoadTrust` | Configure, pin, revoke, and persist trust state |
 | `VerifyAndApplyBatch` | Signature gate then apply |
 | `SIGNATURE_INVALID` / `TRUST_REVOKED` | 0x0013 / 0x0014 |
 

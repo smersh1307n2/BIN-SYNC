@@ -323,6 +323,20 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void NodePersistence_DoesNotExposePrivateFieldReflection()
+    {
+        Assert.Null(typeof(NodePersistence).GetMethod("GetField"));
+    }
+
+    [Fact]
+    public void SnapshotMutationHelpers_AreNotPublicEntryPoints()
+    {
+        Assert.Null(typeof(Node).GetMethod("ApplyRemoteField"));
+        Assert.Null(typeof(Node).GetMethod("ApplyRemoteFieldTombstone"));
+        Assert.Null(typeof(Node).GetMethod("ApplyRemoteLifecycle"));
+    }
+
+    [Fact]
     public void Wal_ExposesAtomicCheckpointButNotRawResetPrimitives()
     {
         Assert.Null(typeof(Wal).GetMethod(nameof(Wal.Truncate)));
