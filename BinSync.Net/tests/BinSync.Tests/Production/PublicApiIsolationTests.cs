@@ -544,6 +544,23 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public async Task FlowControl_cancelled_waiter_does_not_block_later_waiters()
+    {
+        var flow = new FlowControl(initial: 8, maxWindow: 16);
+        Assert.True(flow.TryConsume(17, 8));
+
+        using var cancellation = new CancellationTokenSource();
+        var cancelled = flow.WaitForCreditAsync(17, 8, cancellation.Token).AsTask();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+
+        var next = flow.WaitForCreditAsync(17, 8).AsTask();
+        Assert.True(flow.TryApplyUpdate(17, 8));
+        await next.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(0, flow.Balance(17));
+    }
+
+    [Fact]
     public async Task FlowControl_Failure_wakes_credit_waiters()
     {
         var flow = new FlowControl(initial: 0, maxWindow: 8);

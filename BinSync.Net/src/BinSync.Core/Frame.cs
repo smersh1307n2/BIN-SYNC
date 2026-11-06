@@ -345,7 +345,14 @@ public sealed class FlowControl
     private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
     private readonly Dictionary<uint, long> _inFlight = new();
-    private readonly Dictionary<uint, TaskCompletionSource> _waiters = new();
+    private sealed class CreditWaiter
+    {
+        public readonly TaskCompletionSource Signal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int WaiterCount;
+    }
+
+    private readonly Dictionary<uint, CreditWaiter> _waiters = new();
     private Exception? _failure;
 
     /// <summary>Configured initial flow-control window.</summary>
@@ -403,7 +410,7 @@ public sealed class FlowControl
     {
         while (true)
         {
-            Task waitTask;
+            CreditWaiter waiter;
             lock (_gate)
             {
                 if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
@@ -415,14 +422,29 @@ public sealed class FlowControl
                     _inFlight[streamId] = checked(inFlight + payloadBytes);
                     return;
                 }
-                if (!_waiters.TryGetValue(streamId, out var waiter))
+                if (!_waiters.TryGetValue(streamId, out waiter!))
                 {
-                    waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    waiter = new CreditWaiter();
                     _waiters.Add(streamId, waiter);
                 }
-                waitTask = waiter.Task;
+                waiter.WaiterCount++;
             }
-            await waitTask.WaitAsync(ct).ConfigureAwait(false);
+
+            try
+            {
+                await waiter.Signal.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    waiter.WaiterCount--;
+                    if (waiter.WaiterCount == 0 &&
+                        _waiters.TryGetValue(streamId, out var current) &&
+                        ReferenceEquals(current, waiter))
+                        _waiters.Remove(streamId);
+                }
+            }
         }
     }
 
@@ -439,7 +461,7 @@ public sealed class FlowControl
     public long ApplyUpdate(uint streamId, long credits)
     {
         if (credits <= 0) throw new ArgumentOutOfRangeException(nameof(credits));
-        TaskCompletionSource? waiter;
+        CreditWaiter? waiter;
         long next;
         lock (_gate)
         {
@@ -453,7 +475,7 @@ public sealed class FlowControl
             _waiters.Remove(streamId, out waiter);
             RemoveIdleStream(streamId, next, remaining);
         }
-        waiter?.TrySetResult();
+        waiter?.Signal.TrySetResult();
         return next;
     }
 
@@ -461,7 +483,7 @@ public sealed class FlowControl
     public void Fail(Exception failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
-        TaskCompletionSource[] waiters;
+        CreditWaiter[] waiters;
         lock (_gate)
         {
             if (_failure is not null) return;
@@ -469,14 +491,14 @@ public sealed class FlowControl
             waiters = _waiters.Values.ToArray();
             _waiters.Clear();
         }
-        foreach (var waiter in waiters) waiter.TrySetResult();
+        foreach (var waiter in waiters) waiter.Signal.TrySetResult();
     }
 
     /// <summary>Apply a peer update only when it is strictly within the negotiated window.</summary>
     public bool TryApplyUpdate(uint streamId, long credits)
     {
         if (credits <= 0) return false;
-        TaskCompletionSource? waiter;
+        CreditWaiter? waiter;
         lock (_gate)
         {
             if (_failure is not null) return false;
