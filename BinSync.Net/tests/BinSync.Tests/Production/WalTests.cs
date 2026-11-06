@@ -105,11 +105,12 @@ public class WalTests
 
             // Reopen the WAL and append the next sequence using a fresh process view.
             var second = Fix.MakeNode(125);
-            second.NextOutboxSeq(second.NodeId, 1); // sequence 1 is already in the first WAL record
             using (var wal = Wal.Open(walPath))
             {
                 Assert.Equal(1, wal.Sequence);
-                second.AttachWal(wal);
+                second.AttachWal(wal); // Attach performs replay before enabling new writes.
+                Assert.True(second.TryGetRecord(1, firstRid, out _));
+                Assert.Equal(1, second.GetOutboxCount(1));
                 second.WriteField(1, secondRid, 0x100, new byte[] { 2 }, new Hlc(200, 0));
                 Assert.Equal(2, wal.Sequence);
             }

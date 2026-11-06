@@ -6,17 +6,23 @@ public sealed partial class Node
     private Wal? _wal;
 
     /// <summary>
-    /// Attach a WAL for subsequent local mutations. Replay the WAL before exposing
-    /// the node; the caller retains ownership and must dispose the WAL separately.
+    /// Replay the WAL into this node and attach it for subsequent local mutations.
+    /// The caller retains ownership and must dispose the WAL separately.
     /// </summary>
     public void AttachWal(Wal wal)
     {
         ArgumentNullException.ThrowIfNull(wal);
-        lock (_lockStorage) lock (_lockOutbox)
+        using (EnterAllGates())
         {
             if (_wal is not null && !ReferenceEquals(_wal, wal))
                 throw new InvalidOperationException("A WAL is already attached to this node.");
-            _wal = wal;
+            if (_wal is null)
+            {
+                // Replay and attachment are one gated startup transition: no local
+                // write can slip between recovery and enabling durable mutations.
+                wal.Replay(this);
+                _wal = wal;
+            }
         }
     }
 

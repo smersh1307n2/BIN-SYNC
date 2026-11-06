@@ -159,9 +159,12 @@ Startup order (before exposing the Node to application work):
 ```csharp
 var node = NodePersistence.Load(snapshotPath); // or construct a new Node
 using var wal = Wal.Open(walPath);
-wal.Replay(node);                              // restore complete local mutations
-node.AttachWal(wal);                           // subsequent local writes become durable
+node.AttachWal(wal);                           // replays first, then enables durable writes
 ```
+
+`AttachWal` performs replay and attachment under the Node gates as one startup
+transition. This prevents a local write from racing between recovery and enabling
+the WAL. If replay fails, the WAL is not attached.
 
 `AttachWal` does not take ownership of the WAL; keep it alive for as long as the
 Node uses it. `Wal.Checkpoint(node, snapshotPath)` saves the full snapshot and
