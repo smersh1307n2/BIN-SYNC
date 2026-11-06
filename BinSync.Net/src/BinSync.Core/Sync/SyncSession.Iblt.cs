@@ -15,12 +15,11 @@ public partial class SyncSession
     }
 
     /// <summary>Receive one IBLT frame and decode.</summary>
-    public async Task<Iblt> ReceiveIbltAsync(CancellationToken ct = default)
+    public async Task<Iblt> ReceiveIbltAsync(int namespaceId, CancellationToken ct = default)
     {
-        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.IbltResponse, ct).ConfigureAwait(false)
-           ;
+        var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.IbltResponse, ct).ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.IbltResponse);
-        ValidateNamespaceStreamFamily(frame);
+        ValidateNamespaceStream(frame, namespaceId);
         return Iblt.Decode(frame.Payload);
     }
 
