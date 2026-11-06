@@ -8,7 +8,7 @@ public partial class SyncSession
     public async Task SendGcNoticeAsync(
         Node local, int namespaceId, ulong tombstoneCutoffWall = 0, CancellationToken ct = default)
     {
-        uint streamId = 0x0001_0000u | (uint)namespaceId;
+        uint streamId = 0u;
         var msg = GcNotice.Build(local, namespaceId, tombstoneCutoffWall);
         await SendFrameAsync(ReconcileFrames.GcNotice, streamId, 16, GcNotice.Encode(msg), ct).ConfigureAwait(false);
     }
@@ -18,9 +18,8 @@ public partial class SyncSession
     {
         var raw = await ReceiveExpectedExclusiveAsync(ReconcileFrames.GcNotice, ct).ConfigureAwait(false)
            ;
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != ReconcileFrames.GcNotice)
-            throw new FrameException("FRAME_REJECTED");
+        var frame = ParseExpectedSessionFrame(raw, ReconcileFrames.GcNotice);
+        ValidateControlStream(frame);
         var msg = GcNotice.Decode(frame.Payload);
         return GcNotice.Apply(local, msg);
     }
