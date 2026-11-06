@@ -27,12 +27,13 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v4";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v5";
+    private const string Version4StateTag = "BIN-SYNC/NODESTATE/v4";
     private const string Version3StateTag = "BIN-SYNC/NODESTATE/v3";
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 4;
+    private const ushort Version = 5;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -97,8 +98,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version} or legacy 3).");
+        if (ver != Version && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -113,6 +114,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 4)
+        {
+            var v4 = Blake3Core.TaggedHash(Version4StateTag, body);
+            validDigest = v4.AsSpan().SequenceEqual(storedDigest);
         }
         else
         {
@@ -260,7 +266,12 @@ public static class NodePersistence
             // --- known epochs (mixed-key watermarks)
             w.Varint((ulong)n.KnownEpochs.Count);
             foreach (var ((key, ns), ep) in n.KnownEpochs.OrderBy(k => k.Key.Item1.ToString()).ThenBy(k => k.Key.Item2))
-            { w.B128(key); w.Varint((ulong)(ns - int.MinValue)); w.Varint((ulong)ep); }
+            { w.B128(key); w.Varint((ulong)((long)ns - int.MinValue)); w.Varint((ulong)ep); }
+
+            // --- peer-wide HELLO incarnation epochs (separate from namespace watermarks)
+            w.Varint((ulong)n.PeerSessionEpochs.Count);
+            foreach (var (peer, ep) in n.PeerSessionEpochs.OrderBy(k => k.Key.ToString()))
+            { w.B128(peer); w.Varint((ulong)ep); }
 
             // --- quarantine / policy sets
             w.Varint((ulong)n.Quarantined.Count);
@@ -460,6 +471,27 @@ public static class NodePersistence
             var ns = (int)((long)r.Varint() + int.MinValue);   // zig: stored as ns - int.MinValue
             var ep = (int)r.Varint();
             n.KnownEpochs[((NodeId)key, ns)] = ep;
+        }
+
+        if (version >= 5)
+        {
+            int peerEpochCount = (int)r.Varint();
+            for (int i = 0; i < peerEpochCount; i++)
+            {
+                var peer = NodeId.From(r.B128());
+                var peerEpoch = (int)r.Varint();
+                if (peer.IsZero || peerEpoch < 0)
+                    throw new InvalidDataException("Invalid persisted peer session epoch.");
+                n.PeerSessionEpochs[peer] = peerEpoch;
+            }
+        }
+        else
+        {
+            // v3/v4 stored HELLO epochs in the namespace-0 slot. Preserve that
+            // effective legacy baseline while retaining the slot as namespace 0.
+            foreach (var ((peer, ns), peerEpoch) in n.KnownEpochs)
+                if (ns == 0 && !peer.IsZero)
+                    n.PeerSessionEpochs[peer] = peerEpoch;
         }
 
         int qCount = (int)r.Varint();
