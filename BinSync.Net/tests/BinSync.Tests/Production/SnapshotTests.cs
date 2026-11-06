@@ -552,4 +552,27 @@ public class SnapshotTests
     }
 
 
+    [Fact]
+    public void ApplySnapshot_enforces_record_limit_before_publication()
+    {
+        using var source = Fix.MakeNode(938);
+        source.WriteField(1, Fix.Rid(938), 0x100, new byte[] { 1 });
+        source.WriteField(1, Fix.Rid(939), 0x100, new byte[] { 2 });
+        var batches = source.BuildSnapshot(1);
+        Assert.Equal(2, batches.Count);
+        var batch = batches[0];
+        batch.Entries.AddRange(batches[1].Entries);
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            batch.RecordsRoot, batch.PrevBatchDigest);
+
+        using var target = new Node(Fix.Nid(940), epoch: 1,
+            limits: new ResourceLimits { MaxRecords = 1 });
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(batch));
+        Assert.Empty(target.Storage);
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+
 }

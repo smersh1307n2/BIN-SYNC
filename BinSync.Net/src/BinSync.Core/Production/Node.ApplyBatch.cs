@@ -710,7 +710,12 @@ public sealed partial class Node
             if (ApplyOpInternal(rec, op, author.Value)) applied++;
         }
 
-        // Publish only after every operation has decoded and merged successfully.
+        int newRecordCount = 0;
+        foreach (var recordId in overlays.Keys)
+            if (!nsStore.ContainsKey(recordId)) newRecordCount++;
+        Limits?.EnsureCanApplySnapshot(this, newRecordCount);
+
+        // Publish only after every operation has decoded, merged, and passed limits.
         if (!hadNamespace && overlays.Count > 0)
             Storage[batch.NamespaceId] = nsStore;
         foreach (var (recordId, record) in overlays)
