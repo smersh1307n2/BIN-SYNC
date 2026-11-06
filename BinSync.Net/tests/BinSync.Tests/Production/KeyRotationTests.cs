@@ -215,4 +215,54 @@ public class KeyRotationTests
         // The earlier unrelated frame remains queued and is delivered to its own receiver.
         _ = await server.ReceiveGcNoticeAsync(b).WaitAsync(TimeSpan.FromSeconds(3));
     }
+    [Fact]
+    public async Task Pipe_KEY_ROTATION_rejects_namespace_stream_mismatch_without_advancing_epoch()
+    {
+        using var lower = Fix.MakeNode(121);
+        using var higher = Fix.MakeNode(122);
+        var (toLower, toHigher) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(higher, toHigher);
+        await using var client = await SyncSession.ConnectAsync(lower, toLower);
+        await using var server = await acceptTask;
+
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        var publisher = Id(0xC1);
+        var store = new KeyEpochStore();
+        store.TrustIdentity(publisher, publicKey);
+        var notice = KeyRotation.Create(1, 0, 1, publisher, seed);
+        byte[] frame = FrameCodec.BuildFrame(KeyRotation.FrameType,
+            0x0001_0002u, 17, KeyRotation.Encode(notice));
+
+        var receive = server.ReceiveKeyRotationAsync(store);
+        await toLower.SendAsync(frame);
+
+        await Assert.ThrowsAsync<FrameException>(() => receive);
+        Assert.Equal(0, store.GetEpoch(1, publisher));
+    }
+
+    [Fact]
+    public async Task Pipe_KEY_ROTATION_rejects_nonzero_flags_without_advancing_epoch()
+    {
+        using var lower = Fix.MakeNode(123);
+        using var higher = Fix.MakeNode(124);
+        var (toLower, toHigher) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(higher, toHigher);
+        await using var client = await SyncSession.ConnectAsync(lower, toLower);
+        await using var server = await acceptTask;
+
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        var publisher = Id(0xC2);
+        var store = new KeyEpochStore();
+        store.TrustIdentity(publisher, publicKey);
+        var notice = KeyRotation.Create(1, 0, 1, publisher, seed);
+        byte[] frame = FrameCodec.BuildFrame(KeyRotation.FrameType,
+            0x0001_0001u, 17, KeyRotation.Encode(notice), flags: Frames.FLAG_SIGNED);
+
+        var receive = server.ReceiveKeyRotationAsync(store);
+        await toLower.SendAsync(frame);
+
+        await Assert.ThrowsAsync<FrameException>(() => receive);
+        Assert.Equal(0, store.GetEpoch(1, publisher));
+    }
+
 }
