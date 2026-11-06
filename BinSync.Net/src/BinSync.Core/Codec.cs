@@ -90,7 +90,7 @@ public static partial class Codec
         int nbytes = 0;
         while (true)
         {
-            if (pos >= data.Length) throw new InvalidVarintException("truncated varint");
+            if ((uint)pos >= (uint)data.Length) throw new InvalidVarintException("truncated varint");
             byte b = data[pos];
             pos += 1;
             nbytes += 1;
@@ -325,7 +325,16 @@ public partial class Reader
 
     private void Ensure(int n)
     {
-        if (Pos + n > _data.Length) throw new EndOfStreamException("truncated");
+        if (n < 0 || Pos < 0 || Pos > _data.Length || n > _data.Length - Pos)
+            throw new EndOfStreamException("truncated");
+    }
+
+    private int ReadLength()
+    {
+        ulong length = Varint();
+        if (Pos < 0 || Pos > _data.Length || length > (ulong)(_data.Length - Pos))
+            throw new EndOfStreamException("truncated length-prefixed value");
+        return (int)length;
     }
 
     private byte[] Take(int n)
@@ -444,17 +453,17 @@ public partial class Reader
     /// <summary>Read a canonical ULEB128 and advance the position.</summary>
     public ulong Varint() { var (v, p) = Codec.DecodeVarint(Span, Pos); Pos = p; return v; }
     /// <summary>Append a length-prefixed byte string (varint length + raw bytes).</summary>
-    public byte[] Bytes() => Take((int)Varint());
+    public byte[] Bytes() => Take(ReadLength());
     /// <summary>Read a length-prefixed blob as a span into the underlying buffer.</summary>
     public ReadOnlySpan<byte> BytesSpan()
     {
-        int n = (int)Varint();
+        int n = ReadLength();
         return TakeSpan(n);
     }
     /// <summary>Read a length-prefixed blob as ReadOnlyMemory (may slice the frame).</summary>
     public ReadOnlyMemory<byte> BytesMemory()
     {
-        int n = (int)Varint();
+        int n = ReadLength();
         return TakeMemory(n);
     }
     /// <summary>Append raw bytes without a length prefix.</summary>

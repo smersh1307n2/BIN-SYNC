@@ -27,6 +27,16 @@ public class CodecExtendedTests
     }
 
     [Fact]
+    public void Reader_rejects_oversized_length_prefixes_before_allocating()
+    {
+        byte[] oversizedLength = Codec.EncodeVarint(ulong.MaxValue);
+        Assert.Throws<EndOfStreamException>(() => new Reader(oversizedLength).Bytes());
+        Assert.Throws<EndOfStreamException>(() => new Reader(oversizedLength).BytesSpan());
+        Assert.Throws<EndOfStreamException>(() => new Reader(oversizedLength).BytesMemory());
+        Assert.Throws<InvalidVarintException>(() => Codec.DecodeVarint(new byte[] { 0 }, -1));
+    }
+
+    [Fact]
     public void Tlv_roundtrip()
     {
         var payload = new byte[] { 1, 2, 3, 4 };
