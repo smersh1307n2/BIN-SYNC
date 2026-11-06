@@ -344,7 +344,7 @@ public sealed class FlowControl
 {
     private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
-    private readonly Dictionary<uint, TaskCompletionSource>? _waiters = new();
+    private readonly Dictionary<uint, TaskCompletionSource> _waiters = new();
 
     /// <summary>Configured initial flow-control window.</summary>
     public int Initial { get; }
@@ -406,7 +406,7 @@ public sealed class FlowControl
                     _credit[streamId] = balance - payloadBytes;
                     return;
                 }
-                if (!_waiters!.TryGetValue(streamId, out var waiter))
+                if (!_waiters.TryGetValue(streamId, out var waiter))
                 {
                     waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     _waiters.Add(streamId, waiter);
@@ -429,7 +429,7 @@ public sealed class FlowControl
             long room = MaxWindow - balance;
             next = credits >= room ? MaxWindow : balance + credits;
             _credit[streamId] = next;
-            _waiters!.Remove(streamId, out waiter);
+            _waiters.Remove(streamId, out waiter);
         }
         waiter?.TrySetResult();
         return next;
@@ -445,7 +445,7 @@ public sealed class FlowControl
             long balance = BalanceInternal(streamId);
             if (credits > MaxWindow - balance) return false;
             _credit[streamId] = balance + credits;
-            _waiters!.Remove(streamId, out waiter);
+            _waiters.Remove(streamId, out waiter);
         }
         waiter?.TrySetResult();
         return true;

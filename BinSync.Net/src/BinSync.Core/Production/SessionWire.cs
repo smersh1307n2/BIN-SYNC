@@ -1,4 +1,5 @@
-using System.Buffers;\nusing System.Buffers.Binary;
+using System.Buffers;
+using System.Buffers.Binary;
 // Wire payloads for session bootstrap: HELLO, HELLO_ACK, ALIAS_MAP (§12.7+, §4.3–4.4).
 namespace BinSync;
 

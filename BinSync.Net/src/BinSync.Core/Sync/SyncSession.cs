@@ -1,4 +1,5 @@
-using System.Buffers;\nusing System.Buffers.Binary;
+using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
@@ -9,7 +10,15 @@ namespace BinSync;
 public partial class SyncSession : IAsyncDisposable
 {
     protected readonly ISyncTransport _transport;
-    private readonly bool _ownsTransport;\n    private readonly bool _flowControlEnabled;\n    private readonly FlowControl _sendFlowControl = new();\n    private readonly FlowControl _receiveFlowControl = new();\n    private long _windowUpdateSequence;\n    private int _queuedFrameCount;\n    private long _queuedFrameBytes;\n    private const int MaxQueuedReceiveFrames = 4096;\n    private const long MaxQueuedReceiveBytes = 32L * 1024 * 1024;
+    private readonly bool _ownsTransport;
+    private readonly bool _flowControlEnabled;
+    private readonly FlowControl _sendFlowControl = new();
+    private readonly FlowControl _receiveFlowControl = new();
+    private long _windowUpdateSequence;
+    private int _queuedFrameCount;
+    private long _queuedFrameBytes;
+    private const int MaxQueuedReceiveFrames = 4096;
+    private const long MaxQueuedReceiveBytes = 32L * 1024 * 1024;
     private IDisposable? _sessionLease;
     private int _disposed;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -48,7 +57,8 @@ public partial class SyncSession : IAsyncDisposable
         _sessionLease = sessionLease ?? throw new ArgumentNullException(nameof(sessionLease));
         PeerNodeId = peer.NodeId;
         PeerEpoch = peer.Epoch;
-        PeerCapabilities = peer.Capabilities;\n        _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
+        PeerCapabilities = peer.Capabilities;
+        _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
     }
 
