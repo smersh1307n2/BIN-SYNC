@@ -480,6 +480,18 @@ public class WalTests
             Assert.True(loaded.Storage.ContainsKey(1) && loaded.Storage[1].ContainsKey(rid));
             var empty = Fix.MakeNode(122);
             Assert.Equal(0, Wal.ReplayFile(walPath, empty));
+
+            // The replaced stream must be positioned after its fresh header;
+            // the first post-checkpoint append must remain replayable.
+            var afterCheckpoint = Fix.Rid(302);
+            Assert.True(node.WriteField(1, afterCheckpoint, 0x100, new byte[] { 2 }));
+            Assert.Equal(1, wal.Sequence);
+
+            var recovered = NodePersistence.Load(snapPath);
+            Assert.Equal(1, Wal.ReplayFile(walPath, recovered));
+            Assert.True(recovered.TryGetRecord(1, afterCheckpoint, out _));
+            Assert.Equal(2, recovered.Outbox[1].Count);
+            Assert.Equal(2, recovered.OutboxSeqRef[(recovered.NodeId, 1)]);
         }
         finally
         {
