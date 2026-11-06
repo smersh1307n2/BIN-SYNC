@@ -35,7 +35,7 @@ public sealed class Wal : IDisposable
     /// <summary>Filesystem path of the write-ahead log.</summary>
     public string Path => _path;
     /// <summary>Monotonic sequence of the last appended WAL record.</summary>
-    public long Sequence => _sequence;
+    public long Sequence { get { lock (_lock) return _sequence; } }
 
     private Wal(string path, FileStream fs, long sequence)
     {
@@ -163,7 +163,7 @@ public sealed class Wal : IDisposable
     }
 
     /// <summary>Append a checkpoint marker and return its sequence.</summary>
-    public long AppendCheckpoint()
+    internal long AppendCheckpoint()
     {
         var w = new Writer();
         w.U8((byte)WalRecordType.Checkpoint);
@@ -292,7 +292,7 @@ public sealed class Wal : IDisposable
     }
 
     /// <summary>Truncate the WAL after a successful checkpoint.</summary>
-    public void Truncate()
+    internal void Truncate()
     {
         lock (_lock)
         {
