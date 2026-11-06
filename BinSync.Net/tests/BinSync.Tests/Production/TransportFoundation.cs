@@ -171,6 +171,29 @@ public class TransportFoundationTests
     }
 
     [Fact]
+    public async Task Flow_control_peer_disconnect_wakes_sender_waiting_for_credit()
+    {
+        using var low = Fix.MakeNode(51);
+        using var high = Fix.MakeNode(52);
+        var (toLow, toHigh) = PipeTransport.CreatePair();
+        var capabilities = SessionCapabilities.FlowControl;
+        var acceptTask = SyncSession.AcceptAsync(high, toHigh, capabilities);
+        await using var lowSession = await SyncSession.ConnectAsync(low, toLow, capabilities);
+        await using var highSession = await acceptTask;
+
+        int bodySize = Frames.INITIAL_WINDOW - 24;
+        var first = new byte[bodySize];
+        var second = new byte[bodySize];
+        await lowSession.SendFragmentedAsync(0x09, 0x0001_0001u, 1, first, bodySize);
+        var blockedSend = lowSession.SendFragmentedAsync(0x09, 0x0001_0001u, 2, second, bodySize);
+        Assert.False(blockedSend.IsCompleted);
+
+        await highSession.DisposeAsync();
+        await Assert.ThrowsAsync<IOException>(() =>
+            blockedSend.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
     public async Task Flow_control_rejects_unsolicited_window_update_credit()
     {
         using var low = Fix.MakeNode(41);
