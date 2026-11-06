@@ -4,12 +4,12 @@
 **Статус:** Ready for Production Implementation  
 **Версия:** 2.4.17 FINAL (canonical CRDT payloads; schema-map validation)  
 **Дата:** 2026-11-06  
-**Изменения v2.4.17 относительно v2.4.17:**
+**Изменения v2.4.17 относительно v2.4.16:**
 - Зафиксированы канонические wire layouts COUNTER_G, COUNTER_PN, SET_OR, SEQ_FRACTIONAL и BLOB_REF: строгая сортировка, уникальность идентификаторов, проверка EOF и ограничение count по оставшемуся payload.
 - Конфликтующие payloads с одинаковой идентичностью элемента SEQ_FRACTIONAL или одинаковым blobId отклоняются вместо выбора левого operand.
 - SCHEMA_MAP отклоняет повторные версии, повторные/неупорядоченные field IDs и пересечение активных и retired IDs; malformed descriptors не пропускаются молча.
 
-**Исторические изменения v2.4.17 относительно v2.4.15:**
+**Исторические изменения v2.4.16 относительно v2.4.15:**
 - WINDOW_UPDATE.frameSeq строго возрастает в направлении сессии; повторные и переставленные назад обновления отклоняются.
 - Реальный HELLO handshake отклоняет incarnation epoch ниже сохранённого peer-wide watermark до обмена ALIAS_MAP; прямой in-process test helper сохраняет возможность проверять поздний EPOCH_REGRESSION на data plane.
 - HLC сравнивает unsigned wall без сужения до Int64; отрицательный источник времени отклоняется, skew boundary вычисляется без signed overflow.
@@ -640,7 +640,7 @@ removeCount: varint |
 
 Иммутабельна. «Изменение» = новый `blobId`.
 
-**Wire payload:** `blobId: b128 | size: u64 LE | contentType: UTF-8 String | hash: b256`. All-zero `hash` означает отсутствие известного content hash.
+**Wire payload:** `blobId: b128 | size: u64 LE | contentType: UTF-8 String | hash: b256`. Нулевой `hash` означает отсутствие известного хэша содержимого.
 - Декодер обязан потребить payload полностью.
 - Один `blobId` однозначно идентифицирует неизменяемый descriptor: одинаковый ID с различающимися `size`, `contentType` или `hash` является конфликтом и отклоняется.
 - При разных `blobId` для детерминированного слияния побеждает лексикографически больший b128 ID; сравнение выполняется по unsigned bytes.
@@ -1793,7 +1793,19 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 Ожидающая схема → запрос карты схем → применение после получения.
 
-## 18.4–18.6. Совместимость
+## 18.4. SCHEMA_MAP
+
+Wire payload: `count: varint | descriptor*`, где каждый descriptor имеет layout:
+
+`namespaceId: u16 LE | schemaId: u16 LE | version: u16 LE | mergePolicy: u8 | fieldCount: varint | fieldId: u16 LE* | retiredCount: varint | retiredFieldId: u16 LE*`.
+
+- Ключ descriptor — `(namespaceId, schemaId, version)`; повторный ключ в одном SCHEMA_MAP запрещён.
+- `fieldId` внутри descriptor строго возрастают и уникальны; `retiredFieldId` также строго возрастают и уникальны.
+- Активные и retired field IDs не пересекаются.
+- Каждый count проверяется до итерации/выделения памяти относительно оставшегося payload и минимального размера элемента; после последнего descriptor обязателен EOF.
+- При Learn дескриптор с недопустимыми диапазонами или пересечением active/retired отвергает входную карту до изменения registry. Повторная публикация уже известного ключа допустима только при полном совпадении mergePolicy, FieldIds и RetiredFieldIds. Конфликтующая версия не заменяет ранее зарегистрированную.
+
+## 18.5–18.7. Совместимость
 
 Неизвестные поля — сырой тег-длина-значение, в дайджест. Обратная и прямая совместимость.
 
@@ -2393,3 +2405,14 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 6. Encoder NEED_RANGE/NEED_KEYS обязан проверять диапазон namespace u16 и установленные ограничения до сериализации.
 
 **Wire layout:** без изменений для корректных сообщений.
+
+
+# ERRATA v2.4.17
+
+## E-23. §8.4–8.8 / §18.4 — канонические CRDT payloads и SCHEMA_MAP
+
+**Дефект:** CRDT-декодеры могли принимать повторные компоненты/dots, неупорядоченные записи и trailing bytes; oversized counts приводились к `int` до проверки оставшегося payload. Конфликтующие значения с одинаковой идентичностью SEQ_FRACTIONAL или BLOB_REF могли разрешаться выбором локального operand. SCHEMA_MAP терял дубли field IDs при помещении в HashSet и мог молча пропускать malformed descriptors во время Learn.
+
+**Нормативно:** канонические wire layouts и проверки заданы непосредственно в §§8.4–8.8 и §18.4. Реализация обязана проверять counts до narrowing/allocation, строгий порядок и уникальность, полное потребление payload и конфликт идентичности до merge/publication. Для SCHEMA_MAP дубли descriptor keys и field IDs, неупорядоченные field IDs и пересечение active/retired IDs являются ошибкой всего payload.
+
+**Wire format:** байты, создаваемые корректными прежними encoder-ами, не меняются. Изменяется только приемная строгость: неконанические/неоднозначные payloads отклоняются.
