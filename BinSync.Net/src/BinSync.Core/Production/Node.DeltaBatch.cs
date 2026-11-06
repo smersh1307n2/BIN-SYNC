@@ -196,7 +196,7 @@ public sealed partial class Node
                 Payload = shared ? e.Payload : newPayload,
                 AuthorNodeId = e.AuthorNodeId,
                 CreatedAt = e.CreatedAt,
-                PayloadNeedsDetachment = shared,
+                PayloadNeedsDetachment = detachPublicBuffers && shared,
             });
         }
         if (detachPublicBuffers)
