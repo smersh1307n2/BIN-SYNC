@@ -325,15 +325,30 @@ public sealed partial class Node
                     {
                         var otherPeer = PeersByNid is not null && PeersByNid.TryGetValue(otherPeerKv, out var on) ? on : null;
                         if (otherPeer is not null && otherPeerKv != senderPeer)
-                            EnsureAlias(otherPeer, resolved, epm.Value);
+                            EnsureAliasBestEffort(otherPeer, resolved, epm.Value);
                     }
                     var senderNode = PeersByNid is not null && PeersByNid.TryGetValue(senderPeer, out var sn) ? sn : null;
                     if (senderNode is not null && resolved != NodeId)
-                        EnsureAlias(senderNode, resolved, epm.Value);
+                        EnsureAliasBestEffort(senderNode, resolved, epm.Value);
                 }
             }
         }
         return result;
+    }
+
+    // Alias propagation is opportunistic control-plane work performed after the
+    // batch has committed. A peer may be disposed concurrently; that must not make
+    // an already accepted batch appear to have failed. Do not mask disposal of this
+    // node itself or any other alias-negotiation error.
+    private void EnsureAliasBestEffort(Node peer, NodeId author, int epoch)
+    {
+        try { EnsureAlias(peer, author, epoch); }
+        catch (ObjectDisposedException) when (
+            Volatile.Read(ref _disposed) == 0 &&
+            Volatile.Read(ref peer._disposed) != 0)
+        {
+            // The destination peer is gone; its alias map will be rebuilt on reconnect.
+        }
     }
 
     /// Errata E-13 follow-up 4 (scenario 37): does OUR OWN un-ACKed queue already carry a
