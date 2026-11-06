@@ -192,6 +192,7 @@ public partial class SyncSession
             ValidateNamespaceStream(frame, first.NamespaceId);
             if (first.ChunkCount == 0 || first.ChunkIndex != 0)
                 throw new FormatException("Snapshot must begin with chunk zero");
+            long transferBytes = Reconcile.AddSnapshotTransferBytes(0, frame.Payload.Length);
             var chunks = new List<SnapshotChunkMessage>((int)first.ChunkCount) { first };
             for (uint expected = 1; expected < first.ChunkCount; expected++)
             {
@@ -202,6 +203,7 @@ public partial class SyncSession
                 if (chunk.NamespaceId != first.NamespaceId ||
                     chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != expected)
                     throw new FormatException("Snapshot chunk sequence mismatch");
+                transferBytes = Reconcile.AddSnapshotTransferBytes(transferBytes, frame.Payload.Length);
                 chunks.Add(chunk);
             }
 

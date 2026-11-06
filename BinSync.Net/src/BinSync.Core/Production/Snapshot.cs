@@ -59,6 +59,19 @@ public static partial class Reconcile
     internal const uint MaxSnapshotChunks = 4096;
     internal const int MaxSnapshotRecordsPerChunk = 100_000;
     internal const int MaxSnapshotFieldsPerChunk = 250_000;
+    // A complete receive transfer is buffered until every chunk validates. Bound
+    // aggregate wire bytes as well as per-frame bytes to prevent multi-gigabyte
+    // allocations from a peer advertising thousands of individually valid chunks.
+    internal const long MaxSnapshotTransferBytes = 64L * 1024 * 1024;
+
+    internal static long AddSnapshotTransferBytes(long totalBytes, int nextChunkBytes,
+        long maxBytes = MaxSnapshotTransferBytes)
+    {
+        if (totalBytes < 0 || nextChunkBytes < 0 || maxBytes < 0 ||
+            totalBytes > maxBytes - nextChunkBytes)
+            throw new SyncException("PAYLOAD_TOO_LARGE");
+        return totalBytes + nextChunkBytes;
+    }
     /// <summary>Build the first bounded chunk of a consistent snapshot under <paramref name="prefix"/>.</summary>
     public static SnapshotChunkMessage BuildSnapshot(
         Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000) =>
@@ -159,6 +172,18 @@ public static partial class Reconcile
             partitions.Add(current);
         if (partitions.Count > MaxSnapshotChunks)
             throw new SyncException("PAYLOAD_TOO_LARGE");
+
+        // The receiver buffers the complete transfer to preserve atomic apply.
+        // Keep the sender under the same aggregate wire budget, not merely the
+        // per-frame limit enforced above.
+        long transferBytes = 0;
+        foreach (var partition in partitions)
+        {
+            long chunkBytes = 10 + Codec.VarintLength((ulong)partition.Count);
+            foreach (var record in partition)
+                chunkBytes += SnapshotRecordEncodedSize(record);
+            transferBytes = AddSnapshotTransferBytes(transferBytes, checked((int)chunkBytes));
+        }
 
         uint chunkCount = (uint)partitions.Count;
         var chunks = new List<SnapshotChunkMessage>(partitions.Count);

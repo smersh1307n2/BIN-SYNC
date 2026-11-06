@@ -235,6 +235,14 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void Snapshot_transfer_aggregate_byte_budget_is_checked_without_overflow()
+    {
+        Assert.Equal(10, Reconcile.AddSnapshotTransferBytes(4, 6, maxBytes: 10));
+        Assert.Throws<SyncException>(() => Reconcile.AddSnapshotTransferBytes(4, 7, maxBytes: 10));
+        Assert.Throws<SyncException>(() => Reconcile.AddSnapshotTransferBytes(long.MaxValue, 1, long.MaxValue));
+    }
+
+    [Fact]
     public void Snapshot_decoder_rejects_excessive_field_count_before_reading_fields()
     {
         var oversizedFields = new Writer()
