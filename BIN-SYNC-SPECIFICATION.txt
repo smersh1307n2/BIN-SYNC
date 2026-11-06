@@ -496,6 +496,7 @@ FieldTomb {
 - Поля с `hlc > lifecycle.hlc` видны, но сущность считается удалённой до явного undelete.
 - Пустой документ ≠ удалённая сущность.
 - Lifecycle сначала сравнивается по (wall, logical, authorNodeId). Если полный ключ совпадает, но alive/dead конфликтуют, побеждает dead. Это точное tie-break правило, а не безусловное преимущество tombstone над операцией с более высоким author tie-break.
+- Lifecycle FieldWrite использует fieldId 0x0000, keyEpoch=0 и ровно один байт value (0x00 или 0x01); FieldTomb для fieldId 0x0000 запрещён. Generic WriteField/TombField не принимают lifecycle field — используйте DeleteRecord/UndeleteRecord.
 
 **Инвариант [D7]:** ghost-статус вычисляется по `field.authorNodeId` против `record.lifecycleAuthor`, не по `origin`.
 

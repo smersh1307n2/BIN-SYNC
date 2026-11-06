@@ -64,6 +64,15 @@ public class InvariantsAndAdvanced
         Assert.Equal(8u, next.Logical);
     }
 
+    [Theory]
+    [InlineData(2, 0)]
+    [InlineData(0, 2)]
+    public void MergeLifecycle_rejects_noncanonical_lifecycle_values(byte localValue, byte remoteValue)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Merge.MergeLifecycle(null, null, localValue, new Hlc(1, 0), Fix.Nid(1), remoteValue));
+    }
+
     [Fact]
     public void HlcClockMaxAllowedRemoteWall_uses_unsigned_arithmetic()
     {

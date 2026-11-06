@@ -5,6 +5,9 @@
 **Public API hardening and cleanup.**
 
 - Reject peer HELLO incarnation epochs below the stored peer-wide watermark before alias-map exchange; preserve the in-process stale-epoch path used to test data-plane rejection.
+- Reject malformed lifecycle field operations (empty/multi-byte/invalid values, nonzero key epoch, and lifecycle tombstones) before batch state or WAL publication; generic local field mutation cannot target the lifecycle field.
+- ApplyBatch clock-drift checks compare the full unsigned HLC wall value against the sampled unsigned skew limit.
+
 - Keep HLC send ticks monotonic when restored wall values exceed Int64 and validate non-negative wall-clock sources.
 - Bound length-prefixed reader allocations by remaining input and reject malformed UTF-8 instead of silently substituting replacement characters.
 - Return receive-window credit independently of caller cancellation once a frame has been dequeued; validate WINDOW_UPDATE sequence monotonicity atomically with credit application.

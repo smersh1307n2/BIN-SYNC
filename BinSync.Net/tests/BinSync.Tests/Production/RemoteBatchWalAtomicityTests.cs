@@ -116,6 +116,24 @@ public sealed class RemoteBatchWalAtomicityTests
     }
 
     [Fact]
+    public void ApplyBatch_clock_drift_uses_unsigned_wall_comparison()
+    {
+        using var sender = Fix.MakeNode(1001);
+        using var receiver = new Node(Fix.Nid(1002), nowFn: () => long.MaxValue, maxSkewUs: 0);
+        Transport.MakeSession(sender, receiver);
+        var recordId = Fix.Rid(1001);
+        Assert.True(sender.WriteField(3, recordId, 0x0100, new byte[] { 0x77 },
+            new Hlc((ulong)long.MaxValue + 1, 0)));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        var error = Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+
+        Assert.Equal("CLOCK_DRIFT", error.CodeName);
+        Assert.False(receiver.TryGetRecord(3, recordId, out _));
+        Assert.Empty(receiver.Inbox);
+    }
+
+    [Fact]
     public void Wal_replay_success_is_idempotent_and_preserves_runtime_peer_handles()
     {
         using var writer = Fix.MakeNode(965);
