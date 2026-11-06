@@ -41,6 +41,35 @@ public class InvariantsAndAdvanced
     }
 
     [Fact]
+    public void HlcClockRejectsSendLogicalOverflowWithoutWrapping()
+    {
+        var clock = new HlcClock(() => 100);
+        clock.Observe(new Hlc(100, uint.MaxValue));
+
+        Assert.Throws<InvalidOperationException>(() => clock.SendTick());
+        Assert.Equal(uint.MaxValue, clock.Snapshot().LastLogical);
+    }
+
+    [Fact]
+    public void HlcClockRejectsReceiveLogicalOverflowWithoutWrapping()
+    {
+        var clock = new HlcClock(() => 100);
+        clock.Observe(new Hlc(100, uint.MaxValue));
+
+        Assert.Throws<InvalidOperationException>(() => clock.ReceiveTick(new Hlc(100, uint.MaxValue)));
+        Assert.Equal(uint.MaxValue, clock.Snapshot().LastLogical);
+    }
+
+    [Fact]
+    public void HlcClockRejectsRemoteLogicalOverflowWithoutWrapping()
+    {
+        var clock = new HlcClock(() => 100);
+
+        Assert.Throws<InvalidOperationException>(() => clock.ReceiveTick(new Hlc(200, uint.MaxValue)));
+        Assert.Equal(0UL, clock.Snapshot().LastWall);
+    }
+
+    [Fact]
     public void OriginFixedOffsetC11()
     {
         // [C11] — origin at bytes 17-18; logical untouched.

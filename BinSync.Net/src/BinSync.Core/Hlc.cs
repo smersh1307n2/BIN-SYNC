@@ -46,7 +46,7 @@ public readonly record struct HlcClockSnapshot(ulong LastWall, uint LastLogical)
 /// <summary>Mutable HLC state with skew protection for send and receive paths.</summary>
 public class HlcClock
 {
-    /// <summary>Maximum logical counter value (uint.MaxValue).</summary>
+    /// <summary>Exclusive upper bound for the logical counter (uint.MaxValue).</summary>
     public const uint LogicalMax = uint.MaxValue;
     /// <summary>Optional wall-clock source (microseconds); null uses system time.</summary>
     public Func<long> NowFn { get; }
@@ -84,17 +84,36 @@ public class HlcClock
     }
 
     /// <summary>Advance the clock for a local send and return the new timestamp.</summary>
+    private static uint NextLogical(uint current)
+    {
+        // LogicalMax is an exclusive ceiling. Check before addition so uint overflow
+        // cannot wrap to zero and violate the monotonic HLC invariant.
+        if (current >= LogicalMax - 1)
+            throw new InvalidOperationException("Logical clock overflow");
+        return current + 1;
+    }
+
     public Hlc SendTick()
     {
         lock (_tickGate)
         {
             long now = Now();
-            ulong wall; uint logical;
-            if (now > (long)LastWall) { wall = (ulong)now; logical = 0; }
-            else if (now == (long)LastWall) { wall = LastWall; logical = LastLogical + 1; }
-            else { wall = LastWall; logical = LastLogical + 1; }  // clock backwards: bump logical
-            if (logical >= LogicalMax) throw new InvalidOperationException("Logical clock overflow");
-            LastWall = wall; LastLogical = logical;
+            ulong wall;
+            uint logical;
+            if (now > (long)LastWall)
+            {
+                wall = (ulong)now;
+                logical = 0;
+            }
+            else
+            {
+                // Equal or backwards wall clock: preserve wall and advance logical.
+                wall = LastWall;
+                logical = NextLogical(LastLogical);
+            }
+
+            LastWall = wall;
+            LastLogical = logical;
             return new Hlc(wall, logical);
         }
     }
@@ -127,11 +146,10 @@ public class HlcClock
             ulong wall = Math.Max((ulong)now, Math.Max(LastWall, remote.Wall));
             uint logical;
             if (wall == (ulong)now && wall == LastWall && wall == remote.Wall)
-                logical = Math.Max(LastLogical, remote.Logical) + 1;
-            else if (wall == LastWall) logical = LastLogical + 1;
-            else if (wall == remote.Wall) logical = remote.Logical + 1;
+                logical = NextLogical(Math.Max(LastLogical, remote.Logical));
+            else if (wall == LastWall) logical = NextLogical(LastLogical);
+            else if (wall == remote.Wall) logical = NextLogical(remote.Logical);
             else logical = 0;
-            if (logical >= LogicalMax) throw new InvalidOperationException("Logical clock overflow");
             LastWall = wall; LastLogical = logical;
             return new Hlc(wall, logical);
         }
