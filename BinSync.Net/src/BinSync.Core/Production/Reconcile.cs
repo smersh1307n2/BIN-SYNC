@@ -134,11 +134,7 @@ public static partial class Reconcile
         if (!node.Storage.TryGetValue(namespaceId, out var records))
             records = new Dictionary<RecordId, Record>();
 
-        var dict = new Dictionary<RecordId, Record>();
-        foreach (var (rid, rec) in records)
-            dict[rid] = rec;
-
-        var buckets = StateHash.BuildBuckets(dict, radixBits);
+        var buckets = StateHash.BuildBucketsFromView(records, radixBits);
         // Outbox sequence numbers are independent per author stream. A scalar maximum
         // is neither a globally comparable cursor nor replicated state; delta/ACK
         // synchronization tracks each author stream separately.
