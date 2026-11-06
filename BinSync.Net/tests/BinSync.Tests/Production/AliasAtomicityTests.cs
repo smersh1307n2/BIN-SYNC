@@ -292,4 +292,20 @@ public sealed class AliasAtomicityTests
         Assert.True(peerThread.Join(TimeSpan.FromSeconds(3)));
         Assert.NotNull(local.EnsureAlias(peer, Fix.Nid(93), 1));
     }
+    [Fact]
+    public void Public_alias_and_durable_identity_helpers_reject_invalid_wire_values()
+    {
+        using var node = new Node(Fix.Nid(161));
+        var peer = Fix.Nid(162);
+        var author = Fix.Nid(163);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => node.RegisterAlias(peer, 0, author, 1));
+        Assert.Throws<ArgumentException>(() => node.RegisterAlias(peer, 1, default, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => node.RegisterAlias(peer, 1, author, -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => node.RegisterSessionEpoch(peer, -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => node.SessionEpoch(peer, -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => node.DurableId(epoch: -1));
+        Assert.Throws<ArgumentException>(() => node.DurableId(nodeId: default(NodeId), epoch: 1));
+    }
+
 }

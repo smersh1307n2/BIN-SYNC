@@ -25,6 +25,8 @@ public sealed partial class Node
 
     internal void RegisterSessionEpochInternal(NodeId peer, int epoch)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
         foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer).ToList())
             KnownEpochs.Remove(k);
         KnownEpochs[(peer, 0)] = epoch;
@@ -42,6 +44,7 @@ public sealed partial class Node
     internal void LearnAuthorEpochInternal(NodeId author, int epoch)
     {
         if (author.IsZero) return;
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
         if (!KnownEpochs.TryGetValue((author, -1), out var cur) || epoch > cur)
             KnownEpochs[(author, -1)] = epoch;
     }
@@ -59,6 +62,8 @@ public sealed partial class Node
     /// <summary>Return the session epoch for a peer in a namespace, if any.</summary>
     public int? SessionEpoch(NodeId peer, int ns)
     {
+        ValidateNamespaceId(ns);
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
         lock (_lockMeta)
         {
             ThrowIfDisposed();
@@ -82,6 +87,7 @@ public sealed partial class Node
     /// and delegates to <c>ResetSessionInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void ResetSession(NodeId peer)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
         lock (_lockMeta) { ThrowIfDisposed(); ResetSessionInternal(peer, resetReceiveState: true); }
     }
 
@@ -92,6 +98,8 @@ public sealed partial class Node
     /// </summary>
     public void ResetSession(NodeId peer, int newEpoch)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (newEpoch < 0) throw new ArgumentOutOfRangeException(nameof(newEpoch));
         lock (_lockMeta)
         {
             ThrowIfDisposed();
@@ -170,6 +178,8 @@ public sealed partial class Node
     public int? EnsureAlias(Node peer, NodeId nodeId, int epoch)
     {
         ArgumentNullException.ThrowIfNull(peer);
+        if (nodeId.IsZero) throw new ArgumentException("Author identity must be non-zero.", nameof(nodeId));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
 
         // Never block while acquiring another node's metadata gate: two nodes may
         // negotiate aliases in opposite directions while each holds its own gate.
@@ -380,6 +390,10 @@ public sealed partial class Node
 
     internal void RegisterAliasInternal(NodeId peer, int alias, NodeId nodeId, int epoch)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (alias <= 0) throw new ArgumentOutOfRangeException(nameof(alias));
+        if (nodeId.IsZero) throw new ArgumentException("Author identity must be non-zero.", nameof(nodeId));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
         var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new());
         // BUGFIX (port): inner reverse map MUST use the BytesIntEq content comparer — the default
         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
@@ -449,6 +463,8 @@ public sealed partial class Node
     /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public NodeId ResolveAlias(NodeId peer, int alias)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (alias <= 0) throw new ArgumentOutOfRangeException(nameof(alias));
         lock (_lockMeta) { ThrowIfDisposed(); return ResolveAliasInternal(peer, alias); }
     }
 
@@ -521,6 +537,8 @@ public sealed partial class Node
             ThrowIfDisposed();
             var n = nodeId ?? NodeId;
             var e = epoch ?? Epoch;
+            if (n.IsZero) throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
+            if (e < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
             n.WriteTo(dest[..16]);
             BitConverter.TryWriteBytes(dest[16..], (uint)e);
         }
