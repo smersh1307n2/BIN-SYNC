@@ -69,14 +69,13 @@ public sealed class SchemaRegistry
         ArgumentNullException.ThrowIfNull(desc);
         var owned = CloneDescriptor(desc);
         if (owned.Version < 0) throw new ArgumentException("version must be non-negative");
+        if (owned.FieldIds.Overlaps(owned.RetiredFieldIds))
+            throw new ArgumentException("a field cannot be both active and retired");
         lock (_gate)
         {
             var key = (owned.NamespaceId, owned.SchemaId);
-            if (!_map.TryGetValue(key, out var byVer))
-            {
-                byVer = new Dictionary<int, SchemaDescriptor>();
-                _map[key] = byVer;
-            }
+            bool hadHistory = _map.TryGetValue(key, out var existingHistory);
+            var byVer = existingHistory ?? new Dictionary<int, SchemaDescriptor>();
 
             // Validate the complete known version history in version order. Once a field
             // disappears from a later descriptor (or is explicitly retired), its id
@@ -117,6 +116,8 @@ public sealed class SchemaRegistry
             }
 
             byVer[owned.Version] = owned;
+            if (!hadHistory)
+                _map.Add(key, byVer);
         }
     }
 
@@ -195,19 +196,33 @@ public sealed class SchemaRegistry
     /// <summary>Merge remote descriptors (from SCHEMA_MAP). Returns how many new versions learned.</summary>
     public int Learn(IEnumerable<SchemaDescriptor> remote)
     {
+        ArgumentNullException.ThrowIfNull(remote);
+        // Materialize caller-owned descriptors first, then apply a stable version order.
+        // Otherwise a shuffled SCHEMA_MAP can cause a different valid prefix to be kept
+        // when a later descriptor proves that an intermediate version retired a field.
+        var ordered = remote.Select(CloneDescriptor)
+            .OrderBy(d => d.NamespaceId)
+            .ThenBy(d => d.SchemaId)
+            .ThenBy(d => d.Version)
+            .ToList();
+
         int learned = 0;
-        foreach (var d in remote)
+        lock (_gate)
         {
-            if (TryGet(d.NamespaceId, d.SchemaId, d.Version, out _))
-                continue;
-            try
+            foreach (var descriptor in ordered)
             {
-                Register(d);
-                learned++;
-            }
-            catch (ArgumentException)
-            {
-                // conflicting retirement rules — skip
+                if (_map.TryGetValue((descriptor.NamespaceId, descriptor.SchemaId), out var byVersion) &&
+                    byVersion.ContainsKey(descriptor.Version))
+                    continue;
+                try
+                {
+                    Register(descriptor);
+                    learned++;
+                }
+                catch (ArgumentException)
+                {
+                    // Conflicting retirement rules: skip the invalid later version.
+                }
             }
         }
         return learned;

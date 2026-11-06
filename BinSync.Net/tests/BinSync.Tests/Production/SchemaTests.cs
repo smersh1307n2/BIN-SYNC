@@ -104,6 +104,32 @@ public class SchemaTests
     }
 
     [Fact]
+    public void Learn_applies_schema_history_deterministically_when_map_order_is_shuffled()
+    {
+        var versions = new[]
+        {
+            Desc(1, 4, 3, 0x02, 0x100),
+            Desc(1, 4, 1, 0x02, 0x100),
+            Desc(1, 4, 2, 0x02),
+        };
+        var forward = new SchemaRegistry();
+        var reverse = new SchemaRegistry();
+
+        Assert.Equal(2, forward.Learn(versions));
+        Assert.Equal(2, reverse.Learn(versions.Reverse()));
+
+        var forwardSnapshot = forward.Snapshot();
+        var reverseSnapshot = reverse.Snapshot();
+        Assert.Equal(
+            forwardSnapshot.Select(d => (d.NamespaceId, d.SchemaId, d.Version,
+                string.Join(",", d.FieldIds.Order()), string.Join(",", d.RetiredFieldIds.Order()))),
+            reverseSnapshot.Select(d => (d.NamespaceId, d.SchemaId, d.Version,
+                string.Join(",", d.FieldIds.Order()), string.Join(",", d.RetiredFieldIds.Order()))));
+        Assert.DoesNotContain(forwardSnapshot, d => d.Version == 3);
+        Assert.Contains(forwardSnapshot, d => d.Version == 2);
+    }
+
+    [Fact]
     public void SchemaMap_encode_decode_roundtrip()
     {
         var list = new List<SchemaDescriptor>
