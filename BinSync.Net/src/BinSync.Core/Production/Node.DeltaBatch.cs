@@ -108,35 +108,31 @@ public sealed partial class Node
         }
 
         long localWm = checked(wm + streamOffset);
-        pending = new List<OutboxEntry>();
+
+        // First pass: determine the selected stream span without allocating one
+        // temporary OutboxEntry per outbox item. The source outbox remains untouched.
+        int selectedCount = 0;
+        long start = 0, end = 0;
         for (int i = 0; i < all.Count; i++)
         {
             var source = all[i];
             if (source.AuthorNodeId != stream || source.Seq <= localWm) continue;
-
-            pending.Add(new OutboxEntry
-            {
-                NamespaceId = source.NamespaceId,
-                Seq = checked(source.Seq - streamOffset),
-                ChangeId = source.ChangeId,
-                RecordId = source.RecordId,
-                OpKind = source.OpKind,
-                // Keep the engine-owned payload through origin translation. Public
-                // ownership is detached once, after the final payload bytes are known.
-                Payload = source.Payload,
-                AuthorNodeId = source.AuthorNodeId,
-                CreatedAt = source.CreatedAt,
-            });
+            long seq = checked(source.Seq - streamOffset);
+            if (selectedCount == 0) start = seq;
+            end = seq;
+            selectedCount++;
         }
-        if (pending.Count == 0) return null;
-        long start = pending[0].Seq, end = pending[^1].Seq;
+        if (selectedCount == 0) return null;
+
+        // Build the final DTO graph directly: one OutboxEntry wrapper per selected
+        // operation, rather than pending + translated wrapper lists.
+        var entries = new List<OutboxEntry>(selectedCount);
         // Resolve self-alias once (common path: all entries self-authored).
         int selfAlias = AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1;
-        // Translate origins. Peer-relative wrappers share payload buffers, avoiding payload copies.
-        List<OutboxEntry>? translated = null;
-        for (int i = 0; i < pending.Count; i++)
+        for (int i = 0; i < all.Count; i++)
         {
-            var e = pending[i];
+            var e = all[i];
+            if (e.AuthorNodeId != stream || e.Seq <= localWm) continue;
             int? alias = e.AuthorNodeId == NodeId
                 ? selfAlias
                 : AliasOfInternal(targetPeer, e.AuthorNodeId, Epoch);
@@ -191,30 +187,18 @@ public sealed partial class Node
             bool shared = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(e.Payload, out var paySeg)
                 && object.ReferenceEquals(paySeg.Array, newPayload)
                 && paySeg.Offset == 0 && paySeg.Count == newPayload.Length;
-            if (shared && translated is null)
-                continue; // still fully shared — keep using pending
-
-            // First non-shared payload (or after a prior clone): materialize translated list.
-            if (translated is null)
-            {
-                translated = new List<OutboxEntry>(pending.Count);
-                for (int j = 0; j < i; j++)
-                    translated.Add(pending[j]); // shared payloads so far
-            }
-            translated.Add(new OutboxEntry
+            entries.Add(new OutboxEntry
             {
                 NamespaceId = e.NamespaceId,
-                Seq = e.Seq,
+                Seq = checked(e.Seq - streamOffset),
                 ChangeId = e.ChangeId,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
-                Payload = newPayload,
+                Payload = shared ? e.Payload : newPayload,
                 AuthorNodeId = e.AuthorNodeId,
                 CreatedAt = e.CreatedAt,
             });
         }
-        var entries = translated ?? pending;
-        if (entries.Count == 0) return null;
         if (detachPublicBuffers)
             DetachPublicBatchPayloads(entries);
         var recordsRoot = ComputeRecordsRoot(entries);
