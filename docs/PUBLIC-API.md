@@ -224,10 +224,12 @@ Blind merge compares ciphertext with open HLC + author.
 | API | Role |
 |-----|------|
 | `BatchSignature` | Ed25519 sign/verify (vendored); sign payload takes `NodeId`, `BatchId`, and `Digest16` |
-| `TrustStore` | TOFU / PreShared / CA roots / revoke |
+| `TrustStore` | TOFU / PreShared / CA roots / revoke; TOFU candidates are pinned only after a valid batch signature |
 | `Node.EnsureTrust` / `TrustPeer` / `RevokeTrust` / `SaveTrust` / `LoadTrust` | Configure, pin, revoke, and persist trust state |
-| `VerifyAndApplyBatch` | Signature gate then apply |
+| `VerifyAndApplyBatch` | Verify and publish under the Node + trust-store gates; concurrent revocation is ordered before or after the commit |
 | `SIGNATURE_INVALID` / `TRUST_REVOKED` | 0x0013 / 0x0014 |
+
+`TrustStore.ResolvePublicKey` may return an unpinned TOFU candidate for inspection; lookup alone never establishes trust. `TrustPersistence` strictly validates stored identities, modes, counts, flags, and trailing bytes, and flushes the temporary file before atomic replacement.
 
 ### Errors
 
