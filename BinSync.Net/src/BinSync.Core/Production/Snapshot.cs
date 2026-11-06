@@ -180,6 +180,9 @@ public static partial class Reconcile
     /// <summary>Encode snapshot chunk into canonical wire bytes.</summary>
     public static byte[] EncodeSnapshotChunk(SnapshotChunkMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        Node.ValidateNamespaceId(m.NamespaceId);
+        ArgumentNullException.ThrowIfNull(m.Records);
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U32(m.ChunkIndex);

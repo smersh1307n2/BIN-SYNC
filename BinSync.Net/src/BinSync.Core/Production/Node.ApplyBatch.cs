@@ -24,6 +24,7 @@ public sealed partial class Node
 
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null)
     {
+        ValidateBatchForWire(batch);
         var result = new BatchResult(batch.BatchId)
         {
             CursorEnd = batch.CursorEnd,

@@ -260,6 +260,7 @@ public static class SchemaMap
     /// </summary>
     public static byte[] Encode(IReadOnlyList<SchemaDescriptor> list)
     {
+        ArgumentNullException.ThrowIfNull(list);
         var w = new Writer();
         w.Varint((ulong)list.Count);
         foreach (var d in list)
