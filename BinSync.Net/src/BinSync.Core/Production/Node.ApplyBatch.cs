@@ -424,7 +424,9 @@ public sealed partial class Node
                     ChangeId = relayChangeIds[idx],
                     RecordId = e.RecordId,
                     OpKind = e.OpKind,
-                    Payload = e.Payload,
+                    // ApplyBatchPayload decodes directly from the caller's buffer;
+                    // relay state must own its bytes after that buffer can be recycled.
+                    Payload = durablePayload is null ? e.Payload : e.Payload.ToArray(),
                     AuthorNodeId = resolved,
                     CreatedAt = (long)WallOf(op),
                 };

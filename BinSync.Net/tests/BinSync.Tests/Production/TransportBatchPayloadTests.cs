@@ -84,4 +84,26 @@ public class TransportBatchPayloadTests
 
         Assert.Equal(expected, outbound.Value.Payload);
     }
+    [Fact]
+    public void Apply_batch_payload_detaches_relayed_payload_from_caller_buffer()
+    {
+        var sender = Fix.MakeNode(217);
+        var receiver = Fix.MakeNode(218);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(9, Fix.Rid(0x73), 0x100, new byte[] { 1, 2, 3 }));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 9)!;
+        var payload = sender.EncodeBatchPayload(batch);
+
+        var result = receiver.ApplyBatchPayload(payload, sender.NodeId);
+        Assert.Equal(1, result.Applied);
+        var relayed = Assert.Single(receiver.Outbox[9]);
+        var expected = relayed.Payload.ToArray();
+
+        Array.Fill(payload, (byte)0xEE);
+
+        Assert.Equal(expected, relayed.Payload.ToArray());
+        Assert.IsType<OpFieldWrite>(Ops.DecodeOp(relayed.Payload).Op);
+    }
+
 }
