@@ -257,6 +257,28 @@ public sealed class ResourceLimitsAtomicityTests
     }
 
     [Fact]
+    public void BoundedNode_allows_update_when_record_limit_is_reached()
+    {
+        using var node = new Node(Fix.Nid(174));
+        var limits = new ResourceLimits { MaxRecords = 1 };
+
+        Assert.True(BoundedNode.WriteField(node, limits, 3, Rid(1), 0x100, [1]));
+        Assert.True(BoundedNode.WriteField(node, limits, 3, Rid(1), 0x101, [2]));
+
+        Assert.True(node.TryGetField(3, Rid(1), 0x101, out var field));
+        Assert.Equal(new byte[] { 2 }, field!.Value);
+        Assert.Equal(1, node.GetRecordCount(3));
+    }
+
+    [Fact]
+    public void Resource_limit_preflight_helpers_are_not_public_api()
+    {
+        Assert.Null(typeof(ResourceLimits).GetMethod(nameof(ResourceLimits.EnsureCanEnqueueOutbox)));
+        Assert.Null(typeof(ResourceLimits).GetMethod(nameof(ResourceLimits.EnsureSeenChangesCapacity)));
+        Assert.Null(typeof(ResourceLimits).GetMethod(nameof(ResourceLimits.EnsureStorageCapacity)));
+    }
+
+    [Fact]
     public void BoundedNode_raises_field_written_after_releasing_node_gates()
     {
         using var node = new Node(Fix.Nid(173));
