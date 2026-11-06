@@ -530,8 +530,8 @@ public partial class SyncSession : IAsyncDisposable
         lock (_receiveSync)
         {
             if (_rawReceiveActive) return;
-            if (_queuedFrameCount != 0)
-                throw new InvalidOperationException("Raw receive cannot be mixed with queued typed frames");
+            if (_queuedFrameCount != 0 || !_receiveChannels.IsEmpty)
+                throw new InvalidOperationException("Raw receive cannot be mixed with typed receive operations");
             _rawReceiveActive = true;
             _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
         }
