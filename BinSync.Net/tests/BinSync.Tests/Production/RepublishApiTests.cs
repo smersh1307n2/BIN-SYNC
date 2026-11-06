@@ -36,4 +36,21 @@ public sealed class RepublishApiTests
         Assert.Equal(1, node.RepublishRecords(1, SelectRecords()));
         Assert.Equal(3, node.GetOutboxCount(1));
     }
+    [Fact]
+    public void RepublishRecords_does_not_enumerate_after_node_disposal()
+    {
+        var node = new Node(new NodeId(9, 10));
+        node.Dispose();
+        bool enumerated = false;
+
+        IEnumerable<RecordId> SelectRecords()
+        {
+            enumerated = true;
+            yield return new RecordId(1, 2);
+        }
+
+        Assert.Throws<ObjectDisposedException>(() => node.RepublishRecords(1, SelectRecords()));
+        Assert.False(enumerated);
+    }
+
 }

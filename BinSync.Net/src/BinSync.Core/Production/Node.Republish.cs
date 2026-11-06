@@ -16,6 +16,7 @@ public sealed partial class Node
         ArgumentNullException.ThrowIfNull(prefix);
         if (prefix.Length > 32)
             throw new ArgumentOutOfRangeException(nameof(prefix), "A BLAKE3 record digest is 32 bytes.");
+        ThrowIfDisposed();
         var ownedPrefix = prefix.ToArray();
 
         lock (_lockStorage) lock (_lockOutbox)
@@ -44,6 +45,7 @@ public sealed partial class Node
     {
         ValidateNamespaceId(namespaceId);
         ArgumentNullException.ThrowIfNull(recordIds);
+        ThrowIfDisposed();
         // Enumerate caller code before taking engine locks; the snapshot also prevents
         // a mutable caller collection from changing the selected set mid-operation.
         var ownedRecordIds = recordIds.ToArray();
