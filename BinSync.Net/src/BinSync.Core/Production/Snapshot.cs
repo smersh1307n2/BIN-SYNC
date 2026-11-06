@@ -90,36 +90,36 @@ public static partial class Reconcile
                             !key.AsSpan(0, ownedPrefix.Length).SequenceEqual(ownedPrefix))
                             continue;
                     }
-                var sr = new SnapshotRecord
-                {
-                    RecordId = rid,
-                    HasLifecycle = rec.LifecycleHlc is not null,
-                    LifecycleValue = rec.LifecycleValue,
-                    LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
-                    LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
-                    LifecycleAuthor = rec.LifecycleAuthor ?? default,
-                };
-                foreach (var (fid, fs) in rec.State)
-                {
-                    sr.Fields.Add(new SnapshotField
+                    var sr = new SnapshotRecord
                     {
-                        FieldId = fid, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical,
-                        AuthorNodeId = fs.AuthorNodeId, KeyEpoch = fs.KeyEpoch, Value = fs.Value.ToArray(),
-                    });
-                }
-                if (rec.HasFieldTombs)
-                {
-                    foreach (var (fid, fs) in rec.FieldTombs)
+                        RecordId = rid,
+                        HasLifecycle = rec.LifecycleHlc is not null,
+                        LifecycleValue = rec.LifecycleValue,
+                        LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
+                        LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
+                        LifecycleAuthor = rec.LifecycleAuthor ?? default,
+                    };
+                    foreach (var (fid, fs) in rec.State)
                     {
                         sr.Fields.Add(new SnapshotField
                         {
-                            FieldId = fid, IsTombstone = true, Wall = fs.Timestamp.Wall,
-                            Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId,
-                            KeyEpoch = fs.KeyEpoch, Value = Array.Empty<byte>(),
+                            FieldId = fid, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical,
+                            AuthorNodeId = fs.AuthorNodeId, KeyEpoch = fs.KeyEpoch, Value = fs.Value.ToArray(),
                         });
                     }
-                }
-                records.Add(sr);
+                    if (rec.HasFieldTombs)
+                    {
+                        foreach (var (fid, fs) in rec.FieldTombs)
+                        {
+                            sr.Fields.Add(new SnapshotField
+                            {
+                                FieldId = fid, IsTombstone = true, Wall = fs.Timestamp.Wall,
+                                Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId,
+                                KeyEpoch = fs.KeyEpoch, Value = Array.Empty<byte>(),
+                            });
+                        }
+                    }
+                    records.Add(sr);
                 }
             }
         }
