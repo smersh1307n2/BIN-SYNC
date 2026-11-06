@@ -106,13 +106,16 @@ public class TransportFoundationTests
         var b = Fix.MakeNode(2);
         var (ta, tb) = PipeTransport.CreatePair();
 
-        var acceptTask = SyncSession.AcceptAsync(b, tb);
-        var connectTask = SyncSession.ConnectAsync(a, ta);
+        var caps = SessionCapabilities.FlowControl;
+        var acceptTask = SyncSession.AcceptAsync(b, tb, caps);
+        var connectTask = SyncSession.ConnectAsync(a, ta, caps);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
 
         Assert.Equal(b.NodeId, initiator.PeerNodeId);
         Assert.Equal(a.NodeId, acceptor.PeerNodeId);
+        Assert.True((initiator.PeerCapabilities & SessionCapabilities.FlowControl) != 0);
+        Assert.True((acceptor.PeerCapabilities & SessionCapabilities.FlowControl) != 0);
         Assert.NotNull(a.SessionEpoch(b.NodeId, 0));
         Assert.NotNull(b.SessionEpoch(a.NodeId, 0));
         Assert.Equal(1, a.AliasOf(b.NodeId, a.NodeId));
@@ -123,6 +126,15 @@ public class TransportFoundationTests
         var received = await receiveTask;
         Assert.Equal(1, received.Applied);
         Assert.True(b.Storage[1].ContainsKey(Fix.Rid(10)));
+
+        // The receiver returns payload credit when the application dequeues the batch.
+        // A second batch on the same stream verifies WINDOW_UPDATE is dispatched inline
+        // while the sender is waiting for its ACK.
+        a.WriteField(1, Fix.Rid(11), 0x100, new byte[] { 4, 5, 6 });
+        var secondReceive = acceptor.ReceiveBatchAsync(b);
+        Assert.True(await initiator.PushBatchAsync(a, 1));
+        Assert.Equal(1, (await secondReceive).Applied);
+        Assert.True(b.Storage[1].ContainsKey(Fix.Rid(11)));
     }
 
 
