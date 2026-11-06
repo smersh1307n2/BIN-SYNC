@@ -19,29 +19,51 @@ public class TrustStoreTests
             new List<OutboxEntry>());
 
     [Fact]
-    public void Tofu_pins_first_key()
+    public void Tofu_pins_first_key_only_after_valid_signature()
     {
         var store = new TrustStore { DefaultMode = TrustMode.Tofu };
         var (seed, pub) = BatchSignature.GenerateKeyPair();
-        var node = Id(1);
-        var resolved = store.ResolvePublicKey(node, pub);
-        Assert.NotNull(resolved);
-        Assert.Equal(pub, resolved);
-        Assert.Equal(1, store.PeerCount);
+        var node = NodeId.From(Id(1));
+        var batch = SampleBatch(1);
 
-        // Same key again OK
+        Assert.Equal(pub, store.ResolvePublicKey(node, pub));
+        Assert.Equal(0, store.PeerCount); // lookup alone must not establish trust
+        store.VerifyBatchOrThrow(batch, BatchSignature.SignBatch(seed, batch), pub);
+
+        Assert.Equal(1, store.PeerCount);
+        Assert.True(store.TryGet(node, out var pinned));
+        Assert.Equal(pub, pinned!.PublicKey);
         Assert.Equal(pub, store.ResolvePublicKey(node, pub));
     }
 
     [Fact]
-    public void Tofu_rejects_key_substitution()
+    public void Tofu_rejects_key_substitution_after_verified_first_use()
     {
         var store = new TrustStore { DefaultMode = TrustMode.Tofu };
-        var (_, pub1) = BatchSignature.GenerateKeyPair();
-        var (_, pub2) = BatchSignature.GenerateKeyPair();
-        var node = Id(2);
-        Assert.NotNull(store.ResolvePublicKey(node, pub1));
-        Assert.Null(store.ResolvePublicKey(node, pub2)); // pin mismatch
+        var (seed1, pub1) = BatchSignature.GenerateKeyPair();
+        var (seed2, pub2) = BatchSignature.GenerateKeyPair();
+        var node = NodeId.From(Id(2));
+        var batch = SampleBatch(2);
+        store.VerifyBatchOrThrow(batch, BatchSignature.SignBatch(seed1, batch), pub1);
+
+        Assert.Null(store.ResolvePublicKey(node, pub2));
+        Assert.Throws<SyncException>(() =>
+            store.VerifyBatchOrThrow(batch, BatchSignature.SignBatch(seed2, batch), pub2));
+        Assert.Equal(pub1, store.ResolvePublicKey(node, pub1));
+    }
+
+    [Fact]
+    public void Tofu_invalid_signature_does_not_poison_peer_identity()
+    {
+        var store = new TrustStore { DefaultMode = TrustMode.Tofu };
+        var (seed, attackerKey) = BatchSignature.GenerateKeyPair();
+        var batch = SampleBatch(6);
+        var invalid = BatchSignature.SignBatch(seed, batch);
+        invalid[0] ^= 0x80;
+
+        Assert.Throws<SyncException>(() => store.VerifyBatchOrThrow(batch, invalid, attackerKey));
+        Assert.Equal(0, store.PeerCount);
+        Assert.False(store.TryGet(batch.IssuerNodeId, out _));
     }
 
     [Fact]

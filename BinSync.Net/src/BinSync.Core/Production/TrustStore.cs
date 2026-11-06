@@ -114,37 +114,31 @@ public sealed partial class TrustStore
         PinnedAtUnixMs = peer.PinnedAtUnixMs,
     };
 
-    /// <summary>Resolve the public key to use for a node, optionally checking a candidate.</summary>
+    /// <summary>
+    /// Resolve a pinned key or return an unpinned TOFU candidate. A candidate is not
+    /// persisted until <see cref="VerifyBatchOrThrow"/> verifies a valid signature.
+    /// </summary>
     public byte[]? ResolvePublicKey(NodeId nodeId, byte[]? candidatePublicKey = null)
     {
+        if (candidatePublicKey is not null &&
+            candidatePublicKey.Length != BatchSignature.PublicKeySize)
+            return null;
+
         lock (_gate)
         {
             var k = Key(nodeId);
             if (_peers.TryGetValue(k, out var existing))
             {
                 if (existing.Revoked) return null;
-                if (candidatePublicKey is { Length: BatchSignature.PublicKeySize } &&
+                if (candidatePublicKey is not null &&
                     !existing.PublicKey.AsSpan().SequenceEqual(candidatePublicKey))
                     return null;
                 return existing.PublicKey.ToArray();
             }
 
-            if (DefaultMode == TrustMode.Tofu &&
-                candidatePublicKey is { Length: BatchSignature.PublicKeySize })
-            {
-                var id = nodeId;
-                _peers[k] = new TrustedPeer
-                {
-                    NodeId = id,
-                    PublicKey = candidatePublicKey.ToArray(),
-                    Mode = TrustMode.Tofu,
-                    Revoked = false,
-                    PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                };
-                return _peers[k].PublicKey.ToArray();
-            }
-
-            return null;
+            return _defaultMode == TrustMode.Tofu
+                ? candidatePublicKey?.ToArray()
+                : null;
         }
     }
 
@@ -152,11 +146,42 @@ public sealed partial class TrustStore
     public void VerifyBatchOrThrow(
         Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
-        var pk = ResolvePublicKey(batch.IssuerNodeId, candidatePublicKey);
+        ArgumentNullException.ThrowIfNull(batch);
+        var issuer = batch.IssuerNodeId;
+        var batchId = batch.BatchId;
+        var payload = BatchSignature.BuildSignPayload(
+            batch.NamespaceId, batch.IssuerEpoch, issuer, batchId, batch.BatchDigest);
+        var pk = ResolvePublicKey(issuer, candidatePublicKey);
         if (pk is null)
-            throw new SyncException("TRUST_REVOKED", batch.BatchId);
-        if (!BatchSignature.VerifyBatch(pk, batch, signature))
-            throw new SyncException("SIGNATURE_INVALID", batch.BatchId);
+            throw new SyncException("TRUST_REVOKED", batchId);
+        if (!BatchSignature.Verify(pk, payload, signature))
+            throw new SyncException("SIGNATURE_INVALID", batchId);
+
+        // TOFU must prove possession before first-use pinning. Recheck under the
+        // lock to handle concurrent first use, revocation, and key substitution.
+        lock (_gate)
+        {
+            var key = Key(issuer);
+            if (_peers.TryGetValue(key, out var existing))
+            {
+                if (existing.Revoked || !existing.PublicKey.AsSpan().SequenceEqual(pk))
+                    throw new SyncException("TRUST_REVOKED", batchId);
+                return;
+            }
+
+            if (_defaultMode != TrustMode.Tofu || candidatePublicKey is null ||
+                !candidatePublicKey.AsSpan().SequenceEqual(pk))
+                throw new SyncException("TRUST_REVOKED", batchId);
+
+            _peers[key] = new TrustedPeer
+            {
+                NodeId = issuer,
+                PublicKey = pk.ToArray(),
+                Mode = TrustMode.Tofu,
+                Revoked = false,
+                PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            };
+        }
     }
 
     /// <summary>Verify the batch signature with the trust store; returns true if accepted.</summary>
