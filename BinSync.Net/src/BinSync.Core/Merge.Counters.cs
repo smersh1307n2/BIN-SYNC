@@ -298,16 +298,10 @@ public static class SetOr
         var (ra, rr) = Decode(remote);
 
         // Union of adds (dedupe by actor+seq+elem) and removes (by actor+seq)
-        var addKey = new HashSet<(byte[], ulong, byte[])>(ActorSeqElemEq.Instance);
-        var mergedAdds = new List<Add>();
-        void AddOne(Add a)
-        {
-            if (addKey.Add((a.Actor, a.Seq, a.Element))) mergedAdds.Add(a);
-        }
-        // A dot identifies exactly one logical add. Two replicas presenting the
-        // same (actor, seq) for different elements is a protocol conflict, not
-        // two independent adds. Reject it as malformed remote state before canonical encoding.
+        // One dot identifies exactly one element. A single index both deduplicates
+        // identical adds and rejects cross-replica dot reuse without a second HashSet.
         var dotElements = new Dictionary<(byte[] Actor, ulong Seq), byte[]>(ActorSeqEq.Instance);
+        var mergedAdds = new List<Add>();
         void AddValidated(Add add)
         {
             var dot = (add.Actor, add.Seq);
@@ -318,7 +312,7 @@ public static class SetOr
                 return;
             }
             dotElements.Add(dot, add.Element);
-            AddOne(add);
+            mergedAdds.Add(add);
         }
         foreach (var a in la) AddValidated(a);
         foreach (var a in ra) AddValidated(a);
