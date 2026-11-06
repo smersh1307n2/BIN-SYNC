@@ -1,4 +1,5 @@
 // §6 codec extensions: TLV, strings, floats, signed, field canonicalization.
+using System.Text;
 using BinSync;
 using Xunit;
 
