@@ -1,10 +1,15 @@
-# BIN-SYNC CORE v2.4.16 FINAL
+# BIN-SYNC CORE v2.4.17 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.16 FINAL (flow-control replay protection; HELLO epoch regression; canonical HLC and codec hardening)  
+**Версия:** 2.4.17 FINAL (canonical CRDT payloads; schema-map validation)  
 **Дата:** 2026-11-06  
-**Изменения v2.4.16 относительно v2.4.15:**
+**Изменения v2.4.17 относительно v2.4.17:**
+- Зафиксированы канонические wire layouts COUNTER_G, COUNTER_PN, SET_OR, SEQ_FRACTIONAL и BLOB_REF: строгая сортировка, уникальность идентификаторов, проверка EOF и ограничение count по оставшемуся payload.
+- Конфликтующие payloads с одинаковой идентичностью элемента SEQ_FRACTIONAL или одинаковым blobId отклоняются вместо выбора левого operand.
+- SCHEMA_MAP отклоняет повторные версии, повторные/неупорядоченные field IDs и пересечение активных и retired IDs; malformed descriptors не пропускаются молча.
+
+**Исторические изменения v2.4.17 относительно v2.4.15:**
 - WINDOW_UPDATE.frameSeq строго возрастает в направлении сессии; повторные и переставленные назад обновления отклоняются.
 - Реальный HELLO handshake отклоняет incarnation epoch ниже сохранённого peer-wide watermark до обмена ALIAS_MAP; прямой in-process test helper сохраняет возможность проверять поздний EPOCH_REGRESSION на data plane.
 - HLC сравнивает unsigned wall без сужения до Int64; отрицательный источник времени отклоняется, skew boundary вычисляется без signed overflow.
@@ -593,21 +598,52 @@ applyFieldWrite(recordId, fieldId, fieldOp):
 
 Для каждого автора: `result[author] = max(local, remote)`.
 
+**Wire payload:** `count: varint | (author: b128 | value: u64 LE)*`.
+- `count` — количество компонентов; до выделения памяти/итерации проверяется, что все записи могут находиться в оставшемся payload.
+- `author` — 16 байт; компоненты строго упорядочены по возрастанию unsigned-лексикографического порядка байтов. Повтор автора запрещён.
+- После последнего компонента обязателен EOF. Лишние байты запрещены.
+- Encoder нормализует author в b128 и отвергает коллизии, возникшие после нормализации.
+
 ## 8.5. COUNTER_PN
 
 Положительный и отрицательный счётчики сливаются покомпонентно. `value = sum(positive) - sum(negative)`.
 
+**Wire payload:** `positiveMap | negativeMap`, где каждая map имеет формат COUNTER_G: `count: varint | (author: b128 | value: u64 LE)*`.
+- Каждая из двух map независимо сортируется по author в строго возрастающем unsigned-лексикографическом порядке; повтор автора внутри одной map запрещён. Один author может присутствовать одновременно в positive и negative map.
+- После второй map обязателен EOF.
+- Вычисление signed `value` должно обнаруживать переполнение `Int64`, а не выполнять wraparound.
+
 ## 8.6. SET_OR (Observed-Remove)
 
-Выжившие крышки = все крышки минус все томбстоуны.
+Выжившие элементы — все элементы с add-dot, не покрытым remove-dot. Dot идентифицируется парой `(actor: b128, seq: u64)`; один add-dot не может обозначать более одного элемента.
+
+**Wire payload:**
+```
+addCount: varint |
+  (element: Bytes | actor: b128 | seq: u64 LE)* |
+removeCount: varint |
+  (actor: b128 | seq: u64 LE)*
+```
+- Adds строго упорядочены по `(element bytes, actor bytes, seq)`; remove-dots — по `(actor bytes, seq)`. Сравнение byte strings — unsigned-лексикографическое.
+- Add-dot и remove-dot внутри соответствующего списка должны быть уникальны; дубликаты и неупорядоченные записи запрещены.
+- Counts проверяются до выделения коллекций по минимальному размеру записи и оставшемуся payload; после последнего remove-dot обязателен EOF.
 
 ## 8.7. SEQ_FRACTIONAL
 
 Полный порядок: `(parentId, orderKey, authorNodeId, seq)`.
 
+**Wire payload:** `parentId: b128 | orderKey: UTF-8 String | authorNodeId: b128 | seq: u64 LE | value: Bytes`.
+- Декодер обязан потребить payload полностью.
+- Равная tuple identity означает одну и ту же запись. Если две такие записи несут разные `value`, payload конфликтует и должен быть отклонён; выбирать локальный operand запрещено.
+
 ## 8.8. BLOB_REF
 
 Иммутабельна. «Изменение» = новый `blobId`.
+
+**Wire payload:** `blobId: b128 | size: u64 LE | contentType: UTF-8 String | hash: b256`. All-zero `hash` означает отсутствие известного content hash.
+- Декодер обязан потребить payload полностью.
+- Один `blobId` однозначно идентифицирует неизменяемый descriptor: одинаковый ID с различающимися `size`, `contentType` или `hash` является конфликтом и отклоняется.
+- При разных `blobId` для детерминированного слияния побеждает лексикографически больший b128 ID; сравнение выполняется по unsigned bytes.
 
 ## 8.9. MANUAL (с FieldResolve)
 

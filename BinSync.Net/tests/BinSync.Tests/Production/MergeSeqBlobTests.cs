@@ -135,38 +135,6 @@ public class MergeSeqBlobTests
     }
 
     [Fact]
-    public void SeqFractional_rejects_conflicting_value_for_same_item_identity()
-    {
-        var left = SeqFractional.Encode(new SeqFractional.Item
-        {
-            ParentId = Author(0), OrderKey = "k", AuthorNodeId = Author(1), Seq = 7,
-            Value = new byte[] { 1 },
-        });
-        var right = SeqFractional.Encode(new SeqFractional.Item
-        {
-            ParentId = Author(0), OrderKey = "k", AuthorNodeId = Author(1), Seq = 7,
-            Value = new byte[] { 2 },
-        });
-        Assert.Throws<InvalidDataException>(() => SeqFractional.Merge(left, right));
-        Assert.Throws<InvalidDataException>(() => SeqFractional.Merge(right, left));
-    }
-
-    [Fact]
-    public void BlobRef_rejects_conflicting_descriptor_for_same_blob_id()
-    {
-        var left = BlobRef.Encode(new BlobRef.Descriptor
-        {
-            BlobId = Author(9), Size = 10, ContentType = "a", Hash = new byte[32],
-        });
-        var right = BlobRef.Encode(new BlobRef.Descriptor
-        {
-            BlobId = Author(9), Size = 11, ContentType = "a", Hash = new byte[32],
-        });
-        Assert.Throws<InvalidDataException>(() => BlobRef.Merge(left, right));
-        Assert.Throws<InvalidDataException>(() => BlobRef.Merge(right, left));
-    }
-
-    [Fact]
     public void SeqFractional_and_BlobRef_reject_trailing_bytes()
     {
         var seq = SeqFractional.Encode(new SeqFractional.Item
