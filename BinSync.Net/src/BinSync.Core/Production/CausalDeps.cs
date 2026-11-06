@@ -93,6 +93,8 @@ public sealed class CausalTracker
     /// <summary>Record that a typed change id is durably known.</summary>
     public void NoteApplied(BatchId changeId)
     {
+        if (changeId.IsZero)
+            throw new ArgumentException("ChangeId cannot be zero.", nameof(changeId));
         lock (_gate)
         {
             if (_lost.Contains(changeId))
@@ -155,7 +157,12 @@ public sealed class CausalTracker
 
     public CausalOutcome Evaluate(BatchId changeId, IReadOnlyList<BatchId>? deps, out string? detail)
     {
+        if (changeId.IsZero)
+            throw new ArgumentException("ChangeId cannot be zero.", nameof(changeId));
         deps ??= Array.Empty<BatchId>();
+        for (int i = 0; i < deps.Count; i++)
+            if (deps[i].IsZero)
+                throw new ArgumentException("Causal dependency ID cannot be zero.", nameof(deps));
         lock (_gate)
             return EvaluateLocked(changeId, deps, out detail);
     }
@@ -164,6 +171,11 @@ public sealed class CausalTracker
     public void EnqueuePending(BatchId changeId, IReadOnlyList<BatchId> deps, object? payload = null)
     {
         ArgumentNullException.ThrowIfNull(deps);
+        if (changeId.IsZero)
+            throw new ArgumentException("ChangeId cannot be zero.", nameof(changeId));
+        for (int i = 0; i < deps.Count; i++)
+            if (deps[i].IsZero)
+                throw new ArgumentException("Causal dependency ID cannot be zero.", nameof(deps));
         lock (_gate)
         {
             if (_known.Contains(changeId) || _lost.Contains(changeId) || _pending.ContainsKey(changeId))
@@ -270,6 +282,8 @@ public sealed class CausalTracker
     /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>
     public List<PendingCausalOp> MarkLost(BatchId lostParent)
     {
+        if (lostParent.IsZero)
+            throw new ArgumentException("ChangeId cannot be zero.", nameof(lostParent));
         lock (_gate)
         {
             if (_known.Contains(lostParent))
@@ -294,6 +308,16 @@ public sealed class CausalTracker
         ArgumentNullException.ThrowIfNull(members);
         detail = null;
         CausalOutcome worst = CausalOutcome.Ready;
+        for (int i = 0; i < members.Count; i++)
+        {
+            var (changeId, deps) = members[i];
+            if (changeId.IsZero)
+                throw new InvalidDataException("Causal batch ChangeId cannot be zero.");
+            if (deps is not null)
+                for (int j = 0; j < deps.Count; j++)
+                    if (deps[j].IsZero)
+                        throw new InvalidDataException("Causal dependency ID cannot be zero.");
+        }
         lock (_gate)
         {
             // Earlier members satisfy their intra-batch dependents at the same

@@ -2,6 +2,8 @@
 
 ## 3.0.0 — 2026-11-06
 
+- Reject zero ChangeIds and causal dependency IDs at CausalTracker public entry points, preventing invalid identities from entering known/lost/pending state outside the batch API.
+
 - Validate non-zero, unique ChangeIds before the causal gate; malformed batches can no longer poison the pending graph before normal apply validation.
 
 - Raise `SchemaRegistered` only when a new schema version is published; idempotent republication no longer emits a false change event.

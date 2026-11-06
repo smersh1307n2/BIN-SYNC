@@ -80,6 +80,28 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void Causal_tracker_rejects_zero_change_and_dependency_ids()
+    {
+        var tracker = new CausalTracker();
+        var zero = default(BatchId);
+        var valid = BatchId.From(Id(1));
+
+        Assert.Throws<ArgumentException>(() => tracker.NoteApplied(zero));
+        Assert.Throws<ArgumentException>(() => tracker.MarkLost(zero));
+        Assert.Throws<ArgumentException>(() => tracker.Evaluate(zero, Array.Empty<BatchId>(), out _));
+        Assert.Throws<ArgumentException>(() => tracker.Evaluate(valid, new[] { zero }, out _));
+        Assert.Throws<ArgumentException>(() => tracker.EnqueuePending(zero, new[] { valid }));
+        Assert.Throws<ArgumentException>(() => tracker.EnqueuePending(valid, new[] { zero }));
+
+        Assert.Throws<InvalidDataException>(() => tracker.EvaluateBatch(
+            new[] { (zero, (IReadOnlyList<BatchId>?)null) }, out _));
+        Assert.Throws<InvalidDataException>(() => tracker.EvaluateBatch(
+            new[] { (valid, (IReadOnlyList<BatchId>?)new[] { zero }) }, out _));
+        Assert.Equal(0, tracker.KnownCount);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
     public void NoteApplied_removes_an_existing_pending_entry()
     {
         var tracker = new CausalTracker();
