@@ -163,45 +163,58 @@ public sealed partial class Node
         lock (_lockMeta) { ThrowIfDisposed(); tracker = _causal; }
         if (tracker is null) return 0;
 
-        var released = tracker.Drain();
         int applied = 0;
-        // One batch is enqueued once per entry. Keep the complete group so a failed
-        // retry can restore every pending ChangeId, not just the first one.
-        // BatchId is only one part of the protocol inbox key; different issuers
-        // may legitimately reuse it. Each pending entry shares its HeldCausalBatch
-        // instance, so reference identity groups exactly one original batch.
-        var batches = new Dictionary<HeldCausalBatch, List<PendingCausalOp>>();
-        foreach (var (op, outcome) in released)
+        while (true)
         {
-            if (outcome != CausalOutcome.Ready || op.Payload is not HeldCausalBatch held)
-                continue;
-            if (!batches.TryGetValue(held, out var ops))
-                batches[held] = ops = new List<PendingCausalOp>();
-            ops.Add(op);
-        }
+            var released = tracker.Drain();
+            // One batch is enqueued once per entry. Keep the complete group so a failed
+            // retry can restore every pending ChangeId, not just the first one.
+            // BatchId is only one part of the protocol inbox key; different issuers
+            // may legitimately reuse it. Each pending entry shares its HeldCausalBatch
+            // instance, so reference identity groups exactly one original batch.
+            var batches = new Dictionary<HeldCausalBatch, List<PendingCausalOp>>();
+            foreach (var (op, outcome) in released)
+            {
+                if (outcome != CausalOutcome.Ready || op.Payload is not HeldCausalBatch held)
+                    continue;
+                if (!batches.TryGetValue(held, out var ops))
+                    batches[held] = ops = new List<PendingCausalOp>();
+                ops.Add(op);
+            }
+            if (batches.Count == 0) break;
 
-        foreach (var (held, ops) in batches)
-        {
-            try
+            bool madeProgress = false;
+            foreach (var (held, ops) in batches)
             {
-                ApplyBatchCausalCore(CloneBatchForPublicRead(held.Batch), held.SenderPeer, tracker);
-                applied++;
+                try
+                {
+                    ApplyBatchCausalCore(CloneBatchForPublicRead(held.Batch), held.SenderPeer, tracker);
+                    applied++;
+                    madeProgress = true;
+                }
+                catch (InvalidOperationException) when (!ReferenceEquals(Causal, tracker))
+                {
+                    // The host replaced the causal tracker while this drain was in progress.
+                    return applied;
+                }
+                catch (SyncException)
+                {
+                    // A batch may still have another unresolved dependency or stream gap.
+                    // Restore the released members; if another batch in this pass makes
+                    // progress, the next pass can retry it against the newly advanced state.
+                    foreach (var op in ops) tracker.RequeuePending(op);
+                }
+                catch
+                {
+                    foreach (var op in ops) tracker.RequeuePending(op);
+                    throw;
+                }
             }
-            catch (InvalidOperationException) when (!ReferenceEquals(Causal, tracker))
-            {
-                // The host replaced the causal tracker while this drain was in progress.
-                break;
-            }
-            catch (SyncException)
-            {
-                // The batch did not commit (for example, its stream cursor is not ready).
-                foreach (var op in ops) tracker.RequeuePending(op);
-            }
-            catch
-            {
-                foreach (var op in ops) tracker.RequeuePending(op);
-                throw;
-            }
+
+            // NoteApplied from a successful batch can unlock another held batch. Drain
+            // again until the dependency chain is exhausted. If no batch committed, stop
+            // rather than spinning on a ready causal entry whose normal stream gate failed.
+            if (!madeProgress) break;
         }
         return applied;
     }

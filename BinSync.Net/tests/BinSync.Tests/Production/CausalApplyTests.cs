@@ -241,6 +241,43 @@ public class CausalApplyTests
     }
 
     [Fact]
+    public void DrainAndRetryCausal_drains_newly_unblocked_batches_in_the_same_call()
+    {
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        var firstSender = new Node(Id(0xA1), epoch: 1);
+        var secondSender = new Node(Id(0xA2), epoch: 1);
+        Transport.MakeSession(firstSender, receiver);
+        Transport.MakeSession(secondSender, receiver);
+
+        firstSender.WriteField(1, Rid(0x31), 0x0100, new byte[] { 0x31 });
+        var firstEntry = firstSender.Outbox[1][^1];
+        var parent = BatchId.From(Id(0x40));
+        firstEntry.CausalDeps.Add(parent);
+        var firstBatch = firstSender.CreateDeltaBatch(receiver.NodeId, 1)!;
+
+        secondSender.WriteField(1, Rid(0x32), 0x0100, new byte[] { 0x32 });
+        var secondEntry = secondSender.Outbox[1][^1];
+        secondEntry.CausalDeps.Add(firstEntry.ChangeId);
+        var secondBatch = secondSender.CreateDeltaBatch(receiver.NodeId, 1)!;
+
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+        Assert.Equal("CAUSAL_DEP_MISSING",
+            Assert.Throws<SyncException>(() => receiver.ApplyBatchCausal(firstBatch, firstSender.NodeId)).CodeName);
+        Assert.Equal("CAUSAL_DEP_MISSING",
+            Assert.Throws<SyncException>(() => receiver.ApplyBatchCausal(secondBatch, secondSender.NodeId)).CodeName);
+        Assert.Equal(2, tracker.PendingCount);
+
+        tracker.NoteApplied(parent);
+        Assert.Equal(2, receiver.DrainAndRetryCausal());
+        Assert.Equal(0, tracker.PendingCount);
+        Assert.True(receiver.TryGetField(1, Rid(0x31), 0x0100, out var first));
+        Assert.True(receiver.TryGetField(1, Rid(0x32), 0x0100, out var second));
+        Assert.Equal(new byte[] { 0x31 }, first!.Value);
+        Assert.Equal(new byte[] { 0x32 }, second!.Value);
+    }
+
+    [Fact]
     public void Missing_dep_throws_CAUSAL_DEP_MISSING_and_quarantines_KZ4()
     {
         var tracker = new CausalTracker();
