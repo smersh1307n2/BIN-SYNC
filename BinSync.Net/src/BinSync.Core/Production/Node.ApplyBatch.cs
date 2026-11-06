@@ -304,7 +304,7 @@ public sealed partial class Node
                 ? sessionMap.OrderBy(x => x.Key)
                     .Select(x => new AliasMapEntry((ushort)x.Key, x.Value.Id, x.Value.Epoch)).ToArray()
                 : Array.Empty<AliasMapEntry>();
-            int senderEpoch = SessionEpoch(senderPeer, 0) ?? 0;
+            int senderEpoch = PeerSessionEpochs.TryGetValue(senderPeer, out var knownPeerEpoch) ? knownPeerEpoch : 0;
             _wal.AppendRemoteBatch(senderPeer, senderEpoch, aliases,
                 durablePayload ?? EncodeBatchPayloadInternal(batch));
         }
