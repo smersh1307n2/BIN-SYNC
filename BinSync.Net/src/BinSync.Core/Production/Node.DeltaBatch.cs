@@ -208,15 +208,18 @@ public sealed partial class Node
         {
             // streamAlias was resolved against the reverse map above. Use that alias
             // for the forward lookup instead of scanning every session binding again.
-            bool hit = AliasToNode.TryGetValue(targetPeer, out var m) &&
+            if (AliasToNode.TryGetValue(targetPeer, out var m) &&
                 m.TryGetValue(streamAlias.Value, out var binding) &&
-                binding.Id == author;
-            if (hit)
+                binding.Id == author)
+            {
                 ep = binding.Epoch;
+            }
             else
+            {
                 foreach (var kv in KnownEpochs)
                     if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
                         ep = Math.Max(ep, kv.Value);
+            }
         }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
                               NodeId, ep, start, end, default, default, recordsRoot, default, entries);
