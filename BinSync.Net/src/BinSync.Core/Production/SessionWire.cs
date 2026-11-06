@@ -1,4 +1,4 @@
-using System.Buffers;
+using System.Buffers;\nusing System.Buffers.Binary;
 // Wire payloads for session bootstrap: HELLO, HELLO_ACK, ALIAS_MAP (§12.7+, §4.3–4.4).
 namespace BinSync;
 
@@ -37,6 +37,27 @@ public static class SessionWire
     public const byte TypeError = 0x0D;
     /// <summary>Stream id reserved for session control messages (0).</summary>
     public const uint ControlStreamId = 0;
+
+    /// <summary>Encode a positive WINDOW_UPDATE credit amount as one LE u32.</summary>
+    public static byte[] EncodeWindowUpdate(uint credits)
+    {
+        if (credits == 0) throw new ArgumentOutOfRangeException(nameof(credits));
+        byte[] payload = new byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload, credits);
+        return payload;
+    }
+
+    /// <summary>Decode the canonical four-byte positive WINDOW_UPDATE payload.</summary>
+    public static bool TryDecodeWindowUpdate(ReadOnlySpan<byte> payload, out uint credits)
+    {
+        if (payload.Length != sizeof(uint))
+        {
+            credits = 0;
+            return false;
+        }
+        credits = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        return credits != 0;
+    }
 
     /// <summary>Encode hello into canonical wire bytes.</summary>
     public static byte[] EncodeHello(HelloPayload h)

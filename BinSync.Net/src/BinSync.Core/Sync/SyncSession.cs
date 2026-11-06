@@ -1,4 +1,4 @@
-using System.Buffers;
+using System.Buffers;\nusing System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
@@ -9,7 +9,7 @@ namespace BinSync;
 public partial class SyncSession : IAsyncDisposable
 {
     protected readonly ISyncTransport _transport;
-    private readonly bool _ownsTransport;
+    private readonly bool _ownsTransport;\n    private readonly bool _flowControlEnabled;\n    private readonly FlowControl _sendFlowControl = new();\n    private readonly FlowControl _receiveFlowControl = new();\n    private long _windowUpdateSequence;\n    private int _queuedFrameCount;\n    private long _queuedFrameBytes;\n    private const int MaxQueuedReceiveFrames = 4096;\n    private const long MaxQueuedReceiveBytes = 32L * 1024 * 1024;
     private IDisposable? _sessionLease;
     private int _disposed;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
@@ -41,14 +41,14 @@ public partial class SyncSession : IAsyncDisposable
     /// <summary>Capabilities advertised by the peer.</summary>
     public SessionCapabilities PeerCapabilities { get; }
 
-    protected SyncSession(ISyncTransport transport, HelloPayload peer, bool ownsTransport, IDisposable sessionLease)
+    protected SyncSession(ISyncTransport transport, HelloPayload peer, SessionCapabilities localCapabilities, bool ownsTransport, IDisposable sessionLease)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ownsTransport = ownsTransport;
         _sessionLease = sessionLease ?? throw new ArgumentNullException(nameof(sessionLease));
         PeerNodeId = peer.NodeId;
         PeerEpoch = peer.Epoch;
-        PeerCapabilities = peer.Capabilities;
+        PeerCapabilities = peer.Capabilities;\n        _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
     }
 
@@ -64,7 +64,7 @@ public partial class SyncSession : IAsyncDisposable
             EnsureTransportCapabilities(transport);
             var handshake = await InitiateAsync(local, transport, caps, ct).ConfigureAwait(false);
             lease = handshake.Lease;
-            var session = new SyncSession(transport, handshake.Peer, ownsTransport, lease);
+            var session = new SyncSession(transport, handshake.Peer, caps, ownsTransport, lease);
             lease = null;
             return session;
         }
@@ -150,7 +150,7 @@ public partial class SyncSession : IAsyncDisposable
                 local.CommitSession(peer.NodeId, peer.Epoch, merged);
             }
 
-            var session = new SyncSession(transport, peer, ownsTransport, lease!);
+            var session = new SyncSession(transport, peer, caps, ownsTransport, lease!);
             lease = null;
             return session;
         }
@@ -210,14 +210,39 @@ public partial class SyncSession : IAsyncDisposable
     {
         int size = Frames.HEADER_SIZE + payload.Length;
         var rented = ArrayPool<byte>.Shared.Rent(size);
+        bool creditReserved = false;
+        bool sendStarted = false;
+        bool flowControlled = _flowControlEnabled && streamId != 0 && type != Frames.TYPE_WINDOW_UPDATE;
         try
         {
             int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
+            if (flowControlled)
+            {
+                await _sendFlowControl.WaitForCreditAsync(streamId, payload.Length, ct).ConfigureAwait(false);
+                creditReserved = true;
+            }
             await _sendGate.WaitAsync(ct).ConfigureAwait(false);
-            try { await _transport.SendAsync(rented.AsMemory(0, length), ct).ConfigureAwait(false); }
+            try
+            {
+                sendStarted = true;
+                await _transport.SendAsync(rented.AsMemory(0, length), ct).ConfigureAwait(false);
+            }
             finally { _sendGate.Release(); }
         }
-        finally { ArrayPool<byte>.Shared.Return(rented); }
+        finally
+        {
+            if (creditReserved && !sendStarted)
+                _sendFlowControl.ApplyUpdate(streamId, payload.Length);
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private async Task SendWindowUpdateAsync(uint streamId, int credits, CancellationToken ct)
+    {
+        if (credits <= 0) return;
+        byte[] payload = SessionWire.EncodeWindowUpdate((uint)credits);
+        ulong sequence = (ulong)Interlocked.Increment(ref _windowUpdateSequence);
+        await SendFrameAsync(Frames.TYPE_WINDOW_UPDATE, streamId, sequence, payload, ct).ConfigureAwait(false);
     }
 
     /// <summary>Dispose the underlying channel when this session owns it.</summary>
@@ -255,20 +280,34 @@ public partial class SyncSession : IAsyncDisposable
             if (_rawReceiveActive)
                 throw new InvalidOperationException("An exclusive receive operation is already active on this session");
             channel = _receiveChannels.GetOrAdd(expectedType, static _ =>
-                Channel.CreateBounded<byte[]>(new BoundedChannelOptions(64)
+                Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
                 {
                     SingleReader = true, SingleWriter = true,
-                    FullMode = BoundedChannelFullMode.Wait,
                     AllowSynchronousContinuations = false,
                 }));
             if (_receiveCompleted) channel.Writer.TryComplete(_receiveFailure);
             _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
         }
-        try { return await channel.Reader.ReadAsync(ct).ConfigureAwait(false); }
+        byte[] raw;
+        try { raw = await channel.Reader.ReadAsync(ct).ConfigureAwait(false); }
         catch (ChannelClosedException) when (_receiveFailure is not null)
         { throw new IOException("Session receive pump failed", _receiveFailure); }
         catch (ChannelClosedException)
         { throw new IOException("Peer closed the session"); }
+
+        Interlocked.Decrement(ref _queuedFrameCount);
+        Interlocked.Add(ref _queuedFrameBytes, -raw.Length);
+        if (_flowControlEnabled)
+        {
+            uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
+            int payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17)));
+            if (streamId != 0 && payloadLength > 0)
+            {
+                _receiveFlowControl.ApplyUpdate(streamId, payloadLength);
+                await SendWindowUpdateAsync(streamId, payloadLength, ct).ConfigureAwait(false);
+            }
+        }
+        return raw;
     }
 
     private async Task ReceivePumpAsync(CancellationToken ct)
@@ -283,19 +322,45 @@ public partial class SyncSession : IAsyncDisposable
                 var (frame, consumed) = FrameCodec.ParseFrame(raw);
                 if (consumed != raw.Length || frame.FrameType < 0x04 || frame.FrameType > 0x13)
                     throw new FrameException("FRAME_REJECTED");
+
+                if (frame.FrameType == Frames.TYPE_WINDOW_UPDATE)
+                {
+                    if (!_flowControlEnabled || frame.StreamId == 0 || frame.Flags != 0 ||
+                        !SessionWire.TryDecodeWindowUpdate(frame.Payload, out uint credits) ||
+                        !_sendFlowControl.TryApplyUpdate(frame.StreamId, credits))
+                        throw new FrameException("FLOW_CONTROL_VIOLATION");
+                    continue;
+                }
+
+                if (_flowControlEnabled && frame.StreamId != 0 &&
+                    !_receiveFlowControl.TryConsume(frame.StreamId, frame.Payload.Length))
+                    throw new FrameException("FLOW_CONTROL_VIOLATION");
+
                 Channel<byte[]> channel;
                 lock (_receiveSync)
                 {
                     channel = _receiveChannels.GetOrAdd(frame.FrameType, static _ =>
-                        Channel.CreateBounded<byte[]>(new BoundedChannelOptions(64)
+                        Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
                         {
                             SingleReader = true, SingleWriter = true,
-                            FullMode = BoundedChannelFullMode.Wait,
                             AllowSynchronousContinuations = false,
                         }));
                 }
-                if (!channel.Writer.TryWrite(raw))
+
+                int queuedFrames = Interlocked.Increment(ref _queuedFrameCount);
+                long queuedBytes = Interlocked.Add(ref _queuedFrameBytes, raw.Length);
+                if (queuedFrames > MaxQueuedReceiveFrames || queuedBytes > MaxQueuedReceiveBytes)
+                {
+                    Interlocked.Decrement(ref _queuedFrameCount);
+                    Interlocked.Add(ref _queuedFrameBytes, -raw.Length);
                     throw new FrameException("FLOW_CONTROL_VIOLATION");
+                }
+                if (!channel.Writer.TryWrite(raw))
+                {
+                    Interlocked.Decrement(ref _queuedFrameCount);
+                    Interlocked.Add(ref _queuedFrameBytes, -raw.Length);
+                    throw new FrameException("FLOW_CONTROL_VIOLATION");
+                }
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }

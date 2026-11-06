@@ -14,6 +14,8 @@ public static class Frames
     public const ushort MAGIC = 0x4253;
     /// <summary>Frame format version byte (currently 0x00).</summary>
     public const byte VERSION = 0x00;
+    /// <summary>Established-session WINDOW_UPDATE frame type (§3.6).</summary>
+    public const byte TYPE_WINDOW_UPDATE = 0x0E;
     /// <summary>Fixed frame header size in bytes (25).</summary>
     public const int HEADER_SIZE = 25;
     /// <summary>Absolute maximum frame size including header (§12.3).</summary>
@@ -337,11 +339,12 @@ public static class FrameCodec
     }
 }
 
-/// <summary>Per-stream send-window accounting for flow control.</summary>
-public class FlowControl
+/// <summary>Per-stream byte-window accounting shared by send and receive paths.</summary>
+public sealed class FlowControl
 {
     private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
+    private readonly Dictionary<uint, TaskCompletionSource>? _waiters = new();
 
     /// <summary>Configured initial flow-control window.</summary>
     public int Initial { get; }
@@ -349,7 +352,6 @@ public class FlowControl
     /// <summary>Configured maximum flow-control window.</summary>
     public int MaxWindow { get; }
 
-    /// <summary>Per-stream flow-control windows for send credit accounting.</summary>
     public FlowControl(int initial = Frames.INITIAL_WINDOW, int maxWindow = Frames.MAX_WINDOW_SIZE)
     {
         if (initial < 0) throw new ArgumentOutOfRangeException(nameof(initial));
@@ -372,6 +374,7 @@ public class FlowControl
     public bool TryConsume(uint streamId, long payloadBytes)
     {
         if (payloadBytes < 0) throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        if (payloadBytes > MaxWindow) return false;
         lock (_gate)
         {
             var balance = BalanceInternal(streamId);
@@ -381,17 +384,70 @@ public class FlowControl
         }
     }
 
-    /// <summary>Apply positive additive credits and return the new balance, capped at <see cref="MaxWindow"/>.</summary>
+    /// <summary>Wait until payload credit is available, then reserve it atomically.</summary>
+    public ValueTask WaitForCreditAsync(uint streamId, long payloadBytes, CancellationToken ct = default)
+    {
+        if (payloadBytes < 0 || payloadBytes > MaxWindow)
+            throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        if (TryConsume(streamId, payloadBytes)) return ValueTask.CompletedTask;
+        return new ValueTask(WaitSlowAsync(streamId, payloadBytes, ct));
+    }
+
+    private async Task WaitSlowAsync(uint streamId, long payloadBytes, CancellationToken ct)
+    {
+        while (true)
+        {
+            Task waitTask;
+            lock (_gate)
+            {
+                long balance = BalanceInternal(streamId);
+                if (balance >= payloadBytes)
+                {
+                    _credit[streamId] = balance - payloadBytes;
+                    return;
+                }
+                if (!_waiters!.TryGetValue(streamId, out var waiter))
+                {
+                    waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _waiters.Add(streamId, waiter);
+                }
+                waitTask = waiter.Task;
+            }
+            await waitTask.WaitAsync(ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Apply positive additive credits, capped at the configured maximum.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
         if (credits <= 0) throw new ArgumentOutOfRangeException(nameof(credits));
+        TaskCompletionSource? waiter;
+        long next;
         lock (_gate)
         {
             long balance = BalanceInternal(streamId);
             long room = MaxWindow - balance;
-            long next = credits >= room ? MaxWindow : balance + credits;
+            next = credits >= room ? MaxWindow : balance + credits;
             _credit[streamId] = next;
-            return next;
+            _waiters!.Remove(streamId, out waiter);
         }
+        waiter?.TrySetResult();
+        return next;
+    }
+
+    /// <summary>Apply a peer update only when it is strictly within the negotiated window.</summary>
+    public bool TryApplyUpdate(uint streamId, long credits)
+    {
+        if (credits <= 0) return false;
+        TaskCompletionSource? waiter;
+        lock (_gate)
+        {
+            long balance = BalanceInternal(streamId);
+            if (credits > MaxWindow - balance) return false;
+            _credit[streamId] = balance + credits;
+            _waiters!.Remove(streamId, out waiter);
+        }
+        waiter?.TrySetResult();
+        return true;
     }
 }

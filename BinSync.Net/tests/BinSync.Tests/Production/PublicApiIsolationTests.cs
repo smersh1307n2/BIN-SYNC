@@ -527,6 +527,46 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public async Task FlowControl_WaitForCredit_reserves_atomically_and_wakes_all_waiters()
+    {
+        var flow = new FlowControl(initial: 8, maxWindow: 16);
+        Assert.True(flow.TryConsume(3, 8));
+        var first = flow.WaitForCreditAsync(3, 6).AsTask();
+        var second = flow.WaitForCreditAsync(3, 2).AsTask();
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+
+        Assert.True(flow.TryApplyUpdate(3, 8));
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(0, flow.Balance(3));
+    }
+
+    [Fact]
+    public void FlowControl_TryApplyUpdate_rejects_zero_and_window_overflow()
+    {
+        var flow = new FlowControl(initial: 8, maxWindow: 16);
+        Assert.False(flow.TryApplyUpdate(1, 0));
+        Assert.False(flow.TryApplyUpdate(1, 9));
+        Assert.Equal(8, flow.Balance(1));
+        Assert.True(flow.TryApplyUpdate(1, 8));
+        Assert.Equal(16, flow.Balance(1));
+        Assert.False(flow.TryApplyUpdate(1, 1));
+    }
+
+    [Fact]
+    public void WindowUpdateWire_uses_exactly_four_little_endian_bytes()
+    {
+        Assert.Equal(new byte[] { 0x78, 0x56, 0x34, 0x12 },
+            SessionWire.EncodeWindowUpdate(0x12345678));
+        Assert.True(SessionWire.TryDecodeWindowUpdate(
+            new byte[] { 0x78, 0x56, 0x34, 0x12 }, out uint credits));
+        Assert.Equal(0x12345678u, credits);
+        Assert.False(SessionWire.TryDecodeWindowUpdate(new byte[] { 1, 0, 0 }, out _));
+        Assert.False(SessionWire.TryDecodeWindowUpdate(new byte[] { 0, 0, 0, 0 }, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() => SessionWire.EncodeWindowUpdate(0));
+    }
+
+    [Fact]
     public void FlowControl_UsesImmutableConfigurationAndAtomicCredit()
     {
         Assert.Null(typeof(FlowControl).GetProperty(nameof(FlowControl.Initial))!.GetSetMethod());
