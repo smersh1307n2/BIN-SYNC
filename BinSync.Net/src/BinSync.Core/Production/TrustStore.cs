@@ -37,7 +37,10 @@ public sealed partial class TrustStore
     /// <summary>Default trust mode applied when pinning new peers.</summary>
     public TrustMode DefaultMode
     {
-        get { lock (_gate) return _defaultMode; }
+        get
+        {
+            lock (_gate) return _defaultMode;
+        }
         set
         {
             if (value is not (TrustMode.Tofu or TrustMode.PreShared or TrustMode.CertificateAuthority))
