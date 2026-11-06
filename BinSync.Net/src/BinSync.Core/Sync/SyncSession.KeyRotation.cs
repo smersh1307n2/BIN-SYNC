@@ -29,6 +29,9 @@ public partial class SyncSession
         if (frame.FrameType != KeyRotation.FrameType)
             throw new FrameException("FRAME_REJECTED");
         var notice = KeyRotation.Decode(frame.Payload);
+        uint expectedStreamId = 0x0001_0000u | (uint)notice.NamespaceId;
+        if (frame.StreamId != expectedStreamId || frame.Flags != 0)
+            throw new FrameException("FRAME_REJECTED");
         return local is not null ? local.ApplyKeyRotation(notice, store) : store.TryApply(notice);
     }
 
