@@ -15,7 +15,7 @@ public sealed class PublicApiIsolationTests
         Assert.True(node.TryGetRecord(7, recordId, out var record));
         Assert.NotNull(record);
         record!.State[0x101].Value[0] = (byte)'X';
-        record.State.Add(0x102, new FieldState(new byte[] { 1 }, default, node.NodeId));
+        record.State.Add(0x102, new FieldState(new byte[] { 1 }, new Hlc(0, 0), node.NodeId));
         record.LifecycleValue = Model.Dead;
 
         Assert.True(node.TryGetField(7, recordId, 0x101, out var field));
