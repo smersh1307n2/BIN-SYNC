@@ -13,16 +13,16 @@ public class LoopbackTransport
 {
     /// <summary>Shared node map keyed by NodeId for in-process delivery.</summary>
     public Dictionary<NodeId, Node>? Nodes = null;
-    private readonly Dictionary<(byte[], byte[]), (FlowControl Send, FlowControl Recv)> _sessions = new(BytesPairEq.Instance);
+    private readonly Dictionary<(NodeId, NodeId), (FlowControl Send, FlowControl Recv)> _sessions = new();
     private int _streamCounter = 0;
     /// <summary>Per-pair stream sequence counters keyed by (local, remote) node ids.</summary>
-    public Dictionary<(byte[], byte[]), int> Streams = new(BytesPairEq.Instance);
+    public Dictionary<(NodeId, NodeId), int> Streams = new();
 
     /// <summary>Register a node in the loopback peer map for local delivery.</summary>
     public void Register(Node node) => (Nodes ??= new())[node.NodeId] = node;
 
     /// <summary>Wire two nodes for loopback delivery.</summary>
-    public void Connect(byte[] a, byte[] b)
+    public void Connect(NodeId a, NodeId b)
     {
         if (Nodes is null || !Nodes.TryGetValue(a, out var na) || !Nodes.TryGetValue(b, out var nb))
             throw new KeyNotFoundException("register both nodes first");
@@ -36,7 +36,7 @@ public class LoopbackTransport
     }
 
     /// <summary>Tear down the loopback path between two node ids.</summary>
-    public void Close(byte[] a, byte[] b)
+    public void Close(NodeId a, NodeId b)
     {
         _sessions.Remove((a, b));
         _sessions.Remove((b, a));
@@ -57,7 +57,7 @@ public class LoopbackTransport
         foreach (var (n, f) in frames)
         {
             if (!Nodes!.TryGetValue(n.NodeId, out var src)) throw new PeerRejectedException("unknown peer");
-            byte[] dst;
+            NodeId dst;
             if (f.FrameType == 0x0D)
             {
                 // ERROR frame: streamId carries the offending peer nodeId prefix lookup
@@ -92,19 +92,19 @@ public class LoopbackTransport
         return outp;
     }
 
-    private byte[] ResolveTarget(Node src, Frame f)
+    private NodeId ResolveTarget(Node src, Frame f)
     {
         // harness convention: streamId encodes the destination index among registered peers
         foreach (var ((a, b), sid) in Streams)
-            if (a.AsSpan().SequenceEqual(src.NodeId) && sid == f.StreamId && !b.AsSpan().SequenceEqual(src.NodeId))
+            if (a == src.NodeId && sid == f.StreamId && b != src.NodeId)
                 return b;
         throw new NoSessionException();
     }
 
-    private byte[] LastStreamAuthorPeer(Node src)
+    private NodeId LastStreamAuthorPeer(Node src)
     {
         foreach (var ((a, b), _) in Streams)
-            if (a.AsSpan().SequenceEqual(src.NodeId)) return b;
+            if (a == src.NodeId) return b;
         throw new NoSessionException();
     }
 
@@ -123,10 +123,10 @@ public class LoopbackTransport
         }
     }
 
-    private byte[] SenderOf(Node target, Frame f)
+    private NodeId SenderOf(Node target, Frame f)
     {
         foreach (var ((a, b), sid) in Streams)
-            if (b.AsSpan().SequenceEqual(target.NodeId) && sid == f.StreamId) return a;
+            if (b == target.NodeId && sid == f.StreamId) return a;
         throw new NoSessionException();
     }
 }

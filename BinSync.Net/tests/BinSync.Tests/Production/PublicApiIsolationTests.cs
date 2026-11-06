@@ -176,6 +176,25 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void LoopbackPeerRouting_UsesTypedNodeIds()
+    {
+        var connect = typeof(LoopbackTransport).GetMethod(nameof(LoopbackTransport.Connect))!;
+        var close = typeof(LoopbackTransport).GetMethod(nameof(LoopbackTransport.Close))!;
+        Assert.Equal(typeof(NodeId), connect.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(NodeId), close.GetParameters()[0].ParameterType);
+
+        using var left = new Node(new NodeId(1, 2));
+        using var right = new Node(new NodeId(3, 4));
+        var loopback = new LoopbackTransport();
+        loopback.Register(left);
+        loopback.Register(right);
+        loopback.Connect(left.NodeId, right.NodeId);
+        Assert.Contains((left.NodeId, right.NodeId), loopback.Streams.Keys);
+        loopback.Close(left.NodeId, right.NodeId);
+        Assert.Empty(loopback.Streams);
+    }
+
+    [Fact]
     public void MergeAndBucketHelpers_UseTypedIdentities()
     {
         Assert.DoesNotContain(typeof(Merge).GetMethods(),

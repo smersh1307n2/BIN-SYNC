@@ -145,7 +145,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `SyncSession` | Transport-independent protocol session; generic `ConnectAsync` / `AcceptAsync`, batch/ACK, reconciliation, snapshots, IBLT, membership, schema, key rotation, fragmentation |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; creates generic `SyncSession` instances |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
-| `LoopbackTransport` | Lab loopback |
+| `LoopbackTransport` | Lab loopback with `NodeId` peer routing |
 
 ### Persistence
 
