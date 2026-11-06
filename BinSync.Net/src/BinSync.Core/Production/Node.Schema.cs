@@ -60,11 +60,12 @@ public sealed partial class Node
     {
         ArgumentNullException.ThrowIfNull(desc);
         int namespaceId = desc.NamespaceId, schemaId = desc.SchemaId, version = desc.Version;
+        bool isNewVersion;
         lock (_lockMeta)
         {
             ThrowIfDisposed();
             Schemas ??= new SchemaRegistry();
-            bool isNewVersion = !Schemas.TryGet(namespaceId, schemaId, version, out _);
+            isNewVersion = !Schemas.TryGet(namespaceId, schemaId, version, out _);
             Schemas.Register(desc);
             int max = Schemas.MaxVersion(namespaceId, schemaId) ?? version;
             if (!SchemaVersions.TryGetValue(namespaceId, out var cur) || max > cur)
