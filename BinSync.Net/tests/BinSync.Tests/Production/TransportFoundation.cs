@@ -109,8 +109,10 @@ public class TransportFoundationTests
 
         var lowerTask = SyncSession.EstablishAsync(lower, toLower);
         var higherTask = SyncSession.EstablishAsync(higher, toHigher);
-        var lowerError = await Record.ExceptionAsync(async () => await lowerTask);
-        var higherError = await Record.ExceptionAsync(async () => await higherTask);
+        Exception? lowerError = null;
+        Exception? higherError = null;
+        try { await lowerTask; } catch (Exception ex) { lowerError = ex; }
+        try { await higherTask; } catch (Exception ex) { higherError = ex; }
 
         var regression = Assert.IsType<SyncException>(lowerError);
         Assert.Equal("EPOCH_REGRESSION", regression.CodeName);
