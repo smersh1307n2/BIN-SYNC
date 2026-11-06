@@ -101,6 +101,7 @@ public sealed class PublicApiIsolationTests
         Assert.Throws<ObjectDisposedException>(() => node.Schemas = new SchemaRegistry());
         Assert.Throws<ObjectDisposedException>(() => node.RegisterAlias(Fix.Nid(2), 1, Fix.Nid(3), 1));
         Assert.Throws<ObjectDisposedException>(() => node.RecordDigestOf(7, Fix.Rid(913)));
+        Assert.Throws<ObjectDisposedException>(() => node.KnownAuthorEpoch(Fix.Nid(1)));
     }
 
     [Fact]

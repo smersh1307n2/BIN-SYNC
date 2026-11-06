@@ -50,7 +50,10 @@ public sealed partial class Node
     public int? KnownAuthorEpoch(NodeId author)
     {
         lock (_lockMeta)
+        {
+            ThrowIfDisposed();
             return KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
+        }
     }
 
     /// <summary>Return the session epoch for a peer in a namespace, if any.</summary>
