@@ -14,7 +14,9 @@ public class GcNoticeTests
         a.DurableAuthors[Fix.Nid(50)] = 4;
         var msg = GcNotice.Build(a, 1, tombstoneCutoffWall: 1000);
         Assert.Single(msg.Quarantined);
-        var back = GcNotice.Decode(GcNotice.Encode(msg));
+        var payload = GcNotice.Encode(msg);
+        var back = GcNotice.Decode(payload);
+        Assert.Throws<InvalidDataException>(() => GcNotice.Decode(payload.Append((byte)0).ToArray()));
         Assert.Equal(1, back.NamespaceId);
         Assert.Equal(1000u, back.TombstoneCutoffWall);
         Assert.Single(back.Quarantined);

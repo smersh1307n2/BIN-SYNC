@@ -13,7 +13,9 @@ public class MembershipTests
         a.DurableAuthors[Fix.Nid(99)] = 3;
         var msg = Membership.Build(a, 1, membershipEpoch: 7);
         Assert.True(msg.Members.Count >= 2);
-        var back = Membership.Decode(Membership.Encode(msg));
+        var payload = Membership.Encode(msg);
+        var back = Membership.Decode(payload);
+        Assert.Throws<InvalidDataException>(() => Membership.Decode(payload.Append((byte)0).ToArray()));
         Assert.Equal(1, back.NamespaceId);
         Assert.Equal(7u, back.MembershipEpoch);
         Assert.Equal(msg.Members.Count, back.Members.Count);

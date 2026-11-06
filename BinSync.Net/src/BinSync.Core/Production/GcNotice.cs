@@ -73,21 +73,30 @@ public static class GcNotice
     /// <summary>Decode  from canonical wire bytes.</summary>
     public static GcNoticeMessage Decode(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var m = new GcNoticeMessage
         {
             NamespaceId = r.U16(),
             TombstoneCutoffWall = r.U64(),
         };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(payload.Length / 5))
+            throw new InvalidDataException("GC quarantine count exceeds the available payload.");
+        for (int i = 0; i < (int)count; i++)
         {
+            var nodeId = r.ReadNodeId();
+            uint rawEpoch = r.U32();
+            if (nodeId.IsZero || rawEpoch > int.MaxValue)
+                throw new InvalidDataException("Invalid GC quarantine identity or epoch.");
             m.Quarantined.Add(new GcQuarantineEntry
             {
-                NodeId = r.ReadNodeId(),
-                Epoch = unchecked((int)r.U32()),
+                NodeId = nodeId,
+                Epoch = (int)rawEpoch,
             });
         }
+        if (!r.Eof())
+            throw new InvalidDataException("GC notice payload contains trailing bytes.");
         return m;
     }
 

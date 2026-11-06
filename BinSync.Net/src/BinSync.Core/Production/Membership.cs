@@ -101,22 +101,31 @@ public static class Membership
     /// <summary>Decode  from canonical wire bytes.</summary>
     public static MembershipMessage Decode(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var m = new MembershipMessage
         {
             NamespaceId = r.U16(),
             MembershipEpoch = r.U32(),
         };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(payload.Length / 6))
+            throw new InvalidDataException("Membership entry count exceeds the available payload.");
+        for (int i = 0; i < (int)count; i++)
         {
+            var nodeId = r.ReadNodeId();
+            uint rawEpoch = r.U32();
+            if (nodeId.IsZero || rawEpoch > int.MaxValue)
+                throw new InvalidDataException("Invalid membership identity or epoch.");
             m.Members.Add(new MembershipEntry
             {
-                NodeId = r.ReadNodeId(),
-                Epoch = unchecked((int)r.U32()),
+                NodeId = nodeId,
+                Epoch = (int)rawEpoch,
                 Flags = r.U8(),
             });
         }
+        if (!r.Eof())
+            throw new InvalidDataException("Membership payload contains trailing bytes.");
         return m;
     }
 
