@@ -44,6 +44,9 @@ public static class Merge
     public static (FieldState Winner, bool Changed) MergeFieldWithPolicy(
         FieldState? local, FieldState remote, MergePolicy policy)
     {
+        if (!Enum.IsDefined(policy))
+            throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown merge policy.");
+
         if (local is null)
         {
             ValidateInitialCrdtPayload(policy, remote.Value);
@@ -68,7 +71,7 @@ public static class Merge
             MergePolicy.SeqFractional => MergeCrdtPayload(local, remote, SeqFractional.Merge),
             MergePolicy.BlobRef => MergeCrdtPayload(local, remote, BlobRef.Merge),
             MergePolicy.Manual => MergeManual(local, remote),
-            _ => PickLww(local, remote),
+            _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown merge policy."),
         };
     }
 
@@ -295,6 +298,8 @@ public sealed class MergePolicyRegistry
     /// <summary>Configure the merge policy for a specific namespace field.</summary>
     public void Set(int namespaceId, ushort fieldId, MergePolicy policy)
     {
+        if (!Enum.IsDefined(policy))
+            throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown merge policy.");
         lock (_lock) _map[(namespaceId, fieldId)] = policy;
     }
 
