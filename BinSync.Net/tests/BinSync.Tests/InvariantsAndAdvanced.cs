@@ -41,6 +41,39 @@ public class InvariantsAndAdvanced
     }
 
     [Fact]
+    public void HlcClockSendTick_remains_monotonic_above_signed_wall_range()
+    {
+        var clock = new HlcClock(() => long.MaxValue);
+        ulong restoredWall = (ulong)long.MaxValue + 100;
+        clock.Observe(new Hlc(restoredWall, 7));
+
+        var next = clock.SendTick();
+
+        Assert.Equal(restoredWall, next.Wall);
+        Assert.Equal(8u, next.Logical);
+    }
+
+    [Fact]
+    public void HlcClockReceiveSkewLimit_saturates_at_unsigned_wall_boundary()
+    {
+        var clock = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
+
+        var received = clock.ReceiveTick(new Hlc(ulong.MaxValue, 0));
+
+        Assert.Equal(ulong.MaxValue, received.Wall);
+        Assert.Equal(1u, received.Logical);
+    }
+
+    [Fact]
+    public void HlcClock_rejects_negative_wall_clock_source()
+    {
+        var clock = new HlcClock(() => -1);
+
+        Assert.Throws<InvalidOperationException>(() => clock.SendTick());
+        Assert.Throws<InvalidOperationException>(() => clock.ReceiveTick(new Hlc(1, 0)));
+    }
+
+    [Fact]
     public void HlcClockRejectsSendLogicalOverflowWithoutWrapping()
     {
         var clock = new HlcClock(() => 100);

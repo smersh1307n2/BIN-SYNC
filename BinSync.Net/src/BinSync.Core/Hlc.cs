@@ -76,6 +76,14 @@ public class HlcClock
     /// <summary>Read the configured wall-clock source in microseconds.</summary>
     public long Now() => NowFn();
 
+    private ulong ReadNowWall()
+    {
+        long now = Now();
+        if (now < 0)
+            throw new InvalidOperationException("HLC wall clock must be non-negative Unix microseconds.");
+        return (ulong)now;
+    }
+
     /// <summary>Read a consistent, immutable snapshot of the current clock state.</summary>
     public HlcClockSnapshot Snapshot()
     {
@@ -97,12 +105,12 @@ public class HlcClock
     {
         lock (_tickGate)
         {
-            long now = Now();
+            ulong now = ReadNowWall();
             ulong wall;
             uint logical;
-            if (now > (long)LastWall)
+            if (now > LastWall)
             {
-                wall = (ulong)now;
+                wall = now;
                 logical = 0;
             }
             else
@@ -140,12 +148,14 @@ public class HlcClock
     {
         lock (_tickGate)
         {
-            long now = Now();
-            if (remote.Wall > (ulong)(now + MaxSkewUs))
+            ulong now = ReadNowWall();
+            ulong skew = (ulong)MaxSkewUs;
+            ulong maxAllowedWall = now > ulong.MaxValue - skew ? ulong.MaxValue : now + skew;
+            if (remote.Wall > maxAllowedWall)
                 throw new ClockDriftException($"remote.wall {remote.Wall} beyond now+{MaxSkewUs}");
-            ulong wall = Math.Max((ulong)now, Math.Max(LastWall, remote.Wall));
+            ulong wall = Math.Max(now, Math.Max(LastWall, remote.Wall));
             uint logical;
-            if (wall == (ulong)now && wall == LastWall && wall == remote.Wall)
+            if (wall == now && wall == LastWall && wall == remote.Wall)
                 logical = NextLogical(Math.Max(LastLogical, remote.Logical));
             else if (wall == LastWall) logical = NextLogical(LastLogical);
             else if (wall == remote.Wall) logical = NextLogical(remote.Logical);
