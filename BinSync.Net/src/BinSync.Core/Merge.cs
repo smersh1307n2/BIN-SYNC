@@ -61,6 +61,7 @@ public static class Merge
 
         return policy switch
         {
+            MergePolicy.LwwField => PickLww(local, remote),
             MergePolicy.MaxBytes => PickByValue(local, remote, preferGreater: true, numeric: false),
             MergePolicy.MinBytes => PickByValue(local, remote, preferGreater: false, numeric: false),
             MergePolicy.MaxU64 => PickByValue(local, remote, preferGreater: true, numeric: true),
