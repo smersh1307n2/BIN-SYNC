@@ -150,7 +150,8 @@ public class HlcClock
         {
             ulong now = ReadNowWall();
             ulong skew = (ulong)MaxSkewUs;
-            ulong maxAllowedWall = now > ulong.MaxValue - skew ? ulong.MaxValue : now + skew;
+            // Both operands are non-negative Int64 values, so their sum fits in UInt64.
+            ulong maxAllowedWall = now + skew;
             if (remote.Wall > maxAllowedWall)
                 throw new ClockDriftException($"remote.wall {remote.Wall} beyond now+{MaxSkewUs}");
             ulong wall = Math.Max(now, Math.Max(LastWall, remote.Wall));

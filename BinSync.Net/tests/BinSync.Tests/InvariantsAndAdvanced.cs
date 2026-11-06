@@ -54,14 +54,17 @@ public class InvariantsAndAdvanced
     }
 
     [Fact]
-    public void HlcClockReceiveSkewLimit_saturates_at_unsigned_wall_boundary()
+    public void HlcClockReceiveSkewLimit_handles_wall_above_signed_range()
     {
         var clock = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
 
-        var received = clock.ReceiveTick(new Hlc(ulong.MaxValue, 0));
+        var received = clock.ReceiveTick(new Hlc(ulong.MaxValue - 1, 0));
 
-        Assert.Equal(ulong.MaxValue, received.Wall);
+        Assert.Equal(ulong.MaxValue - 1, received.Wall);
         Assert.Equal(1u, received.Logical);
+        var beyondLimit = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
+        Assert.Throws<ClockDriftException>(() =>
+            beyondLimit.ReceiveTick(new Hlc(ulong.MaxValue, 0)));
     }
 
     [Fact]
