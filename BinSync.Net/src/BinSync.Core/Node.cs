@@ -71,7 +71,7 @@ public sealed partial class Node : IDisposable
         {
             if (_storage.TryGetValue(namespaceId, out var map) && map.TryGetValue(recordId, out var rec))
             {
-                record = rec;
+                record = CloneForPublicRead(rec);
                 return true;
             }
             record = null;
