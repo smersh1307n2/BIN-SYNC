@@ -222,13 +222,6 @@ public sealed partial class PeerState
         NamespaceId = ns;
     }
 
-    /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
-    public PeerState(byte[] peer, int ns) : this((NodeId)peer, ns) { }
-
-    /// <summary>Return the ACK watermark for a given author stream.</summary>
-    public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
-    /// <summary>Return the ACK watermark for a given author stream.</summary>
-    public long AckedFor(ReadOnlyMemory<byte> author) => StreamAcked.TryGetValue((NodeId)author, out var v) ? v : 0;
     /// <summary>Return the ACK watermark for a given author stream.</summary>
     public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
 }
@@ -256,6 +249,4 @@ public struct BatchResult
 
     /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
     public BatchResult(BatchId batchId) => BatchId = batchId;
-    /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
-    public BatchResult(byte[] batchId) => BatchId = BatchId.From(batchId);
 }

@@ -107,8 +107,8 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 |------|--------|
 | `OutboxEntry` | `RecordId`, `BatchId ChangeId`, `NodeId AuthorNodeId`, `ReadOnlyMemory<byte> Payload`, … |
 | `Batch` | Typed issuer/id/digests; `Entries`; `MaterializeEntries()` for owned payloads |
-| `PeerState` | `NodeId PeerNodeId`; stream ACK maps keyed by `NodeId` |
-| `Record` / `FieldState` | In-memory record store (reached via engine apply paths; maps are internal on `Node`) |
+| `PeerState` | `NodeId` constructor and `PeerNodeId`; stream ACK maps keyed by `NodeId` |
+| `Record` / `FieldState` | In-memory record model; `Record` is constructed with `RecordId` (reached via engine apply paths; maps are internal on `Node`) |
 
 ### Wire & codecs (§6, §12)
 

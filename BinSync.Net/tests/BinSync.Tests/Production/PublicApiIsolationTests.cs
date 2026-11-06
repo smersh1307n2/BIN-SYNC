@@ -178,6 +178,20 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void ModelIdentityConstructors_UseTypedIds()
+    {
+        Assert.DoesNotContain(typeof(Record).GetConstructors(),
+            constructor => constructor.GetParameters()[0].ParameterType == typeof(byte[]));
+        Assert.DoesNotContain(typeof(PeerState).GetConstructors(),
+            constructor => constructor.GetParameters()[0].ParameterType == typeof(byte[]));
+        Assert.DoesNotContain(typeof(BatchResult).GetConstructors(),
+            constructor => constructor.GetParameters()[0].ParameterType == typeof(byte[]));
+        Assert.DoesNotContain(typeof(PeerState).GetMethods(),
+            method => method.Name == "AckedFor" &&
+                      method.GetParameters()[0].ParameterType != typeof(NodeId));
+    }
+
+    [Fact]
     public void NodeConstruction_UsesTypedIdentityContract()
     {
         var constructor = typeof(Node).GetConstructors()

@@ -53,10 +53,6 @@ public class Record
         State = new Dictionary<ushort, FieldState>(Math.Max(1, fieldCapacity));
     }
 
-    /// <summary>Convenience ctor from wire/owned bytes.</summary>
-    public Record(byte[] recordId, ushort namespaceId, int fieldCapacity = 1)
-        : this(RecordId.From(recordId), namespaceId, fieldCapacity) { }
-
     /// <summary>True when the record is lifecycle-tombstoned.</summary>
     public bool IsDead => LifecycleValue == Model.Dead;
 

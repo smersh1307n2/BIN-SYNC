@@ -14,15 +14,6 @@ public static class HlcOps
     // §5.4 full order: wall, then logical, then durable authorNodeId (never alias).
     // BUGFIX (implementation finding): unknown (null) author sorts BEFORE every known
     // author — deterministic total order independent of arrival order.
-    /// <summary>Total-order compare of two HLC timestamps with optional durable-author tiebreak.</summary>
-    public static int CompareHlc(Hlc a, byte[]? aAuthor, Hlc b, byte[]? bAuthor)
-    {
-        // Unknown (null) author sorts as empty bytes — before every non-empty author.
-        if (a.Wall != b.Wall) return a.Wall < b.Wall ? -1 : 1;
-        if (a.Logical != b.Logical) return a.Logical < b.Logical ? -1 : 1;
-        return BytesCompare(aAuthor, bAuthor);
-    }
-
     /// <summary>Total-order compare using NodeId authors (default = unknown/empty).</summary>
     public static int CompareHlc(Hlc a, NodeId aAuthor, Hlc b, NodeId bAuthor)
     {
