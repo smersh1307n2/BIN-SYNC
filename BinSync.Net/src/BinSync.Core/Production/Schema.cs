@@ -78,26 +78,42 @@ public sealed class SchemaRegistry
                 _map[key] = byVer;
             }
 
-            // Collect retired + known from all versions
+            // Validate the complete known version history in version order. Once a field
+            // disappears from a later descriptor (or is explicitly retired), its id
+            // cannot become active again in any subsequent version.
+            var history = byVer.Values
+                .Where(existing => existing.Version != owned.Version)
+                .Append(owned)
+                .OrderBy(existing => existing.Version);
+            var seen = new HashSet<ushort>();
             var retired = new HashSet<ushort>();
-            var everUsed = new HashSet<ushort>();
-            foreach (var existing in byVer.Values)
-            {
-                foreach (var f in existing.RetiredFieldIds) retired.Add(f);
-                foreach (var f in existing.FieldIds) everUsed.Add(f);
-            }
+            var closed = new HashSet<ushort>();
 
-            // New descriptor must not revive a retired id, and must not reclaim an id
-            // that was used in another version unless it is still listed (same field).
-            foreach (var f in owned.FieldIds)
+            foreach (var descriptor in history)
             {
-                if (retired.Contains(f))
-                    throw new ArgumentException($"field 0x{f:X4} is retired and cannot be reused (§18.1)");
-            }
-            foreach (var f in owned.RetiredFieldIds)
-            {
-                if (owned.FieldIds.Contains(f))
-                    throw new ArgumentException($"field 0x{f:X4} cannot be both active and retired");
+                foreach (var fieldId in descriptor.FieldIds)
+                {
+                    if (retired.Contains(fieldId) || closed.Contains(fieldId))
+                        throw new ArgumentException(
+                            $"field 0x{fieldId:X4} was retired or removed and cannot be reused (§18.1)");
+                }
+
+                foreach (var fieldId in descriptor.RetiredFieldIds)
+                {
+                    if (descriptor.FieldIds.Contains(fieldId))
+                        throw new ArgumentException(
+                            $"field 0x{fieldId:X4} cannot be both active and retired");
+                    retired.Add(fieldId);
+                }
+
+                foreach (var fieldId in seen)
+                {
+                    if (!descriptor.FieldIds.Contains(fieldId))
+                        closed.Add(fieldId);
+                }
+
+                foreach (var fieldId in descriptor.FieldIds)
+                    seen.Add(fieldId);
             }
 
             byVer[owned.Version] = owned;

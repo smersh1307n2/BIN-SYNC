@@ -77,6 +77,29 @@ public class SchemaTests
     }
 
     [Fact]
+    public void Field_id_cannot_be_reintroduced_after_disappearing_from_a_later_version()
+    {
+        var registry = new SchemaRegistry();
+        registry.Register(Desc(1, 2, 1, 0x02, 0x100, 0x101));
+        registry.Register(Desc(1, 2, 2, 0x02, 0x101));
+
+        Assert.Throws<ArgumentException>(() =>
+            registry.Register(Desc(1, 2, 3, 0x02, 0x100, 0x101)));
+    }
+
+    [Fact]
+    public void Schema_history_validation_is_independent_of_registration_order()
+    {
+        var registry = new SchemaRegistry();
+        registry.Register(Desc(1, 3, 3, 0x02, 0x100));
+        registry.Register(Desc(1, 3, 1, 0x02, 0x100));
+        registry.Register(Desc(1, 3, 2, 0x02));
+
+        Assert.Throws<ArgumentException>(() =>
+            registry.Register(Desc(1, 3, 4, 0x02, 0x100)));
+    }
+
+    [Fact]
     public void SchemaMap_encode_decode_roundtrip()
     {
         var list = new List<SchemaDescriptor>
