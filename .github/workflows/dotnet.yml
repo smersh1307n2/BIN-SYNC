@@ -64,6 +64,12 @@ jobs:
           --
           DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
 
+      - name: Build and run public samples
+        run: |
+          dotnet run --project samples/TwoNodeLoopback -c Release
+          dotnet run --project samples/TwoNodeTcp -c Release
+          dotnet run --project samples/ScenarioHarness -c Release
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
