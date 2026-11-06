@@ -143,6 +143,9 @@ public sealed partial class Node
                 }
             }
             if (selectedCount == 0) return null;
+            if (cursorStart < 0 || cursorEnd < cursorStart)
+                throw new ArgumentOutOfRangeException(nameof(cursorStart),
+                    "Batch cursors must be non-negative and ordered.");
 
             int? streamAlias = stream == NodeId
                 ? AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1
