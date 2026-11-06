@@ -243,4 +243,53 @@ public sealed class ResourceLimitsAtomicityTests
         Assert.Equal(0, unlimited.MaxRecords);
     }
 
+    [Fact]
+    public void BoundedNode_enforces_seen_change_limit()
+    {
+        using var node = new Node(Fix.Nid(171));
+        var limits = new ResourceLimits { MaxSeenChanges = 1 };
+
+        Assert.True(BoundedNode.WriteField(node, limits, 3, Rid(1), 0x100, [1]));
+        Assert.Throws<SyncException>(() =>
+            BoundedNode.WriteField(node, limits, 3, Rid(1), 0x101, [2]));
+        Assert.Equal(1, node.GetOutboxCount(3));
+        Assert.Single(node.SeenChanges);
+    }
+
+    [Fact]
+    public void BoundedNode_preflight_is_atomic_with_the_write()
+    {
+        using var node = new Node(Fix.Nid(172));
+        var limits = new ResourceLimits
+        {
+            MaxRecords = 1,
+            MaxOutboxEntriesPerNamespace = 0,
+        };
+        var gates = node.EnterAllGates();
+        Exception? writeError = null;
+        var worker = new Thread(() =>
+        {
+            try { BoundedNode.WriteField(node, limits, 3, Rid(1), 0x100, [1]); }
+            catch (Exception ex) { writeError = ex; }
+        }) { IsBackground = true };
+
+        worker.Start();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while ((worker.ThreadState & ThreadState.WaitSleepJoin) == 0 &&
+               stopwatch.Elapsed < TimeSpan.FromSeconds(3))
+            Thread.Sleep(1);
+        Assert.True((worker.ThreadState & ThreadState.WaitSleepJoin) != 0,
+            "Bounded write did not block on the node gate.");
+
+        // This write wins while the bounded writer is waiting. The bounded preflight
+        // must run after the gate is acquired, so it must observe this record.
+        Assert.True(node.WriteField(3, Rid(2), 0x100, [2]));
+        gates.Dispose();
+
+        Assert.True(worker.Join(TimeSpan.FromSeconds(3)));
+        Assert.IsType<SyncException>(writeError);
+        Assert.False(node.TryGetRecord(3, Rid(1), out _));
+        Assert.Equal(1, node.GetRecordCount(3));
+    }
+
 }

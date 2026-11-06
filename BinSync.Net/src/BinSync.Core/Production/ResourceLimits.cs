@@ -118,8 +118,9 @@ public static class BoundedNode
     public static bool WriteField(Node node, ResourceLimits limits,
         int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
-        limits.EnsureStorageCapacity(node);
-        limits.EnsureCanEnqueueOutbox(node, namespaceId);
-        return node.WriteField(namespaceId, recordId, fieldId, value, hlc);
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(limits);
+        ArgumentNullException.ThrowIfNull(value);
+        return node.WriteFieldBounded(limits, namespaceId, recordId, fieldId, value, hlc);
     }
 }
