@@ -364,7 +364,7 @@ public static partial class Ops
             if (full)
             {
                 if (r.Remaining < 16) return false;
-                r.B128();
+                r.RawSpan(16); // Skip the fixed-width author id without allocating a byte array.
             }
             else
             {
