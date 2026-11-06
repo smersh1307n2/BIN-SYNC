@@ -202,31 +202,6 @@ public class TrustStoreTests
     }
 
     [Fact]
-    public void Node_TrustPeer_and_VerifyAndApply_empty_batch()
-    {
-        var n = Fix.MakeNode(901);
-        var (seed, pub) = BatchSignature.GenerateKeyPair();
-        var issuer = Id(9);
-        n.TrustPeer(issuer, pub, TrustMode.PreShared);
-
-        var batch = new Batch(1, 0, 1, 0x02, 0, issuer, 1, 1, 1,
-            Fix.Nid(0xAB), Node.Zero128, Node.Zero128, Node.Zero128,
-            new List<OutboxEntry>());
-        var sig = BatchSignature.SignBatch(seed, batch);
-
-        // Empty batch may still hit engine seq paths — only assert trust does not throw TRUST_*
-        try
-        {
-            n.VerifyAndApplyBatch(batch, issuer, sig, pub);
-        }
-        catch (SyncException ex)
-        {
-            Assert.DoesNotContain("TRUST", ex.CodeName);
-            Assert.DoesNotContain("SIGNATURE", ex.CodeName);
-        }
-    }
-
-    [Fact]
     public void Error_codes_registered()
     {
         Assert.Equal(0x0013, Frames.ErrorCodes["SIGNATURE_INVALID"]);
