@@ -48,6 +48,7 @@ public static class Membership
     public static MembershipMessage Build(Node node, int namespaceId, uint membershipEpoch = 0)
     {
         ArgumentNullException.ThrowIfNull(node);
+        Node.ValidateNamespaceId(namespaceId);
         using var gates = node.EnterAllGates();
         var msg = new MembershipMessage
         {
@@ -85,14 +86,19 @@ public static class Membership
     /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(MembershipMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        Node.ValidateNamespaceId(m.NamespaceId);
+        ArgumentNullException.ThrowIfNull(m.Members);
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U32(m.MembershipEpoch);
         w.Varint((ulong)m.Members.Count);
         foreach (var e in m.Members)
         {
+            if (e.Epoch < 0 || e.NodeId.IsZero)
+                throw new ArgumentException("Membership entries require a non-zero node id and non-negative epoch.", nameof(m));
             w.B128(e.NodeId);
-            w.U32(unchecked((uint)e.Epoch));
+            w.U32((uint)e.Epoch);
             w.U8(e.Flags);
         }
         return w.Value();
@@ -109,7 +115,7 @@ public static class Membership
             MembershipEpoch = r.U32(),
         };
         ulong count = r.Varint();
-        if (count > (ulong)(payload.Length / 6))
+        if (count > (ulong)(payload.Length / 21))
             throw new InvalidDataException("Membership entry count exceeds the available payload.");
         for (int i = 0; i < (int)count; i++)
         {
@@ -137,14 +143,15 @@ public static class Membership
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(remote);
+        Node.ValidateNamespaceId(remote.NamespaceId);
         var entries = remote.Members?.Select(entry => entry is null ? null! : new MembershipEntry
         {
             NodeId = entry.NodeId,
             Epoch = entry.Epoch,
             Flags = entry.Flags,
         }).ToArray() ?? throw new FormatException("Membership entries are missing");
-        if (entries.Any(entry => entry is null))
-            throw new FormatException("Membership contains a null entry");
+        if (entries.Any(entry => entry is null || entry.NodeId.IsZero || entry.Epoch < 0))
+            throw new FormatException("Membership contains an invalid entry");
 
         var ownedMessage = new MembershipMessage
         {

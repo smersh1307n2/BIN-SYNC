@@ -35,6 +35,7 @@ public static class GcNotice
     public static GcNoticeMessage Build(Node node, int namespaceId, ulong tombstoneCutoffWall = 0)
     {
         ArgumentNullException.ThrowIfNull(node);
+        Node.ValidateNamespaceId(namespaceId);
         using var gates = node.EnterAllGates();
         var msg = new GcNoticeMessage
         {
@@ -58,14 +59,19 @@ public static class GcNotice
     /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(GcNoticeMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        Node.ValidateNamespaceId(m.NamespaceId);
+        ArgumentNullException.ThrowIfNull(m.Quarantined);
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U64(m.TombstoneCutoffWall);
         w.Varint((ulong)m.Quarantined.Count);
         foreach (var e in m.Quarantined)
         {
+            if (e.Epoch < 0 || e.NodeId.IsZero)
+                throw new ArgumentException("GC entries require a non-zero node id and non-negative epoch.", nameof(m));
             w.B128(e.NodeId);
-            w.U32(unchecked((uint)e.Epoch));
+            w.U32((uint)e.Epoch);
         }
         return w.Value();
     }
@@ -81,7 +87,7 @@ public static class GcNotice
             TombstoneCutoffWall = r.U64(),
         };
         ulong count = r.Varint();
-        if (count > (ulong)(payload.Length / 5))
+        if (count > (ulong)(payload.Length / 20))
             throw new InvalidDataException("GC quarantine count exceeds the available payload.");
         for (int i = 0; i < (int)count; i++)
         {
@@ -105,13 +111,14 @@ public static class GcNotice
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(remote);
+        Node.ValidateNamespaceId(remote.NamespaceId);
         var entries = remote.Quarantined?.Select(entry => entry is null ? null! : new GcQuarantineEntry
         {
             NodeId = entry.NodeId,
             Epoch = entry.Epoch,
         }).ToArray() ?? throw new FormatException("GC quarantine entries are missing");
-        if (entries.Any(entry => entry is null))
-            throw new FormatException("GC notice contains a null quarantine entry");
+        if (entries.Any(entry => entry is null || entry.NodeId.IsZero || entry.Epoch < 0))
+            throw new FormatException("GC notice contains an invalid quarantine entry");
 
         int added = 0;
         using (node.EnterAllGates())

@@ -132,6 +132,7 @@ public sealed class SchemaRegistry
     /// <summary>Try to resolve a schema definition by namespace, schema id, and version.</summary>
     public bool TryGet(int namespaceId, int schemaId, int version, out SchemaDescriptor? desc)
     {
+        ValidateSchemaKey(namespaceId, schemaId, version);
         lock (_gate)
         {
             desc = null;
@@ -145,6 +146,7 @@ public sealed class SchemaRegistry
     /// <summary>Highest registered version for (ns, schemaId), or null.</summary>
     public int? MaxVersion(int namespaceId, int schemaId)
     {
+        ValidateSchemaKey(namespaceId, schemaId);
         lock (_gate)
         {
             if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
@@ -157,8 +159,19 @@ public sealed class SchemaRegistry
     /// Gate a batch against the registry (§18.2–18.3).
     /// Unknown schema/version → Pending; lower-than-known with different policy → Mismatch.
     /// </summary>
+    private static void ValidateSchemaKey(int namespaceId, int schemaId, int? version = null, int? mergePolicy = null)
+    {
+        Node.ValidateNamespaceId(namespaceId);
+        if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
+        if (version.HasValue && (uint)version.Value > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(version));
+        if (mergePolicy.HasValue && (uint)mergePolicy.Value > byte.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(mergePolicy));
+    }
+
     private SchemaOutcome EvaluateLocked(int namespaceId, int schemaId, int schemaVersion, int mergePolicy, out string? detail)
     {
+        ValidateSchemaKey(namespaceId, schemaId, schemaVersion, mergePolicy);
         detail = null;
         if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
         {
@@ -289,20 +302,26 @@ public static class SchemaMap
     public static List<SchemaDescriptor> Decode(ReadOnlySpan<byte> payload)
     {
         var r = new Reader(payload.ToArray());
-        int n = (int)r.Varint();
-        var list = new List<SchemaDescriptor>(n);
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(payload.Length / 9))
+            throw new InvalidDataException("Schema count exceeds the available payload.");
+        var list = new List<SchemaDescriptor>((int)count);
+        for (int i = 0; i < (int)count; i++)
         {
             int ns = r.U16();
             int sid = r.U16();
             int ver = r.U16();
             int policy = r.U8();
-            int fc = (int)r.Varint();
+            ulong fieldCount = r.Varint();
+            if (fieldCount > (ulong)(payload.Length / 2))
+                throw new InvalidDataException("Schema field count exceeds the available payload.");
             var fields = new HashSet<ushort>();
-            for (int j = 0; j < fc; j++) fields.Add(r.U16());
-            int rc = (int)r.Varint();
+            for (int j = 0; j < (int)fieldCount; j++) fields.Add(r.U16());
+            ulong retiredCount = r.Varint();
+            if (retiredCount > (ulong)(payload.Length / 2))
+                throw new InvalidDataException("Schema retired-field count exceeds the available payload.");
             var retired = new HashSet<ushort>();
-            for (int j = 0; j < rc; j++) retired.Add(r.U16());
+            for (int j = 0; j < (int)retiredCount; j++) retired.Add(r.U16());
             list.Add(new SchemaDescriptor
             {
                 NamespaceId = ns,
@@ -313,6 +332,8 @@ public static class SchemaMap
                 RetiredFieldIds = retired,
             });
         }
+        if (!r.Eof())
+            throw new InvalidDataException("Schema map payload contains trailing bytes.");
         return list;
     }
 

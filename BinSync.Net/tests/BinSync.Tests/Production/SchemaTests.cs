@@ -130,6 +130,22 @@ public class SchemaTests
     }
 
     [Fact]
+    public void SchemaMap_decode_rejects_impossible_counts_and_trailing_data()
+    {
+        Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(new byte[] { 1 }));
+        Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(new byte[] { 0, 0xFF }));
+    }
+
+    [Fact]
+    public void SchemaRegistry_rejects_out_of_range_lookup_keys()
+    {
+        var registry = new SchemaRegistry();
+        Assert.Throws<ArgumentOutOfRangeException>(() => registry.TryGet(1, 65536, 1, out _));
+        Assert.Throws<ArgumentOutOfRangeException>(() => registry.MaxVersion(-1, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => registry.Evaluate(1, 1, 65536, 0, out _));
+    }
+
+    [Fact]
     public void SchemaMap_encode_decode_roundtrip()
     {
         var list = new List<SchemaDescriptor>
