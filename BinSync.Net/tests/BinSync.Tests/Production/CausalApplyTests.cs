@@ -99,6 +99,20 @@ public class CausalApplyTests
         Assert.Equal(0x0012, ex.Code);
         Assert.Equal(1, tracker.PendingCount);
         Assert.False(tracker.IsKnown(changeId));
+
+        var originalPayload = new byte[] { 0x10, 0x20 };
+        entry.Payload = originalPayload;
+        entry.CausalDeps.Clear();
+        entry.ChangeId = BatchId.From(Id(0x21));
+        originalPayload[0] = 0xFF;
+
+        tracker.NoteApplied(parent);
+        var released = n.DrainCausal();
+        Assert.Single(released);
+        var held = Assert.IsType<HeldCausalBatch>(released[0].Op.Payload);
+        Assert.Equal(BatchId.From(changeId), held.Batch.Entries[0].ChangeId);
+        Assert.Equal(BatchId.From(parent), Assert.Single(held.Batch.Entries[0].CausalDeps));
+        Assert.Equal(new byte[] { 0x10, 0x20 }, held.Batch.Entries[0].Payload.ToArray());
     }
 
     [Fact]

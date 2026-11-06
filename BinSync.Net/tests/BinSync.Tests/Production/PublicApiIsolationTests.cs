@@ -112,4 +112,19 @@ public sealed class PublicApiIsolationTests
         Assert.Equal("original", System.Text.Encoding.UTF8.GetString(Ops.DecodeOp(outbox.Payload).Op is OpFieldWrite op ? op.Value : Array.Empty<byte>()));
     }
 
+    [Fact]
+    public void SyncException_CopiesBatchIdOnInputAndOutput()
+    {
+        var input = new byte[16];
+        input[0] = 0x42;
+        var exception = new SyncException("SEQ_GAP", input);
+        input[0] = 0x11;
+
+        var exposed = exception.BatchId;
+        Assert.NotNull(exposed);
+        Assert.Equal((byte)0x42, exposed![0]);
+        exposed[0] = 0x22;
+        Assert.Equal((byte)0x42, exception.BatchId![0]);
+    }
+
 }

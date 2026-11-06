@@ -47,7 +47,13 @@ public sealed partial class Node
                     if (outcome == CausalOutcome.Pending)
                     {
                         // KЗ4: hold full batch for later DrainAndRetryCausal
-                        var held = new HeldCausalBatch { Batch = batch, SenderPeer = senderPeer };
+                        // The tracker retains this batch for a later retry. Never retain
+                        // caller-owned mutable lists or payload buffers across the API boundary.
+                        var held = new HeldCausalBatch
+                        {
+                            Batch = CloneBatchForPublicRead(batch),
+                            SenderPeer = senderPeer,
+                        };
                         foreach (var e in batch.Entries)
                             tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
                     }

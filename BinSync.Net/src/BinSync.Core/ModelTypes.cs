@@ -16,8 +16,9 @@ public class SyncException : Exception
         ? (ushort)ErrorCode
         : (Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0);
 
-    /// <summary>Optional batch id (wire b128) associated with the error.</summary>
-    public byte[]? BatchId { get; }
+    private readonly byte[]? _batchId;
+    /// <summary>Optional batch id (wire b128) associated with the error. Returns an owned copy.</summary>
+    public byte[]? BatchId => _batchId?.ToArray();
 
     /// <summary>Create with code name used as the exception message.</summary>
     public SyncException(string codeName, byte[]? batchId = null)
@@ -25,7 +26,7 @@ public class SyncException : Exception
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        BatchId = batchId;
+        _batchId = batchId?.ToArray();
     }
 
     /// <summary>Create with typed error code (message = symbolic name when known).</summary>
@@ -34,7 +35,7 @@ public class SyncException : Exception
     {
         ErrorCode = errorCode;
         CodeName = SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString();
-        BatchId = batchId;
+        _batchId = batchId?.ToArray();
     }
 
     /// <summary>Create with code name and typed batch id.</summary>
@@ -47,7 +48,7 @@ public class SyncException : Exception
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        BatchId = batchId;
+        _batchId = batchId?.ToArray();
     }
 
     /// <summary>Create with message and inner exception.</summary>
@@ -56,7 +57,7 @@ public class SyncException : Exception
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        BatchId = batchId;
+        _batchId = batchId?.ToArray();
     }
 }
 
@@ -135,7 +136,7 @@ public sealed partial class Batch
         IssuerEpoch = issuerEpoch;
         CursorStart = cstart;
         CursorEnd = cend;
-        BatchId = batchId;
+        _batchId = batchId?.ToArray();
         PrevBatchDigest = prev;
         RecordsRoot = root;
         BatchDigest = digest;
