@@ -2,8 +2,8 @@
 
 **Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
 **Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged)  
-**CI:** unit tests, fuzz/lab, and build/run of all three public samples are required checks.  
-**Audit status:** in progress; no percentage-based spec-parity claim is made.
+**CI:** run #1276 successful — 588/588 tests, fuzz/lab 31/31, all three public samples pass, line coverage 70.7%.  
+**Audit status:** stream/fragment binding audited; FLD-DB storage boundary reached and documented. Full normative §§4–18 audit remains in progress; no percentage-based spec-parity claim is made.
 
 Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
@@ -41,11 +41,14 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 - Long identity input is normalized to exactly 16 bytes before wire encoding.
 - Flow Control is negotiated by capability intersection; payload credits are reserved atomically per stream and replenished only after receive dispatch. Oversized logical frames use bounded fragment reassembly.
 - Unsupported merge policy codes are rejected by ApplyBatch; legacy policy 0 is treated as LWW_FIELD, not as a schema-gate wildcard.
+- Stream binding follows §3.7: control-plane frames use stream 0; namespace frames use `0x0001_0000 | namespaceId`; ACK shares its DELTA_BATCH namespace stream; WINDOW_UPDATE targets the credited stream. Receive paths reject mismatches before applying payloads.
+- IBLT response receive now requires the expected namespace. MEMBERSHIP, GC_NOTICE and SCHEMA_MAP use the control stream.
+- Fragment reassembly preserves frame type/stream/base sequence/flags, supports interleaved logical messages, rejects cross-stream message-id reuse, trailing fragment bytes and conflicting duplicate parts; raw receive returns the reconstructed `Frame`.
 
 ## Release gates still open
 
-- Complete normative audit of §§4–18 and cross-check every normative scenario against executable tests.
-- Finish review of merge-policy helper/API boundaries and schema behavior.
+- Complete normative audit of remaining §§4–18 and cross-check every normative scenario against executable tests.
+- Implement the proposed FLD-DB boundary in `docs/FLD-DB-INTEGRATION-CONTRACT.md`: durable atomic remote batch apply, inbox/SeenChanges, relay journal, fenced Outbox lease and consistent read snapshots. Current `FldDatabase.ApplyRemote(...); Commit()` is explicitly not a safe integration path.
 - Confirm final documentation/specification parity on the complete branch diff.
 - Review PR #16 diff and CI once more; only then request explicit approval to merge into main.
 
