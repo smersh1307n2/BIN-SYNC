@@ -34,6 +34,10 @@
 - CanonicalB128 now always returns exactly 16 bytes, including long-input domain-hash normalization.
 - ApplyBatch rejects merge policies not supported by the runtime; legacy policy 0 normalizes to LWW_FIELD for schema gating.
 - All three public samples were aligned to the current session API and are built/executed in CI.
+- Canonicalize and harden CRDT payload decoding: reject duplicate/unsorted author components, duplicate SET_OR dots, impossible counts and trailing bytes; detect arithmetic overflow.
+- Reject conflicting immutable SEQ_FRACTIONAL/BLOB_REF identities rather than making merge results operand-order dependent.
+- Harden SCHEMA_MAP against duplicate versions/field IDs, noncanonical field order, active/retired overlap and malformed learned descriptors.
+- Normative protocol specification advanced to v2.4.17; §§8.4–8.8 and §18.4 now define the canonical CRDT and schema-map payload contracts.
 
 ---
 

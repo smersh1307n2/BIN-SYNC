@@ -204,10 +204,13 @@ public static class SetOr
             .ThenBy(a => a.Actor, ByteArrayComparer.Instance)
             .ThenBy(a => a.Seq)
             .ToList();
-        var addDots = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
-        foreach (var add in addSorted)
-            if (!addDots.Add((add.Actor, add.Seq)))
-                throw new ArgumentException("SET_OR add dots must be unique.", nameof(adds));
+        if (addSorted.Count > 1)
+        {
+            var addDots = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
+            foreach (var add in addSorted)
+                if (!addDots.Add((add.Actor, add.Seq)))
+                    throw new ArgumentException("SET_OR add dots must be unique.", nameof(adds));
+        }
 
         var remSorted = removes
             .Select(d => new Dot { Actor = Codec.CanonicalB128(d.Actor), Seq = d.Seq })
@@ -238,7 +241,9 @@ public static class SetOr
         if (addCount > (ulong)(r.Remaining / 25))
             throw new InvalidDataException("Invalid SET_OR add count.");
         var adds = new List<Add>((int)addCount);
-        var addDots = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
+        HashSet<(byte[], ulong)>? addDots = addCount > 1
+            ? new HashSet<(byte[], ulong)>(ActorSeqEq.Instance)
+            : null;
         Add? previousAdd = null;
         for (int i = 0; i < (int)addCount; i++)
         {
@@ -251,7 +256,7 @@ public static class SetOr
                 if (order >= 0)
                     throw new InvalidDataException("SET_OR adds must be strictly ordered and unique.");
             }
-            if (!addDots.Add((add.Actor, add.Seq)))
+            if (addDots is not null && !addDots.Add((add.Actor, add.Seq)))
                 throw new InvalidDataException("SET_OR add dots must be unique.");
             adds.Add(add);
             previousAdd = add;
