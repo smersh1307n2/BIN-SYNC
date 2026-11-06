@@ -225,4 +225,22 @@ public sealed class ResourceLimitsAtomicityTests
         Assert.Empty(receiver.PeerStates);
         Assert.Equal(long.MaxValue, receiver._outboxSeq[(sender.NodeId, 3)]);
     }
+    [Fact]
+    public void Resource_limits_reject_negative_caps_but_allow_zero_as_unlimited()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxOutboxEntriesPerNamespace = -1 }; });
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxSeenChanges = -1 }; });
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxRecords = -1 }; });
+
+        var unlimited = new ResourceLimits
+        {
+            MaxOutboxEntriesPerNamespace = 0,
+            MaxSeenChanges = 0,
+            MaxRecords = 0,
+        };
+        Assert.Equal(0, unlimited.MaxOutboxEntriesPerNamespace);
+        Assert.Equal(0, unlimited.MaxSeenChanges);
+        Assert.Equal(0, unlimited.MaxRecords);
+    }
+
 }

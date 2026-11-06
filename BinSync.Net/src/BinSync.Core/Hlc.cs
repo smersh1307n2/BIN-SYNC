@@ -63,6 +63,8 @@ public class HlcClock
     /// <summary>Mutable HLC state with skew protection for send and receive paths.</summary>
     public HlcClock(Func<long>? nowFn = null, long maxSkewUs = 60_000_000)
     {
+        if (maxSkewUs < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxSkewUs));
         NowFn = nowFn ?? UnixTimeMicroseconds;
         MaxSkewUs = maxSkewUs;
     }

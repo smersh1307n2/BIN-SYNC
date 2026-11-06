@@ -185,6 +185,13 @@ public sealed partial class Node : IDisposable
     public Node(NodeId? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000, ResourceLimits? limits = null)
     {
+        if (nodeId.HasValue && nodeId.Value.IsZero)
+            throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
+        if (epoch < 0)
+            throw new ArgumentOutOfRangeException(nameof(epoch));
+        if (maxSkewUs < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxSkewUs));
+
         NodeId = nodeId ?? NodeId.From(Guid.NewGuid().ToByteArray());
         Epoch = epoch;
         Clock = new HlcClock(nowFn, maxSkewUs);

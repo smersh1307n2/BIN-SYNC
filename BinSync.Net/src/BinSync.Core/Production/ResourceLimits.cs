@@ -8,17 +8,54 @@ namespace BinSync;
 /// </summary>
 public sealed class ResourceLimits
 {
+    private int _maxOutboxEntriesPerNamespace = 100_000;
+    private int _maxSeenChanges = 1_000_000;
+    private int _maxRecords;
+
     /// <summary>Default resource-limit configuration.</summary>
     public static ResourceLimits Default { get; } = new();
 
     /// <summary>Max outbox entries per namespace (0 = unlimited).</summary>
-    public int MaxOutboxEntriesPerNamespace { get; init; } = 100_000;
+    public int MaxOutboxEntriesPerNamespace
+    {
+        get
+        {
+            return _maxOutboxEntriesPerNamespace;
+        }
+        init
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxOutboxEntriesPerNamespace));
+            _maxOutboxEntriesPerNamespace = value;
+        }
+    }
 
     /// <summary>Max SeenChanges provenance entries (0 = unlimited).</summary>
-    public int MaxSeenChanges { get; init; } = 1_000_000;
+    public int MaxSeenChanges
+    {
+        get
+        {
+            return _maxSeenChanges;
+        }
+        init
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxSeenChanges));
+            _maxSeenChanges = value;
+        }
+    }
 
     /// <summary>Max records held in storage across all namespaces (0 = unlimited).</summary>
-    public int MaxRecords { get; init; } = 0;
+    public int MaxRecords
+    {
+        get
+        {
+            return _maxRecords;
+        }
+        init
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxRecords));
+            _maxRecords = value;
+        }
+    }
 
     /// <summary>Throw if enqueuing another outbox entry would exceed configured resource limits.</summary>
     public void EnsureCanEnqueueOutbox(Node node, int namespaceId)

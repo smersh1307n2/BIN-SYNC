@@ -540,4 +540,13 @@ public sealed class PublicApiIsolationTests
         Assert.Equal((byte)0x31, node.NodeId.ToArray()[0]);
     }
 
+    [Fact]
+    public void Node_and_clock_constructors_reject_invalid_configuration()
+    {
+        Assert.Throws<ArgumentException>(() => { _ = new Node((NodeId?)default(NodeId)); });
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new Node(epoch: -1); });
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new Node(maxSkewUs: -1); });
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new HlcClock(maxSkewUs: -1); });
+    }
+
 }
