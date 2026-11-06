@@ -73,18 +73,23 @@ public static partial class Reconcile
     {
         if (maxRecords <= 0 || maxRecords > MaxSnapshotRecordsPerChunk)
             throw new ArgumentOutOfRangeException(nameof(maxRecords));
-        using var gates = node.EnterAllGates();
+        var ownedPrefix = prefix is { Length: > 0 } ? prefix.ToArray() : null;
         var records = new List<SnapshotRecord>();
-        if (node.Storage.TryGetValue(namespaceId, out var map))
+        // Copy the complete record graph under the ordered node gates. Chunk packing
+        // and size accounting are CPU-only work and must not extend the lock window.
+        using (node.EnterAllGates())
         {
-            foreach (var (rid, rec) in map)
+            if (node.Storage.TryGetValue(namespaceId, out var map))
             {
-                if (prefix is { Length: > 0 })
+                foreach (var (rid, rec) in map)
                 {
-                    var key = BucketAccumulator.BucketKey(rid);
-                    if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
-                        continue;
-                }
+                    if (ownedPrefix is not null)
+                    {
+                        var key = BucketAccumulator.BucketKey(rid);
+                        if (ownedPrefix.Length > key.Length ||
+                            !key.AsSpan(0, ownedPrefix.Length).SequenceEqual(ownedPrefix))
+                            continue;
+                    }
                 var sr = new SnapshotRecord
                 {
                     RecordId = rid,
@@ -115,6 +120,7 @@ public static partial class Reconcile
                     }
                 }
                 records.Add(sr);
+                }
             }
         }
 
