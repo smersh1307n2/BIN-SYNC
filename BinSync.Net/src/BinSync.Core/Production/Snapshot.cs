@@ -5,51 +5,51 @@ namespace BinSync;
 public sealed class SnapshotField
 {
     /// <summary>Field identifier within a record.</summary>
-    public ushort FieldId;
+    public ushort FieldId { get; set; }
     /// <summary>True when this row is a field tombstone rather than a live value.</summary>
-    public bool IsTombstone;
+    public bool IsTombstone { get; set; }
     /// <summary>HLC wall-clock component in microseconds.</summary>
-    public ulong Wall;
+    public ulong Wall { get; set; }
     /// <summary>HLC logical counter component.</summary>
-    public uint Logical;
+    public uint Logical { get; set; }
     /// <summary>Durable author of the field or lifecycle entry in a snapshot record.</summary>
-    public byte[] AuthorNodeId = Array.Empty<byte>();
+    public NodeId AuthorNodeId { get; set; }
     /// <summary>Key epoch associated with the field write.</summary>
-    public ushort KeyEpoch;
+    public ushort KeyEpoch { get; set; }
     /// <summary>Return a copy of the written buffer as a new byte array.</summary>
-    public byte[] Value = Array.Empty<byte>();
+    public byte[] Value { get; set; } = Array.Empty<byte>();
 }
 
 /// <summary>One record in a SNAPSHOT_CHUNK.</summary>
 public sealed class SnapshotRecord
 {
     /// <summary>128-bit record identity with value equality.</summary>
-    public byte[] RecordId = Array.Empty<byte>();
+    public RecordId RecordId { get; set; }
     /// <summary>Field snapshots included for this record.</summary>
-    public List<SnapshotField> Fields = new();
+    public List<SnapshotField> Fields { get; set; } = new();
     /// <summary>Whether the record has an explicit lifecycle HLC.</summary>
-    public bool HasLifecycle;
+    public bool HasLifecycle { get; set; }
     /// <summary>Lifecycle byte: alive or tombstoned.</summary>
-    public byte LifecycleValue = Model.Alive;
+    public byte LifecycleValue { get; set; } = Model.Alive;
     /// <summary>Wall component of the record lifecycle HLC.</summary>
-    public ulong LifecycleWall;
+    public ulong LifecycleWall { get; set; }
     /// <summary>Logical component of the record lifecycle HLC.</summary>
-    public uint LifecycleLogical;
+    public uint LifecycleLogical { get; set; }
     /// <summary>Author of the last record-level lifecycle change.</summary>
-    public byte[] LifecycleAuthor = Array.Empty<byte>();
+    public NodeId LifecycleAuthor { get; set; }
 }
 
 /// <summary>Decoded SNAPSHOT_CHUNK payload.</summary>
 public sealed class SnapshotChunkMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
-    public int NamespaceId;
+    public int NamespaceId { get; set; }
     /// <summary>Zero-based index of this snapshot chunk.</summary>
-    public uint ChunkIndex;
+    public uint ChunkIndex { get; set; }
     /// <summary>Total number of chunks in the snapshot.</summary>
-    public uint ChunkCount = 1;
+    public uint ChunkCount { get; set; } = 1;
     /// <summary>Records carried in this snapshot chunk.</summary>
-    public List<SnapshotRecord> Records = new();
+    public List<SnapshotRecord> Records { get; set; } = new();
 }
 
 /// <summary>State-digest / NEED_RANGE / NEED_KEYS anti-entropy helpers.</summary>
@@ -87,19 +87,19 @@ public static partial class Reconcile
                 }
                 var sr = new SnapshotRecord
                 {
-                    RecordId = rid.ToArray(),
+                    RecordId = rid,
                     HasLifecycle = rec.LifecycleHlc is not null,
                     LifecycleValue = rec.LifecycleValue,
                     LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
                     LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
-                    LifecycleAuthor = (rec.LifecycleAuthor ?? Node.Zero128).ToArray(),
+                    LifecycleAuthor = rec.LifecycleAuthor ?? default,
                 };
                 foreach (var (fid, fs) in rec.State)
                 {
                     sr.Fields.Add(new SnapshotField
                     {
                         FieldId = fid, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical,
-                        AuthorNodeId = fs.AuthorNodeId.ToArray(), KeyEpoch = fs.KeyEpoch, Value = fs.Value.ToArray(),
+                        AuthorNodeId = fs.AuthorNodeId, KeyEpoch = fs.KeyEpoch, Value = fs.Value.ToArray(),
                     });
                 }
                 if (rec.HasFieldTombs)
@@ -109,7 +109,7 @@ public static partial class Reconcile
                         sr.Fields.Add(new SnapshotField
                         {
                             FieldId = fid, IsTombstone = true, Wall = fs.Timestamp.Wall,
-                            Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId.ToArray(),
+                            Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId,
                             KeyEpoch = fs.KeyEpoch, Value = Array.Empty<byte>(),
                         });
                     }
@@ -187,7 +187,7 @@ public static partial class Reconcile
         w.Varint((ulong)m.Records.Count);
         foreach (var r in m.Records)
         {
-            w.B128(Codec.CanonicalB128(r.RecordId));
+            w.B128(r.RecordId);
             w.Varint((ulong)r.Fields.Count);
             foreach (var f in r.Fields)
             {
@@ -195,7 +195,7 @@ public static partial class Reconcile
                 w.U8(f.IsTombstone ? (byte)1 : (byte)0);
                 w.U64(f.Wall);
                 w.U32(f.Logical);
-                w.B128(Codec.CanonicalB128(f.AuthorNodeId));
+                w.B128(f.AuthorNodeId);
                 w.U16(f.KeyEpoch);
                 w.Bytes(f.Value);
             }
@@ -203,7 +203,7 @@ public static partial class Reconcile
             w.U8(r.LifecycleValue);
             w.U64(r.LifecycleWall);
             w.U32(r.LifecycleLogical);
-            w.B128(Codec.CanonicalB128(r.LifecycleAuthor));
+            w.B128(r.LifecycleAuthor);
         }
         return w.Value();
     }
@@ -228,7 +228,7 @@ public static partial class Reconcile
         int totalFields = 0;
         for (int i = 0; i < n; i++)
         {
-            var sr = new SnapshotRecord { RecordId = r.B128() };
+            var sr = new SnapshotRecord { RecordId = r.ReadRecordId() };
             ulong fieldCount = r.Varint();
             if (fieldCount > (ulong)(MaxSnapshotFieldsPerChunk - totalFields))
                 throw new FormatException("Snapshot chunk has too many fields");
@@ -240,7 +240,7 @@ public static partial class Reconcile
                 bool tombstone = r.U8() switch { 0 => false, 1 => true, _ => throw new FormatException("Invalid snapshot field flags") };
                 ulong wall = r.U64();
                 uint logical = r.U32();
-                byte[] author = r.B128();
+                NodeId author = r.ReadNodeId();
                 ushort keyEpoch = r.U16();
                 ulong valueLength = r.Varint();
                 if (valueLength > int.MaxValue || valueLength > (ulong)r.Remaining)
@@ -260,7 +260,7 @@ public static partial class Reconcile
             sr.LifecycleValue = r.U8();
             sr.LifecycleWall = r.U64();
             sr.LifecycleLogical = r.U32();
-            sr.LifecycleAuthor = r.B128();
+            sr.LifecycleAuthor = r.ReadNodeId();
             m.Records.Add(sr);
         }
         if (!r.Eof())
@@ -279,21 +279,57 @@ public static partial class Reconcile
         return ApplySnapshotChunks(node, new[] { chunk });
     }
 
+    private static SnapshotChunkMessage CloneSnapshotChunk(SnapshotChunkMessage? source)
+    {
+        if (source is null) return null!;
+        return new SnapshotChunkMessage
+        {
+            NamespaceId = source.NamespaceId,
+            ChunkIndex = source.ChunkIndex,
+            ChunkCount = source.ChunkCount,
+            Records = source.Records is null ? null! : source.Records.Select(record =>
+                record is null ? null! : new SnapshotRecord
+                {
+                    RecordId = record.RecordId,
+                    Fields = record.Fields is null ? null! : record.Fields.Select(field =>
+                        field is null ? null! : new SnapshotField
+                        {
+                            FieldId = field.FieldId,
+                            IsTombstone = field.IsTombstone,
+                            Wall = field.Wall,
+                            Logical = field.Logical,
+                            AuthorNodeId = field.AuthorNodeId,
+                            KeyEpoch = field.KeyEpoch,
+                            Value = field.Value is null ? null! : field.Value.ToArray(),
+                        }).ToList(),
+                    HasLifecycle = record.HasLifecycle,
+                    LifecycleValue = record.LifecycleValue,
+                    LifecycleWall = record.LifecycleWall,
+                    LifecycleLogical = record.LifecycleLogical,
+                    LifecycleAuthor = record.LifecycleAuthor,
+                }).ToList(),
+        };
+    }
+
     /// <summary>Validate and atomically publish a complete ordered snapshot transfer.</summary>
     public static int ApplySnapshotChunks(Node node, IReadOnlyList<SnapshotChunkMessage> chunks)
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(chunks);
-        if (chunks.Count == 0) throw new FormatException("Snapshot transfer is empty");
-        var first = chunks[0];
-        if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || chunks.Count != first.ChunkCount)
+        var input = chunks.ToArray();
+        if (input.Length == 0) throw new FormatException("Snapshot transfer is empty");
+        // The DTO graph is caller-owned and mutable. Detach it before validation so
+        // concurrent caller edits cannot change the values applied after preflight.
+        var ownedChunks = input.Select(CloneSnapshotChunk).ToArray();
+        var first = ownedChunks[0] ?? throw new FormatException("Snapshot chunk is null");
+        if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || ownedChunks.Length != first.ChunkCount)
             throw new FormatException("Snapshot transfer is incomplete or exceeds protocol limits");
 
         // Validate the complete object graph before taking locks or touching live state.
         // Public DTOs can be constructed in-process and are not necessarily decoder output.
-        for (int i = 0; i < chunks.Count; i++)
+        for (int i = 0; i < ownedChunks.Length; i++)
         {
-            var chunk = chunks[i] ?? throw new FormatException("Snapshot chunk is null");
+            var chunk = ownedChunks[i] ?? throw new FormatException("Snapshot chunk is null");
             if (chunk.NamespaceId != first.NamespaceId ||
                 chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != (uint)i)
                 throw new FormatException("Snapshot chunk sequence mismatch");
@@ -303,7 +339,7 @@ public static partial class Reconcile
             int totalFields = 0;
             foreach (var rec in chunk.Records)
             {
-                if (rec is null || rec.RecordId is null || rec.RecordId.Length != 16 || rec.Fields is null)
+                if (rec is null || rec.Fields is null)
                     throw new FormatException("Invalid snapshot record");
                 if (rec.Fields.Count > MaxSnapshotFieldsPerChunk - totalFields)
                     throw new FormatException("Snapshot chunk has too many fields");
@@ -311,16 +347,14 @@ public static partial class Reconcile
 
                 foreach (var field in rec.Fields)
                 {
-                    if (field is null || field.AuthorNodeId is null || field.AuthorNodeId.Length != 16 ||
-                        field.Value is null || (field.IsTombstone && field.Value.Length != 0) ||
+                    if (field is null || field.Value is null || (field.IsTombstone && field.Value.Length != 0) ||
                         (!field.IsTombstone && field.FieldId == Model.LifecycleFieldId &&
                          field.Value.Length > 0 && field.Value[0] is not Model.Alive and not Model.Dead))
                         throw new FormatException("Invalid snapshot field");
                 }
 
                 if (rec.HasLifecycle &&
-                    (rec.LifecycleAuthor is null || rec.LifecycleAuthor.Length != 16 ||
-                     rec.LifecycleValue is not Model.Alive and not Model.Dead))
+                    (rec.LifecycleValue is not Model.Alive and not Model.Dead))
                     throw new FormatException("Invalid snapshot lifecycle");
             }
         }
@@ -330,11 +364,11 @@ public static partial class Reconcile
         using var gates = node.EnterAllGates();
         var staged = new Dictionary<RecordId, Record>();
         int applied = 0;
-        foreach (var chunk in chunks)
+        foreach (var chunk in ownedChunks)
         {
             foreach (var rec in chunk.Records)
             {
-                var recordId = RecordId.From(rec.RecordId);
+                var recordId = rec.RecordId;
                 if (!staged.TryGetValue(recordId, out var target))
                 {
                     target = node.Storage.TryGetValue(chunk.NamespaceId, out var liveStore) &&
@@ -347,7 +381,7 @@ public static partial class Reconcile
                 foreach (var field in rec.Fields)
                 {
                     var hlc = new Hlc(field.Wall, field.Logical);
-                    var author = NodeId.From(field.AuthorNodeId);
+                    var author = field.AuthorNodeId;
                     bool changed;
                     if (field.IsTombstone)
                     {
@@ -369,7 +403,7 @@ public static partial class Reconcile
 
                 if (rec.HasLifecycle && Merge.ApplyLifecycle(target,
                     new Hlc(rec.LifecycleWall, rec.LifecycleLogical),
-                    NodeId.From(rec.LifecycleAuthor), rec.LifecycleValue))
+                    rec.LifecycleAuthor, rec.LifecycleValue))
                     applied++;
             }
         }

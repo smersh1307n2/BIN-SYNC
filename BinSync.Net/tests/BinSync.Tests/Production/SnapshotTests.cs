@@ -244,6 +244,34 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void ApplySnapshotChunks_CopiesCallerOwnedValueBuffersAndCollections()
+    {
+        var target = Fix.MakeNode(72);
+        var recordId = RecordId.From(Fix.Rid(260));
+        var author = Fix.MakeNode(73).NodeId;
+        var callerValue = new byte[] { 1, 2, 3 };
+        var field = new SnapshotField
+        {
+            FieldId = 0x100,
+            Wall = 10,
+            AuthorNodeId = author,
+            Value = callerValue,
+        };
+        var record = new SnapshotRecord { RecordId = recordId, Fields = new List<SnapshotField> { field } };
+        var chunk = new SnapshotChunkMessage { NamespaceId = 1, Records = new List<SnapshotRecord> { record } };
+
+        Reconcile.ApplySnapshotChunks(target, new[] { chunk });
+
+        callerValue[0] = 0xFF;
+        field.Value[1] = 0xEE;
+        record.Fields.Clear();
+        chunk.Records.Clear();
+
+        Assert.True(target.TryGetField(1, recordId, 0x100, out var stored));
+        Assert.Equal(new byte[] { 1, 2, 3 }, stored!.Value);
+    }
+
+    [Fact]
     public void ApplySnapshotChunks_is_atomic_when_a_late_record_is_invalid()
     {
         var target = Fix.MakeNode(66);
@@ -251,7 +279,7 @@ public class SnapshotTests
         target.WriteField(1, existingId, 0x100, new byte[] { 0x11 });
         var original = target.Storage[1][existingId].State[0x100].Value.ToArray();
         var newId = Fix.Rid(241);
-        var author = Fix.MakeNode(67).NodeId.ToArray();
+        var author = Fix.MakeNode(67).NodeId
 
         var chunks = new[]
         {
@@ -262,7 +290,7 @@ public class SnapshotTests
                 {
                     new()
                     {
-                        RecordId = existingId.ToArray(),
+                        RecordId = RecordId.From(existingId),
                         Fields = new List<SnapshotField>
                         {
                             new() { FieldId = 0x100, Wall = 10, AuthorNodeId = author, Value = new byte[] { 0x22 } }
@@ -277,10 +305,10 @@ public class SnapshotTests
                 {
                     new()
                     {
-                        RecordId = newId.ToArray(),
+                        RecordId = RecordId.From(newId),
                         Fields = new List<SnapshotField>
                         {
-                            new() { FieldId = 0x100, Wall = 11, AuthorNodeId = new byte[15], Value = new byte[] { 0x33 } }
+                            new() { FieldId = 0x100, Wall = 11, AuthorNodeId = author, Value = null! }
                         }
                     }
                 }
@@ -304,10 +332,10 @@ public class SnapshotTests
             {
                 new()
                 {
-                    RecordId = rid.ToArray(),
+                    RecordId = RecordId.From(rid),
                     Fields = new List<SnapshotField>
                     {
-                        new() { FieldId = 0x100, Wall = 1, AuthorNodeId = Fix.MakeNode(69).NodeId.ToArray(), Value = new byte[] { 1 } }
+                        new() { FieldId = 0x100, Wall = 1, AuthorNodeId = Fix.MakeNode(69).NodeId, Value = new byte[] { 1 } }
                     }
                 }
             }

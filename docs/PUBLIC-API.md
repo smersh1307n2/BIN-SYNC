@@ -30,7 +30,7 @@ Breaking hygiene (no wire/protocol change):
 
 | Area | Contract |
 |------|----------|
-| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `Record`, … |
+| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `Record`, `SnapshotField`, `SnapshotRecord`, `SnapshotChunkMessage`, `GcNoticeMessage`, … |
 | Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains available for identity types; use `From(...)` / `ToArray()` when an explicit boundary is clearer. |
 | `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
 | Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. Internal peer cursor state is not exposed. |
@@ -137,7 +137,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 `SyncSession.RunReconciliationAsync<TResult>` provides an exclusive transaction for custom multi-frame reconciliation protocols. Its `ReconciliationOperations` context exposes digest, NEED_RANGE, NEED_KEYS, and snapshot primitives without reacquiring their frame gates. The context is valid only during the callback; using it afterward throws `ObjectDisposedException`. Batch push/receive remains independent.
 
-`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific).
+`Reconcile` ladder messages, `Iblt`, `GcNotice`, `Membership` / roster frames, snapshot build/apply, AutoReconcile / IBLT over generic `SyncSession` (not TCP-specific). Snapshot DTOs use `RecordId` / `NodeId`; `ApplySnapshotChunks` detaches caller-owned DTO graphs before validation and publication.
 
 ### Session / transport
 

@@ -47,6 +47,16 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void SnapshotDtos_UseTypedIdentitiesAndProperties()
+    {
+        Assert.Equal(typeof(RecordId), typeof(SnapshotRecord).GetProperty(nameof(SnapshotRecord.RecordId))!.PropertyType);
+        Assert.Equal(typeof(NodeId), typeof(SnapshotRecord).GetProperty(nameof(SnapshotRecord.LifecycleAuthor))!.PropertyType);
+        Assert.Equal(typeof(NodeId), typeof(SnapshotField).GetProperty(nameof(SnapshotField.AuthorNodeId))!.PropertyType);
+        Assert.Null(typeof(SnapshotRecord).GetField(nameof(SnapshotRecord.RecordId)));
+        Assert.Null(typeof(SnapshotField).GetField(nameof(SnapshotField.AuthorNodeId)));
+    }
+
+    [Fact]
     public void WriteFields_UsesTypedRecordIdentity()
     {
         var method = typeof(Node).GetMethod(nameof(Node.WriteFields));
