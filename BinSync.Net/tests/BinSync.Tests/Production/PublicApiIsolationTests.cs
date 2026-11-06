@@ -113,18 +113,16 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
-    public void SyncException_CopiesBatchIdOnInputAndOutput()
+    public void SyncException_StoresBatchIdAsTypedValue()
     {
         var input = new byte[16];
         input[0] = 0x42;
+        var expected = BatchId.From(input);
         var exception = new SyncException("SEQ_GAP", input);
         input[0] = 0x11;
 
-        var exposed = exception.BatchId;
-        Assert.NotNull(exposed);
-        Assert.Equal((byte)0x42, exposed![0]);
-        exposed[0] = 0x22;
-        Assert.Equal((byte)0x42, exception.BatchId![0]);
+        Assert.Equal(expected, exception.BatchId);
+        Assert.Equal(typeof(BatchId?), typeof(SyncException).GetProperty(nameof(SyncException.BatchId))!.PropertyType);
     }
 
     [Fact]

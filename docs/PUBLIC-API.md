@@ -223,7 +223,7 @@ Blind merge compares ciphertext with open HLC + author.
 
 | Type | Role |
 |------|------|
-| `SyncException` | Domain codes (`CodeName` / `Code`); optional batch id |
+| `SyncException` | Domain codes (`CodeName` / `Code`); optional typed `BatchId?` context |
 | `FrameException` | Frame parse / reject |
 | `InvalidVarintException` / `InvalidFloatException` | Codec |
 | `ClockDriftException` | HLC skew |
