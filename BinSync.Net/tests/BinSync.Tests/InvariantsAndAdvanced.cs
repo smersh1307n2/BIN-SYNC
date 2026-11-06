@@ -375,7 +375,7 @@ public class InvariantsAndAdvanced
         for (long i = 1; i <= 3; i++)
             a.WriteField(NS, Rid(i), 0x0100, Asc($"s{i}"), new Hlc((ulong)(100 + i), 0));
         foreach (var batch in a.BuildSnapshot(NS))
-            b.ApplySnapshot(batch, a.NodeId);
+            b.ApplySnapshot(batch);
         for (long i = 4; i <= 6; i++)
             a.WriteField(NS, Rid(i), 0x0100, Asc($"t{i}"), new Hlc((ulong)(100 + i), 0));
         Transport.SyncRound(a, b, NS);
@@ -554,7 +554,7 @@ public class InvariantsAndAdvanced
         var fresh = Fix.MakeNode(9);
         Transport.MakeSession(a, fresh);
         foreach (var batch in a.BuildSnapshot(NS))
-            fresh.ApplySnapshot(batch, a.NodeId);
+            fresh.ApplySnapshot(batch);
         Assert.True(fresh.Storage[NS][Rid(1)].IsDead);
         Assert.False(fresh.Storage[NS][Rid(2)].IsDead);
         Assert.Equal(Digests.RecordDigest(a.Storage[NS][Rid(1)]), Digests.RecordDigest(fresh.Storage[NS][Rid(1)]));

@@ -153,7 +153,7 @@ public class ChangeIdWireTests
                 AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
             }).ToList());
 
-        Assert.Throws<SyncException>(() => target.ApplySnapshot(zeroIdBatch, source.NodeId.ToArray()));
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(zeroIdBatch));
         Assert.Empty(target.Storage);
 
         var tamperedEntries = snapshot.Entries.Select((e, i) => new OutboxEntry
@@ -167,7 +167,7 @@ public class ChangeIdWireTests
             snapshot.MergePolicy, snapshot.Flags, snapshot.IssuerNodeId, snapshot.IssuerEpoch,
             snapshot.CursorStart, snapshot.CursorEnd, snapshot.BatchId, snapshot.PrevBatchDigest,
             snapshot.RecordsRoot, snapshot.BatchDigest, tamperedEntries);
-        Assert.Throws<SyncException>(() => target.ApplySnapshot(tamperedBatch, source.NodeId.ToArray()));
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(tamperedBatch));
         Assert.Empty(target.Storage);
 
         var duplicateEntries = snapshot.Entries.Select(e => new OutboxEntry
@@ -181,7 +181,7 @@ public class ChangeIdWireTests
             snapshot.CursorStart, snapshot.CursorEnd, snapshot.BatchId, snapshot.PrevBatchDigest,
             snapshot.RecordsRoot, snapshot.BatchDigest, duplicateEntries);
 
-        Assert.Throws<SyncException>(() => target.ApplySnapshot(duplicateBatch, source.NodeId.ToArray()));
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(duplicateBatch));
         Assert.Empty(target.Storage);
     }
 

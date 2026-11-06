@@ -365,13 +365,6 @@ public sealed partial class Node
 
     /// Apply one resolved op to a staged record. Echo suppression happens inside
     /// MergeField: identical (hlc, author, value) → changed=False → nothing queued.
-    /// <summary>Thread-safe entry point (production hardening): takes the node gate
-    /// and delegates to <c>ApplyOpInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public bool ApplyOp(Record rec, object op, byte[] author)
-    {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplyOpInternal(rec, op, NodeId.From(author));
-    }
-
     internal bool ApplyOpInternal(Record rec, object op, NodeId author)
     {
         if (op is OpFieldWrite fw)
@@ -405,11 +398,6 @@ public sealed partial class Node
             ProcessAckInternal(peerNode, namespaceId, ackedSeq, authorStream);
         RaiseAckProcessed(peerNode, namespaceId, ackedSeq, authorStream);
     }
-
-    /// <summary>Legacy byte[] peer id; prefer the <see cref="NodeId"/> overload.</summary>
-    public void ProcessAck(byte[] peerNode, int namespaceId, long ackedSeq, byte[]? authorStream = null) =>
-        ProcessAck(NodeId.From(peerNode), namespaceId, ackedSeq,
-            authorStream is null ? null : NodeId.From(authorStream));
 
     internal void ProcessAckInternal(NodeId peerNode, int namespaceId, long ackedSeq, NodeId? authorStream = null)
     {
@@ -534,12 +522,12 @@ public sealed partial class Node
     /// Apply snapshot ops directly (not through cursor machinery).
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>ApplySnapshotInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public int ApplySnapshot(Batch batch, byte[] senderPeer)
+    public int ApplySnapshot(Batch batch)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplySnapshotInternal(batch, senderPeer);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplySnapshotInternal(batch);
     }
 
-    internal int ApplySnapshotInternal(Batch batch, byte[] senderPeer)
+    internal int ApplySnapshotInternal(Batch batch)
     {
         // Snapshot batches use the same canonical records array as DELTA_BATCH.
         // Validate provenance for the complete snapshot before mutating storage.
@@ -563,7 +551,7 @@ public sealed partial class Node
             var author = GetAuthor(op)!;
             var nsStore = Ns(batch.NamespaceId);
             if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
-            if (ApplyOp(rec, op, author)) applied++;
+            if (ApplyOpInternal(rec, op, NodeId.From(author))) applied++;
         }
         return applied;
     }
