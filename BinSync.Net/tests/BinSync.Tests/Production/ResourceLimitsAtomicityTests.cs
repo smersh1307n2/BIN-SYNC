@@ -127,10 +127,13 @@ public sealed class ResourceLimitsAtomicityTests
 
         Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
         Assert.True(sender.WriteField(3, Fix.Rid(2), 0x100, [2]));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+        Assert.Equal(2, batch.Entries.Count);
 
-        // Keep the outbox stream metadata intact, but make the second wire
-        // operation explicitly identify a different durable author.
-        var second = Ops.DecodeOp(sender.Outbox[3][^1].Payload).Op;
+        // Create a genuinely mixed-author wire batch. CreateDeltaBatch intentionally
+        // normalizes operations to compact aliases, so mutate only after it has signed
+        // the normal batch, then recompute both content-bound digests.
+        var second = Ops.DecodeOp(batch.Entries[1].Payload).Op;
         switch (second)
         {
             case OpFieldWrite write:
@@ -145,10 +148,12 @@ public sealed class ResourceLimitsAtomicityTests
             default:
                 throw new InvalidOperationException("Unexpected test operation type.");
         }
-        sender.Outbox[3][^1].Payload = Ops.EncodeOpFull(second);
+        batch.Entries[1].Payload = Ops.EncodeOpFull(second);
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            batch.RecordsRoot, batch.PrevBatchDigest);
 
-        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
-        Assert.Equal(2, batch.Entries.Count);
         var wireSecond = Assert.IsType<OpFieldWrite>(Ops.DecodeOp(batch.Entries[1].Payload).Op);
         Assert.True(wireSecond.FullAuthorMode);
         Assert.Equal(Fix.Nid(99), wireSecond.AuthorNodeId);
