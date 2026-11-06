@@ -12,7 +12,7 @@ public sealed partial class Node
     /// and delegates to <c>AuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int AuthorEpoch(NodeId author)
     {
-        lock (_lockMeta) return AuthorEpochInternal(author);
+        lock (_lockMeta) { ThrowIfDisposed(); return AuthorEpochInternal(author); }
     }
 
     internal int AuthorEpochInternal(NodeId author)
@@ -37,6 +37,7 @@ public sealed partial class Node
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var batch = CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
             return batch is null ? null : CloneBatchForPublicRead(batch);
         }
@@ -297,7 +298,7 @@ public sealed partial class Node
     /// and delegates to <c>SignBatchForInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch SignBatchFor(Batch batch, NodeId targetPeer)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return SignBatchForInternal(batch, targetPeer);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) { ThrowIfDisposed(); return SignBatchForInternal(batch, targetPeer); }
     }
 
     internal Batch SignBatchForInternal(Batch batch, NodeId targetPeer)
@@ -337,7 +338,7 @@ public sealed partial class Node
     /// and delegates to <c>AdvanceStreamInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void AdvanceStream(NodeId targetPeer, int namespaceId, Batch batch)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) AdvanceStreamInternal(targetPeer, namespaceId, batch);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) { ThrowIfDisposed(); AdvanceStreamInternal(targetPeer, namespaceId, batch); }
     }
 
     internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch)

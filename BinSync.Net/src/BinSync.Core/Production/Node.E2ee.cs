@@ -14,7 +14,7 @@ public sealed partial class Node
     /// <summary>Optional E2EE key ring. Access is serialized with sealed field operations.</summary>
     public E2eeKeyRing? E2eeKeys
     {
-        get { lock (_lockMeta) return _e2eeKeys; }
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _e2eeKeys; } }
         set { lock (_lockMeta) _e2eeKeys = value; }
     }
 
@@ -30,6 +30,7 @@ public sealed partial class Node
         ArgumentNullException.ThrowIfNull(plaintext);
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out var epoch))
@@ -97,6 +98,7 @@ public sealed partial class Node
         ValidateFieldId(fieldId);
         lock (_lockStorage) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out _))

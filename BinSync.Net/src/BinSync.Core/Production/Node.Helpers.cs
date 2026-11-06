@@ -11,7 +11,7 @@ public sealed partial class Node
     public byte[]? RecordDigestOf(int namespaceId, RecordId recordId)
     {
         ValidateNamespaceId(namespaceId);
-        lock (_lockStorage) return RecordDigestOfInternal(namespaceId, recordId);
+        lock (_lockStorage) { ThrowIfDisposed(); return RecordDigestOfInternal(namespaceId, recordId); }
     }
 
     internal byte[]? RecordDigestOfInternal(int namespaceId, RecordId recordId)
@@ -22,7 +22,7 @@ public sealed partial class Node
     public Dictionary<RecordId, byte[]> AllRecordDigests(int namespaceId)
     {
         ValidateNamespaceId(namespaceId);
-        lock (_lockStorage) return AllRecordDigestsInternal(namespaceId);
+        lock (_lockStorage) { ThrowIfDisposed(); return AllRecordDigestsInternal(namespaceId); }
     }
 
     internal Dictionary<RecordId, byte[]> AllRecordDigestsInternal(int namespaceId)
@@ -38,7 +38,7 @@ public sealed partial class Node
     public int OutboxSize(int namespaceId)
     {
         ValidateNamespaceId(namespaceId);
-        lock (_lockOutbox) return OutboxSizeInternal(namespaceId);
+        lock (_lockOutbox) { ThrowIfDisposed(); return OutboxSizeInternal(namespaceId); }
     }
 
     internal int OutboxSizeInternal(int namespaceId)

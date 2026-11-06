@@ -23,7 +23,7 @@ public sealed partial class Node
     /// <summary>Optional causal tracker. Access is serialized with causal apply operations.</summary>
     public CausalTracker? Causal
     {
-        get { lock (_lockMeta) return _causal; }
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _causal; } }
         set { lock (_lockMeta) _causal = value; }
     }
 

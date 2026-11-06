@@ -14,6 +14,7 @@ public sealed partial class Node
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
+            ThrowIfDisposed();
             int n = 0;
             if (!_storage.TryGetValue(namespaceId, out var map)) return 0;
             foreach (var (rid, rec) in map.ToList())
@@ -37,6 +38,7 @@ public sealed partial class Node
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
+            ThrowIfDisposed();
             int n = 0;
             if (!_storage.TryGetValue(namespaceId, out var map)) return 0;
             foreach (var rid in recordIds)

@@ -13,7 +13,7 @@ public sealed partial class Node
     /// <summary>Optional thread-safe trust store used by signature-gated operations.</summary>
     public TrustStore? Trust
     {
-        get { lock (_lockMeta) return _trust; }
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _trust; } }
         set { lock (_lockMeta) _trust = value; }
     }
 

@@ -13,7 +13,7 @@ public sealed partial class Node
     /// <summary>Optional schema registry. Access is serialized with schema-gated apply operations.</summary>
     public SchemaRegistry? Schemas
     {
-        get { lock (_lockMeta) return _schemas; }
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _schemas; } }
         set { lock (_lockMeta) _schemas = value; }
     }
 

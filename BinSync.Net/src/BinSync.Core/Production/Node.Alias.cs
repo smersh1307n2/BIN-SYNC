@@ -10,7 +10,7 @@ public sealed partial class Node
     /// <summary>Take a stable copy of the durable author registry under the metadata gate.</summary>
     internal KeyValuePair<NodeId, int>[] DurableAuthorsSnapshot()
     {
-        lock (_lockMeta) return DurableAuthors.ToArray();
+        lock (_lockMeta) { ThrowIfDisposed(); return DurableAuthors.ToArray(); }
     }
 
     /// §4.4 HELLO carries the sender's incarnation epoch; the receiver stores it as the
@@ -20,7 +20,7 @@ public sealed partial class Node
     /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterSessionEpoch(NodeId peer, int epoch)
     {
-        lock (_lockMeta) RegisterSessionEpochInternal(peer, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); RegisterSessionEpochInternal(peer, epoch); }
     }
 
     internal void RegisterSessionEpochInternal(NodeId peer, int epoch)
@@ -36,7 +36,7 @@ public sealed partial class Node
     /// and delegates to <c>LearnAuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void LearnAuthorEpoch(NodeId author, int epoch)
     {
-        lock (_lockMeta) LearnAuthorEpochInternal(author, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); LearnAuthorEpochInternal(author, epoch); }
     }
 
     internal void LearnAuthorEpochInternal(NodeId author, int epoch)
@@ -78,7 +78,7 @@ public sealed partial class Node
     /// and delegates to <c>ResetSessionInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void ResetSession(NodeId peer)
     {
-        lock (_lockMeta) ResetSessionInternal(peer, resetReceiveState: true);
+        lock (_lockMeta) { ThrowIfDisposed(); ResetSessionInternal(peer, resetReceiveState: true); }
     }
 
     /// <summary>
@@ -367,7 +367,7 @@ public sealed partial class Node
     /// and delegates to <c>RegisterAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterAlias(NodeId peer, int alias, NodeId nodeId, int epoch)
     {
-        lock (_lockMeta) RegisterAliasInternal(peer, alias, nodeId, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); RegisterAliasInternal(peer, alias, nodeId, epoch); }
     }
 
     internal void RegisterAliasInternal(NodeId peer, int alias, NodeId nodeId, int epoch)
@@ -440,7 +440,7 @@ public sealed partial class Node
     /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public NodeId ResolveAlias(NodeId peer, int alias)
     {
-        lock (_lockMeta) return ResolveAliasInternal(peer, alias);
+        lock (_lockMeta) { ThrowIfDisposed(); return ResolveAliasInternal(peer, alias); }
     }
 
     internal NodeId ResolveAliasInternal(NodeId peer, int alias)
@@ -500,7 +500,7 @@ public sealed partial class Node
     /// and delegates to <c>DurableIdInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[] DurableId(NodeId? nodeId = null, int? epoch = null)
     {
-        lock (_lockMeta) return DurableIdInternal(nodeId, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); return DurableIdInternal(nodeId, epoch); }
     }
 
     /// <summary>Write the 20-byte durable identity (nodeId || epoch u32 LE) into <paramref name="dest"/>.</summary>
@@ -529,7 +529,7 @@ public sealed partial class Node
     /// and delegates to <c>AliasOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int? AliasOf(NodeId peer, NodeId nodeId, int? epoch = null)
     {
-        lock (_lockMeta) return AliasOfInternal(peer, nodeId, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); return AliasOfInternal(peer, nodeId, epoch); }
     }
 
     internal int? AliasOfInternal(NodeId peer, NodeId nodeId, int? epoch = null)
