@@ -76,6 +76,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `ApplyBatchPayload(byte[], NodeId sender)` | Decode+apply (preferred on the wire path) |
 | `ProcessAck(NodeId, …)` | Advance per-author watermarks |
 | `ApplySnapshot(Batch)` / `BuildSnapshot(ns)` | Apply or build a validated snapshot baseline |
+| `EnterAllGates()` | Acquire Storage → Outbox → Meta gates; dispose on the acquiring thread (idempotent) |
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
 | `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
@@ -195,7 +196,7 @@ attached to a live Node.
 
 | API | Role |
 |-----|------|
-| `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; no byte-array identity overloads |
+| `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; `DepTimeout` and `UtcNowMs` configure expiry policy |
 | `Node.Causal` | Optional tracker |
 | `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `Node.ApplyBatchCausal` / `DrainCausal` / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
@@ -213,6 +214,8 @@ attached to a live Node.
 | `E2eeKeyRing` / `Node.EnsureE2ee` | Per-namespace keys + epochs |
 | `WriteFieldSealed` / `ReadFieldOpen` / `TryOpenField` | Convenience write and authenticated read helpers |
 | `KeyRotation` / `KeyRotationNotice` / `KeyEpochStore` | Frame 0x11 + strict 64-byte proof bound to typed `NodeId`; exact payload length required |
+| `KeyEpochStore.TrustIdentity` / `TryApply` / `GetEpoch` | Pin identity verification keys and accept only proof-verified epoch advances |
+| `KeyEpochStore.SeedEpoch` | Explicit local bootstrap/restore hook without a proof; seed only from trusted local persisted state, never from remote notices |
 
 Blind merge compares ciphertext with open HLC + author.
 
