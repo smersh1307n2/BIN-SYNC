@@ -69,7 +69,7 @@ public sealed partial class Node
             if (!SchemaVersions.TryGetValue(namespaceId, out var cur) || max > cur)
                 SchemaVersions[namespaceId] = max;
         }
-        SchemaRegistered?.Invoke(namespaceId, schemaId, version);
+        RaiseSchemaRegistered(namespaceId, schemaId, version);
     }
 
     /// <summary>Learn schemas from a decoded SCHEMA_MAP payload.</summary>
@@ -84,7 +84,7 @@ public sealed partial class Node
             var list = SchemaMap.Decode(payload);
             learned = Schemas.Learn(list);
         }
-        if (learned > 0) SchemaMapLearned?.Invoke(learned);
+        if (learned > 0) RaiseSchemaMapLearned(learned);
         return learned;
     }
 
