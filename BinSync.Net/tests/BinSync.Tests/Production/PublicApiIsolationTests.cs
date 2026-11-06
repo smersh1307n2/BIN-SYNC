@@ -187,7 +187,7 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(typeof(Dictionary<RecordId, byte[]>), allDigests.ReturnType);
 
         var boundedWrite = typeof(BoundedNode).GetMethod(nameof(BoundedNode.WriteField))!;
-        Assert.Equal(typeof(RecordId), boundedWrite.GetParameters()[2].ParameterType);
+        Assert.Equal(typeof(RecordId), boundedWrite.GetParameters()[3].ParameterType);
     }
 
     [Fact]
