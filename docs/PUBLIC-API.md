@@ -204,11 +204,11 @@ atomically replaces the active WAL segment. `Wal.Replay(node)` and `Wal.ReplayFi
 
 | API | Role |
 |-----|------|
-| `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; `DepTimeout` and `UtcNowMs` configure expiry policy |
+| `CausalTracker` | Typed `BatchId` known/pending/lost sets; cycle, timeout and lost-dependency outcomes; lost IDs propagate to transitive dependents; `DepTimeout` and `UtcNowMs` configure expiry |
 | `Node.Causal` | Optional tracker |
-| `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
+| `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs; batch flags are set on an encoded copy, not by mutating the caller's batch |
 | `Node.ApplyBatchCausal` / `DrainCausal` (released items are not known until applied) / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
-| `CausalWire` | CCD1 trailer encode/decode |
+| `CausalWire` | CCD1 trailer with footer-length framing, sorted unique dependencies, bounded counts and atomic decode |
 | `CAUSAL_DEP_MISSING` | 0x0012 |
 
 `ApplyBatch` ignores causal; use `ApplyBatchCausal` when enabled.
