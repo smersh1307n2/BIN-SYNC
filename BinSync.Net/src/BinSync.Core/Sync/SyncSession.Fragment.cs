@@ -28,13 +28,16 @@ public partial class SyncSession
             var reassembler = new FragmentReassembler();
             while (true)
             {
-                var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
-                    ?? throw new IOException("peer closed during fragment reassembly");
+                var raw = await _rawReceiveChannel.Reader.ReadAsync(ct).ConfigureAwait(false);
                 var (frame, consumed) = FrameCodec.ParseFrame(raw);
                 if (consumed != raw.Length) throw new FrameException("FRAME_REJECTED");
                 if ((frame.Flags & Frames.FLAG_FRAGMENT) == 0)
+                {
+                    await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
                     return frame.Payload;
+                }
                 var complete = reassembler.Accept(frame.Payload);
+                await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
                 if (complete is not null)
                     return complete;
             }

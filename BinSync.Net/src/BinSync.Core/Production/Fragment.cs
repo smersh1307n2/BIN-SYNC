@@ -120,6 +120,8 @@ public sealed class FragmentReassembler
     }
 
     private readonly Dictionary<BatchId, Slot> _pending = new();
+    private long _pendingBytes;
+    private const int MaxPendingBytes = Frames.MAX_WINDOW_SIZE;
 
     /// <summary>In-progress fragment reassembly keyed by message id.</summary>
     public int PendingMessages => _pending.Count;
@@ -146,8 +148,11 @@ public sealed class FragmentReassembler
 
         if (slot.Parts[f.Index] is null)
         {
+            if (f.Body.Length > MaxPendingBytes - _pendingBytes)
+                throw new FrameException("FLOW_CONTROL_VIOLATION");
             slot.Parts[f.Index] = f.Body;
             slot.Have++;
+            _pendingBytes += f.Body.Length;
         }
 
         if (slot.Have < slot.Count) return null;
@@ -156,6 +161,7 @@ public sealed class FragmentReassembler
         _pending.Remove(key);
         int total = 0;
         foreach (var p in slot.Parts) total += p!.Length;
+        _pendingBytes -= total;
         var buf = new byte[total];
         int off = 0;
         foreach (var p in slot.Parts)
@@ -167,5 +173,5 @@ public sealed class FragmentReassembler
     }
 
     /// <summary>Drop all pending reassembly state.</summary>
-    public void Clear() => _pending.Clear();
+    public void Clear() { _pending.Clear(); _pendingBytes = 0; }
 }

@@ -10,7 +10,7 @@ public enum SessionCapabilities : uint
     None = 0,
     /// <summary>§12.24.4 — FieldWrite carries full 16-byte author instead of origin u16.</summary>
     FullAuthorId = 1 << 0,
-    /// <summary>§3.6.2 — peer will honor WINDOW_UPDATE on this transport.</summary>
+    /// <summary>§3.6.3 — peer will honor WINDOW_UPDATE on this transport.</summary>
     FlowControl = 1 << 1,
 }
 

@@ -139,6 +139,26 @@ public class TransportFoundationTests
 
 
     [Fact]
+    public async Task Negotiated_flow_control_replenishes_credit_during_fragment_reassembly()
+    {
+        using var low = Fix.MakeNode(31);
+        using var high = Fix.MakeNode(32);
+        var (toLow, toHigh) = PipeTransport.CreatePair();
+        var caps = SessionCapabilities.FlowControl;
+        var acceptTask = SyncSession.AcceptAsync(high, toHigh, caps);
+        var connectTask = SyncSession.ConnectAsync(low, toLow, caps);
+        await using var lowSession = await connectTask;
+        await using var highSession = await acceptTask;
+
+        var payload = new byte[Frames.INITIAL_WINDOW + 64 * 1024];
+        for (int i = 0; i < payload.Length; i++) payload[i] = (byte)(i * 31);
+        var receive = highSession.ReceiveReassembledAsync();
+        var send = lowSession.SendFragmentedAsync(0x09, 0x0001_0001u, 1, payload, 128 * 1024);
+        await send.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(payload, await receive.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
     public async Task Full_duplex_batch_exchange_dispatches_data_and_ack_to_the_correct_operations()
     {
         using var low = Fix.MakeNode(1);

@@ -36,7 +36,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly SemaphoreSlim _snapshotGate = new(1, 1);
     private readonly SemaphoreSlim _exclusiveReceiveGate = new(1, 1);
     private readonly object _receiveSync = new();
-    private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();
+    private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();\n    private readonly Channel<byte[]> _rawReceiveChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions\n    { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false });
     private readonly ConcurrentDictionary<byte, SemaphoreSlim> _receiveTypeGates = new();
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
@@ -247,6 +247,28 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
+    private void EnsureReceivePumpStarted()
+    {
+        lock (_receiveSync)
+        {
+            if (_rawReceiveActive && _receivePump is null)
+                throw new InvalidOperationException("Raw receive mode is active");
+            _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
+        }
+    }
+
+    private async Task CompleteReceiveAsync(byte[] raw, CancellationToken ct)
+    {
+        Interlocked.Decrement(ref _queuedFrameCount);
+        Interlocked.Add(ref _queuedFrameBytes, -raw.Length);
+        if (!_flowControlEnabled) return;
+        uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
+        int payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17)));
+        if (streamId == 0 || payloadLength == 0) return;
+        _receiveFlowControl.ApplyUpdate(streamId, payloadLength);
+        await SendWindowUpdateAsync(streamId, payloadLength, ct).ConfigureAwait(false);
+    }
+
     private async Task SendWindowUpdateAsync(uint streamId, int credits, CancellationToken ct)
     {
         if (credits <= 0) return;
@@ -305,18 +327,7 @@ public partial class SyncSession : IAsyncDisposable
         catch (ChannelClosedException)
         { throw new IOException("Peer closed the session"); }
 
-        Interlocked.Decrement(ref _queuedFrameCount);
-        Interlocked.Add(ref _queuedFrameBytes, -raw.Length);
-        if (_flowControlEnabled)
-        {
-            uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
-            int payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17)));
-            if (streamId != 0 && payloadLength > 0)
-            {
-                _receiveFlowControl.ApplyUpdate(streamId, payloadLength);
-                await SendWindowUpdateAsync(streamId, payloadLength, ct).ConfigureAwait(false);
-            }
-        }
+        await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
         return raw;
     }
 
@@ -329,32 +340,40 @@ public partial class SyncSession : IAsyncDisposable
             {
                 var raw = await _transport.ReceiveAsync(ct).ConfigureAwait(false)
                     ?? throw new IOException("Peer closed the session");
-                var (frame, consumed) = FrameCodec.ParseFrame(raw);
-                if (consumed != raw.Length || frame.FrameType < 0x04 || frame.FrameType > 0x13)
+                FrameCodec.ValidateFrame(raw);
+                uint payloadLength = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17));
+                if (raw.Length != Frames.HEADER_SIZE + (int)payloadLength)
+                    throw new FrameException("FRAME_REJECTED");
+                byte frameType = raw[3];
+                byte flags = raw[4];
+                uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
+                if (frameType < 0x04 || frameType > 0x13)
                     throw new FrameException("FRAME_REJECTED");
 
-                if (frame.FrameType == Frames.TYPE_WINDOW_UPDATE)
+                if (frameType == Frames.TYPE_WINDOW_UPDATE)
                 {
-                    if (!_flowControlEnabled || frame.StreamId == 0 || frame.Flags != 0 ||
-                        !SessionWire.TryDecodeWindowUpdate(frame.Payload, out uint credits) ||
-                        !_sendFlowControl.TryApplyUpdate(frame.StreamId, credits))
+                    if (!_flowControlEnabled || streamId == 0 || flags != 0 ||
+                        !SessionWire.TryDecodeWindowUpdate(raw.AsSpan(Frames.HEADER_SIZE, (int)payloadLength), out uint credits) ||
+                        !_sendFlowControl.TryApplyUpdate(streamId, credits))
                         throw new FrameException("FLOW_CONTROL_VIOLATION");
                     continue;
                 }
 
-                if (_flowControlEnabled && frame.StreamId != 0 &&
-                    !_receiveFlowControl.TryConsume(frame.StreamId, frame.Payload.Length))
+                if (_flowControlEnabled && streamId != 0 &&
+                    !_receiveFlowControl.TryConsume(streamId, payloadLength))
                     throw new FrameException("FLOW_CONTROL_VIOLATION");
 
                 Channel<byte[]> channel;
                 lock (_receiveSync)
                 {
-                    channel = _receiveChannels.GetOrAdd(frame.FrameType, static _ =>
-                        Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
-                        {
-                            SingleReader = true, SingleWriter = true,
-                            AllowSynchronousContinuations = false,
-                        }));
+                    channel = _rawReceiveActive
+                        ? _rawReceiveChannel
+                        : _receiveChannels.GetOrAdd(frameType, static _ =>
+                            Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+                            {
+                                SingleReader = true, SingleWriter = true,
+                                AllowSynchronousContinuations = false,
+                            }));
                 }
 
                 int queuedFrames = Interlocked.Increment(ref _queuedFrameCount);
@@ -402,9 +421,10 @@ public partial class SyncSession : IAsyncDisposable
     {
         lock (_receiveSync)
         {
-            if (_receivePump is not null)
-                throw new InvalidOperationException("Raw receive cannot be mixed with another receive mode");
+            if (_rawReceiveActive || _queuedFrameCount != 0)
+                throw new InvalidOperationException("Raw receive cannot be mixed with queued typed frames");
             _rawReceiveActive = true;
+            _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
         }
     }
 
