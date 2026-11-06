@@ -88,7 +88,7 @@ public sealed partial class Node : IDisposable
                 && map.TryGetValue(recordId, out var rec)
                 && rec.State.TryGetValue((ushort)fieldId, out var fs))
             {
-                field = fs;
+                field = CloneFieldForPublicRead(fs);
                 return true;
             }
             field = null;

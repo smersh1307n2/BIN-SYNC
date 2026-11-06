@@ -41,6 +41,23 @@ public sealed partial class Node
     internal int OutboxSizeInternal(int namespaceId)
     { return Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0; }
 
+    // Public read APIs return detached object graphs. Record/FieldState are mutable
+    // DTOs and FieldState.Value is a byte[]; shallow copies would let callers mutate
+    // live storage without the Node gates, WAL, or Outbox.
+    internal static FieldState CloneFieldForPublicRead(FieldState field) =>
+        field with { Value = field.Value.ToArray() };
+
+    internal static Record CloneForPublicRead(Record rec)
+    {
+        var copy = Clone(rec);
+        foreach (var key in copy.State.Keys.ToArray())
+            copy.State[key] = CloneFieldForPublicRead(copy.State[key]);
+        if (copy.HasFieldTombs)
+            foreach (var key in copy.FieldTombs.Keys.ToArray())
+                copy.FieldTombs[key] = CloneFieldForPublicRead(copy.FieldTombs[key]);
+        return copy;
+    }
+
     internal static Record Clone(Record rec)
     {
         // Shallow-copy field maps; do NOT touch FieldTombs getter (it would allocate empty).

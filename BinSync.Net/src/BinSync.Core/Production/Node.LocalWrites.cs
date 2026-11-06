@@ -43,7 +43,13 @@ public sealed partial class Node
     /// and delegates to <c>SeenStateInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public (ulong Wall, uint Logical, byte[] Author, object Val)? SeenState(int ns, RecordId recordId, int fieldId)
     {
-        lock (_lockStorage) return SeenStateInternal(ns, recordId, fieldId);
+        lock (_lockStorage)
+        {
+            var state = SeenStateInternal(ns, recordId, fieldId);
+            if (state is not { } value) return null;
+            return (value.Wall, value.Logical, value.Author,
+                value.Val is byte[] bytes ? bytes.ToArray() : value.Val);
+        }
     }
 
     internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, RecordId recordId, int fieldId)
