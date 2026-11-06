@@ -4,7 +4,7 @@
 
 **Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
-Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.12**.  
+Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.13**.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
 
 ## SemVer policy (3.x)
