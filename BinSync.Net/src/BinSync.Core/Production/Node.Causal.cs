@@ -29,13 +29,16 @@ public sealed partial class Node
     /// <summary>Apply with typed sender peer.</summary>
     public BatchResult ApplyBatchCausal(Batch batch, NodeId senderPeer)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+        // Causal evaluation, quarantine and apply operate on one detached object graph.
+        var ownedBatch = CloneBatchForPublicRead(batch);
         lock (_lockMeta)
         {
             var tracker = Causal;
-            if (tracker is not null && batch.Entries.Count > 0)
+            if (tracker is not null && ownedBatch.Entries.Count > 0)
             {
-                var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(batch.Entries.Count);
-                foreach (var e in batch.Entries)
+                var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(ownedBatch.Entries.Count);
+                foreach (var e in ownedBatch.Entries)
                     members.Add((e.ChangeId, e.CausalDeps.Count > 0 ? e.CausalDeps : null));
 
                 var outcome = tracker.EvaluateBatch(members, out _);
@@ -48,21 +51,21 @@ public sealed partial class Node
                         // caller-owned mutable lists or payload buffers across the API boundary.
                         var held = new HeldCausalBatch
                         {
-                            Batch = CloneBatchForPublicRead(batch),
+                            Batch = ownedBatch,
                             SenderPeer = senderPeer,
                         };
-                        foreach (var e in batch.Entries)
+                        foreach (var e in ownedBatch.Entries)
                             tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
                     }
-                    throw new SyncException("CAUSAL_DEP_MISSING", batch.BatchId);
+                    throw new SyncException("CAUSAL_DEP_MISSING", ownedBatch.BatchId);
                 }
             }
 
-            var result = ApplyBatchInternal(batch, senderPeer);
+            var result = ApplyBatchInternal(ownedBatch, senderPeer);
 
             if (tracker is not null && !result.Duplicate)
             {
-                foreach (var e in batch.Entries)
+                foreach (var e in ownedBatch.Entries)
                 {
                     if (!e.ChangeId.IsZero)
                         tracker.NoteApplied(e.ChangeId);

@@ -9,9 +9,13 @@ public sealed partial class Node
     /// and delegates to <c>ApplyBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public BatchResult ApplyBatch(Batch batch, NodeId senderPeer)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+        // ApplyBatchInternal resolves and stores receiver-side author context on its batch.
+        // Never mutate the caller's DTO or retain caller-owned entry buffers.
+        var ownedBatch = CloneBatchForPublicRead(batch);
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
-            result = ApplyBatchInternal(batch, senderPeer);
+            result = ApplyBatchInternal(ownedBatch, senderPeer);
         // Skip pure idempotent replay (Duplicate, Applied==0) — hot path must stay ~ns.
         if (!result.Duplicate || result.Applied > 0)
             RaiseBatchApplied(result, senderPeer);

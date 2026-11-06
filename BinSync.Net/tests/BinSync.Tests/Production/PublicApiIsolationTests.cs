@@ -43,6 +43,27 @@ public sealed class PublicApiIsolationTests
                       method.GetParameters().Any(parameter => parameter.ParameterType == typeof(byte[])));
     }
 
+
+    [Fact]
+    public void ApplyBatch_DoesNotMutateCallerOwnedBatch()
+    {
+        using var sender = Fix.MakeNode(905);
+        using var receiver = Fix.MakeNode(906);
+        Transport.MakeSession(sender, receiver);
+        Assert.True(sender.WriteField(7, Fix.Rid(905), 0x101, new byte[] { 4, 5, 6 }));
+
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 7);
+        Assert.NotNull(batch);
+        var originalAuthor = batch!.AuthorStreamNodeId;
+
+        var result = receiver.ApplyBatch(batch, sender.NodeId);
+
+        Assert.Equal(originalAuthor, batch.AuthorStreamNodeId);
+        Assert.Equal(sender.NodeId, result.DurableAuthor);
+        Assert.True(receiver.TryGetField(7, Fix.Rid(905), 0x101, out var field));
+        Assert.Equal(new byte[] { 4, 5, 6 }, field!.Value);
+    }
+
     [Fact]
     public void PushOutbox_ReturnsDetachedEntry()
     {
@@ -123,6 +144,8 @@ public sealed class PublicApiIsolationTests
 
         Assert.Equal(expected, exception.BatchId);
         Assert.Equal(typeof(BatchId?), typeof(SyncException).GetProperty(nameof(SyncException.BatchId))!.PropertyType);
+        Assert.DoesNotContain(typeof(SyncException).GetConstructors(),
+            constructor => constructor.GetParameters().Any(parameter => parameter.ParameterType == typeof(byte[])));
     }
 
     [Fact]
