@@ -9,19 +9,34 @@ namespace BinSync;
 public static class Domains
 {
     /// <summary>BLAKE3 domain separation label for per-record digests.</summary>
-    public static readonly byte[] DomainRecord = Ascii("BIN-SYNC/RECORD/v1");
-    /// <summary>BLAKE3 domain separation label for per-field digests.</summary>
-    public static readonly byte[] DomainField = Ascii("BIN-SYNC/FIELD/v1");
-    /// <summary>BLAKE3 domain separation label for bucket rollups.</summary>
-    public static readonly byte[] DomainBucket = Ascii("BIN-SYNC/BUCKET/v1");
-    /// <summary>BLAKE3 domain separation label for state digests.</summary>
-    public static readonly byte[] DomainState = Ascii("BIN-SYNC/STATE/v2");
-    /// <summary>BLAKE3 domain separation label for batch digests.</summary>
-    public static readonly byte[] DomainBatch = Ascii("BIN-SYNC/BATCH/v1");
-    /// <summary>BLAKE3 domain separation label for the records-root hash.</summary>
-    public static readonly byte[] DomainRecords = Ascii("BIN-SYNC/RECORDS/v1");
-    /// <summary>BLAKE3 domain separation label for auth-id material.</summary>
-    public static readonly byte[] DomainAuthId = Ascii("BIN-SYNC/AUTHID/v1");
+    private static readonly byte[] DomainRecordStorage = Ascii("BIN-SYNC/RECORD/v1");
+    private static readonly byte[] DomainFieldStorage = Ascii("BIN-SYNC/FIELD/v1");
+    private static readonly byte[] DomainBucketStorage = Ascii("BIN-SYNC/BUCKET/v1");
+    private static readonly byte[] DomainStateStorage = Ascii("BIN-SYNC/STATE/v2");
+    private static readonly byte[] DomainBatchStorage = Ascii("BIN-SYNC/BATCH/v1");
+    private static readonly byte[] DomainRecordsStorage = Ascii("BIN-SYNC/RECORDS/v1");
+    private static readonly byte[] DomainAuthIdStorage = Ascii("BIN-SYNC/AUTHID/v1");
+
+    /// <summary>BLAKE3 domain separation label for per-record digests. Returns an owned copy.</summary>
+    public static byte[] DomainRecord => DomainRecordStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for per-field digests. Returns an owned copy.</summary>
+    public static byte[] DomainField => DomainFieldStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for bucket rollups. Returns an owned copy.</summary>
+    public static byte[] DomainBucket => DomainBucketStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for state digests. Returns an owned copy.</summary>
+    public static byte[] DomainState => DomainStateStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for batch digests. Returns an owned copy.</summary>
+    public static byte[] DomainBatch => DomainBatchStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for the records-root hash. Returns an owned copy.</summary>
+    public static byte[] DomainRecords => DomainRecordsStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for auth-id material. Returns an owned copy.</summary>
+    public static byte[] DomainAuthId => DomainAuthIdStorage.ToArray();
+
+    internal static byte[] DomainRecordBytes => DomainRecordStorage;
+    internal static byte[] DomainBucketBytes => DomainBucketStorage;
+    internal static byte[] DomainStateBytes => DomainStateStorage;
+    internal static byte[] DomainBatchBytes => DomainBatchStorage;
+    internal static byte[] DomainRecordsBytes => DomainRecordsStorage;
 
     private static byte[] Ascii(string s) => System.Text.Encoding.ASCII.GetBytes(s);
     /// <summary>Concatenate byte arrays into one buffer (domain label helpers).</summary>
@@ -110,12 +125,12 @@ public static class Digests
         var lc = LifecycleDigestPayload(
             rec.LifecycleHlc?.Wall ?? 0, rec.LifecycleHlc?.Logical ?? 0,
             rec.LifecycleAuthor ?? default, rec.LifecycleValue);
-        int est = Domains.DomainRecord.Length + 16 + lc.Length;
+        int est = Domains.DomainRecordBytes.Length + 16 + lc.Length;
         for (int i = 0; i < parts.Count; i++) est += parts[i].Length;
         var w = new Writer(est);
         Span<byte> ridBuf = stackalloc byte[16];
         rec.RecordId.WriteTo(ridBuf);
-        w.Raw(Domains.DomainRecord).Raw(ridBuf);
+        w.Raw(Domains.DomainRecordBytes).Raw(ridBuf);
         for (int i = 0; i < parts.Count; i++) w.Raw(parts[i]);
         w.Raw(lc);
         return Blake3(w.Value(), 32);
@@ -184,7 +199,7 @@ public class BucketAccumulator
     }
 
     /// <summary>BLAKE3 rollup of this accumulator under the bucket domain label.</summary>
-    public byte[] Rollup() => Digests.Blake3(Domains.Cat(Domains.DomainBucket, CanonicalEncoding()), 32);
+    public byte[] Rollup() => Digests.Blake3(Domains.Cat(Domains.DomainBucketBytes, CanonicalEncoding()), 32);
 }
 
 /// <summary>Helpers to compute namespace state roots and bucket digests.</summary>
@@ -196,7 +211,7 @@ public static class StateHash
         var sorted = buckets.OrderBy(b => Convert.ToHexString(b.CanonicalEncoding())).ToList();
         long total = buckets.Sum(b => b.Count);
         var w = new Writer();
-        w.Raw(Domains.DomainState).U16(namespaceId).Varint((ulong)total);
+        w.Raw(Domains.DomainStateBytes).U16(namespaceId).Varint((ulong)total);
         foreach (var b in sorted) w.Bytes(b.CanonicalEncoding());
         return Digests.Blake3(w.Value(), 32);
     }

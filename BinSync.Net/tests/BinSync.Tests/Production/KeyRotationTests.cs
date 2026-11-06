@@ -20,6 +20,10 @@ public class KeyRotationTests
         var nodeId = Id(0x10);
         var store = new KeyEpochStore();
         store.TrustIdentity(nodeId, pub);
+        Assert.True(store.TryGetIdentity(nodeId, out var exposedKey));
+        exposedKey[0] ^= 0xFF;
+        Assert.True(store.TryGetIdentity(nodeId, out var storedKey));
+        Assert.Equal(pub, storedKey);
 
         Assert.Equal(0, store.GetEpoch(1, nodeId));
 

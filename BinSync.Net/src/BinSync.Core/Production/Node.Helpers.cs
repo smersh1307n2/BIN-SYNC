@@ -164,7 +164,7 @@ public sealed partial class Node
         try
         {
             var w = new Writer(buf);
-            w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
+            w.Raw(Domains.DomainBatchBytes).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
             w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
             w.B128(recordsRoot).B128(prevBatchDigest);
             return Digests.Blake3Digest16(w.WrittenSpan);
@@ -183,14 +183,14 @@ public sealed partial class Node
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
     public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries)
     {
-        int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);
+        int est = Domains.DomainRecordsBytes.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
             est += 33 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
         try
         {
             var w = new Writer(buf);
-            w.Raw(Domains.DomainRecords);
+            w.Raw(Domains.DomainRecordsBytes);
             WriteRecordsArray(w, entries);
             return Digests.Blake3Digest16(w.WrittenSpan);
         }

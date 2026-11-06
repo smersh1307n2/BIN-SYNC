@@ -127,4 +127,42 @@ public sealed class PublicApiIsolationTests
         Assert.Equal((byte)0x42, exception.BatchId![0]);
     }
 
+    [Fact]
+    public void DigestDomainLabels_AreReturnedAsDetachedCopies()
+    {
+        var expected = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/RECORD/v1");
+        var exposed = Domains.DomainRecord;
+        exposed[0] ^= 0xFF;
+        Assert.Equal(expected, Domains.DomainRecord);
+    }
+
+    [Fact]
+    public void TrustStore_DoesNotExposeStoredPeerOrKeyBuffers()
+    {
+        var store = new TrustStore { DefaultMode = TrustMode.PreShared };
+        var nodeId = new byte[16];
+        nodeId[0] = 0x55;
+        var (_, publicKey) = BatchSignature.GenerateKeyPair();
+        var expectedKey = publicKey.ToArray();
+        store.Allow(nodeId, publicKey);
+
+        Assert.True(store.TryGet(nodeId, out var peer));
+        peer!.PublicKey[0] ^= 0xFF;
+        peer.NodeId[0] ^= 0xFF;
+        var resolved = store.ResolvePublicKey(NodeId.From(nodeId));
+        Assert.Equal(expectedKey, resolved);
+        resolved![0] ^= 0xFF;
+        Assert.Equal(expectedKey, store.ResolvePublicKey(NodeId.From(nodeId)));
+    }
+
+    [Fact]
+    public void MaterializeEntries_CopiesEvenFullArrayPayloads()
+    {
+        var source = new byte[] { 1, 2, 3 };
+        var batch = new Batch { Entries = new List<OutboxEntry> { new() { Payload = source } } };
+        batch.MaterializeEntries();
+        source[0] = 0xFF;
+        Assert.Equal(new byte[] { 1, 2, 3 }, batch.Entries[0].Payload.ToArray());
+    }
+
 }

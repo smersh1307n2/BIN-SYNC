@@ -22,8 +22,16 @@ public sealed class KeyEpochStore
     }
 
     /// <summary>Try to load stored public identity material for a node id.</summary>
-    public bool TryGetIdentity(ReadOnlySpan<byte> nodeId, out byte[] publicKey) =>
-        _identityKeys.TryGetValue(Hex(nodeId), out publicKey!);
+    public bool TryGetIdentity(ReadOnlySpan<byte> nodeId, out byte[] publicKey)
+    {
+        if (_identityKeys.TryGetValue(Hex(nodeId), out var stored))
+        {
+            publicKey = stored.ToArray();
+            return true;
+        }
+        publicKey = Array.Empty<byte>();
+        return false;
+    }
 
     /// <summary>Current known key epoch for a publisher (0 if never rotated).</summary>
     public ushort GetEpoch(int namespaceId, ReadOnlySpan<byte> nodeId)

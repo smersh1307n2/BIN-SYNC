@@ -171,8 +171,8 @@ public sealed partial class Batch
     public byte[] DurableAuthorBytes => DurableAuthor.ToArray();
 
     /// <summary>
-    /// Copy all entry buffers to owned arrays so the batch outlives the decode frame.
-    /// Safe to call more than once (already-owned arrays are kept).
+    /// Copy all entry buffers into fresh arrays so the batch is detached from its source.
+    /// Each call creates new arrays, including when the input already spans a full array.
     /// </summary>
     public void MaterializeEntries()
     {
@@ -180,7 +180,7 @@ public sealed partial class Batch
         {
             var e = Entries[i];
             // ChangeId/RecordId/AuthorNodeId are value types — no materialize
-            e.Payload = Mem.ToArray(e.Payload);
+            e.Payload = e.Payload.ToArray();
         }
     }
 }

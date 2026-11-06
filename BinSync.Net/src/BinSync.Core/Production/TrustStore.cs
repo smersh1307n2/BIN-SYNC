@@ -83,12 +83,29 @@ public sealed partial class TrustStore
         }
     }
 
-    /// <summary>Try to get trusted-peer metadata for a node id.</summary>
+    /// <summary>Try to get detached trusted-peer metadata for a node id.</summary>
     public bool TryGet(byte[] nodeId, out TrustedPeer? peer)
     {
         lock (_gate)
-            return _peers.TryGetValue(Key(nodeId), out peer);
+        {
+            if (_peers.TryGetValue(Key(nodeId), out var stored))
+            {
+                peer = ClonePeer(stored);
+                return true;
+            }
+            peer = null;
+            return false;
+        }
     }
+
+    private static TrustedPeer ClonePeer(TrustedPeer peer) => new()
+    {
+        NodeId = peer.NodeId.ToArray(),
+        PublicKey = peer.PublicKey.ToArray(),
+        Mode = peer.Mode,
+        Revoked = peer.Revoked,
+        PinnedAtUnixMs = peer.PinnedAtUnixMs,
+    };
 
     /// <summary>Resolve the public key to use for a node, optionally checking a candidate.</summary>
     public byte[]? ResolvePublicKey(NodeId nodeId, byte[]? candidatePublicKey = null) =>
@@ -105,7 +122,7 @@ public sealed partial class TrustStore
                 if (candidatePublicKey is { Length: BatchSignature.PublicKeySize } &&
                     !existing.PublicKey.AsSpan().SequenceEqual(candidatePublicKey))
                     return null;
-                return existing.PublicKey;
+                return existing.PublicKey.ToArray();
             }
 
             if (DefaultMode == TrustMode.Tofu &&
@@ -120,7 +137,7 @@ public sealed partial class TrustStore
                     Revoked = false,
                     PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 };
-                return candidatePublicKey;
+                return _peers[k].PublicKey.ToArray();
             }
 
             return null;
