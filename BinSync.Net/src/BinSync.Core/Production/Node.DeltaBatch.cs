@@ -123,44 +123,41 @@ public sealed partial class Node
         }
         if (selectedCount == 0) return null;
 
+        // Every selected entry belongs to the same author stream. Resolve its session
+        // alias once, not once per operation (AliasOfInternal scans the reverse map).
+        int? streamAlias = stream == NodeId
+            ? AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1
+            : AliasOfInternal(targetPeer, stream, Epoch);
+        if (streamAlias is null)
+        {
+            // Errata E-11 (scenario 23): negotiate a missing alias once per stream.
+            // A resumed node has registry keys but no live peer handle; reuse its
+            // persisted forward mapping instead of attempting negotiation.
+            var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
+            if (peerNode is not null && stream != NodeId)
+            {
+                int epTry = KnownAuthorEpoch(stream) ?? Epoch;
+                streamAlias = EnsureAlias(peerNode, stream, epTry);
+            }
+            else if (peerNode is null)
+            {
+                if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
+                    foreach (var (a_, (nid_, _)) in existingMap)
+                        if (nid_ == stream) { streamAlias = a_; break; }
+            }
+        }
+        if (streamAlias is null)
+            throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
+
         // Build the final DTO graph directly: one OutboxEntry wrapper per selected
         // operation, rather than pending + translated wrapper lists.
         var entries = new List<OutboxEntry>(selectedCount);
-        // Resolve self-alias once (common path: all entries self-authored).
-        int selfAlias = AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1;
+        ushort origin = (ushort)streamAlias.Value;
         for (int i = 0; i < all.Count; i++)
         {
             var e = all[i];
             if (e.AuthorNodeId != stream || e.Seq <= localWm) continue;
-            int? alias = e.AuthorNodeId == NodeId
-                ? selfAlias
-                : AliasOfInternal(targetPeer, e.AuthorNodeId, Epoch);
-            if (alias is null && e.AuthorNodeId == NodeId)
-                alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
-            if (alias is null)
-            {
-                // Errata E-11 (scenario 23): try incremental ALIAS_MAP negotiation before failing closed.
-                // NOTE: a resumed node (NodePersistence.Load) has registry KEYS but no live Node
-                // handles; TryGetValue then yields a null value — treat it as "peer not attached".
-                var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
-                if (peerNode is not null && e.AuthorNodeId != NodeId)
-                {
-                    int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAlias(peerNode, e.AuthorNodeId, epTry);
-                }
-                else if (peerNode is null)
-                {
-                    // Resumed node: the registry already holds an alias for this author in the
-                    // target session (persisted), but there is no live Node handle to negotiate
-                    // ALIAS_MAP with. Reuse the durable mapping instead of failing closed.
-                    if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
-                        foreach (var (a_, (nid_, _)) in existingMap)
-                            if (nid_ == e.AuthorNodeId) { alias = a_; break; }
-                }
-            }
-            if (alias is null)
-                throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
-            var stamped = Ops.TryCloneWithOriginShared(e.Payload, (ushort)alias.Value);
+            var stamped = Ops.TryCloneWithOriginShared(e.Payload, origin);
             byte[] newPayload;
             if (stamped is not null)
             {
@@ -169,7 +166,7 @@ public sealed partial class Node
             else
             {
                 var op = Ops.DecodeOp(e.Payload).Op;
-                SetOrigin(op, (ushort)alias.Value);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
+                SetOrigin(op, origin);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
                 // Persistence byte-stability: an outbox FieldWrite payload may be truncated to its
                 // fixed header (the value bytes live in the record's FieldState after a save/load
                 // round-trip). Restore the current stored value so retransmission carries real data.
