@@ -116,6 +116,49 @@ public sealed class SessionStreamBindingTests
     }
 
     [Fact]
+    public async Task Need_keys_rejects_frame_on_wrong_namespace_stream()
+    {
+        using var a = Fix.MakeNode(317);
+        using var b = Fix.MakeNode(318);
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var accept = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await accept;
+
+        var payload = Reconcile.EncodeNeedKeys(new NeedKeysMessage
+        {
+            NamespaceId = 1,
+            RecordIds = new List<byte[]> { Fix.Rid(319) }
+        });
+        var receive = client.ReceiveNeedKeysAsync();
+        await bPipe.SendAsync(FrameCodec.BuildFrame(ReconcileFrames.NeedKeys,
+            0x0001_0002u, 12, payload));
+
+        await Assert.ThrowsAsync<FrameException>(() => receive);
+    }
+
+    [Fact]
+    public async Task Snapshot_rejects_chunk_on_wrong_namespace_stream_before_apply()
+    {
+        using var a = Fix.MakeNode(320);
+        using var b = Fix.MakeNode(321);
+        var recordId = Fix.Rid(322);
+        Assert.True(b.WriteField(1, recordId, 0x100, new byte[] { 0x7A }));
+        var (aPipe, bPipe) = PipeTransport.CreatePair();
+        var accept = SyncSession.AcceptAsync(b, bPipe);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        await using var server = await accept;
+
+        var chunk = Assert.Single(Reconcile.BuildSnapshotChunks(b, 1));
+        var receive = client.ReceiveSnapshotAsync(a);
+        await bPipe.SendAsync(FrameCodec.BuildFrame(ReconcileFrames.SnapshotChunk,
+            0x0001_0002u, 13, Reconcile.EncodeSnapshotChunk(chunk)));
+
+        await Assert.ThrowsAsync<FrameException>(() => receive);
+        Assert.False(a.TryGetRecord(1, recordId, out _));
+    }
+
+    [Fact]
     public async Task Iblt_exchange_rejects_response_from_another_namespace_stream()
     {
         using var a = Fix.MakeNode(315);
