@@ -23,8 +23,8 @@ public sealed partial class Node : IDisposable
     internal static void ValidateWritableFieldId(int fieldId)
     {
         ValidateFieldId(fieldId);
-        if (fieldId == Model.LifecycleFieldId)
-            throw new ArgumentOutOfRangeException(nameof(fieldId), "Use DeleteRecord/UndeleteRecord for lifecycle changes.");
+        if (fieldId < Model.UserFieldMin && fieldId != Model.FieldResolveId)
+            throw new ArgumentOutOfRangeException(nameof(fieldId), "Field ids below 0x0100 are reserved for system use, except FieldResolve.");
     }
 
 
