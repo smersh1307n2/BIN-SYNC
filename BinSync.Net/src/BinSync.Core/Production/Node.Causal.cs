@@ -141,22 +141,24 @@ public sealed partial class Node
         int applied = 0;
         // One batch is enqueued once per entry. Keep the complete group so a failed
         // retry can restore every pending ChangeId, not just the first one.
-        var batches = new Dictionary<BatchId, (HeldCausalBatch Held, List<PendingCausalOp> Ops)>();
+        // BatchId is only one part of the protocol inbox key; different issuers
+        // may legitimately reuse it. Each pending entry shares its HeldCausalBatch
+        // instance, so reference identity groups exactly one original batch.
+        var batches = new Dictionary<HeldCausalBatch, List<PendingCausalOp>>();
         foreach (var (op, outcome) in released)
         {
             if (outcome != CausalOutcome.Ready || op.Payload is not HeldCausalBatch held)
                 continue;
-            if (!batches.TryGetValue(held.Batch.BatchId, out var group))
-                group = (held, new List<PendingCausalOp>());
-            group.Ops.Add(op);
-            batches[held.Batch.BatchId] = group;
+            if (!batches.TryGetValue(held, out var ops))
+                batches[held] = ops = new List<PendingCausalOp>();
+            ops.Add(op);
         }
 
-        foreach (var group in batches.Values)
+        foreach (var (held, ops) in batches)
         {
             try
             {
-                ApplyBatchCausalCore(CloneBatchForPublicRead(group.Held.Batch), group.Held.SenderPeer, tracker);
+                ApplyBatchCausalCore(CloneBatchForPublicRead(held.Batch), held.SenderPeer, tracker);
                 applied++;
             }
             catch (InvalidOperationException) when (!ReferenceEquals(Causal, tracker))
@@ -167,11 +169,11 @@ public sealed partial class Node
             catch (SyncException)
             {
                 // The batch did not commit (for example, its stream cursor is not ready).
-                foreach (var op in group.Ops) tracker.RequeuePending(op);
+                foreach (var op in ops) tracker.RequeuePending(op);
             }
             catch
             {
-                foreach (var op in group.Ops) tracker.RequeuePending(op);
+                foreach (var op in ops) tracker.RequeuePending(op);
                 throw;
             }
         }
