@@ -15,13 +15,13 @@ public partial class SyncSession
 
     private static void ValidateControlStream(Frame frame)
     {
-        if (frame.StreamId != 0 || frame.Flags != 0)
+        if (frame.StreamId != 0)
             throw new FrameException("FRAME_REJECTED");
     }
 
     private static void ValidateNamespaceStreamFamily(Frame frame)
     {
-        if ((frame.StreamId & 0xFFFF_0000u) != 0x0001_0000u || frame.Flags != 0)
+        if ((frame.StreamId & 0xFFFF_0000u) != 0x0001_0000u)
             throw new FrameException("FRAME_REJECTED");
     }
 
@@ -30,7 +30,7 @@ public partial class SyncSession
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
             throw new FormatException("Namespace is outside u16 range");
         uint expectedStreamId = 0x0001_0000u | (uint)namespaceId;
-        if (frame.StreamId != expectedStreamId || frame.Flags != 0)
+        if (frame.StreamId != expectedStreamId)
             throw new FrameException("FRAME_REJECTED");
     }
 
