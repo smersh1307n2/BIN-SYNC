@@ -409,8 +409,15 @@ public sealed class PublicApiIsolationTests
         var alias = scope;
         Assert.Same(scope, alias);
 
-        Assert.Throws<InvalidOperationException>(() =>
-            Task.Run(() => alias.Dispose()).GetAwaiter().GetResult());
+        Exception? disposeError = null;
+        var wrongThread = new Thread(() =>
+        {
+            try { alias.Dispose(); }
+            catch (Exception ex) { disposeError = ex; }
+        }) { IsBackground = true };
+        wrongThread.Start();
+        Assert.True(wrongThread.Join(TimeSpan.FromSeconds(3)));
+        Assert.IsType<InvalidOperationException>(disposeError);
 
         scope.Dispose();
         alias.Dispose();
@@ -424,18 +431,23 @@ public sealed class PublicApiIsolationTests
         var tracker = new CausalTracker();
         var scope = node.EnterAllGates();
         using var started = new ManualResetEventSlim();
-
-        var setter = Task.Run(() =>
+        using var completed = new ManualResetEventSlim();
+        Exception? setterError = null;
+        var setter = new Thread(() =>
         {
             started.Set();
-            node.Causal = tracker;
-        });
+            try { node.Causal = tracker; }
+            catch (Exception ex) { setterError = ex; }
+            finally { completed.Set(); }
+        }) { IsBackground = true };
+        setter.Start();
 
         Assert.True(started.Wait(TimeSpan.FromSeconds(3)));
-        Assert.False(setter.Wait(TimeSpan.FromMilliseconds(100)));
+        Assert.False(completed.Wait(TimeSpan.FromMilliseconds(100)));
         scope.Dispose();
 
-        setter.GetAwaiter().GetResult();
+        Assert.True(setter.Join(TimeSpan.FromSeconds(3)));
+        Assert.Null(setterError);
         Assert.Same(tracker, node.Causal);
     }
 
