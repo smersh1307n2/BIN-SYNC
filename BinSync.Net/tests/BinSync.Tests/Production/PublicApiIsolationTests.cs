@@ -177,4 +177,16 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(full[..16], Digest16.From(full[..16]).ToArray());
     }
 
+    [Fact]
+    public void NodeBuilder_CopiesCallerOwnedIdentityBuffer()
+    {
+        var input = new byte[16];
+        input[0] = 0x31;
+        var builder = new NodeBuilder().WithNodeId(input);
+        input[0] = 0x42;
+
+        var node = builder.Build();
+        Assert.Equal((byte)0x31, node.NodeId.ToArray()[0]);
+    }
+
 }

@@ -189,4 +189,40 @@ public class SchemaTests
         Assert.Equal(0x0006, Frames.ErrorCodes["SCHEMA_MISMATCH"]);
         Assert.Equal(0x0011, Frames.ErrorCodes["SCHEMA_PENDING"]);
     }
+    [Fact]
+    public void SchemaRegistry_DetachesDescriptorsOnRegisterAndRead()
+    {
+        var registry = new SchemaRegistry();
+        var fields = new HashSet<ushort> { 0x1001 };
+        var retired = new HashSet<ushort> { 0x1002 };
+        var descriptor = new SchemaDescriptor
+        {
+            NamespaceId = 7,
+            SchemaId = 9,
+            Version = 1,
+            MergePolicy = 1,
+            FieldIds = fields,
+            RetiredFieldIds = retired,
+        };
+
+        registry.Register(descriptor);
+        fields.Add(0x1003);
+        retired.Clear();
+        descriptor.FieldIds.Add(0x1004);
+
+        Assert.True(registry.TryGet(7, 9, 1, out var first));
+        Assert.Contains((ushort)0x1001, first!.FieldIds);
+        Assert.DoesNotContain((ushort)0x1003, first.FieldIds);
+        Assert.DoesNotContain((ushort)0x1004, first.FieldIds);
+        Assert.Contains((ushort)0x1002, first.RetiredFieldIds);
+
+        first.FieldIds.Add(0x1005);
+        var snapshot = registry.Snapshot();
+        snapshot[0].RetiredFieldIds.Clear();
+
+        Assert.True(registry.TryGet(7, 9, 1, out var second));
+        Assert.DoesNotContain((ushort)0x1005, second!.FieldIds);
+        Assert.Contains((ushort)0x1002, second.RetiredFieldIds);
+    }
+
 }

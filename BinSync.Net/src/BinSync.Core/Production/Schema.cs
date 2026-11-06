@@ -48,13 +48,30 @@ public sealed class SchemaRegistry
         get { lock (_gate) return _map.Sum(kv => kv.Value.Count); }
     }
 
+    private static SchemaDescriptor CloneDescriptor(SchemaDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
+        ArgumentNullException.ThrowIfNull(descriptor.RetiredFieldIds);
+        return new SchemaDescriptor
+        {
+            NamespaceId = descriptor.NamespaceId,
+            SchemaId = descriptor.SchemaId,
+            Version = descriptor.Version,
+            MergePolicy = descriptor.MergePolicy,
+            FieldIds = new HashSet<ushort>(descriptor.FieldIds),
+            RetiredFieldIds = new HashSet<ushort>(descriptor.RetiredFieldIds),
+        };
+    }
+
     /// <summary>Register or replace a schema version. Enforces §18.1 field-id non-reuse across versions.</summary>
     public void Register(SchemaDescriptor desc)
     {
-        if (desc.Version < 0) throw new ArgumentException("version must be non-negative");
+        ArgumentNullException.ThrowIfNull(desc);
+        var owned = CloneDescriptor(desc);
+        if (owned.Version < 0) throw new ArgumentException("version must be non-negative");
         lock (_gate)
         {
-            var key = (desc.NamespaceId, desc.SchemaId);
+            var key = (owned.NamespaceId, owned.SchemaId);
             if (!_map.TryGetValue(key, out var byVer))
             {
                 byVer = new Dictionary<int, SchemaDescriptor>();
@@ -72,18 +89,18 @@ public sealed class SchemaRegistry
 
             // New descriptor must not revive a retired id, and must not reclaim an id
             // that was used in another version unless it is still listed (same field).
-            foreach (var f in desc.FieldIds)
+            foreach (var f in owned.FieldIds)
             {
                 if (retired.Contains(f))
                     throw new ArgumentException($"field 0x{f:X4} is retired and cannot be reused (§18.1)");
             }
-            foreach (var f in desc.RetiredFieldIds)
+            foreach (var f in owned.RetiredFieldIds)
             {
-                if (desc.FieldIds.Contains(f))
+                if (owned.FieldIds.Contains(f))
                     throw new ArgumentException($"field 0x{f:X4} cannot be both active and retired");
             }
 
-            byVer[desc.Version] = desc;
+            byVer[owned.Version] = owned;
         }
     }
 
@@ -94,7 +111,9 @@ public sealed class SchemaRegistry
         {
             desc = null;
             if (!_map.TryGetValue((namespaceId, schemaId), out var byVer)) return false;
-            return byVer.TryGetValue(version, out desc);
+            if (!byVer.TryGetValue(version, out var stored)) return false;
+            desc = CloneDescriptor(stored);
+            return true;
         }
     }
 
@@ -152,6 +171,7 @@ public sealed class SchemaRegistry
         {
             return _map.Values.SelectMany(v => v.Values)
                 .OrderBy(d => d.NamespaceId).ThenBy(d => d.SchemaId).ThenBy(d => d.Version)
+                .Select(CloneDescriptor)
                 .ToList();
         }
     }

@@ -12,7 +12,8 @@ public sealed class NodeBuilder
     /// <summary>Set the 16-byte node identity.</summary>
     public NodeBuilder WithNodeId(byte[] nodeId)
     {
-        _nodeId = nodeId;
+        ArgumentNullException.ThrowIfNull(nodeId);
+        _nodeId = nodeId.ToArray();
         return this;
     }
 
