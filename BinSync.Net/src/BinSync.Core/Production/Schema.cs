@@ -248,7 +248,7 @@ public sealed class SchemaRegistry
         // Descriptor-local errors are malformed input, not ignorable history conflicts.
         foreach (var descriptor in ordered)
         {
-            SchemaRegistry.ValidateDescriptorRange(descriptor);
+            SchemaRegistry.SchemaRegistry.ValidateDescriptorRange(descriptor);
             if (descriptor.FieldIds.Overlaps(descriptor.RetiredFieldIds))
                 throw new InvalidDataException("A schema field cannot be both active and retired.");
         }
@@ -320,7 +320,7 @@ public static class SchemaMap
         foreach (var descriptor in list)
         {
             ArgumentNullException.ThrowIfNull(descriptor);
-            ValidateDescriptorRange(descriptor);
+            SchemaRegistry.ValidateDescriptorRange(descriptor);
             ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
             ArgumentNullException.ThrowIfNull(descriptor.RetiredFieldIds);
             if (descriptor.FieldIds.Overlaps(descriptor.RetiredFieldIds))
