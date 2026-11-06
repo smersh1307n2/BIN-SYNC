@@ -72,6 +72,54 @@ public class CausalApplyTests
     }
 
     [Fact]
+    public void ApplyBatchCausal_raises_event_after_releasing_all_node_gates()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(1), 0x0100, new byte[] { 0x11 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        receiver.Causal = new CausalTracker();
+
+        int events = 0;
+        receiver.BatchApplied += (_, _) =>
+        {
+            var write = Task.Run(() => receiver.WriteField(1, Rid(2), 0x0101, new byte[] { 0x22 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "BatchApplied ran while node gates were held.");
+            Assert.True(write.Result);
+            Interlocked.Increment(ref events);
+        };
+
+        var result = receiver.ApplyBatchCausal(batch, sender.NodeId);
+
+        Assert.False(result.Duplicate);
+        Assert.Equal(1, events);
+        Assert.True(receiver.TryGetField(1, Rid(1), 0x0100, out _));
+    }
+
+    [Fact]
+    public void DrainAndRetryCausal_reapplies_with_normal_node_gate_order()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(3), 0x0100, new byte[] { 0x33 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var parent = BatchId.From(Id(0x44));
+        batch.Entries[0].CausalDeps.Add(parent);
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+
+        var blocked = Assert.Throws<SyncException>(() => receiver.ApplyBatchCausal(batch, sender.NodeId));
+        Assert.Equal("CAUSAL_DEP_MISSING", blocked.CodeName);
+
+        tracker.NoteApplied(parent);
+        Assert.Equal(1, receiver.DrainAndRetryCausal());
+        Assert.True(receiver.TryGetField(1, Rid(3), 0x0100, out var field));
+        Assert.Equal(new byte[] { 0x33 }, field!.Value);
+    }
+
+    [Fact]
     public void Missing_dep_throws_CAUSAL_DEP_MISSING_and_quarantines_KZ4()
     {
         var tracker = new CausalTracker();

@@ -38,10 +38,19 @@ public sealed partial class Node
     {
         ArgumentNullException.ThrowIfNull(batch);
         // Causal evaluation, quarantine and apply operate on one detached object graph.
-        var ownedBatch = CloneBatchForPublicRead(batch);
-        lock (_lockMeta)
+        return ApplyBatchCausalCore(CloneBatchForPublicRead(batch), senderPeer, expectedTracker: null);
+    }
+
+    private BatchResult ApplyBatchCausalCore(
+        Batch ownedBatch, NodeId senderPeer, CausalTracker? expectedTracker)
+    {
+        BatchResult result;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
-            var tracker = Causal;
+            var tracker = _causal;
+            if (expectedTracker is not null && !ReferenceEquals(tracker, expectedTracker))
+                throw new InvalidOperationException("Causal tracker changed while pending batches were being drained.");
+
             if (tracker is not null && ownedBatch.Entries.Count > 0)
             {
                 var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(ownedBatch.Entries.Count);
@@ -53,9 +62,8 @@ public sealed partial class Node
                 {
                     if (outcome == CausalOutcome.Pending)
                     {
-                        // KЗ4: hold full batch for later DrainAndRetryCausal
-                        // The tracker retains this batch for a later retry. Never retain
-                        // caller-owned mutable lists or payload buffers across the API boundary.
+                        // KЗ4: hold full batch for later DrainAndRetryCausal.
+                        // Keep a detached graph; no caller-owned buffers cross this boundary.
                         var held = new HeldCausalBatch
                         {
                             Batch = ownedBatch,
@@ -68,7 +76,7 @@ public sealed partial class Node
                 }
             }
 
-            var result = ApplyBatchInternal(ownedBatch, senderPeer);
+            result = ApplyBatchInternal(ownedBatch, senderPeer);
 
             if (tracker is not null && !result.Duplicate)
             {
@@ -78,9 +86,13 @@ public sealed partial class Node
                         tracker.NoteApplied(e.ChangeId);
                 }
             }
-
-            return result;
         }
+
+        // Match ApplyBatch: application callbacks run only after Storage → Outbox → Meta
+        // have all been released.
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
+        return result;
     }
 
     /// <summary>
@@ -100,31 +112,37 @@ public sealed partial class Node
     /// </summary>
     public int DrainAndRetryCausal()
     {
-        lock (_lockMeta)
+        // Never hold Meta while entering the normal Storage → Outbox → Meta apply order.
+        CausalTracker? tracker;
+        lock (_lockMeta) tracker = _causal;
+        if (tracker is null) return 0;
+
+        var released = tracker.Drain();
+        int applied = 0;
+        // Deduplicate by batch id (one held batch may be enqueued under several changeIds).
+        var seen = new HashSet<BatchId>();
+        foreach (var (op, outcome) in released)
         {
-            if (Causal is null) return 0;
-            int applied = 0;
-            var released = Causal.Drain();
-            // Deduplicate by batch id (one held batch may be enqueued under several changeIds)
-            var seen = new HashSet<BatchId>();
-            foreach (var (op, outcome) in released)
+            if (outcome != CausalOutcome.Ready) continue;
+            if (op.Payload is not HeldCausalBatch held) continue;
+            if (!seen.Add(held.Batch.BatchId)) continue;
+            try
             {
-                if (outcome != CausalOutcome.Ready) continue;
-                if (op.Payload is not HeldCausalBatch held) continue;
-                if (!seen.Add(held.Batch.BatchId)) continue;
-                try
-                {
-                    // Re-enter causal gate; should be Ready now that parents are known
-                    ApplyBatchCausal(held.Batch, held.SenderPeer);
-                    applied++;
-                }
-                catch (SyncException)
-                {
-                    // Still blocked or SEQ issues — leave for next drain
-                }
+                ApplyBatchCausalCore(CloneBatchForPublicRead(held.Batch), held.SenderPeer, tracker);
+                applied++;
             }
-            return applied;
+            catch (SyncException)
+            {
+                // The batch did not commit (for example, its stream cursor is not ready).
+                // It is not counted as applied.
+            }
+            catch (InvalidOperationException) when (!ReferenceEquals(Causal, tracker))
+            {
+                // The host replaced the causal tracker while this drain was in progress.
+                break;
+            }
         }
+        return applied;
     }
 
     /// <summary>
