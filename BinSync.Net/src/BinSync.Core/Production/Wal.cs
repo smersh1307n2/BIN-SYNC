@@ -276,10 +276,31 @@ public sealed class Wal : IDisposable
                 throw new InvalidOperationException("WAL is faulted after an earlier I/O error; reopen and replay it before truncating.");
             try
             {
-                _fs.SetLength(0);
-                WriteHeader(_fs);
-                _fs.Flush(flushToDisk: true);
-                _sequence = 0;
+                // Never truncate the active WAL in place: a crash between SetLength(0)
+                // and a complete header write could destroy the only recovery log.
+                // Build a fresh v2 segment beside it, fsync it, then atomically replace.
+                var tempPath = _path + ".reset-" + Guid.NewGuid().ToString("N");
+                try
+                {
+                    using (var temp = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
+                        FileShare.None, 4096, FileOptions.WriteThrough))
+                        WriteHeader(temp);
+
+                    _fs.Dispose();
+                    _fs = null;
+                    File.Move(tempPath, _path, overwrite: true);
+                    _fs = new FileStream(_path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read,
+                        4096, FileOptions.WriteThrough);
+                    _fs.Position = _fs.Length;
+                    _sequence = 0;
+                }
+                finally
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        try { File.Delete(tempPath); } catch { /* best effort */ }
+                    }
+                }
             }
             catch
             {
