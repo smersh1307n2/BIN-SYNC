@@ -213,23 +213,35 @@ public static partial class Ops
     }
 
     /// <summary>
-    /// Compact ops store <c>origin</c> at a fixed offset ([C11]). Clone and patch those
-    /// two bytes without decoding the value. Returns null when the payload is full-author,
-    /// truncated, or ambiguous — caller must fall back to decode/encode.
-    /// When origin already matches and <paramref name="payload"/> is a full <c>byte[]</c>,
-    /// returns that same instance (no copy).
+    /// Clone compact payload bytes and patch the fixed-offset <c>origin</c> ([C11]).
+    /// Returns an owned array, including when the origin already matches. Returns null
+    /// when the payload is full-author, truncated, or ambiguous.
     /// </summary>
     public static byte[]? TryCloneWithOrigin(ReadOnlyMemory<byte> payload, ushort origin)
     {
-        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out ArraySegment<byte> seg)
-            && seg.Array is not null && seg.Offset == 0 && seg.Count == seg.Array.Length)
-            return TryCloneWithOrigin(seg.Array, origin);
-        if (payload.Length < 19) return null;
-        return TryCloneWithOrigin(payload.ToArray(), origin);
+        var result = TryCloneWithOriginShared(payload, origin);
+        return result?.ToArray();
     }
 
-    /// <summary>Clone an outbox entry with a new origin byte when needed; may share payload.</summary>
+    /// <summary>Clone compact payload bytes with a new origin; never aliases the caller's array.</summary>
     public static byte[]? TryCloneWithOrigin(byte[] payload, ushort origin)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var result = TryCloneWithOriginShared(payload, origin);
+        return result?.ToArray();
+    }
+
+    // Internal zero-copy fast path for engine-owned immutable Outbox buffers.
+    internal static byte[]? TryCloneWithOriginShared(ReadOnlyMemory<byte> payload, ushort origin)
+    {
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out ArraySegment<byte> seg)
+            && seg.Array is not null && seg.Offset == 0 && seg.Count == seg.Array.Length)
+            return TryCloneWithOriginShared(seg.Array, origin);
+        if (payload.Length < 19) return null;
+        return TryCloneWithOriginShared(payload.ToArray(), origin);
+    }
+
+    internal static byte[]? TryCloneWithOriginShared(byte[] payload, ushort origin)
     {
         if (payload.Length < 19) return null;
         int off;

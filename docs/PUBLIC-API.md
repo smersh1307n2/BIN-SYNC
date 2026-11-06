@@ -1,4 +1,4 @@
-**Current package: 3.0.0** — Node identity is ctor-only; prefer `EnterAllGates()` over obsolete `Gate`.
+**Current package: 3.0.0** — Node identity is ctor-only; `EnterAllGates()` is the supported aggregate gate scope.
 
 # BinSync.Core — Public API surface
 
@@ -36,7 +36,7 @@ Breaking hygiene (no wire/protocol change):
 | Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. Internal peer cursor state is not exposed. |
 | Engine collections | **`Storage`**, **`Outbox`**, **`Inbox`**, alias maps, digests, peer states are **`internal`**. Hosts drive the engine through public methods (`WriteField`, `CreateDeltaBatch`, `ApplyBatch`, `TryGetRecord` / `TryGetField`, …). Test assemblies use `InternalsVisibleTo`. |
 | `Zero128` | Returns a **fresh copy** each access (callers cannot corrupt a shared buffer). |
-| Locks | Prefer **`EnterAllGates()`** (`AllGateScope`). `Node.Gate` is **obsolete** (Meta only). |
+| Locks | **`EnterAllGates()`** (`AllGateScope`) acquires Storage → Outbox → Meta. Individual engine locks are not public. |
 | Decode safety | Public **`DecodeBatchPayload`** materializes owned entry buffers. **`ApplyBatchPayload`** may use zero-copy internally then drop the frame. |
 
 Wire remains b128 / canonical codec on the frame payload; typed ids are an API/layout concern, not a protocol change.
@@ -145,13 +145,14 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 | API | Role |
 |-----|------|
-| `ISyncTransport` | `NodeId PeerNodeId { get; }`, `SendAsync` / `ReceiveAsync` |
-| `PipeTransport` / `StreamSyncTransport` | Test / stream adapters (`PeerNodeId` settable on concrete types) |
+| `ISyncTransport` | `NodeId PeerNodeId`, `SyncTransportCapabilities`, optional `MaxPacketSize`, `SendAsync` / `ReceiveAsync` |
+| `IPeerAwareSyncTransport` | Optional mutable peer identity binding for transports that learn the peer during HELLO |
+| `PipeTransport` / `StreamSyncTransport` | Test / stream adapters implementing peer-aware transport |
 | `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`** |
 | `SyncSession` | Transport-independent protocol session; generic `ConnectAsync` / `AcceptAsync`, batch/ACK, reconciliation, snapshots, IBLT, membership, schema, key rotation, fragmentation |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; creates generic `SyncSession` instances |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
-| `LoopbackTransport` | Lab loopback with `NodeId` peer routing and typed stream keys |
+| `LoopbackTransport` | Lab loopback with `NodeId` peer routing; routing dictionaries are private to the adapter |
 
 ### Persistence
 

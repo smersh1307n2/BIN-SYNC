@@ -12,11 +12,11 @@ public class PeerRejectedException : Exception { public PeerRejectedException(st
 public class LoopbackTransport
 {
     /// <summary>Shared node map keyed by NodeId for in-process delivery.</summary>
-    public Dictionary<NodeId, Node>? Nodes = null;
+    internal Dictionary<NodeId, Node>? Nodes = null;
     private readonly Dictionary<(NodeId, NodeId), (FlowControl Send, FlowControl Recv)> _sessions = new();
     private int _streamCounter = 0;
     /// <summary>Per-pair stream sequence counters keyed by (local, remote) node ids.</summary>
-    public Dictionary<(NodeId, NodeId), int> Streams = new();
+    internal Dictionary<(NodeId, NodeId), int> Streams = new();
 
     /// <summary>Register a node in the loopback peer map for local delivery.</summary>
     public void Register(Node node) => (Nodes ??= new())[node.NodeId] = node;

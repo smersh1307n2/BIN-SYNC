@@ -178,6 +178,40 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void TryCloneWithOrigin_always_returns_owned_payloads()
+    {
+        var payload = Ops.EncodeOp(new OpFieldWrite
+        {
+            FieldId = 0x101,
+            Wall = 10,
+            Logical = 1,
+            Origin = 1,
+            Value = new byte[] { 1, 2, 3 },
+        }, fullAuthor: false);
+
+        var cloneFromArray = Ops.TryCloneWithOrigin(payload, 1);
+        Assert.NotNull(cloneFromArray);
+        Assert.NotSame(payload, cloneFromArray);
+        cloneFromArray![OpsConst.OriginOffset] = 0x7F;
+        Assert.Equal((ushort)1, System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+            payload.AsSpan(OpsConst.OriginOffset)));
+
+        var cloneFromMemory = Ops.TryCloneWithOrigin((ReadOnlyMemory<byte>)payload, 1);
+        Assert.NotNull(cloneFromMemory);
+        Assert.NotSame(payload, cloneFromMemory);
+        cloneFromMemory![OpsConst.OriginOffset + 1] = 0x7F;
+        Assert.Equal((ushort)1, System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(
+            payload.AsSpan(OpsConst.OriginOffset)));
+    }
+
+    [Fact]
+    public void Loopback_transport_does_not_publish_mutable_routing_dictionaries()
+    {
+        Assert.Null(typeof(LoopbackTransport).GetField(nameof(LoopbackTransport.Nodes)));
+        Assert.Null(typeof(LoopbackTransport).GetField(nameof(LoopbackTransport.Streams)));
+    }
+
+    [Fact]
     public void PushOutbox_uses_the_nodes_own_identity_without_redundant_peer_arguments()
     {
         var overloads = typeof(Node).GetMethods()

@@ -6,8 +6,10 @@
 
 - Removed standalone `NextOutboxSeq`; sequence allocation is committed only with its Outbox mutation.
 - Removed untyped public `SeenState`; internal merge logic uses the gated internal accessor.
-- Replaced `PushOutbox(object, ...)` and the legacy `byte[]` author overload with typed operation overloads (`OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone`) and `NodeId`.
-- Public read methods return detached snapshots; `PushOutbox` returns a detached entry.
+- Replaced `PushOutbox(object, ...)` and the legacy `byte[]` author overload with typed operation overloads (`OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone`); the Node supplies its own author identity.
+- Public read methods return detached snapshots; `PushOutbox` returns a detached entry and does not mutate the caller's operation DTO.
+- `Ops.TryCloneWithOrigin` always returns an owned payload; the engine uses a separate internal zero-copy path for its own Outbox buffers.
+- Loopback routing dictionaries are no longer public mutable state.
 - Package version advanced to `3.0.0` for the breaking API cleanup.
 
 ---

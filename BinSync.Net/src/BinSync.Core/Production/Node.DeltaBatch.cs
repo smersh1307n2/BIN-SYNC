@@ -158,7 +158,7 @@ public sealed partial class Node
             }
             if (alias is null)
                 throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
-            var stamped = Ops.TryCloneWithOrigin(e.Payload, (ushort)alias.Value);
+            var stamped = Ops.TryCloneWithOriginShared(e.Payload, (ushort)alias.Value);
             byte[] newPayload;
             if (stamped is not null)
             {
