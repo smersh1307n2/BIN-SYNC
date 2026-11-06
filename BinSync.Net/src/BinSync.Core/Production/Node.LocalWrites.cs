@@ -12,6 +12,23 @@ public sealed partial class Node
         return BatchId.From(g);
     }
 
+    // Test/internal diagnostics only. Sequence reservation is deliberately not public.
+    internal long NextOutboxSeqInternal(NodeId author, int namespaceId)
+    {
+        lock (_lockOutbox)
+        {
+            if (_wal is not null && author == NodeId)
+                throw new InvalidOperationException("Local Outbox sequence allocation is committed with the mutation while WAL is attached.");
+            var key = (author, namespaceId);
+            long current = _outboxSeq.TryGetValue(key, out var value) ? value : 0;
+            if (current == long.MaxValue)
+                throw new SyncException("INTERNAL");
+            long next = current + 1;
+            _outboxSeq[key] = next;
+            return next;
+        }
+    }
+
     internal (ulong Wall, uint Logical, byte[] Author, object Val)? SeenStateInternal(int ns, RecordId recordId, int fieldId)
     {
         if (!Storage.TryGetValue(ns, out var store)) return null;

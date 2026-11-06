@@ -55,7 +55,7 @@ public sealed class ResourceLimitsAtomicityTests
 
         // The next allocation must be exactly the next sequence after the
         // existing queued entry; the rejected push must not leave a hole.
-        Assert.Equal(2, node.NextOutboxSeq(node.NodeId, 3));
+        Assert.Equal(2, node.NextOutboxSeqInternal(node.NodeId, 3));
         Assert.Equal(1, node.GetOutboxCount(3));
     }
 

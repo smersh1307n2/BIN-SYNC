@@ -302,7 +302,7 @@ public class WalTests
             using var wal = Wal.Open(Path.Combine(dir, "node.wal"));
             node.AttachWal(wal);
 
-            Assert.Throws<InvalidOperationException>(() => node.NextOutboxSeq(node.NodeId, 1));
+            Assert.Throws<InvalidOperationException>(() => node.NextOutboxSeqInternal(node.NodeId, 1));
             Assert.Equal(0, wal.Sequence);
             Assert.False(node.OutboxSeqRef.ContainsKey((node.NodeId, 1)));
         }

@@ -46,11 +46,11 @@ public class ReconcileTests
         var authorBBytes = new byte[16]; authorBBytes[0] = 80;
         var authorA = NodeId.From(authorABytes);
         var authorB = NodeId.From(authorBBytes);
-        a.NextOutboxSeq(authorA, 1);
-        a.NextOutboxSeq(authorA, 1);
-        b.NextOutboxSeq(authorB, 1);
-        b.NextOutboxSeq(authorB, 1);
-        b.NextOutboxSeq(authorB, 1);
+        a.NextOutboxSeqInternal(authorA, 1);
+        a.NextOutboxSeqInternal(authorA, 1);
+        b.NextOutboxSeqInternal(authorB, 1);
+        b.NextOutboxSeqInternal(authorB, 1);
+        b.NextOutboxSeqInternal(authorB, 1);
         var da = Reconcile.BuildStateDigest(a, 1);
         var db = Reconcile.BuildStateDigest(b, 1);
         Assert.Equal(0UL, da.OutboxCursor);
