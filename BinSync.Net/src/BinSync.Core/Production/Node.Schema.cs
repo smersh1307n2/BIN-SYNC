@@ -64,12 +64,14 @@ public sealed partial class Node
         {
             ThrowIfDisposed();
             Schemas ??= new SchemaRegistry();
+            bool isNewVersion = !Schemas.TryGet(namespaceId, schemaId, version, out _);
             Schemas.Register(desc);
             int max = Schemas.MaxVersion(namespaceId, schemaId) ?? version;
             if (!SchemaVersions.TryGetValue(namespaceId, out var cur) || max > cur)
                 SchemaVersions[namespaceId] = max;
         }
-        RaiseSchemaRegistered(namespaceId, schemaId, version);
+        if (isNewVersion)
+            RaiseSchemaRegistered(namespaceId, schemaId, version);
     }
 
     /// <summary>Learn schemas from a decoded SCHEMA_MAP payload.</summary>

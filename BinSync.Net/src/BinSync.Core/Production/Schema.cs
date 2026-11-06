@@ -76,7 +76,7 @@ public sealed class SchemaRegistry
         };
     }
 
-    /// <summary>Register or replace a schema version. Enforces §18.1 field-id non-reuse across versions.</summary>
+    /// <summary>Register an immutable schema version. Enforces §18.1 field-id non-reuse across versions.</summary>
     public void Register(SchemaDescriptor desc)
     {
         ArgumentNullException.ThrowIfNull(desc);

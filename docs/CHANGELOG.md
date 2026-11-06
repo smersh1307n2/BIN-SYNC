@@ -2,6 +2,8 @@
 
 ## 3.0.0 — 2026-11-06
 
+- Raise `SchemaRegistered` only when a new schema version is published; idempotent republication no longer emits a false change event.
+
 - Make schema versions immutable in the local Register API as well as SCHEMA_MAP learning; identical republication is idempotent, while policy/field-set changes require a new version.
 
 - Validate the first CRDT field payload when no local value exists; malformed initial CounterG/CounterPn/SetOr/SeqFractional/BlobRef data can no longer bypass merge-codec validation.
