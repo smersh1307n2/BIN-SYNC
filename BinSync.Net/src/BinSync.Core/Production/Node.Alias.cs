@@ -13,9 +13,9 @@ public sealed partial class Node
         lock (_lockMeta) { ThrowIfDisposed(); return DurableAuthors.ToArray(); }
     }
 
-    /// §4.4 HELLO carries the sender's incarnation epoch; the receiver stores it as the
-    /// per-session watermark used by STEP 0.5 (errata E-2/E-3). A NEW session resets the
-    /// peer's watermark first (§4.3: reconnect = fresh exchange), then raises it.
+    /// HELLO carries the sender's incarnation epoch. Keep this peer-wide baseline
+    /// separate from per-namespace batch watermarks so namespace 0 remains an ordinary
+    /// namespace key (errata E-2/E-3). Reconnects may refresh aliases, never roll back epoch.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterSessionEpoch(NodeId peer, int epoch)
@@ -27,15 +27,13 @@ public sealed partial class Node
     {
         if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
         if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
-        int knownSessionEpoch = KnownEpochs.TryGetValue((peer, 0), out var current)
+        int knownSessionEpoch = PeerSessionEpochs.TryGetValue(peer, out var current)
             ? current
             : 0;
 
-        // Keep the highest observed peer incarnation across reconnects. A fresh
-        // alias map does not authorize rollback of the peer's durable incarnation.
-        foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer && k.Item2 != -1 && k.Item2 != 0).ToList())
-            KnownEpochs.Remove(k);
-        KnownEpochs[(peer, 0)] = Math.Max(knownSessionEpoch, epoch);
+        // Preserve namespace-specific receive watermarks independently. A fresh
+        // alias map does not authorize rollback of the peer's incarnation.
+        PeerSessionEpochs[peer] = Math.Max(knownSessionEpoch, epoch);
     }
 
     /// Durable observation of an author's incarnation epoch (§4.4). Used only as fallback
@@ -74,7 +72,7 @@ public sealed partial class Node
         {
             ThrowIfDisposed();
             int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;
-            int? d = KnownEpochs.TryGetValue((peer, 0), out var v0) ? v0 : null;
+            int? d = PeerSessionEpochs.TryGetValue(peer, out var v0) ? v0 : null;
             if (e is null && d is null) return null;
             return Math.Max(e ?? 0, d ?? 0);
         }
@@ -110,7 +108,7 @@ public sealed partial class Node
         {
             ThrowIfDisposed();
             bool incarnationChanged =
-                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch) &&
+                PeerSessionEpochs.TryGetValue(peer, out int previousEpoch) &&
                 previousEpoch != newEpoch;
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
         }
@@ -165,7 +163,7 @@ public sealed partial class Node
                 throw new FrameException("FRAME_REJECTED");
 
             bool hasPreviousSessionEpoch =
-                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch);
+                PeerSessionEpochs.TryGetValue(peer, out int previousEpoch);
             bool incarnationChanged = hasPreviousSessionEpoch && previousEpoch != peerEpoch;
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
             RegisterSessionEpochInternal(peer, peerEpoch);
