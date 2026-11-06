@@ -82,11 +82,10 @@ public sealed class Wal : IDisposable
                 if (fs.Position + len + trailerLength > fs.Length)
                     break;
                 var payload = new byte[len];
-                int read = fs.Read(payload, 0, len);
-                if (read != len) break;
+                fs.ReadExactly(payload);
                 {
                     var storedDigest = new byte[RecordDigestLen];
-                    if (fs.Read(storedDigest, 0, storedDigest.Length) != storedDigest.Length) break;
+                    fs.ReadExactly(storedDigest);
                     VerifyRecordDigest(payload, storedDigest);
                 }
                 ValidateRecord(payload);
@@ -223,11 +222,10 @@ public sealed class Wal : IDisposable
                 if (pos + 4L + len + trailerLength > end)
                     break;
                 var payload = new byte[len];
-                int read = _fs.Read(payload, 0, len);
-                if (read != len) break;
+                _fs.ReadExactly(payload);
                 {
                     var storedDigest = new byte[RecordDigestLen];
-                    if (_fs.Read(storedDigest, 0, storedDigest.Length) != storedDigest.Length) break;
+                    _fs.ReadExactly(storedDigest);
                     VerifyRecordDigest(payload, storedDigest);
                 }
                 ValidateRecord(payload);
@@ -268,11 +266,11 @@ public sealed class Wal : IDisposable
             const int trailerLength = RecordDigestLen;
             if (fs.Position + len + trailerLength > fs.Length)
                 break;
-            var payload = br.ReadBytes(len);
-            if (payload.Length != len) break;
+            var payload = new byte[len];
+            fs.ReadExactly(payload);
             {
-                var storedDigest = br.ReadBytes(RecordDigestLen);
-                if (storedDigest.Length != RecordDigestLen) break;
+                var storedDigest = new byte[RecordDigestLen];
+                fs.ReadExactly(storedDigest);
                 VerifyRecordDigest(payload, storedDigest);
             }
             ValidateRecord(payload);
@@ -567,8 +565,7 @@ public sealed class Wal : IDisposable
     private static int ReadBEInt32(Stream s)
     {
         Span<byte> b = stackalloc byte[4];
-        int n = s.Read(b);
-        if (n != 4) throw new EndOfStreamException();
+        s.ReadExactly(b);
         return (int)(((uint)b[0] << 24) | ((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]);
     }
 
