@@ -38,6 +38,7 @@ public sealed class PendingCausalOp
 public sealed class CausalTracker
 {
     private readonly object _gate = new();
+    internal object SyncRoot => _gate;
     private readonly HashSet<BatchId> _known = new();
     private readonly Dictionary<BatchId, PendingCausalOp> _pending = new();
     private readonly Dictionary<BatchId, HashSet<BatchId>> _edges = new(); // child → parents
@@ -272,7 +273,7 @@ public sealed class CausalTracker
         lock (_gate)
         {
             if (_known.Contains(lostParent))
-                throw new InvalidOperationException("An applied change cannot be marked as lost.");
+                return new List<PendingCausalOp>();
 
             var dropped = new List<PendingCausalOp>();
             if (_pending.TryGetValue(lostParent, out var root))

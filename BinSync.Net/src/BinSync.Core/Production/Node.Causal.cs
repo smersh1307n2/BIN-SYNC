@@ -52,50 +52,57 @@ public sealed partial class Node
             if (expectedTracker is not null && !ReferenceEquals(tracker, expectedTracker))
                 throw new InvalidOperationException("Causal tracker changed while pending batches were being drained.");
 
-            if (tracker is not null && ownedBatch.Entries.Count > 0)
+            if (tracker is null)
             {
-                var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(ownedBatch.Entries.Count);
-                foreach (var e in ownedBatch.Entries)
-                    members.Add((e.ChangeId, e.CausalDeps.Count > 0 ? e.CausalDeps : null));
-
-                var outcome = tracker.EvaluateBatch(members, out _);
-                if (outcome != CausalOutcome.Ready)
-                {
-                    if (outcome == CausalOutcome.Pending)
-                    {
-                        // KЗ4: hold full batch for later DrainAndRetryCausal.
-                        // Keep a detached graph; no caller-owned buffers cross this boundary.
-                        var held = new HeldCausalBatch
-                        {
-                            Batch = ownedBatch,
-                            SenderPeer = senderPeer,
-                        };
-                        foreach (var e in ownedBatch.Entries)
-                            tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
-                    }
-                    else
-                    {
-                        // A rejected batch can never become applicable later. Mark each
-                        // not-yet-known ChangeId lost so its downstream dependents are
-                        // transitively discarded instead of waiting until timeout.
-                        foreach (var e in ownedBatch.Entries)
-                            if (!e.ChangeId.IsZero && !tracker.IsKnown(e.ChangeId))
-                                tracker.MarkLost(e.ChangeId);
-                    }
-                    throw new SyncException("CAUSAL_DEP_MISSING", ownedBatch.BatchId);
-                }
+                result = ApplyBatchInternal(ownedBatch, senderPeer);
             }
-
-            result = ApplyBatchInternal(ownedBatch, senderPeer);
-
-            // A duplicate is already durably present in the receiver Inbox. Keep the
-            // causal tracker aligned with that accepted state as well.
-            if (tracker is not null)
+            else
             {
-                foreach (var e in ownedBatch.Entries)
+                // Serialize gate evaluation, durable apply and NoteApplied against
+                // external MarkLost/NoteCausalApplied calls on this tracker.
+                lock (tracker.SyncRoot)
                 {
-                    if (!e.ChangeId.IsZero)
-                        tracker.NoteApplied(e.ChangeId);
+                    if (ownedBatch.Entries.Count > 0)
+                    {
+                        var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(ownedBatch.Entries.Count);
+                        foreach (var e in ownedBatch.Entries)
+                            members.Add((e.ChangeId, e.CausalDeps.Count > 0 ? e.CausalDeps : null));
+
+                        var outcome = tracker.EvaluateBatch(members, out _);
+                        if (outcome != CausalOutcome.Ready)
+                        {
+                            if (outcome == CausalOutcome.Pending)
+                            {
+                                // KЗ4: hold full batch for later DrainAndRetryCausal.
+                                // Keep a detached graph; no caller-owned buffers cross this boundary.
+                                var held = new HeldCausalBatch
+                                {
+                                    Batch = ownedBatch,
+                                    SenderPeer = senderPeer,
+                                };
+                                foreach (var e in ownedBatch.Entries)
+                                    tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
+                            }
+                            else
+                            {
+                                // A rejected batch can never become applicable later.
+                                // Mark every not-yet-known ChangeId lost for descendants.
+                                foreach (var e in ownedBatch.Entries)
+                                    if (!e.ChangeId.IsZero)
+                                        tracker.MarkLost(e.ChangeId);
+                            }
+                            throw new SyncException("CAUSAL_DEP_MISSING", ownedBatch.BatchId);
+                        }
+                    }
+
+                    result = ApplyBatchInternal(ownedBatch, senderPeer);
+
+                    // Duplicate batches are already durable; keep causal state aligned.
+                    foreach (var e in ownedBatch.Entries)
+                    {
+                        if (!e.ChangeId.IsZero)
+                            tracker.NoteApplied(e.ChangeId);
+                    }
                 }
             }
         }

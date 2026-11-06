@@ -207,6 +207,17 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void MarkLost_does_not_override_an_already_applied_change()
+    {
+        var tracker = new CausalTracker();
+        tracker.NoteApplied(Id(1));
+
+        Assert.Empty(tracker.MarkLost(Id(1)));
+        Assert.True(tracker.IsKnown(Id(1)));
+        Assert.Equal(CausalOutcome.Ready, tracker.Evaluate(Id(1), new[] { Id(2) }, out _));
+    }
+
+    [Fact]
     public void Lost_change_id_cannot_be_reapplied_or_reintroduced_in_a_batch()
     {
         var tracker = new CausalTracker();
