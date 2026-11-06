@@ -5,34 +5,29 @@ namespace BinSync;
 /// <summary>Pinned peer keys, CA roots, and batch signature verification.</summary>
 public sealed partial class TrustStore
 {
-    internal List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)> SnapshotPeers()
+    internal (TrustMode DefaultMode,
+        List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)> Peers,
+        List<byte[]> CaRoots) Snapshot()
     {
         lock (_gate)
         {
-            var snapshot = new List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)>(_peers.Count);
+            var peers = new List<(byte[] NodeId, byte[] PublicKey, TrustMode Mode, bool Revoked, long PinnedAt)>(_peers.Count);
             foreach (var peer in _peers.Values)
             {
-                snapshot.Add((
+                peers.Add((
                     NodeId: peer.NodeId.ToArray(),
                     PublicKey: peer.PublicKey.ToArray(),
                     Mode: peer.Mode,
                     Revoked: peer.Revoked,
                     PinnedAt: peer.PinnedAtUnixMs));
             }
-            snapshot.Sort((left, right) =>
+            peers.Sort((left, right) =>
                 StringComparer.Ordinal.Compare(Convert.ToHexString(left.NodeId), Convert.ToHexString(right.NodeId)));
-            return snapshot;
-        }
-    }
-
-    internal List<byte[]> SnapshotCaRoots()
-    {
-        lock (_gate)
-        {
-            return _caRoots
+            var roots = _caRoots
                 .Select(hex => Convert.FromHexString(hex))
                 .OrderBy(Convert.ToHexString, StringComparer.Ordinal)
                 .ToList();
+            return (_defaultMode, peers, roots);
         }
     }
 
@@ -76,8 +71,9 @@ public static class TrustPersistence
     public static byte[] Serialize(TrustStore store)
     {
         var w = new Writer();
-        w.U32(Magic).U16(Version).U8((byte)store.DefaultMode);
-        var peers = store.SnapshotPeers();
+        var snapshot = store.Snapshot();
+        w.U32(Magic).U16(Version).U8((byte)snapshot.DefaultMode);
+        var peers = snapshot.Peers;
         w.Varint((ulong)peers.Count);
         foreach (var p in peers)
         {
@@ -87,7 +83,7 @@ public static class TrustPersistence
             w.U8(p.Revoked ? (byte)1 : (byte)0);
             w.U64(unchecked((ulong)p.PinnedAt));
         }
-        var roots = store.SnapshotCaRoots();
+        var roots = snapshot.CaRoots;
         w.Varint((ulong)roots.Count);
         foreach (var id in roots)
             w.B128(Codec.CanonicalB128(id));

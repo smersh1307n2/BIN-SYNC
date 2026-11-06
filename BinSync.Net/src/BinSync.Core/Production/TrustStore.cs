@@ -32,7 +32,14 @@ public sealed partial class TrustStore
     private readonly HashSet<string> _caRoots = new(StringComparer.Ordinal);
 
     /// <summary>Default trust mode applied when pinning new peers.</summary>
-    public TrustMode DefaultMode { get; set; } = TrustMode.Tofu;
+    private TrustMode _defaultMode = TrustMode.Tofu;
+
+    /// <summary>Default trust mode applied when pinning new peers.</summary>
+    public TrustMode DefaultMode
+    {
+        get { lock (_gate) return _defaultMode; }
+        set { lock (_gate) _defaultMode = value; }
+    }
 
     /// <summary>Number of peers currently present in the trust store.</summary>
     public int PeerCount
