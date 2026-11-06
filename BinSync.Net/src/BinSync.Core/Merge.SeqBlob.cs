@@ -38,7 +38,7 @@ public static class SeqFractional
     public static Item Decode(byte[] data)
     {
         var r = new Reader(data);
-        return new Item
+        var item = new Item
         {
             ParentId = r.B128(),
             OrderKey = r.StringUtf8(),
@@ -46,6 +46,8 @@ public static class SeqFractional
             Seq = r.U64(),
             Value = r.Bytes(),
         };
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after SEQ_FRACTIONAL payload.");
+        return item;
     }
 
     /// <summary>
@@ -54,13 +56,11 @@ public static class SeqFractional
     /// </summary>
     public static int Compare(Item a, Item b)
     {
-        int c = string.CompareOrdinal(
-            Convert.ToHexString(a.ParentId), Convert.ToHexString(b.ParentId));
+        int c = a.ParentId.AsSpan().SequenceCompareTo(b.ParentId);
         if (c != 0) return c;
         c = string.CompareOrdinal(a.OrderKey ?? "", b.OrderKey ?? "");
         if (c != 0) return c;
-        c = string.CompareOrdinal(
-            Convert.ToHexString(a.AuthorNodeId), Convert.ToHexString(b.AuthorNodeId));
+        c = a.AuthorNodeId.AsSpan().SequenceCompareTo(b.AuthorNodeId);
         if (c != 0) return c;
         return a.Seq.CompareTo(b.Seq);
     }
@@ -112,13 +112,15 @@ public static class BlobRef
     public static Descriptor Decode(byte[] data)
     {
         var r = new Reader(data);
-        return new Descriptor
+        var descriptor = new Descriptor
         {
             BlobId = r.B128(),
             Size = r.U64(),
             ContentType = r.StringUtf8(),
             Hash = r.B256(),
         };
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after BLOB_REF payload.");
+        return descriptor;
     }
 
     /// <summary>
@@ -130,8 +132,7 @@ public static class BlobRef
         if (local is null || local.Length == 0) return remote;
         var a = Decode(local);
         var b = Decode(remote);
-        int cmp = string.CompareOrdinal(
-            Convert.ToHexString(a.BlobId), Convert.ToHexString(b.BlobId));
+        int cmp = a.BlobId.AsSpan().SequenceCompareTo(b.BlobId);
         if (cmp == 0)
             return local; // identical identity — no rewrite
         return cmp < 0 ? remote : local;

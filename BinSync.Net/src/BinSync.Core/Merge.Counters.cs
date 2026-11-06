@@ -13,6 +13,9 @@ public static class CounterG
             .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value))
             .OrderBy(x => x.Author, ByteArrayComparer.Instance)
             .ToList();
+        for (int i = 1; i < items.Count; i++)
+            if (ByteArrayComparer.Instance.Compare(items[i - 1].Author, items[i].Author) == 0)
+                throw new ArgumentException("Duplicate canonical COUNTER_G author.", nameof(byAuthor));
         var w = new Writer();
         w.Varint((ulong)items.Count);
         foreach (var (a, v) in items)
@@ -20,18 +23,31 @@ public static class CounterG
         return w.Value();
     }
 
-    /// <summary>Decode  from canonical wire bytes.</summary>
+    internal static int ReadMapCount(Reader r, string name)
+    {
+        ulong count = r.Varint();
+        // Each map entry is exactly b128 + u64 (24 bytes). Validate before narrowing/allocation.
+        if (count > (ulong)(r.Remaining / 24))
+            throw new InvalidDataException($"Invalid {name} entry count.");
+        return (int)count;
+    }
+
+    /// <summary>Decode from canonical wire bytes.</summary>
     public static Dictionary<byte[], ulong> Decode(byte[] data)
     {
         var r = new Reader(data);
-        int n = (int)r.Varint();
-        var map = new Dictionary<byte[], ulong>(BytesEq.Instance);
+        int n = ReadMapCount(r, "COUNTER_G");
+        var map = new Dictionary<byte[], ulong>(n, BytesEq.Instance);
+        byte[]? previous = null;
         for (int i = 0; i < n; i++)
         {
-            var a = r.B128();
-            ulong v = r.U64();
-            map[a] = v;
+            var author = r.B128();
+            if (previous is not null && ByteArrayComparer.Instance.Compare(previous, author) >= 0)
+                throw new InvalidDataException("COUNTER_G authors must be strictly ordered and unique.");
+            map.Add(author, r.U64());
+            previous = author;
         }
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after COUNTER_G payload.");
         return map;
     }
 
@@ -54,7 +70,7 @@ public static class CounterG
     public static ulong Total(byte[] data)
     {
         ulong sum = 0;
-        foreach (var v in Decode(data).Values) sum += v;
+        foreach (var v in Decode(data).Values) sum = checked(sum + v);
         return sum;
     }
 }
@@ -81,6 +97,9 @@ public static class CounterPn
             .Select(kv => (Author: Codec.CanonicalB128(kv.Key), Value: kv.Value))
             .OrderBy(x => x.Author, ByteArrayComparer.Instance)
             .ToList();
+        for (int i = 1; i < items.Count; i++)
+            if (ByteArrayComparer.Instance.Compare(items[i - 1].Author, items[i].Author) == 0)
+                throw new ArgumentException("Duplicate canonical COUNTER_PN author.", nameof(map));
         w.Varint((ulong)items.Count);
         foreach (var (a, v) in items)
             w.B128(a).U64(v);
@@ -92,15 +111,23 @@ public static class CounterPn
         var r = new Reader(data);
         var pos = ReadMap(r);
         var neg = ReadMap(r);
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after COUNTER_PN payload.");
         return (pos, neg);
     }
 
     static Dictionary<byte[], ulong> ReadMap(Reader r)
     {
-        int n = (int)r.Varint();
-        var map = new Dictionary<byte[], ulong>(BytesEq.Instance);
+        int n = CounterG.ReadMapCount(r, "COUNTER_PN");
+        var map = new Dictionary<byte[], ulong>(n, BytesEq.Instance);
+        byte[]? previous = null;
         for (int i = 0; i < n; i++)
-            map[r.B128()] = r.U64();
+        {
+            var author = r.B128();
+            if (previous is not null && ByteArrayComparer.Instance.Compare(previous, author) >= 0)
+                throw new InvalidDataException("COUNTER_PN authors must be strictly ordered and unique.");
+            map.Add(author, r.U64());
+            previous = author;
+        }
         return map;
     }
 
@@ -130,8 +157,8 @@ public static class CounterPn
     {
         var (p, n) = Decode(data);
         long sum = 0;
-        foreach (var v in p.Values) sum += (long)v;
-        foreach (var v in n.Values) sum -= (long)v;
+        foreach (var v in p.Values) sum = checked(sum + checked((long)v));
+        foreach (var v in n.Values) sum = checked(sum - checked((long)v));
         return sum;
     }
 }
@@ -169,7 +196,7 @@ public static class SetOr
         var addSorted = adds
             .Select(a => new Add
             {
-                Element = a.Element,
+                Element = a.Element ?? Array.Empty<byte>(),
                 Actor = Codec.CanonicalB128(a.Actor),
                 Seq = a.Seq,
             })
@@ -177,11 +204,20 @@ public static class SetOr
             .ThenBy(a => a.Actor, ByteArrayComparer.Instance)
             .ThenBy(a => a.Seq)
             .ToList();
+        var addDots = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
+        foreach (var add in addSorted)
+            if (!addDots.Add((add.Actor, add.Seq)))
+                throw new ArgumentException("SET_OR add dots must be unique.", nameof(adds));
+
         var remSorted = removes
             .Select(d => new Dot { Actor = Codec.CanonicalB128(d.Actor), Seq = d.Seq })
             .OrderBy(d => d.Actor, ByteArrayComparer.Instance)
             .ThenBy(d => d.Seq)
             .ToList();
+        for (int i = 1; i < remSorted.Count; i++)
+            if (ByteArrayComparer.Instance.Compare(remSorted[i - 1].Actor, remSorted[i].Actor) == 0 &&
+                remSorted[i - 1].Seq == remSorted[i].Seq)
+                throw new ArgumentException("SET_OR remove dots must be unique.", nameof(removes));
 
         var w = new Writer();
         w.Varint((ulong)addSorted.Count);
@@ -197,14 +233,49 @@ public static class SetOr
     public static (List<Add> Adds, List<Dot> Removes) Decode(byte[] data)
     {
         var r = new Reader(data);
-        int na = (int)r.Varint();
-        var adds = new List<Add>(na);
-        for (int i = 0; i < na; i++)
-            adds.Add(new Add { Element = r.Bytes(), Actor = r.B128(), Seq = r.U64() });
-        int nr = (int)r.Varint();
-        var rems = new List<Dot>(nr);
-        for (int i = 0; i < nr; i++)
-            rems.Add(new Dot { Actor = r.B128(), Seq = r.U64() });
+        ulong addCount = r.Varint();
+        // Minimum encoded add: one-byte zero length + actor b128 + sequence u64.
+        if (addCount > (ulong)(r.Remaining / 25))
+            throw new InvalidDataException("Invalid SET_OR add count.");
+        var adds = new List<Add>((int)addCount);
+        var addDots = new HashSet<(byte[], ulong)>(ActorSeqEq.Instance);
+        Add? previousAdd = null;
+        for (int i = 0; i < (int)addCount; i++)
+        {
+            var add = new Add { Element = r.Bytes(), Actor = r.B128(), Seq = r.U64() };
+            if (previousAdd is not null)
+            {
+                int order = ByteArrayComparer.Instance.Compare(previousAdd.Element, add.Element);
+                if (order == 0) order = ByteArrayComparer.Instance.Compare(previousAdd.Actor, add.Actor);
+                if (order == 0) order = previousAdd.Seq.CompareTo(add.Seq);
+                if (order >= 0)
+                    throw new InvalidDataException("SET_OR adds must be strictly ordered and unique.");
+            }
+            if (!addDots.Add((add.Actor, add.Seq)))
+                throw new InvalidDataException("SET_OR add dots must be unique.");
+            adds.Add(add);
+            previousAdd = add;
+        }
+
+        ulong removeCount = r.Varint();
+        if (removeCount > (ulong)(r.Remaining / 24))
+            throw new InvalidDataException("Invalid SET_OR remove count.");
+        var rems = new List<Dot>((int)removeCount);
+        Dot? previousRemove = null;
+        for (int i = 0; i < (int)removeCount; i++)
+        {
+            var remove = new Dot { Actor = r.B128(), Seq = r.U64() };
+            if (previousRemove is not null)
+            {
+                int order = ByteArrayComparer.Instance.Compare(previousRemove.Actor, remove.Actor);
+                if (order == 0) order = previousRemove.Seq.CompareTo(remove.Seq);
+                if (order >= 0)
+                    throw new InvalidDataException("SET_OR remove dots must be strictly ordered and unique.");
+            }
+            rems.Add(remove);
+            previousRemove = remove;
+        }
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after SET_OR payload.");
         return (adds, rems);
     }
 

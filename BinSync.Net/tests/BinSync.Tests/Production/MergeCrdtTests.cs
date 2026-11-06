@@ -122,6 +122,53 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void Counter_decoders_reject_duplicate_unsorted_and_trailing_entries()
+    {
+        var a = Author(1);
+        var b = Author(2);
+        var duplicate = new Writer().Varint(2).B128(a).U64(1).B128(a).U64(2).Value();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(duplicate));
+
+        var unsorted = new Writer().Varint(2).B128(b).U64(1).B128(a).U64(2).Value();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(unsorted));
+
+        var pnDuplicate = new Writer().Varint(1).B128(a).U64(1)
+            .Varint(1).B128(a).U64(2).Value();
+        Assert.Throws<InvalidDataException>(() => CounterPn.Decode(pnDuplicate));
+
+        var trailing = CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance) { [a] = 1 })
+            .Concat(new byte[] { 0 }).ToArray();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(trailing));
+    }
+
+    [Fact]
+    public void Counter_decoders_reject_impossible_counts_before_allocation()
+    {
+        var huge = new Writer().Varint(ulong.MaxValue).Value();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(huge));
+        Assert.Throws<InvalidDataException>(() => CounterPn.Decode(huge));
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(huge));
+    }
+
+    [Fact]
+    public void SetOr_decoder_rejects_duplicate_dots_and_trailing_bytes()
+    {
+        var actor = Author(1);
+        var duplicateAddDot = new Writer().Varint(2)
+            .Bytes(new byte[] { 1 }).B128(actor).U64(7)
+            .Bytes(new byte[] { 2 }).B128(actor).U64(7)
+            .Varint(0).Value();
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(duplicateAddDot));
+
+        var duplicateRemove = new Writer().Varint(0).Varint(2)
+            .B128(actor).U64(7).B128(actor).U64(7).Value();
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(duplicateRemove));
+
+        var valid = SetOr.Encode(Array.Empty<SetOr.Add>(), Array.Empty<SetOr.Dot>());
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(valid.Concat(new byte[] { 0 }).ToArray()));
+    }
+
+    [Fact]
     public void Spec_wire_codes_match()
     {
         Assert.Equal(0x03, (byte)MergePolicy.CounterG);

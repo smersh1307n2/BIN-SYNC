@@ -135,6 +135,23 @@ public class MergeSeqBlobTests
     }
 
     [Fact]
+    public void SeqFractional_and_BlobRef_reject_trailing_bytes()
+    {
+        var seq = SeqFractional.Encode(new SeqFractional.Item
+        {
+            ParentId = Author(0), OrderKey = "a", AuthorNodeId = Author(1), Seq = 1,
+            Value = Array.Empty<byte>(),
+        });
+        Assert.Throws<InvalidDataException>(() => SeqFractional.Decode(seq.Concat(new byte[] { 0 }).ToArray()));
+
+        var blob = BlobRef.Encode(new BlobRef.Descriptor
+        {
+            BlobId = Author(1), Size = 1, ContentType = "x", Hash = new byte[32],
+        });
+        Assert.Throws<InvalidDataException>(() => BlobRef.Decode(blob.Concat(new byte[] { 0 }).ToArray()));
+    }
+
+    [Fact]
     public void Spec_wire_codes()
     {
         Assert.Equal(0x06, (byte)MergePolicy.SeqFractional);
