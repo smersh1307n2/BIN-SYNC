@@ -311,7 +311,7 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
-    private async Task CompleteReceiveAsync(byte[] raw, CancellationToken ct)
+    private async Task CompleteReceiveAsync(byte[] raw)
     {
         Interlocked.Decrement(ref _queuedFrameCount);
         Interlocked.Add(ref _queuedFrameBytes, -raw.Length);
@@ -320,7 +320,9 @@ public partial class SyncSession : IAsyncDisposable
         int payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17)));
         if (streamId == 0 || payloadLength == 0) return;
         _receiveFlowControl.ApplyUpdate(streamId, payloadLength);
-        await SendWindowUpdateAsync(streamId, payloadLength, ct).ConfigureAwait(false);
+        // Once a frame has been dequeued, its credit must be returned even if the
+        // application cancels the receive operation. Only session shutdown may cancel it.
+        await SendWindowUpdateAsync(streamId, payloadLength, _receiveCts.Token).ConfigureAwait(false);
     }
 
     private async Task SendWindowUpdateAsync(uint streamId, int credits, CancellationToken ct)
@@ -421,7 +423,7 @@ public partial class SyncSession : IAsyncDisposable
                 throw new FrameException("FRAME_REJECTED");
             if ((frameFlags & Frames.FLAG_FRAGMENT) == 0)
             {
-                await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
+                await CompleteReceiveAsync(raw).ConfigureAwait(false);
                 return raw;
             }
 
