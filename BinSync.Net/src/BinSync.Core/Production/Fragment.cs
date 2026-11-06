@@ -121,6 +121,10 @@ public sealed class FragmentReassembler
 
     private readonly Dictionary<BatchId, Slot> _pending = new();
     private long _pendingBytes;
+    private int _pendingSlots;
+    private const int MaxPendingBytes = Frames.MAX_WINDOW_SIZE;
+    private const int MaxPendingMessages = 64;
+    private const int MaxPendingFragments = 262_144;
     private const int MaxPendingBytes = Frames.MAX_WINDOW_SIZE;
 
     /// <summary>In-progress fragment reassembly keyed by message id.</summary>
@@ -162,6 +166,7 @@ public sealed class FragmentReassembler
 
         // Complete
         _pending.Remove(key);
+        _pendingSlots -= slot.Parts.Length;
         int total = 0;
         foreach (var p in slot.Parts) total += p!.Length;
         _pendingBytes -= total;
