@@ -190,8 +190,11 @@ public static class Merge
     /// <summary>Apply a field tombstone into a record; returns whether state changed.</summary>
     public static bool ApplyFieldTomb(Record record, ushort fieldId, FieldState op)
     {
-        bool hadTomb = record.HasFieldTombs &&
-                       record.FieldTombs.TryGetValue(fieldId, out var previousTomb);
+        FieldState? previousTomb = null;
+        if (record.HasFieldTombs &&
+            record.FieldTombs.TryGetValue(fieldId, out var existingTomb))
+            previousTomb = existingTomb;
+        bool hadTomb = previousTomb is not null;
         FieldState winner = op;
         bool tombChanged = !hadTomb;
 

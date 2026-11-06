@@ -5,7 +5,7 @@ namespace BinSync.Tests;
 
 public sealed class MergeFieldTombTests
 {
-    private static readonly RecordId RecordId = RecordId.From(new byte[16]);
+    private static readonly RecordId TestRecordId = RecordId.From(new byte[16]);
     private static readonly NodeId AuthorA = NodeId.From(new byte[] { 1 });
     private static readonly NodeId AuthorB = NodeId.From(new byte[] { 2 });
 
@@ -18,7 +18,7 @@ public sealed class MergeFieldTombTests
     [Fact]
     public void Newer_field_tombstone_rejects_older_write()
     {
-        var record = new Record(RecordId, 1);
+        var record = new Record(TestRecordId, 1);
         Assert.True(Merge.ApplyFieldTomb(record, 0x0100, Tomb(10, AuthorA)));
 
         Assert.False(Merge.ApplyFieldWrite(record, 0x0100, Value("stale", 9, AuthorB)));
