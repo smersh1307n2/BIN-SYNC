@@ -272,6 +272,69 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void ApplySnapshotChunks_rejects_duplicate_record_and_field_ids()
+    {
+        using var target = Fix.MakeNode(66);
+        var recordId = Fix.Rid(660);
+        SnapshotField Field(ushort id, byte value) => new()
+        {
+            FieldId = id, Wall = 10, Logical = 0, AuthorNodeId = Fix.Nid(661),
+            Value = new[] { value },
+        };
+
+        var duplicateFields = new SnapshotChunkMessage
+        {
+            NamespaceId = 1, ChunkIndex = 0, ChunkCount = 1,
+            Records = new List<SnapshotRecord>
+            {
+                new() { RecordId = recordId, Fields = new List<SnapshotField> { Field(0x100, 1), Field(0x100, 2) } }
+            }
+        };
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[] { duplicateFields }));
+
+        var duplicateRecords = new[]
+        {
+            new SnapshotChunkMessage
+            {
+                NamespaceId = 1, ChunkIndex = 0, ChunkCount = 2,
+                Records = new List<SnapshotRecord> { new() { RecordId = recordId, Fields = new List<SnapshotField> { Field(0x100, 1) } } }
+            },
+            new SnapshotChunkMessage
+            {
+                NamespaceId = 1, ChunkIndex = 1, ChunkCount = 2,
+                Records = new List<SnapshotRecord> { new() { RecordId = recordId, Fields = new List<SnapshotField> { Field(0x101, 2) } } }
+            }
+        };
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, duplicateRecords));
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+    [Fact]
+    public void ApplySnapshotChunks_rejects_noncanonical_lifecycle_field_rows()
+    {
+        using var target = Fix.MakeNode(67);
+        var recordId = Fix.Rid(670);
+        SnapshotChunkMessage Chunk(SnapshotField field) => new()
+        {
+            NamespaceId = 1, ChunkIndex = 0, ChunkCount = 1,
+            Records = new List<SnapshotRecord>
+            {
+                new() { RecordId = recordId, Fields = new List<SnapshotField> { field } }
+            }
+        };
+
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[]
+        {
+            Chunk(new SnapshotField { FieldId = Model.LifecycleFieldId, IsTombstone = true, Value = Array.Empty<byte>() })
+        }));
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[]
+        {
+            Chunk(new SnapshotField { FieldId = Model.LifecycleFieldId, Value = new byte[] { Model.Alive, 0xFF } })
+        }));
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+    [Fact]
     public void Snapshot_transfer_aggregate_byte_budget_is_checked_without_overflow()
     {
         Assert.Equal(10, Reconcile.AddSnapshotTransferBytes(4, 6, maxBytes: 10));

@@ -415,7 +415,9 @@ public static partial class Reconcile
             throw new FormatException("Snapshot transfer is incomplete or exceeds protocol limits");
 
         // Validate the complete object graph before taking locks or touching live state.
-        // Public DTOs can be constructed in-process and are not necessarily decoder output.
+        // The builder emits each record and field exactly once; accepting duplicates
+        // would make conflicting equal-version rows depend on their wire order.
+        var seenRecordIds = new HashSet<RecordId>();
         for (int i = 0; i < ownedChunks.Length; i++)
         {
             var chunk = ownedChunks[i] ?? throw new FormatException("Snapshot chunk is null");
@@ -430,16 +432,24 @@ public static partial class Reconcile
             {
                 if (rec is null || rec.Fields is null)
                     throw new FormatException("Invalid snapshot record");
+                if (!seenRecordIds.Add(rec.RecordId))
+                    throw new FormatException("Duplicate snapshot record id");
                 if (rec.Fields.Count > MaxSnapshotFieldsPerChunk - totalFields)
                     throw new FormatException("Snapshot chunk has too many fields");
                 totalFields += rec.Fields.Count;
 
+                var seenFieldIds = new HashSet<ushort>();
                 foreach (var field in rec.Fields)
                 {
-                    if (field is null || field.Value is null || (field.IsTombstone && field.Value.Length != 0) ||
-                        (!field.IsTombstone && field.FieldId == Model.LifecycleFieldId &&
-                         field.Value.Length > 0 && field.Value[0] is not Model.Alive and not Model.Dead))
-                        throw new FormatException("Invalid snapshot field");
+                    if (field is null || field.Value is null || !seenFieldIds.Add(field.FieldId))
+                        throw new FormatException("Invalid or duplicate snapshot field");
+                    if (field.IsTombstone &&
+                        (field.Value.Length != 0 || field.FieldId == Model.LifecycleFieldId))
+                        throw new FormatException("Invalid snapshot field tombstone");
+                    if (!field.IsTombstone && field.FieldId == Model.LifecycleFieldId &&
+                        (field.Value.Length > 1 ||
+                         (field.Value.Length == 1 && field.Value[0] is not Model.Alive and not Model.Dead)))
+                        throw new FormatException("Invalid snapshot lifecycle field");
                 }
 
                 if (rec.HasLifecycle &&
