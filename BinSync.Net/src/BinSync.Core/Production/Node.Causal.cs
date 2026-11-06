@@ -73,6 +73,15 @@ public sealed partial class Node
                         foreach (var e in ownedBatch.Entries)
                             tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
                     }
+                    else
+                    {
+                        // A rejected batch can never become applicable later. Mark each
+                        // not-yet-known ChangeId lost so its downstream dependents are
+                        // transitively discarded instead of waiting until timeout.
+                        foreach (var e in ownedBatch.Entries)
+                            if (!e.ChangeId.IsZero && !tracker.IsKnown(e.ChangeId))
+                                tracker.MarkLost(e.ChangeId);
+                    }
                     throw new SyncException("CAUSAL_DEP_MISSING", ownedBatch.BatchId);
                 }
             }

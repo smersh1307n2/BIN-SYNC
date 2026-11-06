@@ -183,7 +183,7 @@ public class CausalApplyTests
     }
 
     [Fact]
-    public void Cycle_throws_without_quarantine()
+    public void Cycle_throws_and_marks_change_lost_for_descendants()
     {
         var tracker = new CausalTracker();
         var n = new Node(Id(1), epoch: 1) { Causal = tracker };
@@ -205,6 +205,8 @@ public class CausalApplyTests
         var ex = Assert.Throws<SyncException>(() => n.ApplyBatchCausal(batch, senderPeer: Id(2)));
         Assert.Equal("CAUSAL_DEP_MISSING", ex.CodeName);
         Assert.Equal(0, tracker.PendingCount);
+        Assert.Equal(CausalOutcome.LostDep,
+            tracker.Evaluate(BatchId.From(Id(0x30)), new[] { BatchId.From(changeId) }, out _));
     }
 
     [Fact]
