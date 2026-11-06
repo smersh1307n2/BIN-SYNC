@@ -10,6 +10,15 @@ namespace BinSync;
 public partial class SyncSession : IAsyncDisposable
 {
     protected readonly ISyncTransport _transport;
+    private sealed class TypedFragmentState
+    {
+        public readonly object Gate = new();
+        public readonly FragmentReassembler Reassembler = new();
+        public readonly Dictionary<BatchId, FragmentContext> Contexts = new();
+    }
+
+    private readonly record struct FragmentContext(uint StreamId, ulong BaseSequence, byte Flags, ushort Count);
+
     private readonly bool _ownsTransport;
     private readonly bool _flowControlEnabled;
     private readonly FlowControl _sendFlowControl = new();
@@ -40,6 +49,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly Channel<byte[]> _rawReceiveChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
     { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false });
     private readonly ConcurrentDictionary<byte, SemaphoreSlim> _receiveTypeGates = new();
+    private readonly ConcurrentDictionary<byte, TypedFragmentState> _typedFragmentStates = new();
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
     private bool _rawReceiveActive;
@@ -220,11 +230,31 @@ public partial class SyncSession : IAsyncDisposable
     protected async Task SendFrameAsync(byte type, uint streamId, ulong seq, ReadOnlyMemory<byte> payload,
         CancellationToken ct, byte flags = 0)
     {
+        bool flowControlled = _flowControlEnabled && streamId != 0 && type != Frames.TYPE_WINDOW_UPDATE;
+        if (flowControlled && payload.Length > _sendFlowControl.Initial)
+        {
+            if ((flags & Frames.FLAG_FRAGMENT) != 0 || _sendFlowControl.Initial <= 24)
+                throw new FrameException("FLOW_CONTROL_VIOLATION");
+            int maxBody = _sendFlowControl.Initial - 24;
+            int fragmentCount = checked((payload.Length + maxBody - 1) / maxBody);
+            if (fragmentCount > ushort.MaxValue || (ulong)(fragmentCount - 1) > ulong.MaxValue - seq)
+                throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
+            byte[] messageId = Guid.NewGuid().ToByteArray();
+            for (int i = 0; i < fragmentCount; i++)
+            {
+                int offset = i * maxBody;
+                int bodyLength = Math.Min(maxBody, payload.Length - offset);
+                byte[] fragmentPayload = FragmentCodec.EncodeOne(messageId, (ushort)i,
+                    (ushort)fragmentCount, payload.Span.Slice(offset, bodyLength));
+                await SendFrameAsync(type, streamId, seq + (ulong)i, fragmentPayload, ct,
+                    (byte)(flags | Frames.FLAG_FRAGMENT)).ConfigureAwait(false);
+            }
+            return;
+        }
         int size = Frames.HEADER_SIZE + payload.Length;
         var rented = ArrayPool<byte>.Shared.Rent(size);
         bool creditReserved = false;
         bool sendStarted = false;
-        bool flowControlled = _flowControlEnabled && streamId != 0 && type != Frames.TYPE_WINDOW_UPDATE;
         try
         {
             int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
@@ -332,15 +362,53 @@ public partial class SyncSession : IAsyncDisposable
             if (_receiveCompleted) channel.Writer.TryComplete(_receiveFailure);
             _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
         }
-        byte[] raw;
-        try { raw = await channel.Reader.ReadAsync(ct).ConfigureAwait(false); }
-        catch (ChannelClosedException) when (_receiveFailure is not null)
-        { throw new IOException("Session receive pump failed", _receiveFailure); }
-        catch (ChannelClosedException)
-        { throw new IOException("Peer closed the session"); }
+        var fragmentState = _typedFragmentStates.GetOrAdd(expectedType, static _ => new TypedFragmentState());
+        while (true)
+        {
+            byte[] raw;
+            try { raw = await channel.Reader.ReadAsync(ct).ConfigureAwait(false); }
+            catch (ChannelClosedException) when (_receiveFailure is not null)
+            { throw new IOException("Session receive pump failed", _receiveFailure); }
+            catch (ChannelClosedException)
+            { throw new IOException("Peer closed the session"); }
 
-        await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
-        return raw;
+            var (frame, consumed) = FrameCodec.ParseFrame(raw);
+            if (consumed != raw.Length || frame.FrameType != expectedType)
+                throw new FrameException("FRAME_REJECTED");
+            if ((frame.Flags & Frames.FLAG_FRAGMENT) == 0)
+            {
+                await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
+                return raw;
+            }
+
+            var part = FragmentCodec.DecodeOne(frame.Payload);
+            if (part.Count == 0 || part.Index >= part.Count || frame.FrameSeq < part.Index)
+                throw new FrameException("FRAME_REJECTED");
+            var messageId = BatchId.From(part.MsgId);
+            byte[]? complete;
+            FragmentContext context;
+            lock (fragmentState.Gate)
+            {
+                ulong baseSequence = frame.FrameSeq - part.Index;
+                if (!fragmentState.Contexts.TryGetValue(messageId, out context))
+                {
+                    context = new FragmentContext(frame.StreamId, baseSequence,
+                        (byte)(frame.Flags & ~Frames.FLAG_FRAGMENT), part.Count);
+                    fragmentState.Contexts.Add(messageId, context);
+                }
+                if (context.StreamId != frame.StreamId || context.BaseSequence != baseSequence ||
+                    context.Flags != (byte)(frame.Flags & ~Frames.FLAG_FRAGMENT) ||
+                    context.Count != part.Count)
+                    throw new FrameException("FRAME_REJECTED");
+                complete = fragmentState.Reassembler.Accept(frame.Payload);
+                if (complete is not null) fragmentState.Contexts.Remove(messageId);
+            }
+
+            await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
+            if (complete is not null)
+                return FrameCodec.BuildFrame(frame.FrameType, context.StreamId,
+                    context.BaseSequence, complete, context.Flags);
+        }
     }
 
     private async Task ReceivePumpAsync(CancellationToken ct)

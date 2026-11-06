@@ -122,7 +122,7 @@ public sealed class FragmentReassembler
     private readonly Dictionary<BatchId, Slot> _pending = new();
     private long _pendingBytes;
     private int _pendingSlots;
-    private const int MaxPendingBytes = Frames.MAX_WINDOW_SIZE;
+    private const int MaxPendingBytes = Frames.MAX_PAYLOAD_SIZE;
     private const int MaxPendingMessages = 64;
     private const int MaxPendingFragments = 262_144;
 

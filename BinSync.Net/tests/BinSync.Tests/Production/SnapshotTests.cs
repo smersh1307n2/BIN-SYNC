@@ -127,8 +127,9 @@ public class SnapshotTests
         source.WriteField(1, secondId, 0x100, new byte[9 * 1024 * 1024]);
 
         var (senderPipe, receiverPipe) = PipeTransport.CreatePair();
-        var acceptTask = SyncSession.AcceptAsync(target, receiverPipe);
-        await using var sender = await SyncSession.ConnectAsync(source, senderPipe);
+        var caps = SessionCapabilities.FlowControl;
+        var acceptTask = SyncSession.AcceptAsync(target, receiverPipe, caps);
+        await using var sender = await SyncSession.ConnectAsync(source, senderPipe, caps);
         await using var receiver = await acceptTask;
 
         var receiveOne = receiver.ReceiveSnapshotAsync(target);
