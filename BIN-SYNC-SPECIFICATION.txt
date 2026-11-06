@@ -633,6 +633,7 @@ removeCount: varint |
 Полный порядок: `(parentId, orderKey, authorNodeId, seq)`.
 
 **Wire payload:** `parentId: b128 | orderKey: UTF-8 String | authorNodeId: b128 | seq: u64 LE | value: Bytes`.
+- `orderKey` сравнивается по unsigned-лексикографическому порядку UTF-8 bytes (эквивалентно порядку Unicode scalar values); locale-dependent и UTF-16 code-unit сравнение запрещены.
 - Декодер обязан потребить payload полностью.
 - Равная tuple identity означает одну и ту же запись. Если две такие записи несут разные `value`, payload конфликтует и должен быть отклонён; выбирать локальный operand запрещено.
 

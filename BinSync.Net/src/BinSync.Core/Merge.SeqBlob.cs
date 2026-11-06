@@ -1,4 +1,7 @@
 // SEQ_FRACTIONAL (§8.7) and BLOB_REF (§8.8) payload codecs + merge.
+using System.Buffers;
+using System.Text;
+
 namespace BinSync;
 
 /// <summary>
@@ -58,11 +61,32 @@ public static class SeqFractional
     {
         int c = a.ParentId.AsSpan().SequenceCompareTo(b.ParentId);
         if (c != 0) return c;
-        c = string.CompareOrdinal(a.OrderKey ?? "", b.OrderKey ?? "");
+        c = CompareOrderKeyUtf8(a.OrderKey ?? "", b.OrderKey ?? "");
         if (c != 0) return c;
         c = a.AuthorNodeId.AsSpan().SequenceCompareTo(b.AuthorNodeId);
         if (c != 0) return c;
         return a.Seq.CompareTo(b.Seq);
+    }
+
+    // UTF-8 lexicographic order is Unicode scalar-value order. Comparing UTF-16
+    // code units with String.CompareOrdinal differs for supplementary characters,
+    // which would make replicas implemented in other languages choose another winner.
+    private static int CompareOrderKeyUtf8(string left, string right)
+    {
+        var a = left.AsSpan();
+        var b = right.AsSpan();
+        while (!a.IsEmpty && !b.IsEmpty)
+        {
+            if (Rune.DecodeFromUtf16(a, out var ar, out int aConsumed) != OperationStatus.Done ||
+                Rune.DecodeFromUtf16(b, out var br, out int bConsumed) != OperationStatus.Done)
+                throw new ArgumentException("SEQ_FRACTIONAL orderKey must contain valid Unicode scalar values.");
+
+            int c = ar.Value.CompareTo(br.Value);
+            if (c != 0) return c;
+            a = a[aConsumed..];
+            b = b[bConsumed..];
+        }
+        return a.IsEmpty ? (b.IsEmpty ? 0 : -1) : 1;
     }
 
     /// <summary>Winner is the item that ranks higher in the total order (or equal → keep either).</summary>

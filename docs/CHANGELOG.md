@@ -2,6 +2,8 @@
 
 ## 3.0.0 — 2026-11-06
 
+- Define SEQ_FRACTIONAL `orderKey` ordering as unsigned UTF-8 scalar order and use the same allocation-free comparison in the engine; add a supplementary-Unicode regression test.
+
 **Public API hardening and cleanup.**
 
 - Reject peer HELLO incarnation epochs below the stored peer-wide watermark before alias-map exchange; preserve the in-process stale-epoch path used to test data-plane rejection.

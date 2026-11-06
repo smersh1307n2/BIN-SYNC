@@ -54,6 +54,38 @@ public class MergeSeqBlobTests
     }
 
     [Fact]
+    public void SeqFractional_orderKey_uses_utf8_scalar_order_not_utf16_code_unit_order()
+    {
+        // U+E000 (BMP) sorts before U+10000 (supplementary) in UTF-8.
+        // UTF-16 ordinal comparison gives the opposite result because U+10000
+        // begins with a high surrogate (D800), which sorts before E000.
+        var bmp = new SeqFractional.Item
+        {
+            ParentId = Author(0),
+            OrderKey = "\uE000",
+            AuthorNodeId = Author(1),
+            Seq = 1,
+            Value = new byte[] { 1 },
+        };
+        var supplementary = new SeqFractional.Item
+        {
+            ParentId = Author(0),
+            OrderKey = "\U00010000",
+            AuthorNodeId = Author(1),
+            Seq = 1,
+            Value = new byte[] { 2 },
+        };
+
+        Assert.True(SeqFractional.Compare(bmp, supplementary) < 0);
+        Assert.Equal(new byte[] { 2 },
+            SeqFractional.Decode(SeqFractional.Merge(SeqFractional.Encode(bmp),
+                SeqFractional.Encode(supplementary))).Value);
+        Assert.Equal(
+            SeqFractional.Merge(SeqFractional.Encode(bmp), SeqFractional.Encode(supplementary)),
+            SeqFractional.Merge(SeqFractional.Encode(supplementary), SeqFractional.Encode(bmp)));
+    }
+
+    [Fact]
     public void SeqFractional_policy_via_MergeField()
     {
         var local = new FieldState(
