@@ -410,6 +410,32 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void CreateDeltaBatch_DoesNotRecopyPayloadsAlreadyDetachedByAliasTranslation()
+    {
+        using var node = Fix.MakeNode(931);
+        var recordId = Fix.Rid(931);
+        var targetPeer = Fix.Nid(932);
+        Assert.True(node.WriteField(7, recordId, 0x101, new byte[] { 1, 2, 3 }));
+
+        // Force origin translation so CreateDeltaBatch materializes a caller-owned
+        // payload before the public detachment pass.
+        node.RegisterAlias(targetPeer, 7, node.NodeId, node.Epoch);
+        var stored = node.Outbox[7][0];
+        var storedPayload = stored.Payload.ToArray();
+        var batch = node.CreateDeltaBatch(targetPeer, 7);
+
+        Assert.NotNull(batch);
+        var decoded = Assert.IsType<OpFieldWrite>(Ops.DecodeOp(batch!.Entries[0].Payload).Op);
+        Assert.Equal((ushort)7, decoded.Origin);
+        Assert.Equal(storedPayload, stored.Payload.ToArray());
+
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+            batch.Entries[0].Payload, out var payload));
+        payload.Array![payload.Offset] ^= 0xFF;
+        Assert.Equal(storedPayload, stored.Payload.ToArray());
+    }
+
+    [Fact]
     public void WriteField_CopiesCallerOwnedValueBuffer()
     {
         var node = Fix.MakeNode(904);
