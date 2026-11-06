@@ -186,6 +186,82 @@ public class ChangeIdWireTests
         Assert.Empty(target.Storage);
     }
 
+    private static void Rehash(Batch batch)
+    {
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            batch.RecordsRoot, batch.PrevBatchDigest);
+    }
+
+    [Fact]
+    public void ApplySnapshot_rejects_op_kind_that_disagrees_with_payload()
+    {
+        using var source = Fix.MakeNode(101);
+        using var target = Fix.MakeNode(102);
+        Assert.True(source.WriteField(1, Fix.Rid(0x65), 0x100, new byte[] { 1 }));
+        var batch = Assert.Single(source.BuildSnapshot(1));
+        batch.Entries[0].OpKind = OpsConst.TagFieldTomb;
+        Rehash(batch);
+
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(batch));
+        Assert.Empty(target.Storage);
+    }
+
+    [Fact]
+    public void ApplySnapshot_rejects_record_tombstone_with_different_envelope_record_id()
+    {
+        using var source = Fix.MakeNode(103);
+        using var target = Fix.MakeNode(104);
+        var recordId = Fix.Rid(0x66);
+        Assert.True(source.WriteField(1, recordId, 0x100, new byte[] { 1 }));
+        Assert.True(source.DeleteRecord(1, recordId));
+        var batch = Assert.Single(source.BuildSnapshot(1));
+        var tombstone = Assert.Single(batch.Entries.Where(e =>
+            Ops.DecodeOp(e.Payload).Op is OpRecordTombstone));
+        tombstone.RecordId = RecordId.From(Id(0xFE));
+        Rehash(batch);
+
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(batch));
+        Assert.Empty(target.Storage);
+    }
+
+    [Fact]
+    public void ApplyBatch_rejects_op_kind_that_disagrees_with_payload_before_mutation()
+    {
+        using var source = Fix.MakeNode(105);
+        using var target = Fix.MakeNode(106);
+        Transport.MakeSession(source, target);
+        Assert.True(source.WriteField(1, Fix.Rid(0x67), 0x100, new byte[] { 1 }));
+        var batch = source.CreateDeltaBatch(target.NodeId, 1)!;
+        batch.Entries[0].OpKind = OpsConst.TagFieldTomb;
+        Rehash(batch);
+
+        Assert.Throws<SyncException>(() => target.ApplyBatch(batch, source.NodeId));
+        Assert.Empty(target.Storage);
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+    [Fact]
+    public void ApplyBatch_rejects_record_tombstone_with_different_envelope_record_id_before_mutation()
+    {
+        using var source = Fix.MakeNode(107);
+        using var target = Fix.MakeNode(108);
+        Transport.MakeSession(source, target);
+        var recordId = Fix.Rid(0x68);
+        Assert.True(source.WriteField(1, recordId, 0x100, new byte[] { 1 }));
+        Assert.True(source.DeleteRecord(1, recordId));
+        var batch = source.CreateDeltaBatch(target.NodeId, 1)!;
+        var tombstone = Assert.Single(batch.Entries.Where(e =>
+            Ops.DecodeOp(e.Payload).Op is OpRecordTombstone));
+        tombstone.RecordId = RecordId.From(Id(0xFD));
+        Rehash(batch);
+
+        Assert.Throws<SyncException>(() => target.ApplyBatch(batch, source.NodeId));
+        Assert.Empty(target.Storage);
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
     [Fact]
     public void Ack_cannot_advance_beyond_sent_stream_or_accept_another_author()
     {

@@ -848,7 +848,7 @@ DELTA_BATCH {
 
 ### 12.17.0. Каноническая запись и provenance
 
-Каждая запись массива `records` имеет фиксированный 32-байтовый префикс: `recordId` (b128), затем исходный `changeId` (b128), затем `opKind` (u8), `payloadLen` (varint) и `payload`. `changeId` обязателен и сохраняется без изменения при ретрансляции через любое число узлов. Нулевой `changeId` запрещён для исходящих DELTA_BATCH; при приёме нулевой идентификатор отклоняется как `BATCH_TRANSACTION_FAILED`. `recordsRoot` вычисляется по полному каноническому массиву, включая `changeId`; следовательно, `batchDigest` и подпись автоматически связывают provenance.
+Каждая запись массива `records` имеет фиксированный 32-байтовый префикс: `recordId` (b128), затем исходный `changeId` (b128), затем `opKind` (u8), `payloadLen` (varint) и `payload`. `changeId` обязателен и сохраняется без изменения при ретрансляции через любое число узлов. Нулевой `changeId` запрещён для исходящих DELTA_BATCH; при приёме нулевой идентификатор отклоняется как `BATCH_TRANSACTION_FAILED`. `recordsRoot` вычисляется по полному каноническому массиву, включая `changeId`; следовательно, `batchDigest` и подпись автоматически связывают provenance. Поле `opKind` обязано совпадать с wire tag операции в `payload` (`0x01` FieldWrite, `0x02` FieldTomb, `0x03` RecordTombstone); несовпадение отклоняется до staging/commit. Для `RecordTombstone` вложенный `recordId` обязан совпадать с envelope `recordId`; несовпадение также отклоняется до commit. Это правило одинаково применяется к DELTA_BATCH и snapshot batches.
 
 ## 12.17.1. Атомарность
 
