@@ -156,10 +156,15 @@ public static class CounterPn
     public static long Value(byte[] data)
     {
         var (p, n) = Decode(data);
-        long sum = 0;
-        foreach (var v in p.Values) sum = checked(sum + checked((long)v));
-        foreach (var v in n.Values) sum = checked(sum - checked((long)v));
-        return sum;
+
+        // PN components are unsigned and the mathematical result is Σpos − Σneg.
+        // Accumulate before narrowing so large positive and negative totals may
+        // cancel; only the final signed value must fit Int64.
+        Int128 positive = 0;
+        Int128 negative = 0;
+        foreach (var v in p.Values) positive = checked(positive + (Int128)v);
+        foreach (var v in n.Values) negative = checked(negative + (Int128)v);
+        return checked((long)(positive - negative));
     }
 }
 

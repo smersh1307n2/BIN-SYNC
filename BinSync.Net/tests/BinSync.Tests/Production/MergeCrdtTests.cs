@@ -170,6 +170,26 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void CounterPn_value_allows_large_positive_and_negative_totals_to_cancel()
+    {
+        var a = Author(1);
+        var b = Author(2);
+        var payload = CounterPn.Encode(
+            new Dictionary<byte[], ulong>(BytesEq.Instance)
+            {
+                [a] = ulong.MaxValue,
+                [b] = 17,
+            },
+            new Dictionary<byte[], ulong>(BytesEq.Instance)
+            {
+                [a] = ulong.MaxValue,
+                [b] = 12,
+            });
+
+        Assert.Equal(5L, CounterPn.Value(payload));
+    }
+
+    [Fact]
     public void SetOr_decoder_rejects_duplicate_dots_and_trailing_bytes()
     {
         var actor = Author(1);
