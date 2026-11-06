@@ -353,7 +353,8 @@ public sealed class FlowControl
     }
 
     private readonly Dictionary<uint, CreditWaiter> _waiters = new();
-    private Exception? _failure;\n    private ulong _lastUpdateSequence;
+    private Exception? _failure;
+    private ulong _lastUpdateSequence;
 
     /// <summary>Configured initial flow-control window.</summary>
     public int Initial { get; }

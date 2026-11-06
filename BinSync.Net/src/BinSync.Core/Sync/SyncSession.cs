@@ -33,7 +33,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly bool _flowControlEnabled;
     private readonly FlowControl _sendFlowControl = new();
     private readonly FlowControl _receiveFlowControl = new();
-    private long _windowUpdateSequence;\n    private ulong _lastReceivedWindowUpdateSequence;
+    private long _windowUpdateSequence;
     private int _queuedFrameCount;
     private long _queuedFrameBytes;
     private const int MaxQueuedReceiveFrames = 4096;
@@ -477,11 +477,9 @@ public partial class SyncSession : IAsyncDisposable
                 {
                     ulong sequence = BinaryPrimitives.ReadUInt64LittleEndian(raw.AsSpan(9));
                     if (!_flowControlEnabled || streamId == 0 || flags != 0 || sequence == 0 ||
-                        sequence <= _lastReceivedWindowUpdateSequence ||
                         !SessionWire.TryDecodeWindowUpdate(raw.AsSpan(Frames.HEADER_SIZE, (int)payloadLength), out uint credits) ||
                         !_sendFlowControl.TryApplyUpdate(streamId, credits, sequence))
                         throw new FrameException("FLOW_CONTROL_VIOLATION");
-                    _lastReceivedWindowUpdateSequence = sequence;
                     continue;
                 }
 
