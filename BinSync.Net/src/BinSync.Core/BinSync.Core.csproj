@@ -30,6 +30,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="BinSync.Bench" />
     <AdditionalFiles Include="stylecop.json" Link="stylecop.json" />
   </ItemGroup>
 </Project>
