@@ -8,7 +8,14 @@ public sealed partial class Node
     /// When set, <see cref="ApplyBatchWithSchema(Batch, NodeId)"/> checks schema version before apply.
     /// Plain <see cref="ApplyBatch"/> ignores this registry.
     /// </summary>
-    public SchemaRegistry? Schemas { get; set; }
+    private SchemaRegistry? _schemas;
+
+    /// <summary>Optional schema registry. Access is serialized with schema-gated apply operations.</summary>
+    public SchemaRegistry? Schemas
+    {
+        get { lock (_lockMeta) return _schemas; }
+        set { lock (_lockMeta) _schemas = value; }
+    }
 
     /// <summary>
     /// Apply a batch after schema gate. On Pending → throw SCHEMA_PENDING;

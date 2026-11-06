@@ -64,7 +64,14 @@ public sealed partial class Node : IDisposable
     /// Optional resource caps (outbox/storage/seen-set). When set, enqueue and apply
     /// paths enforce them; null means unlimited (tests / unconstrained hosts).
     /// </summary>
-    public ResourceLimits? Limits { get; set; }
+    private ResourceLimits? _limits;
+
+    /// <summary>Optional resource caps; configuration access is serialized with Node metadata operations.</summary>
+    public ResourceLimits? Limits
+    {
+        get { lock (_lockMeta) return _limits; }
+        set { lock (_lockMeta) _limits = value; }
+    }
 
     /// <summary>Look up a record in the live store.</summary>
     public bool TryGetRecord(int namespaceId, RecordId recordId, out Record? record)

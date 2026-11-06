@@ -425,7 +425,7 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
-    public void Causal_configuration_access_waits_for_the_metadata_gate()
+    public void Optional_configuration_access_waits_for_the_metadata_gate()
     {
         using var node = Fix.MakeNode(912);
         var tracker = new CausalTracker();
@@ -436,7 +436,14 @@ public sealed class PublicApiIsolationTests
         var setter = new Thread(() =>
         {
             started.Set();
-            try { node.Causal = tracker; }
+            try
+            {
+                node.Causal = tracker;
+                node.Trust = new TrustStore();
+                node.Schemas = new SchemaRegistry();
+                node.E2eeKeys = new E2eeKeyRing();
+                node.Limits = ResourceLimits.Default;
+            }
             catch (Exception ex) { setterError = ex; }
             finally { completed.Set(); }
         }) { IsBackground = true };
@@ -449,6 +456,10 @@ public sealed class PublicApiIsolationTests
         Assert.True(setter.Join(TimeSpan.FromSeconds(3)));
         Assert.Null(setterError);
         Assert.Same(tracker, node.Causal);
+        Assert.NotNull(node.Trust);
+        Assert.NotNull(node.Schemas);
+        Assert.NotNull(node.E2eeKeys);
+        Assert.Same(ResourceLimits.Default, node.Limits);
     }
 
     [Fact]

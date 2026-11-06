@@ -9,7 +9,14 @@ public sealed partial class Node
     /// When set, sealed field APIs use the ring to seal and open values.
     /// Default WriteField never consults this.
     /// </summary>
-    public E2eeKeyRing? E2eeKeys { get; set; }
+    private E2eeKeyRing? _e2eeKeys;
+
+    /// <summary>Optional E2EE key ring. Access is serialized with sealed field operations.</summary>
+    public E2eeKeyRing? E2eeKeys
+    {
+        get { lock (_lockMeta) return _e2eeKeys; }
+        set { lock (_lockMeta) _e2eeKeys = value; }
+    }
 
     /// <summary>
     /// Seal <paramref name="plaintext"/> under the namespace key and write ciphertext
