@@ -104,6 +104,7 @@ public static class CausalWire
             ApplyTrailerStrict(payload, bodyLength, entries);
             return bodyLength;
         }
+        catch (InvalidDataException) { return payload.Length; }
         catch (IOException) { return payload.Length; }
         catch (ArgumentException) { return payload.Length; }
         catch (OverflowException) { return payload.Length; }
