@@ -46,13 +46,13 @@ public class HlcClock
     /// <summary>Maximum logical counter value (uint.MaxValue).</summary>
     public const uint LogicalMax = uint.MaxValue;
     /// <summary>Optional wall-clock source (microseconds); null uses system time.</summary>
-    public Func<long>? NowFn;
+    public Func<long> NowFn { get; }
     /// <summary>Maximum allowed clock skew in microseconds before protection kicks in.</summary>
-    public long MaxSkewUs;
+    public long MaxSkewUs { get; }
     /// <summary>Last observed wall component (cold-starts at 0).</summary>
-    public ulong LastWall = 0;   // BUGFIX: never tick at construction (§5.2 cold boot)
+    public ulong LastWall { get; internal set; } = 0;   // BUGFIX: never tick at construction (§5.2 cold boot)
     /// <summary>Last observed logical component.</summary>
-    public uint LastLogical = 0;
+    public uint LastLogical { get; internal set; } = 0;
     // Production hardening: the clock is shared mutable state — concurrent writers inside
     // one node (and background clocks) must not interleave read-modify-write on Last*.
     private readonly object _tickGate = new();
@@ -69,7 +69,7 @@ public class HlcClock
         (DateTimeOffset.UtcNow.UtcTicks - DateTimeOffset.UnixEpoch.Ticks) / 10;
 
     /// <summary>Read the configured wall-clock source in microseconds.</summary>
-    public long Now() => NowFn!();
+    public long Now() => NowFn();
 
     /// <summary>Advance the clock for a local send and return the new timestamp.</summary>
     public Hlc SendTick()

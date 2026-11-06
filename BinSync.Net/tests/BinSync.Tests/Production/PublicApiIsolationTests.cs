@@ -192,6 +192,15 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void HlcClock_StateCannotBeMutatedOutsideTheAssembly()
+    {
+        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.NowFn))!.GetSetMethod());
+        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.MaxSkewUs))!.GetSetMethod());
+        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.LastWall))!.GetSetMethod());
+        Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.LastLogical))!.GetSetMethod());
+    }
+
+    [Fact]
     public void ProtocolLookupTables_AreReadOnly()
     {
         Assert.IsAssignableFrom<IReadOnlyDictionary<int, string>>(Frames.FrameTypes);
