@@ -27,9 +27,32 @@ public sealed partial class Node
     }
 
     /// <summary>Replay one durably accepted remote batch without writing it back to the WAL.</summary>
-    internal bool ReplayRemoteBatch(NodeId senderPeer, byte[] payload)
+    internal bool ReplayRemoteBatch(NodeId senderPeer, int senderEpoch,
+        IReadOnlyList<AliasMapEntry> aliases, byte[] payload)
     {
         var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)payload);
+        var inboxKey = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
+        // A WAL tail may still contain batches already included in a just-written
+        // snapshot. Do not roll the snapshot's newer session map back to an older one.
+        if (!Inbox.Contains(inboxKey))
+        {
+            if (aliases.Count > 0)
+                CommitSession(senderPeer, senderEpoch, aliases);
+            else
+            {
+                lock (_lockMeta)
+                {
+                    bool hasEpoch = KnownEpochs.TryGetValue((senderPeer, 0), out int previousEpoch);
+                    if (hasEpoch && previousEpoch != senderEpoch)
+                    {
+                        ResetSessionInternal(senderPeer, resetReceiveState: true);
+                        RegisterSessionEpochInternal(senderPeer, senderEpoch);
+                    }
+                    else if (!hasEpoch && senderEpoch > 0)
+                        RegisterSessionEpochInternal(senderPeer, senderEpoch);
+                }
+            }
+        }
         var result = ApplyBatchInternal(batch, senderPeer, persistWal: false);
         return !result.Duplicate;
     }

@@ -142,13 +142,19 @@ public sealed class Wal : IDisposable
     /// Append a validated incoming batch before its effects are published or ACKed.
     /// The exact wire payload and receiving peer identity are retained for replay.
     /// </summary>
-    internal long AppendRemoteBatch(NodeId senderPeer, ReadOnlySpan<byte> batchPayload)
+    internal long AppendRemoteBatch(NodeId senderPeer, int senderEpoch,
+        IReadOnlyList<AliasMapEntry> aliases, ReadOnlySpan<byte> batchPayload)
     {
         if (senderPeer.IsZero) throw new ArgumentException("Sender peer identity must be non-zero.", nameof(senderPeer));
+        if (senderEpoch < 0) throw new ArgumentOutOfRangeException(nameof(senderEpoch));
+        ArgumentNullException.ThrowIfNull(aliases);
         if (batchPayload.IsEmpty) throw new ArgumentException("Batch payload must not be empty.", nameof(batchPayload));
         var w = new Writer();
         w.U8((byte)WalRecordType.RemoteBatch);
-        w.B128(senderPeer);
+        w.B128(senderPeer).U32((uint)senderEpoch);
+        w.Varint((ulong)aliases.Count);
+        foreach (var alias in aliases)
+            w.U16(alias.Alias).B128(alias.NodeId).U32((uint)alias.Epoch);
         w.Varint((ulong)batchPayload.Length);
         w.Raw(batchPayload);
         var payload = w.Value();
@@ -375,11 +381,13 @@ public sealed class Wal : IDisposable
                 break;
             case WalRecordType.RemoteBatch:
                 {
-                    var senderPeer = NodeId.From(r.B128());
-                    var batchPayload = r.BytesMemory();
-                    if (senderPeer.IsZero || batchPayload.IsEmpty)
+                    var remote = ReadRemoteBatch(r);
+                    if (remote.SenderPeer.IsZero || remote.BatchPayload.Length == 0)
                         throw new InvalidDataException("Invalid WAL remote-batch metadata.");
-                    _ = Node.DecodeBatchPayloadInternal(batchPayload);
+                    if (remote.Aliases.Count > 0 &&
+                        !remote.Aliases.Any(x => x.NodeId == remote.SenderPeer && x.Epoch == remote.SenderEpoch))
+                        throw new InvalidDataException("WAL remote-batch session map does not identify its sender.");
+                    _ = Node.DecodeBatchPayloadInternal(remote.BatchPayload);
                     break;
                 }
             case WalRecordType.LocalMutation:
@@ -472,13 +480,40 @@ public sealed class Wal : IDisposable
                 }
             case WalRecordType.RemoteBatch:
                 {
-                    var senderPeer = NodeId.From(r.B128());
-                    var batchPayload = r.BytesMemory().ToArray();
-                    return node.ReplayRemoteBatch(senderPeer, batchPayload) ? 1 : 0;
+                    var remote = ReadRemoteBatch(r);
+                    return node.ReplayRemoteBatch(remote.SenderPeer, remote.SenderEpoch,
+                        remote.Aliases, remote.BatchPayload) ? 1 : 0;
                 }
             default:
                 throw new InvalidDataException($"Unknown WAL record type 0x{(byte)type:X2}.");
         }
+    }
+
+    private static (NodeId SenderPeer, int SenderEpoch, List<AliasMapEntry> Aliases, byte[] BatchPayload)
+        ReadRemoteBatch(Reader r)
+    {
+        var senderPeer = NodeId.From(r.B128());
+        ulong epochValue = r.U32();
+        if (epochValue > int.MaxValue)
+            throw new InvalidDataException("Invalid WAL remote-batch sender epoch.");
+        int aliasCount = checked((int)r.Varint());
+        if (aliasCount > ushort.MaxValue)
+            throw new InvalidDataException("WAL remote-batch alias map is too large.");
+        var aliases = new List<AliasMapEntry>(aliasCount);
+        var aliasIds = new HashSet<ushort>();
+        var nodeIds = new HashSet<NodeId>();
+        for (int i = 0; i < aliasCount; i++)
+        {
+            ushort alias = r.U16();
+            var nodeId = NodeId.From(r.B128());
+            ulong aliasEpochValue = r.U32();
+            if (alias == 0 || nodeId.IsZero || aliasEpochValue > int.MaxValue ||
+                !aliasIds.Add(alias) || !nodeIds.Add(nodeId))
+                throw new InvalidDataException("Invalid WAL remote-batch alias map.");
+            aliases.Add(new AliasMapEntry(alias, nodeId, (int)aliasEpochValue));
+        }
+        var batchPayload = r.BytesMemory().ToArray();
+        return (senderPeer, (int)epochValue, aliases, batchPayload);
     }
 
     private static (bool ApplyToStorage, OutboxEntry Entry) ReadLocalMutation(Reader r)

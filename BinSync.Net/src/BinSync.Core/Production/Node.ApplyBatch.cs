@@ -250,7 +250,15 @@ public sealed partial class Node
         // The accepted batch must be durable before publishing any effects. ReceiveBatchAsync
         // sends its ACK only after this method returns, so a crash after ACK cannot lose it.
         if (persistWal && _wal is not null)
-            _wal.AppendRemoteBatch(senderPeer, durablePayload ?? EncodeBatchPayloadInternal(batch));
+        {
+            var aliases = AliasToNode.TryGetValue(senderPeer, out var sessionMap)
+                ? sessionMap.OrderBy(x => x.Key)
+                    .Select(x => new AliasMapEntry((ushort)x.Key, x.Value.Id, x.Value.Epoch)).ToArray()
+                : Array.Empty<AliasMapEntry>();
+            int senderEpoch = SessionEpoch(senderPeer, 0) ?? 0;
+            _wal.AppendRemoteBatch(senderPeer, senderEpoch, aliases,
+                durablePayload ?? EncodeBatchPayloadInternal(batch));
+        }
 
         // Commit: all deterministic validation and resource checks have succeeded.
         if (!hadNamespace && overlays.Count > 0)
