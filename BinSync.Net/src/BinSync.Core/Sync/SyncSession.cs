@@ -451,7 +451,7 @@ public partial class SyncSession : IAsyncDisposable
                 if (complete is not null) fragmentState.Contexts.Remove(messageId);
             }
 
-            await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
+            await CompleteReceiveAsync(raw).ConfigureAwait(false);
             if (complete is not null)
                 return FrameCodec.BuildFrame(frameType, context.StreamId,
                     context.BaseSequence, complete, context.Flags);
