@@ -1,10 +1,14 @@
-# BIN-SYNC CORE v2.4.12 FINAL
+# BIN-SYNC CORE v2.4.13 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.12 FINAL (record digest v2; implementation contract alignment)  
+**Версия:** 2.4.13 FINAL (epoch watermark separation; node-state v5)  
 **Дата:** 2026-11-06  
-**Изменения v2.4.12 относительно v2.4.11:**
+**Изменения v2.4.13 относительно v2.4.12:**
+- HELLO incarnation watermark хранится отдельно от per-namespace batch watermarks; namespace `0` не используется как служебный ключ.
+- Node-state v5 сохраняет peer-wide HELLO epochs отдельно; reader сохраняет совместимость с v3/v4 и консервативно мигрирует legacy `(peer, 0)`. 
+
+**Исторические изменения v2.4.12 относительно v2.4.11:**
 - RecordDigest использует домен BIN-SYNC/RECORD/v2 и kind 0=FieldWrite / 1=FieldTomb; пустое значение и tombstone больше не имеют одинаковый digest.
 - StateRootDigest использует BIN-SYNC/STATE/v2 и не включает агрегированный Outbox cursor.
 - Уточнены сравнение HLC author, field tombstones, нормализация b128 и runtime-профиль merge policies .NET 3.0.0.
@@ -2129,7 +2133,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 **Конец спецификации.**
 
-Документ самодостаточен и описывает текущую реализацию BIN-SYNC CORE v2.4.0. В версиях 2.3.6–2.4.0 последовательно закрыты критические проблемы, выявленные при практической реализации:
+Документ самодостаточен и описывает текущую реализацию BIN-SYNC CORE v2.4.13. В версиях 2.3.6–2.4.0 последовательно закрыты критические проблемы, выявленные при практической реализации:
 
 1. **Порядок проверок** в применении батча предотвращает ложные отказы при потерянных подтверждениях.
 2. **Трансляция псевдонимов** гарантирует корректную идентификацию автора в ячеистых топологиях.
@@ -2152,7 +2156,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 
 ## E-2. §4.4/§12.17 — watermark'и эпох ключуются СЕССИЕЙ получателя, а не автором
 **Дефект:** §4.4 («remote.epoch < known.epoch[nodeId]») при ретрансляции неоднозначен: реле не может штамовать чужие операции эпохой автора без нового wire-поля; глобальное сравнение по nodeId отвергало легитимные прямые батчи того же узла как EPOCH_REGRESSION (сценарий 42), а включение проверяемого issuerEpoch в ключ делало проверку тавтологией (сценарий 7 не срабатывал).
-**Нормативно:** приёмный watermark хранится по ключу **(senderPeer, namespaceId)** — incarnation-эпоха ТЕКУЩЕЙ сессии прямого отправителя, поднимаемая только из HELLO/ALIAS_MAP (live-канал); батч-штамп лишь повышает его для прошедших все гейты батчей. Сравнение ведётся против текущей известной сессии, никогда против собственного штампа батча.
+**Нормативно:** существуют два непересекающихся уровня watermark: (а) `PeerSessionEpochs[senderPeer]` — peer-wide incarnation baseline, полученный только из HELLO/ALIAS_MAP live-канала; (б) `KnownEpochs[(senderPeer, namespaceId)]` — namespace-specific watermark, повышаемый только после полного принятия батча. Эффективный watermark для приёма в namespace равен `max(PeerSessionEpochs[senderPeer], KnownEpochs[(senderPeer, namespaceId)])`, если оба значения существуют. Эти значения хранятся раздельно: `namespaceId = 0` — обычный namespace, а не sentinel. Durable author metadata (`namespace = -1`) также остаётся отдельной областью. Переподключение не снижает peer-wide baseline и не удаляет namespace-specific watermarks. Сравнение ведётся против эффективного watermark, никогда против собственного штампа батча.
 
 ## E-3. §10.4/STEP 2 — приёмный курсор ключуется (senderPeer, senderEpoch, ns)
 **Дефект:** единый курсор на durable issuerNodeId смешивал стримы разных incarnations одного узла.
@@ -2239,7 +2243,7 @@ value = ChaCha20-Poly1305(key, nonce, plaintext)
 4. `CreateDeltaBatch` формирует peer-relative sequence в лёгких копиях записей; payload и ChangeId остаются неизменными. Диапазон batch cursor и batch-id cache используют wire cursor.
 5. ACK сначала проверяется по StreamPushed в wire coordinate, затем contiguous-range validation выполняется в local coordinate через offset. StreamAcked хранится в wire coordinate.
 6. Compaction сравнивает local Outbox.Seq с `StreamAcked + StreamOffset` каждого заинтересованного peer. Отсутствие PeerState означает отсутствие ACK и не разрешает удаление.
-7. Offset сохраняется вместе с PeerState. Node-state повышен до v4 (`BIN-SYNC/NODESTATE/v4`); v3 читается с нулевым offset, v1/v2 не поддерживаются.
+7. Offset сохраняется вместе с PeerState. Node-state v4 ввёл сохранение StreamOffsets; node-state v5 (`BIN-SYNC/NODESTATE/v5`) дополнительно сохраняет peer-wide HELLO epochs отдельно от namespace watermarks. Reader поддерживает v3/v4: legacy `(peer, 0)` сохраняется как namespace-0 watermark и одновременно переносится в peer-wide baseline, чтобы не ослабить ранее действовавшую защиту от rollback. v1/v2 не поддерживаются.
 
 **Инвариант:** изменение cursor mapping одного peer не может изменить cursor, batch-id, ACK или видимость записей для любого другого peer.
 
