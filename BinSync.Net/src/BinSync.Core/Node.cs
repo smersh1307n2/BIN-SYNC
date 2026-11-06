@@ -237,6 +237,8 @@ public sealed partial class Node : IDisposable
     internal Dictionary<(NodeId, int), NodeId> LastStreamAuthor { get; } = new();
     /// <summary>Highest known epoch per (author, namespace).</summary>
     internal Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
+    /// <summary>Highest HELLO incarnation epoch observed per direct peer.</summary>
+    internal Dictionary<NodeId, int> PeerSessionEpochs { get; } = new();
     /// <summary>Peers currently quarantined from sync.</summary>
     internal HashSet<NodeId> Quarantined { get; } = new();
     /// <summary>Collected error code names from the last operations (diagnostic).</summary>
@@ -417,6 +419,7 @@ public sealed partial class Node : IDisposable
             LastStreamDigest.Clear();
             DurableAuthors.Clear();
             KnownEpochs.Clear();
+            PeerSessionEpochs.Clear();
             LastStreamAuthor.Clear();
             Quarantined.Clear();
             SchemaVersions.Clear();
