@@ -1,3 +1,4 @@
+using System.IO;
 using System.Threading;
 using BinSync;
 using Xunit;
@@ -362,6 +363,53 @@ public sealed class AliasAtomicityTests
         var durable = node.DurableId(epoch: 0x01020304);
         Assert.Equal(new byte[] { 0x04, 0x03, 0x02, 0x01 }, durable[16..]);
 
+    }
+
+    [Fact]
+    public void Namespace_zero_epoch_is_independent_from_peer_handshake_epoch()
+    {
+        using var node = new Node(Fix.Nid(171));
+        var peer = Fix.Nid(172);
+
+        node.KnownEpochs[(peer, 0)] = 9;
+        node.KnownEpochs[(peer, 7)] = 4;
+        node.RegisterSessionEpoch(peer, 5);
+
+        Assert.Equal(9, node.SessionEpoch(peer, 0));
+        Assert.Equal(5, node.SessionEpoch(peer, 7));
+        Assert.Equal(5, node.SessionEpoch(peer, 1));
+
+        node.RegisterSessionEpoch(peer, 3);
+        Assert.Equal(5, node.SessionEpoch(peer, 1));
+        Assert.Equal(9, node.SessionEpoch(peer, 0));
+        Assert.Equal(4, node.KnownEpochs[(peer, 7)]);
+    }
+
+    [Fact]
+    public void Peer_and_namespace_epoch_watermarks_round_trip_in_node_state_v5()
+    {
+        using var node = new Node(Fix.Nid(173));
+        var peer = Fix.Nid(174);
+        node.KnownEpochs[(peer, 0)] = 9;
+        node.KnownEpochs[(peer, 7)] = 4;
+        node.RegisterSessionEpoch(peer, 5);
+
+        var path = Path.GetTempFileName();
+        try
+        {
+            NodePersistence.Save(node, path);
+            using var restored = NodePersistence.Load(path);
+
+            Assert.Equal(5, restored.PeerSessionEpochs[peer]);
+            Assert.Equal(9, restored.KnownEpochs[(peer, 0)]);
+            Assert.Equal(4, restored.KnownEpochs[(peer, 7)]);
+            Assert.Equal(9, restored.SessionEpoch(peer, 0));
+            Assert.Equal(5, restored.SessionEpoch(peer, 7));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
 }
