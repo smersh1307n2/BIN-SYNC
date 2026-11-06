@@ -72,8 +72,8 @@ public sealed partial class Node
             publicEntry = entry is null ? null : CloneOutboxEntryForPublicRead(entry);
             committedEntry = entry;
         }
-        if (committedEntry is not null && OutboxEntryPushed is { } handler)
-            handler(CloneOutboxEntryForPublicRead(committedEntry));
+        if (committedEntry is not null)
+            RaiseOutboxEntryPushed(committedEntry);
         return publicEntry;
     }
 
@@ -429,7 +429,7 @@ public sealed partial class Node
         bool changed;
         lock (_lockStorage) lock (_lockOutbox)
             changed = TombFieldInternal(namespaceId, recordId, fieldId, hlc);
-        if (changed) FieldTombstoned?.Invoke(namespaceId, recordId, fieldId);
+        if (changed) RaiseFieldTombstoned(namespaceId, recordId, fieldId);
         return changed;
     }
 
@@ -473,7 +473,7 @@ public sealed partial class Node
         bool changed;
         lock (_lockStorage) lock (_lockOutbox)
             changed = DeleteRecordInternal(namespaceId, recordId, hlc);
-        if (changed) RecordDeleted?.Invoke(namespaceId, recordId);
+        if (changed) RaiseRecordDeleted(namespaceId, recordId);
         return changed;
     }
 
@@ -515,7 +515,7 @@ public sealed partial class Node
             changed = UndeleteRecordInternal(namespaceId, recordId, hlc);
         // Undelete is an explicit propagated lifecycle operation even when the local
         // lifecycle value was already Alive, so notify after every successful commit.
-        RecordUndeleted?.Invoke(namespaceId, recordId);
+        RaiseRecordUndeleted(namespaceId, recordId);
         return changed;
     }
 
