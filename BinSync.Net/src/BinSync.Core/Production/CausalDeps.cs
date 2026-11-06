@@ -280,22 +280,60 @@ public sealed class CausalTracker
         }
     }
 
-    /// <summary>Batch gate with typed change ids.</summary>
+    /// <summary>Batch gate with typed change ids and atomic intra-batch dependencies.</summary>
     public CausalOutcome EvaluateBatch(
         IReadOnlyList<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)> members,
         out string? detail)
     {
+        ArgumentNullException.ThrowIfNull(members);
         detail = null;
         CausalOutcome worst = CausalOutcome.Ready;
         lock (_gate)
         {
-            foreach (var (cid, deps) in members)
+            // Earlier members satisfy their intra-batch dependents at the same
+            // atomic commit. Forward references cannot be satisfied in stream order.
+            var positions = new Dictionary<BatchId, int>(members.Count);
+            for (int i = 0; i < members.Count; i++)
             {
-                var o = EvaluateLocked(cid, deps ?? Array.Empty<BatchId>(), out var d);
-                if (o != CausalOutcome.Ready)
+                if (!positions.TryAdd(members[i].ChangeId, i))
+                    throw new InvalidDataException("Duplicate ChangeId in causal batch.");
+            }
+
+            for (int i = 0; i < members.Count; i++)
+            {
+                var (cid, rawDeps) = members[i];
+                var deps = rawDeps ?? Array.Empty<BatchId>();
+                List<BatchId>? externalMissing = null;
+                CausalOutcome memberOutcome = CausalOutcome.Ready;
+                string? memberDetail = null;
+
+                for (int j = 0; j < deps.Count; j++)
                 {
-                    detail = d;
-                    if (o > worst) worst = o;
+                    var dep = deps[j];
+                    if (dep == cid || (positions.TryGetValue(dep, out int parentIndex) && parentIndex >= i))
+                    {
+                        memberOutcome = CausalOutcome.Cycle;
+                        memberDetail = Key(dep);
+                        break;
+                    }
+                    if (_lost.Contains(dep))
+                    {
+                        memberOutcome = CausalOutcome.LostDep;
+                        memberDetail = Key(dep);
+                        break;
+                    }
+                    if (positions.ContainsKey(dep) || _known.Contains(dep))
+                        continue;
+                    (externalMissing ??= new List<BatchId>()).Add(dep);
+                }
+
+                if (memberOutcome == CausalOutcome.Ready && externalMissing is not null)
+                    memberOutcome = EvaluateLocked(cid, externalMissing, out memberDetail);
+
+                if (memberOutcome > worst)
+                {
+                    worst = memberOutcome;
+                    detail = memberDetail;
                 }
             }
         }

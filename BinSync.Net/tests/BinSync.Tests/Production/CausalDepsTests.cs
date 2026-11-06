@@ -207,6 +207,37 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void Batch_gate_accepts_dependencies_on_earlier_members_atomically()
+    {
+        var tracker = new CausalTracker();
+        var members = new List<(BatchId, IReadOnlyList<BatchId>?)>
+        {
+            (Id(1), Array.Empty<BatchId>()),
+            (Id(2), new[] { Id(1) }),
+        };
+        Assert.Equal(CausalOutcome.Ready, tracker.EvaluateBatch(members, out _));
+    }
+
+    [Fact]
+    public void Batch_gate_rejects_forward_dependencies_and_duplicate_change_ids()
+    {
+        var tracker = new CausalTracker();
+        var forward = new List<(BatchId, IReadOnlyList<BatchId>?)>
+        {
+            (Id(1), new[] { Id(2) }),
+            (Id(2), Array.Empty<BatchId>()),
+        };
+        Assert.Equal(CausalOutcome.Cycle, tracker.EvaluateBatch(forward, out _));
+
+        var duplicate = new List<(BatchId, IReadOnlyList<BatchId>?)>
+        {
+            (Id(1), Array.Empty<BatchId>()),
+            (Id(1), Array.Empty<BatchId>()),
+        };
+        Assert.Throws<InvalidDataException>(() => tracker.EvaluateBatch(duplicate, out _));
+    }
+
+    [Fact]
     public void Batch_all_or_nothing_KZ5()
     {
         var t = new CausalTracker();
