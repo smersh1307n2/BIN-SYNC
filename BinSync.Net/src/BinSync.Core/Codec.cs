@@ -121,7 +121,13 @@ public static partial class Codec
         var pre = new byte["BIN-SYNC/AUTHID/v1".Length + v.Length];
         System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/AUTHID/v1").CopyTo(pre, 0);
         v.CopyTo(pre, "BIN-SYNC/AUTHID/v1".Length);
-        return Blake3Core.Hash256(pre);
+
+        // Hash256 returns 32 bytes, but B128 is exactly 16 bytes on the wire.
+        // Keep the leading half of the domain-separated digest, matching NodeId /
+        // RecordId / BatchId.From and preventing oversized identity fields.
+        Span<byte> digest = stackalloc byte[32];
+        Blake3Core.Hash256(pre, digest);
+        return digest[..16].ToArray();
     }
 }
 
