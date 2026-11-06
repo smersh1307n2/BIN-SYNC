@@ -331,6 +331,7 @@ public static partial class Reconcile
         // concurrent caller edits cannot change the values applied after preflight.
         var ownedChunks = input.Select(CloneSnapshotChunk).ToArray();
         var first = ownedChunks[0] ?? throw new FormatException("Snapshot chunk is null");
+        Node.ValidateNamespaceId(first.NamespaceId);
         if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || ownedChunks.Length != first.ChunkCount)
             throw new FormatException("Snapshot transfer is incomplete or exceeds protocol limits");
 
@@ -415,6 +416,20 @@ public static partial class Reconcile
                     rec.LifecycleAuthor, rec.LifecycleValue))
                     applied++;
             }
+        }
+
+        // Snapshot apply obeys the same configured storage cap as DELTA_BATCH.
+        // Count only record identities not already present in the target namespace;
+        // reject before publishing any staged record.
+        var limits = node.Limits;
+        if (limits is not null && staged.Count > 0)
+        {
+            int newRecords = 0;
+            bool hasNamespace = node.Storage.TryGetValue(first.NamespaceId, out var existingStore);
+            foreach (var recordId in staged.Keys)
+                if (!hasNamespace || !existingStore!.ContainsKey(recordId))
+                    newRecords++;
+            limits.EnsureCanApplySnapshot(node, newRecords);
         }
 
         // Single publication phase while all node gates remain held.
