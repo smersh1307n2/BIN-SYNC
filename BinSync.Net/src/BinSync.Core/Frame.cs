@@ -513,7 +513,7 @@ public sealed class FlowControl
             _waiters.Remove(streamId, out waiter);
             RemoveIdleStream(streamId, next, remaining);
         }
-        waiter?.TrySetResult();
+        waiter?.Signal.TrySetResult();
         return true;
     }
 }
