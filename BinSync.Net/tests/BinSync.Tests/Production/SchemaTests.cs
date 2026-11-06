@@ -165,6 +165,14 @@ public class SchemaTests
                     RetiredFieldIds = new HashSet<ushort> { 0x101 },
                 }
             }));
+
+        // A conflict late in the incoming map must not leave earlier entries published.
+        Assert.Throws<InvalidDataException>(() => registry.Learn(new[]
+        {
+            Desc(1, 13, 1, 0x02, 0x200),
+            Desc(1, 12, 1, 0x03, 0x100),
+        }));
+        Assert.Null(registry.MaxVersion(1, 13));
     }
 
     [Fact]

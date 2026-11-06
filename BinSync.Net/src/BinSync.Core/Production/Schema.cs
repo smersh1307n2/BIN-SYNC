@@ -56,6 +56,11 @@ public sealed class SchemaRegistry
         if ((uint)descriptor.MergePolicy > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.MergePolicy));
     }
 
+    private static bool DescriptorsEqual(SchemaDescriptor left, SchemaDescriptor right) =>
+        left.MergePolicy == right.MergePolicy &&
+        left.FieldIds.SetEquals(right.FieldIds) &&
+        left.RetiredFieldIds.SetEquals(right.RetiredFieldIds);
+
     private static SchemaDescriptor CloneDescriptor(SchemaDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
@@ -243,20 +248,30 @@ public sealed class SchemaRegistry
         int learned = 0;
         lock (_gate)
         {
+            // Preflight immutable-version conflicts before mutating the registry.
+            // Also detect conflicting duplicates inside one incoming map.
+            var incoming = new Dictionary<(int Ns, int SchemaId, int Version), SchemaDescriptor>();
+            foreach (var descriptor in ordered)
+            {
+                var key = (descriptor.NamespaceId, descriptor.SchemaId, descriptor.Version);
+                if (incoming.TryGetValue(key, out var prior) &&
+                    !DescriptorsEqual(prior, descriptor))
+                    throw new InvalidDataException(
+                        $"Conflicting schema descriptors in map for namespace {key.Ns}, schema {key.SchemaId}, version {key.Version}.");
+                incoming[key] = descriptor;
+
+                if (_map.TryGetValue((descriptor.NamespaceId, descriptor.SchemaId), out var byVersion) &&
+                    byVersion.TryGetValue(descriptor.Version, out var existing) &&
+                    !DescriptorsEqual(existing, descriptor))
+                    throw new InvalidDataException(
+                        $"Conflicting schema descriptor for namespace {descriptor.NamespaceId}, schema {descriptor.SchemaId}, version {descriptor.Version}.");
+            }
+
             foreach (var descriptor in ordered)
             {
                 if (_map.TryGetValue((descriptor.NamespaceId, descriptor.SchemaId), out var byVersion) &&
-                    byVersion.TryGetValue(descriptor.Version, out var existing))
-                {
-                    // A schema version is immutable. Treat a conflicting descriptor
-                    // as invalid input instead of silently accepting whichever map arrived first.
-                    if (existing.MergePolicy != descriptor.MergePolicy ||
-                        !existing.FieldIds.SetEquals(descriptor.FieldIds) ||
-                        !existing.RetiredFieldIds.SetEquals(descriptor.RetiredFieldIds))
-                        throw new InvalidDataException(
-                            $"Conflicting schema descriptor for namespace {descriptor.NamespaceId}, schema {descriptor.SchemaId}, version {descriptor.Version}.");
+                    byVersion.ContainsKey(descriptor.Version))
                     continue;
-                }
                 try
                 {
                     Register(descriptor);
