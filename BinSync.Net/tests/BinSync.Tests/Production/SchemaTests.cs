@@ -335,6 +335,28 @@ public class SchemaTests
     }
 
     [Fact]
+    public void ApplyBatchWithSchema_policy_mismatch_rejects_without_publishing_state()
+    {
+        using var sender = Fix.MakeNode(303);
+        using var receiver = Fix.MakeNode(304);
+        Transport.MakeSession(sender, receiver);
+        receiver.RegisterSchema(Desc(1, 0, 1, 0x03, 0x100));
+
+        var recordId = Fix.Rid(303);
+        Assert.True(sender.WriteField(1, recordId, 0x100, new byte[] { 0x5A }));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1);
+        Assert.NotNull(batch);
+
+        var error = Assert.Throws<SyncException>(() =>
+            receiver.ApplyBatchWithSchema(batch!, sender.NodeId));
+
+        Assert.Equal("SCHEMA_MISMATCH", error.CodeName);
+        Assert.False(receiver.TryGetRecord(1, recordId, out _));
+        Assert.Empty(receiver.Inbox);
+        Assert.Equal(0, receiver.GetOutboxCount(1));
+    }
+
+    [Fact]
     public void ApplyBatchWithSchema_pending_throws()
     {
         var n = Fix.MakeNode(300);
