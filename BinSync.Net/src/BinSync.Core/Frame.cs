@@ -345,6 +345,7 @@ public sealed class FlowControl
     private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
     private readonly Dictionary<uint, TaskCompletionSource> _waiters = new();
+    private Exception? _failure;
 
     /// <summary>Configured initial flow-control window.</summary>
     public int Initial { get; }
@@ -376,6 +377,8 @@ public sealed class FlowControl
         if (payloadBytes < 0) throw new ArgumentOutOfRangeException(nameof(payloadBytes));
         if (payloadBytes > MaxWindow) return false;
         lock (_gate)
+            if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
+        lock (_gate)
         {
             var balance = BalanceInternal(streamId);
             if (balance < payloadBytes) return false;
@@ -400,6 +403,7 @@ public sealed class FlowControl
             Task waitTask;
             lock (_gate)
             {
+                if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
                 long balance = BalanceInternal(streamId);
                 if (balance >= payloadBytes)
                 {
@@ -435,6 +439,21 @@ public sealed class FlowControl
         return next;
     }
 
+    /// <summary>Fail all current and future credit waiters when the session can no longer progress.</summary>
+    public void Fail(Exception failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        TaskCompletionSource[] waiters;
+        lock (_gate)
+        {
+            if (_failure is not null) return;
+            _failure = failure;
+            waiters = _waiters.Values.ToArray();
+            _waiters.Clear();
+        }
+        foreach (var waiter in waiters) waiter.TrySetException(failure);
+    }
+
     /// <summary>Apply a peer update only when it is strictly within the negotiated window.</summary>
     public bool TryApplyUpdate(uint streamId, long credits)
     {
@@ -442,6 +461,7 @@ public sealed class FlowControl
         TaskCompletionSource? waiter;
         lock (_gate)
         {
+            if (_failure is not null) return false;
             long balance = BalanceInternal(streamId);
             if (credits > MaxWindow - balance) return false;
             _credit[streamId] = balance + credits;

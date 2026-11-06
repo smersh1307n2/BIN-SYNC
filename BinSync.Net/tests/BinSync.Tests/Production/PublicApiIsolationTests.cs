@@ -542,6 +542,16 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public async Task FlowControl_Failure_wakes_credit_waiters()
+    {
+        var flow = new FlowControl(initial: 0, maxWindow: 8);
+        var waiting = flow.WaitForCreditAsync(9, 1).AsTask();
+        flow.Fail(new IOException("peer closed"));
+        await Assert.ThrowsAsync<IOException>(() => waiting);
+        Assert.Throws<IOException>(() => flow.TryConsume(9, 1));
+    }
+
+    [Fact]
     public void FlowControl_TryApplyUpdate_rejects_zero_and_window_overflow()
     {
         var flow = new FlowControl(initial: 8, maxWindow: 16);

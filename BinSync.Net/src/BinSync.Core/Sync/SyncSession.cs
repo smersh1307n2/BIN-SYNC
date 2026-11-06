@@ -230,6 +230,8 @@ public partial class SyncSession : IAsyncDisposable
             int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
             if (flowControlled)
             {
+                if (payload.Length > _sendFlowControl.Initial)
+                    throw new FrameException("FLOW_CONTROL_VIOLATION");
                 EnsureReceivePumpStarted();
                 await _sendFlowControl.WaitForCreditAsync(streamId, payload.Length, ct).ConfigureAwait(false);
                 creditReserved = true;
@@ -239,6 +241,12 @@ public partial class SyncSession : IAsyncDisposable
             {
                 sendStarted = true;
                 await _transport.SendAsync(rented.AsMemory(0, length), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _sendFlowControl.Fail(ex);
+                _receiveCts.Cancel();
+                throw;
             }
             finally { _sendGate.Release(); }
         }
@@ -284,6 +292,7 @@ public partial class SyncSession : IAsyncDisposable
     public virtual async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        _sendFlowControl.Fail(new ObjectDisposedException(nameof(SyncSession)));
         _receiveCts.Cancel();
         try
         {
@@ -399,6 +408,7 @@ public partial class SyncSession : IAsyncDisposable
         catch (Exception ex) { failure = ex; }
         finally
         {
+            if (failure is not null) _sendFlowControl.Fail(failure);
             lock (_receiveSync)
             {
                 _receiveFailure = failure;
