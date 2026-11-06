@@ -371,6 +371,65 @@ public sealed partial class Node
         Limits?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
             relayIndices.Count, newSeenKeys?.Count ?? 0);
 
+        // Prepare every object and reserve every collection slot before the WAL commit
+        // point. After AppendRemoteBatch succeeds, publication is assignment/add-only.
+        var hasRelayOutbox = Outbox.TryGetValue(batch.NamespaceId, out var relayOutbox);
+        var stagedRelayEntries = relayIndices.Count == 0
+            ? Array.Empty<OutboxEntry>()
+            : new OutboxEntry[relayIndices.Count];
+        for (int ri = 0; ri < relayIndices.Count; ri++)
+        {
+            int idx = relayIndices[ri];
+            var e = batch.Entries[idx];
+            var op = decodedOps[idx];
+            stagedRelayEntries[ri] = new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
+                Seq = relaySequences[idx],
+                ChangeId = relayChangeIds[idx],
+                RecordId = e.RecordId,
+                OpKind = e.OpKind,
+                Payload = durablePayload is null ? e.Payload : e.Payload.ToArray(),
+                AuthorNodeId = resolvedAuthors[idx],
+                CreatedAt = (long)WallOf(op),
+            };
+        }
+
+        if (stagedRelayEntries.Length > 0)
+        {
+            if (hasRelayOutbox)
+                relayOutbox!.EnsureCapacity(relayOutbox.Count + stagedRelayEntries.Length);
+            else
+            {
+                Outbox.EnsureCapacity(Outbox.Count + 1);
+                relayOutbox = new List<OutboxEntry>(stagedRelayEntries.Length);
+            }
+
+            int newSequenceKeys = stagedOutboxSequences.Keys.Count(key => !_outboxSeq.ContainsKey(key));
+            _outboxSeq.EnsureCapacity(_outboxSeq.Count + newSequenceKeys);
+        }
+
+        if (overlays.Count > 0)
+        {
+            if (!hadNamespace)
+                Storage.EnsureCapacity(Storage.Count + 1);
+            nsStore.EnsureCapacity(nsStore.Count + newRecordCount);
+        }
+
+        Inbox.EnsureCapacity(Inbox.Count + 1);
+        InboxAuthors.EnsureCapacity(InboxAuthors.Count + 1);
+        if (ps is null)
+            PeerStates.EnsureCapacity(PeerStates.Count + 1);
+        var peerStateToPublish = ps ?? new PeerState(batch.IssuerNodeId, batch.NamespaceId);
+        peerStateToPublish.ReceivedStreams.EnsureCapacity(peerStateToPublish.ReceivedStreams.Count + 1);
+        LastStreamAuthor.EnsureCapacity(LastStreamAuthor.Count +
+            (LastStreamAuthor.ContainsKey((senderPeer, batch.NamespaceId)) ? 0 : 1));
+        LastBatchDigest.EnsureCapacity(LastBatchDigest.Count + (LastBatchDigest.ContainsKey(chain) ? 0 : 1));
+        KnownEpochs.EnsureCapacity(KnownEpochs.Count + (KnownEpochs.ContainsKey(sesKey) ? 0 : 1));
+        AcksOut.EnsureCapacity(AcksOut.Count + 1);
+        if (newSeenKeys is not null && newSeenKeys.Count > 0)
+            SeenChanges.EnsureCapacity(SeenChanges.Count + newSeenKeys.Count);
+
         // The accepted batch must be durable before publishing any effects. ReceiveBatchAsync
         // sends its ACK only after this method returns, so a crash after ACK cannot lose it.
         if (persistWal && _wal is not null)
@@ -391,7 +450,7 @@ public sealed partial class Node
             nsStore[rid] = rec;
 
         if (ps is null)
-            PeerStates[pkey] = ps = new PeerState(batch.IssuerNodeId, batch.NamespaceId);
+            PeerStates[pkey] = ps = peerStateToPublish;
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
         Inbox.Add(key);
         InboxAuthors[key] = streamAuthor;
@@ -405,35 +464,21 @@ public sealed partial class Node
         result.Applied = applied;
         result.Acked = true;
 
-        // Relay only the entries selected during preflight. Change IDs are reused for
-        // SeenChanges and Outbox so zero-ID entries cannot diverge between the two.
+        // Relay only the entries selected and fully materialized during preflight.
         if (batch.IssuerNodeId != NodeId)
         {
             foreach (var ck in newSeenKeys!)
                 SeenChanges.Add(ck);
 
-            foreach (int idx in relayIndices)
+            if (stagedRelayEntries.Length > 0)
             {
-                var e = batch.Entries[idx];
-                var op = decodedOps[idx];
-                var resolved = resolvedAuthors[idx];
-                var entry = new OutboxEntry
+                if (!hasRelayOutbox)
+                    Outbox[batch.NamespaceId] = relayOutbox!;
+                foreach (var entry in stagedRelayEntries)
                 {
-                    NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
-                    Seq = relaySequences[idx],
-                    ChangeId = relayChangeIds[idx],
-                    RecordId = e.RecordId,
-                    OpKind = e.OpKind,
-                    // ApplyBatchPayload decodes directly from the caller's buffer;
-                    // relay state must own its bytes after that buffer can be recycled.
-                    Payload = durablePayload is null ? e.Payload : e.Payload.ToArray(),
-                    AuthorNodeId = resolved,
-                    CreatedAt = (long)WallOf(op),
-                };
-                if (!Outbox.TryGetValue(batch.NamespaceId, out var ol)) Outbox[batch.NamespaceId] = ol = new();
-                ol.Add(entry);
-                _outboxSeq[(resolved, batch.NamespaceId)] = relaySequences[idx];
-
+                    relayOutbox!.Add(entry);
+                    _outboxSeq[(entry.AuthorNodeId, batch.NamespaceId)] = entry.Seq;
+                }
             }
         }
 
