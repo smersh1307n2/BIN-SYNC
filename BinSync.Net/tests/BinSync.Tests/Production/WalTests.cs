@@ -704,4 +704,53 @@ public class WalTests
         }
     }
 
+
+    [Fact]
+    public void Wal_replay_semantic_failure_marks_partially_restored_node_unusable()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-semantic-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "node.wal");
+        try
+        {
+            var sender = Fix.MakeNode(936);
+            var receiver = Fix.MakeNode(937);
+            Transport.MakeSession(sender, receiver);
+            Assert.True(sender.WriteField(3, Fix.Rid(936), 0x100, new byte[] { 1 }));
+            var firstBatch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+            using (var wal = Wal.Open(path))
+            {
+                receiver.AttachWal(wal);
+                var accepted = receiver.ApplyBatch(firstBatch, sender.NodeId);
+                Assert.Equal(1, accepted.Applied);
+
+                var aliases = receiver.AliasToNode[sender.NodeId]
+                    .Select(x => new AliasMapEntry((ushort)x.Key, x.Value.Id, x.Value.Epoch))
+                    .ToArray();
+                var entries = new List<OutboxEntry>();
+                var batchId = BatchId.From(Fix.Nid(938));
+                var root = Node.ComputeRecordsRoot(entries);
+                var digest = Node.ComputeBatchDigest(batchId, 3, sender.NodeId, sender.Epoch,
+                    2, 2, root, firstBatch.BatchDigest);
+                var futureSchemaBatch = new Batch(3, 0, 2, 0, 0, sender.NodeId, sender.Epoch,
+                    2, 2, batchId, firstBatch.BatchDigest, root, digest, entries);
+
+                // Structurally valid and checksummed WAL frame, but semantically pending
+                // on a receiver that only supports schema version 1.
+                wal.AppendRemoteBatch(sender.NodeId, sender.Epoch, aliases,
+                    sender.EncodeBatchPayload(futureSchemaBatch));
+            }
+
+            using var recovered = new Node(receiver.NodeId, epoch: receiver.Epoch);
+            Assert.Throws<SyncException>(() => Wal.ReplayFile(path, recovered));
+            Assert.Throws<InvalidOperationException>(() => recovered.GetRecordCount(3));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+
 }
