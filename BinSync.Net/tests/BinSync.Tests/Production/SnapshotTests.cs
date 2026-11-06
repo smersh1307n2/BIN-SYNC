@@ -330,7 +330,15 @@ public class SnapshotTests
         }));
         Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[]
         {
+            Chunk(new SnapshotField { FieldId = Model.LifecycleFieldId, Value = Array.Empty<byte>() })
+        }));
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[]
+        {
             Chunk(new SnapshotField { FieldId = Model.LifecycleFieldId, Value = new byte[] { Model.Alive, 0xFF } })
+        }));
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, new[]
+        {
+            Chunk(new SnapshotField { FieldId = Model.LifecycleFieldId, KeyEpoch = 1, Value = new byte[] { Model.Alive } })
         }));
         Assert.Equal(0, target.GetRecordCount(1));
     }

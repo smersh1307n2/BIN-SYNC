@@ -90,6 +90,15 @@ public sealed partial class Node
         if (entry.OpKind != expectedKind ||
             (op is OpRecordTombstone tombstone && entry.RecordId != tombstone.RecordId))
             throw new SyncException("BATCH_TRANSACTION_FAILED", batchId);
+
+        if (op is OpFieldWrite lifecycleWrite &&
+            lifecycleWrite.FieldId == Model.LifecycleFieldId &&
+            (lifecycleWrite.KeyEpoch != 0 || lifecycleWrite.Value.Length != 1 ||
+             lifecycleWrite.Value[0] is not Model.Alive and not Model.Dead))
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batchId);
+        if (op is OpFieldTomb lifecycleTomb &&
+            lifecycleTomb.FieldId == Model.LifecycleFieldId)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batchId);
     }
 
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>

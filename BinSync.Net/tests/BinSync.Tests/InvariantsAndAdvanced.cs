@@ -15,6 +15,19 @@ public class InvariantsAndAdvanced
 
     // ------------------------------------------------------------ ported extras
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(255)]
+    public void Public_field_mutations_reject_reserved_system_field_ids(int fieldId)
+    {
+        using var node = Fix.MakeNode(979);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.WriteField(NS, Rid(979), fieldId, new byte[] { 1 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.TombField(NS, Rid(979), fieldId));
+    }
+
     [Fact]
     public void HlcTotalOrderTiebreakByDurableAuthor()
     {

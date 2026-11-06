@@ -150,6 +150,9 @@ public static class Merge
         Hlc? localHlc, NodeId? localAuthor, byte localValue,
         Hlc remoteHlc, NodeId remoteAuthor, byte remoteValue)
     {
+        if (localValue is not Model.Alive and not Model.Dead ||
+            remoteValue is not Model.Alive and not Model.Dead)
+            throw new ArgumentOutOfRangeException(nameof(remoteValue), "Lifecycle value must be 0x00 (alive) or 0x01 (dead).");
         if (localHlc is null)
             return (remoteHlc, remoteAuthor, remoteValue, true);
         int cmp = HlcOps.CompareHlc(remoteHlc, remoteAuthor, localHlc, localAuthor);

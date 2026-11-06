@@ -448,8 +448,8 @@ public static partial class Reconcile
                         (field.Value.Length != 0 || field.FieldId == Model.LifecycleFieldId))
                         throw new FormatException("Invalid snapshot field tombstone");
                     if (!field.IsTombstone && field.FieldId == Model.LifecycleFieldId &&
-                        (field.Value.Length > 1 ||
-                         (field.Value.Length == 1 && field.Value[0] is not Model.Alive and not Model.Dead)))
+                        (field.KeyEpoch != 0 || field.Value.Length != 1 ||
+                         field.Value[0] is not Model.Alive and not Model.Dead))
                         throw new FormatException("Invalid snapshot lifecycle field");
                 }
 

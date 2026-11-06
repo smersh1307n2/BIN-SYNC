@@ -83,6 +83,39 @@ public sealed class RemoteBatchWalAtomicityTests
     }
 
     [Fact]
+    public void ApplyBatch_rejects_noncanonical_lifecycle_operations_before_publication()
+    {
+        object[] invalidOperations =
+        {
+            new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = 100, Logical = 0, Origin = 1, Value = Array.Empty<byte>() },
+            new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = 100, Logical = 0, Origin = 1, Value = new byte[] { Model.Alive, 0xFF } },
+            new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = 100, Logical = 0, Origin = 1, Value = new byte[] { 0x02 } },
+            new OpFieldWrite { FieldId = Model.LifecycleFieldId, KeyEpoch = 1, Wall = 100, Logical = 0, Origin = 1, Value = new byte[] { Model.Alive } },
+            new OpFieldTomb { FieldId = Model.LifecycleFieldId, KeyEpoch = 0, Wall = 100, Logical = 0, Origin = 1 },
+        };
+
+        for (int i = 0; i < invalidOperations.Length; i++)
+        {
+            using var sender = Fix.MakeNode(980 + i);
+            using var receiver = Fix.MakeNode(990 + i);
+            Transport.MakeSession(sender, receiver);
+            var recordId = Fix.Rid(980 + i);
+            Assert.True(sender.WriteField(3, recordId, 0x0100, new byte[] { 0xAA }));
+            var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+            var operation = invalidOperations[i];
+            batch.Entries[0].Payload = Ops.EncodeOp(operation);
+            batch.Entries[0].OpKind = operation is OpFieldTomb
+                ? OpsConst.TagFieldTomb
+                : OpsConst.TagFieldWrite;
+
+            var error = Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
+            Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+            Assert.False(receiver.TryGetRecord(3, recordId, out _));
+            Assert.Empty(receiver.Inbox);
+        }
+    }
+
+    [Fact]
     public void Wal_replay_success_is_idempotent_and_preserves_runtime_peer_handles()
     {
         using var writer = Fix.MakeNode(965);

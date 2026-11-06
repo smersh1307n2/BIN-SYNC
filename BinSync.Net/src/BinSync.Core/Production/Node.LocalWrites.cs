@@ -370,7 +370,7 @@ public sealed partial class Node
     {
         ThrowIfDisposed();
         ValidateNamespaceId(namespaceId);
-        ValidateFieldId(fieldId);
+        ValidateUserFieldId(fieldId);
         ArgumentNullException.ThrowIfNull(value);
         var ownedValue = value.ToArray();
         Storage.TryGetValue(namespaceId, out var store);
@@ -437,7 +437,7 @@ public sealed partial class Node
     {
         ThrowIfDisposed();
         ValidateNamespaceId(namespaceId);
-        ValidateFieldId(fieldId);
+        ValidateUserFieldId(fieldId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var current);

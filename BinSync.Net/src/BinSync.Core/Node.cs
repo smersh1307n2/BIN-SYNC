@@ -20,6 +20,14 @@ public sealed partial class Node : IDisposable
             throw new ArgumentOutOfRangeException(nameof(fieldId), "Field id must fit the 16-bit wire field.");
     }
 
+    internal static void ValidateUserFieldId(int fieldId)
+    {
+        ValidateFieldId(fieldId);
+        if (fieldId < Model.UserFieldMin)
+            throw new ArgumentOutOfRangeException(nameof(fieldId), "Field ids below 0x0100 are reserved for system use.");
+    }
+
+
     /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
     private static readonly byte[] Zero128Storage = new byte[16];
     /// <summary>16 zero bytes. Returns a fresh copy so callers cannot corrupt a shared buffer.</summary>
