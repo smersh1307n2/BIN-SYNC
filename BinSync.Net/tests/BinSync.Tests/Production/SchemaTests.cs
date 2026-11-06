@@ -156,10 +156,15 @@ public class SchemaTests
         Assert.Throws<InvalidDataException>(() =>
             registry.Learn(new[] { Desc(1, 12, 1, 0x02, 0x100, 0x101) }));
         Assert.Throws<InvalidDataException>(() =>
-            registry.Learn(new[] { Desc(1, 12, 1, 0x02, 0x100, 0x200) with
+            registry.Learn(new[]
             {
-                RetiredFieldIds = new HashSet<ushort> { 0x101 }
-            } }));
+                new SchemaDescriptor
+                {
+                    NamespaceId = 1, SchemaId = 12, Version = 1, MergePolicy = 0x02,
+                    FieldIds = new HashSet<ushort> { 0x100 },
+                    RetiredFieldIds = new HashSet<ushort> { 0x101 },
+                }
+            }));
     }
 
     [Fact]
