@@ -372,41 +372,45 @@ public partial class SyncSession : IAsyncDisposable
             catch (ChannelClosedException)
             { throw new IOException("Peer closed the session"); }
 
-            var (frame, consumed) = FrameCodec.ParseFrame(raw);
-            if (consumed != raw.Length || frame.FrameType != expectedType)
+            byte frameType = raw[3];
+            byte frameFlags = raw[4];
+            uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
+            ulong frameSequence = BinaryPrimitives.ReadUInt64LittleEndian(raw.AsSpan(9));
+            if (frameType != expectedType)
                 throw new FrameException("FRAME_REJECTED");
-            if ((frame.Flags & Frames.FLAG_FRAGMENT) == 0)
+            if ((frameFlags & Frames.FLAG_FRAGMENT) == 0)
             {
                 await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
                 return raw;
             }
 
-            var part = FragmentCodec.DecodeOne(frame.Payload);
-            if (part.Count == 0 || part.Index >= part.Count || frame.FrameSeq < part.Index)
+            int payloadLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17)));
+            var part = FragmentCodec.DecodeOne(raw.AsSpan(Frames.HEADER_SIZE, payloadLength).ToArray());
+            if (part.Count == 0 || part.Index >= part.Count || frameSequence < part.Index)
                 throw new FrameException("FRAME_REJECTED");
             var messageId = BatchId.From(part.MsgId);
             byte[]? complete;
             FragmentContext context;
             lock (fragmentState.Gate)
             {
-                ulong baseSequence = frame.FrameSeq - part.Index;
+                ulong baseSequence = frameSequence - part.Index;
                 if (!fragmentState.Contexts.TryGetValue(messageId, out context))
                 {
-                    context = new FragmentContext(frame.StreamId, baseSequence,
-                        (byte)(frame.Flags & ~Frames.FLAG_FRAGMENT), part.Count);
+                    context = new FragmentContext(streamId, baseSequence,
+                        (byte)(frameFlags & ~Frames.FLAG_FRAGMENT), part.Count);
                     fragmentState.Contexts.Add(messageId, context);
                 }
-                if (context.StreamId != frame.StreamId || context.BaseSequence != baseSequence ||
-                    context.Flags != (byte)(frame.Flags & ~Frames.FLAG_FRAGMENT) ||
+                if (context.StreamId != streamId || context.BaseSequence != baseSequence ||
+                    context.Flags != (byte)(frameFlags & ~Frames.FLAG_FRAGMENT) ||
                     context.Count != part.Count)
                     throw new FrameException("FRAME_REJECTED");
-                complete = fragmentState.Reassembler.Accept(frame.Payload);
+                complete = fragmentState.Reassembler.Accept(part);
                 if (complete is not null) fragmentState.Contexts.Remove(messageId);
             }
 
             await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
             if (complete is not null)
-                return FrameCodec.BuildFrame(frame.FrameType, context.StreamId,
+                return FrameCodec.BuildFrame(frameType, context.StreamId,
                     context.BaseSequence, complete, context.Flags);
         }
     }

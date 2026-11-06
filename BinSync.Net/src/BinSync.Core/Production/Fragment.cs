@@ -132,9 +132,11 @@ public sealed class FragmentReassembler
     /// <summary>
     /// Feed a fragment payload. Returns reassembled body when complete; otherwise null.
     /// </summary>
-    public byte[]? Accept(byte[] fragmentPayload)
+    public byte[]? Accept(byte[] fragmentPayload) => Accept(FragmentCodec.DecodeOne(fragmentPayload));
+
+    /// <summary>Accept an already decoded fragment without allocating a second body copy.</summary>
+    public byte[]? Accept(FrameFragment f)
     {
-        var f = FragmentCodec.DecodeOne(fragmentPayload);
         if (f.Count == 0) throw new FrameException("FRAME_REJECTED");
         if (f.Index >= f.Count) throw new FrameException("FRAME_REJECTED");
 
