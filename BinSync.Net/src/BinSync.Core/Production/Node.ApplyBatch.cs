@@ -10,6 +10,16 @@ public sealed partial class Node
     public BatchResult ApplyBatch(Batch batch, NodeId senderPeer)
     {
         ArgumentNullException.ThrowIfNull(batch);
+
+        // Lost-ACK replay is common and must not deep-copy an entire public DTO graph.
+        // Keep the same header-validation precedence as ApplyBatchInternal, then probe
+        // Inbox while holding the node gates. A miss falls through to the owned-copy path.
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            if (TryGetDuplicateBatchResult(batch, senderPeer, out var duplicate))
+                return duplicate;
+        }
+
         // ApplyBatchInternal resolves and stores receiver-side author context on its batch.
         // Never mutate the caller's DTO or retain caller-owned entry buffers.
         var ownedBatch = CloneBatchForPublicRead(batch);
@@ -20,6 +30,48 @@ public sealed partial class Node
         if (!result.Duplicate || result.Applied > 0)
             RaiseBatchApplied(result, senderPeer);
         return result;
+    }
+
+    // Must be called under all node gates. Mirrors the validation steps that precede
+    // Inbox.Contains in ApplyBatchInternal; duplicate payload contents are not decoded.
+    private bool TryGetDuplicateBatchResult(Batch batch, NodeId senderPeer, out BatchResult result)
+    {
+        ThrowIfDisposed();
+        ValidateBatchForWire(batch);
+        if (batch.MergePolicy != 0 && batch.MergePolicy != 0x02)
+            throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
+
+        result = new BatchResult(batch.BatchId)
+        {
+            CursorEnd = batch.CursorEnd,
+            NamespaceId = batch.NamespaceId,
+        };
+
+        if (ForbiddenNamespaces.Contains(batch.NamespaceId))
+            throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
+
+        var currentEpoch = SessionEpoch(senderPeer, batch.NamespaceId);
+        if (currentEpoch is not null && batch.IssuerEpoch < currentEpoch.Value)
+            throw new SyncException("EPOCH_REGRESSION", batch.BatchId);
+
+        int supported = SchemaVersions.TryGetValue(batch.NamespaceId, out var version) ? version : 1;
+        if (batch.SchemaVersion > supported)
+            throw new SyncException("SCHEMA_PENDING", batch.BatchId);
+
+        var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
+        if (!Inbox.Contains(key))
+            return false;
+
+        AcksOut.Add(batch.BatchId);
+        result.Duplicate = true;
+        result.Acked = true;
+        if (InboxAuthors.TryGetValue(key, out var acceptedAuthor))
+            result.DurableAuthor = acceptedAuthor;
+        else if (LastStreamAuthor.TryGetValue((senderPeer, batch.NamespaceId), out var priorAuthor))
+            result.DurableAuthor = priorAuthor;
+        else
+            result.DurableAuthor = batch.DurableAuthor;
+        return true;
     }
 
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null)
