@@ -57,7 +57,26 @@ public class CausalDepsTests
         Assert.Equal(CausalOutcome.Ready, released[0].Outcome);
         Assert.Equal(42, released[0].Op.Payload);
         Assert.Equal(0, t.PendingCount);
+        Assert.False(t.IsKnown(Id(2))); // Drain releases; successful apply confirms known state.
+        t.NoteApplied(Id(2));
         Assert.True(t.IsKnown(Id(2)));
+    }
+
+    [Fact]
+    public void Requeue_after_failed_apply_does_not_mark_change_known()
+    {
+        var tracker = new CausalTracker();
+        tracker.NoteApplied(Id(1));
+        tracker.EnqueuePending(Id(2), new[] { Id(1) }, payload: "batch");
+
+        var released = Assert.Single(tracker.Drain());
+        Assert.Equal(CausalOutcome.Ready, released.Outcome);
+        Assert.False(tracker.IsKnown(Id(2)));
+
+        tracker.RequeuePending(released.Op);
+        Assert.Equal(1, tracker.PendingCount);
+        Assert.False(tracker.IsKnown(Id(2)));
+        Assert.Single(tracker.Drain());
     }
 
     [Fact]

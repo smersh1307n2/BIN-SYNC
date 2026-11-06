@@ -159,7 +159,8 @@ public sealed class CausalTracker
     }
 
     /// <summary>
-    /// After parents land, release any pending ops that are now Ready / TimedOut / Cycle.
+    /// Release pending ops whose dependencies are ready, timed out, or cyclic.
+    /// Ready ops are not marked known until the caller confirms successful application.
     /// </summary>
     public List<(PendingCausalOp Op, CausalOutcome Outcome)> Drain()
     {
@@ -190,7 +191,6 @@ public sealed class CausalTracker
                     if (!_known.Contains(op.Deps[i])) { allKnown = false; break; }
                 if (allKnown)
                 {
-                    _known.Add(cid);
                     released.Add((op, CausalOutcome.Ready));
                     done.Add(cid);
                 }
@@ -202,6 +202,18 @@ public sealed class CausalTracker
             }
         }
         return released;
+    }
+
+    /// <summary>Restore a released item when its held batch could not be applied.</summary>
+    internal void RequeuePending(PendingCausalOp op)
+    {
+        ArgumentNullException.ThrowIfNull(op);
+        lock (_gate)
+        {
+            if (_known.Contains(op.ChangeId)) return;
+            _pending[op.ChangeId] = op;
+            _edges[op.ChangeId] = new HashSet<BatchId>(op.Deps);
+        }
     }
 
     /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>

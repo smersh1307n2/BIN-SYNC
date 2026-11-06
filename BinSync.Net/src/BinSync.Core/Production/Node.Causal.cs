@@ -119,27 +119,40 @@ public sealed partial class Node
 
         var released = tracker.Drain();
         int applied = 0;
-        // Deduplicate by batch id (one held batch may be enqueued under several changeIds).
-        var seen = new HashSet<BatchId>();
+        // One batch is enqueued once per entry. Keep the complete group so a failed
+        // retry can restore every pending ChangeId, not just the first one.
+        var batches = new Dictionary<BatchId, (HeldCausalBatch Held, List<PendingCausalOp> Ops)>();
         foreach (var (op, outcome) in released)
         {
-            if (outcome != CausalOutcome.Ready) continue;
-            if (op.Payload is not HeldCausalBatch held) continue;
-            if (!seen.Add(held.Batch.BatchId)) continue;
+            if (outcome != CausalOutcome.Ready || op.Payload is not HeldCausalBatch held)
+                continue;
+            if (!batches.TryGetValue(held.Batch.BatchId, out var group))
+                group = (held, new List<PendingCausalOp>());
+            group.Ops.Add(op);
+            batches[held.Batch.BatchId] = group;
+        }
+
+        foreach (var group in batches.Values)
+        {
             try
             {
-                ApplyBatchCausalCore(CloneBatchForPublicRead(held.Batch), held.SenderPeer, tracker);
+                ApplyBatchCausalCore(CloneBatchForPublicRead(group.Held.Batch), group.Held.SenderPeer, tracker);
                 applied++;
-            }
-            catch (SyncException)
-            {
-                // The batch did not commit (for example, its stream cursor is not ready).
-                // It is not counted as applied.
             }
             catch (InvalidOperationException) when (!ReferenceEquals(Causal, tracker))
             {
                 // The host replaced the causal tracker while this drain was in progress.
                 break;
+            }
+            catch (SyncException)
+            {
+                // The batch did not commit (for example, its stream cursor is not ready).
+                foreach (var op in group.Ops) tracker.RequeuePending(op);
+            }
+            catch
+            {
+                foreach (var op in group.Ops) tracker.RequeuePending(op);
+                throw;
             }
         }
         return applied;
