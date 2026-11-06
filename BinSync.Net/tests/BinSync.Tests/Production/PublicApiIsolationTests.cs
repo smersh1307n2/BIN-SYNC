@@ -444,7 +444,7 @@ public sealed class PublicApiIsolationTests
     [Fact]
     public void DigestDomainLabels_AreReturnedAsDetachedCopies()
     {
-        var expected = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/RECORD/v1");
+        var expected = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/RECORD/v2");
         var exposed = Domains.DomainRecord;
         exposed[0] ^= 0xFF;
         Assert.Equal(expected, Domains.DomainRecord);
