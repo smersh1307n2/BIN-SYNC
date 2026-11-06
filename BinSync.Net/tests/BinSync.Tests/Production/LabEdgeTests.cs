@@ -152,7 +152,9 @@ public class LabEdgeTests
     [Fact]
     public void S12_Fragment_rejects_index_out_of_range()
     {
-        var bad = FragmentCodec.EncodeOne(Fix.Nid(1), index: 5, count: 3, body: new byte[] { 1 });
+        var bad = FragmentCodec.EncodeOne(Fix.Nid(1), index: 0, count: 3, body: new byte[] { 1 });
+        bad[16] = 5;
+        bad[17] = 0;
         var re = new FragmentReassembler();
         Assert.ThrowsAny<FrameException>(() => re.Accept(bad));
     }
