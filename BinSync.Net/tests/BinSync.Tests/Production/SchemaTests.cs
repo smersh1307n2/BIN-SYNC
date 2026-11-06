@@ -207,6 +207,16 @@ public class SchemaTests
     }
 
     [Fact]
+    public void SchemaMap_rejects_resource_excessive_descriptor_counts()
+    {
+        const int count = 100_001;
+        var header = new Writer().Varint(count).Value();
+        var payload = new byte[header.Length + count * 9];
+        header.CopyTo(payload, 0);
+        Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(payload));
+    }
+
+    [Fact]
     public void Learn_rejects_malformed_descriptor_instead_of_silently_skipping_it()
     {
         var registry = new SchemaRegistry();

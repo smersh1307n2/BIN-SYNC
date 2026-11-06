@@ -298,6 +298,9 @@ public sealed class SchemaRegistry
 /// <summary>SCHEMA_MAP frame (type 0x04) encode/decode.</summary>
 public static class SchemaMap
 {
+    private const int MaxSchemaCount = 100_000;
+    private const int MaxTotalFieldIds = 250_000;
+
     /// <summary>Wire frame type byte (e.g. DELTA_BATCH, ACK).</summary>
     public const byte FrameType = 0x04;
 
@@ -310,12 +313,24 @@ public static class SchemaMap
     public static byte[] Encode(IReadOnlyList<SchemaDescriptor> list)
     {
         ArgumentNullException.ThrowIfNull(list);
+        if (list.Count > MaxSchemaCount)
+            throw new ArgumentException("Schema map exceeds the maximum descriptor count.", nameof(list));
         var keys = new HashSet<(int NamespaceId, int SchemaId, int Version)>();
+        int totalFieldIds = 0;
         foreach (var descriptor in list)
         {
             ArgumentNullException.ThrowIfNull(descriptor);
+            ValidateDescriptorRange(descriptor);
+            ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
+            ArgumentNullException.ThrowIfNull(descriptor.RetiredFieldIds);
+            if (descriptor.FieldIds.Overlaps(descriptor.RetiredFieldIds))
+                throw new ArgumentException("a field cannot be both active and retired", nameof(list));
             if (!keys.Add((descriptor.NamespaceId, descriptor.SchemaId, descriptor.Version)))
                 throw new ArgumentException("Duplicate schema version in map.", nameof(list));
+            int fieldCount = checked(descriptor.FieldIds.Count + descriptor.RetiredFieldIds.Count);
+            if (fieldCount > ushort.MaxValue + 1 ||
+                (totalFieldIds = checked(totalFieldIds + fieldCount)) > MaxTotalFieldIds)
+                throw new ArgumentException("Schema map exceeds the maximum field-id count.", nameof(list));
         }
 
         var w = new Writer();
@@ -347,10 +362,11 @@ public static class SchemaMap
     {
         var r = new Reader(payload.ToArray());
         ulong count = r.Varint();
-        if (count > (ulong)(payload.Length / 9))
-            throw new InvalidDataException("Schema count exceeds the available payload.");
+        if (count > MaxSchemaCount || count > (ulong)(r.Remaining / 9))
+            throw new InvalidDataException("Schema count exceeds the available payload or configured limit.");
         var list = new List<SchemaDescriptor>((int)count);
         var keys = new HashSet<(int NamespaceId, int SchemaId, int Version)>();
+        int totalFieldIds = 0;
         for (int i = 0; i < (int)count; i++)
         {
             int ns = r.U16();
@@ -361,8 +377,10 @@ public static class SchemaMap
                 throw new InvalidDataException("Duplicate schema version in map.");
 
             ulong fieldCount = r.Varint();
-            if (fieldCount > (ulong)(r.Remaining / 2))
-                throw new InvalidDataException("Schema field count exceeds the available payload.");
+            if (fieldCount > ushort.MaxValue + 1UL ||
+                fieldCount > (ulong)(r.Remaining / 2) ||
+                (totalFieldIds = checked(totalFieldIds + (int)fieldCount)) > MaxTotalFieldIds)
+                throw new InvalidDataException("Schema field count exceeds the available payload or configured limit.");
             var fields = new HashSet<ushort>();
             ushort previousField = 0;
             for (int j = 0; j < (int)fieldCount; j++)
@@ -374,8 +392,11 @@ public static class SchemaMap
             }
 
             ulong retiredCount = r.Varint();
-            if (retiredCount > (ulong)(r.Remaining / 2))
-                throw new InvalidDataException("Schema retired-field count exceeds the available payload.");
+            if (retiredCount > ushort.MaxValue + 1UL ||
+                fieldCount + retiredCount > ushort.MaxValue + 1UL ||
+                retiredCount > (ulong)(r.Remaining / 2) ||
+                (totalFieldIds = checked(totalFieldIds + (int)retiredCount)) > MaxTotalFieldIds)
+                throw new InvalidDataException("Schema retired-field count exceeds the available payload or configured limit.");
             var retired = new HashSet<ushort>();
             ushort previousRetired = 0;
             for (int j = 0; j < (int)retiredCount; j++)
