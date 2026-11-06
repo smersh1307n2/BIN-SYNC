@@ -23,10 +23,22 @@ public sealed partial class Node
         lock (_lockMeta) { ThrowIfDisposed(); RegisterSessionEpochInternal(peer, epoch); }
     }
 
+    private int? KnownPeerEpochInternal(NodeId peer)
+    {
+        if (KnownEpochs.TryGetValue((peer, 0), out var sessionEpoch))
+            return sessionEpoch;
+        return DurableAuthors.TryGetValue(peer, out var durableEpoch)
+            ? durableEpoch
+            : null;
+    }
+
     internal void RegisterSessionEpochInternal(NodeId peer, int epoch)
     {
         if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
         if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+        if (KnownPeerEpochInternal(peer) is int known && epoch < known)
+            throw new SyncException("EPOCH_REGRESSION");
+
         foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer).ToList())
             KnownEpochs.Remove(k);
         KnownEpochs[(peer, 0)] = epoch;
@@ -158,9 +170,11 @@ public sealed partial class Node
             if (!hasLocal || !hasPeer)
                 throw new FrameException("FRAME_REJECTED");
 
+            int? previousPeerEpoch = KnownPeerEpochInternal(peer);
+            if (previousPeerEpoch is int knownPeerEpoch && peerEpoch < knownPeerEpoch)
+                throw new SyncException("EPOCH_REGRESSION");
             bool incarnationChanged =
-                KnownEpochs.TryGetValue((peer, 0), out int previousEpoch) &&
-                previousEpoch != peerEpoch;
+                previousPeerEpoch is int previousEpoch && previousEpoch != peerEpoch;
 
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
             RegisterSessionEpochInternal(peer, peerEpoch);
@@ -394,6 +408,9 @@ public sealed partial class Node
         if (alias <= 0) throw new ArgumentOutOfRangeException(nameof(alias));
         if (nodeId.IsZero) throw new ArgumentException("Author identity must be non-zero.", nameof(nodeId));
         if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+        if (nodeId == peer && KnownPeerEpochInternal(peer) is int knownPeerEpoch &&
+            epoch < knownPeerEpoch)
+            throw new SyncException("EPOCH_REGRESSION");
         var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new());
         // BUGFIX (port): inner reverse map MUST use the BytesIntEq content comparer — the default
         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
@@ -438,6 +455,11 @@ public sealed partial class Node
                 if (alias <= 0 || entry.NodeId.IsZero || entry.Epoch < 0 ||
                     !aliases.Add(alias) || !authors.Add(entry.NodeId))
                     throw new FrameException("FRAME_REJECTED");
+
+                if (entry.NodeId == peer &&
+                    KnownPeerEpochInternal(peer) is int knownPeerEpoch &&
+                    entry.Epoch < knownPeerEpoch)
+                    throw new SyncException("EPOCH_REGRESSION");
 
                 if (fwd is not null && fwd.TryGetValue(alias, out var owner) &&
                     (owner.Id != entry.NodeId || owner.Epoch != entry.Epoch))
