@@ -216,15 +216,20 @@ Flow Control включается только если обе стороны о
 
 ## 3.7. Мультиплексирование потоков (streamId ↔ namespaceId)
 
-Поле `streamId: u32` в заголовке кадра связывается с `namespaceId`:
+Поле `streamId: u32` в заголовке кадра связывается с `namespaceId` по назначению кадра:
 
 | streamId | Назначение |
 |---|---|
-| `0x0000_0000` | Служебный управляющий поток (Handshake, Membership, Ping, GC_NOTICE) |
-| `0x0001_XXXX` | Поток данных для `namespaceId = XXXX` |
+| `0x0000_0000` | Управляющий поток: Handshake, ALIAS_MAP, SCHEMA_MAP, MEMBERSHIP, Ping/Pong, GC_NOTICE |
+| `0x0001_XXXX` | Поток namespace `XXXX`: STATE_DIGEST, NEED_RANGE, NEED_KEYS, DELTA_BATCH, SNAPSHOT_CHUNK, ACK, KEY_ROTATION, IBLT_REQUEST, IBLT_RESPONSE |
 
 **Правила:**
 - Управляющий поток (Control Plane) имеет **высший приоритет** над потоками данных.
+- MEMBERSHIP и GC_NOTICE несут `namespaceId` в payload, но остаются управляющими кадрами: roster авторов/карантина относится к control plane, а namespace в payload ограничивает область применяемого cutoff/состояния.
+- SCHEMA_MAP использует control stream, поскольку одна карта может содержать descriptors нескольких namespace.
+- ACK обязан использовать тот же namespace stream, что и подтверждаемый DELTA_BATCH; отдельный диапазон stream ID для ACK не определён.
+- WINDOW_UPDATE использует `streamId` потока, кредит которого обновляется; он не переводится на control stream.
+- Управляющий поток использует только `streamId = 0`; namespace-кадр обязан использовать точное значение `0x0001_0000 | namespaceId`. Неизвестные/несогласованные значения отклоняются с `FRAME_REJECTED`.
 - Каждый namespace синхронизируется **независимо**: отдельные курсоры, peer state, STATE_DIGEST.
 - Ошибка в одном namespace (например, `NAMESPACE_FORBIDDEN`) завершает только соответствующий `streamId`, **не разрывая сессию** и не затрагивая другие namespace.
 - Частичные сбои изолированы: отказ одного namespace не блокирует остальные.
