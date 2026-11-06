@@ -173,14 +173,14 @@ public sealed class CausalTracker
         ArgumentNullException.ThrowIfNull(deps);
         if (changeId.IsZero)
             throw new ArgumentException("ChangeId cannot be zero.", nameof(changeId));
-        for (int i = 0; i < deps.Count; i++)
-            if (deps[i].IsZero)
+        var depArr = deps.ToArray();
+        for (int i = 0; i < depArr.Length; i++)
+            if (depArr[i].IsZero)
                 throw new ArgumentException("Causal dependency ID cannot be zero.", nameof(deps));
         lock (_gate)
         {
             if (_known.Contains(changeId) || _lost.Contains(changeId) || _pending.ContainsKey(changeId))
                 return;
-            var depArr = deps.ToArray();
             if (depArr.Any(_lost.Contains))
             {
                 _ = PropagateLostLocked(changeId);
