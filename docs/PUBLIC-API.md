@@ -157,6 +157,8 @@ MergePolicyRegistry is a standalone helper registry; it is not connected to Node
 | `StreamSyncTransport` | Complete-packet adapter over a caller-supplied `Stream`; `ownsStream` controls whether disposal closes that stream; peer identity is bound after HELLO |
 | `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`**; includes low-level `HandshakeAsync` for role-specific setup |
 | `SyncSession` | Transport-independent protocol session; `ConnectAsync` / `AcceptAsync` use role-specific handshakes, while `EstablishAsync` lets both endpoints start symmetrically and selects the initiator by `NodeId`; `ownsTransport` controls transport disposal |
+| Fragment receive | `ReceiveReassembledAsync` returns a complete `Frame` (type, stream, sequence, flags, payload); fragments sharing a message id must retain the same type/stream/base sequence/flags |
+| IBLT receive | `ReceiveIbltAsync(namespaceId)` requires the expected namespace so the response stream is validated before decoding |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; listener defaults to loopback unless an address is supplied; TLS is enabled by supplying server/client authentication options; both create generic `SyncSession` instances |
 | `AsyncTransport` | Async batch delivery, sync-round orchestration, and async Node save/load helpers |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
