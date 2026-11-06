@@ -10,6 +10,8 @@ public partial class SyncSession
         CancellationToken ct = default)
     {
         var parts = FragmentCodec.Split(logicalPayload, maxBody);
+        if (_flowControlEnabled && parts.Any(part => part.Length > _sendFlowControl.Initial))
+            throw new FrameException("FLOW_CONTROL_VIOLATION");
         for (int i = 0; i < parts.Count; i++)
             await SendFrameAsync(logicalType, streamId, baseSeq + (ulong)i, parts[i], ct, Frames.FLAG_FRAGMENT)
                 .ConfigureAwait(false);
@@ -29,14 +31,15 @@ public partial class SyncSession
             while (true)
             {
                 var raw = await _rawReceiveChannel.Reader.ReadAsync(ct).ConfigureAwait(false);
-                var (frame, consumed) = FrameCodec.ParseFrame(raw);
-                if (consumed != raw.Length) throw new FrameException("FRAME_REJECTED");
-                if ((frame.Flags & Frames.FLAG_FRAGMENT) == 0)
+                byte flags = raw[4];
+                int payloadLength = checked((int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(17)));
+                byte[] payload = raw.AsSpan(Frames.HEADER_SIZE, payloadLength).ToArray();
+                if ((flags & Frames.FLAG_FRAGMENT) == 0)
                 {
                     await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
-                    return frame.Payload;
+                    return payload;
                 }
-                var complete = reassembler.Accept(frame.Payload);
+                var complete = reassembler.Accept(payload);
                 await CompleteReceiveAsync(raw, ct).ConfigureAwait(false);
                 if (complete is not null)
                     return complete;

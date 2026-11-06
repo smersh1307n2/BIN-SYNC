@@ -136,10 +136,15 @@ public sealed class FragmentReassembler
         if (f.Index >= f.Count) throw new FrameException("FRAME_REJECTED");
 
         var key = BatchId.From(f.MsgId);
+        if (f.Body.Length > MaxPendingBytes - _pendingBytes)
+            throw new FrameException("FLOW_CONTROL_VIOLATION");
         if (!_pending.TryGetValue(key, out var slot))
         {
+            if (_pending.Count >= MaxPendingMessages || f.Count > MaxPendingFragments - _pendingSlots)
+                throw new FrameException("FLOW_CONTROL_VIOLATION");
             slot = new Slot { Count = f.Count, Parts = new byte[f.Count][], Have = 0 };
             _pending[key] = slot;
+            _pendingSlots += f.Count;
         }
         else if (slot.Count != f.Count)
         {
@@ -148,8 +153,6 @@ public sealed class FragmentReassembler
 
         if (slot.Parts[f.Index] is null)
         {
-            if (f.Body.Length > MaxPendingBytes - _pendingBytes)
-                throw new FrameException("FLOW_CONTROL_VIOLATION");
             slot.Parts[f.Index] = f.Body;
             slot.Have++;
             _pendingBytes += f.Body.Length;
@@ -173,5 +176,5 @@ public sealed class FragmentReassembler
     }
 
     /// <summary>Drop all pending reassembly state.</summary>
-    public void Clear() { _pending.Clear(); _pendingBytes = 0; }
+    public void Clear() { _pending.Clear(); _pendingBytes = 0; _pendingSlots = 0; }
 }

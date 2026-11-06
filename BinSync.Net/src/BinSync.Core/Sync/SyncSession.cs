@@ -230,6 +230,7 @@ public partial class SyncSession : IAsyncDisposable
             int length = FrameCodec.BuildFrame(type, streamId, seq, payload.Span, rented.AsSpan(0, size), flags);
             if (flowControlled)
             {
+                EnsureReceivePumpStarted();
                 await _sendFlowControl.WaitForCreditAsync(streamId, payload.Length, ct).ConfigureAwait(false);
                 creditReserved = true;
             }
