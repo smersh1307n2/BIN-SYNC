@@ -136,7 +136,7 @@ public sealed partial class Batch
         IssuerEpoch = issuerEpoch;
         CursorStart = cstart;
         CursorEnd = cend;
-        _batchId = batchId?.ToArray();
+        BatchId = batchId;
         PrevBatchDigest = prev;
         RecordsRoot = root;
         BatchDigest = digest;

@@ -78,6 +78,7 @@ public class CausalApplyTests
         var n = new Node(Id(1), epoch: 1) { Causal = tracker };
         var changeId = Id(0x20);
         var parent = Id(0x10);
+        var originalPayload = new byte[] { 0x10, 0x20 };
         var entry = new OutboxEntry
         {
             NamespaceId = 1,
@@ -85,7 +86,7 @@ public class CausalApplyTests
             ChangeId = changeId,
             RecordId = Rid(1),
             OpKind = 0x01,
-            Payload = Array.Empty<byte>(),
+            Payload = originalPayload,
             AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<BatchId> { parent },
         };
@@ -100,8 +101,6 @@ public class CausalApplyTests
         Assert.Equal(1, tracker.PendingCount);
         Assert.False(tracker.IsKnown(changeId));
 
-        var originalPayload = new byte[] { 0x10, 0x20 };
-        entry.Payload = originalPayload;
         entry.CausalDeps.Clear();
         entry.ChangeId = BatchId.From(Id(0x21));
         originalPayload[0] = 0xFF;
