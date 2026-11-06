@@ -706,7 +706,7 @@ public class WalTests
 
 
     [Fact]
-    public void Wal_replay_semantic_failure_marks_partially_restored_node_unusable()
+    public void Wal_replay_semantic_failure_leaves_target_unchanged_and_usable()
     {
         var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-semantic-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -744,7 +744,10 @@ public class WalTests
 
             using var recovered = new Node(receiver.NodeId, epoch: receiver.Epoch);
             Assert.Throws<SyncException>(() => Wal.ReplayFile(path, recovered));
-            Assert.Throws<InvalidOperationException>(() => recovered.GetRecordCount(3));
+            Assert.Equal(0, recovered.GetRecordCount(3));
+            Assert.False(recovered.TryGetRecord(3, Fix.Rid(936), out _));
+            Assert.Empty(recovered.Inbox);
+            Assert.Empty(recovered.PeerStates);
         }
         finally
         {
