@@ -42,11 +42,31 @@ public sealed class CausalTracker
     private readonly Dictionary<BatchId, PendingCausalOp> _pending = new();
     private readonly Dictionary<BatchId, HashSet<BatchId>> _edges = new(); // child → parents
 
-    /// <summary>How long a missing dep may stay pending before KЗ1 timeout.</summary>
-    public TimeSpan DepTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    private TimeSpan _depTimeout = TimeSpan.FromSeconds(30);
+    private Func<long> _utcNowMs = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
-    /// <summary>Clock for tests; defaults to UTC now.</summary>
-    public Func<long> UtcNowMs { get; set; } = () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    /// <summary>How long a missing dep may stay pending before KЗ1 timeout.</summary>
+    public TimeSpan DepTimeout
+    {
+        get { lock (_gate) return _depTimeout; }
+        set
+        {
+            if (value < TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(value), "Dependency timeout cannot be negative.");
+            lock (_gate) _depTimeout = value;
+        }
+    }
+
+    /// <summary>Clock for tests; defaults to UTC now. The delegate cannot be null.</summary>
+    public Func<long> UtcNowMs
+    {
+        get { lock (_gate) return _utcNowMs; }
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            lock (_gate) _utcNowMs = value;
+        }
+    }
 
     /// <summary>Number of change ids marked known/applied in the tracker.</summary>
     public int KnownCount { get { lock (_gate) return _known.Count; } }
@@ -125,7 +145,7 @@ public sealed class CausalTracker
             {
                 ChangeId = changeId,
                 Deps = depArr,
-                EnqueuedUtcMs = UtcNowMs(),
+                EnqueuedUtcMs = _utcNowMs(),
                 Payload = payload,
             };
             _edges[changeId] = new HashSet<BatchId>(depArr);
@@ -140,11 +160,11 @@ public sealed class CausalTracker
         var released = new List<(PendingCausalOp, CausalOutcome)>();
         lock (_gate)
         {
-            long now = UtcNowMs();
+            long now = _utcNowMs();
             var done = new List<BatchId>();
             foreach (var (cid, op) in _pending)
             {
-                if (now - op.EnqueuedUtcMs > DepTimeout.TotalMilliseconds)
+                if (now - op.EnqueuedUtcMs > _depTimeout.TotalMilliseconds)
                 {
                     released.Add((op, CausalOutcome.TimedOut));
                     done.Add(cid);

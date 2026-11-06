@@ -79,6 +79,22 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void Causal_policy_rejects_invalid_configuration()
+    {
+        var tracker = new CausalTracker();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            tracker.DepTimeout = TimeSpan.FromMilliseconds(-1));
+        Assert.Throws<ArgumentNullException>(() =>
+            tracker.UtcNowMs = null!);
+
+        tracker.DepTimeout = TimeSpan.Zero;
+        tracker.UtcNowMs = () => 123;
+        tracker.EnqueuePending(Id(2), new[] { Id(1) });
+        Assert.Single(tracker.Drain());
+    }
+
+    [Fact]
     public void Cycle_detected_KZ2()
     {
         var t = new CausalTracker();
