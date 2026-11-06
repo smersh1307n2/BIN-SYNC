@@ -61,6 +61,21 @@ public class SyncException : Exception
 /// <summary>One pending or decoded mutation in the outbox / batch records array.</summary>
 public sealed class OutboxEntry
 {
+    private List<BatchId>? _causalDeps;
+    private bool _causalDepsDeferred;
+
+    /// <summary>Creates an entry with an immediately available dependency list.</summary>
+    public OutboxEntry() => _causalDeps = new List<BatchId>();
+
+    // Delta batches normally carry no causal trailer. Defer the empty list allocation
+    // until a caller actually accesses CausalDeps, while preserving a distinct,
+    // mutable list for every entry.
+    internal OutboxEntry(bool deferCausalDeps)
+    {
+        _causalDepsDeferred = deferCausalDeps;
+        if (!deferCausalDeps) _causalDeps = new List<BatchId>();
+    }
+
     /// <summary>Namespace id for this entry.</summary>
     public int NamespaceId { get; set; }
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
@@ -78,7 +93,23 @@ public sealed class OutboxEntry
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
     /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
-    public List<BatchId> CausalDeps { get; set; } = new();
+    public List<BatchId> CausalDeps
+    {
+        get
+        {
+            if (_causalDepsDeferred)
+            {
+                _causalDeps = new List<BatchId>();
+                _causalDepsDeferred = false;
+            }
+            return _causalDeps!;
+        }
+        set
+        {
+            _causalDeps = value;
+            _causalDepsDeferred = false;
+        }
+    }
 
     // True only while a public delta batch still references an engine-owned outbox buffer.
     // Cleared as soon as the payload is detached into caller-owned storage.

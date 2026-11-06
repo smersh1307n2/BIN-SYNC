@@ -6,6 +6,29 @@ namespace BinSync.Tests;
 public class TransportBatchPayloadTests
 {
     [Fact]
+    public void Delta_entries_keep_independent_mutable_causal_dependency_lists()
+    {
+        var sender = Fix.MakeNode(215);
+        var receiver = Fix.MakeNode(216);
+        Transport.MakeSession(sender, receiver);
+
+        Assert.True(sender.WriteField(9, Fix.Rid(0x73), 0x100, new byte[] { 1 }));
+        Assert.True(sender.WriteField(9, Fix.Rid(0x73), 0x101, new byte[] { 2 }));
+
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 9)!;
+        Assert.Equal(2, batch.Entries.Count);
+
+        batch.Entries[0].CausalDeps.Add(BatchId.From(Guid.NewGuid().ToByteArray()));
+        Assert.Single(batch.Entries[0].CausalDeps);
+        Assert.Empty(batch.Entries[1].CausalDeps);
+
+        var ordinaryEntry = new OutboxEntry();
+        Assert.NotNull(ordinaryEntry.CausalDeps);
+        ordinaryEntry.CausalDeps.Add(BatchId.From(Guid.NewGuid().ToByteArray()));
+        Assert.Single(ordinaryEntry.CausalDeps);
+    }
+
+    [Fact]
     public void Transport_payload_matches_public_batch_wire_bytes_and_ack_metadata()
     {
         var sender = Fix.MakeNode(211);

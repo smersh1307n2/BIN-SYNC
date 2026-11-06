@@ -403,7 +403,7 @@ public sealed partial class Node
             bool shared = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(e.Payload, out var paySeg)
                 && object.ReferenceEquals(paySeg.Array, newPayload)
                 && paySeg.Offset == 0 && paySeg.Count == newPayload.Length;
-            entries.Add(new OutboxEntry
+            entries.Add(new OutboxEntry(deferCausalDeps: true)
             {
                 NamespaceId = e.NamespaceId,
                 Seq = checked(e.Seq - streamOffset),
