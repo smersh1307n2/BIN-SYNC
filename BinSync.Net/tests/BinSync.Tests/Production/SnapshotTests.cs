@@ -222,6 +222,17 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void ApplySnapshotChunks_rejects_oversized_chunk_list_before_cloning()
+    {
+        var target = Fix.MakeNode(65);
+        var chunks = Enumerable.Range(0, (int)Reconcile.MaxSnapshotChunks + 1)
+            .Select(_ => new SnapshotChunkMessage()).ToArray();
+
+        Assert.Throws<FormatException>(() => Reconcile.ApplySnapshotChunks(target, chunks));
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+    [Fact]
     public void Snapshot_decoder_rejects_unbounded_chunk_and_record_counts()
     {
         var oversizedChunks = new Writer()

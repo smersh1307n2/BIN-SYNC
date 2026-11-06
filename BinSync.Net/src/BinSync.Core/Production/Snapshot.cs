@@ -361,6 +361,9 @@ public static partial class Reconcile
         ArgumentNullException.ThrowIfNull(chunks);
         int chunkCount = chunks.Count;
         if (chunkCount == 0) throw new FormatException("Snapshot transfer is empty");
+        // Reject an oversized public transfer before allocating its detached copy.
+        if (chunkCount > MaxSnapshotChunks)
+            throw new FormatException("Snapshot transfer exceeds the chunk-count limit");
         // Public DTOs are detached before validation. Decoder-owned transfer graphs
         // are already private to this method and can be validated without deep copies.
         var ownedChunks = new SnapshotChunkMessage[chunkCount];
