@@ -206,11 +206,14 @@ public sealed partial class Node
         NodeId author = stream;
         if (author != NodeId)
         {
-            if (!AliasToNode.TryGetValue(targetPeer, out var m)) m = EmptyAliasMap;
-            bool hit = false;
-            foreach (var (alias_, (nid2, ep2)) in m)
-                if (nid2 == author) { ep = ep2; hit = true; break; }
-            if (!hit)
+            // streamAlias was resolved against the reverse map above. Use that alias
+            // for the forward lookup instead of scanning every session binding again.
+            bool hit = AliasToNode.TryGetValue(targetPeer, out var m) &&
+                m.TryGetValue(streamAlias.Value, out var binding) &&
+                binding.Id == author;
+            if (hit)
+                ep = binding.Epoch;
+            else
                 foreach (var kv in KnownEpochs)
                     if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
                         ep = Math.Max(ep, kv.Value);
