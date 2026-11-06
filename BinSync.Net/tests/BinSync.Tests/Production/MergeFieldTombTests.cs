@@ -29,7 +29,7 @@ public sealed class MergeFieldTombTests
     [Fact]
     public void Newer_write_supersedes_and_removes_field_tombstone()
     {
-        var record = new Record(RecordId, 1);
+        var record = new Record(TestRecordId, 1);
         Assert.True(Merge.ApplyFieldTomb(record, 0x0100, Tomb(10, AuthorA)));
 
         Assert.True(Merge.ApplyFieldWrite(record, 0x0100, Value("new", 11, AuthorB)));
@@ -41,7 +41,7 @@ public sealed class MergeFieldTombTests
     [Fact]
     public void Older_tombstone_does_not_replace_newer_value_or_remain_in_digest_state()
     {
-        var record = new Record(RecordId, 1);
+        var record = new Record(TestRecordId, 1);
         Assert.True(Merge.ApplyFieldWrite(record, 0x0100, Value("new", 10, AuthorA)));
 
         Assert.False(Merge.ApplyFieldTomb(record, 0x0100, Tomb(9, AuthorB)));
@@ -52,7 +52,7 @@ public sealed class MergeFieldTombTests
     [Fact]
     public void Record_digest_does_not_materialize_empty_lazy_tomb_dictionary()
     {
-        var record = new Record(RecordId, 1);
+        var record = new Record(TestRecordId, 1);
         Assert.False(record.HasFieldTombs);
 
         _ = Digests.RecordDigest(record);
