@@ -33,7 +33,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly bool _flowControlEnabled;
     private readonly FlowControl _sendFlowControl = new();
     private readonly FlowControl _receiveFlowControl = new();
-    private long _windowUpdateSequence;
+    private long _windowUpdateSequence;\n    private ulong _lastReceivedWindowUpdateSequence;
     private int _queuedFrameCount;
     private long _queuedFrameBytes;
     private const int MaxQueuedReceiveFrames = 4096;
@@ -325,8 +325,35 @@ public partial class SyncSession : IAsyncDisposable
     {
         if (credits <= 0) return;
         byte[] payload = SessionWire.EncodeWindowUpdate((uint)credits);
-        ulong sequence = (ulong)Interlocked.Increment(ref _windowUpdateSequence);
-        await SendFrameAsync(Frames.TYPE_WINDOW_UPDATE, streamId, sequence, payload, ct).ConfigureAwait(false);
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // Allocate the sequence while holding the wire send gate so sequence order
+            // is identical to the order in which WINDOW_UPDATE frames reach the transport.
+            ulong sequence = (ulong)Interlocked.Increment(ref _windowUpdateSequence);
+            int size = Frames.HEADER_SIZE + payload.Length;
+            byte[] rented = ArrayPool<byte>.Shared.Rent(size);
+            try
+            {
+                int length = FrameCodec.BuildFrame(Frames.TYPE_WINDOW_UPDATE, streamId,
+                    sequence, payload, rented.AsSpan(0, size));
+                await _transport.SendAsync(rented.AsMemory(0, length), ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+        catch (Exception ex)
+        {
+            _sendFlowControl.Fail(ex);
+            _receiveCts.Cancel();
+            throw;
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
     }
 
     /// <summary>Dispose the underlying channel when this session owns it.</summary>
@@ -448,10 +475,13 @@ public partial class SyncSession : IAsyncDisposable
 
                 if (frameType == Frames.TYPE_WINDOW_UPDATE)
                 {
-                    if (!_flowControlEnabled || streamId == 0 || flags != 0 ||
+                    ulong sequence = BinaryPrimitives.ReadUInt64LittleEndian(raw.AsSpan(9));
+                    if (!_flowControlEnabled || streamId == 0 || flags != 0 || sequence == 0 ||
+                        sequence <= _lastReceivedWindowUpdateSequence ||
                         !SessionWire.TryDecodeWindowUpdate(raw.AsSpan(Frames.HEADER_SIZE, (int)payloadLength), out uint credits) ||
                         !_sendFlowControl.TryApplyUpdate(streamId, credits))
                         throw new FrameException("FLOW_CONTROL_VIOLATION");
+                    _lastReceivedWindowUpdateSequence = sequence;
                     continue;
                 }
 
