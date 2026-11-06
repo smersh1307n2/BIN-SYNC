@@ -132,8 +132,8 @@ public class CausalApplyTests
         Assert.True(duplicate.Duplicate);
         Assert.Equal(0, tracker.PendingCount);
         Assert.False(tracker.IsKnown(BatchId.From(Id(0xE1))));
-        Assert.Equal(CausalOutcome.Ready,
-            tracker.Evaluate(BatchId.From(Id(0xE2)), Array.Empty<BatchId>(), out _));
+        Assert.Equal(CausalOutcome.Pending,
+            tracker.Evaluate(BatchId.From(Id(0xE2)), new[] { BatchId.From(Id(0xE1)) }, out _));
     }
 
     [Fact]
