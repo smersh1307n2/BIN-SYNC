@@ -149,7 +149,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 ### Persistence
 
-`NodePersistence` stores the complete Node snapshot. `Wal` is a v2-only append log:
+`NodePersistence` stores the complete Node snapshot. `Wal` is a v2-only append log. Hosts use `Checkpoint(Node, snapshotPath)` for the atomic snapshot-and-reset transition; raw truncate and checkpoint-marker append are internal. The sequence is read-only and synchronized:
 each local mutation is one integrity-protected frame containing both the operation
 and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time and
 causal dependencies). There is no field-only WAL record or v1 writer/reader.

@@ -205,6 +205,15 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void Wal_ExposesAtomicCheckpointButNotRawResetPrimitives()
+    {
+        Assert.Null(typeof(Wal).GetMethod(nameof(Wal.Truncate)));
+        Assert.Null(typeof(Wal).GetMethod(nameof(Wal.AppendCheckpoint)));
+        Assert.Null(typeof(Wal).GetProperty(nameof(Wal.Sequence))!.GetSetMethod());
+        Assert.NotNull(typeof(Wal).GetMethod(nameof(Wal.Checkpoint)));
+    }
+
+    [Fact]
     public void HlcClock_StateCannotBeMutatedOutsideTheAssembly()
     {
         Assert.Null(typeof(HlcClock).GetProperty(nameof(HlcClock.NowFn))!.GetSetMethod());
