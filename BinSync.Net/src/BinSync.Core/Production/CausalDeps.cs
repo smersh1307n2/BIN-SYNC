@@ -93,6 +93,7 @@ public sealed class CausalTracker
         lock (_gate)
         {
             _known.Add(changeId);
+            _pending.Remove(changeId);
             _edges.Remove(changeId);
         }
     }
@@ -104,41 +105,45 @@ public sealed class CausalTracker
     }
 
     /// <summary>Evaluate with typed change ids.</summary>
-    public CausalOutcome Evaluate(BatchId changeId, IReadOnlyList<BatchId>? deps, out string? detail)
+    private CausalOutcome EvaluateLocked(BatchId changeId, IReadOnlyList<BatchId> deps, out string? detail)
     {
         detail = null;
-        deps ??= Array.Empty<BatchId>();
-        lock (_gate)
+        if (deps.Count == 0)
+            return CausalOutcome.Ready;
+
+        foreach (var dep in deps)
         {
-            if (_known.Contains(changeId) && deps.Count == 0)
-                return CausalOutcome.Ready;
-
-            foreach (var d in deps)
+            if (dep == changeId)
             {
-                if (d == changeId)
-                {
-                    detail = "self-dep";
-                    return CausalOutcome.Cycle;
-                }
-            }
-
-            var parentSet = deps is HashSet<BatchId> hs ? hs : new HashSet<BatchId>(deps);
-            if (WouldCycle(changeId, parentSet))
-            {
-                detail = "cycle";
+                detail = "self-dep";
                 return CausalOutcome.Cycle;
             }
-
-            foreach (var d in deps)
-            {
-                if (!_known.Contains(d))
-                {
-                    detail = Key(d); // missing parent hex for diagnostics / tests
-                    return CausalOutcome.Pending;
-                }
-            }
-            return CausalOutcome.Ready;
         }
+
+        if (deps is not HashSet<BatchId> parents)
+            parents = new HashSet<BatchId>(deps);
+        if (WouldCycle(changeId, parents))
+        {
+            detail = "cycle";
+            return CausalOutcome.Cycle;
+        }
+
+        foreach (var dep in deps)
+        {
+            if (!_known.Contains(dep))
+            {
+                detail = Key(dep);
+                return CausalOutcome.Pending;
+            }
+        }
+        return CausalOutcome.Ready;
+    }
+
+    public CausalOutcome Evaluate(BatchId changeId, IReadOnlyList<BatchId>? deps, out string? detail)
+    {
+        deps ??= Array.Empty<BatchId>();
+        lock (_gate)
+            return EvaluateLocked(changeId, deps, out detail);
     }
 
     /// <summary>Hold an op until parents arrive (or timeout).</summary>
@@ -146,6 +151,8 @@ public sealed class CausalTracker
     {
         lock (_gate)
         {
+            if (_known.Contains(changeId) || _pending.ContainsKey(changeId))
+                return;
             var depArr = deps.ToArray();
             _pending[changeId] = new PendingCausalOp
             {
@@ -250,13 +257,16 @@ public sealed class CausalTracker
     {
         detail = null;
         CausalOutcome worst = CausalOutcome.Ready;
-        foreach (var (cid, deps) in members)
+        lock (_gate)
         {
-            var o = Evaluate(cid, deps, out var d);
-            if (o != CausalOutcome.Ready)
+            foreach (var (cid, deps) in members)
             {
-                detail = d;
-                if (o > worst) worst = o;
+                var o = EvaluateLocked(cid, deps ?? Array.Empty<BatchId>(), out var d);
+                if (o != CausalOutcome.Ready)
+                {
+                    detail = d;
+                    if (o > worst) worst = o;
+                }
             }
         }
         return worst;

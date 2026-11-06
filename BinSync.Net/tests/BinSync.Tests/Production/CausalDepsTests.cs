@@ -80,6 +80,18 @@ public class CausalDepsTests
     }
 
     [Fact]
+    public void NoteApplied_removes_an_existing_pending_entry()
+    {
+        var tracker = new CausalTracker();
+        tracker.EnqueuePending(Id(2), new[] { Id(1) });
+        tracker.NoteApplied(Id(2));
+
+        Assert.Equal(0, tracker.PendingCount);
+        Assert.True(tracker.IsKnown(Id(2)));
+        Assert.Empty(tracker.Drain());
+    }
+
+    [Fact]
     public void Timeout_drops_pending_KZ1()
     {
         long now = 1_000_000;
