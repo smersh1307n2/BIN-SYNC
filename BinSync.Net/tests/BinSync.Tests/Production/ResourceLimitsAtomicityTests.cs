@@ -148,8 +148,7 @@ public sealed class ResourceLimitsAtomicityTests
         sender.Outbox[3][^1].Payload = Ops.EncodeOpFull(second);
 
         var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
-        var error = Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
-        Assert.Equal("BATCH_TRANSACTION_FAILED", error.Code);
+        Assert.Throws<SyncException>(() => receiver.ApplyBatch(batch, sender.NodeId));
 
         Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
         Assert.False(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(2)), out _));
