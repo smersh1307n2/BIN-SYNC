@@ -149,7 +149,24 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 ### Persistence
 
-`NodePersistence` (full snapshot), `Wal` (append / replay / checkpoint).
+`NodePersistence` stores the complete Node snapshot. `Wal` is a v2-only append log:
+each local mutation is one integrity-protected frame containing both the operation
+and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time and
+causal dependencies). There is no field-only WAL record or v1 writer/reader.
+
+Startup order (before exposing the Node to application work):
+
+```csharp
+var node = NodePersistence.Load(snapshotPath); // or construct a new Node
+using var wal = Wal.Open(walPath);
+wal.Replay(node);                              // restore complete local mutations
+node.AttachWal(wal);                           // subsequent local writes become durable
+```
+
+`AttachWal` does not take ownership of the WAL; keep it alive for as long as the
+Node uses it. `Wal.Checkpoint(node, snapshotPath)` saves the full snapshot and
+atomically replaces the active WAL segment. Do not dispose the WAL while it remains
+attached to a live Node.
 
 ### Schema (§18, opt-in)
 
@@ -207,7 +224,7 @@ Blind merge compares ciphertext with open HLC + author.
 ## Explicitly out of scope
 
 - Full X.509 certificate path validation (CA roots are **node-id** allow-list only)
-- Auto-WAL on every `WriteField`
+- Automatic WAL creation/attachment; durability is opt-in through `Node.AttachWal`
 - Forcing causal / E2EE / trust on every `ApplyBatch` (all opt-in)
 - Guaranteed allocation-free paths under all policies (hot paths optimised; domain objects still allocate)
 - Public mutable access to `Storage` / `Outbox` / `Inbox` maps (internal by design in 2.2)
