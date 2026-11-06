@@ -59,10 +59,11 @@ public class GcNoticeTests
             NamespaceId = 1,
             Quarantined = new List<GcQuarantineEntry> { new() { NodeId = NodeId.From(peer), Epoch = 2 } },
         };
-        int noticeEvents = 0, gcEvents = 0;
+        int noticeEvents = 0, gcEvents = 0, probeRecord = 96;
         void AssertCanWrite()
         {
-            var write = Task.Run(() => node.WriteField(1, Fix.Rid(96 + Interlocked.Increment(ref gcEvents)), 0x120, new byte[] { 1 }));
+            var probeId = Fix.Rid(Interlocked.Increment(ref probeRecord));
+            var write = Task.Run(() => node.WriteField(1, probeId, 0x120, new byte[] { 1 }));
             Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "GC event ran while node gates were held.");
             Assert.True(write.Result);
         }
@@ -74,7 +75,7 @@ public class GcNoticeTests
         node.ApplyRemoteField(1, rid, 0x100, new byte[] { 1 }, new Hlc(100, 0), node.NodeId);
         Assert.Equal(1, GcNotice.PurgeBelowCutoff(node, 1, 1000));
         Assert.Equal(1, noticeEvents);
-        Assert.Equal(2, gcEvents);
+        Assert.Equal(1, gcEvents);
     }
 
     [Fact]
