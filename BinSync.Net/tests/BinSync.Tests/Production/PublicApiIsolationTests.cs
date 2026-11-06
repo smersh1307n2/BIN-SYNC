@@ -539,6 +539,8 @@ public sealed class PublicApiIsolationTests
         Assert.True(flow.TryApplyUpdate(3, 8));
         await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
         Assert.Equal(0, flow.Balance(3));
+        Assert.True(flow.TryApplyUpdate(3, 8));
+        Assert.Equal(8, flow.Balance(3));
     }
 
     [Fact]

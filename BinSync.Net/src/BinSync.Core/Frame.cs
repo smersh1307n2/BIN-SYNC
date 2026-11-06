@@ -410,6 +410,8 @@ public sealed class FlowControl
                 if (balance >= payloadBytes)
                 {
                     _credit[streamId] = balance - payloadBytes;
+                    _inFlight.TryGetValue(streamId, out long inFlight);
+                    _inFlight[streamId] = checked(inFlight + payloadBytes);
                     return;
                 }
                 if (!_waiters.TryGetValue(streamId, out var waiter))
