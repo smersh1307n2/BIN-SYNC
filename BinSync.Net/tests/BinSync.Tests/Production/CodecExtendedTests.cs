@@ -72,6 +72,26 @@ public class CodecExtendedTests
     }
 
     [Fact]
+    public void String_invalid_utf8_is_rejected_instead_of_replaced()
+    {
+        byte[] invalidUtf8 = { 0xC0, 0xAF };
+        var writer = new Writer();
+        writer.Bytes(invalidUtf8);
+        byte[] encoded = writer.Value();
+
+        Assert.Throws<InvalidDataException>(() => Codec.DecodeString(encoded, 0, out _));
+        Assert.Throws<InvalidDataException>(() => new Reader(encoded).StringUtf8());
+    }
+
+    [Fact]
+    public void String_encoder_rejects_unpaired_surrogates()
+    {
+        string invalidUtf16 = new string((char)0xD800, 1);
+        Assert.Throws<EncoderFallbackException>(() => Codec.EncodeString(invalidUtf16));
+        Assert.Throws<EncoderFallbackException>(() => new Writer().StringUtf8(invalidUtf16));
+    }
+
+    [Fact]
     public void String_strips_bom_if_present()
     {
         // Encoder never emits BOM; decoder tolerates and strips.
