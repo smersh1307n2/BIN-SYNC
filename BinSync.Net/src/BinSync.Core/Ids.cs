@@ -271,25 +271,33 @@ public readonly partial struct Digest16 : IEquatable<Digest16>
 
     public Digest16(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
+    /// <summary>Create a digest from exactly 16 bytes; malformed lengths are rejected.</summary>
     public static Digest16 From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16)
-        {
-            if (bytes.Length == 0) return default;
-            // take first 16 or pad
-            Span<byte> tmp = stackalloc byte[16];
-            bytes[..Math.Min(16, bytes.Length)].CopyTo(tmp);
-            return From(tmp);
-        }
+            throw new ArgumentException("Digest16 requires exactly 16 bytes.", nameof(bytes));
         return new Digest16(
             System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes),
             System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8)));
     }
 
-    public static Digest16 From(byte[]? bytes) =>
-        bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
+    /// <summary>Create a digest from an exactly 16-byte array.</summary>
+    public static Digest16 From(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        return From(bytes.AsSpan());
+    }
 
-    public static implicit operator Digest16(byte[]? bytes) => From(bytes);
+    /// <summary>Explicitly take the leading 16 bytes of a digest buffer.</summary>
+    public static Digest16 Truncate(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 16)
+            throw new ArgumentException("At least 16 bytes are required to truncate a digest.", nameof(bytes));
+        return From(bytes[..16]);
+    }
+
+    public static implicit operator Digest16(byte[]? bytes) =>
+        bytes is null ? throw new ArgumentNullException(nameof(bytes)) : From(bytes);
     public static implicit operator byte[](Digest16 d) => d.ToArray();
 
     public void WriteTo(Span<byte> dest)

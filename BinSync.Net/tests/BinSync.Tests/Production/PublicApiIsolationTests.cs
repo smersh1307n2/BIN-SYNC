@@ -165,4 +165,16 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(new byte[] { 1, 2, 3 }, batch.Entries[0].Payload.ToArray());
     }
 
+    [Fact]
+    public void Digest16_FromRequiresExactLengthAndTruncationIsExplicit()
+    {
+        Assert.Throws<ArgumentException>(() => Digest16.From(new byte[15]));
+        Assert.Throws<ArgumentException>(() => Digest16.From(new byte[17]));
+        Assert.Throws<ArgumentNullException>(() => Digest16.From((byte[])null!));
+
+        var full = Enumerable.Range(0, 32).Select(value => (byte)value).ToArray();
+        Assert.Equal(full[..16], Digest16.Truncate(full).ToArray());
+        Assert.Equal(full[..16], Digest16.From(full[..16]).ToArray());
+    }
+
 }

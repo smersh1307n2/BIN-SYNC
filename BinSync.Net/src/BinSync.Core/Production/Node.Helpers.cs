@@ -178,7 +178,7 @@ public sealed partial class Node
     public static Digest16 ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest) =>
         ComputeBatchDigest(BatchId.From(batchId), namespaceId, NodeId.From(issuerNode),
-            issuerEpoch, cursorStart, cursorEnd, Digest16.From(recordsRoot), Digest16.From(prevBatchDigest));
+            issuerEpoch, cursorStart, cursorEnd, Digest16.Truncate(recordsRoot), Digest16.Truncate(prevBatchDigest));
 
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
     public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries)

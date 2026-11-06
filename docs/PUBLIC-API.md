@@ -52,7 +52,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `NodeId` | 16-byte node identity (`Lo`/`Hi`), `From` / `WriteTo` / `ToArray` / `EqualsBytes` |
 | `RecordId` | 16-byte record identity (same layout rules) |
 | `BatchId` | 16-byte batch identity |
-| `Digest16` | 16-byte digest (records root, batch digests, stream chain) |
+| `Digest16` | 16-byte digest (records root, batch digests, stream chain); `From` requires exactly 16 bytes, `Truncate` explicitly takes the leading 16 bytes |
 
 ### Engine — `Node`
 
