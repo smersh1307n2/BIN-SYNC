@@ -114,6 +114,8 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 `FrameCodec`, `Frames`, `Frame` / `FrameException`, `Codec` / `Writer` / `Reader`, `Ops`, `Hlc` / `HlcClock` / `HlcOps`, `Digests` / `Digest16` domains, `FragmentCodec` / `FragmentReassembler` / `FrameFragment`, `FrameStream`, `FlowControl`, `Mem`.
 
+`Frames.FrameTypes` and `Frames.ErrorCodes` are read-only lookup maps. `HlcClock` exposes clock state for observation; restoration and mutation of its state are engine-owned. `FlowControl` has immutable window configuration and thread-safe per-stream credit accounting.
+
 ### Merge (§8)
 
 | Policy | Code | API |
@@ -145,7 +147,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `SyncSession` | Transport-independent protocol session; generic `ConnectAsync` / `AcceptAsync`, batch/ACK, reconciliation, snapshots, IBLT, membership, schema, key rotation, fragmentation |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; creates generic `SyncSession` instances |
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
-| `LoopbackTransport` | Lab loopback with `NodeId` peer routing |
+| `LoopbackTransport` | Lab loopback with `NodeId` peer routing and typed stream keys |
 
 ### Persistence
 
@@ -190,7 +192,7 @@ attached to a live Node.
 
 | API | Role |
 |-----|------|
-| `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5 |
+| `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; no byte-array identity overloads |
 | `Node.Causal` | Optional tracker |
 | `Node.ApplyBatchCausal` / `DrainCausal` / `NoteCausalApplied(BatchId)` | Gate before apply and note local causal commits |
 | `CausalWire` | CCD1 trailer encode/decode |
