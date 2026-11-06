@@ -50,6 +50,22 @@ public sealed class MergeFieldTombTests
     }
 
     [Fact]
+    public void Record_digest_distinguishes_empty_value_from_tombstone_with_same_metadata()
+    {
+        var timestamp = new Hlc(10, 2);
+        var valueRecord = new Record(TestRecordId, 1);
+        valueRecord.State[0x0100] = new FieldState(Array.Empty<byte>(), timestamp, AuthorA);
+
+        var tombRecord = new Record(TestRecordId, 1);
+        tombRecord.FieldTombs[0x0100] = new FieldState(Array.Empty<byte>(), timestamp, AuthorA);
+
+        var valueDigest = Digests.RecordDigest(valueRecord);
+        var tombDigest = Digests.RecordDigest(tombRecord);
+        Assert.False(valueDigest.AsSpan().SequenceEqual(tombDigest));
+        Assert.Equal("BIN-SYNC/RECORD/v2", System.Text.Encoding.ASCII.GetString(Domains.DomainRecord));
+    }
+
+    [Fact]
     public void Record_digest_does_not_materialize_empty_lazy_tomb_dictionary()
     {
         var record = new Record(TestRecordId, 1);

@@ -9,7 +9,7 @@ namespace BinSync;
 public static class Domains
 {
     /// <summary>BLAKE3 domain separation label for per-record digests.</summary>
-    private static readonly byte[] DomainRecordStorage = Ascii("BIN-SYNC/RECORD/v1");
+    private static readonly byte[] DomainRecordStorage = Ascii("BIN-SYNC/RECORD/v2");
     private static readonly byte[] DomainFieldStorage = Ascii("BIN-SYNC/FIELD/v1");
     private static readonly byte[] DomainBucketStorage = Ascii("BIN-SYNC/BUCKET/v1");
     private static readonly byte[] DomainStateStorage = Ascii("BIN-SYNC/STATE/v2");
@@ -93,10 +93,16 @@ public static class Digests
 
     /// <summary>Build the canonical byte payload hashed for a single field digest.</summary>
     public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
-        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value)
+        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value) =>
+        FieldDigestPayload(fieldId, keyEpoch, wall, logical, authorNodeId, value, isTombstone: false);
+
+    /// <summary>Build a field digest payload with an explicit value/tombstone discriminator.</summary>
+    public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
+        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value, bool isTombstone)
     {
         var w = new Writer();
-        w.U16(fieldId).U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
+        w.U16(fieldId).U8(isTombstone ? (byte)1 : (byte)0)
+            .U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
         w.Varint((ulong)value.Length).Raw(value.Span);
         return w.Value();
     }
@@ -116,15 +122,24 @@ public static class Digests
     public static byte[] RecordDigest(Record rec)
     {
         var parts = new List<byte[]>();
-        var allFields = new List<(ushort, FieldState)>(rec.State.Select(kv => (kv.Key, kv.Value)));
+        var allFields = new List<(ushort FieldId, byte Kind, FieldState State)>(rec.State.Count);
+        foreach (var field in rec.State)
+            allFields.Add((field.Key, 0, field.Value));
+
         // Most records have no field tombstones. Do not invoke the lazy getter on
         // the digest hot path unless the record actually owns tomb entries.
         if (rec.HasFieldTombs)
-            foreach (var t in rec.FieldTombs) allFields.Add((t.Key, t.Value));
-        allFields.Sort((x, y) => x.Item1.CompareTo(y.Item1));
-        foreach (var (fid, fs) in allFields)
+            foreach (var tomb in rec.FieldTombs)
+                allFields.Add((tomb.Key, 1, tomb.Value));
+
+        allFields.Sort((x, y) =>
+        {
+            int byField = x.FieldId.CompareTo(y.FieldId);
+            return byField != 0 ? byField : x.Kind.CompareTo(y.Kind);
+        });
+        foreach (var (fid, kind, fs) in allFields)
             parts.Add(FieldDigestPayload(fid, fs.KeyEpoch, fs.Timestamp.Wall,
-                                         fs.Timestamp.Logical, fs.AuthorNodeId, fs.Value));
+                fs.Timestamp.Logical, fs.AuthorNodeId, fs.Value, isTombstone: kind == 1));
         var lc = LifecycleDigestPayload(
             rec.LifecycleHlc?.Wall ?? 0, rec.LifecycleHlc?.Logical ?? 0,
             rec.LifecycleAuthor ?? default, rec.LifecycleValue);
