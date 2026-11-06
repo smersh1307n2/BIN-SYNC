@@ -232,4 +232,4 @@ public static class StateHash
             acc.Add(Digests.RecordDigest(rec));
         }
         return buckets.Values.ToList();
-    }}
+    }
