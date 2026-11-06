@@ -30,7 +30,7 @@ public partial class SyncSession
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
             throw new FormatException("Namespace is outside u16 range");
         uint expectedStreamId = 0x0001_0000u | (uint)namespaceId;
-        if (frame.StreamId != expectedStreamId)
+        if (frame.StreamId != expectedStreamId || frame.Flags != 0)
             throw new FrameException("FRAME_REJECTED");
     }
 
