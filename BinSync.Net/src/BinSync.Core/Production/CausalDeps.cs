@@ -173,14 +173,16 @@ public sealed class CausalTracker
         ArgumentNullException.ThrowIfNull(deps);
         if (changeId.IsZero)
             throw new ArgumentException("ChangeId cannot be zero.", nameof(changeId));
-        var depArr = deps.ToArray();
-        for (int i = 0; i < depArr.Length; i++)
-            if (depArr[i].IsZero)
-                throw new ArgumentException("Causal dependency ID cannot be zero.", nameof(deps));
         lock (_gate)
         {
+            // Duplicate pending IDs are common on independent mesh paths; keep
+            // that fast path allocation-free. Snapshot and validate only new entries.
             if (_known.Contains(changeId) || _lost.Contains(changeId) || _pending.ContainsKey(changeId))
                 return;
+            var depArr = deps.ToArray();
+            for (int i = 0; i < depArr.Length; i++)
+                if (depArr[i].IsZero)
+                    throw new ArgumentException("Causal dependency ID cannot be zero.", nameof(deps));
             if (depArr.Any(_lost.Contains))
             {
                 _ = PropagateLostLocked(changeId);
