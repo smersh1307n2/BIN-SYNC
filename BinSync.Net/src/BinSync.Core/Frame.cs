@@ -340,33 +340,55 @@ public static class FrameCodec
 /// <summary>Per-stream send-window accounting for flow control.</summary>
 public class FlowControl
 {
-    /// <summary>Configured initial flow-control window.</summary>
-    public int Initial;
-    /// <summary>Configured maximum flow-control window.</summary>
-    public int MaxWindow;
+    private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
+
+    /// <summary>Configured initial flow-control window.</summary>
+    public int Initial { get; }
+
+    /// <summary>Configured maximum flow-control window.</summary>
+    public int MaxWindow { get; }
 
     /// <summary>Per-stream flow-control windows for send credit accounting.</summary>
     public FlowControl(int initial = Frames.INITIAL_WINDOW, int maxWindow = Frames.MAX_WINDOW_SIZE)
-    { Initial = initial; MaxWindow = maxWindow; }
+    {
+        if (initial < 0) throw new ArgumentOutOfRangeException(nameof(initial));
+        if (maxWindow <= 0) throw new ArgumentOutOfRangeException(nameof(maxWindow));
+        if (initial > maxWindow) throw new ArgumentException("Initial window cannot exceed maximum window.", nameof(initial));
+        Initial = initial;
+        MaxWindow = maxWindow;
+    }
+
+    private long BalanceInternal(uint streamId) =>
+        _credit.TryGetValue(streamId, out var value) ? value : (_credit[streamId] = Initial);
 
     /// <summary>Remaining credit on a stream window (bytes that may still be sent).</summary>
-    public long Balance(uint streamId) => _credit.TryGetValue(streamId, out var v) ? v : (_credit[streamId] = Initial);
+    public long Balance(uint streamId)
+    {
+        lock (_gate) return BalanceInternal(streamId);
+    }
 
     /// <summary>Attempt to consume payloadBytes from the stream window; false if insufficient credit.</summary>
     public bool TryConsume(uint streamId, long payloadBytes)
     {
-        var bal = Balance(streamId);
-        if (bal < payloadBytes) return false;   // [УП2]
-        _credit[streamId] = bal - payloadBytes;
-        return true;
+        if (payloadBytes < 0) throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        lock (_gate)
+        {
+            var balance = BalanceInternal(streamId);
+            if (balance < payloadBytes) return false;
+            _credit[streamId] = balance - payloadBytes;
+            return true;
+        }
     }
 
     /// <summary>Apply a window update (positive or negative) and return the new balance.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
-        long nv = Math.Min(Balance(streamId) + credits, MaxWindow);
-        _credit[streamId] = nv;
-        return nv;
+        lock (_gate)
+        {
+            long next = Math.Min(BalanceInternal(streamId) + credits, MaxWindow);
+            _credit[streamId] = next;
+            return next;
+        }
     }
 }

@@ -176,6 +176,23 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void FlowControl_UsesImmutableConfigurationAndAtomicCredit()
+    {
+        Assert.Null(typeof(FlowControl).GetProperty(nameof(FlowControl.Initial))!.GetSetMethod());
+        Assert.Null(typeof(FlowControl).GetProperty(nameof(FlowControl.MaxWindow))!.GetSetMethod());
+
+        var flow = new FlowControl(initial: 128);
+        var consumed = 0;
+        Parallel.For(0, 256, _ =>
+        {
+            if (flow.TryConsume(1, 1))
+                Interlocked.Increment(ref consumed);
+        });
+        Assert.Equal(128, consumed);
+        Assert.Equal(0, flow.Balance(1));
+    }
+
+    [Fact]
     public void LoopbackPeerRouting_UsesTypedNodeIds()
     {
         var connect = typeof(LoopbackTransport).GetMethod(nameof(LoopbackTransport.Connect))!;
