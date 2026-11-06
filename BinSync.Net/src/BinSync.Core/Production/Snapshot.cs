@@ -321,15 +321,26 @@ public static partial class Reconcile
     }
 
     /// <summary>Validate and atomically publish a complete ordered snapshot transfer.</summary>
-    public static int ApplySnapshotChunks(Node node, IReadOnlyList<SnapshotChunkMessage> chunks)
+    public static int ApplySnapshotChunks(Node node, IReadOnlyList<SnapshotChunkMessage> chunks) =>
+        ApplySnapshotChunksCore(node, chunks, cloneInput: true);
+
+    // The transport decoder already created an owned graph. Avoid cloning every
+    // record/list/value a second time on the network receive path.
+    internal static int ApplySnapshotChunksOwned(Node node, IReadOnlyList<SnapshotChunkMessage> chunks) =>
+        ApplySnapshotChunksCore(node, chunks, cloneInput: false);
+
+    private static int ApplySnapshotChunksCore(
+        Node node, IReadOnlyList<SnapshotChunkMessage> chunks, bool cloneInput)
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(chunks);
-        var input = chunks.ToArray();
-        if (input.Length == 0) throw new FormatException("Snapshot transfer is empty");
-        // The DTO graph is caller-owned and mutable. Detach it before validation so
-        // concurrent caller edits cannot change the values applied after preflight.
-        var ownedChunks = input.Select(CloneSnapshotChunk).ToArray();
+        int chunkCount = chunks.Count;
+        if (chunkCount == 0) throw new FormatException("Snapshot transfer is empty");
+        // Public DTOs are detached before validation. Decoder-owned transfer graphs
+        // are already private to this method and can be validated without deep copies.
+        var ownedChunks = new SnapshotChunkMessage[chunkCount];
+        for (int i = 0; i < chunkCount; i++)
+            ownedChunks[i] = cloneInput ? CloneSnapshotChunk(chunks[i]) : chunks[i];
         var first = ownedChunks[0] ?? throw new FormatException("Snapshot chunk is null");
         Node.ValidateNamespaceId(first.NamespaceId);
         if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || ownedChunks.Length != first.ChunkCount)
