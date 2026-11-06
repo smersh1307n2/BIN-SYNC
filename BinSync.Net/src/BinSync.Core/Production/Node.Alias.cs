@@ -27,13 +27,15 @@ public sealed partial class Node
     {
         if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
         if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
-        if (KnownEpochs.TryGetValue((peer, 0), out int knownSessionEpoch) &&
-            epoch < knownSessionEpoch)
-            throw new SyncException("EPOCH_REGRESSION");
+        int knownSessionEpoch = KnownEpochs.TryGetValue((peer, 0), out var current)
+            ? current
+            : 0;
 
-        foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer).ToList())
+        // Keep the highest observed peer incarnation across reconnects. A fresh
+        // alias map does not authorize rollback of the peer's durable incarnation.
+        foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer && k.Item2 != -1 && k.Item2 != 0).ToList())
             KnownEpochs.Remove(k);
-        KnownEpochs[(peer, 0)] = epoch;
+        KnownEpochs[(peer, 0)] = Math.Max(knownSessionEpoch, epoch);
     }
 
     /// Durable observation of an author's incarnation epoch (§4.4). Used only as fallback
@@ -164,9 +166,6 @@ public sealed partial class Node
 
             bool hasPreviousSessionEpoch =
                 KnownEpochs.TryGetValue((peer, 0), out int previousEpoch);
-            if (hasPreviousSessionEpoch && peerEpoch < previousEpoch)
-                throw new SyncException("EPOCH_REGRESSION");
-
             bool incarnationChanged = hasPreviousSessionEpoch && previousEpoch != peerEpoch;
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
             RegisterSessionEpochInternal(peer, peerEpoch);
