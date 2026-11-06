@@ -54,7 +54,6 @@ public sealed partial class Node
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
         long wm;
         NodeId stream;
-        List<OutboxEntry> pending;
         var all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : new List<OutboxEntry>();
         if (filterAuthorNodeId is not null)
         {
