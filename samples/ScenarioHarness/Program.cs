@@ -1,4 +1,4 @@
-// Scenario harness — multi-step flows with logging (BinSync.Core 3.0.0+ public API).
+// Scenario harness — multi-step flows with logging (BinSync.Core 2.6+ public API).
 // Exit 0 only if all scenarios pass.
 //
 //   dotnet run --project samples/ScenarioHarness -c Release

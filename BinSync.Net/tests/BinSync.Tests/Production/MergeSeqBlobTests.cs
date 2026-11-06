@@ -167,6 +167,25 @@ public class MergeSeqBlobTests
     }
 
     [Fact]
+    public void SeqFractional_and_BlobRef_merge_validate_remote_payload_without_local_state()
+    {
+        var seq = SeqFractional.Encode(new SeqFractional.Item
+        {
+            ParentId = Author(0), OrderKey = "a", AuthorNodeId = Author(1), Seq = 1,
+            Value = Array.Empty<byte>(),
+        }).Concat(new byte[] { 0 }).ToArray();
+        Assert.Throws<InvalidDataException>(() => SeqFractional.Merge(null, seq));
+        Assert.Throws<InvalidDataException>(() => SeqFractional.Merge(Array.Empty<byte>(), seq));
+
+        var blob = BlobRef.Encode(new BlobRef.Descriptor
+        {
+            BlobId = Author(1), Size = 1, ContentType = "x", Hash = new byte[32],
+        }).Concat(new byte[] { 0 }).ToArray();
+        Assert.Throws<InvalidDataException>(() => BlobRef.Merge(null, blob));
+        Assert.Throws<InvalidDataException>(() => BlobRef.Merge(Array.Empty<byte>(), blob));
+    }
+
+    [Fact]
     public void SeqFractional_and_BlobRef_reject_trailing_bytes()
     {
         var seq = SeqFractional.Encode(new SeqFractional.Item

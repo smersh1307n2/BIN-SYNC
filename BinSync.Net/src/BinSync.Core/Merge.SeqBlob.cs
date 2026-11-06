@@ -68,7 +68,11 @@ public static class SeqFractional
     /// <summary>Winner is the item that ranks higher in the total order (or equal → keep either).</summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
-        if (local is null || local.Length == 0) return remote;
+        if (local is null || local.Length == 0)
+        {
+            _ = Decode(remote); // Validate even when the merge has no local operand.
+            return remote;
+        }
         var a = Decode(local);
         var b = Decode(remote);
         int order = Compare(b, a);
@@ -132,7 +136,11 @@ public static class BlobRef
     /// </summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
-        if (local is null || local.Length == 0) return remote;
+        if (local is null || local.Length == 0)
+        {
+            _ = Decode(remote); // Validate even when the merge has no local operand.
+            return remote;
+        }
         var a = Decode(local);
         var b = Decode(remote);
         int cmp = a.BlobId.AsSpan().SequenceCompareTo(b.BlobId);
