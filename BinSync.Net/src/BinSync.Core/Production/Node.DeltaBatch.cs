@@ -38,14 +38,17 @@ public sealed partial class Node
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             ThrowIfDisposed();
-            var batch = CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
-            return batch is null ? null : CloneBatchForPublicRead(batch);
+            // The internal builder can detach payload buffers while materializing the
+            // selected stream. This avoids building a second complete public DTO graph.
+            return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId,
+                schemaId, schemaVersion, detachPublicBuffers: true);
         }
     }
 
     internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,
                                        NodeId? filterAuthorNodeId = null,
-                                       int schemaId = 0, int schemaVersion = 1)
+                                       int schemaId = 0, int schemaVersion = 1,
+                                       bool detachPublicBuffers = false)
     {
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
@@ -105,24 +108,27 @@ public sealed partial class Node
         }
 
         long localWm = checked(wm + streamOffset);
-        var localPending = new List<OutboxEntry>();
+        pending = new List<OutboxEntry>();
         for (int i = 0; i < all.Count; i++)
         {
-            var e = all[i];
-            if (e.AuthorNodeId == stream && e.Seq > localWm) localPending.Add(e);
-        }
-        if (localPending.Count == 0) return null;
+            var source = all[i];
+            if (source.AuthorNodeId != stream || source.Seq <= localWm) continue;
 
-        pending = new List<OutboxEntry>(localPending.Count);
-        foreach (var e in localPending)
-        {
             pending.Add(new OutboxEntry
             {
-                NamespaceId = e.NamespaceId, Seq = checked(e.Seq - streamOffset),
-                ChangeId = e.ChangeId, RecordId = e.RecordId, OpKind = e.OpKind,
-                Payload = e.Payload, AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt,
+                NamespaceId = source.NamespaceId,
+                Seq = checked(source.Seq - streamOffset),
+                ChangeId = source.ChangeId,
+                RecordId = source.RecordId,
+                OpKind = source.OpKind,
+                // Public batches own their buffers. Internal session batches retain
+                // the zero-copy path because they are consumed before the node gate exits.
+                Payload = detachPublicBuffers ? source.Payload.ToArray() : source.Payload,
+                AuthorNodeId = source.AuthorNodeId,
+                CreatedAt = source.CreatedAt,
             });
         }
+        if (pending.Count == 0) return null;
         long start = pending[0].Seq, end = pending[^1].Seq;
         // Resolve self-alias once (common path: all entries self-authored).
         int selfAlias = AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1;
