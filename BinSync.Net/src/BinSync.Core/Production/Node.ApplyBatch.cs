@@ -751,10 +751,20 @@ public sealed partial class Node
 
         // Decode and apply into copy-on-write records. A malformed late entry must
         // not leave earlier snapshot entries visible in the live namespace.
+        var snapshotTargets = new HashSet<(RecordId RecordId, ushort FieldId)>();
         foreach (var e in batch.Entries)
         {
             var op = Ops.DecodeOp(e.Payload).Op;
             ValidateEntryOperation(e, op, batch.BatchId);
+            ushort targetFieldId = op switch
+            {
+                OpFieldWrite fieldWrite => fieldWrite.FieldId,
+                OpFieldTomb fieldTomb when fieldTomb.FieldId != Model.LifecycleFieldId => fieldTomb.FieldId,
+                OpRecordTombstone => Model.LifecycleFieldId,
+                _ => throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId),
+            };
+            if (!snapshotTargets.Add((e.RecordId, targetFieldId)))
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             var author = GetAuthor(op);
             if (author is null)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);

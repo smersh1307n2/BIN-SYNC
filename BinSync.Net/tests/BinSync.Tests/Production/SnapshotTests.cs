@@ -661,6 +661,34 @@ public class SnapshotTests
 
 
     [Fact]
+    public void ApplySnapshot_rejects_duplicate_record_field_targets_before_publication()
+    {
+        using var source = Fix.MakeNode(946);
+        using var target = Fix.MakeNode(947);
+        Assert.True(source.WriteField(1, Fix.Rid(946), 0x100, new byte[] { 1 }));
+        var batch = Assert.Single(source.BuildSnapshot(1));
+        var original = Assert.Single(batch.Entries);
+        batch.Entries.Add(new OutboxEntry
+        {
+            NamespaceId = original.NamespaceId,
+            Seq = original.Seq,
+            ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            RecordId = original.RecordId,
+            OpKind = original.OpKind,
+            Payload = original.Payload.ToArray(),
+            AuthorNodeId = original.AuthorNodeId,
+            CreatedAt = original.CreatedAt,
+        });
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            batch.RecordsRoot, batch.PrevBatchDigest);
+
+        Assert.Throws<SyncException>(() => target.ApplySnapshot(batch));
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+    [Fact]
     public void ApplySnapshot_enforces_record_limit_before_publication()
     {
         using var source = Fix.MakeNode(938);

@@ -438,10 +438,11 @@ public static partial class Reconcile
                     throw new FormatException("Snapshot chunk has too many fields");
                 totalFields += rec.Fields.Count;
 
-                var seenFieldIds = new HashSet<ushort>();
+                HashSet<ushort>? seenFieldIds = rec.Fields.Count > 1 ? new HashSet<ushort>() : null;
                 foreach (var field in rec.Fields)
                 {
-                    if (field is null || field.Value is null || !seenFieldIds.Add(field.FieldId))
+                    if (field is null || field.Value is null ||
+                        (seenFieldIds is not null && !seenFieldIds.Add(field.FieldId)))
                         throw new FormatException("Invalid or duplicate snapshot field");
                     if (field.IsTombstone &&
                         (field.Value.Length != 0 || field.FieldId == Model.LifecycleFieldId))
