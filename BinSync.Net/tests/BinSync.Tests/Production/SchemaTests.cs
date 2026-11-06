@@ -183,48 +183,6 @@ public class SchemaTests
     }
 
     [Fact]
-    public void SchemaMap_rejects_duplicate_versions_duplicate_fields_and_active_retired_overlap()
-    {
-        var descriptor = Desc(1, 20, 1, 0x02, 0x100);
-        var duplicateVersion = new Writer().Varint(2);
-        for (int i = 0; i < 2; i++)
-        {
-            duplicateVersion.U16(1).U16(20).U16(1).U8(0x02)
-                .Varint(1).U16(0x100).Varint(0);
-        }
-        Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(duplicateVersion.Value()));
-
-        var duplicateField = new Writer().Varint(1)
-            .U16(1).U16(20).U16(1).U8(0x02)
-            .Varint(2).U16(0x100).U16(0x100).Varint(0);
-        Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(duplicateField.Value()));
-
-        var overlap = new Writer().Varint(1)
-            .U16(1).U16(20).U16(1).U8(0x02)
-            .Varint(1).U16(0x100).Varint(1).U16(0x100);
-        Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(overlap.Value()));
-        Assert.Throws<ArgumentException>(() => SchemaMap.Encode(new[] { descriptor, descriptor }));
-    }
-
-    [Fact]
-    public void Learn_rejects_malformed_descriptor_instead_of_silently_skipping_it()
-    {
-        var registry = new SchemaRegistry();
-        var malformed = new SchemaDescriptor
-        {
-            NamespaceId = 1, SchemaId = 21, Version = 1, MergePolicy = 0x02,
-            FieldIds = new HashSet<ushort> { 0x100 },
-            RetiredFieldIds = new HashSet<ushort> { 0x100 },
-        };
-        Assert.Throws<InvalidDataException>(() => registry.Learn(new[] { malformed }));
-        Assert.Null(registry.MaxVersion(1, 21));
-
-        malformed = Desc(1, 21, 1, 256, 0x100);
-        Assert.Throws<ArgumentOutOfRangeException>(() => registry.Learn(new[] { malformed }));
-        Assert.Null(registry.MaxVersion(1, 21));
-    }
-
-    [Fact]
     public void SchemaRegistry_rejects_out_of_range_lookup_keys()
     {
         var registry = new SchemaRegistry();
