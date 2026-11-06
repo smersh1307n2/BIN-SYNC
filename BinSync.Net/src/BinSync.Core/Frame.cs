@@ -353,7 +353,7 @@ public sealed class FlowControl
     }
 
     private readonly Dictionary<uint, CreditWaiter> _waiters = new();
-    private Exception? _failure;
+    private Exception? _failure;\n    private ulong _lastUpdateSequence;
 
     /// <summary>Configured initial flow-control window.</summary>
     public int Initial { get; }
@@ -495,13 +495,22 @@ public sealed class FlowControl
     }
 
     /// <summary>Apply a peer update only when it is strictly within the negotiated window.</summary>
-    public bool TryApplyUpdate(uint streamId, long credits)
+    public bool TryApplyUpdate(uint streamId, long credits) =>
+        TryApplyUpdate(streamId, credits, sequence: null);
+
+    /// <summary>Apply a peer credit update only once and in increasing wire sequence order.</summary>
+    public bool TryApplyUpdate(uint streamId, long credits, ulong sequence) =>
+        TryApplyUpdate(streamId, credits, (ulong?)sequence);
+
+    private bool TryApplyUpdate(uint streamId, long credits, ulong? sequence)
     {
-        if (credits <= 0) return false;
+        if (credits <= 0 || (sequence.HasValue && sequence.Value == 0)) return false;
         CreditWaiter? waiter;
         lock (_gate)
         {
-            if (_failure is not null) return false;
+            if (_failure is not null ||
+                (sequence.HasValue && sequence.Value <= _lastUpdateSequence))
+                return false;
             long balance = BalanceInternal(streamId);
             if (credits > MaxWindow - balance) return false;
             if (!_inFlight.TryGetValue(streamId, out long inFlight) || credits > inFlight)
@@ -512,6 +521,7 @@ public sealed class FlowControl
             _inFlight[streamId] = remaining;
             _waiters.Remove(streamId, out waiter);
             RemoveIdleStream(streamId, next, remaining);
+            if (sequence.HasValue) _lastUpdateSequence = sequence.Value;
         }
         waiter?.Signal.TrySetResult();
         return true;

@@ -479,7 +479,7 @@ public partial class SyncSession : IAsyncDisposable
                     if (!_flowControlEnabled || streamId == 0 || flags != 0 || sequence == 0 ||
                         sequence <= _lastReceivedWindowUpdateSequence ||
                         !SessionWire.TryDecodeWindowUpdate(raw.AsSpan(Frames.HEADER_SIZE, (int)payloadLength), out uint credits) ||
-                        !_sendFlowControl.TryApplyUpdate(streamId, credits))
+                        !_sendFlowControl.TryApplyUpdate(streamId, credits, sequence))
                         throw new FrameException("FLOW_CONTROL_VIOLATION");
                     _lastReceivedWindowUpdateSequence = sequence;
                     continue;

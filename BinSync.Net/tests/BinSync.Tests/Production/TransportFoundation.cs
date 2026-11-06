@@ -159,14 +159,14 @@ public class TransportFoundationTests
     }
 
     [Fact]
-    public void FlowControl_duplicate_credit_is_ambiguous_without_frame_sequence_guard()
+    public void FlowControl_rejects_replayed_or_reordered_window_update_sequences()
     {
         var flow = new FlowControl(initial: 8, maxWindow: 16);
         Assert.True(flow.TryConsume(1, 2));
-        Assert.True(flow.TryApplyUpdate(1, 1));
-        // A duplicate 1-byte update still fits the aggregate in-flight count.
-        // SyncSession therefore also enforces monotonic WINDOW_UPDATE frameSeq.
-        Assert.True(flow.TryApplyUpdate(1, 1));
+        Assert.True(flow.TryApplyUpdate(1, 1, 1));
+        Assert.False(flow.TryApplyUpdate(1, 1, 1));
+        Assert.False(flow.TryApplyUpdate(1, 1, 0));
+        Assert.True(flow.TryApplyUpdate(1, 1, 2));
         Assert.Equal(8, flow.Balance(1));
     }
 
