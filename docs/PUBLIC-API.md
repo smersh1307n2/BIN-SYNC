@@ -4,7 +4,7 @@
 
 **Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0`  
 **Protocol:** **BIN-SYNC CORE**  
-Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.5**.  
+Normative: **BIN-SYNC-SPECIFICATION.txt v2.4.11**.  
 Status: [PRODUCTION-STATUS.md](PRODUCTION-STATUS.md) · Changelog: [CHANGELOG.md](CHANGELOG.md) · Naming: [NAME.md](NAME.md).
 
 ## SemVer policy (3.x)
@@ -89,6 +89,8 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `NodeOptions` | Structured construction with typed `NodeId?` (limits at create) |
 | `SyncErrorCode` / `SyncException.ErrorCode` | Typed error codes |
 | `AckProcessed` | ACK watermark advanced |
+
+**Event delivery:** events are raised synchronously after the corresponding state transition and outside engine gates. A throwing observer is isolated and traced; it cannot turn a committed write, batch, snapshot, ACK, trust or schema update into an apparent failure. When no observer is attached, dispatch returns without allocating. Keep handlers short and enqueue expensive application work elsewhere; callbacks are not run on an internal per-record loop.
 | `MembershipApplied` / `KeyRotationApplied` | Roster / key epoch events |
 | `ApplyKeyRotation` | Apply notice + raise event |
 | `NodeBuilder` | Fluent construction with typed `WithNodeId(NodeId)` |
