@@ -32,6 +32,8 @@ public static class FragmentCodec
     public static List<byte[]> Split(byte[] logicalPayload, int maxBody, byte[]? msgId = null)
     {
         if (maxBody < 1) throw new ArgumentOutOfRangeException(nameof(maxBody));
+        if (logicalPayload.Length > Frames.MAX_PAYLOAD_SIZE)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         msgId ??= Guid.NewGuid().ToByteArray();
         if (msgId.Length != 16) msgId = Codec.CanonicalB128(msgId);
 
@@ -93,6 +95,8 @@ public static class FragmentCodec
         byte logicalType, uint streamId, ulong baseSeq, byte[] logicalPayload, int maxBody)
     {
         var parts = Split(logicalPayload, maxBody);
+        if (parts.Count > 0 && (ulong)(parts.Count - 1) > ulong.MaxValue - baseSeq)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         var frames = new List<byte[]>(parts.Count);
         for (int i = 0; i < parts.Count; i++)
         {

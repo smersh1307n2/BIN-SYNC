@@ -9,7 +9,11 @@ public partial class SyncSession
         byte logicalType, uint streamId, ulong baseSeq, byte[] logicalPayload, int maxBody,
         CancellationToken ct = default)
     {
+        if (logicalPayload.Length > Frames.MAX_PAYLOAD_SIZE)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         var parts = FragmentCodec.Split(logicalPayload, maxBody);
+        if (parts.Count > 0 && (ulong)(parts.Count - 1) > ulong.MaxValue - baseSeq)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         if (_flowControlEnabled && parts.Any(part => part.Length > _sendFlowControl.Initial))
             throw new FrameException("FLOW_CONTROL_VIOLATION");
         for (int i = 0; i < parts.Count; i++)

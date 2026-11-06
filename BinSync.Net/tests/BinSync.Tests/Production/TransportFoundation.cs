@@ -139,6 +139,15 @@ public class TransportFoundationTests
 
 
     [Fact]
+    public void Fragmentation_rejects_logical_payload_and_sequence_overflow()
+    {
+        Assert.Throws<FrameException>(() =>
+            FragmentCodec.Split(new byte[Frames.MAX_PAYLOAD_SIZE + 1], 1024));
+        Assert.Throws<FrameException>(() =>
+            FragmentCodec.BuildFrames(0x09, 1, ulong.MaxValue, new byte[] { 1, 2 }, 1));
+    }
+
+    [Fact]
     public async Task Negotiated_flow_control_replenishes_credit_during_fragment_reassembly()
     {
         using var low = Fix.MakeNode(31);

@@ -240,6 +240,8 @@ public partial class SyncSession : IAsyncDisposable
     protected async Task SendFrameAsync(byte type, uint streamId, ulong seq, ReadOnlyMemory<byte> payload,
         CancellationToken ct, byte flags = 0)
     {
+        if (payload.Length > Frames.MAX_PAYLOAD_SIZE)
+            throw new FrameException("PAYLOAD_TOO_LARGE", fatal: true);
         bool flowControlled = _flowControlEnabled && streamId != 0 && type != Frames.TYPE_WINDOW_UPDATE;
         if (flowControlled && payload.Length > _sendFlowControl.Initial)
         {
