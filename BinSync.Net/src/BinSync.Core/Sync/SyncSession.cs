@@ -18,7 +18,7 @@ public partial class SyncSession : IAsyncDisposable
     private int _queuedFrameCount;
     private long _queuedFrameBytes;
     private const int MaxQueuedReceiveFrames = 4096;
-    private const long MaxQueuedReceiveBytes = 32L * 1024 * 1024;
+    private const long MaxQueuedReceiveBytes = 64L * 1024 * 1024;
     private IDisposable? _sessionLease;
     private int _disposed;
     private readonly SemaphoreSlim _sendGate = new(1, 1);

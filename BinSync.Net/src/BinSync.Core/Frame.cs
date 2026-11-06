@@ -377,9 +377,8 @@ public sealed class FlowControl
         if (payloadBytes < 0) throw new ArgumentOutOfRangeException(nameof(payloadBytes));
         if (payloadBytes > MaxWindow) return false;
         lock (_gate)
-            if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
-        lock (_gate)
         {
+            if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
             var balance = BalanceInternal(streamId);
             if (balance < payloadBytes) return false;
             _credit[streamId] = balance - payloadBytes;
