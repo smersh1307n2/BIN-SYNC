@@ -62,6 +62,15 @@ public sealed partial class Node
         if (!Inbox.Contains(key))
             return false;
 
+        // Preserve the public-copy path's structural null checks without allocating
+        // entry objects, payload arrays, or causal-dependency lists for a replay.
+        for (int i = 0; i < batch.Entries.Count; i++)
+        {
+            var entry = batch.Entries[i];
+            ArgumentNullException.ThrowIfNull(entry);
+            ArgumentNullException.ThrowIfNull(entry.CausalDeps);
+        }
+
         AcksOut.Add(batch.BatchId);
         result.Duplicate = true;
         result.Acked = true;
