@@ -17,7 +17,7 @@ public class SyncException : Exception
         : (Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0);
 
     private readonly BatchId? _batchId;
-    /// <summary>Optional batch id (wire b128) associated with the error. Returns an owned copy.</summary>
+    /// <summary>Optional typed batch id associated with the error.</summary>
     public BatchId? BatchId => _batchId;
 
     /// <summary>Create with code name used as the exception message.</summary>
@@ -35,7 +35,7 @@ public class SyncException : Exception
     {
         ErrorCode = errorCode;
         CodeName = SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString();
-        _batchId = batchId?.ToArray();
+        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
     }
 
     /// <summary>Create with code name and typed batch id.</summary>
@@ -53,7 +53,7 @@ public class SyncException : Exception
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        _batchId = batchId?.ToArray();
+        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
     }
 
     /// <summary>Create with message and inner exception.</summary>
@@ -62,7 +62,7 @@ public class SyncException : Exception
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        _batchId = batchId?.ToArray();
+        _batchId = batchId is null ? null : BinSync.BatchId.From(batchId);
     }
 }
 
