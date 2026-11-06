@@ -1,0 +1,151 @@
+# Контракт интеграции BIN-SYNC ↔ FLD-DB
+
+**Статус:** проект контракта, точка завершения текущего аудита.  
+**Область:** только граница хранения и протокола. Это не wire-spec и не реализация адаптера.  
+**Владелец durable field state:** FLD-DB.  
+**Владелец протокольной семантики:** BIN-SYNC.  
+**Важно:** до согласования и реализации этого контракта прямое подключение текущего `FldDatabase` к текущему `Node` не считается безопасным.
+
+## 1. Цель и разделение ответственности
+
+### FLD-DB owns
+
+- durable field values, field/record tombstones и lifecycle state;
+- локальный author identity и генерацию HLC для локальных записей;
+- локальный durable Outbox и его namespace cursor;
+- WAL v2, group commit, checkpoint, recovery и compaction;
+- LWW application remote mutations к field state;
+- durable storage для протокольного commit receipt / inbox metadata и relay journal, необходимого для восстановления BIN-SYNC после сбоя.
+
+### BIN-SYNC owns
+
+- wire protocol, framing, compression/signatures/E2EE, trust и schema validation;
+- session aliases, peer membership, peer-specific cursors и ACK validation;
+- batch digest chain, inbox/duplicate semantics, ChangeId dedup policy;
+- per-peer acknowledgement aggregation и решение, когда локальный Outbox prefix безопасно подтверждён;
+- relay policy и назначение relay sequence для author stream;
+- формирование DELTA_BATCH, STATE_DIGEST, IBLT и snapshot protocol messages.
+
+BIN-SYNC не должен держать вторую копию durable field state или второй WAL с теми же field mutations в external-storage режиме. FLD-DB не должен самостоятельно интерпретировать wire protocol.
+
+## 2. Идентичность и отображение курсоров
+
+1. `FldDatabase.LocalAuthor` обязан побайтно совпадать с `BinSync.NodeId`. Один FLD database instance обслуживает один namespace; несколько namespace используют один и тот же local author.
+2. `FldDatabase.NamespaceId` соответствует BIN-SYNC `namespaceId`; допустимый диапазон — `0..65535`.
+3. FLD `OutboxSeq` — durable монотонный cursor локального Outbox внутри namespace. Он напрямую отображается на BIN-SYNC stream `(LocalAuthor, namespaceId)`.
+4. Не добавлять второй author sequence в FLD: при одном local author на database его глобальный namespace OutboxSeq уже является sequence этого author stream.
+5. FLD `CommitSeq` — WAL durability/commit sequence, **не** BIN-SYNC stream cursor.
+6. FLD `MaterializedThroughCommitSeq`, `LastSealedCommitSeq`, `CertifiedWatermark` и BIN-SYNC `SafeOutboxSeq` — разные шкалы. Их нельзя подменять друг другом.
+7. `ChangeId` — стабильный 16-byte идентификатор mutation. Он не генерируется заново при remote apply, replay, retry или relay.
+8. Author tie-break использует порядок BIN-SYNC `NodeId`: `Lo = UInt64LE(bytes[0..7])`, затем `Hi = UInt64LE(bytes[8..15])`. RecordId sort остаётся unsigned BE memcmp. HLC wall — микросекунды UTC; `KeyEpoch` — u16.
+
+## 3. Предлагаемая граница API
+
+Адаптер реализуется отдельным слоем, который зависит от обоих проектов. FLD-DB не должен ссылаться на `BinSync.Core` и wire-типы напрямую. DTO на границе — нейтральные storage DTO с фиксированными размерами идентификаторов.
+
+Минимальные операции адаптера:
+
+| Операция | Контракт |
+|---|---|
+| `OpenReadSnapshot(namespaceId)` | Возвращает стабильный read-only snapshot поколения базы; чтение не удерживает writer lock на всё время отправки |
+| `ReadLocalOutboxBatch(afterSeq, limit, lease)` | Читает только локальные изменения FLD author; возвращает стабильные OutboxSeq/ChangeId и полные HLC/op/value |
+| `AcknowledgeLocalOutbox(safeThroughSeq, lease)` | Подтверждает только непрерывный безопасный prefix, вычисленный BIN-SYNC по всем interested peers |
+| `ApplyRemoteBatch(commit)` | Одна атомарная durable транзакция: field state + dedup/inbox/cursor + relay journal/protocol extension |
+| `ReadRelayBatch(author, afterSeq, limit, lease)` | Возвращает сохранённые relay-eligible mutations, включая операции, проигравшие LWW |
+| `AcknowledgeRelay(author, safeThroughSeq, lease)` | Удаляет relay prefix только после подтверждения всеми interested peers |
+
+### 3.1 RemoteBatchCommit
+
+Граница `ApplyRemoteBatch` принимает не только список победивших полей. В commit DTO должны быть доступны:
+
+- `SenderPeer`, `SenderEpoch`, `NamespaceId`;
+- `BatchId`, `CursorStart`, `CursorEnd`, `DurableAuthor`;
+- `PreviousBatchDigest`, `BatchDigest`, `RecordsRoot` и остальные данные, необходимые для восстановления chain/inbox state;
+- полный набор decoded mutations: `RecordId`, `FieldId`, operation kind, value, HLC, `AuthorNodeId`, `KeyEpoch`, обязательный `ChangeId`;
+- opaque `ProtocolStateDelta`, сформированный BIN-SYNC: inbox cursor/chain update, SeenChanges delta, relay journal delta и необходимые provenance/session данные.
+
+FLD хранит opaque protocol extension как часть той же durable transaction, не разбирая wire semantics. BIN-SYNC остаётся владельцем кодирования и интерпретации extension.
+
+### 3.2 Семантика ApplyRemoteBatch
+
+`ApplyRemoteBatch` обязана выполнять атомарно:
+
+1. Проверить namespace и размеры идентификаторов.
+2. Проверить idempotency по входящему batch и ChangeId согласно ключам BIN-SYNC.
+3. Применить к field state только LWW-победителей, используя канонический comparator.
+4. Сохранить все новые принятые relay-eligible mutations, даже если они проиграли LWW.
+5. Сохранить inbox/cursor/digest-chain/SeenChanges и relay journal delta.
+6. Записать WAL commit и выполнить требуемый durability flush.
+7. Только после durable commit опубликовать состояние и вернуть receipt.
+
+**Успешный return означает, что можно отправлять ACK.** При ошибке ни field state, ни inbox/cursor, ни SeenChanges, ни relay journal не должны частично публиковаться; ACK не отправляется.
+
+Повтор того же batch после lost ACK возвращает duplicate receipt с тем же `CursorEnd`/author result и не создаёт повторных field mutations или relay entries. Повтор ChangeId через другого peer не должен повторно применять/relay mutation, но входящий peer cursor должен быть корректно обработан.
+
+Remote mutation не создаёт запись в **локальном** FLD Outbox. Self-echo уже локально authored mutation не ставится в relay повторно.
+
+## 4. Локальный Outbox и ACK
+
+- FLD local Put/Delete/record lifecycle operations создают локальные Outbox entries с устойчивыми `OutboxSeq` и `ChangeId`.
+- BIN-SYNC преобразует эти записи в author stream локального Node. `OutboxSeq` используется как cursor; `CommitSeq` не используется в DELTA_BATCH cursor.
+- `AcknowledgeLocalOutbox` получает не ACK отдельного peer, а вычисленный BIN-SYNC `SafeOutboxSeq`: минимальный непрерывный cursor, подтверждённый всеми interested peers.
+- Peer без PeerState/ACK не разрешает удалять соответствующий prefix. Это сохраняет relay/reconnect safety.
+- Compaction сохраняет исходные OutboxSeq и следующий sequence; никакой renumbering после restart/compaction.
+- Outbox consumer должен иметь fenced lease: owner/session identity + монотонный lease epoch/token. Устаревший consumer не может читать/ACK-ать после выдачи нового lease.
+- FLD API должен предоставить high watermark (последний назначенный OutboxSeq) отдельно от ACK watermark.
+
+## 5. Relay journal
+
+Локальный FLD Outbox и BIN-SYNC relay queue — разные логические очереди.
+
+Relay journal сохраняет исходную mutation identity и содержимое: ChangeId, RecordId, FieldId/op kind, HLC, author, KeyEpoch и value/tombstone. BIN-SYNC назначает и восстанавливает relay sequence по своим правилам author stream. FLD local OutboxSeq не используется для remote author.
+
+Relay retention/compaction рассчитывается по ACK всех interested peers. LWW loser остаётся relay-eligible: локальное значение может быть новее, но операция всё равно нужна другим узлам для детерминированной сходимости и SeenChanges provenance.
+
+## 6. Read snapshot
+
+Snapshot API должен давать один согласованный view поверх overlay и immutable runs:
+
+- field value и tombstone/lifecycle state;
+- HLC wall/logical и full AuthorNodeId;
+- KeyEpoch;
+- namespace и стабильное поколение snapshot.
+
+Snapshot lifetime защищает необходимые run generations от reclamation. BIN-SYNC строит digest/IBLT/snapshot payload из этого read view без удержания FLD writer lock на время сетевой отправки.
+
+FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest16` (BLAKE3 truncated): это разные digest domains.
+
+## 7. Текущее состояние API и блокирующие расхождения
+
+Проверено по FLD-DB `fix/crash-consistency-outbox` на commit `6d83b509` и BIN-SYNC PR #16:
+
+| Текущее API / состояние | Почему недостаточно для интеграции |
+|---|---|
+| `FldDatabase.ApplyRemote(ReadOnlySpan<RemoteFieldWrite>)` | Возвращает только count LWW winners; не принимает BatchId/peer/cursor/digest-chain/protocol delta |
+| `RemoteFieldWrite.ChangeId` nullable | Для remote apply ChangeId должен быть обязательным и стабильным |
+| `ApplyRemote` пропускает LWW losers | Операции, проигравшие локальному значению, не сохраняются для relay |
+| `ApplyRemote` добавляет изменения в общий `_dirty` | Следующий `Commit()` записывает все dirty mutations в локальный Outbox, включая remote author; это создаёт ошибочный self/relay echo |
+| `Commit()` формирует WAL group и Outbox из всего dirty set | Нет разделения local commit vs remote commit |
+| `ReadOutboxBatch/AcknowledgeOutbox/GetOutboxWatermark/CompactOutbox` | Есть базовый local Outbox API, но нет consumer lease/fencing и отдельного high-watermark API |
+| Нет durable relay journal API | Нельзя безопасно восстановить и повторно отправить принятые remote operations после checkpoint/restart |
+| Нет atomic protocol extension/inbox commit API | Нельзя атомарно закрепить field state, incoming cursor/digest, SeenChanges и relay journal |
+| BIN-SYNC `Node` хранит Storage/Outbox/PeerStates/SeenChanges в собственных коллекциях и имеет собственный WAL v2 | В external mode пока нет storage-provider boundary; прямое подключение FLD создаст две копии состояния |
+
+**Запрет до появления целевого API:** не использовать последовательность `FldDatabase.ApplyRemote(...); FldDatabase.Commit();` как реализацию BIN-SYNC receive. Она не обеспечивает atomic batch/idempotency/relay semantics и может добавить remote author entries в локальный Outbox.
+
+## 8. Приёмочные тесты контракта
+
+1. Local writes: restart сохраняет OutboxSeq, ChangeId, HLC и payload без renumbering.
+2. Remote commit: field winners, inbox cursor, SeenChanges и relay journal появляются атомарно.
+3. Crash/lost ACK: повтор того же BatchId возвращает duplicate receipt; нет повторного применения и relay append.
+4. Cross-peer duplicate ChangeId: поле и relay не дублируются; cursor каждого входящего peer корректен.
+5. LWW loser: field state не меняется, но новая операция остаётся relay-eligible.
+6. Remote apply → commit/reopen: remote operation не появляется в local Outbox.
+7. Safe ACK: один отставший/неизвестный peer удерживает local/relay prefix; stale lease token отклоняется.
+8. Compaction/restart: OutboxSeq и relay cursors сохраняют continuity; новый peer получает корректный gap-normal cursor.
+9. Snapshot under concurrent commit/checkpoint: один стабильный view, без пропусков/дубликатов и без use-after-reclaim.
+10. Lifecycle/tombstone/KeyEpoch: digest и LWW результаты совпадают с BIN-SYNC comparator и FLD canonical encoding.
+
+## 9. Решение по текущему этапу
+
+Аудит BIN-SYNC должен завершиться на этой границе. Следующий этап — согласовать и реализовать neutral DTO + FLD durable operations и BIN-SYNC external-store adapter. До этого не заменять внутренние Node dictionaries точечными callback-ами: горячий путь, atomic publication, WAL replay и relay retention требуют единой транзакционной границы.
