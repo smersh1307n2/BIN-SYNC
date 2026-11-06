@@ -18,7 +18,7 @@ public class GcNoticeTests
         Assert.Equal(1, back.NamespaceId);
         Assert.Equal(1000u, back.TombstoneCutoffWall);
         Assert.Single(back.Quarantined);
-        Assert.True(Fix.Eq(Fix.Nid(50), back.Quarantined[0].NodeId));
+        Assert.Equal(NodeId.From(Fix.Nid(50)), back.Quarantined[0].NodeId);
         Assert.Equal(4, back.Quarantined[0].Epoch);
     }
 

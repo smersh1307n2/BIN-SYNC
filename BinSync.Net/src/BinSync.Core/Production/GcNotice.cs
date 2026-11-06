@@ -12,7 +12,7 @@ public static partial class ReconcileFrames
 public sealed class GcQuarantineEntry
 {
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
-    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public NodeId NodeId { get; set; }
     /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; }
 }
@@ -21,11 +21,11 @@ public sealed class GcQuarantineEntry
 public sealed class GcNoticeMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
-    public int NamespaceId;
+    public int NamespaceId { get; set; }
     /// <summary>Fields/records with wall strictly below this may be GC'd locally (advisory).</summary>
-    public ulong TombstoneCutoffWall;
+    public ulong TombstoneCutoffWall { get; set; }
     /// <summary>Peers currently quarantined from sync.</summary>
-    public List<GcQuarantineEntry> Quarantined = new();
+    public List<GcQuarantineEntry> Quarantined { get; set; } = new();
 }
 
 /// <summary>GC notice messages and purge helpers for outdated records.</summary>
@@ -44,12 +44,12 @@ public static class GcNotice
             int ep = node.DurableAuthors.TryGetValue(nid, out var e) ? e : 0;
             msg.Quarantined.Add(new GcQuarantineEntry
             {
-                NodeId = Codec.CanonicalB128(nid.ToArray()),
+                NodeId = nid,
                 Epoch = ep,
             });
         }
         msg.Quarantined.Sort((a, b) =>
-            a.NodeId.AsSpan().SequenceCompareTo(b.NodeId.AsSpan()));
+            a.NodeId.ToArray().AsSpan().SequenceCompareTo(b.NodeId.ToArray().AsSpan()));
         return msg;
     }
 
@@ -62,7 +62,7 @@ public static class GcNotice
         w.Varint((ulong)m.Quarantined.Count);
         foreach (var e in m.Quarantined)
         {
-            w.B128(Codec.CanonicalB128(e.NodeId));
+            w.B128(e.NodeId);
             w.U32(unchecked((uint)e.Epoch));
         }
         return w.Value();
@@ -82,7 +82,7 @@ public static class GcNotice
         {
             m.Quarantined.Add(new GcQuarantineEntry
             {
-                NodeId = r.B128(),
+                NodeId = r.ReadNodeId(),
                 Epoch = unchecked((int)r.U32()),
             });
         }
@@ -95,8 +95,8 @@ public static class GcNotice
         int added = 0;
         foreach (var e in remote.Quarantined)
         {
-            var id = Codec.CanonicalB128(e.NodeId);
-            if (id.AsSpan().SequenceEqual(node.NodeId)) continue;
+            var id = e.NodeId;
+            if (id == node.NodeId) continue;
             if (!node.Quarantined.Contains(id))
             {
                 node.Quarantined.Add(id);

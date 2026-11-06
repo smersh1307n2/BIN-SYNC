@@ -47,6 +47,15 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void GcNoticeDtos_UseTypedIdsAndProperties()
+    {
+        Assert.Equal(typeof(NodeId), typeof(GcQuarantineEntry).GetProperty(nameof(GcQuarantineEntry.NodeId))!.PropertyType);
+        Assert.Null(typeof(GcNoticeMessage).GetField(nameof(GcNoticeMessage.NamespaceId)));
+        Assert.Null(typeof(GcNoticeMessage).GetField(nameof(GcNoticeMessage.TombstoneCutoffWall)));
+        Assert.Null(typeof(GcNoticeMessage).GetField(nameof(GcNoticeMessage.Quarantined)));
+    }
+
+    [Fact]
     public void PeerCursorState_IsNotPartOfThePublicApi()
     {
         Assert.False(typeof(PeerState).IsPublic);
