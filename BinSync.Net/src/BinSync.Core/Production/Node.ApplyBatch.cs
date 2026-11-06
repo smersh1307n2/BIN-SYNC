@@ -775,11 +775,26 @@ public sealed partial class Node
             if (!nsStore.ContainsKey(recordId)) newRecordCount++;
         Limits?.EnsureCanApplySnapshot(this, newRecordCount);
 
-        // Publish only after every operation has decoded, merged, and passed limits.
-        if (!hadNamespace && overlays.Count > 0)
-            Storage[batch.NamespaceId] = nsStore;
-        foreach (var (recordId, record) in overlays)
-            nsStore[recordId] = record;
+        // Reserve all destination capacity before publication. For a new namespace,
+        // build the complete store off-node and publish it with one dictionary insert;
+        // never expose an empty/partially populated namespace if allocation fails.
+        if (overlays.Count > 0)
+        {
+            if (hadNamespace)
+            {
+                nsStore.EnsureCapacity(nsStore.Count + overlays.Count);
+                foreach (var (recordId, record) in overlays)
+                    nsStore[recordId] = record;
+            }
+            else
+            {
+                var newStore = new Dictionary<RecordId, Record>(overlays.Count);
+                foreach (var (recordId, record) in overlays)
+                    newStore.Add(recordId, record);
+                Storage.EnsureCapacity(Storage.Count + 1);
+                Storage.Add(batch.NamespaceId, newStore);
+            }
+        }
         return applied;
     }
 
