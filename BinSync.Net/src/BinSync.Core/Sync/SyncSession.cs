@@ -151,6 +151,7 @@ public partial class SyncSession : IAsyncDisposable
             var (helloFrame, _) = FrameCodec.ParseFrame(raw);
             if (helloFrame.FrameType != SessionWire.TypeHello) throw new FrameException("FRAME_REJECTED");
             var peer = SessionWire.DecodeHello(raw);
+            local.ValidateSessionEpoch(peer.NodeId, peer.Epoch);
 
             int order = CompareNodeIds(local.NodeId, peer.NodeId);
             if (order == 0) throw new FrameException("FRAME_REJECTED");

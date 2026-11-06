@@ -100,6 +100,26 @@ public class TransportFoundationTests
     }
 
     [Fact]
+    public async Task EstablishAsync_rejects_peer_hello_with_regressed_incarnation_epoch()
+    {
+        using var lower = new Node(Fix.Nid(1));
+        using var higher = new Node(Fix.Nid(2), epoch: 4);
+        lower.RegisterSessionEpoch(higher.NodeId, 5);
+        var (toLower, toHigher) = PipeTransport.CreatePair();
+
+        var lowerTask = SyncSession.EstablishAsync(lower, toLower);
+        var higherTask = SyncSession.EstablishAsync(higher, toHigher);
+        var lowerError = await Record.ExceptionAsync(async () => await lowerTask);
+        var higherError = await Record.ExceptionAsync(async () => await higherTask);
+
+        var regression = Assert.IsType<SyncException>(lowerError);
+        Assert.Equal("EPOCH_REGRESSION", regression.CodeName);
+        Assert.NotNull(higherError);
+        Assert.Equal(5, lower.SessionEpoch(higher.NodeId, 0));
+        Assert.False(lower.AliasToNode.ContainsKey(higher.NodeId));
+    }
+
+    [Fact]
     public async Task GenericSyncSession_UsesPipeTransport_WithoutTcpHost()
     {
         var a = Fix.MakeNode(1);

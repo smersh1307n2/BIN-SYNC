@@ -23,6 +23,18 @@ public sealed partial class Node
         lock (_lockMeta) { ThrowIfDisposed(); RegisterSessionEpochInternal(peer, epoch); }
     }
 
+    internal void ValidateSessionEpoch(NodeId peer, int epoch)
+    {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (PeerSessionEpochs.TryGetValue(peer, out int knownEpoch) && epoch < knownEpoch)
+                throw new SyncException("EPOCH_REGRESSION");
+        }
+    }
+
     internal void RegisterSessionEpochInternal(NodeId peer, int epoch)
     {
         if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
@@ -164,6 +176,8 @@ public sealed partial class Node
 
             bool hasPreviousSessionEpoch =
                 PeerSessionEpochs.TryGetValue(peer, out int previousEpoch);
+            if (hasPreviousSessionEpoch && peerEpoch < previousEpoch)
+                throw new SyncException("EPOCH_REGRESSION");
             bool incarnationChanged = hasPreviousSessionEpoch && previousEpoch != peerEpoch;
             ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
             RegisterSessionEpochInternal(peer, peerEpoch);

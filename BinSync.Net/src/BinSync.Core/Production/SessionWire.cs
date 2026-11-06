@@ -250,6 +250,8 @@ public static class SessionWire
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(toPeer);
         ArgumentNullException.ThrowIfNull(toLocal);
+        local.ValidateSessionEpoch(remote.NodeId, remote.Epoch);
+        remote.ValidateSessionEpoch(local.NodeId, local.Epoch);
         SyncSession.EnsureHandshakeRole(local.NodeId, remote.NodeId, initiator: true);
 
         IDisposable? localLease = null;
