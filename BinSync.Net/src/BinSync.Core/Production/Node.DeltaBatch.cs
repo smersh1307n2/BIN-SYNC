@@ -121,9 +121,9 @@ public sealed partial class Node
                 ChangeId = source.ChangeId,
                 RecordId = source.RecordId,
                 OpKind = source.OpKind,
-                // Public batches own their buffers. Internal session batches retain
-                // the zero-copy path because they are consumed before the node gate exits.
-                Payload = detachPublicBuffers ? source.Payload.ToArray() : source.Payload,
+                // Keep the engine-owned payload through origin translation. Public
+                // ownership is detached once, after the final payload bytes are known.
+                Payload = source.Payload,
                 AuthorNodeId = source.AuthorNodeId,
                 CreatedAt = source.CreatedAt,
             });
@@ -215,6 +215,8 @@ public sealed partial class Node
         }
         var entries = translated ?? pending;
         if (entries.Count == 0) return null;
+        if (detachPublicBuffers)
+            DetachPublicBatchPayloads(entries);
         var recordsRoot = ComputeRecordsRoot(entries);
         // BUGFIX (scenario 23): stamp with the epoch LEARNED for the author in the target
         // session (ALIAS_MAP entry / per-session watermark), not self.epoch.
@@ -242,6 +244,34 @@ public sealed partial class Node
     }
 
 
+
+    // Public Batch payloads must not alias mutable engine-owned outbox arrays.
+    // A single packed backing array avoids one byte[] allocation per entry and avoids
+    // copying payloads that origin translation has already rewritten.
+    private static void DetachPublicBatchPayloads(List<OutboxEntry> entries)
+    {
+        int totalLength = 0;
+        for (int i = 0; i < entries.Count; i++)
+            totalLength = checked(totalLength + entries[i].Payload.Length);
+
+        if (totalLength == 0)
+        {
+            for (int i = 0; i < entries.Count; i++)
+                entries[i].Payload = ReadOnlyMemory<byte>.Empty;
+            return;
+        }
+
+        var backing = new byte[totalLength];
+        int offset = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var payload = entries[i].Payload;
+            int length = payload.Length;
+            payload.Span.CopyTo(backing.AsSpan(offset, length));
+            entries[i].Payload = new ReadOnlyMemory<byte>(backing, offset, length);
+            offset += length;
+        }
+    }
 
     /// <summary>
     /// Drop outbox entries that every known peer of this namespace has acknowledged.
