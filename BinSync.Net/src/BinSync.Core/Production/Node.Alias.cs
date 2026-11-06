@@ -540,7 +540,7 @@ public sealed partial class Node
             if (n.IsZero) throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
             if (e < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
             n.WriteTo(dest[..16]);
-            BitConverter.TryWriteBytes(dest[16..], (uint)e);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(dest[16..], (uint)e);
         }
     }
 

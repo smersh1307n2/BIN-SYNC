@@ -306,6 +306,9 @@ public sealed class AliasAtomicityTests
         Assert.Throws<ArgumentOutOfRangeException>(() => node.SessionEpoch(peer, -1));
         Assert.Throws<ArgumentOutOfRangeException>(() => node.DurableId(epoch: -1));
         Assert.Throws<ArgumentException>(() => node.DurableId(nodeId: default(NodeId), epoch: 1));
+        var durable = node.DurableId(epoch: 0x01020304);
+        Assert.Equal(new byte[] { 0x04, 0x03, 0x02, 0x01 }, durable[16..]);
+
     }
 
 }
