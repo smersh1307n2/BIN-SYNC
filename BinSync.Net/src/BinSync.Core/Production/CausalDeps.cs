@@ -54,26 +54,12 @@ public sealed class CausalTracker
     public int PendingCount { get { lock (_gate) return _pending.Count; } }
 
     /// <summary>Hex key for diagnostics (allocates).</summary>
-    public static string Key(byte[] id) => Convert.ToHexString(id);
-
-    /// <summary>Hex key for diagnostics (allocates).</summary>
     public static string Key(BatchId id)
     {
         Span<byte> tmp = stackalloc byte[16];
         id.WriteTo(tmp);
         return Convert.ToHexString(tmp);
     }
-
-    static BatchId[] ToBatchIds(IReadOnlyList<byte[]>? deps)
-    {
-        if (deps is null || deps.Count == 0) return Array.Empty<BatchId>();
-        var a = new BatchId[deps.Count];
-        for (int i = 0; i < deps.Count; i++) a[i] = BatchId.From(deps[i]);
-        return a;
-    }
-
-    /// <summary>Record that <paramref name="changeId"/> is durably known (applied or authored locally).</summary>
-    public void NoteApplied(byte[] changeId) => NoteApplied(BatchId.From(changeId));
 
     /// <summary>Record that a typed change id is durably known.</summary>
     public void NoteApplied(BatchId changeId)
@@ -86,20 +72,10 @@ public sealed class CausalTracker
     }
 
     /// <summary>True when this change id is already marked applied in the tracker.</summary>
-    public bool IsKnown(byte[] changeId) => IsKnown(BatchId.From(changeId));
-
-    /// <summary>True when this change id is already marked applied in the tracker.</summary>
     public bool IsKnown(BatchId changeId)
     {
         lock (_gate) return _known.Contains(changeId);
     }
-
-    /// <summary>
-    /// Evaluate an incoming op. Returns Ready when all deps are known and no cycle;
-    /// otherwise Pending / Cycle / TimedOut / LostDep. Never mutates storage itself.
-    /// </summary>
-    public CausalOutcome Evaluate(byte[] changeId, IReadOnlyList<byte[]>? deps, out string? detail) =>
-        Evaluate(BatchId.From(changeId), ToBatchIds(deps), out detail);
 
     /// <summary>Evaluate with typed change ids.</summary>
     public CausalOutcome Evaluate(BatchId changeId, IReadOnlyList<BatchId>? deps, out string? detail)
@@ -138,14 +114,6 @@ public sealed class CausalTracker
             return CausalOutcome.Ready;
         }
     }
-
-    /// <summary>Hold an op until parents arrive (or timeout).</summary>
-    public void EnqueuePending(BatchId changeId, IReadOnlyList<byte[]> deps, object? payload = null) =>
-        EnqueuePending(changeId, ToBatchIds(deps), payload);
-
-    /// <summary>Hold an op until parents arrive (or timeout).</summary>
-    public void EnqueuePending(byte[] changeId, IReadOnlyList<byte[]> deps, object? payload = null) =>
-        EnqueuePending(BatchId.From(changeId), ToBatchIds(deps), payload);
 
     /// <summary>Hold an op until parents arrive (or timeout).</summary>
     public void EnqueuePending(BatchId changeId, IReadOnlyList<BatchId> deps, object? payload = null)
@@ -211,9 +179,6 @@ public sealed class CausalTracker
     }
 
     /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>
-    public List<PendingCausalOp> MarkLost(byte[] lostParent) => MarkLost(BatchId.From(lostParent));
-
-    /// <summary>Mark specific parent changeIds as permanently lost (KЗ3) and drop dependents.</summary>
     public List<PendingCausalOp> MarkLost(BatchId lostParent)
     {
         var dropped = new List<PendingCausalOp>();
@@ -238,27 +203,6 @@ public sealed class CausalTracker
             }
         }
         return dropped;
-    }
-
-    /// <summary>
-    /// Batch gate (KЗ5): if any op in the set is not Ready, the whole batch must not apply.
-    /// </summary>
-    public CausalOutcome EvaluateBatch(
-        IReadOnlyList<(byte[] ChangeId, IReadOnlyList<byte[]>? Deps)> members,
-        out string? detail)
-    {
-        detail = null;
-        CausalOutcome worst = CausalOutcome.Ready;
-        foreach (var (cid, deps) in members)
-        {
-            var o = Evaluate(cid, deps, out var d);
-            if (o != CausalOutcome.Ready)
-            {
-                detail = d;
-                if (o > worst) worst = o;
-            }
-        }
-        return worst;
     }
 
     /// <summary>Batch gate with typed change ids.</summary>

@@ -190,7 +190,7 @@ attached to a live Node.
 
 | API | Role |
 |-----|------|
-| `CausalTracker` | Known set, pending, KЗ1–KЗ5 |
+| `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5 |
 | `Node.Causal` | Optional tracker |
 | `Node.ApplyBatchCausal` / `DrainCausal` / `NoteCausalApplied(BatchId)` | Gate before apply and note local causal commits |
 | `CausalWire` | CCD1 trailer encode/decode |

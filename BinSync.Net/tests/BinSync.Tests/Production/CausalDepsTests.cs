@@ -6,11 +6,11 @@ namespace BinSync.Tests;
 
 public class CausalDepsTests
 {
-    static byte[] Id(byte b)
+    static BatchId Id(byte b)
     {
         var a = new byte[16];
         a[15] = b;
-        return a;
+        return BatchId.From(a);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class CausalDepsTests
     {
         var t = new CausalTracker();
         t.NoteApplied(Id(1));
-        var members = new List<(byte[], IReadOnlyList<byte[]>)>
+        var members = new List<(BatchId, IReadOnlyList<BatchId>)>
         {
             (Id(2), new[] { Id(1) }),           // ready
             (Id(3), new[] { Id(99) }),          // pending
