@@ -10,7 +10,7 @@ public sealed partial class TrustStore
         lock (_gate)
         {
             return _peers.Values
-                .Select(p => (p.NodeId, p.PublicKey, p.Mode, p.Revoked, p.PinnedAtUnixMs))
+                .Select(p => (p.NodeId.ToArray(), p.PublicKey.ToArray(), p.Mode, p.Revoked, p.PinnedAtUnixMs))
                 .OrderBy(p => Convert.ToHexString(p.NodeId), StringComparer.Ordinal)
                 .ToList();
         }
@@ -39,7 +39,7 @@ public sealed partial class TrustStore
             _caRoots.Clear();
             foreach (var p in peers)
             {
-                var id = Codec.CanonicalB128(p.NodeId);
+                var id = NodeId.From(p.NodeId);
                 _peers[Key(id)] = new TrustedPeer
                 {
                     NodeId = id,
@@ -50,7 +50,7 @@ public sealed partial class TrustStore
                 };
             }
             foreach (var id in caRoots)
-                _caRoots.Add(Key(id));
+                _caRoots.Add(Key(NodeId.From(id)));
         }
     }
 }
