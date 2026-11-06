@@ -151,7 +151,12 @@ public sealed partial class Node
         int nEntEarly = batch.Entries.Count;
         var decodedOps = nEntEarly > 0 ? new object[nEntEarly] : Array.Empty<object>();
         for (int di = 0; di < nEntEarly; di++)
-            decodedOps[di] = Ops.DecodeOp(batch.Entries[di].Payload).Op;
+        {
+            var entry = batch.Entries[di];
+            var op = Ops.DecodeOp(entry.Payload).Op;
+            ValidateEntryOperation(entry, op, batch.BatchId);
+            decodedOps[di] = op;
+        }
 
         // A non-zero ChangeId identifies one logical mutation. Reusing it for
         // different entries makes provenance/relay deduplication ambiguous.
@@ -695,6 +700,7 @@ public sealed partial class Node
         foreach (var e in batch.Entries)
         {
             var op = Ops.DecodeOp(e.Payload).Op;
+            ValidateEntryOperation(e, op, batch.BatchId);
             var author = GetAuthor(op);
             if (author is null)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);

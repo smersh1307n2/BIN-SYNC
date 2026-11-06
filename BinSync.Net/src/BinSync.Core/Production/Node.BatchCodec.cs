@@ -74,6 +74,24 @@ public sealed partial class Node
 
     }
 
+    // The canonical records array carries both an envelope recordId/opKind and an
+    // operation payload. They must identify the same operation before any state is staged.
+    // In particular, RecordTombstone repeats recordId inside its payload.
+    private static void ValidateEntryOperation(OutboxEntry entry, object op, BatchId batchId)
+    {
+        byte expectedKind = op switch
+        {
+            OpFieldWrite => OpsConst.TagFieldWrite,
+            OpFieldTomb => OpsConst.TagFieldTomb,
+            OpRecordTombstone => OpsConst.TagRecordTomb,
+            _ => throw new SyncException("BATCH_TRANSACTION_FAILED", batchId),
+        };
+
+        if (entry.OpKind != expectedKind ||
+            (op is OpRecordTombstone tombstone && entry.RecordId != tombstone.RecordId))
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batchId);
+    }
+
     /// <summary>Thread-safe entry point. See <see cref="EnterAllGates"/>.</summary>
     /// <summary>Encode batch to wire bytes. Lock-free: operates only on the given <see cref="Batch"/> snapshot.</summary>
     public byte[] EncodeBatchPayload(Batch batch) => EncodeBatchPayloadInternal(batch);
