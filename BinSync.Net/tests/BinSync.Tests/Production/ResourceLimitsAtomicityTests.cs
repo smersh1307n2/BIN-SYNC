@@ -335,4 +335,31 @@ public sealed class ResourceLimitsAtomicityTests
         Assert.Equal(1, node.GetRecordCount(3));
     }
 
+
+    [Fact]
+    public void Apply_batch_does_not_surface_disposed_relay_peer_after_commit()
+    {
+        var sender = Fix.MakeNode(61);
+        var receiver = Fix.MakeNode(62);
+        var stalePeer = Fix.MakeNode(63);
+        Transport.MakeSession(sender, receiver);
+        Transport.MakeSession(stalePeer, receiver);
+
+        // A peer handle can become stale independently of this receiver's session map.
+        stalePeer.Dispose();
+
+        Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+
+        // Relay alias propagation is opportunistic control-plane work. It must not
+        // turn an already accepted batch into an apparent failure.
+        var result = receiver.ApplyBatch(batch, sender.NodeId);
+
+        Assert.False(result.Duplicate);
+        Assert.Equal(1, result.Applied);
+        Assert.True(receiver.TryGetRecord(3, RecordId.From(Fix.Rid(1)), out _));
+        Assert.Single(receiver.Inbox);
+        Assert.Equal(1, receiver.GetOutboxCount(3));
+    }
+
 }
