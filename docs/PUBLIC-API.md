@@ -65,7 +65,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `WriteFields(IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)>)` | Batch of typed-record writes under one lock (distinct HLC stamps) |
 | `TombField` / `DeleteRecord` / `UndeleteRecord` | Local field and record lifecycle mutations → outbox |
 | `RepublishRecords(ns, IEnumerable<RecordId>)` | Re-enqueue visible record state for a namespace |
-| typed `PushOutbox` overloads | Low-level outbox helpers |
+| `PushOutbox(ns, RecordId, OpFieldWrite / OpFieldTomb / OpRecordTombstone)` | Low-level local Outbox enqueue; the node supplies its own author identity and session peer routing is not an enqueue argument |
 | `AuthorEpoch(NodeId)` | Resolve the current durable epoch for an author |
 | `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |

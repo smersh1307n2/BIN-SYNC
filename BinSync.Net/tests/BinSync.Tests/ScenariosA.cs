@@ -263,7 +263,7 @@ public class ScenariosA
         var a = Fix.MakeNode(1); var b = Fix.MakeNode(2);
         Transport.MakeSession(a, b);
         var op = new OpFieldWrite { FieldId = 0x0100, KeyEpoch = 2, Wall = 10, Logical = 0, Origin = 1, Value = System.Text.Encoding.ASCII.GetBytes("reencrypted") };
-        var entry = a.PushOutbox(NS, Rid(1), op, a.NodeId);
+        var entry = a.PushOutbox(NS, Rid(1), op);
         Assert.NotNull(entry);
         Assert.Equal(Ops.EncodeOp(op), entry!.Payload);
         var (dec, _) = Ops.DecodeOp(entry.Payload);

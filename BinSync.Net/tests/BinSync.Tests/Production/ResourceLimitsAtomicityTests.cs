@@ -51,7 +51,7 @@ public sealed class ResourceLimitsAtomicityTests
         };
 
         Assert.Throws<SyncException>(() =>
-            node.PushOutbox(3, Rid(1), op, node.NodeId));
+            node.PushOutbox(3, Rid(1), op));
 
         // The next allocation must be exactly the next sequence after the
         // existing queued entry; the rejected push must not leave a hole.

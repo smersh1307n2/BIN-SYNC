@@ -46,25 +46,25 @@ public sealed partial class Node
     /// Append a local operation to the durable Outbox. Prefer <see cref="WriteField"/>
     /// and the other typed mutation APIs for ordinary application writes.
     /// </summary>
-    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpFieldWrite op, NodeId author, NodeId? peer = null) =>
-        PushOutboxCore(ns, recordId, op, author, peer);
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpFieldWrite op) =>
+        PushOutboxCore(ns, recordId, op);
 
     /// <summary>Append a local field tombstone to the durable Outbox.</summary>
-    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpFieldTomb op, NodeId author, NodeId? peer = null) =>
-        PushOutboxCore(ns, recordId, op, author, peer);
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpFieldTomb op) =>
+        PushOutboxCore(ns, recordId, op);
 
     /// <summary>Append a local record tombstone to the durable Outbox.</summary>
-    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpRecordTombstone op, NodeId author, NodeId? peer = null) =>
-        PushOutboxCore(ns, recordId, op, author, peer);
+    public OutboxEntry? PushOutbox(int ns, RecordId recordId, OpRecordTombstone op) =>
+        PushOutboxCore(ns, recordId, op);
 
-    private OutboxEntry? PushOutboxCore(int ns, RecordId recordId, object op, NodeId author, NodeId? peer)
+    private OutboxEntry? PushOutboxCore(int ns, RecordId recordId, object op)
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
-            // PushOutbox stamps the local origin. Never mutate a caller-owned operation DTO.
+            // The node owns its author identity and stamps the local origin.
+            // Never mutate a caller-owned operation DTO.
             var ownedOp = CloneOperationForPush(op);
-            var entry = PushOutboxInternal(ns, recordId, ownedOp, author.ToArray(),
-                peer is { } p ? p.ToArray() : null);
+            var entry = PushOutboxInternal(ns, recordId, ownedOp);
             return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
         }
     }
@@ -105,9 +105,9 @@ public sealed partial class Node
         _ => throw new ArgumentException("Unsupported local Outbox operation.", nameof(op)),
     };
 
-    internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op, byte[] author, byte[]? peer = null)
+    internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op)
     {
-        var entry = PrepareOutboxEntryInternal(ns, recordId, op, author, suppressRestoredEcho: true);
+        var entry = PrepareOutboxEntryInternal(ns, recordId, op, NodeId.ToArray(), suppressRestoredEcho: true);
         if (entry is null) return null;
         CommitLocalMutationInternal(entry, stagedRecord: null, applyToStorage: false);
         return entry;

@@ -178,6 +178,19 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void PushOutbox_uses_the_nodes_own_identity_without_redundant_peer_arguments()
+    {
+        var overloads = typeof(Node).GetMethods()
+            .Where(method => method.Name == nameof(Node.PushOutbox))
+            .ToArray();
+
+        Assert.Equal(3, overloads.Length);
+        Assert.All(overloads, method => Assert.Equal(3, method.GetParameters().Length));
+        Assert.All(overloads, method => Assert.Equal(typeof(int), method.GetParameters()[0].ParameterType));
+        Assert.All(overloads, method => Assert.Equal(typeof(RecordId), method.GetParameters()[1].ParameterType));
+    }
+
+    [Fact]
     public void PushOutbox_does_not_mutate_caller_owned_operation()
     {
         var node = Fix.MakeNode(911);
@@ -191,7 +204,7 @@ public sealed class PublicApiIsolationTests
             Value = value,
         };
 
-        var entry = node.PushOutbox(7, Fix.Rid(911), op, node.NodeId);
+        var entry = node.PushOutbox(7, Fix.Rid(911), op);
 
         Assert.NotNull(entry);
         Assert.Equal((ushort)0xBEEF, op.Origin);
@@ -214,7 +227,7 @@ public sealed class PublicApiIsolationTests
             Value = System.Text.Encoding.UTF8.GetBytes("payload"),
         };
 
-        var returned = node.PushOutbox(7, recordId, op, node.NodeId);
+        var returned = node.PushOutbox(7, recordId, op);
         Assert.NotNull(returned);
         var stored = node.Outbox[7][0];
         var storedPayload = stored.Payload.ToArray();

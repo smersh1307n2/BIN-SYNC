@@ -269,7 +269,7 @@ public class WalTests
                     FieldId = 0x102, KeyEpoch = 0, Wall = 999, Logical = 1,
                     Origin = 1, AuthorNodeId = node.NodeId, Value = new byte[] { 0x7A }
                 };
-                Assert.NotNull(node.PushOutbox(1, rid, outboxOnly, node.NodeId));
+                Assert.NotNull(node.PushOutbox(1, rid, outboxOnly));
                 Assert.Equal(4, wal.Sequence);
             }
 
