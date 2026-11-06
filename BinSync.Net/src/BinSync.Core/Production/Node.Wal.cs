@@ -1,4 +1,4 @@
-// WAL replay for complete local mutations.
+// WAL replay for complete local mutations and accepted remote batches.
 namespace BinSync;
 
 public sealed partial class Node
@@ -24,6 +24,14 @@ public sealed partial class Node
                 _wal = wal;
             }
         }
+    }
+
+    /// <summary>Replay one durably accepted remote batch without writing it back to the WAL.</summary>
+    internal bool ReplayRemoteBatch(NodeId senderPeer, byte[] payload)
+    {
+        var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)payload);
+        var result = ApplyBatchInternal(batch, senderPeer, persistWal: false);
+        return !result.Duplicate;
     }
 
     /// <summary>Restore one durable local mutation, preserving its original Outbox identity.</summary>

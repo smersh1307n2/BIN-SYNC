@@ -18,7 +18,7 @@ public sealed partial class Node
         return result;
     }
 
-    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer)
+    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null)
     {
         var result = new BatchResult(batch.BatchId)
         {
@@ -246,6 +246,11 @@ public sealed partial class Node
             if (!nsStore.ContainsKey(rid)) newRecordCount++;
         Limits?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
             relayIndices.Count, newSeenKeys?.Count ?? 0);
+
+        // The accepted batch must be durable before publishing any effects. ReceiveBatchAsync
+        // sends its ACK only after this method returns, so a crash after ACK cannot lose it.
+        if (persistWal && _wal is not null)
+            _wal.AppendRemoteBatch(senderPeer, durablePayload ?? EncodeBatchPayloadInternal(batch));
 
         // Commit: all deterministic validation and resource checks have succeeded.
         if (!hadNamespace && overlays.Count > 0)

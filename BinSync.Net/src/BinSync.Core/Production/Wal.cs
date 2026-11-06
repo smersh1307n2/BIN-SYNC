@@ -9,6 +9,7 @@ public enum WalRecordType : byte
 {
     Checkpoint = 0x02,
     LocalMutation = 0x03,
+    RemoteBatch = 0x04,
 }
 
 /// <summary>
@@ -132,6 +133,24 @@ public sealed class Wal : IDisposable
         w.U64((ulong)entry.CreatedAt);
         w.Varint((ulong)entry.CausalDeps.Count);
         foreach (var dep in entry.CausalDeps) w.B128(dep);
+        var payload = w.Value();
+        ValidateRecord(payload);
+        return AppendRaw(payload);
+    }
+
+    /// <summary>
+    /// Append a validated incoming batch before its effects are published or ACKed.
+    /// The exact wire payload and receiving peer identity are retained for replay.
+    /// </summary>
+    internal long AppendRemoteBatch(NodeId senderPeer, ReadOnlySpan<byte> batchPayload)
+    {
+        if (senderPeer.IsZero) throw new ArgumentException("Sender peer identity must be non-zero.", nameof(senderPeer));
+        if (batchPayload.IsEmpty) throw new ArgumentException("Batch payload must not be empty.", nameof(batchPayload));
+        var w = new Writer();
+        w.U8((byte)WalRecordType.RemoteBatch);
+        w.B128(senderPeer);
+        w.Varint((ulong)batchPayload.Length);
+        w.Raw(batchPayload);
         var payload = w.Value();
         ValidateRecord(payload);
         return AppendRaw(payload);
@@ -354,6 +373,15 @@ public sealed class Wal : IDisposable
             case WalRecordType.Checkpoint:
                 _ = r.U64();
                 break;
+            case WalRecordType.RemoteBatch:
+                {
+                    var senderPeer = NodeId.From(r.B128());
+                    var batchPayload = r.BytesMemory();
+                    if (senderPeer.IsZero || batchPayload.IsEmpty)
+                        throw new InvalidDataException("Invalid WAL remote-batch metadata.");
+                    _ = Node.DecodeBatchPayloadInternal(batchPayload);
+                    break;
+                }
             case WalRecordType.LocalMutation:
                 {
                     var (_, entry) = ReadLocalMutation(r);
@@ -441,6 +469,12 @@ public sealed class Wal : IDisposable
                 {
                     var (applyToStorage, entry) = ReadLocalMutation(r);
                     return node.ReplayLocalMutation(entry, applyToStorage) ? 1 : 0;
+                }
+            case WalRecordType.RemoteBatch:
+                {
+                    var senderPeer = NodeId.From(r.B128());
+                    var batchPayload = r.BytesMemory().ToArray();
+                    return node.ReplayRemoteBatch(senderPeer, batchPayload) ? 1 : 0;
                 }
             default:
                 throw new InvalidDataException($"Unknown WAL record type 0x{(byte)type:X2}.");

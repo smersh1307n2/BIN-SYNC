@@ -103,7 +103,7 @@ public sealed partial class Node
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
-            result = ApplyBatchInternal(batch, senderPeer);
+            result = ApplyBatchInternal(batch, senderPeer, durablePayload: data);
         }
         if (!result.Duplicate || result.Applied > 0)
             RaiseBatchApplied(result, senderPeer);
@@ -114,7 +114,7 @@ public sealed partial class Node
         => DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
 
     /// <summary>Sliced decode — entry Memory views into <paramref name="data"/>. Do not return this batch to callers.</summary>
-    internal Batch DecodeBatchPayloadInternal(ReadOnlyMemory<byte> data)
+    internal static Batch DecodeBatchPayloadInternal(ReadOnlyMemory<byte> data)
     {
         var r = new Reader(data);
         int ns = r.U16();
@@ -154,6 +154,7 @@ public sealed partial class Node
                 CreatedAt = 0,
             });
         }
+        if (!r.Eof()) throw new SyncException("BATCH_TRANSACTION_FAILED");
         return new Batch(ns, schemaId, schemaVer, policy, flags, issuer, epoch,
                          cstart, cend, batchId, prev, root, digest, entries);
     }
