@@ -25,6 +25,12 @@ public static partial class Transport
         // Errata E-11 (scenario 23): keep a nodeId -> Node registry so CreateDeltaBatch's
         // lazy ALIAS_MAP negotiation can reach the peer's copy of the session table.
         // In a real stack this is the live connection handle.
+        // Detect a resumed peer BEFORE replacing null placeholders with live handles.
+        // Otherwise the assignments below erase the only durable indication that the
+        // peer was restored from persistence and the session would be reset incorrectly.
+        bool resumedPeer = (b.PeersByNid is not null && b.PeersByNid.TryGetValue(a.NodeId, out var bh) && bh is null)
+                        || (a.PeersByNid is not null && a.PeersByNid.TryGetValue(b.NodeId, out var ah) && ah is null);
+
         a.PeersByNid ??= new Dictionary<NodeId, Node>();
         b.PeersByNid ??= new Dictionary<NodeId, Node>();
         a.PeersByNid[b.NodeId] = b;
@@ -44,8 +50,6 @@ public static partial class Transport
         // peer therefore PRESERVES all session state and merely tops up the maps below;
         // a genuine live-session re-handshake keeps the full ResetSession wipe (§4.3,
         // scenario 7: same nodeId, rotated epoch ⇒ REPLACE, never merge).
-        bool resumedPeer = (b.PeersByNid is not null && b.PeersByNid.TryGetValue(a.NodeId, out var bh) && bh is null)
-                        || (a.PeersByNid is not null && a.PeersByNid.TryGetValue(b.NodeId, out var ah) && ah is null);
         if (!resumedPeer)
         {
             a.ResetSession(b.NodeId);
