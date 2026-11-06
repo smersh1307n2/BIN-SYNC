@@ -132,8 +132,9 @@ public class MergeCrdtTests
         var unsorted = new Writer().Varint(2).B128(b).U64(1).B128(a).U64(2).Value();
         Assert.Throws<InvalidDataException>(() => CounterG.Decode(unsorted));
 
-        var pnDuplicate = new Writer().Varint(1).B128(a).U64(1)
-            .Varint(1).B128(a).U64(2).Value();
+        var pnDuplicate = new Writer().Varint(2)
+            .B128(a).U64(1).B128(a).U64(2)
+            .Varint(0).Value();
         Assert.Throws<InvalidDataException>(() => CounterPn.Decode(pnDuplicate));
 
         var trailing = CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance) { [a] = 1 })
@@ -148,6 +149,24 @@ public class MergeCrdtTests
         Assert.Throws<InvalidDataException>(() => CounterG.Decode(huge));
         Assert.Throws<InvalidDataException>(() => CounterPn.Decode(huge));
         Assert.Throws<InvalidDataException>(() => SetOr.Decode(huge));
+    }
+
+    [Fact]
+    public void Counter_totals_reject_signed_and_unsigned_overflow()
+    {
+        var a = Author(1);
+        var b = Author(2);
+        var growOnly = CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance)
+        {
+            [a] = ulong.MaxValue,
+            [b] = 1,
+        });
+        Assert.Throws<OverflowException>(() => CounterG.Total(growOnly));
+
+        var pn = CounterPn.Encode(
+            new Dictionary<byte[], ulong>(BytesEq.Instance) { [a] = (ulong)long.MaxValue + 1 },
+            new Dictionary<byte[], ulong>(BytesEq.Instance));
+        Assert.Throws<OverflowException>(() => CounterPn.Value(pn));
     }
 
     [Fact]
