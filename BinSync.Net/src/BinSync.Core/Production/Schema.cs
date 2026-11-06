@@ -245,6 +245,15 @@ public sealed class SchemaRegistry
             .ThenBy(d => d.Version)
             .ToList();
 
+        // Descriptor-local errors are malformed input, not ignorable history conflicts.
+        // Validate before the catch below, which is reserved for non-reusable field history.
+        foreach (var descriptor in ordered)
+        {
+            ValidateDescriptorRange(descriptor);
+            if (descriptor.FieldIds.Overlaps(descriptor.RetiredFieldIds))
+                throw new InvalidDataException("A schema field cannot be both active and retired.");
+        }
+
         int learned = 0;
         lock (_gate)
         {
@@ -302,6 +311,14 @@ public static class SchemaMap
     public static byte[] Encode(IReadOnlyList<SchemaDescriptor> list)
     {
         ArgumentNullException.ThrowIfNull(list);
+        var keys = new HashSet<(int NamespaceId, int SchemaId, int Version)>();
+        foreach (var descriptor in list)
+        {
+            ArgumentNullException.ThrowIfNull(descriptor);
+            if (!keys.Add((descriptor.NamespaceId, descriptor.SchemaId, descriptor.Version)))
+                throw new ArgumentException("Duplicate schema version in map.", nameof(list));
+        }
+
         var w = new Writer();
         w.Varint((ulong)list.Count);
         foreach (var d in list)
@@ -334,22 +351,44 @@ public static class SchemaMap
         if (count > (ulong)(payload.Length / 9))
             throw new InvalidDataException("Schema count exceeds the available payload.");
         var list = new List<SchemaDescriptor>((int)count);
+        var keys = new HashSet<(int NamespaceId, int SchemaId, int Version)>();
         for (int i = 0; i < (int)count; i++)
         {
             int ns = r.U16();
             int sid = r.U16();
             int ver = r.U16();
             int policy = r.U8();
+            if (!keys.Add((ns, sid, ver)))
+                throw new InvalidDataException("Duplicate schema version in map.");
+
             ulong fieldCount = r.Varint();
-            if (fieldCount > (ulong)(payload.Length / 2))
+            if (fieldCount > (ulong)(r.Remaining / 2))
                 throw new InvalidDataException("Schema field count exceeds the available payload.");
             var fields = new HashSet<ushort>();
-            for (int j = 0; j < (int)fieldCount; j++) fields.Add(r.U16());
+            ushort previousField = 0;
+            for (int j = 0; j < (int)fieldCount; j++)
+            {
+                ushort field = r.U16();
+                if ((j > 0 && field <= previousField) || !fields.Add(field))
+                    throw new InvalidDataException("Schema field IDs must be strictly ordered and unique.");
+                previousField = field;
+            }
+
             ulong retiredCount = r.Varint();
-            if (retiredCount > (ulong)(payload.Length / 2))
+            if (retiredCount > (ulong)(r.Remaining / 2))
                 throw new InvalidDataException("Schema retired-field count exceeds the available payload.");
             var retired = new HashSet<ushort>();
-            for (int j = 0; j < (int)retiredCount; j++) retired.Add(r.U16());
+            ushort previousRetired = 0;
+            for (int j = 0; j < (int)retiredCount; j++)
+            {
+                ushort field = r.U16();
+                if ((j > 0 && field <= previousRetired) || !retired.Add(field))
+                    throw new InvalidDataException("Retired schema field IDs must be strictly ordered and unique.");
+                previousRetired = field;
+            }
+            if (fields.Overlaps(retired))
+                throw new InvalidDataException("A schema field cannot be both active and retired.");
+
             list.Add(new SchemaDescriptor
             {
                 NamespaceId = ns,
