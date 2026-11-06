@@ -207,8 +207,8 @@ public partial class SyncSession : IAsyncDisposable
         await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1,
             batch.Value.Payload, ct).ConfigureAwait(false);
         var raw = await ReceivePacketAsync(0x0B, ct).ConfigureAwait(false);
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != 0x0B) throw new FrameException("FRAME_REJECTED");
+        var frame = ParseExpectedSessionFrame(raw, 0x0B);
+        ValidateNamespaceStream(frame, namespaceId);
         var (id, seq, author) = Transport.DecodeAck(frame.Payload);
         if (!batch.Value.BatchId.EqualsBytes(id)) throw new InvalidOperationException("ACK batch id mismatch");
         if (seq != batch.Value.CursorEnd || author is null || NodeId.From(author) != batch.Value.DurableAuthor)
@@ -227,11 +227,14 @@ public partial class SyncSession : IAsyncDisposable
         try
         {
         var raw = await ReceivePacketAsync(0x09, ct).ConfigureAwait(false);
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != 0x09) throw new FrameException("FRAME_REJECTED");
+        var frame = ParseExpectedSessionFrame(raw, 0x09);
+        if (frame.Payload.Length < sizeof(ushort))
+            throw new FrameException("FRAME_REJECTED");
+        int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(frame.Payload);
+        ValidateNamespaceStream(frame, namespaceId);
         var result = receiver.ApplyBatchPayload(frame.Payload, PeerNodeId);
         var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
-        await SendFrameAsync(0x0B, 0x0002_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
+        await SendFrameAsync(0x0B, 0x0001_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
         return result;
         }
         finally { _batchReceiveGate.Release(); }
