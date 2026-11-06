@@ -12,7 +12,7 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 | Area | Spec | Current implementation status |
 |---|---|---|
 | Goals / consistency | §1 | implemented in the core model and apply path |
-| Transport | §3 | generic SyncSession, ISyncTransport, Pipe/Stream/TCP adapters implemented |
+| Transport | §3 | generic SyncSession, Pipe/Stream/TCP adapters, negotiated per-stream Flow Control, WINDOW_UPDATE, and typed/raw fragment reassembly implemented |
 | Identity / alias / epoch | §4 | implemented; b128 API normalization and wire width audited |
 | HLC | §5 | implemented in µs; overflow checked before logical increment |
 | Codec | §6 | implemented; b128 writer always emits exactly 16 bytes |
@@ -39,6 +39,7 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 - Digest calculation does not materialize the lazy empty FieldTombs dictionary.
 - Record digest v2 includes a field-kind byte, so an empty live value and a tombstone with identical metadata produce different digests.
 - Long identity input is normalized to exactly 16 bytes before wire encoding.
+- Flow Control is negotiated by capability intersection; payload credits are reserved atomically per stream and replenished only after receive dispatch. Oversized logical frames use bounded fragment reassembly.
 - Unsupported merge policy codes are rejected by ApplyBatch; legacy policy 0 is treated as LWW_FIELD, not as a schema-gate wildcard.
 
 ## Release gates still open

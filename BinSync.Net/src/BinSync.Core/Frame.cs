@@ -450,7 +450,7 @@ public sealed class FlowControl
             waiters = _waiters.Values.ToArray();
             _waiters.Clear();
         }
-        foreach (var waiter in waiters) waiter.TrySetException(failure);
+        foreach (var waiter in waiters) waiter.TrySetResult();
     }
 
     /// <summary>Apply a peer update only when it is strictly within the negotiated window.</summary>

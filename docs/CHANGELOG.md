@@ -4,6 +4,10 @@
 
 **Public API hardening and cleanup.**
 
+- Negotiated per-stream Flow Control: additive payload credits, canonical four-byte LE WINDOW_UPDATE, inline update dispatch, and strict over-credit rejection.
+- Oversized flow-controlled frames are automatically fragmented and reassembled by typed receive paths; fragment memory and queued receive memory have explicit bounds.
+- Flow-control send waiters are awakened on peer/session failure; the send fast path reserves credit without allocating wait state when the window is available.
+
 - Removed standalone `NextOutboxSeq`; sequence allocation is committed only with its Outbox mutation.
 - Removed untyped public `SeenState`; internal merge logic uses the gated internal accessor.
 - Replaced `PushOutbox(object, ...)` and the legacy `byte[]` author overload with typed operation overloads (`OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone`); the Node supplies its own author identity.

@@ -24,7 +24,7 @@ public readonly record struct AliasMapEntry(
 
 /// <summary>
 /// Encode / decode session-control payloads. Frame types: HELLO=0x01, HELLO_ACK=0x02,
-/// ALIAS_MAP=0x03, ERROR=0x0D. Control plane uses <c>streamId = 0</c> (§3.7).
+/// ALIAS_MAP=0x03, ERROR=0x0D, WINDOW_UPDATE=0x0E. Control plane uses <c>streamId = 0</c> (§3.7).
 /// </summary>
 public static class SessionWire
 {
