@@ -200,7 +200,7 @@ attached to a live Node.
 | `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; `DepTimeout` and `UtcNowMs` configure expiry policy |
 | `Node.Causal` | Optional tracker |
 | `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
-| `Node.ApplyBatchCausal` / `DrainCausal` / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
+| `Node.ApplyBatchCausal` / `DrainCausal` (released items are not known until applied) / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
 | `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `CausalWire` | CCD1 trailer encode/decode |
 | `CAUSAL_DEP_MISSING` | 0x0012 |

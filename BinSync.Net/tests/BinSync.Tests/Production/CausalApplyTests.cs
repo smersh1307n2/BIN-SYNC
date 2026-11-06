@@ -98,6 +98,26 @@ public class CausalApplyTests
     }
 
     [Fact]
+    public void Duplicate_batch_still_marks_its_changes_as_causally_known()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(4), 0x0100, new byte[] { 0x44 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+
+        var first = receiver.ApplyBatch(batch, sender.NodeId);
+        Assert.False(first.Duplicate);
+
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+        var duplicate = receiver.ApplyBatchCausal(batch, sender.NodeId);
+
+        Assert.True(duplicate.Duplicate);
+        Assert.All(batch.Entries, entry => Assert.True(tracker.IsKnown(entry.ChangeId)));
+    }
+
+    [Fact]
     public void DrainAndRetryCausal_reapplies_with_normal_node_gate_order()
     {
         var sender = new Node(Id(0xA1), epoch: 1);

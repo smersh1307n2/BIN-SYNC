@@ -78,7 +78,9 @@ public sealed partial class Node
 
             result = ApplyBatchInternal(ownedBatch, senderPeer);
 
-            if (tracker is not null && !result.Duplicate)
+            // A duplicate is already durably present in the receiver Inbox. Keep the
+            // causal tracker aligned with that accepted state as well.
+            if (tracker is not null)
             {
                 foreach (var e in ownedBatch.Entries)
                 {
