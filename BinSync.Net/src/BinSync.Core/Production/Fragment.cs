@@ -31,6 +31,7 @@ public static class FragmentCodec
     /// <summary>Split <paramref name="logicalPayload"/> into fragments of at most <paramref name="maxBody"/> bytes.</summary>
     public static List<byte[]> Split(byte[] logicalPayload, int maxBody, byte[]? msgId = null)
     {
+        ArgumentNullException.ThrowIfNull(logicalPayload);
         if (maxBody < 1 || maxBody > Frames.MAX_PAYLOAD_SIZE - 24)
             throw new ArgumentOutOfRangeException(nameof(maxBody));
         if (logicalPayload.Length > Frames.MAX_PAYLOAD_SIZE)
@@ -58,8 +59,11 @@ public static class FragmentCodec
     }
 
     /// <summary>Encode one into canonical wire bytes.</summary>
-    public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body) =>
-        EncodeOne(msgId, index, count, (ReadOnlySpan<byte>)body);
+    public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, byte[] body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        return EncodeOne(msgId, index, count, (ReadOnlySpan<byte>)body);
+    }
 
     /// <summary>Encode one fragment without requiring an owned body array.</summary>
     public static byte[] EncodeOne(byte[] msgId, ushort index, ushort count, ReadOnlySpan<byte> body)
@@ -90,6 +94,7 @@ public static class FragmentCodec
     /// <summary>Decode one from canonical wire bytes.</summary>
     public static FrameFragment DecodeOne(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var id = r.B128();
         ushort idx = r.U16();
