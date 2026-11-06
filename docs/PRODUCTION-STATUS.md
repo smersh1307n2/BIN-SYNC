@@ -2,10 +2,10 @@
 
 **Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
 
-**Package:** `BinSync.Core` **`2.6.5`** · **Target:** `net10.0` · **Branch:** `main`  
-**Tag:** `v2.6.5` (see GitHub Releases)  
+**Package:** `BinSync.Core` **`3.0.0`** · **Target:** `net10.0` · **Branch:** `feature/fld-external-storage` (PR #16)  
+**Status:** PR #16 open; latest audited commit `6451eff`  
 **Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** 276 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
+**Tests:** 456 green · **Coverage:** 68.3% · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
 
 **Spec parity:** **~95%+** — reference engine production-hardened.  
 **Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** → **1.0.1** → **2.1.0** (API shape major).
@@ -14,7 +14,7 @@ Legend: **done** · **partial** · **missing**
 
 ---
 
-## Post-1.0 hygiene (main)
+## Historical baseline — main at 2.6.5 (before the 3.0.0 branch audit)
 
 - Node engine split into partials (`Node.Alias` / `LocalWrites` / `DeltaBatch` / `ApplyBatch` / …)
 - Test warnings-as-errors; dead Diag harness and duplicate comparers removed
