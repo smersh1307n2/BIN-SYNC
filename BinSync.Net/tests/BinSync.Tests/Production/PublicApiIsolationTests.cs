@@ -95,4 +95,21 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(storedPayload, stored.Payload.ToArray());
     }
 
+    [Fact]
+    public void WriteField_CopiesCallerOwnedValueBuffer()
+    {
+        var node = Fix.MakeNode(904);
+        var recordId = Fix.Rid(904);
+        var input = System.Text.Encoding.UTF8.GetBytes("original");
+
+        Assert.True(node.WriteField(7, recordId, 0x101, input));
+        input[0] = (byte)'X';
+
+        Assert.True(node.TryGetField(7, recordId, 0x101, out var field));
+        Assert.NotNull(field);
+        Assert.Equal("original", System.Text.Encoding.UTF8.GetString(field!.Value));
+        var outbox = node.Outbox[7][0];
+        Assert.Equal("original", System.Text.Encoding.UTF8.GetString(Ops.DecodeOp(outbox.Payload).Op is OpFieldWrite op ? op.Value : Array.Empty<byte>()));
+    }
+
 }

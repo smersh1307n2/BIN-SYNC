@@ -298,13 +298,15 @@ public sealed partial class Node
 
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
+        ArgumentNullException.ThrowIfNull(value);
+        var ownedValue = value.ToArray();
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
         bool exists = store.TryGetValue(recordId, out var currentRecord);
         var rec = exists ? Clone(currentRecord!) : new Record(recordId, (ushort)namespaceId);
 
         var h = hlc ?? Clock.SendTick();
-        var fs = new FieldState(value, h, NodeId);
+        var fs = new FieldState(ownedValue, h, NodeId);
         var (winner, changed) = Merge.MergeFieldWithPolicy(
             rec.State.TryGetValue((ushort)fieldId, out var current) ? current : null,
             fs,
@@ -325,7 +327,7 @@ public sealed partial class Node
             Logical = h.Logical,
             Origin = 1,
             AuthorNodeId = NodeId,
-            Value = value
+            Value = ownedValue
         };
 
         rec.State[(ushort)fieldId] = winner;
