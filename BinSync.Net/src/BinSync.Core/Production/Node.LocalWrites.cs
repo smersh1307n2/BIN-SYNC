@@ -175,7 +175,7 @@ public sealed partial class Node
 
         SetOrigin(op, 1);
         var payload = Ops.EncodeOp(op, fullAuthor: false);
-        var limits = System.Threading.Volatile.Read(ref _limits);
+        var limits = Limits;
         limits?.EnsureCanEnqueueOutbox(this, ns);
         limits?.EnsureSeenChangesCapacity(this);
         var key = (NodeId, ns);

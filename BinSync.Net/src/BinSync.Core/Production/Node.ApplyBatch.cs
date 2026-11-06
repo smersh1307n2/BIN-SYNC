@@ -250,7 +250,7 @@ public sealed partial class Node
         int newRecordCount = 0;
         foreach (var rid in overlays.Keys)
             if (!nsStore.ContainsKey(rid)) newRecordCount++;
-        System.Threading.Volatile.Read(ref _limits)?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
+        Limits?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
             relayIndices.Count, newSeenKeys?.Count ?? 0);
 
         // The accepted batch must be durable before publishing any effects. ReceiveBatchAsync
