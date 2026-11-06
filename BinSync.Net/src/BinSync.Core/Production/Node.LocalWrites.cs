@@ -296,7 +296,11 @@ public sealed partial class Node
         bool changed;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
-            limits.EnsureStorageCapacity(this);
+            // MaxRecords limits creation only; an update to an existing record
+            // must remain possible when storage is exactly at capacity.
+            bool recordExists = Storage.TryGetValue(namespaceId, out var store) &&
+                                store.ContainsKey(recordId);
+            if (!recordExists) limits.EnsureStorageCapacity(this);
             limits.EnsureCanEnqueueOutbox(this, namespaceId);
             limits.EnsureSeenChangesCapacity(this);
             changed = WriteFieldInternal(namespaceId, recordId, fieldId, value, hlc);
