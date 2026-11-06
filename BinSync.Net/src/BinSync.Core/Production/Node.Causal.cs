@@ -18,7 +18,14 @@ public sealed partial class Node
     /// When set, <see cref="ApplyBatchCausal(Batch, NodeId)"/> evaluates <see cref="OutboxEntry.CausalDeps"/>
     /// before applying (KЗ5 all-or-nothing). Plain <see cref="ApplyBatch"/> ignores this.
     /// </summary>
-    public CausalTracker? Causal { get; set; }
+    private CausalTracker? _causal;
+
+    /// <summary>Optional causal tracker. Access is serialized with causal apply operations.</summary>
+    public CausalTracker? Causal
+    {
+        get { lock (_lockMeta) return _causal; }
+        set { lock (_lockMeta) _causal = value; }
+    }
 
     /// <summary>
     /// Apply a batch only when every entry's causal deps are Ready (or no <see cref="Causal"/>).

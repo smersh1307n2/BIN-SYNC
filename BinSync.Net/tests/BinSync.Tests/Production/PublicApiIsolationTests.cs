@@ -402,6 +402,44 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void AllGateScope_IsReferenceOwnedAndDisposeIsIdempotent()
+    {
+        using var node = Fix.MakeNode(911);
+        var scope = node.EnterAllGates();
+        var alias = scope;
+        Assert.Same(scope, alias);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            Task.Run(() => alias.Dispose()).GetAwaiter().GetResult());
+
+        scope.Dispose();
+        alias.Dispose();
+        node.WriteField(7, Fix.Rid(911), 0x101, new byte[] { 1 });
+    }
+
+    [Fact]
+    public void Causal_configuration_access_waits_for_the_metadata_gate()
+    {
+        using var node = Fix.MakeNode(912);
+        var tracker = new CausalTracker();
+        var scope = node.EnterAllGates();
+        using var started = new ManualResetEventSlim();
+
+        var setter = Task.Run(() =>
+        {
+            started.Set();
+            node.Causal = tracker;
+        });
+
+        Assert.True(started.Wait(TimeSpan.FromSeconds(3)));
+        Assert.False(setter.Wait(TimeSpan.FromMilliseconds(100)));
+        scope.Dispose();
+
+        setter.GetAwaiter().GetResult();
+        Assert.Same(tracker, node.Causal);
+    }
+
+    [Fact]
     public void NodePersistence_DoesNotExposePrivateFieldReflection()
     {
         Assert.Null(typeof(NodePersistence).GetMethod("GetField"));
