@@ -157,9 +157,12 @@ public sealed class FragmentReassembler
             throw new FrameException("FRAME_REJECTED");
 
         var key = BatchId.From(f.MsgId);
-        if (!_pending.TryGetValue(key, out var slot))
+        bool isNewMessage = !_pending.TryGetValue(key, out var slot);
+        if (isNewMessage)
         {
-            if (_pending.Count >= MaxPendingMessages || f.Count > MaxPendingFragments - _pendingSlots)
+            if (f.Body.Length > MaxPendingBytes - _pendingBytes ||
+                _pending.Count >= MaxPendingMessages ||
+                f.Count > MaxPendingFragments - _pendingSlots)
                 throw new FrameException("FLOW_CONTROL_VIOLATION");
             slot = new Slot { Count = f.Count, Parts = new byte[f.Count][], Have = 0 };
             _pending[key] = slot;
