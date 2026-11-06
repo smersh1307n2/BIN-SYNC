@@ -684,15 +684,37 @@ public sealed partial class Node
         if (batch.BatchDigest != snapshotDigest)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
 
+        ValidateNamespaceId(batch.NamespaceId);
+        bool hadNamespace = Storage.TryGetValue(batch.NamespaceId, out var nsStore);
+        nsStore ??= new Dictionary<RecordId, Record>();
+        var overlays = new Dictionary<RecordId, Record>();
         int applied = 0;
+
+        // Decode and apply into copy-on-write records. A malformed late entry must
+        // not leave earlier snapshot entries visible in the live namespace.
         foreach (var e in batch.Entries)
         {
             var op = Ops.DecodeOp(e.Payload).Op;
-            var author = GetAuthor(op)!;
-            var nsStore = Ns(batch.NamespaceId);
-            if (!nsStore.TryGetValue(e.RecordId, out var rec)) nsStore[e.RecordId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
-            if (ApplyOpInternal(rec, op, NodeId.From(author))) applied++;
+            var author = GetAuthor(op);
+            if (author is null)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+
+            if (!overlays.TryGetValue(e.RecordId, out var rec))
+            {
+                rec = nsStore.TryGetValue(e.RecordId, out var existing)
+                    ? Clone(existing)
+                    : new Record(e.RecordId, (ushort)batch.NamespaceId);
+                overlays.Add(e.RecordId, rec);
+            }
+
+            if (ApplyOpInternal(rec, op, author.Value)) applied++;
         }
+
+        // Publish only after every operation has decoded and merged successfully.
+        if (!hadNamespace && overlays.Count > 0)
+            Storage[batch.NamespaceId] = nsStore;
+        foreach (var (recordId, record) in overlays)
+            nsStore[recordId] = record;
         return applied;
     }
 

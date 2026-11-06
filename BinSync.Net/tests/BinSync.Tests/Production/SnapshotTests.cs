@@ -522,4 +522,34 @@ public class SnapshotTests
     }
 
 
+    [Fact]
+    public void ApplySnapshot_is_atomic_when_a_late_operation_is_malformed()
+    {
+        using var source = Fix.MakeNode(936);
+        using var target = Fix.MakeNode(937);
+        var firstId = Fix.Rid(936);
+        source.WriteField(1, firstId, 0x100, new byte[] { 0xA5 });
+        var batch = Assert.Single(source.BuildSnapshot(1));
+
+        var lateId = RecordId.From(Fix.Rid(937));
+        batch.Entries.Add(new OutboxEntry
+        {
+            NamespaceId = 1,
+            ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            RecordId = lateId,
+            OpKind = 0xFF,
+            Payload = new byte[] { 0xFF },
+            AuthorNodeId = source.NodeId,
+        });
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            batch.RecordsRoot, batch.PrevBatchDigest);
+
+        Assert.Throws<ArgumentException>(() => target.ApplySnapshot(batch));
+        Assert.Empty(target.Storage);
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+
 }
