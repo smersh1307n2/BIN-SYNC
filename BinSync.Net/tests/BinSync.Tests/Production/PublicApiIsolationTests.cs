@@ -47,6 +47,16 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void MembershipDtos_ExposePropertiesAndTypedPeerIdentity()
+    {
+        Assert.Equal(typeof(NodeId), typeof(MembershipEntry).GetProperty(nameof(MembershipEntry.NodeId))!.PropertyType);
+        Assert.Null(typeof(MembershipEntry).GetField(nameof(MembershipEntry.Flags)));
+        Assert.Null(typeof(MembershipMessage).GetField(nameof(MembershipMessage.NamespaceId)));
+        Assert.Null(typeof(MembershipMessage).GetField(nameof(MembershipMessage.MembershipEpoch)));
+        Assert.Null(typeof(MembershipMessage).GetField(nameof(MembershipMessage.Members)));
+    }
+
+    [Fact]
     public void SnapshotDtos_UseTypedIdentitiesAndProperties()
     {
         Assert.Equal(typeof(RecordId), typeof(SnapshotRecord).GetProperty(nameof(SnapshotRecord.RecordId))!.PropertyType);

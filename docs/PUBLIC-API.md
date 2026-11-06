@@ -30,7 +30,7 @@ Breaking hygiene (no wire/protocol change):
 
 | Area | Contract |
 |------|----------|
-| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `Record`, `SnapshotField`, `SnapshotRecord`, `SnapshotChunkMessage`, `GcNoticeMessage`, … |
+| DTO fields | Public **properties** (not bare fields): `OutboxEntry`, `Batch`, `Record`, `SnapshotField`, `SnapshotRecord`, `SnapshotChunkMessage`, `GcNoticeMessage`, `MembershipEntry`, `MembershipMessage`, … |
 | Identities | Value types: **`NodeId`**, **`RecordId`**, **`BatchId`**, **`Digest16`** (value equality / hash). Implicit conversion from/to `byte[]` remains available for identity types; use `From(...)` / `ToArray()` when an explicit boundary is clearer. |
 | `BatchResult` | **`struct`** (not a class) — ApplyBatch/ApplyBatchPayload return by value; no heap result object on the success path. |
 | Peer identity on transport/session | **`ISyncTransport.PeerNodeId`**, **`HelloPayload.NodeId`**, **`AliasMapEntry.NodeId`**, **`SyncSession.PeerNodeId`** are **`NodeId`**. Internal peer cursor state is not exposed. |

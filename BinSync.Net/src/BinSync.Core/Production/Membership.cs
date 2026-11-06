@@ -16,7 +16,7 @@ public sealed class MembershipEntry
     /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
-    public byte Flags;
+    public byte Flags { get; set; }
     /// <summary>True when membership flags include the active bit.</summary>
     public bool IsActive => (Flags & 0x01) != 0;
     /// <summary>True when membership flags include the quarantined bit.</summary>
@@ -27,11 +27,11 @@ public sealed class MembershipEntry
 public sealed class MembershipMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
-    public int NamespaceId;
+    public int NamespaceId { get; set; }
     /// <summary>Membership list epoch for this roster.</summary>
-    public uint MembershipEpoch;
+    public uint MembershipEpoch { get; set; }
     /// <summary>Membership entries describing peers and their flags.</summary>
-    public List<MembershipEntry> Members = new();
+    public List<MembershipEntry> Members { get; set; } = new();
 }
 
 /// <summary>Membership list messages and peer flag helpers.</summary>
@@ -47,6 +47,8 @@ public static class Membership
     /// </summary>
     public static MembershipMessage Build(Node node, int namespaceId, uint membershipEpoch = 0)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        using var gates = node.EnterAllGates();
         var msg = new MembershipMessage
         {
             NamespaceId = namespaceId,
@@ -124,21 +126,41 @@ public static class Membership
     /// </summary>
     public static int Apply(Node node, MembershipMessage remote)
     {
-        int learned = 0;
-        foreach (var e in remote.Members)
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(remote);
+        var entries = remote.Members?.Select(entry => entry is null ? null! : new MembershipEntry
         {
-            if (e.NodeId == node.NodeId) continue;
-            if (e.IsQuarantined)
-                node.Quarantined.Add(e.NodeId);
-            int prev = node.DurableAuthors.TryGetValue(e.NodeId, out var cur) ? cur : 0;
-            if (e.Epoch > prev)
+            NodeId = entry.NodeId,
+            Epoch = entry.Epoch,
+            Flags = entry.Flags,
+        }).ToArray() ?? throw new FormatException("Membership entries are missing");
+        if (entries.Any(entry => entry is null))
+            throw new FormatException("Membership contains a null entry");
+
+        var ownedMessage = new MembershipMessage
+        {
+            NamespaceId = remote.NamespaceId,
+            MembershipEpoch = remote.MembershipEpoch,
+            Members = entries.ToList(),
+        };
+        int learned = 0;
+        using (node.EnterAllGates())
+        {
+            foreach (var e in entries)
             {
-                node.DurableAuthors[e.NodeId] = e.Epoch;
-                node.LearnAuthorEpoch(e.NodeId, e.Epoch);
-                if (prev == 0) learned++;
+                if (e.NodeId == node.NodeId) continue;
+                if (e.IsQuarantined)
+                    node.Quarantined.Add(e.NodeId);
+                int prev = node.DurableAuthors.TryGetValue(e.NodeId, out var cur) ? cur : 0;
+                if (e.Epoch > prev)
+                {
+                    node.DurableAuthors[e.NodeId] = e.Epoch;
+                    node.LearnAuthorEpoch(e.NodeId, e.Epoch);
+                    if (prev == 0) learned++;
+                }
             }
         }
-        node.RaiseMembershipApplied(remote, learned);
+        node.RaiseMembershipApplied(ownedMessage, learned);
         return learned;
     }
 }

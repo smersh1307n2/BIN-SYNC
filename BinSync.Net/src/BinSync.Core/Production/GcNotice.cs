@@ -34,6 +34,8 @@ public static class GcNotice
     /// <summary>Build  from current state.</summary>
     public static GcNoticeMessage Build(Node node, int namespaceId, ulong tombstoneCutoffWall = 0)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        using var gates = node.EnterAllGates();
         var msg = new GcNoticeMessage
         {
             NamespaceId = namespaceId,
@@ -92,23 +94,36 @@ public static class GcNotice
     /// <summary>Apply  to local state.</summary>
     public static int Apply(Node node, GcNoticeMessage remote)
     {
-        int added = 0;
-        foreach (var e in remote.Quarantined)
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(remote);
+        var entries = remote.Quarantined?.Select(entry => entry is null ? null! : new GcQuarantineEntry
         {
-            var id = e.NodeId;
-            if (id == node.NodeId) continue;
-            if (!node.Quarantined.Contains(id))
+            NodeId = entry.NodeId,
+            Epoch = entry.Epoch,
+        }).ToArray() ?? throw new FormatException("GC quarantine entries are missing");
+        if (entries.Any(entry => entry is null))
+            throw new FormatException("GC notice contains a null quarantine entry");
+
+        int added = 0;
+        using (node.EnterAllGates())
+        {
+            foreach (var e in entries)
             {
-                node.Quarantined.Add(id);
-                added++;
-            }
-            if (e.Epoch > 0)
-            {
-                int prev = node.DurableAuthors.TryGetValue(id, out var cur) ? cur : 0;
-                if (e.Epoch > prev)
+                var id = e.NodeId;
+                if (id == node.NodeId) continue;
+                if (!node.Quarantined.Contains(id))
                 {
-                    node.DurableAuthors[id] = e.Epoch;
-                    node.LearnAuthorEpoch(id, e.Epoch);
+                    node.Quarantined.Add(id);
+                    added++;
+                }
+                if (e.Epoch > 0)
+                {
+                    int prev = node.DurableAuthors.TryGetValue(id, out var cur) ? cur : 0;
+                    if (e.Epoch > prev)
+                    {
+                        node.DurableAuthors[id] = e.Epoch;
+                        node.LearnAuthorEpoch(id, e.Epoch);
+                    }
                 }
             }
         }
@@ -118,7 +133,9 @@ public static class GcNotice
     /// <summary>Purge records whose lifecycle wall is strictly below the cutoff; returns how many were removed.</summary>
     public static int PurgeBelowCutoff(Node node, int namespaceId, ulong cutoffWall)
     {
+        ArgumentNullException.ThrowIfNull(node);
         if (cutoffWall == 0) return 0;
+        using var gates = node.EnterAllGates();
         if (!node.Storage.TryGetValue(namespaceId, out var map)) return 0;
         int removed = 0;
         foreach (var rec in map.Values)
