@@ -47,6 +47,34 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void Lifecycle_events_run_after_node_locks_are_released()
+    {
+        using var node = Fix.MakeNode(911);
+        var recordId = Fix.Rid(911);
+        int tombstones = 0, deletions = 0, revivals = 0;
+
+        void AssertCanWriteFromAnotherThread()
+        {
+            var write = Task.Run(() => node.WriteField(7, Fix.Rid(912), 0x120, new byte[] { 1 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "Lifecycle event ran while node locks were held.");
+            Assert.True(write.Result);
+        }
+
+        node.FieldTombstoned += (_, _, _) => { AssertCanWriteFromAnotherThread(); tombstones++; };
+        node.RecordDeleted += (_, _) => { AssertCanWriteFromAnotherThread(); deletions++; };
+        node.RecordUndeleted += (_, _) => { AssertCanWriteFromAnotherThread(); revivals++; };
+
+        Assert.True(node.WriteField(7, recordId, 0x101, new byte[] { 1 }));
+        Assert.True(node.TombField(7, recordId, 0x101));
+        Assert.True(node.DeleteRecord(7, recordId));
+        Assert.True(node.UndeleteRecord(7, recordId));
+
+        Assert.Equal(1, tombstones);
+        Assert.Equal(1, deletions);
+        Assert.Equal(1, revivals);
+    }
+
+    [Fact]
     public void SigningAndKeyRotationHelpers_UseTypedIdentityParameters()
     {
         var rotationCreate = typeof(KeyRotation).GetMethod(nameof(KeyRotation.Create))!;

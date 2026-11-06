@@ -416,7 +416,11 @@ public sealed partial class Node
     /// and delegates to <c>TombFieldInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool TombField(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
-        lock (_lockStorage) lock (_lockOutbox) return TombFieldInternal(namespaceId, recordId, fieldId, hlc);
+        bool changed;
+        lock (_lockStorage) lock (_lockOutbox)
+            changed = TombFieldInternal(namespaceId, recordId, fieldId, hlc);
+        if (changed) FieldTombstoned?.Invoke(namespaceId, recordId, fieldId);
+        return changed;
     }
 
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
@@ -455,7 +459,11 @@ public sealed partial class Node
     /// and delegates to <c>DeleteRecordInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool DeleteRecord(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
-        lock (_lockStorage) lock (_lockOutbox) return DeleteRecordInternal(namespaceId, recordId, hlc);
+        bool changed;
+        lock (_lockStorage) lock (_lockOutbox)
+            changed = DeleteRecordInternal(namespaceId, recordId, hlc);
+        if (changed) RecordDeleted?.Invoke(namespaceId, recordId);
+        return changed;
     }
 
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
@@ -490,7 +498,13 @@ public sealed partial class Node
     /// and delegates to <c>UndeleteRecordInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public bool UndeleteRecord(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
-        lock (_lockStorage) lock (_lockOutbox) return UndeleteRecordInternal(namespaceId, recordId, hlc);
+        bool changed;
+        lock (_lockStorage) lock (_lockOutbox)
+            changed = UndeleteRecordInternal(namespaceId, recordId, hlc);
+        // Undelete is an explicit propagated lifecycle operation even when the local
+        // lifecycle value was already Alive, so notify after every successful commit.
+        RecordUndeleted?.Invoke(namespaceId, recordId);
+        return changed;
     }
 
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)

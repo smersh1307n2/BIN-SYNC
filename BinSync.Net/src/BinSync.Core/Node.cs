@@ -51,6 +51,12 @@ public sealed partial class Node : IDisposable
 
     /// <summary>Raised after a successful local field write (outside engine locks).</summary>
     public event Action<int, RecordId, int>? FieldWritten;
+    /// <summary>Raised after a local field tombstone is committed (outside engine locks).</summary>
+    public event Action<int, RecordId, int>? FieldTombstoned;
+    /// <summary>Raised after a local record deletion is committed (outside engine locks).</summary>
+    public event Action<int, RecordId>? RecordDeleted;
+    /// <summary>Raised after an explicit local record revive is committed (outside engine locks).</summary>
+    public event Action<int, RecordId>? RecordUndeleted;
 
     /// <summary>Raised after an ACK advances peer watermarks (outside engine locks).</summary>
     public event Action<NodeId, int, long, NodeId?>? AckProcessed;
@@ -289,6 +295,9 @@ public sealed partial class Node : IDisposable
             PeersByNid = null;
             BatchApplied = null;
             FieldWritten = null;
+            FieldTombstoned = null;
+            RecordDeleted = null;
+            RecordUndeleted = null;
             AckProcessed = null;
             MembershipApplied = null;
             KeyRotationApplied = null;
