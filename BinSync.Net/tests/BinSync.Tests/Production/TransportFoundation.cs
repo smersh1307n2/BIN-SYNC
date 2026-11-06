@@ -176,7 +176,7 @@ public class TransportFoundationTests
             1, SessionWire.EncodeWindowUpdate((uint)excessive)));
         var error = await Assert.ThrowsAsync<IOException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(2)));
         Assert.IsType<FrameException>(error.InnerException);
-        Assert.Equal("FLOW_CONTROL_VIOLATION", ((FrameException)error.InnerException!).Code);
+        Assert.Equal("FLOW_CONTROL_VIOLATION", ((FrameException)error.InnerException!).CodeName);
     }
 
     [Fact]
