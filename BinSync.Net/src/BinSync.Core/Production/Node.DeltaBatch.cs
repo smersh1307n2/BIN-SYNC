@@ -35,7 +35,11 @@ public sealed partial class Node
                                    byte[]? filterAuthorNodeId = null,
                                    int schemaId = 0, int schemaVersion = 1)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            var batch = CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
+            return batch is null ? null : CloneBatchForPublicRead(batch);
+        }
     }
 
     internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,

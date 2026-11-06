@@ -72,4 +72,27 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(storedPayload, stored.Payload.ToArray());
     }
 
+    [Fact]
+    public void CreateDeltaBatch_ReturnsDetachedPayloadsAndEntryList()
+    {
+        var node = Fix.MakeNode(903);
+        var recordId = Fix.Rid(903);
+        var targetPeer = new NodeId(903, 1903);
+        Assert.True(node.WriteField(7, recordId, 0x101, new byte[] { 1, 2, 3 }));
+
+        var stored = node.Outbox[7][0];
+        var storedPayload = stored.Payload.ToArray();
+        var batch = node.CreateDeltaBatch(targetPeer, 7);
+
+        Assert.NotNull(batch);
+        Assert.Single(batch!.Entries);
+        Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+            batch.Entries[0].Payload, out var payload));
+        payload.Array![payload.Offset] ^= 0xFF;
+        batch.Entries.Clear();
+
+        Assert.Equal(1, node.GetOutboxCount(7));
+        Assert.Equal(storedPayload, stored.Payload.ToArray());
+    }
+
 }

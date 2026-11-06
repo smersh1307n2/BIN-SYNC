@@ -41,6 +41,29 @@ public sealed partial class Node
     internal int OutboxSizeInternal(int namespaceId)
     { return Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0; }
 
+    internal static Batch CloneBatchForPublicRead(Batch batch)
+    {
+        var copy = new Batch(
+            batch.NamespaceId,
+            batch.SchemaId,
+            batch.SchemaVersion,
+            batch.MergePolicy,
+            batch.Flags,
+            batch.IssuerNodeId,
+            batch.IssuerEpoch,
+            batch.CursorStart,
+            batch.CursorEnd,
+            batch.BatchId,
+            batch.PrevBatchDigest,
+            batch.RecordsRoot,
+            batch.BatchDigest,
+            batch.Entries.Select(CloneOutboxEntryForPublicRead).ToList())
+        {
+            AuthorStreamNodeId = batch.AuthorStreamNodeId,
+        };
+        return copy;
+    }
+
     internal static OutboxEntry CloneOutboxEntryForPublicRead(OutboxEntry entry) => new()
     {
         NamespaceId = entry.NamespaceId,
