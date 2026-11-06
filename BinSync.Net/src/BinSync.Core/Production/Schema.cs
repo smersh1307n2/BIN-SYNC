@@ -253,7 +253,7 @@ public sealed class SchemaRegistry
             var incoming = new Dictionary<(int Ns, int SchemaId, int Version), SchemaDescriptor>();
             foreach (var descriptor in ordered)
             {
-                var key = (descriptor.NamespaceId, descriptor.SchemaId, descriptor.Version);
+                var key = (Ns: descriptor.NamespaceId, SchemaId: descriptor.SchemaId, Version: descriptor.Version);
                 if (incoming.TryGetValue(key, out var prior) &&
                     !DescriptorsEqual(prior, descriptor))
                     throw new InvalidDataException(
