@@ -48,7 +48,10 @@ public sealed class CausalTracker
     /// <summary>How long a missing dep may stay pending before KЗ1 timeout.</summary>
     public TimeSpan DepTimeout
     {
-        get { lock (_gate) return _depTimeout; }
+        get
+        {
+            lock (_gate) return _depTimeout;
+        }
         set
         {
             if (value < TimeSpan.Zero)
@@ -60,7 +63,10 @@ public sealed class CausalTracker
     /// <summary>Clock for tests; defaults to UTC now. The delegate cannot be null.</summary>
     public Func<long> UtcNowMs
     {
-        get { lock (_gate) return _utcNowMs; }
+        get
+        {
+            lock (_gate) return _utcNowMs;
+        }
         set
         {
             ArgumentNullException.ThrowIfNull(value);
