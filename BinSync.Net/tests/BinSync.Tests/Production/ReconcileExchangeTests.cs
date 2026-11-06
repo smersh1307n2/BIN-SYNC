@@ -13,8 +13,9 @@ public class ReconcileExchangeTests
         var a = Fix.MakeNode(71);
         var b = Fix.MakeNode(72);
         var (aPipe, bPipe) = PipeTransport.CreatePair();
-        var acceptTask = SyncSession.AcceptAsync(b, bPipe);
-        await using var client = await SyncSession.ConnectAsync(a, aPipe);
+        var capabilities = SessionCapabilities.FlowControl;
+        var acceptTask = SyncSession.AcceptAsync(b, bPipe, capabilities);
+        await using var client = await SyncSession.ConnectAsync(a, aPipe, capabilities);
         await using var server = await acceptTask;
 
         var peerDigest = Reconcile.EncodeStateDigest(Reconcile.BuildStateDigest(b, 1));
