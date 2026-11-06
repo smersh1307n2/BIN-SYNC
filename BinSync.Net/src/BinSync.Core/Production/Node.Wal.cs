@@ -107,8 +107,7 @@ public sealed partial class Node
     }
 
     private static void ReplaceContents<TKey, TValue>(
-        Dictionary<TKey, TValue> destination, Dictionary<TKey, TValue> source)
-        where TKey : notnull
+        Dictionary<TKey, TValue> destination, Dictionary<TKey, TValue> source) where TKey : notnull
     {
         destination.Clear();
         foreach (var pair in source)
