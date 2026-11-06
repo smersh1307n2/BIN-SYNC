@@ -49,9 +49,9 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 | Type | Role |
 |------|------|
-| `NodeId` | 16-byte node identity (`Lo`/`Hi`), `From` / `WriteTo` / `ToArray` / `EqualsBytes` |
-| `RecordId` | 16-byte record identity (same layout rules) |
-| `BatchId` | 16-byte batch identity |
+| `NodeId` | Fixed 16-byte node identity (`Lo`/`Hi`); `From` accepts b128 wire bytes and canonicalizes them, `WriteTo` / `ToArray` / `EqualsBytes` |
+| `RecordId` | Fixed 16-byte record identity (same b128 normalization rules) |
+| `BatchId` | Fixed 16-byte batch identity (same b128 normalization rules) |
 | `Digest16` | 16-byte digest (records root, batch digests, stream chain); `From` requires exactly 16 bytes, `Truncate` explicitly takes the leading 16 bytes |
 
 ### Engine — `Node`
@@ -63,7 +63,10 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 |-----|------|
 | `WriteField(ns, RecordId, fieldId, value, Hlc?)` | Local LWW write → outbox |
 | `WriteFields(IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)>)` | Batch of typed-record writes under one lock (distinct HLC stamps) |
+| `TombField` / `DeleteRecord` / `UndeleteRecord` | Local field and record lifecycle mutations → outbox |
+| `RepublishRecords(ns, IEnumerable<RecordId>)` | Re-enqueue visible record state for a namespace |
 | typed `PushOutbox` overloads | Low-level outbox helpers |
+| `AuthorEpoch(NodeId)` | Resolve the current durable epoch for an author |
 | `CreateDeltaBatch(NodeId target, ns, NodeId? filterAuthor, …)` | Build one-author delta for peer |
 | `SignBatchFor` / `AdvanceStream` | Wire bind + stream cursor after send |
 | `EncodeBatchPayload` / `EncodeBatchPayload(…, Span<byte>)` | Batch → payload bytes |
@@ -71,7 +74,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `ApplyBatch(Batch, NodeId sender)` | Apply + inbox idempotency |
 | `ApplyBatchPayload(byte[], NodeId sender)` | Decode+apply (preferred on the wire path) |
 | `ProcessAck(NodeId, …)` | Advance per-author watermarks |
-| `ApplySnapshot(Batch)` | Apply a validated snapshot batch |
+| `ApplySnapshot(Batch)` / `BuildSnapshot(ns)` | Apply or build a validated snapshot baseline |
 | `RegisterSessionEpoch` / `RegisterAlias` / `ResolveAlias` / `AliasOf` / `EnsureAlias` / `ResetSession` / `LearnAuthorEpoch` / … | Session & alias registry |
 | `OutboxSize` / `GetOutboxCount` | Bound/diagnostic helper |
 | `TryGetRecord` / `TryGetField` | Read detached snapshots; returned mutable DTOs cannot mutate live storage |
@@ -193,6 +196,7 @@ attached to a live Node.
 |-----|------|
 | `CausalTracker` | Typed `BatchId` known set, pending, cycle detection and KЗ1–KЗ5; no byte-array identity overloads |
 | `Node.Causal` | Optional tracker |
+| `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `Node.ApplyBatchCausal` / `DrainCausal` / `DrainAndRetryCausal` / `NoteCausalApplied(BatchId)` | Gate before apply, retry held batches, and note local causal commits |
 | `EncodeBatchPayloadCausal` / `DecodeBatchPayloadCausal` | Causal dependency trailer codecs |
 | `CausalWire` | CCD1 trailer encode/decode |
