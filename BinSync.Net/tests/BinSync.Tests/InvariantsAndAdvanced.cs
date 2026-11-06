@@ -54,6 +54,13 @@ public class InvariantsAndAdvanced
     }
 
     [Fact]
+    public void HlcClockMaxAllowedRemoteWall_uses_unsigned_arithmetic()
+    {
+        var clock = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
+        Assert.Equal(ulong.MaxValue - 1, clock.MaxAllowedRemoteWall((ulong)long.MaxValue));
+    }
+
+    [Fact]
     public void HlcClockReceiveSkewLimit_handles_wall_above_signed_range()
     {
         var clock = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);

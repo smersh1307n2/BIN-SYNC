@@ -84,6 +84,8 @@ public class HlcClock
         return (ulong)now;
     }
 
+    internal ulong MaxAllowedRemoteWall(ulong now) => now + (ulong)MaxSkewUs;
+
     /// <summary>Read a consistent, immutable snapshot of the current clock state.</summary>
     public HlcClockSnapshot Snapshot()
     {
@@ -149,9 +151,7 @@ public class HlcClock
         lock (_tickGate)
         {
             ulong now = ReadNowWall();
-            ulong skew = (ulong)MaxSkewUs;
-            // Both operands are non-negative Int64 values, so their sum fits in UInt64.
-            ulong maxAllowedWall = now + skew;
+            ulong maxAllowedWall = MaxAllowedRemoteWall(now);
             if (remote.Wall > maxAllowedWall)
                 throw new ClockDriftException($"remote.wall {remote.Wall} beyond now+{MaxSkewUs}");
             ulong wall = Math.Max(now, Math.Max(LastWall, remote.Wall));

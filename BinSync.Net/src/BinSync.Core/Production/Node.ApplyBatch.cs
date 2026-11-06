@@ -221,7 +221,9 @@ public sealed partial class Node
         var resolvedAuthors = nEnt > 0 ? new NodeId[nEnt] : Array.Empty<NodeId>();
         // One wall sample for the whole batch (skew window is large vs apply latency).
         long nowWall = Clock.Now();
-        long maxSkew = Clock.MaxSkewUs;
+        if (nowWall < 0)
+            throw new InvalidOperationException("HLC wall clock must be non-negative Unix microseconds.");
+        ulong maxAllowedWall = Clock.MaxAllowedRemoteWall((ulong)nowWall);
         for (int idx = 0; idx < nEnt; idx++)
         {
             var e = batch.Entries[idx];
@@ -229,7 +231,7 @@ public sealed partial class Node
             var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
             resolvedAuthors[idx] = opAuthor; // reuse after commit; no post-commit resolution
             // clock skew clamp on incoming HLC wall (§5.3)
-            if ((long)WallOf(op) > nowWall + maxSkew)
+            if (WallOf(op) > maxAllowedWall)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
             RecordId recId = op is OpRecordTombstone rt ? rt.RecordId : e.RecordId;
             if (!overlays.TryGetValue(recId, out var rec))
