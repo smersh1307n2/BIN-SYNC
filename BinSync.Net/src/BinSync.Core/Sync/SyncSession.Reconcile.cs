@@ -13,6 +13,18 @@ public partial class SyncSession
         return frame;
     }
 
+    private static void ValidateControlStream(Frame frame)
+    {
+        if (frame.StreamId != 0 || frame.Flags != 0)
+            throw new FrameException("FRAME_REJECTED");
+    }
+
+    private static void ValidateNamespaceStreamFamily(Frame frame)
+    {
+        if ((frame.StreamId & 0xFFFF_0000u) != 0x0001_0000u || frame.Flags != 0)
+            throw new FrameException("FRAME_REJECTED");
+    }
+
     private static void ValidateNamespaceStream(Frame frame, int namespaceId)
     {
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
