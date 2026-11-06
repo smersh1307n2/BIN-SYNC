@@ -98,6 +98,16 @@ public sealed class ResourceLimits
         }
     }
 
+    /// <summary>Preflight a complete snapshot against the configured storage cap.</summary>
+    internal void EnsureCanApplySnapshot(Node node, int newRecords)
+    {
+        if (MaxRecords <= 0 || newRecords == 0) return;
+        long total = 0;
+        foreach (var ns in node.Storage.Values) total += ns.Count;
+        if (total + newRecords > MaxRecords)
+            throw new SyncException("INTERNAL");
+    }
+
     /// <summary>Throw if storage would exceed configured record/namespace limits.</summary>
     internal void EnsureStorageCapacity(Node node)
     {
