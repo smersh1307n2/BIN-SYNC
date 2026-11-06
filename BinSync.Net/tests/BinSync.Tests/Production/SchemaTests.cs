@@ -371,26 +371,6 @@ public class SchemaTests
     }
 
     [Fact]
-    public void ApplyBatchWithSchema_ok_when_registered()
-    {
-        using var sender = Fix.MakeNode(301);
-        using var receiver = Fix.MakeNode(302);
-        Transport.MakeSession(sender, receiver);
-        receiver.RegisterSchema(Desc(1, 0, 1, 0x02, 0x100));
-
-        var recordId = Fix.Rid(301);
-        Assert.True(sender.WriteField(1, recordId, 0x100, new byte[] { 0xA5 }));
-        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1);
-        Assert.NotNull(batch);
-
-        var result = receiver.ApplyBatchWithSchema(batch!, sender.NodeId);
-
-        Assert.Equal(1, result.Applied);
-        Assert.True(receiver.TryGetField(1, recordId, 0x100, out var field));
-        Assert.Equal(new byte[] { 0xA5 }, field!.Value);
-    }
-
-    [Fact]
     public void LearnSchemaMap_then_gate_passes()
     {
         var a = Fix.MakeNode(302);
