@@ -82,4 +82,35 @@ public sealed class RemoteBatchWalAtomicityTests
         Assert.Equal(0, target.GetRecordCount(3));
     }
 
+    [Fact]
+    public void Wal_replay_success_is_idempotent_and_preserves_runtime_peer_handles()
+    {
+        using var writer = Fix.MakeNode(965);
+        using var peer = Fix.MakeNode(966);
+        using var target = new Node(writer.NodeId, writer.Epoch);
+        target.RegisterLoopbackPeer(peer);
+
+        var walPath = Path.Combine(Path.GetTempPath(),
+            "binsync-wal-replay-success-" + Guid.NewGuid().ToString("N") + ".wal");
+        using var wal = Wal.Open(walPath);
+        writer.AttachWal(wal);
+
+        var recordId = Fix.Rid(965);
+        Assert.True(writer.WriteField(3, recordId, 0x100, new byte[] { 0xB5 }));
+
+        Assert.Equal(1, wal.Replay(target));
+        Assert.True(target.TryGetField(3, recordId, 0x100, out var field));
+        Assert.Equal(new byte[] { 0xB5 }, field!.Value);
+        Assert.Single(target.Outbox[3]);
+        Assert.True(target.PeersByNid!.TryGetValue(peer.NodeId, out var restoredPeer));
+        Assert.Same(peer, restoredPeer);
+
+        Assert.Equal(0, wal.Replay(target));
+        Assert.Equal(1, target.GetOutboxCount(3));
+        Assert.True(target.TryGetField(3, recordId, 0x100, out field));
+        Assert.Equal(new byte[] { 0xB5 }, field!.Value);
+        Assert.True(target.PeersByNid.TryGetValue(peer.NodeId, out restoredPeer));
+        Assert.Same(peer, restoredPeer);
+    }
+
 }
