@@ -250,15 +250,13 @@ public class CausalApplyTests
         Transport.MakeSession(secondSender, receiver);
 
         firstSender.WriteField(1, Rid(0x31), 0x0100, new byte[] { 0x31 });
-        var firstEntry = firstSender.Outbox[1][^1];
-        var parent = BatchId.From(Id(0x40));
-        firstEntry.CausalDeps.Add(parent);
         var firstBatch = firstSender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var parent = BatchId.From(Id(0x40));
+        firstBatch.Entries[0].CausalDeps.Add(parent);
 
         secondSender.WriteField(1, Rid(0x32), 0x0100, new byte[] { 0x32 });
-        var secondEntry = secondSender.Outbox[1][^1];
-        secondEntry.CausalDeps.Add(firstEntry.ChangeId);
         var secondBatch = secondSender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        secondBatch.Entries[0].CausalDeps.Add(firstBatch.Entries[0].ChangeId);
 
         var tracker = new CausalTracker();
         receiver.Causal = tracker;
