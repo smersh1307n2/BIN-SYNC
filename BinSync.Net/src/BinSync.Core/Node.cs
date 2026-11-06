@@ -302,7 +302,13 @@ public sealed partial class Node : IDisposable
             NodeId = notice.NodeId,
             Proof = notice.Proof?.ToArray() ?? Array.Empty<byte>(),
         };
-        if (!store.TryApply(ownedNotice)) return false;
+        bool applied;
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            applied = store.TryApply(ownedNotice);
+        }
+        if (!applied) return false;
         RaiseKeyRotationApplied(ownedNotice);
         return true;
     }

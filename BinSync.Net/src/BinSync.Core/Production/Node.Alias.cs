@@ -58,6 +58,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;
             int? d = KnownEpochs.TryGetValue((peer, 0), out var v0) ? v0 : null;
             if (e is null && d is null) return null;
@@ -90,6 +91,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             bool incarnationChanged =
                 KnownEpochs.TryGetValue((peer, 0), out int previousEpoch) &&
                 previousEpoch != newEpoch;
@@ -126,6 +128,7 @@ public sealed partial class Node
         ArgumentNullException.ThrowIfNull(entries);
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var aliases = new HashSet<int>();
             var authors = new HashSet<NodeId>();
             bool hasLocal = false;
@@ -170,11 +173,13 @@ public sealed partial class Node
         // A transient conflict is fail-closed (caller may retry on the next exchange).
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             if (!Monitor.TryEnter(peer._lockMeta))
                 return null;
 
             try
             {
+                peer.ThrowIfDisposed();
                 return EnsureAliasInternal(peer, nodeId, epoch);
             }
             finally
@@ -401,6 +406,7 @@ public sealed partial class Node
         ArgumentNullException.ThrowIfNull(entries);
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var aliases = new HashSet<int>();
             var authors = new HashSet<NodeId>();
             var fwd = AliasToNode.TryGetValue(peer, out var currentFwd)
@@ -509,6 +515,7 @@ public sealed partial class Node
         if (dest.Length < 20) throw new ArgumentException("need 20 bytes", nameof(dest));
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var n = nodeId ?? NodeId;
             var e = epoch ?? Epoch;
             n.WriteTo(dest[..16]);

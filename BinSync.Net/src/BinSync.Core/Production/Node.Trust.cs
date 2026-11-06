@@ -14,7 +14,7 @@ public sealed partial class Node
     public TrustStore? Trust
     {
         get { lock (_lockMeta) { ThrowIfDisposed(); return _trust; } }
-        set { lock (_lockMeta) _trust = value; }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _trust = value; } }
     }
 
     /// <summary>
@@ -24,6 +24,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Trust ??= new TrustStore { DefaultMode = mode };
             return Trust;
         }
@@ -42,6 +43,7 @@ public sealed partial class Node
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var store = Trust ?? throw new InvalidOperationException("Trust store not configured");
             // Keep Node and trust gates through publication: trust replacement, peer
             // revocation, and the accepted batch have one linearized order.
@@ -61,6 +63,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             EnsureTrust(mode == TrustMode.Tofu ? TrustMode.Tofu : mode)
                 .Allow(nodeId, publicKey, mode);
         }
@@ -69,14 +72,17 @@ public sealed partial class Node
     /// <summary>Revoke a previously trusted peer.</summary>
     public void RevokeTrust(NodeId nodeId)
     {
-        lock (_lockMeta) Trust?.Revoke(nodeId);
+        lock (_lockMeta) { ThrowIfDisposed(); Trust?.Revoke(nodeId); }
     }
 
     /// <summary>Persist <see cref="Trust"/> (creating a TOFU store if missing).</summary>
     public void SaveTrust(string path)
     {
         lock (_lockMeta)
+        {
+            ThrowIfDisposed();
             TrustPersistence.Save(EnsureTrust(), path);
+        }
     }
 
     /// <summary>Replace <see cref="Trust"/> with a file previously written by <see cref="SaveTrust"/>.</summary>
@@ -85,6 +91,7 @@ public sealed partial class Node
         var loaded = TrustPersistence.Load(path);
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Trust = loaded;
             return Trust;
         }

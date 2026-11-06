@@ -24,7 +24,7 @@ public sealed partial class Node
     public CausalTracker? Causal
     {
         get { lock (_lockMeta) { ThrowIfDisposed(); return _causal; } }
-        set { lock (_lockMeta) _causal = value; }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _causal = value; } }
     }
 
     /// <summary>
@@ -47,6 +47,7 @@ public sealed partial class Node
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var tracker = _causal;
             if (expectedTracker is not null && !ReferenceEquals(tracker, expectedTracker))
                 throw new InvalidOperationException("Causal tracker changed while pending batches were being drained.");
@@ -104,6 +105,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             return Causal?.Drain() ?? new List<(PendingCausalOp, CausalOutcome)>();
         }
     }
@@ -116,7 +118,7 @@ public sealed partial class Node
     {
         // Never hold Meta while entering the normal Storage → Outbox → Meta apply order.
         CausalTracker? tracker;
-        lock (_lockMeta) tracker = _causal;
+        lock (_lockMeta) { ThrowIfDisposed(); tracker = _causal; }
         if (tracker is null) return 0;
 
         var released = tracker.Drain();
@@ -167,6 +169,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Causal?.NoteApplied(changeId);
         }
     }
@@ -179,6 +182,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             if (CausalWire.HasDeps(batch.Entries))
                 batch.Flags |= CausalWire.FlagHasCausalTrailer;
             var body = EncodeBatchPayloadInternal(batch);
@@ -193,6 +197,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             // First decode as standard (Reader stops at records end via known lengths).
             // Standard decoder reads exactly the declared structure — trailing bytes may confuse it.
             // Strategy: find trailer magic, decode body prefix only.

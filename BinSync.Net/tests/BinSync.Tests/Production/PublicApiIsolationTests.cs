@@ -62,6 +62,13 @@ public sealed class PublicApiIsolationTests
         Assert.Throws<ObjectDisposedException>(() => node.WriteField(7, Fix.Rid(913), 0x101, new byte[] { 2 }));
         Assert.Throws<ObjectDisposedException>(() => node.TryGetRecord(7, Fix.Rid(913), out _));
         Assert.Throws<ObjectDisposedException>(() => node.EnterAllGates());
+        Assert.Throws<ObjectDisposedException>(() => node.RegisterSchema(new SchemaDescriptor
+        {
+            NamespaceId = 7, SchemaId = 2, Version = 1, MergePolicy = 1,
+        }));
+        Assert.Throws<ObjectDisposedException>(() => node.Schemas = new SchemaRegistry());
+        Assert.Throws<ObjectDisposedException>(() => node.RegisterAlias(Fix.Nid(2), 1, Fix.Nid(3), 1));
+        Assert.Throws<ObjectDisposedException>(() => node.RecordDigestOf(7, Fix.Rid(913)));
     }
 
     [Fact]

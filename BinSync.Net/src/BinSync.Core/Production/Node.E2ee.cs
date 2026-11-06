@@ -15,7 +15,7 @@ public sealed partial class Node
     public E2eeKeyRing? E2eeKeys
     {
         get { lock (_lockMeta) { ThrowIfDisposed(); return _e2eeKeys; } }
-        set { lock (_lockMeta) _e2eeKeys = value; }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _e2eeKeys = value; } }
     }
 
     /// <summary>

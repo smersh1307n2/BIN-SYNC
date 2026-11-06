@@ -14,7 +14,7 @@ public sealed partial class Node
     public SchemaRegistry? Schemas
     {
         get { lock (_lockMeta) { ThrowIfDisposed(); return _schemas; } }
-        set { lock (_lockMeta) _schemas = value; }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _schemas = value; } }
     }
 
     /// <summary>
@@ -28,6 +28,7 @@ public sealed partial class Node
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var registry = _schemas;
             if (registry is null)
                 result = ApplyBatchInternal(ownedBatch, senderPeer);
@@ -61,6 +62,7 @@ public sealed partial class Node
         int namespaceId = desc.NamespaceId, schemaId = desc.SchemaId, version = desc.Version;
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Schemas ??= new SchemaRegistry();
             Schemas.Register(desc);
             int max = Schemas.MaxVersion(namespaceId, schemaId) ?? version;
@@ -77,6 +79,7 @@ public sealed partial class Node
         int learned;
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Schemas ??= new SchemaRegistry();
             var list = SchemaMap.Decode(payload);
             learned = Schemas.Learn(list);
@@ -90,6 +93,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var list = Schemas?.Snapshot() ?? new List<SchemaDescriptor>();
             return SchemaMap.Encode(list);
         }
