@@ -1,90 +1,184 @@
 // Optional on-wire causal deps trailer (§16.19) appended after the standard batch payload.
-// Does not alter EncodeRecordsArray / recordsRoot — trailer is outside the digest domain.
+// The footer length makes trailer location unambiguous; payload bytes are never scanned for magic.
 namespace BinSync;
 
 /// <summary>
-/// Wire format for optional causal metadata carried with a DELTA_BATCH.
-/// Layout after the standard <see cref="Node.EncodeBatchPayload(Batch)"/> bytes:
-///   magic u32 LE = 0x31444343 ("CCD1") | entryCount varint |
-///   per entry: changeId b128 | depCount varint | dep[i] b128…
-/// Present only when at least one entry declares CausalDeps or a non-empty ChangeId
-/// that the sender wants the receiver to gate on.
+/// Wire format after the standard DELTA_BATCH body:
+/// magic u32 LE | entryCount varint | per entry: changeId b128 | depCount varint | sorted dep b128*
+/// | trailerLength u32 LE (length from magic through the final dependency; excludes this footer).
 /// </summary>
 public static class CausalWire
 {
-    /// <summary>File or segment magic number identifying the format.</summary>
+    /// <summary>Trailer magic number.</summary>
     public const uint Magic = 0x31444343; // "CCD1" LE
     /// <summary>Batch.Flags bit: payload is followed by a causal trailer.</summary>
     public const int FlagHasCausalTrailer = 0x20;
 
-    /// <summary>True when any entry in the list has non-empty causal dependencies.</summary>
-    public static bool HasDeps(IReadOnlyList<OutboxEntry> entries) =>
-        entries.Any(e => e.CausalDeps.Count > 0);
+    private const int MaxEntries = 100_000;
+    private const int MaxDepsPerEntry = 4_096;
+    private const int MaxTotalDeps = 250_000;
 
-    /// <summary>Encode trailer into canonical wire bytes.</summary>
+    /// <summary>True when any entry declares causal dependencies.</summary>
+    public static bool HasDeps(IReadOnlyList<OutboxEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        for (int i = 0; i < entries.Count; i++)
+            if (entries[i].CausalDeps.Count > 0) return true;
+        return false;
+    }
+
+    /// <summary>Encode a canonical trailer including its length footer.</summary>
     public static byte[] EncodeTrailer(IReadOnlyList<OutboxEntry> entries)
     {
+        ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count > MaxEntries)
+            throw new ArgumentOutOfRangeException(nameof(entries), "Too many causal trailer entries.");
+
         var w = new Writer();
-        w.U32(Magic);
-        w.Varint((ulong)entries.Count);
-        foreach (var e in entries)
+        w.U32(Magic).Varint((ulong)entries.Count);
+        int totalDeps = 0;
+        foreach (var entry in entries)
         {
-            w.B128(e.ChangeId);
-            w.Varint((ulong)e.CausalDeps.Count);
-            foreach (var d in e.CausalDeps)
-                w.B128(d);
+            ArgumentNullException.ThrowIfNull(entry);
+            var changeId = BatchId.From(entry.ChangeId);
+            if (changeId.IsZero)
+                throw new ArgumentException("Causal trailer changeId cannot be zero.", nameof(entries));
+
+            var sourceDeps = entry.CausalDeps ?? throw new ArgumentException("CausalDeps cannot be null.", nameof(entries));
+            if (sourceDeps.Count > MaxDepsPerEntry ||
+                (totalDeps = checked(totalDeps + sourceDeps.Count)) > MaxTotalDeps)
+                throw new ArgumentOutOfRangeException(nameof(entries), "Causal dependency count exceeds the configured limit.");
+
+            var deps = sourceDeps.ToArray();
+            Array.Sort(deps, CompareBatchIds);
+            for (int i = 0; i < deps.Length; i++)
+            {
+                if (deps[i].IsZero)
+                    throw new ArgumentException("Causal dependency ID cannot be zero.", nameof(entries));
+                if (i > 0 && CompareBatchIds(deps[i - 1], deps[i]) == 0)
+                    throw new ArgumentException("Causal dependency IDs must be unique.", nameof(entries));
+            }
+
+            w.B128(changeId).Varint((ulong)deps.Length);
+            for (int i = 0; i < deps.Length; i++)
+                w.B128(deps[i]);
         }
-        return w.Value();
+
+        var body = w.Value();
+        var trailer = new byte[checked(body.Length + 4)];
+        body.CopyTo(trailer, 0);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            trailer.AsSpan(body.Length), (uint)body.Length);
+        return trailer;
+    }
+
+    /// <summary>Return the standard batch body length using the fixed trailer footer.</summary>
+    public static int GetBodyLength(byte[] payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length < 9)
+            throw new InvalidDataException("Causal trailer footer is missing.");
+
+        uint trailerLength = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(
+            payload.AsSpan(payload.Length - 4));
+        if (trailerLength < 5 || trailerLength > (uint)(payload.Length - 4))
+            throw new InvalidDataException("Invalid causal trailer length.");
+
+        int bodyLength = payload.Length - 4 - (int)trailerLength;
+        uint magic = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(bodyLength));
+        if (magic != Magic)
+            throw new InvalidDataException("Causal trailer magic does not match the footer.");
+
+        return bodyLength;
     }
 
     /// <summary>
-    /// If <paramref name="payload"/> ends with a valid trailer, populate ChangeId/CausalDeps
-    /// on <paramref name="entries"/> (must already be decoded from the body) and return the
-    /// body length. Otherwise return payload.Length (no trailer).
+    /// Try to apply a valid trailer atomically. Returns payload.Length when no valid trailer exists.
+    /// Entries must already be decoded from the standard body and their ChangeIds must match.
     /// </summary>
     public static int TryApplyTrailer(byte[] payload, List<OutboxEntry> entries)
     {
-        if (payload.Length < 4) return payload.Length;
-        // Scan from the end is hard; instead: if Flags said so, body is prefix.
-        // For auto-detect: try parse from offset = payload.Length - estimate, or linear search magic.
-        for (int start = 0; start + 4 <= payload.Length; start++)
+        try
         {
-            uint m = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(start));
-            if (m != Magic) continue;
-            try
-            {
-                var r = new Reader(payload, start + 4);
-                int n = (int)r.Varint();
-                if (n != entries.Count) continue;
-                for (int i = 0; i < n; i++)
-                {
-                    var cid = BatchId.From(r.B128());
-                    int dc = (int)r.Varint();
-                    var deps = new List<BatchId>(dc);
-                    for (int j = 0; j < dc; j++)
-                        deps.Add(BatchId.From(r.B128()));
-                    entries[i].ChangeId = cid;
-                    entries[i].CausalDeps = deps;
-                }
-                if (r.Pos != payload.Length) continue; // must consume to EOF
-                return start; // body length
-            }
-            catch
-            {
-                // not a valid trailer at this offset
-            }
+            int bodyLength = GetBodyLength(payload);
+            ApplyTrailerStrict(payload, bodyLength, entries);
+            return bodyLength;
         }
-        return payload.Length;
+        catch (IOException) { return payload.Length; }
+        catch (ArgumentException) { return payload.Length; }
+        catch (OverflowException) { return payload.Length; }
+    }
+
+    internal static void ApplyTrailerStrict(byte[] payload, int bodyLength, List<OutboxEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(entries);
+        if (GetBodyLength(payload) != bodyLength)
+            throw new InvalidDataException("Causal trailer body length changed.");
+
+        int trailerEnd = payload.Length - 4;
+        var r = new Reader(payload, bodyLength + 4);
+        ulong entryCount = r.Varint();
+        if (entryCount > MaxEntries || entryCount != (ulong)entries.Count)
+            throw new InvalidDataException("Causal trailer entry count does not match the batch.");
+
+        var decoded = new List<(BatchId ChangeId, List<BatchId> Deps)>(entries.Count);
+        int totalDeps = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var changeId = BatchId.From(r.B128());
+            var expectedChangeId = BatchId.From(entries[i].ChangeId);
+            if (changeId.IsZero || changeId != expectedChangeId)
+                throw new InvalidDataException("Causal trailer changeId does not match its batch entry.");
+
+            ulong depCount = r.Varint();
+            if (depCount > MaxDepsPerEntry ||
+                depCount > (ulong)(r.Remaining / 16) ||
+                (totalDeps = checked(totalDeps + (int)depCount)) > MaxTotalDeps)
+                throw new InvalidDataException("Causal trailer dependency count exceeds the available payload or configured limit.");
+
+            var deps = new List<BatchId>((int)depCount);
+            byte[]? previous = null;
+            for (int j = 0; j < (int)depCount; j++)
+            {
+                var bytes = r.B128();
+                if (previous is not null && previous.AsSpan().SequenceCompareTo(bytes) >= 0)
+                    throw new InvalidDataException("Causal dependency IDs must be strictly ordered and unique.");
+                var dep = BatchId.From(bytes);
+                if (dep.IsZero)
+                    throw new InvalidDataException("Causal dependency ID cannot be zero.");
+                deps.Add(dep);
+                previous = bytes;
+            }
+            decoded.Add((changeId, deps));
+        }
+
+        if (r.Pos != trailerEnd)
+            throw new InvalidDataException("Trailing bytes inside causal trailer.");
+
+        // Publish only after the entire trailer has been validated.
+        for (int i = 0; i < entries.Count; i++)
+            entries[i].CausalDeps = decoded[i].Deps;
     }
 
     /// <summary>Standard batch payload + optional causal trailer.</summary>
     public static byte[] EncodeWithTrailer(byte[] standardPayload, IReadOnlyList<OutboxEntry> entries)
     {
+        ArgumentNullException.ThrowIfNull(standardPayload);
         if (!HasDeps(entries)) return standardPayload;
         var trailer = EncodeTrailer(entries);
-        var combined = new byte[standardPayload.Length + trailer.Length];
+        var combined = new byte[checked(standardPayload.Length + trailer.Length)];
         standardPayload.CopyTo(combined, 0);
         trailer.CopyTo(combined, standardPayload.Length);
         return combined;
+    }
+
+    private static int CompareBatchIds(BatchId left, BatchId right)
+    {
+        Span<byte> a = stackalloc byte[16];
+        Span<byte> b = stackalloc byte[16];
+        left.WriteTo(a);
+        right.WriteTo(b);
+        return a.SequenceCompareTo(b);
     }
 }

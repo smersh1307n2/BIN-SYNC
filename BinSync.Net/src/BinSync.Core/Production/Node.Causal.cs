@@ -180,13 +180,26 @@ public sealed partial class Node
     /// </summary>
     public byte[] EncodeBatchPayloadCausal(Batch batch)
     {
+        ArgumentNullException.ThrowIfNull(batch);
         lock (_lockMeta)
         {
             ThrowIfDisposed();
-            if (CausalWire.HasDeps(batch.Entries))
-                batch.Flags |= CausalWire.FlagHasCausalTrailer;
-            var body = EncodeBatchPayloadInternal(batch);
-            return CausalWire.EncodeWithTrailer(body, batch.Entries);
+            bool hasDeps = CausalWire.HasDeps(batch.Entries);
+            int flags = hasDeps
+                ? batch.Flags | CausalWire.FlagHasCausalTrailer
+                : batch.Flags & ~CausalWire.FlagHasCausalTrailer;
+            // Encode a shallow header copy so adding/clearing the trailer bit never
+            // mutates the caller's Batch. Entry buffers are read-only during encoding.
+            var wireBatch = new Batch(
+                batch.NamespaceId, batch.SchemaId, batch.SchemaVersion, batch.MergePolicy, flags,
+                batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+                batch.BatchId, batch.PrevBatchDigest, batch.RecordsRoot, batch.BatchDigest,
+                batch.Entries)
+            {
+                AuthorStreamNodeId = batch.AuthorStreamNodeId,
+            };
+            var body = EncodeBatchPayloadInternal(wireBatch);
+            return CausalWire.EncodeWithTrailer(body, wireBatch.Entries);
         }
     }
 
@@ -195,22 +208,24 @@ public sealed partial class Node
     /// </summary>
     public Batch DecodeBatchPayloadCausal(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
         lock (_lockMeta)
         {
             ThrowIfDisposed();
-            // First decode as standard (Reader stops at records end via known lengths).
-            // Standard decoder reads exactly the declared structure — trailing bytes may confuse it.
-            // Strategy: find trailer magic, decode body prefix only.
-            int bodyLen = data.Length;
-            for (int i = 0; i + 4 <= data.Length; i++)
+            if (data.Length < 8)
+                throw new EndOfStreamException("Truncated DELTA_BATCH header.");
+
+            bool hasTrailer = (data[7] & CausalWire.FlagHasCausalTrailer) != 0;
+            if (!hasTrailer)
             {
-                uint m = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i));
-                if (m == CausalWire.Magic) { bodyLen = i; break; }
+                var standard = DecodeBatchPayloadInternal(data);
+                standard.MaterializeEntries();
+                return standard;
             }
-            var body = bodyLen == data.Length ? data : data.AsSpan(0, bodyLen).ToArray();
-            var batch = DecodeBatchPayloadInternal(body);
-            if (bodyLen < data.Length)
-                CausalWire.TryApplyTrailer(data, batch.Entries);
+
+            int bodyLength = CausalWire.GetBodyLength(data);
+            var batch = DecodeBatchPayloadInternal(data.AsMemory(0, bodyLength));
+            CausalWire.ApplyTrailerStrict(data, bodyLength, batch.Entries);
             batch.MaterializeEntries(); // public API — owned buffers
             return batch;
         }
