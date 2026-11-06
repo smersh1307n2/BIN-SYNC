@@ -146,6 +146,23 @@ public class SchemaTests
     }
 
     [Fact]
+    public void Learn_rejects_conflicting_descriptor_for_existing_schema_version()
+    {
+        var registry = new SchemaRegistry();
+        registry.Register(Desc(1, 12, 1, 0x02, 0x100));
+
+        Assert.Throws<InvalidDataException>(() =>
+            registry.Learn(new[] { Desc(1, 12, 1, 0x03, 0x100) }));
+        Assert.Throws<InvalidDataException>(() =>
+            registry.Learn(new[] { Desc(1, 12, 1, 0x02, 0x100, 0x101) }));
+        Assert.Throws<InvalidDataException>(() =>
+            registry.Learn(new[] { Desc(1, 12, 1, 0x02, 0x100, 0x200) with
+            {
+                RetiredFieldIds = new HashSet<ushort> { 0x101 }
+            } }));
+    }
+
+    [Fact]
     public void SchemaMap_decode_rejects_impossible_counts_and_trailing_data()
     {
         Assert.Throws<InvalidDataException>(() => SchemaMap.Decode(new byte[] { 1 }));

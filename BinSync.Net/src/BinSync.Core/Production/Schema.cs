@@ -246,8 +246,17 @@ public sealed class SchemaRegistry
             foreach (var descriptor in ordered)
             {
                 if (_map.TryGetValue((descriptor.NamespaceId, descriptor.SchemaId), out var byVersion) &&
-                    byVersion.ContainsKey(descriptor.Version))
+                    byVersion.TryGetValue(descriptor.Version, out var existing))
+                {
+                    // A schema version is immutable. Treat a conflicting descriptor
+                    // as invalid input instead of silently accepting whichever map arrived first.
+                    if (existing.MergePolicy != descriptor.MergePolicy ||
+                        !existing.FieldIds.SetEquals(descriptor.FieldIds) ||
+                        !existing.RetiredFieldIds.SetEquals(descriptor.RetiredFieldIds))
+                        throw new InvalidDataException(
+                            $"Conflicting schema descriptor for namespace {descriptor.NamespaceId}, schema {descriptor.SchemaId}, version {descriptor.Version}.");
                     continue;
+                }
                 try
                 {
                     Register(descriptor);
