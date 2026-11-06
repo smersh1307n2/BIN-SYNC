@@ -32,6 +32,17 @@ public sealed partial class Node
     {
         var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)payload);
         var inboxKey = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
+
+        // Recreate the peer placeholder even when the alias/session map is supplied
+        // by this WAL frame. Transport.MakeSession uses a null placeholder to recognize
+        // a resumed peer and preserve its durable receive cursor and digest chain.
+        lock (_lockMeta)
+        {
+            PeersByNid ??= new Dictionary<NodeId, Node>();
+            if (!PeersByNid.ContainsKey(senderPeer))
+                PeersByNid[senderPeer] = null!;
+        }
+
         // A WAL tail may still contain batches already included in a just-written
         // snapshot. Do not roll the snapshot's newer session map back to an older one.
         if (!Inbox.Contains(inboxKey))

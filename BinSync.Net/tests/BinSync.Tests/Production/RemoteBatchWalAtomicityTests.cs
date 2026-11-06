@@ -146,6 +146,15 @@ public sealed class RemoteBatchWalAtomicityTests
         Assert.Equal(new long[] { 1, 2 }, recovered.Outbox[3].Select(entry => entry.Seq).ToArray());
         Assert.True(recovered.TryGetRecord(3, relayedRecordId, out _));
         Assert.True(recovered.TryGetRecord(3, localRecordId, out _));
+        Assert.True(recovered.PeersByNid!.TryGetValue(relay.NodeId, out var peerHandle));
+        Assert.Null(peerHandle);
+        Assert.True(recovered.PeerStates.ContainsKey((relay.NodeId, 3)));
+
+        // A reconnect must recognize the replay-created placeholder as a resumed
+        // peer; otherwise MakeSession would reset the receive cursor and digest chain.
+        Transport.MakeSession(relay, recovered);
+        Assert.True(recovered.PeerStates.ContainsKey((relay.NodeId, 3)));
+        Assert.NotEmpty(recovered.LastBatchDigest);
     }
 
 }
