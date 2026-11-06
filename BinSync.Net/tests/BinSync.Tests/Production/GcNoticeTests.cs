@@ -50,6 +50,34 @@ public class GcNoticeTests
     }
 
     [Fact]
+    public void Gc_events_run_after_node_gates_are_released()
+    {
+        using var node = Fix.MakeNode(96);
+        var peer = Fix.Nid(53);
+        var msg = new GcNoticeMessage
+        {
+            NamespaceId = 1,
+            Quarantined = new List<GcQuarantineEntry> { new() { NodeId = NodeId.From(peer), Epoch = 2 } },
+        };
+        int noticeEvents = 0, gcEvents = 0;
+        void AssertCanWrite()
+        {
+            var write = Task.Run(() => node.WriteField(1, Fix.Rid(96 + Interlocked.Increment(ref gcEvents)), 0x120, new byte[] { 1 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "GC event ran while node gates were held.");
+            Assert.True(write.Result);
+        }
+        node.GcNoticeApplied += (_, added) => { Assert.Equal(1, added); AssertCanWrite(); noticeEvents++; };
+        node.GarbageCollected += (_, removed, _) => { Assert.Equal(1, removed); AssertCanWrite(); gcEvents++; };
+
+        Assert.Equal(1, GcNotice.Apply(node, msg));
+        var rid = Fix.Rid(200);
+        node.ApplyRemoteField(1, rid, 0x100, new byte[] { 1 }, new Hlc(100, 0), node.NodeId);
+        Assert.Equal(1, GcNotice.PurgeBelowCutoff(node, 1, 1000));
+        Assert.Equal(1, noticeEvents);
+        Assert.Equal(2, gcEvents);
+    }
+
+    [Fact]
     public async Task Tcp_ExchangeGcNotice_propagates_quarantine()
     {
         var a = Fix.MakeNode(94);

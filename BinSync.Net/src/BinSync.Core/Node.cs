@@ -71,6 +71,10 @@ public sealed partial class Node : IDisposable
     public event Action<int, int, int>? SchemaRegistered;
     /// <summary>Raised when a SCHEMA_MAP teaches at least one new schema version (outside node locks).</summary>
     public event Action<int>? SchemaMapLearned;
+    /// <summary>Raised after a GC_NOTICE is merged (outside engine locks).</summary>
+    public event Action<GcNoticeMessage, int>? GcNoticeApplied;
+    /// <summary>Raised after tombstones are purged (outside engine locks).</summary>
+    public event Action<int, int, ulong>? GarbageCollected;
 
     private int _disposed;
 
@@ -254,6 +258,12 @@ public sealed partial class Node : IDisposable
     internal void RaiseKeyRotationApplied(KeyRotationNotice notice) =>
         KeyRotationApplied?.Invoke(notice);
 
+    internal void RaiseGcNoticeApplied(GcNoticeMessage notice, int added) =>
+        GcNoticeApplied?.Invoke(notice, added);
+
+    internal void RaiseGarbageCollected(int namespaceId, int removed, ulong cutoffWall) =>
+        GarbageCollected?.Invoke(namespaceId, removed, cutoffWall);
+
     /// <summary>Apply a verified KEY_ROTATION notice via <paramref name="store"/> and raise <see cref="KeyRotationApplied"/>.</summary>
     public bool ApplyKeyRotation(KeyRotationNotice notice, KeyEpochStore store)
     {
@@ -303,6 +313,8 @@ public sealed partial class Node : IDisposable
             KeyRotationApplied = null;
             SchemaRegistered = null;
             SchemaMapLearned = null;
+            GcNoticeApplied = null;
+            GarbageCollected = null;
         }
         GC.SuppressFinalize(this);
     }

@@ -120,6 +120,12 @@ public static class GcNotice
         if (entries.Any(entry => entry is null || entry.NodeId.IsZero || entry.Epoch < 0))
             throw new FormatException("GC notice contains an invalid quarantine entry");
 
+        var ownedNotice = new GcNoticeMessage
+        {
+            NamespaceId = remote.NamespaceId,
+            TombstoneCutoffWall = remote.TombstoneCutoffWall,
+            Quarantined = entries,
+        };
         int added = 0;
         using (node.EnterAllGates())
         {
@@ -143,6 +149,7 @@ public static class GcNotice
                 }
             }
         }
+        node.RaiseGcNoticeApplied(ownedNotice, added);
         return added;
     }
 
@@ -150,24 +157,30 @@ public static class GcNotice
     public static int PurgeBelowCutoff(Node node, int namespaceId, ulong cutoffWall)
     {
         ArgumentNullException.ThrowIfNull(node);
+        Node.ValidateNamespaceId(namespaceId);
         if (cutoffWall == 0) return 0;
-        using var gates = node.EnterAllGates();
-        if (!node.Storage.TryGetValue(namespaceId, out var map)) return 0;
         int removed = 0;
-        foreach (var rec in map.Values)
+        using (node.EnterAllGates())
         {
-            var dead = new List<ushort>();
-            foreach (var (fid, fs) in rec.State)
+            if (node.Storage.TryGetValue(namespaceId, out var map))
             {
-                if (fs.Timestamp.Wall < cutoffWall)
-                    dead.Add(fid);
-            }
-            foreach (var fid in dead)
-            {
-                rec.State.Remove(fid);
-                removed++;
+                foreach (var rec in map.Values)
+                {
+                    var dead = new List<ushort>();
+                    foreach (var (fid, fs) in rec.State)
+                    {
+                        if (fs.Timestamp.Wall < cutoffWall)
+                            dead.Add(fid);
+                    }
+                    foreach (var fid in dead)
+                    {
+                        rec.State.Remove(fid);
+                        removed++;
+                    }
+                }
             }
         }
+        if (removed > 0) node.RaiseGarbageCollected(namespaceId, removed, cutoffWall);
         return removed;
     }
 }
