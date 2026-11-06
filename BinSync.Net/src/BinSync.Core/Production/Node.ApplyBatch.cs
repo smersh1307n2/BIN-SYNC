@@ -412,8 +412,14 @@ public sealed partial class Node
         if (overlays.Count > 0)
         {
             if (!hadNamespace)
+            {
+                nsStore.EnsureCapacity(overlays.Count);
+                foreach (var (rid, rec) in overlays)
+                    nsStore.Add(rid, rec);
                 Storage.EnsureCapacity(Storage.Count + 1);
-            nsStore.EnsureCapacity(nsStore.Count + newRecordCount);
+            }
+            else
+                nsStore.EnsureCapacity(nsStore.Count + newRecordCount);
         }
 
         Inbox.EnsureCapacity(Inbox.Count + 1);
@@ -446,8 +452,9 @@ public sealed partial class Node
         // Commit: all deterministic validation and resource checks have succeeded.
         if (!hadNamespace && overlays.Count > 0)
             Storage[batch.NamespaceId] = nsStore;
-        foreach (var (rid, rec) in overlays)
-            nsStore[rid] = rec;
+        else
+            foreach (var (rid, rec) in overlays)
+                nsStore[rid] = rec;
 
         if (ps is null)
             PeerStates[pkey] = ps = peerStateToPublish;

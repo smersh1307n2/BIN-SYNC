@@ -443,13 +443,24 @@ public static partial class Reconcile
             limits.EnsureCanApplySnapshot(node, newRecords);
         }
 
-        // Single publication phase while all node gates remain held.
+        // Reserve capacity before publication. A new namespace is assembled off-node
+        // and becomes visible through one dictionary insertion.
         if (staged.Count > 0)
         {
-            if (!node.Storage.TryGetValue(first.NamespaceId, out var store))
-                node.Storage[first.NamespaceId] = store = new Dictionary<RecordId, Record>();
-            foreach (var (recordId, record) in staged)
-                store[recordId] = record;
+            if (node.Storage.TryGetValue(first.NamespaceId, out var store))
+            {
+                store.EnsureCapacity(store.Count + staged.Count);
+                foreach (var (recordId, record) in staged)
+                    store[recordId] = record;
+            }
+            else
+            {
+                var newStore = new Dictionary<RecordId, Record>(staged.Count);
+                foreach (var (recordId, record) in staged)
+                    newStore.Add(recordId, record);
+                node.Storage.EnsureCapacity(node.Storage.Count + 1);
+                node.Storage.Add(first.NamespaceId, newStore);
+            }
         }
         // Release all node gates before notifying observers. Snapshot application is
         // a control-plane transfer, so event dispatch never runs under engine locks.

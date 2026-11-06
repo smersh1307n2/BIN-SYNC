@@ -64,6 +64,43 @@ public sealed partial class Node
         if (staged.NodeId != NodeId)
             throw new InvalidOperationException("Cannot publish WAL replay state from a different node identity.");
 
+        // Allocate the replacement peer registry and all destination capacity before
+        // mutating the live node. The following copy phase performs no collection growth.
+        Dictionary<NodeId, Node>? restoredPeers = null;
+        if (staged.PeersByNid is not null)
+        {
+            var livePeers = PeersByNid;
+            restoredPeers = new Dictionary<NodeId, Node>(staged.PeersByNid.Count);
+            foreach (var peerId in staged.PeersByNid.Keys)
+            {
+                if (livePeers is not null && livePeers.TryGetValue(peerId, out var live) && live is not null)
+                    restoredPeers[peerId] = live;
+                else
+                    restoredPeers[peerId] = null!;
+            }
+        }
+
+        _storage.EnsureCapacity(staged._storage.Count);
+        Outbox.EnsureCapacity(staged.Outbox.Count);
+        _outboxSeq.EnsureCapacity(staged._outboxSeq.Count);
+        Inbox.EnsureCapacity(staged.Inbox.Count);
+        InboxAuthors.EnsureCapacity(staged.InboxAuthors.Count);
+        LastBatchDigest.EnsureCapacity(staged.LastBatchDigest.Count);
+        LastStreamDigest.EnsureCapacity(staged.LastStreamDigest.Count);
+        AliasToNode.EnsureCapacity(staged.AliasToNode.Count);
+        NodeToAlias.EnsureCapacity(staged.NodeToAlias.Count);
+        DurableAuthors.EnsureCapacity(staged.DurableAuthors.Count);
+        PeerStates.EnsureCapacity(staged.PeerStates.Count);
+        SeenChanges.EnsureCapacity(staged.SeenChanges.Count);
+        LastStreamAuthor.EnsureCapacity(staged.LastStreamAuthor.Count);
+        KnownEpochs.EnsureCapacity(staged.KnownEpochs.Count);
+        PeerSessionEpochs.EnsureCapacity(staged.PeerSessionEpochs.Count);
+        Quarantined.EnsureCapacity(staged.Quarantined.Count);
+        ForbiddenNamespaces.EnsureCapacity(staged.ForbiddenNamespaces.Count);
+        SchemaVersions.EnsureCapacity(staged.SchemaVersions.Count);
+        ErrorsOut.EnsureCapacity(staged.ErrorsOut.Count);
+        AcksOut.EnsureCapacity(staged.AcksOut.Count);
+
         ReplaceContents(_storage, staged._storage);
         ReplaceContents(Outbox, staged.Outbox);
         ReplaceContents(_outboxSeq, staged._outboxSeq);
@@ -82,22 +119,7 @@ public sealed partial class Node
         ReplaceContents(Quarantined, staged.Quarantined);
         ReplaceContents(ForbiddenNamespaces, staged.ForbiddenNamespaces);
         ReplaceContents(SchemaVersions, staged.SchemaVersions);
-
-        if (staged.PeersByNid is null)
-            PeersByNid = null;
-        else
-        {
-            var livePeers = PeersByNid;
-            var restoredPeers = new Dictionary<NodeId, Node>(staged.PeersByNid.Count);
-            foreach (var peerId in staged.PeersByNid.Keys)
-            {
-                if (livePeers is not null && livePeers.TryGetValue(peerId, out var live) && live is not null)
-                    restoredPeers[peerId] = live;
-                else
-                    restoredPeers[peerId] = null!;
-            }
-            PeersByNid = restoredPeers;
-        }
+        PeersByNid = restoredPeers;
 
         Epoch = staged.Epoch;
         var clock = staged.Clock.Snapshot();
