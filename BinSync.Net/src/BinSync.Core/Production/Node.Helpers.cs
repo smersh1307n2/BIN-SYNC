@@ -151,8 +151,8 @@ public sealed partial class Node
         var outp = new List<(RecordId, BatchId, byte, byte[])>((int)count);
         for (int i = 0; i < (int)count; i++)
         {
-            var rid = RecordId.From(r.B128());
-            var changeId = BatchId.From(r.B128());
+            var rid = r.ReadRecordId();
+            var changeId = r.ReadBatchId();
             if (changeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
             byte kind = r.U8();
