@@ -76,6 +76,8 @@ public sealed partial class Node : IDisposable
     public event Action<int, RecordId>? RecordDeleted;
     /// <summary>Raised after an explicit local record revive is committed (outside engine locks).</summary>
     public event Action<int, RecordId>? RecordUndeleted;
+    /// <summary>Raised after the typed low-level PushOutbox API commits an entry (outside node locks).</summary>
+    public event Action<OutboxEntry>? OutboxEntryPushed;
 
     /// <summary>Raised after an ACK advances peer watermarks (outside engine locks).</summary>
     public event Action<NodeId, int, long, NodeId?>? AckProcessed;
@@ -357,6 +359,7 @@ public sealed partial class Node : IDisposable
             FieldTombstoned = null;
             RecordDeleted = null;
             RecordUndeleted = null;
+            OutboxEntryPushed = null;
             AckProcessed = null;
             MembershipApplied = null;
             KeyRotationApplied = null;

@@ -60,6 +60,8 @@ public sealed partial class Node
     private OutboxEntry? PushOutboxCore(int ns, RecordId recordId, object op)
     {
         ValidateNamespaceId(ns);
+        OutboxEntry? publicEntry;
+        OutboxEntry? committedEntry;
         lock (_lockStorage) lock (_lockOutbox)
         {
             ThrowIfDisposed();
@@ -67,8 +69,12 @@ public sealed partial class Node
             // Never mutate a caller-owned operation DTO.
             var ownedOp = CloneOperationForPush(op);
             var entry = PushOutboxInternal(ns, recordId, ownedOp);
-            return entry is null ? null : CloneOutboxEntryForPublicRead(entry);
+            publicEntry = entry is null ? null : CloneOutboxEntryForPublicRead(entry);
+            committedEntry = entry;
         }
+        if (committedEntry is not null && OutboxEntryPushed is { } handler)
+            handler(CloneOutboxEntryForPublicRead(committedEntry));
+        return publicEntry;
     }
 
     private static object CloneOperationForPush(object op) => op switch

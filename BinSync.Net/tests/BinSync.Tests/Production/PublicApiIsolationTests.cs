@@ -47,6 +47,38 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void OutboxEntryPushed_event_is_detached_and_runs_outside_locks()
+    {
+        using var node = Fix.MakeNode(918);
+        OutboxEntry? observed = null;
+        int probeRecord = 918;
+        node.OutboxEntryPushed += entry =>
+        {
+            observed = entry;
+            var probeId = Fix.Rid(Interlocked.Increment(ref probeRecord));
+            var write = Task.Run(() => node.WriteField(7, probeId, 0x120, new byte[] { 1 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "Outbox event ran while node locks were held.");
+            Assert.True(write.Result);
+        };
+
+        var op = new OpFieldWrite
+        {
+            FieldId = 0x101,
+            Wall = 1,
+            Logical = 0,
+            Origin = 1,
+            AuthorNodeId = node.NodeId.ToArray(),
+            Value = new byte[] { 0x44 },
+        };
+        var returned = node.PushOutbox(7, Fix.Rid(918), op);
+
+        Assert.NotNull(returned);
+        Assert.NotNull(observed);
+        Assert.NotSame(returned, observed);
+        Assert.NotSame(returned.Payload, observed.Payload);
+    }
+
+    [Fact]
     public void Dispose_is_idempotent_terminal_and_releases_engine_state()
     {
         var node = Fix.MakeNode(913);
