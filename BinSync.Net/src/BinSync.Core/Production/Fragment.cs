@@ -177,7 +177,7 @@ public sealed class FragmentReassembler
             _pending[key] = slot;
             _pendingSlots += f.Count;
         }
-        else if (slot.Count != f.Count)
+        if (slot.Count != f.Count)
         {
             RemoveSlot(key, slot);
             throw new FrameException("FRAME_REJECTED");
@@ -195,7 +195,10 @@ public sealed class FragmentReassembler
         }
 
         if (f.Body.Length > MaxPendingBytes - _pendingBytes)
+        {
+            RemoveSlot(key, slot);
             throw new FrameException("FLOW_CONTROL_VIOLATION");
+        }
         slot.Parts[f.Index] = f.Body;
         slot.Have++;
         _pendingBytes += f.Body.Length;
