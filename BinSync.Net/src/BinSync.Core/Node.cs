@@ -173,12 +173,10 @@ public sealed partial class Node : IDisposable
 
     /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
     /// <summary>Create a node with optional identity, epoch, clock and resource limits.</summary>
-    public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
+    public Node(NodeId? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000, ResourceLimits? limits = null)
     {
-        var raw = nodeId ?? Guid.NewGuid().ToByteArray();
-        if (raw.Length != 16) throw new ArgumentException("nodeId must be 16 bytes", nameof(nodeId));
-        NodeId = NodeId.From(raw);
+        NodeId = nodeId ?? NodeId.From(Guid.NewGuid().ToByteArray());
         Epoch = epoch;
         Clock = new HlcClock(nowFn, maxSkewUs);
         Limits = limits;

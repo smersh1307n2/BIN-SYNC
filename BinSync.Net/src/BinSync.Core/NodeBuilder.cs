@@ -3,24 +3,16 @@ namespace BinSync;
 /// <summary>Fluent construction for <see cref="Node"/>.</summary>
 public sealed class NodeBuilder
 {
-    private byte[]? _nodeId;
+    private NodeId? _nodeId;
     private int _epoch = 1;
     private Func<long>? _nowFn;
     private long _maxSkewUs = 60_000_000;
     private ResourceLimits? _limits;
 
     /// <summary>Set the 16-byte node identity.</summary>
-    public NodeBuilder WithNodeId(byte[] nodeId)
-    {
-        ArgumentNullException.ThrowIfNull(nodeId);
-        _nodeId = nodeId.ToArray();
-        return this;
-    }
-
-    /// <summary>Set the 16-byte node identity.</summary>
     public NodeBuilder WithNodeId(NodeId nodeId)
     {
-        _nodeId = nodeId.ToArray();
+        _nodeId = nodeId;
         return this;
     }
 

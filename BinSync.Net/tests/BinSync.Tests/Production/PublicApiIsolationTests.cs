@@ -178,6 +178,24 @@ public sealed class PublicApiIsolationTests
     }
 
     [Fact]
+    public void NodeConstruction_UsesTypedIdentityContract()
+    {
+        var constructor = typeof(Node).GetConstructors()
+            .Single(candidate => candidate.GetParameters().Length == 5);
+        Assert.Equal(typeof(NodeId?), constructor.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(NodeId?), typeof(NodeOptions).GetProperty(nameof(NodeOptions.NodeId))!.PropertyType);
+        Assert.DoesNotContain(typeof(NodeBuilder).GetMethods(),
+            method => method.Name == "WithNodeId" &&
+                      method.GetParameters()[0].ParameterType == typeof(byte[]));
+
+        var expected = new NodeId(0x1234, 0x5678);
+        using var node = new Node(expected);
+        Assert.Equal(expected, node.NodeId);
+        using var configured = new Node(new NodeOptions { NodeId = expected });
+        Assert.Equal(expected, configured.NodeId);
+    }
+
+    [Fact]
     public void NodeBuilder_CopiesCallerOwnedIdentityBuffer()
     {
         var input = new byte[16];

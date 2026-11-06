@@ -56,7 +56,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 ### Engine — `Node`
 
-**Construction:** `Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null, long maxSkewUs = …)`  
+**Construction:** `Node(NodeId? nodeId = null, int epoch = 1, Func<long>? nowFn = null, long maxSkewUs = …)`  
 **Public state:** `NodeId` (ctor-only), `Epoch`, `Clock`, optional `ResourceLimits? Limits`.
 
 | API | Role |
@@ -79,12 +79,12 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 | `RegisterLoopbackPeer` | In-process peer map for alias negotiation |
 | `BatchApplied` / `FieldWritten` | Events (handlers run outside engine locks) |
 | `Dispose` | Clear maps / detach events |
-| `NodeOptions` | Structured construction (limits at create) |
+| `NodeOptions` | Structured construction with typed `NodeId?` (limits at create) |
 | `SyncErrorCode` / `SyncException.ErrorCode` | Typed error codes |
 | `AckProcessed` | ACK watermark advanced |
 | `MembershipApplied` / `KeyRotationApplied` | Roster / key epoch events |
 | `ApplyKeyRotation` | Apply notice + raise event |
-| `NodeBuilder` | Fluent construction |
+| `NodeBuilder` | Fluent construction with typed `WithNodeId(NodeId)` |
 | `TrustPeer` / `RevokeTrust` (`NodeId`) | Typed trust pins |
 
 **Resource bounds:** `ResourceLimits`, `BoundedNode` factory helpers.
