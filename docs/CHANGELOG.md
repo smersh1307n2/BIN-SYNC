@@ -11,6 +11,11 @@
 - `Ops.TryCloneWithOrigin` always returns an owned payload; the engine uses a separate internal zero-copy path for its own Outbox buffers.
 - Loopback routing dictionaries are no longer public mutable state.
 - Package version advanced to `3.0.0` for the breaking API cleanup.
+- Relay alias propagation is post-commit and best-effort; disposed peers cannot turn an accepted batch into an apparent failure, and duplicate alias work is deduplicated per batch.
+- Snapshot apply validates namespace and `MaxRecords` before publication; decoder-owned receive transfers avoid a redundant deep clone.
+- Snapshot chunk packing runs after the consistent storage copy releases Node gates; STATE_DIGEST hashes the storage dictionary directly without a temporary record-map copy.
+- WAL replay marks a Node unusable if semantic replay fails after mutation, preventing accidental use of partially restored state.
+- Observer exceptions are isolated per subscriber and traced; event callbacks run outside engine gates and cannot change committed operation results.
 
 ---
 
