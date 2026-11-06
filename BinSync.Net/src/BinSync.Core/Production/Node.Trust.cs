@@ -39,14 +39,21 @@ public sealed partial class Node
         var ownedBatch = CloneBatchForPublicRead(batch);
         var ownedSignature = signature.ToArray();
         var ownedCandidateKey = candidatePublicKey?.ToArray();
-        lock (_lockMeta)
+        BatchResult result;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             var store = Trust ?? throw new InvalidOperationException("Trust store not configured");
-            // Verify and apply the same detached batch snapshot; never verify one DTO
-            // and later apply a caller-mutated version of it.
-            store.VerifyBatchOrThrow(ownedBatch, ownedSignature, ownedCandidateKey);
+            // Keep Node and trust gates through publication: trust replacement, peer
+            // revocation, and the accepted batch have one linearized order.
+            result = store.VerifyBatchAndExecute(
+                ownedBatch,
+                ownedSignature,
+                ownedCandidateKey,
+                () => ApplyBatchInternal(ownedBatch, senderPeer));
         }
-        return ApplyBatch(ownedBatch, senderPeer);
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
+        return result;
     }
 
     /// <summary>Pin or pre-share a peer key.</summary>

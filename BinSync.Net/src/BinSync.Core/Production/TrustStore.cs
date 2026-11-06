@@ -161,41 +161,66 @@ public sealed partial class TrustStore
         Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
         ArgumentNullException.ThrowIfNull(batch);
+        var ownedSignature = signature.ToArray();
+        var ownedCandidate = candidatePublicKey?.ToArray();
+        lock (_gate)
+            VerifyBatchOrThrowLocked(batch, ownedSignature, ownedCandidate);
+    }
+
+    /// <summary>
+    /// Verify a batch and execute its commit while trust changes are excluded.
+    /// The callback is synchronous and is intended for the Node's already-gated
+    /// internal apply path; it must not invoke application callbacks.
+    /// </summary>
+    internal T VerifyBatchAndExecute<T>(
+        Batch batch, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey, Func<T> execute)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(execute);
+        var ownedSignature = signature.ToArray();
+        var ownedCandidate = candidatePublicKey?.ToArray();
+        lock (_gate)
+        {
+            VerifyBatchOrThrowLocked(batch, ownedSignature, ownedCandidate);
+            return execute();
+        }
+    }
+
+    private void VerifyBatchOrThrowLocked(Batch batch, byte[] signature, byte[]? candidatePublicKey)
+    {
         var issuer = batch.IssuerNodeId;
         var batchId = batch.BatchId;
         var payload = BatchSignature.BuildSignPayload(
             batch.NamespaceId, batch.IssuerEpoch, issuer, batchId, batch.BatchDigest);
-        var pk = ResolvePublicKey(issuer, candidatePublicKey);
-        if (pk is null)
+        var publicKey = ResolvePublicKey(issuer, candidatePublicKey);
+        if (publicKey is null)
             throw new SyncException("TRUST_REVOKED", batchId);
-        if (!BatchSignature.Verify(pk, payload, signature))
+        if (!BatchSignature.Verify(publicKey, payload, signature))
             throw new SyncException("SIGNATURE_INVALID", batchId);
 
-        // TOFU must prove possession before first-use pinning. Recheck under the
-        // lock to handle concurrent first use, revocation, and key substitution.
-        lock (_gate)
+        // TOFU must prove possession before first-use pinning. Keep the trust lock
+        // through verification and publication so concurrent revocation/replacement
+        // is ordered either before or after the accepted batch.
+        var key = Key(issuer);
+        if (_peers.TryGetValue(key, out var existing))
         {
-            var key = Key(issuer);
-            if (_peers.TryGetValue(key, out var existing))
-            {
-                if (existing.Revoked || !existing.PublicKey.AsSpan().SequenceEqual(pk))
-                    throw new SyncException("TRUST_REVOKED", batchId);
-                return;
-            }
-
-            if (_defaultMode != TrustMode.Tofu || candidatePublicKey is null ||
-                !candidatePublicKey.AsSpan().SequenceEqual(pk))
+            if (existing.Revoked || !existing.PublicKey.AsSpan().SequenceEqual(publicKey))
                 throw new SyncException("TRUST_REVOKED", batchId);
-
-            _peers[key] = new TrustedPeer
-            {
-                NodeId = issuer,
-                PublicKey = pk.ToArray(),
-                Mode = TrustMode.Tofu,
-                Revoked = false,
-                PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            };
+            return;
         }
+
+        if (_defaultMode != TrustMode.Tofu || candidatePublicKey is null ||
+            !candidatePublicKey.AsSpan().SequenceEqual(publicKey))
+            throw new SyncException("TRUST_REVOKED", batchId);
+
+        _peers[key] = new TrustedPeer
+        {
+            NodeId = issuer,
+            PublicKey = publicKey.ToArray(),
+            Mode = TrustMode.Tofu,
+            Revoked = false,
+            PinnedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        };
     }
 
     /// <summary>Verify the batch signature with the trust store; returns true if accepted.</summary>

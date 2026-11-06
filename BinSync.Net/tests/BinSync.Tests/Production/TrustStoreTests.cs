@@ -126,6 +126,57 @@ public class TrustStoreTests
     }
 
     [Fact]
+    public void Trust_revocation_waits_until_verified_batch_commit_finishes()
+    {
+        var store = new TrustStore { DefaultMode = TrustMode.Tofu };
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        var batch = SampleBatch(7);
+        var signature = BatchSignature.SignBatch(seed, batch);
+        using var verifying = new ManualResetEventSlim();
+        using var releaseCommit = new ManualResetEventSlim();
+        using var revokeStarted = new ManualResetEventSlim();
+        using var revokeCompleted = new ManualResetEventSlim();
+        Exception? verifyError = null;
+        var verifyThread = new Thread(() =>
+        {
+            try
+            {
+                store.VerifyBatchAndExecute(batch, signature, publicKey, () =>
+                {
+                    verifying.Set();
+                    releaseCommit.Wait();
+                    return true;
+                });
+            }
+            catch (Exception ex) { verifyError = ex; }
+        }) { IsBackground = true };
+        var revokeThread = new Thread(() =>
+        {
+            revokeStarted.Set();
+            store.Revoke(batch.IssuerNodeId);
+            revokeCompleted.Set();
+        }) { IsBackground = true };
+
+        verifyThread.Start();
+        try
+        {
+            Assert.True(verifying.Wait(TimeSpan.FromSeconds(3)));
+            revokeThread.Start();
+            Assert.True(revokeStarted.Wait(TimeSpan.FromSeconds(3)));
+            Assert.False(revokeCompleted.Wait(TimeSpan.FromMilliseconds(100)));
+        }
+        finally
+        {
+            releaseCommit.Set();
+        }
+
+        Assert.True(verifyThread.Join(TimeSpan.FromSeconds(3)));
+        Assert.True(revokeThread.Join(TimeSpan.FromSeconds(3)));
+        Assert.Null(verifyError);
+        Assert.Null(store.ResolvePublicKey(batch.IssuerNodeId, publicKey));
+    }
+
+    [Fact]
     public void Node_TrustPeer_and_VerifyAndApply_empty_batch()
     {
         var n = Fix.MakeNode(901);
