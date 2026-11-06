@@ -533,11 +533,20 @@ public sealed partial class Node
     /// and delegates to <c>ApplySnapshotInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int ApplySnapshot(Batch batch)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return ApplySnapshotInternal(batch);
+        ArgumentNullException.ThrowIfNull(batch);
+        int applied;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            applied = ApplySnapshotInternal(batch);
+        }
+        RaiseSnapshotApplied(batch.NamespaceId, applied);
+        return applied;
     }
 
     internal int ApplySnapshotInternal(Batch batch)
     {
+        ThrowIfDisposed();
         // Snapshot batches use the same canonical records array as DELTA_BATCH.
         // Validate provenance for the complete snapshot before mutating storage.
         var snapshotChangeIds = new HashSet<BatchId>();

@@ -56,6 +56,28 @@ public class SnapshotTests
     }
 
     [Fact]
+    public void SnapshotApplied_event_runs_after_node_gates_are_released()
+    {
+        using var source = Fix.MakeNode(916);
+        using var target = Fix.MakeNode(917);
+        source.WriteField(1, Fix.Rid(916), 0x100, new byte[] { 9 });
+        var chunks = Reconcile.BuildSnapshotChunks(source, 1);
+        int events = 0;
+        target.SnapshotApplied += (namespaceId, applied) =>
+        {
+            Assert.Equal(1, namespaceId);
+            Assert.True(applied > 0);
+            var write = Task.Run(() => target.WriteField(1, Fix.Rid(917), 0x101, new byte[] { 1 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "SnapshotApplied ran while node gates were held.");
+            Assert.True(write.Result);
+            events++;
+        };
+
+        Assert.True(Reconcile.ApplySnapshotChunks(target, chunks) > 0);
+        Assert.Equal(1, events);
+    }
+
+    [Fact]
     public void Snapshot_chunks_cover_the_complete_record_set()
     {
         var source = Fix.MakeNode(60);

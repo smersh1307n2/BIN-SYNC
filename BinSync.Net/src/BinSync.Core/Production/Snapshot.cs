@@ -419,6 +419,10 @@ public static partial class Reconcile
             foreach (var (recordId, record) in staged)
                 store[recordId] = record;
         }
+        // Release all node gates before notifying observers. Snapshot application is
+        // a control-plane transfer, so event dispatch never runs under engine locks.
+        gates.Dispose();
+        node.RaiseSnapshotApplied(first.NamespaceId, applied);
         return applied;
     }
 }

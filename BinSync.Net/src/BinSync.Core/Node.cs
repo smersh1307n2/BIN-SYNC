@@ -96,6 +96,8 @@ public sealed partial class Node : IDisposable
     public event Action<int, int, ulong>? GarbageCollected;
     /// <summary>Raised after a peer trust pin is added or revoked (outside node locks; control plane only).</summary>
     public event Action<NodeId, bool>? TrustChanged;
+    /// <summary>Raised after a complete snapshot is applied (outside engine locks).</summary>
+    public event Action<int, int>? SnapshotApplied;
 
     private int _disposed;
 
@@ -291,6 +293,9 @@ public sealed partial class Node : IDisposable
     internal void RaiseGarbageCollected(int namespaceId, int removed, ulong cutoffWall) =>
         GarbageCollected?.Invoke(namespaceId, removed, cutoffWall);
 
+    internal void RaiseSnapshotApplied(int namespaceId, int applied) =>
+        SnapshotApplied?.Invoke(namespaceId, applied);
+
     /// <summary>Apply a verified KEY_ROTATION notice via <paramref name="store"/> and raise <see cref="KeyRotationApplied"/>.</summary>
     public bool ApplyKeyRotation(KeyRotationNotice notice, KeyEpochStore store)
     {
@@ -360,6 +365,7 @@ public sealed partial class Node : IDisposable
             GcNoticeApplied = null;
             GarbageCollected = null;
             TrustChanged = null;
+            SnapshotApplied = null;
         }
         GC.SuppressFinalize(this);
     }
