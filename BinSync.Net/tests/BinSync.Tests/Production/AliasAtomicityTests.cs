@@ -13,7 +13,7 @@ public sealed class AliasAtomicityTests
         var peer = Fix.Nid(142);
         var author = Fix.Nid(143);
 
-        using var gates = node.EnterAllGates();
+        var gates = node.EnterAllGates();
         var started = new ManualResetEventSlim();
         var reader = Task.Run(() =>
         {
@@ -26,7 +26,9 @@ public sealed class AliasAtomicityTests
             "Public epoch readers must wait for the metadata gate.");
 
         gates.Dispose();
-        Assert.Equal((null, null), reader.GetAwaiter().GetResult());
+        var result = reader.GetAwaiter().GetResult();
+        Assert.Null(result.Item1);
+        Assert.Null(result.Item2);
     }
 
     [Fact]
