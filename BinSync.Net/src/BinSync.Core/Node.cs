@@ -122,7 +122,7 @@ public sealed partial class Node : IDisposable
     public ResourceLimits? Limits
     {
         get { lock (_lockMeta) { ThrowIfDisposed(); return _limits; } }
-        set { lock (_lockMeta) { ThrowIfDisposed(); _limits = value; } }
+        set { lock (_lockMeta) { ThrowIfDisposed(); System.Threading.Volatile.Write(ref _limits, value); } }
     }
 
     /// <summary>Look up a record in the live store.</summary>
@@ -352,7 +352,7 @@ public sealed partial class Node : IDisposable
             _e2eeKeys = null;
             _trust = null;
             _wal = null;
-            _limits = null;
+            System.Threading.Volatile.Write(ref _limits, null);
             PeersByNid = null;
             BatchApplied = null;
             FieldWritten = null;

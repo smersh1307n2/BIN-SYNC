@@ -175,8 +175,9 @@ public sealed partial class Node
 
         SetOrigin(op, 1);
         var payload = Ops.EncodeOp(op, fullAuthor: false);
-        Limits?.EnsureCanEnqueueOutbox(this, ns);
-        Limits?.EnsureSeenChangesCapacity(this);
+        var limits = System.Threading.Volatile.Read(ref _limits);
+        limits?.EnsureCanEnqueueOutbox(this, ns);
+        limits?.EnsureSeenChangesCapacity(this);
         var key = (NodeId, ns);
         long current = _outboxSeq.TryGetValue(key, out var value) ? value : 0;
         if (current == long.MaxValue) throw new SyncException("INTERNAL");
@@ -412,10 +413,11 @@ public sealed partial class Node
     private void EnsureLocalWriteCapacity(int namespaceId, bool isNewRecord)
     {
         // MaxRecords applies to record creation, not updates of an existing record.
+        var limits = System.Threading.Volatile.Read(ref _limits);
         if (isNewRecord)
-            Limits?.EnsureStorageCapacity(this);
-        Limits?.EnsureCanEnqueueOutbox(this, namespaceId);
-        Limits?.EnsureSeenChangesCapacity(this);
+            limits?.EnsureStorageCapacity(this);
+        limits?.EnsureCanEnqueueOutbox(this, namespaceId);
+        limits?.EnsureSeenChangesCapacity(this);
         if (_outboxSeq.TryGetValue((NodeId, namespaceId), out var seq) && seq == long.MaxValue)
             throw new SyncException("INTERNAL");
     }
