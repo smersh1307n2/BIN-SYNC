@@ -57,7 +57,7 @@ public class OpFieldTomb
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
-    public byte[]? AuthorNodeId;
+    public NodeId? AuthorNodeId;
     /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagFieldTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
@@ -77,7 +77,7 @@ public class OpRecordTombstone
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
-    public byte[]? AuthorNodeId;
+    public NodeId? AuthorNodeId;
     /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagRecordTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
@@ -301,8 +301,8 @@ public static partial class Ops
             ushort fid = r.U16(), ke = r.U16();
             ulong wall = r.U64(); uint logical = r.U32();
             bool full = fullAuthor ?? (r.Remaining == 16);
-            byte[]? author; ushort origin = 0;
-            if (full) { author = r.B128(); }
+            NodeId? author; ushort origin = 0;
+            if (full) { author = r.ReadNodeId(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffset + (full ? 16 : 2))
                 throw new InvalidOperationException("malformed op payload");
@@ -313,8 +313,8 @@ public static partial class Ops
             var rid = r.ReadRecordId();
             ulong wall = r.U64(); uint logical = r.U32();
             bool full = fullAuthor ?? (r.Remaining == 16);
-            byte[]? author; ushort origin = 0;
-            if (full) { author = r.B128(); }
+            NodeId? author; ushort origin = 0;
+            if (full) { author = r.ReadNodeId(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffsetRecordTomb + (full ? 16 : 2))
                 throw new InvalidOperationException("malformed op payload");
