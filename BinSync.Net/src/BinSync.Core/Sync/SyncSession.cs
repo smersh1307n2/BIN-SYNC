@@ -36,7 +36,9 @@ public partial class SyncSession : IAsyncDisposable
     private readonly SemaphoreSlim _snapshotGate = new(1, 1);
     private readonly SemaphoreSlim _exclusiveReceiveGate = new(1, 1);
     private readonly object _receiveSync = new();
-    private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();\n    private readonly Channel<byte[]> _rawReceiveChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions\n    { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false });
+    private readonly ConcurrentDictionary<byte, Channel<byte[]>> _receiveChannels = new();
+    private readonly Channel<byte[]> _rawReceiveChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
+    { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false });
     private readonly ConcurrentDictionary<byte, SemaphoreSlim> _receiveTypeGates = new();
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
@@ -402,6 +404,7 @@ public partial class SyncSession : IAsyncDisposable
                 _receiveCompleted = true;
                 foreach (var channel in _receiveChannels.Values)
                     channel.Writer.TryComplete(failure);
+                _rawReceiveChannel.Writer.TryComplete(failure);
             }
         }
     }
