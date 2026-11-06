@@ -47,6 +47,21 @@ public sealed class PublicApiIsolationTests
         Assert.Equal(original, currentField!.Value);
     }
     [Fact]
+    public void SigningAndKeyRotationHelpers_UseTypedIdentityParameters()
+    {
+        var rotationCreate = typeof(KeyRotation).GetMethod(nameof(KeyRotation.Create))!;
+        Assert.Equal(typeof(NodeId), rotationCreate.GetParameters()[3].ParameterType);
+        var proofBuilder = typeof(KeyRotation).GetMethod(nameof(KeyRotation.BuildProofMessage))!;
+        Assert.Equal(typeof(NodeId), proofBuilder.GetParameters()[3].ParameterType);
+        var signPayload = typeof(BatchSignature).GetMethods()
+            .Single(method => method.Name == nameof(BatchSignature.BuildSignPayload) &&
+                              method.GetParameters().Length == 5);
+        Assert.Equal(typeof(NodeId), signPayload.GetParameters()[2].ParameterType);
+        Assert.Equal(typeof(BatchId), signPayload.GetParameters()[3].ParameterType);
+        Assert.Equal(typeof(Digest16), signPayload.GetParameters()[4].ParameterType);
+    }
+
+    [Fact]
     public void MembershipDtos_ExposePropertiesAndTypedPeerIdentity()
     {
         Assert.Equal(typeof(NodeId), typeof(MembershipEntry).GetProperty(nameof(MembershipEntry.NodeId))!.PropertyType);

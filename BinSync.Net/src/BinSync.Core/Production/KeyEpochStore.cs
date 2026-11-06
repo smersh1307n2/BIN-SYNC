@@ -53,13 +53,24 @@ public sealed class KeyEpochStore
     /// </summary>
     public bool TryApply(KeyRotationNotice notice)
     {
+        ArgumentNullException.ThrowIfNull(notice);
+        if (notice.Proof is null || notice.Proof.Length != BatchSignature.SignatureSize)
+            return false;
+        var ownedNotice = new KeyRotationNotice
+        {
+            NamespaceId = notice.NamespaceId,
+            OldKeyEpoch = notice.OldKeyEpoch,
+            NewKeyEpoch = notice.NewKeyEpoch,
+            NodeId = notice.NodeId,
+            Proof = notice.Proof.ToArray(),
+        };
         lock (_gate)
         {
-            if (notice.NewKeyEpoch <= notice.OldKeyEpoch) return false;
-            var hex = Hex(notice.NodeId);
+            if (ownedNotice.NewKeyEpoch <= ownedNotice.OldKeyEpoch) return false;
+            var hex = Hex(ownedNotice.NodeId);
             if (!_identityKeys.TryGetValue(hex, out var pub))
                 return false; // UNKNOWN identity → drop (caller may surface UNKNOWN_KEY_EPOCH)
-            if (!KeyRotation.VerifyProof(notice, pub))
+            if (!KeyRotation.VerifyProof(ownedNotice, pub))
                 return false;
 
             if (!_epochs.TryGetValue(notice.NamespaceId, out var map))
@@ -68,11 +79,11 @@ public sealed class KeyEpochStore
                 _epochs[notice.NamespaceId] = map;
             }
             ushort current = map.TryGetValue(hex, out var cur) ? cur : (ushort)0;
-            if (current != 0 && notice.OldKeyEpoch != current)
+            if (current != 0 && ownedNotice.OldKeyEpoch != current)
                 return false;
-            if (notice.NewKeyEpoch <= current)
+            if (ownedNotice.NewKeyEpoch <= current)
                 return false;
-            map[hex] = notice.NewKeyEpoch;
+            map[hex] = ownedNotice.NewKeyEpoch;
             return true;
         }
     }

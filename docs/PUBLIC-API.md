@@ -212,7 +212,7 @@ attached to a live Node.
 | `E2ee.SealField` / `OpenField` | ChaCha20-Poly1305 |
 | `E2eeKeyRing` / `Node.EnsureE2ee` | Per-namespace keys + epochs |
 | `WriteFieldSealed` / `ReadFieldOpen` / `TryOpenField` | Convenience write and authenticated read helpers |
-| `KeyRotation` / `KeyRotationNotice` / `KeyEpochStore` | Frame 0x11 + proof |
+| `KeyRotation` / `KeyRotationNotice` / `KeyEpochStore` | Frame 0x11 + strict 64-byte proof bound to typed `NodeId`; exact payload length required |
 
 Blind merge compares ciphertext with open HLC + author.
 
@@ -220,7 +220,7 @@ Blind merge compares ciphertext with open HLC + author.
 
 | API | Role |
 |-----|------|
-| `BatchSignature` | Ed25519 sign/verify (vendored) |
+| `BatchSignature` | Ed25519 sign/verify (vendored); sign payload takes `NodeId`, `BatchId`, and `Digest16` |
 | `TrustStore` | TOFU / PreShared / CA roots / revoke |
 | `Node.EnsureTrust` / `TrustPeer` / `RevokeTrust` / `SaveTrust` / `LoadTrust` | Configure, pin, revoke, and persist trust state |
 | `VerifyAndApplyBatch` | Signature gate then apply |

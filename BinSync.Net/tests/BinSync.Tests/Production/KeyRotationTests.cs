@@ -6,11 +6,11 @@ namespace BinSync.Tests;
 
 public class KeyRotationTests
 {
-    static byte[] Id(byte b)
+    static NodeId Id(byte b)
     {
         var a = new byte[16];
         a[15] = b;
-        return a;
+        return NodeId.From(a);
     }
 
     [Fact]
@@ -83,6 +83,47 @@ public class KeyRotationTests
         Assert.False(store.TryApply(KeyRotation.Create(1, 5, 5, nodeId, seed)));
         Assert.False(store.TryApply(KeyRotation.Create(1, 5, 4, nodeId, seed)));
         Assert.Equal(5, store.GetEpoch(1, nodeId));
+    }
+
+    [Fact]
+    public void KeyRotation_rejects_malformed_proof_lengths_and_trailing_bytes()
+    {
+        var (seed, _) = BatchSignature.GenerateKeyPair();
+        var notice = KeyRotation.Create(1, 0, 1, Id(6), seed);
+        var payload = KeyRotation.Encode(notice);
+        Assert.Throws<InvalidDataException>(() => KeyRotation.Decode(payload.Append((byte)0).ToArray()));
+
+        var wrongLength = payload.ToArray();
+        wrongLength[22] = 63;
+        wrongLength[23] = 0;
+        Assert.Throws<InvalidDataException>(() => KeyRotation.Decode(wrongLength));
+
+        var invalidNotice = new KeyRotationNotice
+        {
+            NamespaceId = 1,
+            OldKeyEpoch = 0,
+            NewKeyEpoch = 1,
+            NodeId = Id(6),
+            Proof = new byte[63],
+        };
+        Assert.Throws<ArgumentException>(() => KeyRotation.Encode(invalidNotice));
+    }
+
+    [Fact]
+    public void Node_ApplyKeyRotation_RaisesDetachedNotice()
+    {
+        var (seed, pub) = BatchSignature.GenerateKeyPair();
+        var nodeId = Id(7);
+        var store = new KeyEpochStore();
+        store.TrustIdentity(nodeId, pub);
+        var notice = KeyRotation.Create(1, 0, 1, nodeId, seed);
+        var originalProof = notice.Proof.ToArray();
+        using var node = Fix.MakeNode(114);
+        node.KeyRotationApplied += applied => applied.Proof[0] ^= 0xFF;
+
+        Assert.True(node.ApplyKeyRotation(notice, store));
+        Assert.Equal(originalProof, notice.Proof);
+        Assert.Equal(1, store.GetEpoch(1, nodeId));
     }
 
     [Fact]

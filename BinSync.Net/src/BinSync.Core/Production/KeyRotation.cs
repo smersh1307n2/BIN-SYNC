@@ -35,10 +35,14 @@ public static class KeyRotation
     /// </summary>
     public static byte[] Encode(KeyRotationNotice n)
     {
+        ArgumentNullException.ThrowIfNull(n);
         if (n.NewKeyEpoch <= n.OldKeyEpoch)
             throw new ArgumentException("newKeyEpoch must be greater than oldKeyEpoch");
+        var proof = n.Proof?.ToArray() ?? throw new ArgumentException("KEY_ROTATION proof is required", nameof(n));
+        if (proof.Length != BatchSignature.SignatureSize)
+            throw new ArgumentException($"KEY_ROTATION proof must be {BatchSignature.SignatureSize} bytes", nameof(n));
 
-        int proofLen = n.Proof.Length;
+        int proofLen = proof.Length;
         var buf = new byte[2 + 2 + 2 + 16 + 2 + proofLen];
         int o = 0;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), n.NamespaceId); o += 2;
@@ -46,7 +50,7 @@ public static class KeyRotation
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), n.NewKeyEpoch); o += 2;
         n.NodeId.WriteTo(buf.AsSpan(o)); o += 16;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), (ushort)proofLen); o += 2;
-        n.Proof.CopyTo(buf.AsSpan(o));
+        proof.CopyTo(buf.AsSpan(o));
         return buf;
     }
 
@@ -54,15 +58,17 @@ public static class KeyRotation
     public static KeyRotationNotice Decode(ReadOnlySpan<byte> payload)
     {
         if (payload.Length < 2 + 2 + 2 + 16 + 2)
-            throw new ArgumentException("KEY_ROTATION payload too short");
+            throw new InvalidDataException("KEY_ROTATION payload too short");
         int o = 0;
         ushort ns = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
         ushort oldE = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
         ushort newE = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
         var nodeId = NodeId.From(payload.Slice(o, 16)); o += 16;
         ushort proofLen = BinaryPrimitives.ReadUInt16LittleEndian(payload[o..]); o += 2;
-        if (payload.Length < o + proofLen)
-            throw new ArgumentException("KEY_ROTATION proof truncated");
+        if (proofLen != BatchSignature.SignatureSize || payload.Length != o + proofLen)
+            throw new InvalidDataException("KEY_ROTATION proof length or payload size is invalid");
+        if (newE <= oldE)
+            throw new InvalidDataException("KEY_ROTATION epoch must advance");
         var proof = payload.Slice(o, proofLen).ToArray();
         return new KeyRotationNotice
         {
@@ -75,16 +81,16 @@ public static class KeyRotation
     }
 
     /// <summary>Canonical message covered by the rotation proof.</summary>
-    public static byte[] BuildProofMessage(ushort namespaceId, ushort oldEpoch, ushort newEpoch, ReadOnlySpan<byte> nodeId)
+    public static byte[] BuildProofMessage(ushort namespaceId, ushort oldEpoch, ushort newEpoch, NodeId nodeId)
     {
         var domain = Encoding.UTF8.GetBytes(ProofDomain);
-        var buf = new byte[domain.Length + 2 + 2 + 2 + nodeId.Length];
+        var buf = new byte[domain.Length + 2 + 2 + 2 + 16];
         int o = 0;
         domain.CopyTo(buf.AsSpan(o)); o += domain.Length;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), namespaceId); o += 2;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), oldEpoch); o += 2;
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(o), newEpoch); o += 2;
-        nodeId.CopyTo(buf.AsSpan(o));
+        nodeId.WriteTo(buf.AsSpan(o, 16));
         return buf;
     }
 
@@ -93,9 +99,11 @@ public static class KeyRotation
         ushort namespaceId,
         ushort oldKeyEpoch,
         ushort newKeyEpoch,
-        ReadOnlySpan<byte> nodeId,
+        NodeId nodeId,
         ReadOnlySpan<byte> identitySeed)
     {
+        if (newKeyEpoch <= oldKeyEpoch)
+            throw new ArgumentException("newKeyEpoch must be greater than oldKeyEpoch", nameof(newKeyEpoch));
         var msg = BuildProofMessage(namespaceId, oldKeyEpoch, newKeyEpoch, nodeId);
         var proof = BatchSignature.Sign(identitySeed, msg);
         return new KeyRotationNotice
@@ -103,7 +111,7 @@ public static class KeyRotation
             NamespaceId = namespaceId,
             OldKeyEpoch = oldKeyEpoch,
             NewKeyEpoch = newKeyEpoch,
-            NodeId = NodeId.From(nodeId),
+            NodeId = nodeId,
             Proof = proof,
         };
     }
@@ -111,10 +119,9 @@ public static class KeyRotation
     /// <summary>Verify the notice's Ed25519 proof against the publisher's public key.</summary>
     public static bool VerifyProof(KeyRotationNotice n, ReadOnlySpan<byte> publisherPublicKey)
     {
-        if (n.NewKeyEpoch <= n.OldKeyEpoch) return false;
-        Span<byte> nid = stackalloc byte[16];
-        n.NodeId.WriteTo(nid);
-        var msg = BuildProofMessage(n.NamespaceId, n.OldKeyEpoch, n.NewKeyEpoch, nid);
+        if (n is null || n.NewKeyEpoch <= n.OldKeyEpoch ||
+            n.Proof is null || n.Proof.Length != BatchSignature.SignatureSize) return false;
+        var msg = BuildProofMessage(n.NamespaceId, n.OldKeyEpoch, n.NewKeyEpoch, n.NodeId);
         return BatchSignature.Verify(publisherPublicKey, msg, n.Proof);
     }
 

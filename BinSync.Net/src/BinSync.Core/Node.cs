@@ -216,9 +216,18 @@ public sealed partial class Node : IDisposable
     /// <summary>Apply a verified KEY_ROTATION notice via <paramref name="store"/> and raise <see cref="KeyRotationApplied"/>.</summary>
     public bool ApplyKeyRotation(KeyRotationNotice notice, KeyEpochStore store)
     {
+        ArgumentNullException.ThrowIfNull(notice);
         ArgumentNullException.ThrowIfNull(store);
-        if (!store.TryApply(notice)) return false;
-        RaiseKeyRotationApplied(notice);
+        var ownedNotice = new KeyRotationNotice
+        {
+            NamespaceId = notice.NamespaceId,
+            OldKeyEpoch = notice.OldKeyEpoch,
+            NewKeyEpoch = notice.NewKeyEpoch,
+            NodeId = notice.NodeId,
+            Proof = notice.Proof?.ToArray() ?? Array.Empty<byte>(),
+        };
+        if (!store.TryApply(ownedNotice)) return false;
+        RaiseKeyRotationApplied(ownedNotice);
         return true;
     }
 
