@@ -2,6 +2,8 @@
 
 ## 3.0.0 — 2026-11-06
 
+- Validate non-zero, unique ChangeIds before the causal gate; malformed batches can no longer poison the pending graph before normal apply validation.
+
 - Raise `SchemaRegistered` only when a new schema version is published; idempotent republication no longer emits a false change event.
 
 - Make schema versions immutable in the local Register API as well as SCHEMA_MAP learning; identical republication is idempotent, while policy/field-set changes require a new version.

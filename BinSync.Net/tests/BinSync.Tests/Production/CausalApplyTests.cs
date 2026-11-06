@@ -98,6 +98,51 @@ public class CausalApplyTests
     }
 
     [Fact]
+    public void Causal_gate_rejects_zero_change_id_before_quarantining()
+    {
+        var tracker = new CausalTracker();
+        var node = new Node(Id(1), epoch: 1) { Causal = tracker };
+        var entry = new OutboxEntry
+        {
+            NamespaceId = 1,
+            ChangeId = default,
+            RecordId = Rid(1),
+            Payload = Array.Empty<byte>(),
+            CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) },
+        };
+        var batch = new Batch(
+            1, 0, 1, 0x02, 0, node.NodeId, node.Epoch, 1, 1,
+            Id(0xBB), Node.Zero128, Node.Zero128, Node.Zero128,
+            new List<OutboxEntry> { entry });
+
+        var error = Assert.Throws<SyncException>(() => node.ApplyBatchCausal(batch, Id(2)));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
+    public void Causal_gate_rejects_duplicate_change_ids_before_quarantining()
+    {
+        var tracker = new CausalTracker();
+        var node = new Node(Id(1), epoch: 1) { Causal = tracker };
+        var changeId = BatchId.From(Id(0x45));
+        var entries = new List<OutboxEntry>
+        {
+            new() { NamespaceId = 1, ChangeId = changeId, RecordId = Rid(1),
+                Payload = Array.Empty<byte>(), CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) } },
+            new() { NamespaceId = 1, ChangeId = changeId, RecordId = Rid(2),
+                Payload = Array.Empty<byte>(), CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) } },
+        };
+        var batch = new Batch(
+            1, 0, 1, 0x02, 0, node.NodeId, node.Epoch, 1, 2,
+            Id(0xBC), Node.Zero128, Node.Zero128, Node.Zero128, entries);
+
+        var error = Assert.Throws<SyncException>(() => node.ApplyBatchCausal(batch, Id(2)));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
     public void Duplicate_batch_bypasses_causal_gate_and_does_not_trust_replay_change_ids()
     {
         var sender = new Node(Id(0xA1), epoch: 1);

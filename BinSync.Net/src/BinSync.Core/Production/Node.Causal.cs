@@ -76,6 +76,14 @@ public sealed partial class Node
             }
             else
             {
+                // ApplyBatchInternal performs this check after its stream gates. The
+                // causal gate runs earlier, so validate identities here before a zero
+                // or repeated ChangeId can enter the process-local pending graph.
+                var uniqueChangeIds = new HashSet<BatchId>();
+                foreach (var entry in ownedBatch.Entries)
+                    if (entry.ChangeId.IsZero || !uniqueChangeIds.Add(entry.ChangeId))
+                        throw new SyncException("BATCH_TRANSACTION_FAILED", ownedBatch.BatchId);
+
                 // Serialize gate evaluation, durable apply and NoteApplied against
                 // external MarkLost/NoteCausalApplied calls on this tracker.
                 lock (tracker.SyncRoot)
