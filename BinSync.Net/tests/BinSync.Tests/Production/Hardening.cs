@@ -236,7 +236,7 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V4TagAndStreamOffsetsRoundTrip()
+    public void Persistence_V5TagAndStreamOffsetsRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
@@ -245,10 +245,10 @@ public class Production : IDisposable
         var path = Path.Combine(_dir, "tag-v4.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)4, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)5, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v4", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v5", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
