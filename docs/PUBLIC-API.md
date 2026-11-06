@@ -154,6 +154,17 @@ each local mutation is one integrity-protected frame containing both the operati
 and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time and
 causal dependencies). There is no field-only WAL record or v1 writer/reader.
 
+Accepted incoming DELTA_BATCH frames are also recorded as `RemoteBatch` entries
+before the receiver publishes their effects or sends the ACK. Each entry preserves
+the exact batch payload together with the sending peer identity, session epoch and
+alias map needed to resolve operation authors during replay. An idempotent duplicate
+batch does not create another WAL entry. This closes the crash window in which a
+sender could receive an ACK for data that the receiver had not yet made recoverable.
+
+Snapshot transfers remain atomic in memory but are not WAL records: they have no
+acceptance ACK, do not advance the sender's Outbox acknowledgement cursor, and can
+be transferred again from the sender's retained state after a receiver restart.
+
 Startup order (before exposing the Node to application work):
 
 ```csharp
