@@ -16,9 +16,8 @@ public partial class SyncSession
     {
         var raw = await ReceiveExpectedExclusiveAsync(SchemaMap.FrameType, ct).ConfigureAwait(false)
            ;
-        var (frame, _) = FrameCodec.ParseFrame(raw);
-        if (frame.FrameType != SchemaMap.FrameType)
-            throw new FrameException("FRAME_REJECTED");
+        var frame = ParseExpectedSessionFrame(raw, SchemaMap.FrameType);
+        ValidateControlStream(frame);
         return local.LearnSchemaMap(frame.Payload);
     }
 
