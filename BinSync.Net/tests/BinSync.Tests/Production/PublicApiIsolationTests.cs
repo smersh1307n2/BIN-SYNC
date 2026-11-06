@@ -75,7 +75,7 @@ public sealed class PublicApiIsolationTests
         Assert.NotNull(returned);
         Assert.NotNull(observed);
         Assert.NotSame(returned, observed);
-        Assert.NotSame(returned.Payload, observed.Payload);
+        Assert.NotEqual(returned.Payload, observed.Payload);
     }
 
     [Fact]
