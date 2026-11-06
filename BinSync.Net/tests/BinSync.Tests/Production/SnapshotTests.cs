@@ -279,7 +279,7 @@ public class SnapshotTests
         target.WriteField(1, existingId, 0x100, new byte[] { 0x11 });
         var original = target.Storage[1][existingId].State[0x100].Value.ToArray();
         var newId = Fix.Rid(241);
-        var author = Fix.MakeNode(67).NodeId
+        var author = Fix.MakeNode(67).NodeId;
 
         var chunks = new[]
         {
