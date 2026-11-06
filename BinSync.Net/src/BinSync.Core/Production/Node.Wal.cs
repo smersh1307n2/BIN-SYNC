@@ -58,6 +58,75 @@ public sealed partial class Node
     }
 
     /// <summary>Restore one durable local mutation, preserving its original Outbox identity.</summary>
+    internal void CommitWalReplayFrom(Node staged)
+    {
+        ArgumentNullException.ThrowIfNull(staged);
+        if (staged.NodeId != NodeId)
+            throw new InvalidOperationException("Cannot publish WAL replay state from a different node identity.");
+
+        ReplaceContents(_storage, staged._storage);
+        ReplaceContents(Outbox, staged.Outbox);
+        ReplaceContents(_outboxSeq, staged._outboxSeq);
+        ReplaceContents(Inbox, staged.Inbox);
+        ReplaceContents(InboxAuthors, staged.InboxAuthors);
+        ReplaceContents(LastBatchDigest, staged.LastBatchDigest);
+        ReplaceContents(LastStreamDigest, staged.LastStreamDigest);
+        ReplaceContents(AliasToNode, staged.AliasToNode);
+        ReplaceContents(NodeToAlias, staged.NodeToAlias);
+        ReplaceContents(DurableAuthors, staged.DurableAuthors);
+        ReplaceContents(PeerStates, staged.PeerStates);
+        ReplaceContents(SeenChanges, staged.SeenChanges);
+        ReplaceContents(LastStreamAuthor, staged.LastStreamAuthor);
+        ReplaceContents(KnownEpochs, staged.KnownEpochs);
+        ReplaceContents(PeerSessionEpochs, staged.PeerSessionEpochs);
+        ReplaceContents(Quarantined, staged.Quarantined);
+        ReplaceContents(ForbiddenNamespaces, staged.ForbiddenNamespaces);
+        ReplaceContents(SchemaVersions, staged.SchemaVersions);
+
+        if (staged.PeersByNid is null)
+            PeersByNid = null;
+        else
+        {
+            var livePeers = PeersByNid;
+            var restoredPeers = new Dictionary<NodeId, Node>(staged.PeersByNid.Count);
+            foreach (var peerId in staged.PeersByNid.Keys)
+            {
+                if (livePeers is not null && livePeers.TryGetValue(peerId, out var live) && live is not null)
+                    restoredPeers[peerId] = live;
+                else
+                    restoredPeers[peerId] = null!;
+            }
+            PeersByNid = restoredPeers;
+        }
+
+        Epoch = staged.Epoch;
+        var clock = staged.Clock.Snapshot();
+        Clock.Observe(new Hlc(clock.LastWall, clock.LastLogical));
+        ReplaceContents(ErrorsOut, staged.ErrorsOut);
+        ReplaceContents(AcksOut, staged.AcksOut);
+    }
+
+    private static void ReplaceContents<TKey, TValue>(
+        Dictionary<TKey, TValue> destination, Dictionary<TKey, TValue> source) where TKey : notnull
+    {
+        destination.Clear();
+        foreach (var pair in source)
+            destination.Add(pair.Key, pair.Value);
+    }
+
+    private static void ReplaceContents<T>(HashSet<T> destination, HashSet<T> source)
+    {
+        destination.Clear();
+        foreach (var value in source)
+            destination.Add(value);
+    }
+
+    private static void ReplaceContents<T>(List<T> destination, List<T> source)
+    {
+        destination.Clear();
+        destination.AddRange(source);
+    }
+
     internal bool ReplayLocalMutation(OutboxEntry entry, bool applyToStorage)
     {
         if (entry.AuthorNodeId != NodeId)

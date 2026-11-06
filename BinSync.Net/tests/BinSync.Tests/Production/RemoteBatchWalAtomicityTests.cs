@@ -39,4 +39,43 @@ public sealed class RemoteBatchWalAtomicityTests
         Assert.Empty(receiver.LastStreamAuthor);
         Assert.Empty(receiver.LastBatchDigest);
     }
+    [Fact]
+    public void Wal_replay_semantic_failure_does_not_publish_earlier_local_mutations()
+    {
+        using var writer = Fix.MakeNode(963);
+        using var sender = Fix.MakeNode(964);
+        using var target = new Node(writer.NodeId, writer.Epoch);
+        Transport.MakeSession(sender, target);
+
+        var walPath = Path.Combine(Path.GetTempPath(),
+            "binsync-wal-replay-atomic-" + Guid.NewGuid().ToString("N") + ".wal");
+        using var wal = Wal.Open(walPath);
+        writer.AttachWal(wal);
+
+        var localRecordId = Fix.Rid(963);
+        Assert.True(writer.WriteField(3, localRecordId, 0x100, [0x51]));
+
+        var remoteRecordId = Fix.Rid(964);
+        Assert.True(sender.WriteField(3, remoteRecordId, 0x100, [0xA4]));
+        var invalidBatch = sender.CreateDeltaBatch(target.NodeId, 3)!;
+        invalidBatch.CursorStart = 2;
+        invalidBatch.CursorEnd = 2;
+        var invalidPayload = sender.EncodeBatchPayload(invalidBatch);
+        wal.AppendRemoteBatch(sender.NodeId, sender.Epoch,
+            Array.Empty<AliasMapEntry>(), invalidPayload);
+
+        var clockBefore = target.ClockState;
+        Assert.Throws<SyncException>(() => wal.Replay(target));
+
+        Assert.False(target.TryGetRecord(3, localRecordId, out _));
+        Assert.False(target.TryGetRecord(3, remoteRecordId, out _));
+        Assert.Equal(0, target.GetRecordCount(3));
+        Assert.Equal(0, target.GetOutboxCount(3));
+        Assert.Empty(target.Inbox);
+        Assert.Empty(target.SeenChanges);
+        Assert.Empty(target.PeerStates);
+        Assert.Equal(clockBefore, target.ClockState);
+        Assert.Equal(0, target.GetRecordCount(3));
+    }
+
 }

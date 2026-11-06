@@ -235,18 +235,7 @@ public sealed class Wal : IDisposable
                 records.Add(payload);
             }
 
-            ValidateReplaySequence(node, records);
-            int applied = 0;
-            try
-            {
-                foreach (var payload in records)
-                    applied += ApplyRecord(node, payload);
-            }
-            catch
-            {
-                node.MarkReplayFaulted();
-                throw;
-            }
+            int applied = ReplayRecordsAtomically(node, records);
             _fs.Position = end;
             return applied;
         }
@@ -288,22 +277,9 @@ public sealed class Wal : IDisposable
             records.Add(payload);
         }
 
-        // Do not mutate the target node until every complete record has passed
-        // structural and sequence validation. This prevents partial replay when
-        // a later, well-formed frame has an impossible Outbox sequence.
-        ValidateReplaySequence(node, records);
-        int applied = 0;
-        try
-        {
-            foreach (var payload in records)
-                applied += ApplyRecord(node, payload);
-        }
-        catch
-        {
-            node.MarkReplayFaulted();
-            throw;
-        }
-        return applied;
+        // Replay on an isolated state image. A late semantic failure must not
+        // publish any earlier local or remote WAL effects to the target node.
+        return ReplayRecordsAtomically(node, records);
         }
     }
 
@@ -479,6 +455,17 @@ public sealed class Wal : IDisposable
                 throw new InvalidDataException("WAL local-mutation sequence is not continuous with the loaded snapshot.");
             sequenceByNamespace[entry.NamespaceId] = entry.Seq;
         }
+    }
+
+    private static int ReplayRecordsAtomically(Node node, IReadOnlyList<byte[]> records)
+    {
+        ValidateReplaySequence(node, records);
+        using var staged = NodePersistence.CloneForWalReplay(node);
+        int applied = 0;
+        foreach (var payload in records)
+            applied += ApplyRecord(staged, payload);
+        node.CommitWalReplayFrom(staged);
+        return applied;
     }
 
     private static int ApplyRecord(Node node, byte[] payload)

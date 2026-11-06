@@ -134,6 +134,17 @@ public static class NodePersistence
 
     // ------------------------------------------------------------- serialization
 
+    internal static Node CloneForWalReplay(Node node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        var body = SerializeBody(node);
+        var clone = DeserializeBody(body, Version, node.Clock.NowFn, node.Clock.MaxSkewUs, node.Limits);
+        clone.PeersByNid = null;
+        clone.ErrorsOut.AddRange(node.ErrorsOut);
+        clone.AcksOut.AddRange(node.AcksOut);
+        return clone;
+    }
+
     private static byte[] SerializeBody(Node n)
     {
         using (n.EnterAllGates()) // point-in-time image under all domain gates
@@ -293,12 +304,20 @@ public static class NodePersistence
         }
     }
 
-    private static Node DeserializeBody(byte[] body, ushort version)
+    private static Node DeserializeBody(byte[] body, ushort version,
+        Func<long>? nowFn = null, long maxSkewUs = 60_000_000, ResourceLimits? limits = null)
     {
         var r = new Reader(body);
         var nodeId = r.B128();
         var epoch = (int)r.Varint();
-        var n = new Node(nodeId, epoch);
+        var n = new Node(new NodeOptions
+        {
+            NodeId = nodeId,
+            Epoch = epoch,
+            NowFn = nowFn,
+            MaxSkewUs = maxSkewUs,
+            Limits = limits,
+        });
         n.Epoch = epoch;
 
         n.Clock.LastWall = r.U64();
