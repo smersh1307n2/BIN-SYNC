@@ -53,6 +53,7 @@ public sealed class PublicApiIsolationTests
         var returned = node.PushOutbox(7, recordId, op, node.NodeId);
         Assert.NotNull(returned);
         var stored = node.Outbox[7][0];
+        var storedPayload = stored.Payload.ToArray();
         Assert.NotSame(stored, returned);
 
         Assert.True(System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
@@ -63,7 +64,7 @@ public sealed class PublicApiIsolationTests
 
         Assert.Equal(1L, stored.Seq);
         Assert.Empty(stored.CausalDeps);
-        Assert.Equal("payload", System.Text.Encoding.UTF8.GetString(stored.Payload.Span));
+        Assert.Equal(storedPayload, stored.Payload.ToArray());
     }
 
 }
