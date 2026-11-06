@@ -627,4 +627,49 @@ public class WalTests
     }
 
 
+
+    [Fact]
+    public void Wal_replays_accepted_remote_batch_before_ack_and_does_not_reappend_duplicates()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-remote-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "node.wal");
+            var sender = Fix.MakeNode(151);
+            var receiver = Fix.MakeNode(152);
+            Transport.MakeSession(sender, receiver);
+            var rid = Fix.Rid(9152);
+            Assert.True(sender.WriteField(1, rid, 0x100, new byte[] { 0xA1 }));
+            var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+            sender.SignBatchFor(batch, receiver.NodeId);
+            var payload = sender.EncodeBatchPayload(batch);
+
+            using (var wal = Wal.Open(path))
+            {
+                receiver.AttachWal(wal);
+                var accepted = receiver.ApplyBatchPayload(payload, sender.NodeId);
+                Assert.False(accepted.Duplicate);
+                Assert.Equal(1, wal.Sequence);
+                Assert.True(receiver.TryGetField(1, rid, 0x100, out var field));
+                Assert.Equal(new byte[] { 0xA1 }, field!.Value);
+
+                var duplicate = receiver.ApplyBatchPayload(payload, sender.NodeId);
+                Assert.True(duplicate.Duplicate);
+                Assert.Equal(1, wal.Sequence);
+            }
+
+            var recovered = Fix.MakeNode(152);
+            Assert.Equal(1, Wal.ReplayFile(path, recovered));
+            Assert.True(recovered.TryGetField(1, rid, 0x100, out var restored));
+            Assert.Equal(new byte[] { 0xA1 }, restored!.Value);
+            Assert.Single(recovered.Inbox);
+            Assert.Single(recovered.Outbox[1]);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
 }
