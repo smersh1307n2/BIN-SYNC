@@ -39,6 +39,7 @@ public sealed class RemoteBatchWalAtomicityTests
         Assert.Empty(receiver.LastStreamAuthor);
         Assert.Empty(receiver.LastBatchDigest);
     }
+
     [Fact]
     public void Wal_replay_semantic_failure_does_not_publish_earlier_local_mutations()
     {
