@@ -5,6 +5,22 @@ namespace BinSync.Tests;
 public sealed class PublicApiIsolationTests
 {
     [Fact]
+    public void Node_ExposesOnlyAReadOnlyClockSnapshot()
+    {
+        Assert.Null(typeof(Node).GetProperty(nameof(Node.Clock)));
+        var property = typeof(Node).GetProperty(nameof(Node.ClockState));
+        Assert.NotNull(property);
+        Assert.Equal(typeof(HlcClockSnapshot), property!.PropertyType);
+        Assert.Null(property.SetMethod);
+
+        var node = Fix.MakeNode(907);
+        var before = node.ClockState;
+        node.WriteField(7, Fix.Rid(907), 0x101, new byte[] { 1 });
+        var after = node.ClockState;
+        Assert.True(after.LastWall >= before.LastWall);
+    }
+
+    [Fact]
     public void PublicRecordAndFieldReads_ReturnDetachedMutableCopies()
     {
         var node = Fix.MakeNode(901);

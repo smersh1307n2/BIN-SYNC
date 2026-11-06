@@ -57,7 +57,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 ### Engine — `Node`
 
 **Construction:** `Node(NodeId? nodeId = null, int epoch = 1, Func<long>? nowFn = null, long maxSkewUs = …)`  
-**Public state:** `NodeId` (ctor-only), `Epoch`, `Clock`, optional `ResourceLimits? Limits`.
+**Public state:** `NodeId` (ctor-only), `Epoch`, read-only `ClockState` snapshot, optional `ResourceLimits? Limits`.
 
 | API | Role |
 |-----|------|
@@ -114,7 +114,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 `FrameCodec`, `Frames`, `Frame` / `FrameException`, `Codec` / `Writer` / `Reader`, `Ops`, `Hlc` / `HlcClock` / `HlcOps`, `Digests` / `Digest16` domains, `FragmentCodec` / `FragmentReassembler` / `FrameFragment`, `FrameStream`, `FlowControl`, `Mem`.
 
-`Frames.FrameTypes` and `Frames.ErrorCodes` are read-only lookup maps. `HlcClock` exposes clock state for observation; restoration and mutation of its state are engine-owned. `FlowControl` has immutable window configuration and thread-safe per-stream credit accounting.
+`Frames.FrameTypes` and `Frames.ErrorCodes` are read-only lookup maps. `Node.ClockState` and `HlcClock.Snapshot()` expose a consistent immutable clock snapshot. The mutable clock instance and its tick state are not exposed by `Node`. `FlowControl` has immutable window configuration and thread-safe per-stream credit accounting.
 
 ### Merge (§8)
 

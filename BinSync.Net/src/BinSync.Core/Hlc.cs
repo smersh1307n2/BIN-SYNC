@@ -40,6 +40,9 @@ public class ClockDriftException : Exception
     public ClockDriftException(string msg) : base(msg) { }
 }
 
+/// <summary>Immutable point-in-time view of an HLC clock.</summary>
+public readonly record struct HlcClockSnapshot(ulong LastWall, uint LastLogical);
+
 /// <summary>Mutable HLC state with skew protection for send and receive paths.</summary>
 public class HlcClock
 {
@@ -50,9 +53,9 @@ public class HlcClock
     /// <summary>Maximum allowed clock skew in microseconds before protection kicks in.</summary>
     public long MaxSkewUs { get; }
     /// <summary>Last observed wall component (cold-starts at 0).</summary>
-    public ulong LastWall { get; internal set; } = 0;   // BUGFIX: never tick at construction (§5.2 cold boot)
+    internal ulong LastWall { get; set; } = 0;   // BUGFIX: never tick at construction (§5.2 cold boot)
     /// <summary>Last observed logical component.</summary>
-    public uint LastLogical { get; internal set; } = 0;
+    internal uint LastLogical { get; set; } = 0;
     // Production hardening: the clock is shared mutable state — concurrent writers inside
     // one node (and background clocks) must not interleave read-modify-write on Last*.
     private readonly object _tickGate = new();
@@ -70,6 +73,13 @@ public class HlcClock
 
     /// <summary>Read the configured wall-clock source in microseconds.</summary>
     public long Now() => NowFn();
+
+    /// <summary>Read a consistent, immutable snapshot of the current clock state.</summary>
+    public HlcClockSnapshot Snapshot()
+    {
+        lock (_tickGate)
+            return new HlcClockSnapshot(LastWall, LastLogical);
+    }
 
     /// <summary>Advance the clock for a local send and return the new timestamp.</summary>
     public Hlc SendTick()

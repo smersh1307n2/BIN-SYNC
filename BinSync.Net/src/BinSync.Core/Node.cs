@@ -56,7 +56,9 @@ public sealed partial class Node : IDisposable
     /// <summary>Session/epoch counter; mutated on load and epoch bump.</summary>
     public int Epoch { get; internal set; }
     /// <summary>HLC clock (starts cold §5.2). Replace is not allowed; mutate LastWall via load.</summary>
-    public HlcClock Clock { get; }
+    internal HlcClock Clock { get; }
+    /// <summary>Consistent read-only snapshot of the node's hybrid logical clock.</summary>
+    public HlcClockSnapshot ClockState => Clock.Snapshot();
 
     /// <summary>
     /// Optional resource caps (outbox/storage/seen-set). When set, enqueue and apply
