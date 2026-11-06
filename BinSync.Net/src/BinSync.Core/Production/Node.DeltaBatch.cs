@@ -167,7 +167,9 @@ public sealed partial class Node
             if (streamAlias is null)
                 throw new SyncException("UNKNOWN_ALIAS");
 
-            var entries = new TransportDeltaEntry[selectedCount];
+            var entries = System.Buffers.ArrayPool<TransportDeltaEntry>.Shared.Rent(selectedCount);
+            try
+            {
             ushort origin = (ushort)streamAlias.Value;
             int entryIndex = 0;
             if (all is not null)
@@ -224,7 +226,7 @@ public sealed partial class Node
                 }
             }
 
-            var recordsRoot = ComputeTransportRecordsRoot(entries);
+            var recordsRoot = ComputeTransportRecordsRoot(entries, selectedCount);
             var chainKey = (NodeId, namespaceId, issuerEpoch);
             var streamKey = (chainKey, targetPeer);
             var idKey = (stream, cursorStart, cursorEnd);
@@ -242,7 +244,7 @@ public sealed partial class Node
                 cursorStart, cursorEnd, recordsRoot, previousDigest);
 
             int payloadSize = checked(108 + 2 * Codec.VarintLength((ulong)selectedCount));
-            for (int i = 0; i < entries.Length; i++)
+            for (int i = 0; i < selectedCount; i++)
                 payloadSize = checked(payloadSize + 33 +
                     Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
 
@@ -255,13 +257,18 @@ public sealed partial class Node
             writer.Varint((ulong)selectedCount);
             writer.B128(batchId).B128(previousDigest);
             writer.B128(recordsRoot).B128(batchDigest);
-            WriteTransportRecordsArray(writer, entries);
+            WriteTransportRecordsArray(writer, entries, selectedCount);
             if (writer.Length != payload.Length)
                 throw new InvalidOperationException("Transport batch size estimate mismatch");
 
             ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
             return new OutboundBatchPayload(payload, batchId, stream, stream, namespaceId,
                 issuerEpoch, cursorStart, cursorEnd, batchDigest);
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<TransportDeltaEntry>.Shared.Return(entries, clearArray: true);
+            }
         }
     }
 
