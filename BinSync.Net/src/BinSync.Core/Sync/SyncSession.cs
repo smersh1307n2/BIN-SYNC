@@ -15,9 +15,19 @@ public partial class SyncSession : IAsyncDisposable
         public readonly object Gate = new();
         public readonly FragmentReassembler Reassembler = new();
         public readonly Dictionary<BatchId, FragmentContext> Contexts = new();
+
+        public void Clear()
+        {
+            lock (Gate)
+            {
+                Reassembler.Clear();
+                Contexts.Clear();
+            }
+        }
     }
 
-    private readonly record struct FragmentContext(uint StreamId, ulong BaseSequence, byte Flags, ushort Count);
+    private readonly record struct FragmentContext(byte FrameType, uint StreamId,
+        ulong BaseSequence, byte Flags, ushort Count);
 
     private readonly bool _ownsTransport;
     private readonly bool _flowControlEnabled;
@@ -49,7 +59,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly Channel<byte[]> _rawReceiveChannel = Channel.CreateUnbounded<byte[]>(new UnboundedChannelOptions
     { SingleReader = true, SingleWriter = true, AllowSynchronousContinuations = false });
     private readonly ConcurrentDictionary<byte, SemaphoreSlim> _receiveTypeGates = new();
-    private readonly ConcurrentDictionary<byte, TypedFragmentState> _typedFragmentStates = new();
+    private readonly TypedFragmentState _typedFragmentState = new();
     private readonly CancellationTokenSource _receiveCts = new();
     private Task? _receivePump;
     private bool _rawReceiveActive;
@@ -322,7 +332,7 @@ public partial class SyncSession : IAsyncDisposable
     public virtual async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        _sendFlowControl.Fail(new ObjectDisposedException(nameof(SyncSession)));
+        _sendFlowControl.Fail(new ObjectDisposedException(nameof(SyncSession)));\n        _typedFragmentState.Clear();
         _receiveCts.Cancel();
         try
         {
@@ -362,7 +372,7 @@ public partial class SyncSession : IAsyncDisposable
             if (_receiveCompleted) channel.Writer.TryComplete(_receiveFailure);
             _receivePump ??= ReceivePumpAsync(_receiveCts.Token);
         }
-        var fragmentState = _typedFragmentStates.GetOrAdd(expectedType, static _ => new TypedFragmentState());
+        var fragmentState = _typedFragmentState;
         while (true)
         {
             byte[] raw;
@@ -396,11 +406,11 @@ public partial class SyncSession : IAsyncDisposable
                 ulong baseSequence = frameSequence - part.Index;
                 if (!fragmentState.Contexts.TryGetValue(messageId, out context))
                 {
-                    context = new FragmentContext(streamId, baseSequence,
+                    context = new FragmentContext(frameType, streamId, baseSequence,
                         (byte)(frameFlags & ~Frames.FLAG_FRAGMENT), part.Count);
                     fragmentState.Contexts.Add(messageId, context);
                 }
-                if (context.StreamId != streamId || context.BaseSequence != baseSequence ||
+                if (context.FrameType != frameType || context.StreamId != streamId || context.BaseSequence != baseSequence ||
                     context.Flags != (byte)(frameFlags & ~Frames.FLAG_FRAGMENT) ||
                     context.Count != part.Count)
                     throw new FrameException("FRAME_REJECTED");
