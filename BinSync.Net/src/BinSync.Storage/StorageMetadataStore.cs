@@ -17,7 +17,7 @@ public class StorageMetadataStore : IMetadataStore
     private readonly string _directory;
     private readonly bool _deleteOnDispose;
 
-    public StorageMetadataStoreAdapter(string directory, ulong partitionId = 301, bool deleteOnDispose = true)
+    public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = true)
     {
         _directory = directory;
         _deleteOnDispose = deleteOnDispose;
