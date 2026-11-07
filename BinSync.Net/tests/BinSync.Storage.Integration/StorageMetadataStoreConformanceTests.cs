@@ -421,6 +421,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             new MetadataProviderApplyReceipt(token, secondDigest));
         Assert.True(retry.IsDuplicate);
         Assert.Equal(2UL, retry.CursorEnd);
+        Assert.Equal(author, retry.DurableAuthor);
     }
 
     [Fact]
