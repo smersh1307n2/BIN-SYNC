@@ -23,25 +23,30 @@ internal static class ChangeIdentity
         object operation, NodeId resolvedAuthor)
     {
         Node.ValidateNamespaceId(namespaceId);
-        switch (operation)
+        // Never mutate the decoded operation: ApplyBatch still needs to know whether
+        // its original payload was compact or full-author when deciding relay encoding.
+        object canonical = operation switch
         {
-            case OpFieldWrite x:
-                x.AuthorNodeId = resolvedAuthor;
-                x.FullAuthorMode = true;
-                break;
-            case OpFieldTomb x:
-                x.AuthorNodeId = resolvedAuthor;
-                x.FullAuthorMode = true;
-                break;
-            case OpRecordTombstone x:
-                x.AuthorNodeId = resolvedAuthor;
-                x.FullAuthorMode = true;
-                break;
-            default:
-                throw new InvalidDataException("Unsupported operation for ChangeId fingerprint.");
-        }
+            OpFieldWrite x => new OpFieldWrite
+            {
+                FieldId = x.FieldId, KeyEpoch = x.KeyEpoch, Wall = x.Wall,
+                Logical = x.Logical, AuthorNodeId = resolvedAuthor,
+                FullAuthorMode = true, Value = x.Value.ToArray()
+            },
+            OpFieldTomb x => new OpFieldTomb
+            {
+                FieldId = x.FieldId, KeyEpoch = x.KeyEpoch, Wall = x.Wall,
+                Logical = x.Logical, AuthorNodeId = resolvedAuthor, FullAuthorMode = true
+            },
+            OpRecordTombstone x => new OpRecordTombstone
+            {
+                RecordId = x.RecordId, Wall = x.Wall, Logical = x.Logical,
+                AuthorNodeId = resolvedAuthor, FullAuthorMode = true
+            },
+            _ => throw new InvalidDataException("Unsupported operation for ChangeId fingerprint.")
+        };
 
-        var canonicalOperation = Ops.EncodeOp(operation, fullAuthor: true);
+        var canonicalOperation = Ops.EncodeOp(canonical, fullAuthor: true);
         var w = new Writer(Domain.Length + 2 + 16 + 1 + 5 + canonicalOperation.Length);
         w.Raw(Domain).U16((ushort)namespaceId).B128(recordId).U8(opKind)
             .Varint((ulong)canonicalOperation.Length).Raw(canonicalOperation);
