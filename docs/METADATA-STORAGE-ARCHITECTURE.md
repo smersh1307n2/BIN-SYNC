@@ -69,8 +69,8 @@ A Data Provider is responsible for adapting a user source to the BIN-SYNC canoni
 - a stable mapping from source entities/items to canonical RecordId values;
 - a stable mapping from source properties/fields to canonical FieldId values;
 - canonical byte representation for field values and tombstones;
-- how local source changes are discovered;
-- how source snapshots are read consistently;
+- how local source changes are discovered through a durable feed or equivalent change-capture mechanism;
+- how source snapshots are read consistently, including a stable snapshot token/version and the corresponding change-feed watermark needed to continue with an exact tail;
 - how accepted remote changes are applied;
 - how provider-specific validation, schema mapping, and source constraints are enforced;
 - how local and remote operations are distinguished so remote apply does not reappear as a new local change.
@@ -230,7 +230,7 @@ Relay enumeration and acknowledgement must be independent of the local-origin ou
 
 ### 6.5. Snapshot and recovery
 
-The store must provide a consistent read view for any operation that compares or exports a set of source state and metadata. A snapshot must remain valid for its documented lifetime while concurrent commits/checkpoints/compaction occur.
+The store must provide a consistent read view for any operation that compares or exports metadata. A snapshot must remain valid for its documented lifetime while concurrent commits/checkpoints/compaction occur. Independently, the Data Provider must expose a source snapshot tied to a stable version/change-feed watermark. The runtime must be able to establish a baseline at that watermark and then consume every later source change without a gap. A provider that cannot provide this boundary must use an equivalent write barrier or durable journal protocol; taking an arbitrary source snapshot and separately reading an unrelated metadata cursor is not sufficient.
 
 Recovery must be deterministic. A store must not expose a state where an inbox cursor is advanced but the corresponding accepted data/relay state is missing, or vice versa.
 
