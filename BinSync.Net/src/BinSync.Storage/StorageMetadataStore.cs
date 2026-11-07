@@ -294,7 +294,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             incoming.BatchDigest.CopyTo(receiptValue, 32);
             BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), receipt.NewRelayOperationCount);
             receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
-        batch.HeaderFingerprint.CopyTo(receiptValue, 68);
             incoming.HeaderFingerprint.CopyTo(receiptValue, 68);
             writes.Add((StorageKey(root, 1, receiptSuffix), receiptValue));
 
@@ -588,6 +587,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         batch.BatchDigest.CopyTo(receiptValue, 32);
         BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), relayAdded);
         receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
+        batch.HeaderFingerprint.CopyTo(receiptValue, 68);
 
         byte[] receiveSuffix = new byte[38];
         batch.SenderPeer.WriteTo(receiveSuffix);
