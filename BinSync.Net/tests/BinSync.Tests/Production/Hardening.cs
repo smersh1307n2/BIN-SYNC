@@ -236,19 +236,19 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V5TagAndStreamOffsetsRoundTrip()
+    public void Persistence_V6TagAndStreamOffsetsRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
         var author = a.NodeId;
         peer.StreamOffsets[author] = 17;
-        var path = Path.Combine(_dir, "tag-v4.state");
+        var path = Path.Combine(_dir, "tag-v6.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
         Assert.Equal((ushort)6, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v5", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v6", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
