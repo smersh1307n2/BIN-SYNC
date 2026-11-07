@@ -245,7 +245,7 @@ public class Production : IDisposable
         var path = Path.Combine(_dir, "tag-v4.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)5, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)6, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
         var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v5", body);
