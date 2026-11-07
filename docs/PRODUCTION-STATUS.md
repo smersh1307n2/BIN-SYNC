@@ -20,7 +20,7 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 | Merge policies | §8 | **partial** — Node apply path supports LWW_FIELD only; other merge helpers are standalone |
 | Digests | §9 | record digest v2 distinguishes live field values from tombstones |
 | Outbox / inbox | §10 | implemented |
-| Membership / GC | §11 | implemented |
+| Membership / GC | §11 | membership and GC_NOTICE frames implemented; destructive tombstone/ghost GC is disabled by E-25 until a safe namespace frontier and stale-peer recovery protocol exist |
 | Wire frames | §12 | implemented, including fragments |
 | Reconciliation ladder | §13 | implemented; CI lab/fuzz coverage |
 | E2EE | §14 | opt-in |
@@ -53,7 +53,7 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 - **E-24 implemented and normative (v2.4.18):** exact global `(namespaceId, ChangeId)` identity with canonical semantic fingerprint and equivocation rejection is implemented. Origin-sequence/range compression remains an unapproved representation alternative; it must prove mesh replay, snapshot/bootstrap and equivocation safety before replacing the exact ledger.
 - **E-25 normative (v2.4.19):** tombstone/ghost GC remains disabled until durable namespace membership/safe-frontier, stale-peer fencing and mandatory authoritative full-resync semantics are implemented. TTL/HLC age and GC_NOTICE alone never authorize deletion.
 - **Inbox/receipt lifecycle:** NodePersistence v12 adaptive receipt encoding and global 16-byte ChangeId ledger are implemented. Receipt expiry/GC and independent dedup retention horizons remain open; do not couple them to relay payload ACK.
-- **Peer cache pruning:** prune `PeerState.Ids` only in the same durable ACK transaction after matching peer/namespace/author StreamAcked covers the full cursorEnd; this remains an implementation gate.
+- **Peer cache pruning implemented:** `ProcessAckInternal` prunes `PeerState.Ids` only after a validated contiguous ACK covers the full author cursorEnd; `LastStreamDigest` remains as the chain checkpoint. Partial ACK and lost-ACK behavior remain covered by regression tests.
 - **ProtocolStateDelta:** the bounded per-batch recovery-envelope lifecycle is specified and pending-apply semantics have volatile conformance tests. Durable separate-store provider receipts, restart recovery and production metadata finalization remain unimplemented.
 - **FLD APPLY/relay:** APPLY_COMMIT v3 single-encoding, relay-only ApplyJournal, per-author JournalSeq ACK sidecar and post-WAL-seal relay payload compaction are implemented on the FLD branch. The cross-system JournalSeq → ChangeId → OutboxSeq provenance map, outbound publication gate and ACK translation remain open; receipt GC and bounded/rebuildable journal indexing also remain open.
 - **Two-DLL FLD boundary:** architecture is decided (`Fld1.Storage.dll` + `Fld1.Database.dll`, one-way Database → Storage); extraction into the final public assemblies and Storage-only physical conformance remain implementation work.
