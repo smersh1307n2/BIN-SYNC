@@ -129,8 +129,7 @@ public sealed class StorageSyncCoordinatorTests
         var receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(bAccept, _ => { });
         Assert.True(await aConnect.PushBatchAsync(nodeA, 1, metadataA, scopeA));
         Assert.Equal(1, (await receiveAtB).Applied);
-        Assert.Single(metadataB.ReadRelayForPeer(scopeB, nodeB.NodeId, nodeA.NodeId,
-            checked((uint)nodeA.Epoch), 1, nodeA.NodeId, 10).Items);
+        Assert.Single(metadataB.ReadRelay(scopeB, nodeB.NodeId, 1, nodeA.NodeId, 0, 10).Items);
 
         // D is durably interested but offline. C's ACK alone must not release the
         // single shared relay payload needed by D.
