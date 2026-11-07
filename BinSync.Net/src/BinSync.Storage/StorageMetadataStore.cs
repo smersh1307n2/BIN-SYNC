@@ -728,7 +728,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidOperationException("The replacement peer epoch must be durably registered before retirement.");
             uint latestActiveEpoch = current.InterestedPeers
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer)
-                .Select(key => key.PeerEpoch).DefaultIfEmpty(0).Max();
+                .Select(key => key.PeerEpoch).DefaultIfEmpty(0U).Max();
             if (latestActiveEpoch != replacementPeerEpoch)
                 throw new InvalidOperationException("Only the newest registered peer epoch can retire an older incarnation.");
 
@@ -966,7 +966,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         uint latestActiveEpoch = state.InterestedPeers
             .Where(key => key.NamespaceId == namespaceId && key.Peer == peer)
-            .Select(key => key.PeerEpoch).DefaultIfEmpty(0).Max();
+            .Select(key => key.PeerEpoch).DefaultIfEmpty(0U).Max();
         if (peerEpoch < latestActiveEpoch)
             throw new InvalidDataException("Peer session epoch is stale relative to the durable namespace roster.");
     }
