@@ -270,17 +270,38 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var current = _partitions.TryGetValue(partitionKey, out var stored)
             ? stored
             : new PartitionState();
-        foreach (var operation in operations)
-        {
-            if (current.OutboundChangeIds.Contains(new OutboundChangeKey(namespaceId, operation.ChangeId)))
-                throw new InvalidDataException("Outbound ChangeId is already frozen in this namespace.");
-        }
-
         if (operations.Count == 0)
             return Array.Empty<MetadataOutboundItem>();
 
-        var next = current.Clone();
         var key = new OutboundKey(namespaceId, localAuthor);
+        var existing = new List<MetadataOutboundItem>(operations.Count);
+        int existingCount = 0;
+        foreach (var operation in operations)
+        {
+            var changeKey = new OutboundChangeKey(namespaceId, operation.ChangeId);
+            if (!current.OutboundChangeIds.Contains(changeKey))
+                continue;
+
+            if (!current.Outbound.TryGetValue(key, out var priorEntries))
+                throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
+
+            var prior = priorEntries.FirstOrDefault(item => item.ChangeId == operation.ChangeId);
+            if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload))
+                throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
+            existing.Add(CloneOutboundItem(prior));
+            existingCount++;
+        }
+
+        // A freeze retry is idempotent only when the complete original batch is
+        // present. A mixed old/new batch is ambiguous and must be retried as a whole.
+        if (existingCount != 0)
+        {
+            if (existingCount != operations.Count)
+                throw new InvalidDataException("Outbound freeze retry partially overlaps an earlier freeze.");
+            return existing;
+        }
+
+        var next = current.Clone();
         if (!next.Outbound.TryGetValue(key, out var entries))
         {
             entries = new List<MetadataOutboundItem>();
