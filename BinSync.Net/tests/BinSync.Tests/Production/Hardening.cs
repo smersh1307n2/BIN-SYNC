@@ -384,6 +384,44 @@ public class Production : IDisposable
     }
 
     [Fact]
+    public void Persistence_RejectsOverflowingIntegerAndNamespaceVarints()
+    {
+        static byte[] ReplaceBodyVarint(byte[] image, int bodyOffset, ulong value)
+        {
+            var body = image.AsSpan(46).ToArray();
+            var encoded = Codec.EncodeVarint(value);
+            var changedBody = new byte[body.Length - 1 + encoded.Length];
+            body.AsSpan(0, bodyOffset).CopyTo(changedBody);
+            encoded.CopyTo(changedBody.AsSpan(bodyOffset));
+            body.AsSpan(bodyOffset + 1).CopyTo(changedBody.AsSpan(bodyOffset + encoded.Length));
+            var changed = new byte[46 + changedBody.Length];
+            image.AsSpan(0, 14).CopyTo(changed);
+            BinaryPrimitives.WriteUInt64BigEndian(changed.AsSpan(6, 8), (ulong)changedBody.Length);
+            var digest = Blake3Core.TaggedHash(NodePersistence.StateTag, changedBody);
+            digest.CopyTo(changed.AsSpan(14, 32));
+            changedBody.CopyTo(changed.AsSpan(46));
+            return changed;
+        }
+
+        using var empty = Fix.MakeNode(888);
+        var emptyPath = Path.Combine(_dir, "integer-overflow-source.state");
+        NodePersistence.Save(empty, emptyPath);
+        var emptyImage = File.ReadAllBytes(emptyPath);
+        // NodeId occupies 16 bytes; the next field is the node epoch varint.
+        var invalidEpoch = ReplaceBodyVarint(emptyImage, 16, (ulong)int.MaxValue + 1);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(invalidEpoch));
+
+        using var populated = Fix.MakeNode(889);
+        populated.WriteField(7, Fix.Rid(889), 0x100, Val("namespace"));
+        var populatedPath = Path.Combine(_dir, "namespace-overflow-source.state");
+        NodePersistence.Save(populated, populatedPath);
+        var populatedImage = File.ReadAllBytes(populatedPath);
+        // NodeId + epoch + HLC + namespace-count precede the first namespace id.
+        var invalidNamespace = ReplaceBodyVarint(populatedImage, 30, (ulong)ushort.MaxValue + 1);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(invalidNamespace));
+    }
+
+    [Fact]
     public void Persistence_BadMagicAndVersion_IsRejected()
     {
         var (a, _) = BuildHistory();
