@@ -128,7 +128,7 @@ public sealed class StorageSyncCoordinatorTests
         BatchResult nextResult = await nextReceive;
 
         Assert.Equal(1, nextResult.Applied);
-        Assert.Equal(2UL, metadata.GetReceiveCursor(sender.NodeId, 1, 1, sender.NodeId));
+        Assert.Equal(2UL, metadata.GetReceiveCursor(scope, secondReceiver.NodeId, sender.NodeId, 1, 1, sender.NodeId));
         Assert.True(secondReceiver.TryGetField(1, secondRecord, 0x0815, out var nodeValue));
         Assert.Equal("second-durable-batch", Encoding.UTF8.GetString(nodeValue!.Value));
         Assert.True(provider.TryReadCurrent(firstRecord, 0x0815, out var firstValue));
