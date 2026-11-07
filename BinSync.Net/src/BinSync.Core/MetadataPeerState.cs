@@ -19,6 +19,11 @@ public interface IMetadataPeerStateStore
         NodeId peer, uint peerEpoch, int namespaceId);
     IReadOnlyList<MetadataInterestedPeer> ReadInterestedPeers(
         string scopeId, NodeId localReplica, int namespaceId);
+    bool IsPeerInitialSyncComplete(
+        string scopeId, NodeId localReplica, NodeId peer, uint peerEpoch, int namespaceId);
+    void CompletePeerInitialSync(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId,
+        IReadOnlyList<MetadataPeerStreamBaseline> streamBaselines);
     uint? GetRetiredPeerEpoch(string scopeId, NodeId localReplica, NodeId peer, int namespaceId);
 
     /// <summary>
@@ -82,6 +87,13 @@ public interface IMetadataPeerStateStore
 public sealed record MetadataPeerStreamSnapshot(NodeId AuthorStream, MetadataPeerStreamState State);
 
 public sealed record MetadataInterestedPeer(NodeId Peer, uint PeerEpoch, int NamespaceId);
+
+/// <summary>
+/// Per-author feed watermark captured before initial reconciliation. Outbound streams
+/// may skip this local sequence only after the peer's complete snapshot baseline is
+/// confirmed; relay streams must use offset zero because snapshots do not replace relay history.
+/// </summary>
+public sealed record MetadataPeerStreamBaseline(NodeId AuthorStream, ulong StreamOffset, uint IssuerEpoch);
 
 public sealed record MetadataPeerStreamState(
     ulong AckedCursor,
