@@ -241,6 +241,43 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Pending_apply_wire_payload_survives_restart_for_node_replay()
+    {
+        string directory = Path.Combine(_root, "pending-wire-replay");
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        const string scope = "pending-wire-replay";
+        Guid token = Guid.Parse("a1000000-0000-0000-0000-000000000001");
+        byte[] wire = Enumerable.Range(0, 128).Select(value => (byte)value).ToArray();
+        var incoming = new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 2,
+            AuthorStreamNodeId = author, NamespaceId = 7, BatchId = Batch(110),
+            CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)111, 16).ToArray(),
+            WirePayload = wire,
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author, ChangeId = Batch(112),
+                    Fingerprint = Enumerable.Repeat((byte)113, 16).ToArray(),
+                    Payload = new byte[17], RelayEligible = true
+                }
+            }
+        };
+
+        using (var store = new StorageMetadataStore(directory, 426, deleteOnDispose: false))
+            store.BeginPendingApply(incoming, token);
+
+        using var reopened = new StorageMetadataStore(directory, 426, deleteOnDispose: false);
+        var pending = Assert.Single(reopened.ReadPendingApplyIntents(scope, local));
+        Assert.Equal(token, pending.ApplyToken);
+        Assert.Equal(wire, pending.Batch.WirePayload);
+        Assert.Equal(Batch(110), pending.Batch.BatchId);
+    }
+
+    [Fact]
     public void Relay_page_is_read_from_metadata_at_each_downstream_peers_own_cursor()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-relay-page"), 422);
