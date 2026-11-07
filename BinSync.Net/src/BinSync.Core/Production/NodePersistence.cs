@@ -518,11 +518,20 @@ public static class NodePersistence
         }
 
         int seenCount = (int)r.Varint();
+        var persistedSeen = new List<(NodeId Peer, int Ns, BatchId ChangeId)>(seenCount);
         for (int i = 0; i < seenCount; i++)
         {
-            var peer = r.B128(); var ns = (int)r.Varint(); var cid = r.B128();
-            n.SeenChanges.Add(((NodeId)peer, ns, BatchId.From(cid)));
+            var peer = NodeId.From(r.B128());
+            var ns = (int)r.Varint();
+            var changeId = BatchId.From(r.B128());
+            persistedSeen.Add((peer, ns, changeId));
         }
+        // Only local WAL replay markers remain in SeenChanges. Remote provenance
+        // is now covered by the global ChangeId ledger and need not be duplicated
+        // once per sender peer.
+        foreach (var (peer, ns, changeId) in persistedSeen)
+            if (peer == nodeId)
+                n.SeenChanges.Add((peer, ns, changeId));
 
         if (version >= 6)
         {
@@ -545,21 +554,26 @@ public static class NodePersistence
         {
             // v3-v5 only had route-scoped SeenChanges and no semantic fingerprint.
             // Preserve every historical identity conservatively as an explicit
-            // unknown marker; first matching arrival upgrades it without relay.
-            foreach (var (_, ns, changeId) in n.SeenChanges)
+            // unknown marker before dropping redundant remote peer provenance.
+            foreach (var (_, ns, changeId) in persistedSeen)
                 n.GlobalChangeLedger.TryAdd((ns, changeId),
                     new ChangeLedgerValue(default, isKnown: false));
+        }
 
+        if (version < 6)
+        {
             // A retained legacy Outbox payload is sufficient to reconstruct its
-            // canonical fingerprint. Only compacted historical entries stay unknown.
+            // canonical fingerprint. Only compacted or deferred-value entries stay unknown.
             foreach (var (ns, entries) in n.Outbox)
             {
                 foreach (var entry in entries)
                 {
                     if (entry.ChangeId.IsZero) continue;
                     var key = (ns, entry.ChangeId);
+                    if (!n.GlobalChangeLedger.ContainsKey(key))
+                        n.GlobalChangeLedger.Add(key, new ChangeLedgerValue(default, isKnown: false));
                     if (!ChangeIdentity.TryFingerprint(entry, out var fingerprint))
-                        continue; // retain the explicit unknown marker for deferred payloads
+                        continue; // keep the explicit unknown marker for deferred payloads
                     if (n.GlobalChangeLedger.TryGetValue(key, out var oldValue) &&
                         oldValue.IsKnown && oldValue.Fingerprint != fingerprint)
                         throw new InvalidDataException("Legacy Outbox contains conflicting payloads for one ChangeId.");
