@@ -27,14 +27,15 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v6";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v7";
+    private const string Version6StateTag = "BIN-SYNC/NODESTATE/v6";
     private const string Version5StateTag = "BIN-SYNC/NODESTATE/v5";
     private const string Version4StateTag = "BIN-SYNC/NODESTATE/v4";
     private const string Version3StateTag = "BIN-SYNC/NODESTATE/v3";
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 6;
+    private const ushort Version = 7;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -99,8 +100,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -115,6 +116,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 6)
+        {
+            var v6 = Blake3Core.TaggedHash(Version6StateTag, body);
+            validDigest = v6.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 5)
         {
@@ -190,12 +196,7 @@ public static class NodePersistence
             foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1.ToString()).ThenBy(kv => kv.Key.Item2))
             { w.B128(author); w.Varint((ulong)ns); w.U64((ulong)seq); }
 
-            // --- inbox idempotency set (issuer, ns, epoch, batchId)
-            w.Varint((ulong)n.Inbox.Count);
-            foreach (var (issuer, ns, ep, bid) in n.Inbox.OrderBy(k => k.Issuer.Lo).ThenBy(k => k.Issuer.Hi)
-                                                         .ThenBy(k => k.Ns).ThenBy(k => k.Epoch)
-                                                         .ThenBy(k => k.BatchId.Lo).ThenBy(k => k.BatchId.Hi))
-            { w.B128(issuer); w.Varint((ulong)ns); w.Varint((ulong)ep); w.B128(bid); }
+            // --- unified accepted-batch receipt: issuer/ns/epoch/batchId -> durable author
             w.Varint((ulong)n.InboxAuthors.Count);
             foreach (var (key, author) in n.InboxAuthors.OrderBy(k => k.Key.Issuer.Lo).ThenBy(k => k.Key.Issuer.Hi)
                                                         .ThenBy(k => k.Key.Ns).ThenBy(k => k.Key.Epoch)
@@ -375,18 +376,45 @@ public static class NodePersistence
             seqMap[((NodeId)author, ns)] = seq;
         }
 
-        int inboxCount = (int)r.Varint();
-        for (int i = 0; i < inboxCount; i++)
+        HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)>? legacyInbox = null;
+        if (version >= 7)
         {
-            var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint(); var bid = r.B128();
-            n.Inbox.Add(((NodeId)issuer, ns, ep, BatchId.From(bid)));
+            int receiptCount = (int)r.Varint();
+            for (int i = 0; i < receiptCount; i++)
+            {
+                var issuer = NodeId.From(r.B128());
+                var ns = (int)r.Varint();
+                var ep = (int)r.Varint();
+                var batchId = BatchId.From(r.B128());
+                var author = NodeId.From(r.B128());
+                var key = (issuer, ns, ep, batchId);
+                if (issuer.IsZero || batchId.IsZero || author.IsZero ||
+                    (uint)ns > ushort.MaxValue || ep < 0 || !n.InboxAuthors.TryAdd(key, author))
+                    throw new InvalidDataException("Invalid or duplicate persisted batch receipt.");
+            }
         }
-        int inboxAuthorCount = (int)r.Varint();
-        for (int i = 0; i < inboxAuthorCount; i++)
+        else
         {
-            var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint();
-            var bid = r.B128(); var author = r.B128();
-            n.InboxAuthors[((NodeId)issuer, ns, ep, BatchId.From(bid))] = (NodeId)author;
+            // v3-v6 stored the receipt key set and durable-author map separately.
+            // Keep the old set only long enough to validate exact migration parity.
+            legacyInbox = new HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)>();
+            int inboxCount = (int)r.Varint();
+            for (int i = 0; i < inboxCount; i++)
+            {
+                var issuer = NodeId.From(r.B128()); var ns = (int)r.Varint();
+                var ep = (int)r.Varint(); var batchId = BatchId.From(r.B128());
+                if (!legacyInbox.Add((issuer, ns, ep, batchId)))
+                    throw new InvalidDataException("Duplicate legacy inbox receipt key.");
+            }
+            int inboxAuthorCount = (int)r.Varint();
+            for (int i = 0; i < inboxAuthorCount; i++)
+            {
+                var issuer = NodeId.From(r.B128()); var ns = (int)r.Varint();
+                var ep = (int)r.Varint(); var batchId = BatchId.From(r.B128());
+                var author = NodeId.From(r.B128());
+                if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), author))
+                    throw new InvalidDataException("Duplicate legacy inbox author key.");
+            }
         }
 
         int lbdCount = (int)r.Varint();
@@ -612,20 +640,29 @@ public static class NodePersistence
         if (!r.Eof())
             throw new InvalidDataException("Trailing bytes in node-state body.");
 
-        // v3 ACK replay depends on an exact Inbox -> durable-author mapping. Never
-        // restore a partially populated map and fall back to the session's last author:
-        // that can acknowledge a duplicate on the wrong author stream.
-        if (n.InboxAuthors.Count != n.Inbox.Count)
-            throw new InvalidDataException("Inbox author map does not match the inbox.");
-        foreach (var inboxKey in n.Inbox)
+        // v3-v6 carried duplicate receipt keys. Require exact key parity during
+        // migration; v7 stores each key and its ACK author in one atomic map entry.
+        if (legacyInbox is not null)
         {
-            if (!n.InboxAuthors.TryGetValue(inboxKey, out var author) || author.IsZero)
-                throw new InvalidDataException("Inbox author map is missing or contains a zero author.");
+            if (n.InboxAuthors.Count != legacyInbox.Count)
+                throw new InvalidDataException("Legacy inbox author map does not match the inbox.");
+            foreach (var inboxKey in legacyInbox)
+            {
+                if (!n.InboxAuthors.TryGetValue(inboxKey, out var author) || author.IsZero)
+                    throw new InvalidDataException("Legacy inbox receipt is missing its durable author.");
+            }
+            foreach (var (inboxKey, author) in n.InboxAuthors)
+            {
+                if (!legacyInbox.Contains(inboxKey) || author.IsZero)
+                    throw new InvalidDataException("Legacy inbox author map contains an orphan or zero author.");
+            }
         }
-        foreach (var (inboxKey, author) in n.InboxAuthors)
+        else
         {
-            if (!n.Inbox.Contains(inboxKey) || author.IsZero)
-                throw new InvalidDataException("Inbox author map contains an orphan or zero author.");
+            foreach (var (key, author) in n.InboxAuthors)
+                if (key.Issuer.IsZero || key.BatchId.IsZero || author.IsZero ||
+                    (uint)key.Ns > ushort.MaxValue || key.Epoch < 0)
+                    throw new InvalidDataException("Invalid persisted batch receipt.");
         }
 
         foreach (var ps in n.PeerStates.Values)
