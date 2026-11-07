@@ -618,7 +618,9 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         if (_storage.LastCommitSeq != current.StorageCommitSeq)
             throw new StorageConflictException(current.StorageCommitSeq, _storage.LastCommitSeq);
 
-        var oldEntries = StateEntries(key, current);
+        var oldEntries = current.IsPersisted
+            ? StateEntries(key, current)
+            : new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         var newEntries = StateEntries(key, next);
         using var batch = _storage.BeginWriteBatch();
         bool changed = false;
@@ -648,6 +650,7 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         foreach (var cached in _partitions.Values)
             cached.StorageCommitSeq = committedThrough;
         next.StorageCommitSeq = committedThrough;
+        next.IsPersisted = true;
         _partitions[key] = next;
     }
 
@@ -781,7 +784,7 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         IReadOnlyList<StorageEntry> rows,
         ulong commitSeq)
     {
-        var state = new PartitionState { StorageCommitSeq = commitSeq };
+        var state = new PartitionState { StorageCommitSeq = commitSeq, IsPersisted = true };
         bool identitySeen = false;
         foreach (var row in rows)
         {
@@ -1233,10 +1236,11 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
 
         public ulong StorageCommitSeq { get; set; }
+        public bool IsPersisted { get; set; }
 
         public PartitionState Clone()
         {
-            var clone = new PartitionState { StorageCommitSeq = StorageCommitSeq };
+            var clone = new PartitionState { StorageCommitSeq = StorageCommitSeq, IsPersisted = IsPersisted };
             foreach (var pair in Receipts)
                 clone.Receipts.Add(pair.Key, new ReceiptValue(
                     pair.Value.CursorStart,
