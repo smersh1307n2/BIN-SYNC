@@ -713,6 +713,9 @@ public sealed class StorageSyncCoordinator
                     new MetadataProviderApplyReceipt(plan.ApplyToken, plan.Batch.BatchDigest.ToArray()));
                 if (metadataReceipt.DurableAuthor != batch.DurableAuthor)
                     throw new InvalidDataException("Finalized metadata receipt author does not match the applied Node batch.");
+                byte[] expectedHeaderFingerprint = InboxReceiptIdentity.Compute(batch).ToArray();
+                if (!metadataReceipt.HeaderFingerprint.AsSpan().SequenceEqual(expectedHeaderFingerprint))
+                    throw new InvalidDataException("Finalized metadata receipt header fingerprint does not match the applied Node batch.");
             }
             return receipt;
         }
@@ -775,6 +778,9 @@ public sealed class StorageSyncCoordinator
                     : intent.Batch.Operations.Count == 0 ? default : intent.Batch.Operations[0].AuthorNodeId;
                 if (!metadataReceipt.DurableAuthor.IsZero && metadataReceipt.DurableAuthor != expectedAuthor)
                     throw new InvalidDataException("Recovered metadata receipt author does not match its PendingApply intent.");
+                if (intent.Batch.ReceiveStateOwnedByMetadataStore &&
+                    !metadataReceipt.HeaderFingerprint.AsSpan().SequenceEqual(intent.Batch.HeaderFingerprint))
+                    throw new InvalidDataException("Recovered metadata receipt header fingerprint does not match its PendingApply intent.");
                 recovered++;
             }
 
@@ -821,6 +827,7 @@ public sealed class StorageSyncCoordinator
             CursorEnd = checked((ulong)batch.CursorEnd),
             PreviousBatchDigest = batch.PrevBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
+            HeaderFingerprint = InboxReceiptIdentity.Compute(batch).ToArray(),
             WirePayload = wirePayload?.ToArray() ?? Array.Empty<byte>(),
             ReceiveStateOwnedByMetadataStore = true,
             Operations = operations
