@@ -127,7 +127,7 @@ SeenChanges provenance dedup — отдельное состояние BIN-SYNC,
 - ApplyCommitCodec v2 кодирует полный Fields и затем отдельно полный RelayFields. Значит, relay-eligible payload повторяется внутри одного APPLY_COMMIT.
 - FldDatabase.ApplyRemoteBatch записывает один и тот же полный encoded APPLY_COMMIT сначала в WAL, затем в ApplyJournal.
 - ApplyJournal хранит полный входящий batch для TryFindBatch и позднее ReadRelayBatches читает полный payload и извлекает из него relay subset.
-- В проверенном ApplyJournal есть AppendIfMissing/TryFindBatch/ReadBatches/Flush, но нет ACK/compaction/truncation API. Receipt и relay payload имеют один append-only lifetime.
+- В проверенном ApplyJournal есть AppendIfMissing/TryFindBatch/ReadBatches/Flush, но нет ACK/compaction/truncation API. Receipt и relay payload имеют один append-only lifetime. ApplyJournal держит все IndexEntry одновременно в List и BatchKey Dictionary (unbounded RAM), а ReadBatches(afterJournalSeq, limit) сканирует список с начала при каждом paging запросе (растущая стоимость чтения).
 
 Следовательно, relay subset дублируется уже внутри WAL record, а затем весь WAL payload дублируется в sidecar journal. Это нужно исправлять не удалением данных, а разделением их семантических сроков хранения.
 
