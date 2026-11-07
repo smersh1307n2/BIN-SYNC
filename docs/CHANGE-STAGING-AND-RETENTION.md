@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.7; global ChangeId dedup, remote SeenChanges removal, unified receipts, v8 header-bound duplicate ACKs and v9 compact peer progress are implemented; receipt expiry/GC, tombstone GC safety, APPLY payload compaction and Storage physical format remain optimization gates.  
+**Status:** Architecture decision draft v0.8; global ChangeId dedup, remote SeenChanges removal, unified receipts, v8 header-bound duplicate ACKs, v9 compact peer progress and bounded Inbox receipt admission are implemented; receipt expiry/GC, tombstone GC safety, APPLY payload compaction and Storage physical format remain optimization gates.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
