@@ -256,6 +256,22 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(Batch(32), Assert.Single(store.ReadOutbound("scope-a", Node(1), 8, Node(20), leaseC, 0, 10).Items).ChangeId);
     }
 
+    [Fact]
+    public void Relay_and_outbound_pages_reject_cursors_beyond_durable_highwater()
+    {
+        using var store = CreateStore();
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50)));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            store.ReadRelay("scope-a", Node(1), 7, Node(20), 2, 0));
+
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(31, 51) });
+        ulong lease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 2, 0));
+    }
+
     protected static MetadataIncomingBatch CreateBatch(
         string scope,
         byte replica,
