@@ -40,6 +40,61 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Unpublished_local_field_edits_are_coalesced_before_node_outbox_freeze()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-coalesce"), 410);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        Node node = NewNode(17);
+        RecordId record = RecordId.From(Guid.Parse("17000000-0000-0000-0000-000000000017").ToByteArray());
+        const ushort fieldA = 0x0701;
+        const ushort fieldB = 0x0702;
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = fieldA, AuthorNodeId = node.NodeId,
+            HlcWall = 1000, HlcLogical = 0, Value = "first"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = fieldB, AuthorNodeId = node.NodeId,
+            HlcWall = 1500, HlcLogical = 0, Value = "independent"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = fieldA, AuthorNodeId = node.NodeId,
+            HlcWall = 2000, HlcLogical = 0, Value = "second"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = fieldA, AuthorNodeId = node.NodeId,
+            HlcWall = 3000, HlcLogical = 0, Value = "final"u8.ToArray()
+        });
+
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce");
+        int consumed = coordinator.PublishLocalChanges(_ => { }, limit: 16);
+
+        Assert.Equal(4, consumed);
+        Assert.Equal(2, node.GetOutboxCount(1));
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark("pending-coalesce", node.NodeId, 1, node.NodeId));
+        Assert.True(provider.TryReadCurrent(record, fieldA, out var providerA));
+        Assert.Equal("final", Encoding.UTF8.GetString(providerA!.Value));
+        Assert.True(provider.TryReadCurrent(record, fieldB, out var providerB));
+        Assert.Equal("independent", Encoding.UTF8.GetString(providerB!.Value));
+        Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
+
+        var outbox = node.ReadOutboxEntries(1, node.NodeId, 0, 16);
+        var values = outbox.Select(entry => Ops.DecodeOp(entry.Payload).Op)
+            .OfType<OpFieldWrite>()
+            .Select(operation => Encoding.UTF8.GetString(operation.Value))
+            .ToArray();
+        Assert.Contains("final", values);
+        Assert.Contains("independent", values);
+        Assert.DoesNotContain("first", values);
+        Assert.DoesNotContain("second", values);
+    }
+
+    [Fact]
     public void Remote_node_materialization_is_durable_but_does_not_create_local_feed_entries()
     {
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 402, deleteOnDispose: true);
