@@ -15,6 +15,7 @@ public class StorageDataProvider : IDataProvider
     private const byte FieldMap = 0x03;
     private const byte FieldReverse = 0x04;
     private const byte CurrentField = 0x10;
+    private const byte CurrentRecordTombstone = 0x11;
     private const byte LocalChange = 0x20;
     private const byte LocalHighWatermark = 0x21;
     private const byte LocalAckWatermark = 0x22;
@@ -132,7 +133,9 @@ public class StorageDataProvider : IDataProvider
                 : 0;
             ulong sequence = checked(current + 1);
             byte[] owned = EncodeMutation(mutation);
-            byte[] currentKey = CurrentKey(mutation.RecordId, mutation.FieldId);
+            byte[] currentKey = mutation.IsRecordTombstone
+                ? CurrentRecordTombstoneKey(mutation.RecordId)
+                : CurrentKey(mutation.RecordId, mutation.FieldId);
             if (batch.TryGet(currentKey, out var currentFieldBytes))
             {
                 ProviderMutation existing = DecodeMutation(currentFieldBytes!);
@@ -250,12 +253,17 @@ public class StorageDataProvider : IDataProvider
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
 
             var rows = snapshot.ScanPrefix([CurrentField], ReadOnlySpan<byte>.Empty, int.MaxValue);
-            if (afterIndex > rows.Count) throw new ArgumentOutOfRangeException(nameof(afterIndex));
-            var entries = new List<ProviderMutation>(Math.Min(limit, rows.Count - afterIndex));
-            int end = Math.Min(rows.Count, checked(afterIndex + limit));
+            var recordTombstones = snapshot.ScanPrefix([CurrentRecordTombstone], ReadOnlySpan<byte>.Empty, int.MaxValue);
+            var all = new List<ProviderMutation>(rows.Count + recordTombstones.Count);
+            foreach (var row in rows) all.Add(DecodeMutation(row.Value));
+            foreach (var row in recordTombstones) all.Add(DecodeMutation(row.Value));
+            all.Sort(CompareSnapshotOrder);
+            if (afterIndex > all.Count) throw new ArgumentOutOfRangeException(nameof(afterIndex));
+            var entries = new List<ProviderMutation>(Math.Min(limit, all.Count - afterIndex));
+            int end = Math.Min(all.Count, checked(afterIndex + limit));
             for (int i = afterIndex; i < end; i++)
-                entries.Add(DecodeMutation(rows[i].Value));
-            return new ProviderSnapshotPage(entries, end, end == rows.Count);
+                entries.Add(CloneMutation(all[i]));
+            return new ProviderSnapshotPage(entries, end, end == all.Count);
         }
     }
 
@@ -299,7 +307,9 @@ public class StorageDataProvider : IDataProvider
 
             foreach (var mutation in mutations)
             {
-                byte[] key = CurrentKey(mutation.RecordId, mutation.FieldId);
+                byte[] key = mutation.IsRecordTombstone
+                    ? CurrentRecordTombstoneKey(mutation.RecordId)
+                    : CurrentKey(mutation.RecordId, mutation.FieldId);
                 if (batch.TryGet(key, out var priorValue))
                 {
                     ProviderMutation existing = DecodeMutation(priorValue!);
@@ -329,7 +339,18 @@ public class StorageDataProvider : IDataProvider
             ThrowIfDisposed();
             if (_storage.TryGet(CurrentKey(recordId, fieldId), out var value))
             {
-                mutation = DecodeMutation(value!);
+                ProviderMutation field = DecodeMutation(value!);
+                if (_storage.TryGet(CurrentRecordTombstoneKey(recordId), out var tombstoneBytes))
+                {
+                    ProviderMutation tombstone = DecodeMutation(tombstoneBytes!);
+                    if (Compare(tombstone, field) >= 0)
+                    {
+                        mutation = null;
+                        return false;
+                    }
+                }
+
+                mutation = field;
                 return true;
             }
 
@@ -361,8 +382,16 @@ public class StorageDataProvider : IDataProvider
         if (mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero)
             throw new ArgumentException("RecordId and original AuthorNodeId must be non-zero.", nameof(mutation));
         ArgumentNullException.ThrowIfNull(mutation.Value);
-        if (mutation.IsTombstone && mutation.Value.Length != 0)
-            throw new ArgumentException("Tombstone mutation must not carry a value payload.", nameof(mutation));
+        if (mutation.IsRecordTombstone)
+        {
+            if (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
+                mutation.KeyEpoch != 0 || mutation.Value.Length != 0)
+                throw new ArgumentException("Record tombstone must use the lifecycle field, key epoch zero and no value.", nameof(mutation));
+        }
+        else if (mutation.IsTombstone && mutation.Value.Length != 0)
+        {
+            throw new ArgumentException("Field tombstone mutation must not carry a value payload.", nameof(mutation));
+        }
     }
 
     private static int Compare(ProviderMutation left, ProviderMutation right)
@@ -374,6 +403,7 @@ public class StorageDataProvider : IDataProvider
         => left.RecordId == right.RecordId
             && left.FieldId == right.FieldId
             && left.IsTombstone == right.IsTombstone
+            && left.IsRecordTombstone == right.IsRecordTombstone
             && left.HlcWall == right.HlcWall
             && left.HlcLogical == right.HlcLogical
             && left.AuthorNodeId == right.AuthorNodeId
@@ -395,7 +425,7 @@ public class StorageDataProvider : IDataProvider
         {
             mutation.RecordId.WriteTo(fixedPart);
             BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(16), mutation.FieldId);
-            fixedPart[18] = mutation.IsTombstone ? (byte)1 : (byte)0;
+            fixedPart[18] = (byte)((mutation.IsTombstone ? 1 : 0) | (mutation.IsRecordTombstone ? 2 : 0));
             BinaryPrimitives.WriteUInt64LittleEndian(fixedPart.Slice(19), mutation.HlcWall);
             BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(27), mutation.HlcLogical);
             mutation.AuthorNodeId.WriteTo(fixedPart.Slice(31));
@@ -438,7 +468,7 @@ public class StorageDataProvider : IDataProvider
         byte[] result = new byte[53 + mutation.Value.Length];
         mutation.RecordId.WriteTo(result);
         BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(16), mutation.FieldId);
-        result[18] = mutation.IsTombstone ? (byte)1 : (byte)0;
+        result[18] = (byte)((mutation.IsTombstone ? 1 : 0) | (mutation.IsRecordTombstone ? 2 : 0));
         BinaryPrimitives.WriteUInt64LittleEndian(result.AsSpan(19), mutation.HlcWall);
         BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(27), mutation.HlcLogical);
         mutation.AuthorNodeId.WriteTo(result.AsSpan(31));
@@ -452,13 +482,14 @@ public class StorageDataProvider : IDataProvider
     {
         if (bytes.Length < 53) throw new InvalidDataException("Stored provider mutation is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
-        if (valueLength > int.MaxValue || bytes.Length != 53 + (int)valueLength || bytes[18] > 1)
+        if (valueLength > int.MaxValue || bytes.Length != 53 + (int)valueLength || bytes[18] > 3)
             throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
         return new ProviderMutation
         {
             RecordId = RecordId.From(bytes.Slice(0, 16)),
             FieldId = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(16)),
-            IsTombstone = bytes[18] != 0,
+            IsTombstone = (bytes[18] & 1) != 0,
+            IsRecordTombstone = (bytes[18] & 2) != 0,
             HlcWall = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(19)),
             HlcLogical = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(27)),
             AuthorNodeId = NodeId.From(bytes.Slice(31, 16)),
@@ -467,12 +498,43 @@ public class StorageDataProvider : IDataProvider
         };
     }
 
+    private static ProviderMutation CloneMutation(ProviderMutation mutation)
+        => new()
+        {
+            RecordId = mutation.RecordId,
+            FieldId = mutation.FieldId,
+            IsTombstone = mutation.IsTombstone,
+            IsRecordTombstone = mutation.IsRecordTombstone,
+            HlcWall = mutation.HlcWall,
+            HlcLogical = mutation.HlcLogical,
+            AuthorNodeId = mutation.AuthorNodeId,
+            KeyEpoch = mutation.KeyEpoch,
+            Value = mutation.Value.ToArray()
+        };
+
+    private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
+    {
+        int order = CompareRecordIds(left.RecordId, right.RecordId);
+        if (order != 0) return order;
+        if (left.IsRecordTombstone != right.IsRecordTombstone)
+            return left.IsRecordTombstone ? -1 : 1;
+        return left.FieldId.CompareTo(right.FieldId);
+    }
+
     private static byte[] CurrentKey(RecordId recordId, ushort fieldId)
     {
         byte[] key = new byte[19];
         key[0] = CurrentField;
         recordId.WriteTo(key.AsSpan(1, 16));
         BinaryPrimitives.WriteUInt16BigEndian(key.AsSpan(17), fieldId);
+        return key;
+    }
+
+    private static byte[] CurrentRecordTombstoneKey(RecordId recordId)
+    {
+        byte[] key = new byte[17];
+        key[0] = CurrentRecordTombstone;
+        recordId.WriteTo(key.AsSpan(1));
         return key;
     }
 
