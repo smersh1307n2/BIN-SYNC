@@ -144,6 +144,52 @@ public sealed partial class Node
         }
     }
 
+    internal Batch DecodeBatchPayloadForMetadataAuthority(byte[] data, NodeId senderPeer)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        if (senderPeer.IsZero)
+            throw new ArgumentException("Sender peer must be non-zero.", nameof(senderPeer));
+
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            Batch batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+            ValidateBatchForWire(batch);
+            if (batch.MergePolicy != 0 && batch.MergePolicy != 0x02)
+                throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
+            if (ForbiddenNamespaces.Contains(batch.NamespaceId))
+                throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
+            int supported = SchemaVersions.TryGetValue(batch.NamespaceId, out var version) ? version : 1;
+            if (batch.SchemaVersion > supported)
+                throw new SyncException("SCHEMA_PENDING", batch.BatchId);
+            var currentEpoch = SessionEpoch(senderPeer, batch.NamespaceId);
+            if (currentEpoch is not null && batch.IssuerEpoch < currentEpoch.Value)
+                throw new SyncException("EPOCH_REGRESSION", batch.BatchId);
+
+            NodeId streamAuthor = batch.IssuerNodeId;
+            for (int i = 0; i < batch.Entries.Count; i++)
+            {
+                var entry = batch.Entries[i];
+                object operation = Ops.DecodeOp(entry.Payload).Op;
+                ValidateEntryOperation(entry, operation, batch.BatchId);
+                NodeId author = ResolveOperationAuthor(operation, senderPeer);
+                if (i == 0) streamAuthor = author;
+                else if (author != streamAuthor)
+                    throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            }
+            if (streamAuthor.IsZero)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            batch.AuthorStreamNodeId = streamAuthor;
+
+            if (ComputeRecordsRoot(batch.Entries) != batch.RecordsRoot ||
+                ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,
+                    batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+                    batch.RecordsRoot, batch.PrevBatchDigest) != batch.BatchDigest)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            return batch;
+        }
+    }
+
     private NodeId ResolveOperationAuthor(object operation, NodeId senderPeer)
     {
         bool full = operation switch
@@ -159,7 +205,7 @@ public sealed partial class Node
         catch (SyncException) when (full && embedded.HasValue) { return embedded.Value; }
     }
 
-    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null)
+    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null, bool receiveStateOwnedByMetadataStore = false)
     {
         ThrowIfDisposed();
         ValidateBatchForWire(batch);
@@ -190,7 +236,7 @@ public sealed partial class Node
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
         // STEP 1: idempotency FIRST ([S7], [П7], §10.2.2 lost-ACK replay)
         var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
-        if (InboxAuthors.TryGetValue(key, out var acceptedReceipt))
+        if (!receiveStateOwnedByMetadataStore && InboxAuthors.TryGetValue(key, out var acceptedReceipt))
         {
             if (acceptedReceipt.DurableAuthor.IsZero)
                 throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
@@ -209,7 +255,9 @@ public sealed partial class Node
         // STEP 2: cursor check [S2]/[П2] — errata E-3: keyed per SESSION stream.
         var pkey = (batch.IssuerNodeId, batch.NamespaceId);
         // Do not publish a new peer-state row until validation and resource preflight pass.
-        PeerState? ps = PeerStates.TryGetValue(pkey, out var existingPs) ? existingPs : null;
+        PeerState? ps = receiveStateOwnedByMetadataStore
+            ? null
+            : PeerStates.TryGetValue(pkey, out var existingPs) ? existingPs : null;
         // Errata E-4: resolve the batch's AUTHOR STREAM durably and key the receive cursor
         // per stream — §13.6.1 [Р3] makes seq numbering per-author.
         // BUGFIX (persistence resume): restored ops carry Origin=0 as a stale sentinel but
@@ -256,9 +304,12 @@ public sealed partial class Node
         }
         result.DurableAuthor = batch.DurableAuthor;
         var streamKey = (senderPeer, batch.IssuerEpoch, streamAuthor);
-        long expected = (ps is not null && ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
-        if (batch.CursorStart != expected)
-            throw new SyncException("SEQ_GAP", batch.BatchId);
+        if (!receiveStateOwnedByMetadataStore)
+        {
+            long expected = (ps is not null && ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
+            if (batch.CursorStart != expected)
+                throw new SyncException("SEQ_GAP", batch.BatchId);
+        }
         // STEP 3: batch digest chain (§12.17.2, [Т3]).
         // BUGFIX (port fidelity): the reference port checks prevBatchDigest UNCONDITIONALLY
         // after the cursor gate of STEP 2 has already passed. The earlier "streamEmpty"
@@ -267,6 +318,7 @@ public sealed partial class Node
         // b1 applied cleanly instead of raising), while a legitimate FIRST batch of a fresh
         // per-(issuer,ns,epoch) chain could hit a stale non-zero checkpoint. With STEP 2
         // guaranteeing cursor contiguity, an unconditional check is exactly [Т3].
+        if (!receiveStateOwnedByMetadataStore)
         {
             var expectPrev = LastBatchDigest.TryGetValue(chain, out var ep2) ? ep2 : default;
             if (batch.PrevBatchDigest != expectPrev)
@@ -279,7 +331,7 @@ public sealed partial class Node
             batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, batch.PrevBatchDigest);
         if (batch.BatchDigest != recomputed)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
-        var receiptFingerprint = InboxReceiptIdentity.Compute(batch);
+        Digest16 receiptFingerprint = receiveStateOwnedByMetadataStore ? default : InboxReceiptIdentity.Compute(batch);
         // STEP 4: atomic application [T1] — copy-on-write only for touched records.
         // Untouched records stay as shared references in nsStore; overlays discard on throw.
         bool hadNamespace = Storage.TryGetValue(batch.NamespaceId, out var nsStore);
@@ -354,7 +406,7 @@ public sealed partial class Node
                 if (!queuedEntries[qi].ChangeId.IsZero)
                     queuedChangeIds.Add(queuedEntries[qi].ChangeId);
 
-        if (batch.IssuerNodeId != NodeId)
+        if (!receiveStateOwnedByMetadataStore && batch.IssuerNodeId != NodeId)
         {
             for (int idx = 0; idx < nEnt; idx++)
             {
@@ -513,16 +565,20 @@ public sealed partial class Node
                 nsStore.EnsureCapacity(nsStore.Count + newRecordCount);
         }
 
-        InboxAuthors.EnsureCapacityFor(key);
-        if (ps is null)
-            PeerStates.EnsureCapacity(PeerStates.Count + 1);
-        var peerStateToPublish = ps ?? new PeerState(batch.IssuerNodeId, batch.NamespaceId);
-        peerStateToPublish.ReceivedStreams.EnsureCapacity(peerStateToPublish.ReceivedStreams.Count + 1);
-        LastStreamAuthor.EnsureCapacity(LastStreamAuthor.Count +
-            (LastStreamAuthor.ContainsKey((senderPeer, batch.NamespaceId)) ? 0 : 1));
-        LastBatchDigest.EnsureCapacity(LastBatchDigest.Count + (LastBatchDigest.ContainsKey(chain) ? 0 : 1));
-        KnownEpochs.EnsureCapacity(KnownEpochs.Count + (KnownEpochs.ContainsKey(sesKey) ? 0 : 1));
-        AcksOut.EnsureCapacity(AcksOut.Count + 1);
+        PeerState? peerStateToPublish = null;
+        if (!receiveStateOwnedByMetadataStore)
+        {
+            InboxAuthors.EnsureCapacityFor(key);
+            if (ps is null)
+                PeerStates.EnsureCapacity(PeerStates.Count + 1);
+            peerStateToPublish = ps ?? new PeerState(batch.IssuerNodeId, batch.NamespaceId);
+            peerStateToPublish.ReceivedStreams.EnsureCapacity(peerStateToPublish.ReceivedStreams.Count + 1);
+            LastStreamAuthor.EnsureCapacity(LastStreamAuthor.Count +
+                (LastStreamAuthor.ContainsKey((senderPeer, batch.NamespaceId)) ? 0 : 1));
+            LastBatchDigest.EnsureCapacity(LastBatchDigest.Count + (LastBatchDigest.ContainsKey(chain) ? 0 : 1));
+            KnownEpochs.EnsureCapacity(KnownEpochs.Count + (KnownEpochs.ContainsKey(sesKey) ? 0 : 1));
+            AcksOut.EnsureCapacity(AcksOut.Count + 1);
+        }
         if (stagedGlobalLedger.Count > 0)
             GlobalChangeLedger.EnsureCapacity(GlobalChangeLedger.Count +
                 stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
@@ -550,19 +606,23 @@ public sealed partial class Node
             foreach (var (rid, rec) in overlays)
                 nsStore[rid] = rec;
 
-        if (ps is null)
-            PeerStates[pkey] = ps = peerStateToPublish;
-        LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        InboxAuthors[key] = new InboxReceipt(streamAuthor, batch.CursorEnd, hasCursorEnd: true,
-            receiptFingerprint, hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
-        ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
-        ps.LastReceivedSeq = batch.CursorEnd;   // compatibility/diagnostic mirror
-        LastBatchDigest[chain] = batch.BatchDigest;
-        // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns).
-        int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
-        KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
-        AcksOut.Add(batch.BatchId);
+        if (!receiveStateOwnedByMetadataStore)
+        {
+            if (ps is null)
+                PeerStates[pkey] = ps = peerStateToPublish!;
+            LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
+            InboxAuthors[key] = new InboxReceipt(streamAuthor, batch.CursorEnd, hasCursorEnd: true,
+                receiptFingerprint, hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
+            ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
+            ps.LastReceivedSeq = batch.CursorEnd;   // compatibility/diagnostic mirror
+            LastBatchDigest[chain] = batch.BatchDigest;
+            // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns).
+            int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
+            KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
+            AcksOut.Add(batch.BatchId);
+        }
         result.Applied = applied;
+        result.DurableAuthor = streamAuthor;
         result.Acked = true;
 
         // Publish the global identity ledger only after the accepted batch WAL frame
@@ -571,7 +631,7 @@ public sealed partial class Node
             GlobalChangeLedger[pair.Key] = pair.Value;
 
         // Relay only the entries selected and fully materialized during preflight.
-        if (batch.IssuerNodeId != NodeId)
+        if (!receiveStateOwnedByMetadataStore && batch.IssuerNodeId != NodeId)
         {
             if (stagedRelayEntries.Length > 0)
             {
