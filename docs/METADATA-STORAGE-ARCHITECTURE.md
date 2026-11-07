@@ -552,15 +552,15 @@ CompactOutbox currently checks every interested peer for every entry. A later CP
 
 PeerState.Ids stores the deterministic batch replay mapping only while a peer may retry an unacknowledged cursor range. A validated contiguous ACK now prunes fully covered mappings while preserving LastStreamDigest as the independent digest-chain checkpoint.
 
-The v9 in-memory peer state consolidates StreamAcked, StreamPushed and StreamOffsets into one per-author value entry with presence flags. This removes repeated author keys and separate dictionary entry sets for authors that have multiple watermarks. ReceivedStreams no longer repeats NamespaceId in each key because the containing PeerState is already scoped by (peer, namespace); its key is now (senderPeer, issuerEpoch, author). NodePersistence v9 writes these compact structures once per author/stream.
+The v9 in-memory peer state consolidates StreamAcked, StreamPushed and StreamOffsets into one per-author value entry with presence flags. This removes repeated author keys and separate dictionary entry sets for authors that have multiple watermarks. ReceivedStreams no longer repeats NamespaceId in each key because the containing PeerState is already scoped by (peer, namespace); its key is now (senderPeer, issuerEpoch, author). NodePersistence v9 introduced these compact structures, and v10 retains them while grouping repeated receipt and ledger scope keys.
 
-NodePersistence v3-v8 remains readable. The v3-v8 reader validates the legacy ReceivedStreams namespace against its containing PeerState and migrates the three independent watermark dictionaries into the combined v9 author-progress map. The v9 reader validates flags, nonnegative values, ACK≤pushed and overflow-safe offset arithmetic. No wire format changes: this is a local persistence/in-memory representation change.
+NodePersistence v3-v9 remains readable. The v3-v8 reader validates the legacy ReceivedStreams namespace against its containing PeerState and migrates the three independent watermark dictionaries into the combined v9 author-progress map. The v9/v10 readers validate flags, nonnegative values, ACK≤pushed and overflow-safe offset arithmetic. v10 changes only the local snapshot encoding; no wire format changes.
 
 The byte reduction depends on how many of the three watermarks exist per author and on dictionary implementation overhead. The structural reduction is deterministic (one author key and one dictionary value instead of up to three repeated author keys/entries); measured disk/RAM results should be published separately rather than claiming a fixed percentage.
 
 ### 8.4. Inbox receipt growth is bounded by admission control
 
-Because receipt expiry/GC has no proven protocol horizon, accepted-batch receipts are never evicted by age or by unrelated ACK progress. To prevent unbounded growth from becoming an uncontrolled memory/disk failure, `ResourceLimits.MaxInboxReceipts` now provides an explicit admission cap (default 1,000,000; zero means unlimited). The cap is checked during whole-batch preflight before WAL append or state publication. When full, the new batch is rejected atomically, including a new BatchId that contains a globally deduplicated ChangeId: the batch still requires its own durable receipt and cursor transition.
+Because receipt expiry/GC has no proven protocol horizon, accepted-batch receipts are never evicted by age or by unrelated ACK progress. To prevent unbounded growth from becoming an uncontrolled memory/disk failure, `ResourceLimits.MaxInboxReceipts` now provides an explicit admission cap (default 1,000,000; zero means unlimited). The cap is checked during whole-batch preflight before WAL append or state publication when the host supplies this ResourceLimits instance through NodeOptions.Limits; Node remains unbounded if Limits is null. When full, the new batch is rejected atomically, including a new BatchId that contains a globally deduplicated ChangeId: the batch still requires its own durable receipt and cursor transition.
 
 This is backpressure, not reclamation. It does not make receipt GC safe, and it does not reduce already persisted receipt bytes. Hosts must monitor the cap and provision/recover capacity deliberately. A future safe-GC design must retain the independent duplicate-replay horizon and log-segment confirmation condition.
 
@@ -589,7 +589,7 @@ The runtime now has a route-independent ledger keyed by (namespace, ChangeId), l
 
 NodePersistence is now v6. Loading v3-v5 creates explicit unknown-fingerprint markers for legacy SeenChanges. A retained legacy Outbox payload upgrades its marker when its complete semantic value is available; a truncated/deferred legacy field value remains unknown. An unknown marker suppresses relay as an already-seen identity and is upgraded on its first matching arrival, but cannot validate historical equivocation until then.
 
-The global ledger has an independent MaxGlobalChangeLedgerEntries cap (default 1,000,000; zero means unlimited). No TTL or destructive GC is implemented: a protocol-safe dedup retention horizon is still unproven.
+The global ledger has an independent MaxGlobalChangeLedgerEntries cap (default 1,000,000; zero means unlimited) when a ResourceLimits instance is attached through NodeOptions.Limits; otherwise the core remains unbounded. No TTL or destructive GC is implemented: a protocol-safe dedup retention horizon is still unproven.
 
 ### 8.4. ChangeId and OriginSeq remain open gates
 
@@ -667,3 +667,11 @@ NodePersistence remains v7: no layout change was needed. When loading v3-v5, all
 The removed remote row repeated peer NodeId (16 B), namespace varint and ChangeId (16 B) per received operation—about 33 raw bytes per remote marker for common namespace values—plus HashSet entry/bucket overhead. The global ledger still stores the identity and fingerprint once. This is a format-derived estimate, not a benchmark. `MaxSeenChanges` now bounds local WAL replay markers; `MaxGlobalChangeLedgerEntries` bounds global remote/local dedup facts.
 
 GitHub Actions run [42345011358](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42345011358) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening. No wire-format or NodePersistence-version change.
+
+## 22. NodePersistence v10 grouped scope encoding (2026-11-07)
+
+NodePersistence v10 groups accepted Inbox receipts by their shared `(issuer, namespace, epoch)` key and writes that key once per group, followed by the group's BatchId/receipt values. The global ChangeId ledger is grouped by namespace and writes the namespace once per group. This removes repeated scope identifiers without changing either in-memory dictionary key, receipt semantics, fingerprint semantics or the network protocol.
+
+For a group containing N receipts, the raw receipt-key saving is approximately `(N-1) × (16 + varint(namespace) + varint(epoch))` bytes, offset by one additional per-group count varint. For N ledger entries in one namespace, the saving is approximately `(N-1) × varint(namespace)`, also offset by the group-count encoding. These are format-derived estimates, not benchmark results; singleton groups can be slightly larger. The benefit scales with batches per issuer/session and changes per namespace.
+
+The v10 reader validates group keys, non-empty group counts, receipt flags, cursor range and expiry ordering. It reads v3-v9 snapshots using their original flat layouts; v9 remains separately covered by a compatibility fixture. The v10 round-trip test covers multiple receipts in shared and distinct groups, known/unknown ChangeId markers, and receipt expiry fields. No DELTA_BATCH wire format change.
