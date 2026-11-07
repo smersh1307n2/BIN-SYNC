@@ -396,17 +396,19 @@ The current `GcNotice.Apply` does not persist or enforce the received `Tombstone
 
 Do not rely on this path for tombstone reclamation. Before enabling it, implement a durable monotonic cutoff per namespace, force peers behind the cutoff through full resync/snapshot, and reclaim only tombstone/ghost state proven safe. Never delete a live field solely because its HLC is old. Inbox receipt expiry, global ChangeId ledger retention and relay payload ACK remain independent lifetimes. The normative requirements are summarized in Metadata Storage Architecture §8.3 and FLD-DB roadmap §7.8.
 
-### 9.4. FLD remote APPLY currently duplicates payloads across WAL and ApplyJournal
+### 9.4. FLD APPLY single-encoding and relay-only materialization (implemented)
 
-The inspected FLD implementation has another material storage-amplification point:
+The FLD remote APPLY path has been changed:
+- ApplyCommitCodec v3 encodes the incoming Fields array once and stores relay selection as canonical varint indexes. Decode reconstructs RelayFields as references to those same decoded operation objects. v2 payloads remain readable.
+- FldDatabase.ApplyRemoteBatch flushes the full APPLY_COMMIT to WAL, then ApplyJournal.AppendIfMissing writes a compact journal representation containing batch receipt metadata and only RelayFields payloads.
+- The journal's relay-only form stores the selected payloads once, with no duplicate full Fields array or relay-index list. Non-relay operation payloads are not copied into ApplyJournal.
+- The WAL is durable before the journal materialization; ApplyJournal is flushed before ApplyRemoteBatch returns. Thus a subsequent checkpoint/WAL truncation cannot remove the only durable copy of relay-eligible operations.
+- Journal promotion is idempotent by batch identity and compares canonical receipt metadata plus relay payload. WAL recovery can rebuild the compact journal from both old v2 and new v3 APPLY_COMMIT records.
+- Relay-eligible LWW losers remain in the relay-only journal.
 
-- RemoteBatchCommit.ValidateRelaySubset requires RelayWrites to be an exact subset of Writes, matched by ChangeId and byte-identical operation fields.
-- ApplyCommitCodec v2 serializes both Fields and RelayFields as separate full field arrays. Therefore, every relay-eligible operation's payload is serialized twice inside the same APPLY_COMMIT WAL payload.
-- FldDatabase.ApplyRemoteBatch appends that full encoded APPLY_COMMIT payload to WAL, flushes it, then appends the same payload again to ApplyJournal and flushes the journal.
-- ApplyJournal stores/indexes the full payload by batch identity. ReadRelayBatches later reads the full batch record and filters out the RelayFields subset. The receipt lookup also reads the same full record.
-- The inspected ApplyJournal has AppendIfMissing, TryFindBatch, ReadBatches and Flush, but no ACK, compaction or truncation API. It retains every IndexEntry in both an in-memory List and a BatchKey Dictionary, so growth is unbounded in both disk and RAM. ReadBatches(afterJournalSeq, limit) currently scans the List from its beginning and skips entries at/below the cursor; repeated paging therefore becomes progressively more expensive as historical entries accumulate. Receipt retention and relay-payload retention are coupled to one append-only sidecar.
+Until WAL truncation, non-relay operations exist only in WAL and relay operations exist in WAL plus the relay-only journal. After WAL truncation, only relay-selected payloads remain in the journal. The metadata receipt and relay payload are still co-located in one append-only journal record/file, so their physical retention lifetimes are not yet independent.
 
-For a remote batch with N incoming operations and R relay-eligible operations (R ≤ N), the current APPLY_COMMIT body contains N operation payloads plus another R copies. The sidecar then stores another copy of that entire body. Ignoring headers/indexes and current-state runs, the WAL plus ApplyJournal therefore retain approximately 2 × (N + R) operation-payload copies until WAL truncation and indefinitely in the current ApplyJournal unless another external lifecycle exists. This is a structural observation, not a benchmark estimate. If P is the total payload bytes for all incoming Fields and R is the payload bytes in the relay subset, the current WAL+ApplyJournal pair retains approximately 2 × (P + R) payload bytes before headers/indexes. The target retains approximately P + R plus a compact selection/receipt overhead while WAL and RelayJournal coexist, then R plus receipt metadata after WAL truncation. When R is small or zero, removing the full-batch ApplyJournal copy is especially valuable; when R approaches P, the target still avoids the extra duplicate relay subset inside each WAL/sidecar payload.
+The remaining ApplyJournal issues are unchanged: no ACK/compaction/truncation API, unbounded in-memory List and BatchKey Dictionary, and ReadBatches scans from the beginning for every page. Receipt GC, relay payload GC, bounded indexes and seekable paging remain open.
 
 ### 9.5. Preferred remote-APPLY storage decomposition
 
