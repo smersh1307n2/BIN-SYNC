@@ -1,4 +1,5 @@
 using BinSync.MetadataStore.Conformance;
+using Xunit;
 
 namespace BinSync.Tests.MetadataStore;
 
