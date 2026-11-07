@@ -13,7 +13,7 @@
 // Persisted state mirrors every field of BinSync.Node:
 //  identity (NodeId, Epoch), HLC clock (LastWall/LastLogical), Storage (ns -> recordId
 //  -> Record with FieldState/HLC/ghost lifecycle + FieldTombs), Outbox per namespace,
-//  per-(author,ns) outbox seq counters, Inbox idempotency set, LastBatchDigest and
+//  per-(author,ns) outbox seq counters, unified batch receipts (key -> durable author), LastBatchDigest and
 //  LastStreamDigest chain checkpoints, AliasToNode/NodeToAlias, DurableAuthors,
 //  InboxAuthors (accepted batch -> durable author), PeerStates (cursors + ReceivedStreams/StreamAcked/StreamPushed/Ids caches), SeenChanges,
 //  GlobalChangeLedger (namespace + ChangeId -> canonical semantic fingerprint), LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
