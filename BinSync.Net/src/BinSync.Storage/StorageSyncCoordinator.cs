@@ -143,7 +143,151 @@ public sealed class StorageSyncCoordinator
         // reconstruct payload from current Node winners.
         Guid token = CreateBatchApplyToken(batch);
         lock (_gate)
-            return _provider.ApplyRemoteBatch(token, mutations);
+        {
+            if (_metadataStore is null)
+                return _provider.ApplyRemoteBatch(token, mutations);
+
+            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch);
+            bool finalizeMetadata = true;
+            try
+            {
+                _metadataStore.BeginPendingApply(metadataBatch, token);
+            }
+            catch (InvalidOperationException)
+            {
+                // A finalized token is resolved through the durable receive receipt.
+                // If it is not an exact duplicate, fail closed.
+                var prior = _metadataStore.AcceptIncomingBatch(metadataBatch);
+                if (!prior.IsDuplicate)
+                    throw;
+                finalizeMetadata = false;
+            }
+
+            var providerReceipt = _provider.ApplyRemoteBatch(token, mutations);
+            if (finalizeMetadata)
+            {
+                _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
+                    new MetadataProviderApplyReceipt(token, metadataBatch.BatchDigest.ToArray()));
+            }
+            return providerReceipt;
+        }
+    }
+
+    /// <summary>Recover pending provider commits after restart before accepting new sync work.</summary>
+    public int RecoverPendingApplies()
+    {
+        if (_metadataStore is null)
+            throw new InvalidOperationException("No Metadata Store is attached to this coordinator.");
+
+        lock (_gate)
+        {
+            var intents = _metadataStore.ReadPendingApplyIntents(_scopeId!, _node.NodeId);
+            int recovered = 0;
+            foreach (var intent in intents)
+            {
+                if (intent.Batch.NamespaceId != _namespaceId)
+                    throw new InvalidDataException("Pending apply intent belongs to a different namespace.");
+
+                var mutations = CreateProviderMutations(intent.Batch.Operations);
+                if (mutations.Count == 0)
+                    throw new InvalidDataException("Pending apply intent contains no provider mutations.");
+
+                _provider.ApplyRemoteBatch(intent.ApplyToken, mutations);
+                _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
+                    new MetadataProviderApplyReceipt(intent.ApplyToken, intent.Batch.BatchDigest.ToArray()));
+                recovered++;
+            }
+
+            return recovered;
+        }
+    }
+
+    private MetadataIncomingBatch CreateMetadataBatch(Batch batch)
+    {
+        var operations = new List<MetadataOperation>(batch.Entries.Count);
+        foreach (var entry in batch.Entries)
+        {
+            object op = Ops.DecodeOp(entry.Payload).Op;
+            Digest16 fingerprint = ChangeIdentity.Fingerprint(
+                batch.NamespaceId, entry.RecordId, entry.OpKind, op,
+                batch.DurableAuthor, entry.CausalDeps);
+
+            // MetadataStore payloads are opaque relay records. Prefix the 16-byte
+            // RecordId so relay/recovery can reconstruct the exact provider mutation.
+            byte[] envelope = new byte[16 + entry.Payload.Length];
+            entry.RecordId.WriteTo(envelope);
+            entry.Payload.Span.CopyTo(envelope.AsSpan(16));
+            operations.Add(new MetadataOperation
+            {
+                AuthorNodeId = batch.DurableAuthor,
+                ChangeId = entry.ChangeId,
+                Fingerprint = fingerprint.ToArray(),
+                Payload = envelope,
+                RelayEligible = true
+            });
+        }
+
+        return new MetadataIncomingBatch
+        {
+            ScopeId = _scopeId!,
+            LocalReplica = _node.NodeId,
+            SenderPeer = batch.IssuerNodeId,
+            SenderEpoch = checked((uint)batch.IssuerEpoch),
+            NamespaceId = batch.NamespaceId,
+            BatchId = batch.BatchId,
+            CursorStart = checked((ulong)batch.CursorStart),
+            CursorEnd = checked((ulong)batch.CursorEnd),
+            PreviousBatchDigest = batch.PrevBatchDigest.ToArray(),
+            BatchDigest = batch.BatchDigest.ToArray(),
+            Operations = operations
+        };
+    }
+
+    private static List<ProviderMutation> CreateProviderMutations(
+        IReadOnlyList<MetadataOperation> operations)
+    {
+        var mutations = new List<ProviderMutation>(operations.Count);
+        foreach (var operation in operations)
+        {
+            if (operation.Payload.Length <= 16)
+                throw new InvalidDataException("Pending metadata operation has no RecordId envelope.");
+
+            RecordId recordId = RecordId.From(operation.Payload.AsSpan(0, 16));
+            object op = Ops.DecodeOp(operation.Payload.AsMemory(16)).Op;
+            switch (op)
+            {
+                case OpFieldWrite write:
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = recordId,
+                        FieldId = write.FieldId,
+                        HlcWall = write.Wall,
+                        HlcLogical = write.Logical,
+                        AuthorNodeId = operation.AuthorNodeId,
+                        KeyEpoch = write.KeyEpoch,
+                        Value = write.Value.ToArray()
+                    });
+                    break;
+                case OpFieldTomb tomb:
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = recordId,
+                        FieldId = tomb.FieldId,
+                        IsTombstone = true,
+                        HlcWall = tomb.Wall,
+                        HlcLogical = tomb.Logical,
+                        AuthorNodeId = operation.AuthorNodeId,
+                        KeyEpoch = tomb.KeyEpoch,
+                        Value = Array.Empty<byte>()
+                    });
+                    break;
+                case OpRecordTombstone:
+                    throw new NotSupportedException("StorageDataProvider does not yet persist record-level tombstones.");
+                default:
+                    throw new InvalidDataException("Pending metadata operation has an unsupported operation type.");
+            }
+        }
+        return mutations;
     }
 
     private ProviderApplyReceipt? ApplyRemoteFieldsCore(
