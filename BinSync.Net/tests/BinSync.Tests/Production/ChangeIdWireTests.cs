@@ -128,7 +128,7 @@ public class ChangeIdWireTests
         Assert.NotNull(Transport.DeliverBatch(c, a, 1));
         Assert.False(a.Outbox.TryGetValue(1, out var returnedEntries) &&
                      returnedEntries.Any(e => e.ChangeId == originalChangeId));
-        Assert.DoesNotContain((1, originalChangeId), a.SeenChanges);
+        Assert.Contains((1, originalChangeId), a.SeenChanges);
         Assert.True(a.GlobalChangeLedger.ContainsKey((1, originalChangeId)));
 
         Assert.True(a.Storage[1].ContainsKey(Fix.Rid(0x41)));
@@ -188,7 +188,7 @@ public class ChangeIdWireTests
         var echoResult = a.ApplyBatch(echoBatch, c.NodeId);
         Assert.Equal(0, echoResult.Applied);
         Assert.Equal(0, a.OutboxSize(1));
-        Assert.DoesNotContain((1, changeId), a.SeenChanges);
+        Assert.Contains((1, changeId), a.SeenChanges);
 
         // The same operation also arrives directly from A through another route.
         // Re-establish A as alias 1 so the saved compact payload remains valid.
@@ -280,7 +280,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v10_groups_receipts_and_change_ledger_and_roundtrips_all_entries()
+    public void Persistence_v11_groups_receipts_and_change_ledger_and_roundtrips_all_entries()
     {
         using var node = Fix.MakeNode(123);
         var issuer = Fix.Nid(124);
@@ -310,7 +310,7 @@ public class ChangeIdWireTests
         {
             NodePersistence.Save(node, path);
             var bytes = File.ReadAllBytes(path);
-            Assert.Equal((ushort)10, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+            Assert.Equal((ushort)11, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
             using var restored = NodePersistence.Load(path);
 
             Assert.Equal(4, restored.InboxAuthors.Count);
