@@ -280,6 +280,38 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void InboxReceiptStore_promotes_multi_receipt_streams_and_demotes_after_removal()
+    {
+        using var node = Fix.MakeNode(127);
+        var issuer = Fix.Nid(128);
+        var author = Fix.Nid(129);
+        var fingerprint = Digest16.From(Id(0xA8));
+        var batch1 = BatchId.From(Id(0xA9));
+        var batch2 = BatchId.From(Id(0xAA));
+        var key1 = (issuer, 7, 3, batch1);
+        var key2 = (issuer, 7, 3, batch2);
+        var receipt1 = new InboxReceipt(author, 10, true, fingerprint, true, 100, 0);
+        var receipt2 = new InboxReceipt(author, 11, true, fingerprint, true, 101, 0);
+
+        Assert.True(node.InboxAuthors.TryAdd(key1, receipt1));
+        Assert.Single(node.InboxAuthors.Keys);
+        Assert.True(node.InboxAuthors.TryAdd(key2, receipt2));
+        Assert.Equal(2, node.InboxAuthors.Count);
+        Assert.Equal(receipt1.CursorEnd, node.InboxAuthors[key1].CursorEnd);
+        Assert.Equal(receipt2.CursorEnd, node.InboxAuthors[key2].CursorEnd);
+
+        Assert.True(node.InboxAuthors.Remove(key2));
+        Assert.Single(node.InboxAuthors.Keys);
+        Assert.True(node.InboxAuthors.TryGetValue(key1, out var remaining));
+        Assert.Equal(receipt1.CursorEnd, remaining.CursorEnd);
+        Assert.False(node.InboxAuthors.ContainsKey(key2));
+
+        Assert.True(node.InboxAuthors.Remove(key1));
+        Assert.Empty(node.InboxAuthors.Keys);
+        Assert.Equal(0, node.InboxAuthors.Count);
+    }
+
+    [Fact]
     public void Persistence_v12_groups_receipts_by_author_and_roundtrips_all_entries()
     {
         using var node = Fix.MakeNode(123);
