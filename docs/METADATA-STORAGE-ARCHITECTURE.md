@@ -1,9 +1,9 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.9 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store/Data Provider semantic conformance and PendingLocal/source-feed handoff ownership are recorded. NodePersistence v13/v14/v15 compact the alias, Outbox and peer-progress encodings. Durable external adapters remain unimplemented.  
+**Status:** Architecture contract v0.9 — public IDataProvider/IMetadataStore contracts, durable Fld1.Storage adapters, source-feed coordination and pre-ACK provider commit ordering are implemented with conformance/restart coverage. NodePersistence v15 remains the Node checkpoint format. Full Node/Transport authority migration to IMetadataStore and O(partition) metadata mutation cost remain open gates.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
-**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v15, including adaptive receipt indexing, compact 16-byte ledger values, single-direction alias persistence, shared Outbox author tables, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
+**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v15, including adaptive receipt indexing, compact 16-byte ledger values, single-direction alias persistence, shared Outbox author tables, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. Public Storage adapters now pass provider/metadata conformance, shared-database, restart, compaction, equivocation and pre-ACK apply/replay tests. FLD relay provenance transaction, receipt/dedup GC horizons, bounded metadata mutation cost and authoritative Node/Transport IMetadataStore integration remain open.
 
 ## 1. Purpose
 
@@ -852,3 +852,25 @@ The coordinator's local publication order is provider feed → Node mutation wit
 The public array sample now uses these runtime APIs. On the integration workflow, 32/32 tests passed, including durable provider and Metadata Store conformance, restart/compaction, coordinator replay without duplicate Outbox writes, remote feed isolation, and the two-replica array sample.
 
 **Remaining runtime integration gate:** `StorageMetadataStore` is implemented and publicly exposed, but the existing `Node`/Transport path still uses its legacy in-memory/WAL metadata state. Wiring `IMetadataStore` into batch freeze, receive/relay, ACK/lease and Pending Apply must be done as a separate compatibility-preserving migration. The current coordinator is explicit; automatic NodeBuilder/Transport injection is not yet claimed.
+
+
+## 7.24 Storage-backed provider commit ordering and global ChangeId ledger (2026-11-07)
+
+The runtime Storage milestone now includes the following verified path:
+
+- `StorageDataProvider` and `StorageMetadataStore` are public implementations in `BinSync.Storage.dll`; both can attach to one caller-owned `StorageDatabase` instance and neither disposes it when attached.
+- Provider read-modify-write operations use Storage write batches for their reads and writes. Read-watermark and ACK operations bind the snapshot generation to the optimistic batch base, so a concurrent commit cannot silently publish stale sequence state.
+- Local feed append preserves every distinct event, updates current state only when the incoming HLC/author wins, treats an identical same-version replay as idempotent, and rejects same-version equivocation.
+- Remote provider apply atomically stores its idempotency receipt with field-state changes, preserves the LWW winner, and rejects same-version equivocation even when a different apply token is supplied.
+- `MetadataFrozenOperation` now carries the same canonical 16-byte fingerprint used by incoming `MetadataOperation`. Local outbound freeze records that fingerprint in the global ChangeId ledger. An incoming copy of the same operation from another route advances that sender's receive cursor but does not create another relay entry; conflicting fingerprints fail the whole batch.
+- `Transport.DeliverBatch/SyncRound` and `SyncSession.ReceiveBatchAsync` expose a pre-ACK callback. The receiver first checkpoints its Node state/receipt, then commits external provider materialization, and only then returns ACK. Callback failure leaves the sender's batch pending for duplicate replay.
+- The Storage array example now persists the receiver Node checkpoint, commits the provider, then ACKs. Its integration test simulates a restart after provider commit but before ACK; retry is recognized as a duplicate and provider apply returns its original receipt.
+
+CI at commit `37d4e3f3e028`: BIN-SYNC core 642/642, fuzz/lab 31/31, Storage integration 38/38; the array sample reports PASS. These counts are the last fully completed test run before the subsequent documentation-only commits.
+
+### Remaining integration and performance gates
+
+1. **Node/Transport Metadata Store authority:** the public `IMetadataStore` implementation is not yet injected into Node's internal Outbox, receive/relay, per-peer ACK/lease and Pending Apply paths. The current NodePersistence/WAL metadata remains authoritative there. Migrate in compatibility-preserving slices with crash injection at every commit boundary; do not dual-write without a single recovery authority.
+2. **Metadata mutation complexity:** Storage persists only changed logical keys, but the current adapter still clones collection structures and derives the key diff from partition state on each mutation. Replace this with explicit per-operation dirty-key deltas/copy-on-write before claiming bounded per-operation CPU/allocation cost for large partitions.
+3. **Multi-writer policy:** adapters sharing one StorageDatabase refresh stale partition generations and fail closed on conflicting optimistic writes. Automatic retry/merge and multi-process fencing are not yet implemented.
+4. **Retention:** outbound/relay payload compaction must continue preserving global ChangeId fingerprints, receipts and source JournalSeq→ChangeId→OutboxSeq provenance until a proven GC horizon exists.
