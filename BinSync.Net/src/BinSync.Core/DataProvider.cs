@@ -27,6 +27,8 @@ public sealed class ProviderMutation
     public required RecordId RecordId { get; init; }
     public required ushort FieldId { get; init; }
     public bool IsTombstone { get; init; }
+    /// <summary>True for a record lifecycle tombstone; FieldId must be the reserved lifecycle id.</summary>
+    public bool IsRecordTombstone { get; init; }
     public ulong HlcWall { get; init; }
     public uint HlcLogical { get; init; }
     public required NodeId AuthorNodeId { get; init; }
