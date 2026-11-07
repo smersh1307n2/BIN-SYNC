@@ -176,7 +176,7 @@ Remote changes that are accepted for relay must remain recoverable until the rel
 
 The relay journal must preserve original change identity, author, HLC, key epoch, operation and payload/reference. It must include operations selected for relay even when they lose the local LWW comparison, where required by BIN-SYNC relay semantics.
 
-The relay journal is distinct from the local-origin outbound journal. Their cursors, ownership and retention rules must not be conflated.
+The relay journal is distinct from the local-origin outbound journal. Their cursors, ownership and retention rules must not be conflated. The inspected runtime's cross-peer queuedChangeIds check is derived from the currently retained Outbox, while SeenChanges is keyed by direct sender. After Outbox compaction, the runtime does not visibly retain a separate global ChangeId relay-history index. The protocol must define whether a completed snapshot/membership baseline makes an old relay ID forgettable or whether a separate exact RelayedChangeIds index is required; do not assume per-peer SeenChanges proves lifetime-wide at-most-once relay.
 
 The durable batch receipt and relay payload journal also have independent lifetimes. A duplicate-batch receipt may expire under the Inbox GC rule while relay payload remains needed by downstream peers; relay ACK may complete while the receipt's duplicate-retry horizon has not elapsed. Do not store them in one indivisible record/file unless the physical layout supports independent reclamation. FLD's current ApplyCommitCodec v2 duplicates RelayFields inside Fields and ApplyJournal copies the full APPLY_COMMIT payload again; the target FLD design is one operation payload array plus compact relay-selection indexes, a compact receipt, and a relay-only journal. See [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
 
@@ -482,6 +482,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 16. Ensure the per-peer batch replay cache (PeerState.Ids) is pruned only after the matching per-author ACK covers its cursor range; the current runtime persists these entries but the inspected ACK path does not remove them.
 17. Define the lifecycle of ProtocolStateDelta: whether it is an opaque replay log or is materialized into queryable current protocol metadata, when its recovery payload can be checkpointed/removed, and whether duplicate-batch receipts still need to return the full delta after that point.
 18. Align Inbox receipt duplicate-key validation across BIN-SYNC and FLD: decide which digest/range fields are normative and persist them compactly so a reused BatchId with conflicting content is not accepted as the original batch.
+19. Define whether relay ChangeId dedup is at-most-once for the lifetime of the namespace or only while the Outbox entry is retained; after Outbox compaction, decide whether snapshot/membership state safely subsumes old IDs or a separate exact relay-history index is required.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
