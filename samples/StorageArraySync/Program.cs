@@ -67,13 +67,11 @@ try
             // external provider. Transport sends ACK only after this callback returns.
             if (ReferenceEquals(receiver, nodeA))
             {
-                StorageNodePersistence.Save(storageA, receiver);
-                coordinatorA.ApplyRemoteBatch(batch);
+                coordinatorA.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageA, n));
             }
             else
             {
-                StorageNodePersistence.Save(storageB, receiver);
-                coordinatorB.ApplyRemoteBatch(batch);
+                coordinatorB.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageB, n));
             }
         });
         StorageNodePersistence.Save(storageA, nodeA);
@@ -112,13 +110,11 @@ try
         {
             if (ReferenceEquals(receiver, nodeA))
             {
-                StorageNodePersistence.Save(storageA, receiver);
-                coordinatorA.ApplyRemoteBatch(batch);
+                coordinatorA.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageA, n));
             }
             else
             {
-                StorageNodePersistence.Save(storageB, receiver);
-                coordinatorB.ApplyRemoteBatch(batch);
+                coordinatorB.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageB, n));
             }
         });
         StorageNodePersistence.Save(storageA, nodeA);
@@ -159,13 +155,11 @@ try
         {
             if (ReferenceEquals(receiver, nodeA))
             {
-                StorageNodePersistence.Save(storageA, receiver);
-                coordinatorA.ApplyRemoteBatch(batch);
+                coordinatorA.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageA, n));
             }
             else
             {
-                StorageNodePersistence.Save(storageB, receiver);
-                coordinatorB.ApplyRemoteBatch(batch);
+                coordinatorB.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageB, n));
             }
         });
         if (deleteRound == 0 ||
