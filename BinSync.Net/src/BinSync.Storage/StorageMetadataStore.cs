@@ -177,7 +177,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         MetadataIncomingBatch incoming, byte[] providerDigest)
     {
         var receiptKey = new ReceiptKey(incoming.SenderPeer, incoming.SenderEpoch,
-            incoming.NamespaceId, incoming.BatchId, ResolveAuthorStream(incoming));
+            incoming.NamespaceId, incoming.BatchId);
         MetadataBatchReceipt receipt;
         bool isNewReceipt = !current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
         var newLedger = new List<(LedgerKey Key, ChangeLedgerValue Value)>();
@@ -273,12 +273,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         if (isNewReceipt)
         {
-            byte[] receiptSuffix = new byte[54];
+            byte[] receiptSuffix = new byte[38];
             incoming.SenderPeer.WriteTo(receiptSuffix);
             BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
             incoming.BatchId.WriteTo(receiptSuffix.AsSpan(22));
-            ResolveAuthorStream(incoming).WriteTo(receiptSuffix.AsSpan(38));
             byte[] receiptValue = new byte[52];
             BinaryPrimitives.WriteUInt64LittleEndian(receiptValue, incoming.CursorStart);
             BinaryPrimitives.WriteUInt64LittleEndian(receiptValue.AsSpan(8), incoming.CursorEnd);
@@ -405,7 +404,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
     {
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
-            batch.NamespaceId, batch.BatchId, ResolveAuthorStream(batch));
+            batch.NamespaceId, batch.BatchId);
         if (state.Receipts.TryGetValue(receiptKey, out var receipt))
         {
             if (!receipt.Matches(batch))
@@ -474,7 +473,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     private static MetadataBatchReceipt ApplyIncomingBatch(PartitionState next, MetadataIncomingBatch batch)
     {
         var receiptKey = new ReceiptKey(
-            batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId, ResolveAuthorStream(batch));
+            batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId);
         if (next.Receipts.TryGetValue(receiptKey, out var priorReceipt))
         {
             if (!priorReceipt.Matches(batch))
@@ -1877,12 +1876,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         foreach (var pair in state.Receipts)
         {
-            byte[] suffix = new byte[54];
+            // Protocol receipt identity is (sender, epoch, namespace, batchId).
+            // The resolved author stream belongs to receive progress, not the
+            // idempotency key; keeping it here would permit BatchId equivocation.
+            byte[] suffix = new byte[38];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
             pair.Key.BatchId.WriteTo(suffix.AsSpan(22));
-            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(38));
             byte[] value = new byte[52];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorStart);
             BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), pair.Value.CursorEnd);
@@ -2067,7 +2068,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
                         BatchId.From(key.Slice(22, 16)),
-                        key.Length == 54 ? NodeId.From(key.Slice(38, 16)) : default);
+                        );
                     state.Receipts.Add(receiptKey, new ReceiptValue(
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
@@ -2649,7 +2650,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     }
 
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
-    private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId, NodeId AuthorStream);
+    private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
