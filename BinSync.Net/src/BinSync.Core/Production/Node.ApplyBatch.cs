@@ -59,10 +59,13 @@ public sealed partial class Node
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
 
         var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
-        if (!InboxAuthors.TryGetValue(key, out var acceptedAuthor))
+        if (!InboxAuthors.TryGetValue(key, out var acceptedReceipt))
             return false;
-        if (acceptedAuthor.IsZero)
+        if (acceptedReceipt.DurableAuthor.IsZero)
             throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
+        var replayFingerprint = InboxReceiptIdentity.ValidateAndCompute(batch);
+        if (acceptedReceipt.HasFingerprint && acceptedReceipt.Fingerprint != replayFingerprint)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
 
         // Preserve the public-copy path's structural null checks without allocating
         // entry objects, payload arrays, or causal-dependency lists for a replay.
@@ -76,7 +79,7 @@ public sealed partial class Node
         AcksOut.Add(batch.BatchId);
         result.Duplicate = true;
         result.Acked = true;
-        result.DurableAuthor = acceptedAuthor;
+        result.DurableAuthor = acceptedReceipt.DurableAuthor;
         return true;
     }
 
@@ -111,16 +114,19 @@ public sealed partial class Node
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
         // STEP 1: idempotency FIRST ([S7], [П7], §10.2.2 lost-ACK replay)
         var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
-        if (InboxAuthors.TryGetValue(key, out var acceptedAuthor))
+        if (InboxAuthors.TryGetValue(key, out var acceptedReceipt))
         {
-            if (acceptedAuthor.IsZero)
+            if (acceptedReceipt.DurableAuthor.IsZero)
                 throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
+            var replayFingerprint = InboxReceiptIdentity.ValidateAndCompute(batch);
+            if (acceptedReceipt.HasFingerprint && acceptedReceipt.Fingerprint != replayFingerprint)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
-            // The receipt map stores the exact author stream for this batch; never
-            // infer it from LastStreamAuthor because a peer may interleave authors.
-            result.DurableAuthor = acceptedAuthor;
+            // The receipt map stores the exact author stream and committed batch
+            // header for this BatchId; never infer either from LastStreamAuthor.
+            result.DurableAuthor = acceptedReceipt.DurableAuthor;
             return result;
         }
         // STEP 2: cursor check [S2]/[П2] — errata E-3: keyed per SESSION stream.
@@ -203,6 +209,7 @@ public sealed partial class Node
             batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd, batch.RecordsRoot, batch.PrevBatchDigest);
         if (batch.BatchDigest != recomputed)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+        var receiptFingerprint = InboxReceiptIdentity.Compute(batch);
         // STEP 4: atomic application [T1] — copy-on-write only for touched records.
         // Untouched records stay as shared references in nsStore; overlays discard on throw.
         bool hadNamespace = Storage.TryGetValue(batch.NamespaceId, out var nsStore);
@@ -476,7 +483,8 @@ public sealed partial class Node
         if (ps is null)
             PeerStates[pkey] = ps = peerStateToPublish;
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        InboxAuthors[key] = streamAuthor;
+        InboxAuthors[key] = new InboxReceipt(streamAuthor, receiptFingerprint,
+            hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
         ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
         LastBatchDigest[chain] = batch.BatchDigest;
