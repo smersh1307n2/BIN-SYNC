@@ -103,6 +103,7 @@ public sealed partial class Node
         DurableAuthors.EnsureCapacity(staged.DurableAuthors.Count);
         PeerStates.EnsureCapacity(staged.PeerStates.Count);
         SeenChanges.EnsureCapacity(staged.SeenChanges.Count);
+        GlobalChangeLedger.EnsureCapacity(staged.GlobalChangeLedger.Count);
         LastStreamAuthor.EnsureCapacity(staged.LastStreamAuthor.Count);
         KnownEpochs.EnsureCapacity(staged.KnownEpochs.Count);
         PeerSessionEpochs.EnsureCapacity(staged.PeerSessionEpochs.Count);
@@ -124,6 +125,7 @@ public sealed partial class Node
         ReplaceContents(DurableAuthors, staged.DurableAuthors);
         ReplaceContents(PeerStates, staged.PeerStates);
         ReplaceContents(SeenChanges, staged.SeenChanges);
+        ReplaceContents(GlobalChangeLedger, staged.GlobalChangeLedger);
         ReplaceContents(LastStreamAuthor, staged.LastStreamAuthor);
         ReplaceContents(KnownEpochs, staged.KnownEpochs);
         ReplaceContents(PeerSessionEpochs, staged.PeerSessionEpochs);
@@ -180,6 +182,12 @@ public sealed partial class Node
                 throw new InvalidDataException("WAL local-mutation sequence is not the next expected value.");
 
             var decoded = Ops.DecodeOp(entry.Payload, fullAuthor: false).Op;
+            var fingerprint = ChangeIdentity.Fingerprint(entry.NamespaceId, entry.RecordId,
+                entry.OpKind, decoded, NodeId);
+            var ledgerKey = (entry.NamespaceId, entry.ChangeId);
+            if (GlobalChangeLedger.TryGetValue(ledgerKey, out var existingIdentity) &&
+                existingIdentity.IsKnown && existingIdentity.Fingerprint != fingerprint)
+                throw new InvalidDataException("WAL local mutation conflicts with the global ChangeId ledger.");
             Hlc timestamp = decoded switch
             {
                 OpFieldWrite x => new Hlc(x.Wall, x.Logical),
@@ -220,6 +228,7 @@ public sealed partial class Node
             });
             _outboxSeq[(NodeId, entry.NamespaceId)] = entry.Seq;
             SeenChanges.Add(seenKey);
+            GlobalChangeLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
             Clock.Observe(timestamp);
             if (entry.CreatedAt > 0) Clock.Observe(new Hlc((ulong)entry.CreatedAt, 0));
             return true;
