@@ -92,9 +92,11 @@ The named baseline scenarios 1–25 map directly to executable test methods. Ext
 | 24. Unknown alias atomic rollback | `ScenariosB.Scenario24_UnknownAliasAtomicRollback` |
 | 25. Concurrent delete by author | `ScenariosB.Scenario25_ConcurrentDeleteByAuthor` |
 
-Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 642 passing core tests and 31 passing Fuzz/Lab cases on the last verified full CI head.
+Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 642 passing core tests, 83 passing durable Storage Integration tests and 31 passing Fuzz/Lab cases on the last verified full CI head.
 
 **Interpretation guard:** a scenario test proves only the assertions inside that method. In particular, scenario 10 proves fail-closed behavior, not that destructive tombstone GC is implemented; scenario 13 proves quarantine behavior, not that a complete safe-frontier GC engine exists.
+
+**Durable peer-lifecycle regression:** `StorageMetadataStoreConformanceTests.Peer_roster_baseline_and_epoch_retirement_commit_as_atomic_deltas` verifies that peer registration, initial-sync baseline publication and old-epoch retirement each commit as one Storage transaction, that repeated idempotent calls do not advance the commit sequence, and that roster/stream/retired-epoch state survives reopening. This is storage mutation evidence, not a substitute for the still-open process-crash matrix or protocol-authority cutover.
 
 ## 6. §16 invariant mapping status
 
