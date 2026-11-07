@@ -161,6 +161,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 var pending = Assert.IsType<MetadataOutboundBatchReservation>(
                     reopened.GetPendingOutboundBatch(scope, local, peer, 7, 9, author));
                 Assert.Equal(Batch(40), pending.BatchId);
+                Assert.Equal(3u, pending.IssuerEpoch);
                 Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, pending.Payload);
                 reopened.AcknowledgeOutboundBatch(scope, local, peer, 7, 9, author,
                     pending.BatchId, pending.CursorEnd, pending.BatchDigest.ToArray());
@@ -168,6 +169,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 var state = reopened.GetPeerStreamState(scope, local, peer, 7, 9, author);
                 Assert.Equal(3UL, state.AckedCursor);
                 Assert.Equal(3UL, state.PushedCursor);
+                Assert.Equal(3u, state.IssuerEpoch);
                 Assert.Equal(pending.BatchDigest, state.LastBatchDigest);
                 Assert.Null(state.PendingBatch);
                 Assert.Throws<InvalidOperationException>(() =>
@@ -198,6 +200,32 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         {
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public void First_peer_reservation_bootstraps_existing_checkpoint_cursor_and_digest()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-reservation-bootstrap"), 417);
+        NodeId local = Node(1), peer = Node(2), author = Node(3);
+        const string scope = "peer-reservation-bootstrap";
+        byte[] previous = Enumerable.Repeat((byte)61, 16).ToArray();
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(62), IssuerEpoch = 5,
+            CursorStart = 4, CursorEnd = 6,
+            PreviousBatchDigest = previous,
+            BatchDigest = Enumerable.Repeat((byte)63, 16).ToArray(),
+            Payload = new byte[] { 7, 8 }
+        };
+
+        store.ReserveOutboundBatch(scope, local, peer, 2, 7, author, reservation);
+        var state = store.GetPeerStreamState(scope, local, peer, 2, 7, author);
+        Assert.Equal(3UL, state.AckedCursor);
+        Assert.Equal(3UL, state.PushedCursor);
+        Assert.Equal(5u, state.IssuerEpoch);
+        Assert.Equal(previous, state.LastBatchDigest);
+        Assert.Equal(Batch(62), Assert.IsType<MetadataOutboundBatchReservation>(state.PendingBatch).BatchId);
+        Assert.Equal(author, Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 2, 7)).AuthorStream);
     }
 
     [Fact]
