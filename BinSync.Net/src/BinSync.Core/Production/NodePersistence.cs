@@ -210,7 +210,10 @@ public static class NodePersistence
             {
                 w.B128(key.Issuer); w.Varint((ulong)key.Ns); w.Varint((ulong)key.Epoch);
                 w.B128(key.BatchId); w.B128(author.DurableAuthor);
-                w.U8(author.HasFingerprint ? (byte)1 : (byte)0);
+                byte receiptFlags = (byte)((author.HasCursorEnd ? 1 : 0) |
+                                           (author.HasFingerprint ? 2 : 0));
+                w.U8(receiptFlags);
+                if (author.HasCursorEnd) w.U64((ulong)author.CursorEnd);
                 if (author.HasFingerprint) w.B128(author.Fingerprint);
                 w.Varint(author.AppliedAt);
                 w.Varint(author.ExpiresAt);
@@ -400,20 +403,23 @@ public static class NodePersistence
                 InboxReceipt receipt;
                 if (version >= 8)
                 {
-                    byte hasFingerprint = r.U8();
-                    if (hasFingerprint > 1)
-                        throw new InvalidDataException("Invalid persisted receipt fingerprint flag.");
-                    var fingerprint = hasFingerprint == 1 ? Digest16.From(r.B128()) : default;
+                    byte receiptFlags = r.U8();
+                    if (receiptFlags > 3 || ((receiptFlags & 2) != 0 && (receiptFlags & 1) == 0))
+                        throw new InvalidDataException("Invalid persisted receipt flags.");
+                    bool hasCursorEnd = (receiptFlags & 1) != 0;
+                    long cursorEnd = hasCursorEnd ? (long)r.U64() : 0;
+                    bool hasFingerprint = (receiptFlags & 2) != 0;
+                    var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
                     var appliedAt = r.Varint();
                     var expiresAt = r.Varint();
-                    if (expiresAt != 0 && expiresAt < appliedAt)
-                        throw new InvalidDataException("Invalid persisted receipt expiry.");
-                    receipt = new InboxReceipt(author, fingerprint, hasFingerprint == 1,
-                        appliedAt, expiresAt);
+                    if (cursorEnd < 0 || (expiresAt != 0 && expiresAt < appliedAt))
+                        throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
+                    receipt = new InboxReceipt(author, cursorEnd, hasCursorEnd,
+                        fingerprint, hasFingerprint, appliedAt, expiresAt);
                 }
                 else
-                    receipt = new InboxReceipt(author, default, hasFingerprint: false,
-                        appliedAt: 0, expiresAt: 0);
+                    receipt = new InboxReceipt(author, cursorEnd: 0, hasCursorEnd: false,
+                        fingerprint: default, hasFingerprint: false, appliedAt: 0, expiresAt: 0);
                 var key = (issuer, ns, ep, batchId);
                 if (issuer.IsZero || batchId.IsZero || author.IsZero ||
                     (uint)ns > ushort.MaxValue || ep < 0 || !n.InboxAuthors.TryAdd(key, receipt))
@@ -439,8 +445,8 @@ public static class NodePersistence
                 var issuer = NodeId.From(r.B128()); var ns = (int)r.Varint();
                 var ep = (int)r.Varint(); var batchId = BatchId.From(r.B128());
                 var author = NodeId.From(r.B128());
-                var legacyReceipt = new InboxReceipt(author, default, hasFingerprint: false,
-                    appliedAt: 0, expiresAt: 0);
+                var legacyReceipt = new InboxReceipt(author, cursorEnd: 0, hasCursorEnd: false,
+                    fingerprint: default, hasFingerprint: false, appliedAt: 0, expiresAt: 0);
                 if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), legacyReceipt))
                     throw new InvalidDataException("Duplicate legacy inbox author key.");
             }
@@ -705,6 +711,8 @@ public static class NodePersistence
             foreach (var (key, receipt) in n.InboxAuthors)
                 if (key.Issuer.IsZero || key.BatchId.IsZero || receipt.DurableAuthor.IsZero ||
                     (uint)key.Ns > ushort.MaxValue || key.Epoch < 0 ||
+                    (receipt.HasCursorEnd && receipt.CursorEnd < 0) ||
+                    (receipt.HasFingerprint && !receipt.HasCursorEnd) ||
                     (receipt.ExpiresAt != 0 && receipt.ExpiresAt < receipt.AppliedAt))
                     throw new InvalidDataException("Invalid persisted batch receipt.");
         }
