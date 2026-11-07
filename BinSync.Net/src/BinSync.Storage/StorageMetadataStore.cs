@@ -493,7 +493,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
             return new MetadataBatchReceipt(priorReceipt.CursorStart, priorReceipt.CursorEnd,
                 priorReceipt.BatchDigest.ToArray(), priorReceipt.NewRelayOperationCount, IsDuplicate: true)
-            { DurableAuthor = priorReceipt.DurableAuthor };
+            {
+                DurableAuthor = priorReceipt.DurableAuthor,
+                HeaderFingerprint = priorReceipt.HeaderFingerprint.ToArray()
+            };
         }
 
         var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch,
@@ -670,7 +673,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         storageBatch.Commit();
 
         current.Receipts.Add(receiptKey, new ReceiptValue(batch.CursorStart, batch.CursorEnd,
-            batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded, receipt.DurableAuthor));
+            batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded,
+            receipt.DurableAuthor, batch.HeaderFingerprint.ToArray()));
         current.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
         current.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
         foreach (var pair in newLedger)
@@ -715,7 +719,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 priorReceipt.BatchDigest.ToArray(),
                 priorReceipt.NewRelayOperationCount,
                 IsDuplicate: true)
-            { DurableAuthor = priorReceipt.DurableAuthor };
+            {
+                DurableAuthor = priorReceipt.DurableAuthor,
+                HeaderFingerprint = priorReceipt.HeaderFingerprint.ToArray()
+            };
         }
 
         var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch,
@@ -783,7 +790,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             batch.BatchDigest.ToArray(),
             relayAdded,
             IsDuplicate: false)
-        { DurableAuthor = ResolveAuthorStream(batch) };
+        { DurableAuthor = ResolveAuthorStream(batch), HeaderFingerprint = batch.HeaderFingerprint.ToArray() };
     }
 
     private static bool SamePendingBatch(MetadataIncomingBatch left, MetadataIncomingBatch right)
