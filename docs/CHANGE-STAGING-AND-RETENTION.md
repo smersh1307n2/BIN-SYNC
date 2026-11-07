@@ -543,3 +543,19 @@ The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value b
 7. Only then evaluate content-derived ChangeId, OriginSeq, batch-level alias and WAL-backed Outbox references.
 
 No wire-format or ChangeId change is authorized by this addendum.
+
+## 8. Compact history decisions and implementation gates (2026-11-07)
+
+See the cross-repository [Sync Storage Compaction Roadmap](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-STORAGE-COMPACTION-ROADMAP.md) and code-backed [Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md).
+
+The target lifecycle decisions are:
+1. Current field state stores the current winner and required lifecycle/tombstone data; it is not a full ChangeId history.
+2. Pending local LWW staging stores at most one latest unpublished operation per canonical field key. Its payload is independent of the current visible winner.
+3. Freeze/publication is atomic and immutable. Once an operation could have been exposed to any peer, it cannot be coalesced or rewritten, regardless of ACK state.
+4. Remote relay payload is separate from local pending staging. Preserve relay-eligible operations, including LWW losers; do not apply local coalescing to relay history.
+5. One payload serves all peers. Peer progress is stored separately per peer/namespace/author stream.
+6. Batch receipts, global ChangeId dedup facts, relay payload and outgoing replay mappings are separate logical records with independent lifetimes. Physical co-location is allowed only if atomicity and reclamation remain independent.
+
+First implementation priority is route-independent ChangeId dedup, ACK-covered replay-cache pruning and receipt-path audit. The largest payload optimization is APPLY WAL single-encoding plus compact relay-selection indexes and a relay-only payload log. Durable PendingLocal coalescing follows; physical compact encodings come only after logical transitions are tested.
+
+No ChangeId generation change, OriginSeq extension, wire-format change or destructive GC policy is approved here. Detailed exit criteria and crash tests are in the roadmap.
