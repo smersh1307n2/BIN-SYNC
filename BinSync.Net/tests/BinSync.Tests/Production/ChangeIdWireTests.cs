@@ -295,7 +295,17 @@ public class ChangeIdWireTests
         var batch = a.CreateDeltaBatch(b.NodeId, 1)!;
         a.SignBatchFor(batch, b.NodeId);
         a.AdvanceStream(b.NodeId, 1, batch);
+        var peerState = a.PeerStates[(b.NodeId, 1)];
+        Assert.Single(peerState.Ids);
+        var streamCheckpointKey = ((a.NodeId, 1, batch.IssuerEpoch), b.NodeId);
+        var sentDigestCheckpoint = a.LastStreamDigest[streamCheckpointKey];
+
         a.ProcessAck(b.NodeId, 1, batch.CursorEnd, batch.DurableAuthor);
+
+        // The ACK is contiguous and covers the cached range: release its replay
+        // mapping, but retain the independent digest-chain checkpoint.
+        Assert.Empty(peerState.Ids);
+        Assert.Equal(sentDigestCheckpoint, a.LastStreamDigest[streamCheckpointKey]);
 
         var path = Path.Combine(Path.GetTempPath(), $"binsync-ack-{Guid.NewGuid():N}.bin");
         try
@@ -304,7 +314,9 @@ public class ChangeIdWireTests
             var restored = NodePersistence.Load(path);
             Assert.Equal(batch.CursorEnd, restored.PeerStates[(b.NodeId, 1)].StreamPushed[batch.DurableAuthor]);
             Assert.Equal(batch.CursorEnd, restored.PeerStates[(b.NodeId, 1)].AckedFor(batch.DurableAuthor));
+            Assert.Empty(restored.PeerStates[(b.NodeId, 1)].Ids);
             restored.ProcessAck(b.NodeId, 1, batch.CursorEnd, batch.DurableAuthor);
+            Assert.Empty(restored.PeerStates[(b.NodeId, 1)].Ids);
             Assert.Equal(0, restored.OutboxSize(1));
         }
         finally
