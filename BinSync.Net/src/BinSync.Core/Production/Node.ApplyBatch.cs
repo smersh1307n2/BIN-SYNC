@@ -576,9 +576,9 @@ public sealed partial class Node
             LastStreamAuthor.EnsureCapacity(LastStreamAuthor.Count +
                 (LastStreamAuthor.ContainsKey((senderPeer, batch.NamespaceId)) ? 0 : 1));
             LastBatchDigest.EnsureCapacity(LastBatchDigest.Count + (LastBatchDigest.ContainsKey(chain) ? 0 : 1));
-            KnownEpochs.EnsureCapacity(KnownEpochs.Count + (KnownEpochs.ContainsKey(sesKey) ? 0 : 1));
             AcksOut.EnsureCapacity(AcksOut.Count + 1);
         }
+        KnownEpochs.EnsureCapacity(KnownEpochs.Count + (KnownEpochs.ContainsKey(sesKey) ? 0 : 1));
         if (stagedGlobalLedger.Count > 0)
             GlobalChangeLedger.EnsureCapacity(GlobalChangeLedger.Count +
                 stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
@@ -616,11 +616,12 @@ public sealed partial class Node
             ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
             ps.LastReceivedSeq = batch.CursorEnd;   // compatibility/diagnostic mirror
             LastBatchDigest[chain] = batch.BatchDigest;
-            // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns).
-            int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
-            KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
             AcksOut.Add(batch.BatchId);
         }
+        // Keep the session-incarnation fence in Node: Metadata Store owns receive
+        // cursor/digest/inbox state, while HELLO/session epoch remains Node context.
+        int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
+        KnownEpochs[sesKey] = Math.Max(knownS, batch.IssuerEpoch);
         result.Applied = applied;
         result.DurableAuthor = streamAuthor;
         result.Acked = true;
