@@ -376,7 +376,7 @@ The receipt does not retain the full Fields payload. A repeated idempotency key 
 
 The normative Inbox GC condition remains: expiresAt has elapsed AND both sides have confirmed the relevant log segment. Relay ACK, WAL truncation, ChangeId-ledger retention and tombstone GC are not substitutes for this condition.
 
-Current NodePersistence v5 serializes Inbox keys/authors and related checkpoints but not the complete InboxEntry tuple as one receipt. Migration must preserve or safely derive the original range/expiry facts; never invent an expiry or delete old receipts merely because they are old. The current Node.ApplyBatch duplicate path must be aligned with FLD's stricter range/digest validation.
+Current NodePersistence v5 serializes Inbox keys/authors and related checkpoints but not the complete InboxEntry tuple as one receipt. Migration must preserve or safely derive the original range/expiry facts; never invent an expiry or delete old receipts merely because they are old. If the original digest/range/expiry cannot be recovered from durable history, retain a LegacyUnverifiable receipt until a fenced namespace/scope rebootstrap; preserve the old duplicate-retry behavior for that legacy key, but do not claim the new conflicting-payload validation guarantee for it. New receipts must always carry the full validation tuple. The current Node.ApplyBatch duplicate path must be aligned with FLD's stricter range/digest validation.
 
 ### 9.3. Per-peer batch replay cache has a finite ACK-based lifetime
 
