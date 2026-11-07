@@ -341,7 +341,7 @@ The current Node implementation stores remote SeenChanges under (senderPeer, nam
 - compact fingerprint: BLAKE3-128 over the canonical operation identity and payload (resolved original author, RecordId, operation kind, field/key epoch, HLC, value/tombstone bytes and any canonical causal dependency data);
 - only the minimal format/legacy marker needed to distinguish imported IDs whose old payload fingerprint is unavailable.
 
-The original author is already included in the fingerprint and must not be stored a second time in this index. Scope and local replica identity define the owning partition; namespace belongs in the key prefix. Do not repeat these values in every ledger record.
+The original author is already included in the fingerprint and must not be stored a second time in this index. Scope and local replica identity define the owning partition; namespace belongs in the key prefix. Do not repeat these values in every ledger record. The logical ledger payload is therefore 32 bytes per unique operation (16-byte ChangeId key + 16-byte fingerprint), before page/index/record overhead; there is no peer multiplier and no operation payload copy.
 
 The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes. Its exact lookup must be disk/page-backed with a bounded hot cache; a Bloom filter is allowed only as a negative prefilter, never as the authoritative answer. Do not keep one in-memory object per historical ChangeId.
 
@@ -370,7 +370,7 @@ The Inbox idempotency key remains (issuerNodeId, namespaceId, issuerEpoch, batch
 - BatchDigest, RecordsRoot and PreviousBatchDigest;
 - appliedCount/result needed to reproduce the original ACK;
 - appliedAt and expiresAt;
-- the storage-native commit identity/reference needed to prove that the corresponding apply and ProtocolStateDelta were durably committed.
+- the storage-native commit identity/reference while WAL-to-sidecar materialization/recovery requires it; after materialization, the receipt's own durable generation is sufficient and the temporary WAL reference may be dropped.
 
 The receipt does not retain the full Fields payload. A repeated idempotency key is accepted as a duplicate only if cursor range, author stream and all stored digest/chain fields match exactly. A conflicting reuse is rejected before ACK; it must not return the old receipt as though the new payload had been accepted. A same ChangeId arriving in a different BatchId is handled by the global ChangeId ledger, not by Inbox.
 
