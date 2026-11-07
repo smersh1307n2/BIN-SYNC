@@ -554,9 +554,9 @@ PeerState.Ids stores the deterministic outgoing batch replay mapping keyed by au
 
 NodePersistence serializes StreamAcked, StreamPushed and StreamOffsets independently, repeating the author ID in each map. A versioned per-author progress tuple with presence flags can store the author once while preserving sparse values. This is a format optimization, not a semantic change.
 
-The duplicate key storage in Inbox and InboxAuthors has been consolidated: runtime now stores one dictionary entry keyed by (issuer, namespace, epoch, BatchId) with the resolved author as its value. The old Inbox property is a read-only key view and owns no second set. NodePersistence v7 serializes the key and author once; v3-v6 loaders still validate exact parity between the old set and author map before migrating. ReceivedStreams remains a separate per-peer/per-author cursor fact and is not part of this key consolidation.
+The duplicate key storage in Inbox and InboxAuthors has been consolidated: runtime stores one dictionary entry keyed by (issuer, namespace, epoch, BatchId). The value is now an InboxReceipt with durable author, original cursorEnd, header fingerprint, appliedAt and expiresAt. The old Inbox property is a read-only key view and owns no second set. NodePersistence v8 serializes the unified receipt; v3-v6 loaders validate old key-set/map parity, and v7 loaders migrate author-only receipts as explicit legacy-unknown entries. ReceivedStreams remains a separate per-peer/per-author cursor fact.
 
-This closes only the duplicated key representation. The receipt still does not retain the full cursor range/digest/expiry tuple discussed in the protocol audit, and the existing duplicate path still follows the legacy issuer+BatchId idempotency behavior. Full receipt-tuple validation and safe expiry/GC remain open.
+The header fingerprint commits to cursorStart/end, previous/records/batch digests, schema/mode fields and flags, but intentionally excludes entry payload and causal trailer. Duplicate replay compares the stored header commitment and returns the stored cursorEnd/author without decoding replay entries; same BatchId + same committed header is a no-op even if replay-supplied ChangeIds/CausalDeps differ. Changed committed header is rejected. Legacy v3-v7 receipts lack cursor/fingerprint and preserve old duplicate behavior. Receipt expiry/GC and a WAL-generation field remain open; new receipts use expiresAt=0 (no scheduled expiry).
 
 ### 8.3. Global ChangeId ledger — implemented
 
@@ -599,7 +599,7 @@ Do not add a per-change/per-peer delivery table or ACK bitmap. Do not merge rece
 
 The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint for now; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
 
-Order: baseline; global dedup, ACK-covered replay pruning, Inbox/InboxAuthors key consolidation and remote SeenChanges removal (implemented); full receipt-tuple/expiry audit; APPLY payload dedup and relay/receipt split; durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
+Order: baseline; global dedup, ACK-covered replay pruning, Inbox/InboxAuthors key consolidation and remote SeenChanges removal (implemented); compact header-bound InboxReceipt v8 (implemented; expiry/GC still open); APPLY payload dedup and relay/receipt split; durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
 
 
 ## 18. Replay-cache pruning implementation status (2026-11-07)
@@ -622,19 +622,22 @@ Focused tests cover second-route duplicates after origin Outbox compaction, retu
 
 Not included: a safe dedup GC horizon, receipt consolidation, APPLY payload de-duplication, or a ChangeId/wire-format change. The backup branch remains untouched.
 
-## 20. Inbox receipt key consolidation implementation status (2026-11-07)
+## 20. Inbox receipt consolidation and v8 header commitment (2026-11-07)
 
 Implemented on `feature/fld-external-storage`:
-- replaced the separate Inbox HashSet plus InboxAuthors Dictionary with one key-to-author Dictionary;
-- duplicate ACK resolution reads the exact author from that single map and no longer falls back to LastStreamAuthor;
-- the legacy Inbox property is a read-only view over dictionary keys, not separately retained storage;
-- NodePersistence v7 writes each issuer/namespace/epoch/BatchId key once with its durable author;
-- v3-v6 migration reads the old set and map, rejects missing/orphan/duplicate/zero-author entries, then publishes the single v7 map;
-- WAL replay and atomic state publication now copy only the one receipt dictionary.
+- replaced the separate Inbox HashSet plus InboxAuthors Dictionary with one key-to-InboxReceipt Dictionary;
+- duplicate ACK resolution uses the stored durable author and original cursorEnd, never LastStreamAuthor or replay-supplied cursorEnd;
+- each new receipt stores a 16-byte header fingerprint, appliedAt (HLC wall Unix microseconds) and expiresAt (currently zero/no scheduled expiry);
+- the fingerprint commits to issuer/namespace/epoch/BatchId, cursor range, previous/records/batch digests, schema id/version, merge policy and flags (excluding causal-trailer framing);
+- duplicate replay compares only the committed header; it deliberately does not inspect entry payloads or causal dependencies, preserving the hardening contract that duplicate BatchId bypasses the causal gate and ignores replay-supplied ChangeIds;
+- NodePersistence v8 stores the receipt; v3-v7 migrations retain explicit legacy-unknown receipts when cursor/fingerprint data did not exist;
+- WAL replay and atomic state publication carry the one receipt dictionary.
 
-The raw serialized saving is one duplicate receipt key per accepted batch (issuer 16 B + BatchId 16 B + namespace/epoch varints, approximately 34 bytes for the common one-byte varint case), plus removal of the second in-memory hash-set entry and its buckets. This is a format-derived estimate, not a benchmark. GitHub Actions run [42344555045](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42344555045) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening.
+CursorEnd and timestamps are varint encoded; the fingerprint is 16 bytes. This preserves the key consolidation while adding the data needed for exact duplicate ACK cursor reconstruction and header conflict detection. It is not a claim of net disk reduction versus the older v6 set+map layout: the new receipt metadata consumes some of the bytes saved by key de-duplication. The raw saving relative to v6 depends on cursor/appliedAt varint lengths; the larger benefit is one authoritative receipt object and reduced in-memory collection overhead.
 
-Not solved by this slice: a full durable receipt tuple containing cursor range, batch/records/previous digests, expiry and WAL-to-sidecar generation; conflicting payload reuse under an already accepted BatchId; receipt expiry/GC proof. `ReceivedStreams` remains a distinct author-stream cursor structure. No wire-format change.
+GitHub Actions run [42345734949](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42345734949) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening. This run tested the v8 header-commitment implementation before the subsequent cursorEnd varint-only serialization refinement; that final refinement is covered by the next CI run.
+
+Legacy v3-v7 receipts have no header fingerprint or original cursorEnd and retain old duplicate behavior. New receipts use `expiresAt=0`; no receipt expiry/GC is implemented. A WAL-generation/materialization field is also not yet stored. No wire-format change.
 
 ## 21. Remove redundant remote SeenChanges provenance (2026-11-07)
 
