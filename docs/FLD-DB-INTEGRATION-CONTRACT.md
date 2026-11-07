@@ -85,7 +85,11 @@ FLD хранит opaque protocol extension как часть той же durable
 
 Повтор того же batch после lost ACK возвращает duplicate receipt с тем же `CursorEnd`/author result и не создаёт повторных field mutations или relay entries. Повтор ChangeId через другого peer не должен повторно применять/relay mutation, но входящий peer cursor должен быть корректно обработан.
 
+Повтор ChangeId через другого peer с тем же canonical fingerprint не пере-применяется и не ставится в relay повторно, но новый batch receipt и receive cursor этого peer фиксируются. Тот же ChangeId с другим fingerprint отклоняет весь batch до публикации любых изменений.
+
 Remote mutation не создаёт запись в **локальном** FLD Outbox. Self-echo уже локально authored mutation не ставится в relay повторно.
+
+`ProtocolStateDelta` — bounded per-batch recovery envelope. Его изменения материализуются в индексированные protocol metadata records при финализации; raw delta удерживается только внутри pending-apply intent для separate-store recovery и удаляется после durable finalization. Duplicate BatchId возвращает compact receipt/ACK result, а не полный ProtocolStateDelta.
 
 ## 4. Локальный Outbox и ACK
 
