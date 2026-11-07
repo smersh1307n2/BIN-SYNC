@@ -513,8 +513,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         var key = new OutboundKey(namespaceId, localAuthor);
         ulong acknowledged = current.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
         ulong peerSafe = GetSafePeerCursor(current, namespaceId, localAuthor);
-        bool hasPeerRequirements = current.InterestedPeers.Any(peer => peer.NamespaceId == namespaceId) ||
-            current.RequiredPeerStreams.Any(peer => peer.NamespaceId == namespaceId && peer.AuthorStream == localAuthor);
+        bool hasPeerRequirements = current.InterestedPeers.Any(peer => peer.NamespaceId == namespaceId && peer.Peer != localAuthor) ||
+            current.RequiredPeerStreams.Any(peer => peer.NamespaceId == namespaceId && peer.AuthorStream == localAuthor && peer.Peer != localAuthor);
         if (safeThroughSequence > acknowledged ||
             (hasPeerRequirements && safeThroughSequence > peerSafe))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
@@ -663,9 +663,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
             var next = current.Clone();
             next.InterestedPeers.Add(rosterKey);
-            foreach (var outbound in next.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId))
+            foreach (var outbound in next.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
                 EnsurePeerStream(next, new PeerStreamKey(peer, peerEpoch, namespaceId, outbound.Author), 0);
-            foreach (var relay in next.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId))
+            foreach (var relay in next.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
                 EnsurePeerStream(next, new PeerStreamKey(peer, peerEpoch, namespaceId, relay.Author), 0);
             PersistPartition(partitionKey, current, next);
         }
@@ -855,10 +855,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
     private static ulong GetSafePeerCursor(PartitionState state, int namespaceId, NodeId authorStream)
     {
-        var peers = state.InterestedPeers.Where(key => key.NamespaceId == namespaceId)
+        var peers = state.InterestedPeers.Where(key => key.NamespaceId == namespaceId && key.Peer != authorStream)
             .Select(key => (key.Peer, key.PeerEpoch))
             .Concat(state.RequiredPeerStreams
-                .Where(key => key.NamespaceId == namespaceId && key.AuthorStream == authorStream)
+                .Where(key => key.NamespaceId == namespaceId && key.AuthorStream == authorStream && key.Peer != authorStream)
                 .Select(key => (key.Peer, key.PeerEpoch)))
             .Distinct()
             .ToArray();
@@ -883,7 +883,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     private static void EnsureRegisteredPeerStreams(
         PartitionState state, int namespaceId, NodeId authorStream, uint issuerEpoch)
     {
-        foreach (var peer in state.InterestedPeers.Where(key => key.NamespaceId == namespaceId))
+        foreach (var peer in state.InterestedPeers.Where(key => key.NamespaceId == namespaceId && key.Peer != authorStream))
             EnsurePeerStream(state,
                 new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream), issuerEpoch);
     }
