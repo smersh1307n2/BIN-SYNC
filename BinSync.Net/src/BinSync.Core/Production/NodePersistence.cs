@@ -271,10 +271,10 @@ public static class NodePersistence
                 w.U8(ps.InitialSyncComplete ? (byte)1 : (byte)0);
                 w.Varint((ulong)ps.MembershipEpoch); w.U64((ulong)ps.LastSeen);
                 w.Varint((ulong)ps.ReceivedStreams.Count);
-                foreach (var ((peer, epoch, author), seq) in ps.ReceivedStreams
+                foreach (var ((streamPeer, epoch, author), seq) in ps.ReceivedStreams
                            .OrderBy(k => k.Key.Peer.Lo).ThenBy(k => k.Key.Peer.Hi)
                            .ThenBy(k => k.Key.Epoch).ThenBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi))
-                { w.B128(peer); w.Varint((ulong)epoch); w.B128(author); w.U64((ulong)seq); }
+                { w.B128(streamPeer); w.Varint((ulong)epoch); w.B128(author); w.U64((ulong)seq); }
                 w.Varint((ulong)ps.AuthorProgress.Count);
                 foreach (var (author, progress) in ps.AuthorProgress.OrderBy(k => k.Key.ToString()))
                 {
