@@ -109,13 +109,12 @@ public class Production : IDisposable
             if (ps.LastPushedSeq != ops.LastPushedSeq || ps.LastReceivedSeq != ops.LastReceivedSeq ||
                 ps.LastAckedSeq != ops.LastAckedSeq || ps.InitialSyncComplete != ops.InitialSyncComplete) return false;
             if (ps.ReceivedStreams.Count != ops.ReceivedStreams.Count) return false;
-            if (ps.StreamAcked.Count != ops.StreamAcked.Count) return false;
-            if (ps.StreamPushed.Count != ops.StreamPushed.Count) return false;
-            foreach (var (author, seq) in ps.StreamPushed)
-                if (!ops.StreamPushed.TryGetValue(author, out var pushed) || pushed != seq) return false;
-            if (ps.StreamOffsets.Count != ops.StreamOffsets.Count) return false;
-            foreach (var (author, offset) in ps.StreamOffsets)
-                if (!ops.StreamOffsets.TryGetValue(author, out var otherOffset) || otherOffset != offset) return false;
+            foreach (var (streamKey, seq) in ps.ReceivedStreams)
+                if (!ops.ReceivedStreams.TryGetValue(streamKey, out var otherSeq) || otherSeq != seq) return false;
+            if (ps.AuthorProgress.Count != ops.AuthorProgress.Count) return false;
+            foreach (var (author, progress) in ps.AuthorProgress)
+                if (!ops.AuthorProgress.TryGetValue(author, out var otherProgress) ||
+                    !otherProgress.Equals(progress)) return false;
             if (ps.IdsRef.Count != ops.IdsRef.Count) return false;
         }
         // Outbox entries + per-author seq counters
@@ -236,19 +235,19 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V8TagAndStreamOffsetsRoundTrip()
+    public void Persistence_V9TagAndAuthorProgressRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
         var author = a.NodeId;
-        peer.StreamOffsets[author] = 17;
-        var path = Path.Combine(_dir, "tag-v6.state");
+        peer.SetStreamOffset(author, 17);
+        var path = Path.Combine(_dir, "tag-v9.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)8, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)9, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v8", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v9", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
@@ -288,12 +287,14 @@ public class Production : IDisposable
         donor.AdvanceStream(newPeer.NodeId, NS, tail);
         donor.ProcessAck(newPeer.NodeId, NS, received.CursorEnd, received.DurableAuthor);
         Assert.Equal(1L, donor.PeerStates[(newPeer.NodeId, NS)].AckedFor(donor.NodeId));
-        Assert.Equal(2L, donor.PeerStates[(newPeer.NodeId, NS)].StreamOffsets[donor.NodeId]);
+        Assert.True(donor.PeerStates[(newPeer.NodeId, NS)].TryGetStreamOffset(donor.NodeId, out var donorOffset));
+        Assert.Equal(2L, donorOffset);
 
         var path = Path.Combine(_dir, "stream-offset-restart.state");
         NodePersistence.Save(donor, path);
         var resumed = NodePersistence.Load(path);
-        Assert.Equal(2L, resumed.PeerStates[(newPeer.NodeId, NS)].StreamOffsets[donor.NodeId]);
+        Assert.True(resumed.PeerStates[(newPeer.NodeId, NS)].TryGetStreamOffset(donor.NodeId, out var resumedOffset));
+        Assert.Equal(2L, resumedOffset);
 
         // The persisted alias table is sufficient for a resumed sender to rebuild
         // the exact peer-relative cursor before a live session is reattached.
@@ -306,7 +307,8 @@ public class Production : IDisposable
 
         var peerState = resumed.PeerStates[(newPeer.NodeId, NS)];
         Assert.Equal(2L, peerState.AckedFor(resumed.NodeId));
-        Assert.Equal(2L, peerState.StreamOffsets[resumed.NodeId]);
+        Assert.True(peerState.TryGetStreamOffset(resumed.NodeId, out var peerOffset));
+        Assert.Equal(2L, peerOffset);
         Assert.Contains(resumed.Outbox[NS], e => e.Seq == 4);
     }
 
