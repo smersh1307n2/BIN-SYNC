@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v7";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v8";
+    private const string Version7StateTag = "BIN-SYNC/NODESTATE/v7";
     private const string Version6StateTag = "BIN-SYNC/NODESTATE/v6";
     private const string Version5StateTag = "BIN-SYNC/NODESTATE/v5";
     private const string Version4StateTag = "BIN-SYNC/NODESTATE/v4";
@@ -35,7 +36,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 7;
+    private const ushort Version = 8;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -100,8 +101,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -116,6 +117,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 7)
+        {
+            var v7 = Blake3Core.TaggedHash(Version7StateTag, body);
+            validDigest = v7.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 6)
         {
@@ -203,7 +209,11 @@ public static class NodePersistence
                                                         .ThenBy(k => k.Key.BatchId.Lo).ThenBy(k => k.Key.BatchId.Hi))
             {
                 w.B128(key.Issuer); w.Varint((ulong)key.Ns); w.Varint((ulong)key.Epoch);
-                w.B128(key.BatchId); w.B128(author);
+                w.B128(key.BatchId); w.B128(author.DurableAuthor);
+                w.U8(author.HasFingerprint ? (byte)1 : (byte)0);
+                if (author.HasFingerprint) w.B128(author.Fingerprint);
+                w.Varint(author.AppliedAt);
+                w.Varint(author.ExpiresAt);
             }
 
             // --- batch-digest chain checkpoints: (issuer, ns, epoch) -> digest
@@ -387,9 +397,26 @@ public static class NodePersistence
                 var ep = (int)r.Varint();
                 var batchId = BatchId.From(r.B128());
                 var author = NodeId.From(r.B128());
+                InboxReceipt receipt;
+                if (version >= 8)
+                {
+                    byte hasFingerprint = r.U8();
+                    if (hasFingerprint > 1)
+                        throw new InvalidDataException("Invalid persisted receipt fingerprint flag.");
+                    var fingerprint = hasFingerprint == 1 ? Digest16.From(r.B128()) : default;
+                    var appliedAt = r.Varint();
+                    var expiresAt = r.Varint();
+                    if (expiresAt != 0 && expiresAt < appliedAt)
+                        throw new InvalidDataException("Invalid persisted receipt expiry.");
+                    receipt = new InboxReceipt(author, fingerprint, hasFingerprint == 1,
+                        appliedAt, expiresAt);
+                }
+                else
+                    receipt = new InboxReceipt(author, default, hasFingerprint: false,
+                        appliedAt: 0, expiresAt: 0);
                 var key = (issuer, ns, ep, batchId);
                 if (issuer.IsZero || batchId.IsZero || author.IsZero ||
-                    (uint)ns > ushort.MaxValue || ep < 0 || !n.InboxAuthors.TryAdd(key, author))
+                    (uint)ns > ushort.MaxValue || ep < 0 || !n.InboxAuthors.TryAdd(key, receipt))
                     throw new InvalidDataException("Invalid or duplicate persisted batch receipt.");
             }
         }
@@ -412,7 +439,9 @@ public static class NodePersistence
                 var issuer = NodeId.From(r.B128()); var ns = (int)r.Varint();
                 var ep = (int)r.Varint(); var batchId = BatchId.From(r.B128());
                 var author = NodeId.From(r.B128());
-                if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), author))
+                var legacyReceipt = new InboxReceipt(author, default, hasFingerprint: false,
+                    appliedAt: 0, expiresAt: 0);
+                if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), legacyReceipt))
                     throw new InvalidDataException("Duplicate legacy inbox author key.");
             }
         }
@@ -662,20 +691,21 @@ public static class NodePersistence
                 throw new InvalidDataException("Legacy inbox author map does not match the inbox.");
             foreach (var inboxKey in legacyInbox)
             {
-                if (!n.InboxAuthors.TryGetValue(inboxKey, out var author) || author.IsZero)
+                if (!n.InboxAuthors.TryGetValue(inboxKey, out var receipt) || receipt.DurableAuthor.IsZero)
                     throw new InvalidDataException("Legacy inbox receipt is missing its durable author.");
             }
-            foreach (var (inboxKey, author) in n.InboxAuthors)
+            foreach (var (inboxKey, receipt) in n.InboxAuthors)
             {
-                if (!legacyInbox.Contains(inboxKey) || author.IsZero)
+                if (!legacyInbox.Contains(inboxKey) || receipt.DurableAuthor.IsZero)
                     throw new InvalidDataException("Legacy inbox author map contains an orphan or zero author.");
             }
         }
         else
         {
-            foreach (var (key, author) in n.InboxAuthors)
-                if (key.Issuer.IsZero || key.BatchId.IsZero || author.IsZero ||
-                    (uint)key.Ns > ushort.MaxValue || key.Epoch < 0)
+            foreach (var (key, receipt) in n.InboxAuthors)
+                if (key.Issuer.IsZero || key.BatchId.IsZero || receipt.DurableAuthor.IsZero ||
+                    (uint)key.Ns > ushort.MaxValue || key.Epoch < 0 ||
+                    (receipt.ExpiresAt != 0 && receipt.ExpiresAt < receipt.AppliedAt))
                     throw new InvalidDataException("Invalid persisted batch receipt.");
         }
 
