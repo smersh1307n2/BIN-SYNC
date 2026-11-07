@@ -153,7 +153,10 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 priorReceipt.BatchDigest.ToArray(),
                 priorReceipt.NewRelayOperationCount,
                 IsDuplicate: true)
-            { DurableAuthor = priorReceipt.DurableAuthor };
+            {
+                DurableAuthor = priorReceipt.DurableAuthor,
+                HeaderFingerprint = priorReceipt.HeaderFingerprint.ToArray()
+            };
         }
 
         var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
@@ -205,7 +208,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             batch.PreviousBatchDigest.ToArray(),
             batch.BatchDigest.ToArray(),
             relayAdded,
-            ResolveAuthorStream(batch)));
+            ResolveAuthorStream(batch),
+            batch.HeaderFingerprint.ToArray()));
 
         return new MetadataBatchReceipt(
             batch.CursorStart,
@@ -213,7 +217,10 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             batch.BatchDigest.ToArray(),
             relayAdded,
             IsDuplicate: false)
-        { DurableAuthor = ResolveAuthorStream(batch) };
+        {
+            DurableAuthor = ResolveAuthorStream(batch),
+            HeaderFingerprint = batch.HeaderFingerprint.ToArray()
+        };
     }
 
     private static bool SamePendingBatch(MetadataIncomingBatch left, MetadataIncomingBatch right)
@@ -228,6 +235,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             && left.CursorEnd == right.CursorEnd
             && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest)
             && left.WirePayload.AsSpan().SequenceEqual(right.WirePayload)
+            && left.HeaderFingerprint.AsSpan().SequenceEqual(right.HeaderFingerprint)
             && left.ReceiveStateOwnedByMetadataStore == right.ReceiveStateOwnedByMetadataStore;
 
     private static MetadataIncomingBatch CloneBatch(MetadataIncomingBatch batch)
@@ -244,6 +252,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             CursorEnd = batch.CursorEnd,
             PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
+            HeaderFingerprint = batch.HeaderFingerprint.ToArray(),
             WirePayload = batch.WirePayload.ToArray(),
             ReceiveStateOwnedByMetadataStore = batch.ReceiveStateOwnedByMetadataStore,
             Operations = batch.Operations.Select(operation => new MetadataOperation
@@ -258,7 +267,11 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
 
     private static MetadataBatchReceipt CloneReceipt(MetadataBatchReceipt receipt, bool isDuplicate)
         => new MetadataBatchReceipt(receipt.CursorStart, receipt.CursorEnd, receipt.BatchDigest.ToArray(),
-            receipt.NewRelayOperationCount, isDuplicate) { DurableAuthor = receipt.DurableAuthor };
+            receipt.NewRelayOperationCount, isDuplicate)
+        {
+            DurableAuthor = receipt.DurableAuthor,
+            HeaderFingerprint = receipt.HeaderFingerprint.ToArray()
+        };
 
     private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
         => batch.AuthorStreamNodeId;
@@ -620,6 +633,10 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             throw new ArgumentOutOfRangeException(nameof(batch.CursorStart));
         ValidateDigest(batch.PreviousBatchDigest, nameof(batch.PreviousBatchDigest));
         ValidateDigest(batch.BatchDigest, nameof(batch.BatchDigest));
+        if (batch.HeaderFingerprint.Length != 0)
+            ValidateDigest(batch.HeaderFingerprint, nameof(batch.HeaderFingerprint));
+        if (batch.ReceiveStateOwnedByMetadataStore && batch.HeaderFingerprint.Length != 16)
+            throw new ArgumentException("Metadata-authoritative receive requires a full header fingerprint.", nameof(batch));
         ArgumentNullException.ThrowIfNull(batch.Operations);
 
         var seen = new HashSet<BatchId>();
@@ -749,7 +766,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         byte[] previousBatchDigest,
         byte[] batchDigest,
         int newRelayOperationCount,
-        NodeId durableAuthor = default)
+        NodeId durableAuthor = default,
+        byte[]? headerFingerprint = null)
     {
         public ulong CursorStart { get; } = cursorStart;
         public ulong CursorEnd { get; } = cursorEnd;
@@ -757,12 +775,14 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         public byte[] BatchDigest { get; } = batchDigest;
         public int NewRelayOperationCount { get; } = newRelayOperationCount;
         public NodeId DurableAuthor { get; } = durableAuthor;
+        public byte[] HeaderFingerprint { get; } = headerFingerprint ?? Array.Empty<byte>();
 
         public bool Matches(MetadataIncomingBatch batch)
             => CursorStart == batch.CursorStart
                 && CursorEnd == batch.CursorEnd
                 && PreviousBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest)
-                && BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest);
+                && BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest)
+                && HeaderFingerprint.AsSpan().SequenceEqual(batch.HeaderFingerprint);
     }
 
     private sealed record PendingApplyValue(MetadataIncomingBatch Batch);
@@ -794,7 +814,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                     pair.Value.PreviousBatchDigest.ToArray(),
                     pair.Value.BatchDigest.ToArray(),
                     pair.Value.NewRelayOperationCount,
-                    pair.Value.DurableAuthor));
+                    pair.Value.DurableAuthor,
+                    pair.Value.HeaderFingerprint.ToArray()));
             foreach (var pair in Receives)
                 clone.Receives.Add(pair.Key, new ReceiveState(pair.Value.CursorEnd, pair.Value.LastBatchDigest.ToArray()));
             foreach (var pair in ChangeLedger)
