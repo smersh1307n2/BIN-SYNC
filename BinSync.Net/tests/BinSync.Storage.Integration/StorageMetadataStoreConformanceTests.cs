@@ -123,7 +123,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         const string scope = "peer-reservation-scope";
         var first = new MetadataOutboundBatchReservation
         {
-            BatchId = Batch(40),
+            BatchId = Batch(40), IssuerEpoch = 3,
             CursorStart = 1,
             CursorEnd = 3,
             PreviousBatchDigest = new byte[16],
@@ -139,7 +139,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 reserved.Payload[0] = 99;
                 var retryCandidate = new MetadataOutboundBatchReservation
                 {
-                    BatchId = Batch(42),
+                    BatchId = Batch(42), IssuerEpoch = 3,
                     CursorStart = 1,
                     CursorEnd = 1,
                     PreviousBatchDigest = new byte[16],
@@ -183,7 +183,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Null(state.PendingBatch);
                 var next = new MetadataOutboundBatchReservation
                 {
-                    BatchId = Batch(44),
+                    BatchId = Batch(44), IssuerEpoch = 3,
                     CursorStart = 4,
                     CursorEnd = 4,
                     PreviousBatchDigest = state.LastBatchDigest.ToArray(),
@@ -208,7 +208,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         const string scope = "peer-reservation-validation";
         var reservation = new MetadataOutboundBatchReservation
         {
-            BatchId = Batch(50), CursorStart = 1, CursorEnd = 2,
+            BatchId = Batch(50), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 2,
             PreviousBatchDigest = new byte[16],
             BatchDigest = Enumerable.Repeat((byte)51, 16).ToArray(),
             Payload = new byte[] { 1 }
@@ -225,7 +225,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
             new MetadataOutboundBatchReservation
             {
-                BatchId = Batch(52), CursorStart = 4, CursorEnd = 4,
+                BatchId = Batch(52), IssuerEpoch = 1, CursorStart = 4, CursorEnd = 4,
                 PreviousBatchDigest = reservation.BatchDigest.ToArray(),
                 BatchDigest = Enumerable.Repeat((byte)53, 16).ToArray(),
                 Payload = new byte[] { 2 }
