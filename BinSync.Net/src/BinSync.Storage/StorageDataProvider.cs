@@ -28,7 +28,7 @@ public class StorageDataProvider : IDataProvider
     private readonly Dictionary<Guid, StorageSnapshot> _snapshots = new();
     private bool _disposed;
 
-    public StorageDataProvider(string directory, ulong partitionId = 1, bool deleteOnDispose = true)
+    public StorageDataProvider(string directory, ulong partitionId = 1, bool deleteOnDispose = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         _directory = directory;
