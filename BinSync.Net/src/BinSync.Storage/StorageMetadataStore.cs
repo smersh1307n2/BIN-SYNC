@@ -71,7 +71,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         {
             if (!completed.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest))
                 throw new InvalidDataException("Completed apply token was reused for different input.");
-            throw new InvalidOperationException("Pending apply token has already been finalized.");
+            throw new MetadataPendingApplyAlreadyFinalizedException();
         }
 
         if (current.PendingApplies.TryGetValue(applyToken, out var pending))
