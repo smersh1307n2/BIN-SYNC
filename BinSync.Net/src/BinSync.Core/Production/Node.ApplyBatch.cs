@@ -292,6 +292,9 @@ public sealed partial class Node
             streamAuthor = nEntEarly > 0 ? ResolveAuthor(decodedOps[0]) : batch.IssuerNodeId;
         }
         catch (SyncException) { streamAuthor = batch.IssuerNodeId; }
+        if (receiveStateOwnedByMetadataStore &&
+            batch.AuthorStreamNodeId is NodeId preResolvedAuthor && preResolvedAuthor != streamAuthor)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         batch.AuthorStreamNodeId = streamAuthor;
         // [Р3]/errata E-4: a delta batch is one author stream. Validate every
         // decoded operation before cursor checks or any staging/WAL/state mutation;
@@ -392,21 +395,22 @@ public sealed partial class Node
         }
         // Stage provenance and relay decisions BEFORE publishing any state. This is
         // required so configured resource limits cannot reject after storage/cursors commit.
-        var relayChangeIds = batch.IssuerNodeId != NodeId && nEnt > 0
+        bool shouldRelay = !receiveStateOwnedByMetadataStore && batch.IssuerNodeId != NodeId;
+        var relayChangeIds = shouldRelay && nEnt > 0
             ? new BatchId[nEnt]
             : Array.Empty<BatchId>();
-        var relayIndices = batch.IssuerNodeId != NodeId
+        var relayIndices = shouldRelay
             ? new List<int>(Math.Min(nEnt, 16))
             : new List<int>(0);
         // The global ChangeId ledger is now the sole remote dedup authority.
         // SeenChanges is reserved for local WAL replay markers only.
         var queuedChangeIds = new HashSet<BatchId>();
-        if (Outbox.TryGetValue(batch.NamespaceId, out var queuedEntries))
+        if (shouldRelay && Outbox.TryGetValue(batch.NamespaceId, out var queuedEntries))
             for (int qi = 0; qi < queuedEntries.Count; qi++)
                 if (!queuedEntries[qi].ChangeId.IsZero)
                     queuedChangeIds.Add(queuedEntries[qi].ChangeId);
 
-        if (!receiveStateOwnedByMetadataStore && batch.IssuerNodeId != NodeId)
+        if (shouldRelay)
         {
             for (int idx = 0; idx < nEnt; idx++)
             {
@@ -514,7 +518,8 @@ public sealed partial class Node
 
         // Prepare every object and reserve every collection slot before the WAL commit
         // point. After AppendRemoteBatch succeeds, publication is assignment/add-only.
-        var hasRelayOutbox = Outbox.TryGetValue(batch.NamespaceId, out var relayOutbox);
+        List<OutboxEntry>? relayOutbox = null;
+        bool hasRelayOutbox = shouldRelay && Outbox.TryGetValue(batch.NamespaceId, out relayOutbox);
         var stagedRelayEntries = relayIndices.Count == 0
             ? Array.Empty<OutboxEntry>()
             : new OutboxEntry[relayIndices.Count];
@@ -632,7 +637,7 @@ public sealed partial class Node
             GlobalChangeLedger[pair.Key] = pair.Value;
 
         // Relay only the entries selected and fully materialized during preflight.
-        if (!receiveStateOwnedByMetadataStore && batch.IssuerNodeId != NodeId)
+        if (shouldRelay)
         {
             if (stagedRelayEntries.Length > 0)
             {
