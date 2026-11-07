@@ -101,6 +101,160 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             IsDuplicate: false);
     }
 
+    public IReadOnlyList<MetadataOutboundItem> FreezeOutbound(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor,
+        IReadOnlyList<MetadataFrozenOperation> operations)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+        ArgumentNullException.ThrowIfNull(operations);
+
+        var seen = new HashSet<BatchId>();
+        foreach (var operation in operations)
+        {
+            if (operation.ChangeId.IsZero)
+                throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(operations));
+            ArgumentNullException.ThrowIfNull(operation.Payload);
+            if (!seen.Add(operation.ChangeId))
+                throw new ArgumentException("Outbound ChangeId values must be unique within a freeze operation.", nameof(operations));
+        }
+
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        var current = _partitions.TryGetValue(partitionKey, out var stored)
+            ? stored
+            : new PartitionState();
+        foreach (var operation in operations)
+        {
+            if (current.OutboundChangeIds.Contains(new OutboundChangeKey(namespaceId, operation.ChangeId)))
+                throw new InvalidDataException("Outbound ChangeId is already frozen in this namespace.");
+        }
+
+        if (operations.Count == 0)
+            return Array.Empty<MetadataOutboundItem>();
+
+        var next = current.Clone();
+        var key = new OutboundKey(namespaceId, localAuthor);
+        if (!next.Outbound.TryGetValue(key, out var entries))
+        {
+            entries = new List<MetadataOutboundItem>();
+            next.Outbound.Add(key, entries);
+        }
+
+        var frozen = new List<MetadataOutboundItem>(operations.Count);
+        foreach (var operation in operations)
+        {
+            ulong sequence = entries.Count == 0 ? 1 : checked(entries[^1].Sequence + 1);
+            var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
+            entries.Add(item);
+            frozen.Add(CloneOutboundItem(item));
+            next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
+        }
+
+        _partitions[partitionKey] = next;
+        return frozen;
+    }
+
+    public ulong AcquireOutboundLease(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor,
+        Guid consumerId)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+        if (consumerId == Guid.Empty)
+            throw new ArgumentException("ConsumerId must be non-empty.", nameof(consumerId));
+
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        var current = _partitions.TryGetValue(partitionKey, out var stored)
+            ? stored
+            : new PartitionState();
+        var key = new OutboundKey(namespaceId, localAuthor);
+        ulong previous = current.OutboundLeases.TryGetValue(key, out var prior) ? prior.Generation : 0;
+        ulong generation = checked(previous + 1);
+
+        var next = current.Clone();
+        next.OutboundLeases[key] = new LeaseState(generation, consumerId);
+        _partitions[partitionKey] = next;
+        return generation;
+    }
+
+    public MetadataOutboundPage ReadOutbound(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor,
+        ulong leaseGeneration,
+        ulong afterSequence,
+        int limit)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+            throw new InvalidOperationException("Outbound lease is not active.");
+
+        var key = new OutboundKey(namespaceId, localAuthor);
+        ValidateOutboundLease(state, key, leaseGeneration);
+        if (limit <= 0)
+            return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), afterSequence);
+
+        ulong acknowledged = state.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
+        ulong cursor = Math.Max(afterSequence, acknowledged);
+        if (!state.Outbound.TryGetValue(key, out var entries))
+            return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), cursor);
+
+        var page = entries
+            .Where(entry => entry.Sequence > cursor)
+            .Take(limit)
+            .Select(CloneOutboundItem)
+            .ToArray();
+        ulong scannedThrough = page.Length == 0 ? cursor : page[^1].Sequence;
+        return new MetadataOutboundPage(page, scannedThrough);
+    }
+
+    public void AcknowledgeOutbound(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor,
+        ulong leaseGeneration,
+        ulong safeThroughSequence)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        if (!_partitions.TryGetValue(partitionKey, out var current))
+            throw new InvalidOperationException("Outbound lease is not active.");
+
+        var key = new OutboundKey(namespaceId, localAuthor);
+        ValidateOutboundLease(current, key, leaseGeneration);
+        ulong previous = current.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
+        ulong highWatermark = current.Outbound.TryGetValue(key, out var entries) && entries.Count != 0
+            ? entries[^1].Sequence
+            : 0;
+        if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+
+        var next = current.Clone();
+        next.OutboundAck[key] = safeThroughSequence;
+        _partitions[partitionKey] = next;
+    }
+
+    public ulong GetOutboundHighWatermark(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor)
+    {
+        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+            return 0;
+
+        return state.Outbound.TryGetValue(new OutboundKey(namespaceId, localAuthor), out var entries) &&
+               entries.Count != 0
+            ? entries[^1].Sequence
+            : 0;
+    }
+
     public MetadataRelayPage ReadRelay(
         string scopeId,
         NodeId localReplica,
@@ -245,11 +399,23 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
     private static MetadataRelayItem CloneRelayItem(MetadataRelayItem item)
         => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray());
 
+    private static MetadataOutboundItem CloneOutboundItem(MetadataOutboundItem item)
+        => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray());
+
+    private static void ValidateOutboundLease(PartitionState state, OutboundKey key, ulong generation)
+    {
+        if (!state.OutboundLeases.TryGetValue(key, out var lease) || lease.Generation != generation)
+            throw new InvalidOperationException("Outbound lease was superseded by a newer consumer.");
+    }
+
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
     private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
+    private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
+    private readonly record struct OutboundChangeKey(int NamespaceId, BatchId ChangeId);
+    private readonly record struct LeaseState(ulong Generation, Guid ConsumerId);
     private readonly record struct ReceiveState(ulong CursorEnd, byte[] LastBatchDigest);
 
     private sealed class ReceiptValue(
@@ -279,6 +445,10 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         public Dictionary<LedgerKey, byte[]> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
+        public Dictionary<OutboundKey, List<MetadataOutboundItem>> Outbound { get; } = new();
+        public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
+        public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
+        public HashSet<OutboundChangeKey> OutboundChangeIds { get; } = new();
 
         public PartitionState Clone()
         {
@@ -298,6 +468,14 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 clone.Relay.Add(pair.Key, pair.Value.Select(CloneRelayItem).ToList());
             foreach (var pair in RelayAck)
                 clone.RelayAck.Add(pair.Key, pair.Value);
+            foreach (var pair in Outbound)
+                clone.Outbound.Add(pair.Key, pair.Value.Select(CloneOutboundItem).ToList());
+            foreach (var pair in OutboundAck)
+                clone.OutboundAck.Add(pair.Key, pair.Value);
+            foreach (var pair in OutboundLeases)
+                clone.OutboundLeases.Add(pair.Key, pair.Value);
+            foreach (var key in OutboundChangeIds)
+                clone.OutboundChangeIds.Add(key);
             return clone;
         }
     }
