@@ -82,7 +82,7 @@ public class Production : IDisposable
         if (x.Inbox.Count != y.Inbox.Count) return false;
         if (x.InboxAuthors.Count != y.InboxAuthors.Count) return false;
         foreach (var (key, author) in x.InboxAuthors)
-            if (!y.InboxAuthors.TryGetValue(key, out var otherAuthor) || otherAuthor != author) return false;
+            if (!y.InboxAuthors.TryGetValue(key, out var otherAuthor) || !otherAuthor.Equals(author)) return false;
         if (x.LastBatchDigest.Count != y.LastBatchDigest.Count) return false;
         foreach (var (k, dig) in x.LastBatchDigest)
             if (!y.LastBatchDigest.TryGetValue(k, out var od) || dig != od) return false;
@@ -236,7 +236,7 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V7TagAndStreamOffsetsRoundTrip()
+    public void Persistence_V8TagAndStreamOffsetsRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
@@ -245,10 +245,10 @@ public class Production : IDisposable
         var path = Path.Combine(_dir, "tag-v6.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)7, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)8, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v7", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v8", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
