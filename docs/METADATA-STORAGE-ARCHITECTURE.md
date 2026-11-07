@@ -292,7 +292,7 @@ But it must not implicitly perform FLD's synchronized-data semantics:
 - no protocol-level HLC generation for metadata writes;
 - no automatic ChangeId generation;
 - no local synchronization Outbox;
-- no relay journal unless explicitly used as a Metadata Store data structure;
+- no FLD-native automatic relay-journal behavior; BIN-SYNC relay records may still be stored as ordinary Metadata Store payloads through the neutral contract;
 - no automatic BIN-SYNC event/change publication;
 - no recursive inclusion of metadata writes in the same synchronized dataset.
 
