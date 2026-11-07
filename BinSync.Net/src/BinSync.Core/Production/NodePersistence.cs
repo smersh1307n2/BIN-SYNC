@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v13", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v14", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v13";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v14";
+    private const string Version13StateTag = "BIN-SYNC/NODESTATE/v13";
     private const string Version12StateTag = "BIN-SYNC/NODESTATE/v12";
     private const string Version11StateTag = "BIN-SYNC/NODESTATE/v11";
     private const string Version10StateTag = "BIN-SYNC/NODESTATE/v10";
@@ -41,7 +42,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 13;
+    private const ushort Version = 14;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -106,8 +107,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 12 && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 12, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 13 && ver != 12 && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -122,6 +123,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 13)
+        {
+            var v13 = Blake3Core.TaggedHash(Version13StateTag, body);
+            validDigest = v13.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 12)
         {
@@ -222,8 +228,7 @@ public static class NodePersistence
             foreach (var (ns, list) in n.Outbox.OrderBy(kv => kv.Key))
             {
                 w.Varint((ulong)ns);
-                w.Varint((ulong)list.Count);
-                foreach (var e in list) WriteOutboxEntry(w, e);
+                WriteOutboxEntries(w, ns, list);
             }
 
             // --- per-(author, ns) outbox seq counters [П1]
@@ -446,10 +451,10 @@ public static class NodePersistence
         for (int i = 0; i < outNsCount; i++)
         {
             var ns = ReadNamespaceId(r);
-            int cnt = ReadCount(r, 68, "outbox entry");
-            var list = new List<OutboxEntry>(cnt);
-            for (int j = 0; j < cnt; j++) list.Add(ReadOutboxEntry(r));
-            n.Outbox[ns] = list;
+            int cnt = ReadCount(r, version >= 14 ? 1 : 68, "outbox entry");
+            n.Outbox[ns] = version >= 14
+                ? ReadOutboxEntries(r, ns, cnt)
+                : ReadLegacyOutboxEntries(r, cnt);
         }
 
         var seqMap = GetField<Dictionary<(NodeId, int), long>>(n, "_outboxSeq");
@@ -1135,6 +1140,118 @@ public static class NodePersistence
         var keyEpoch = r.U16();
         var value = r.Bytes();
         return (fid, new FieldState(value, new Hlc(wall, logical), NodeId.From(author), keyEpoch));
+    }
+
+    private static void WriteOutboxEntries(Writer w, int namespaceId, List<OutboxEntry> entries)
+    {
+        w.Varint((ulong)entries.Count);
+        // Keep original Outbox order while storing each author once per namespace.
+        var authors = new List<NodeId>();
+        var authorIndexes = new Dictionary<NodeId, int>();
+        foreach (var entry in entries)
+        {
+            if (entry.NamespaceId != namespaceId || entry.AuthorNodeId.IsZero ||
+                entry.Seq < 0 || entry.CreatedAt < 0)
+                throw new InvalidOperationException("Invalid Outbox entry metadata for compact persistence.");
+            if (!authorIndexes.ContainsKey(entry.AuthorNodeId))
+            {
+                authorIndexes.Add(entry.AuthorNodeId, authors.Count);
+                authors.Add(entry.AuthorNodeId);
+            }
+        }
+        w.Varint((ulong)authors.Count);
+        foreach (var author in authors) w.B128(author);
+        foreach (var entry in entries)
+        {
+            var payload = entry.Payload.Span;
+            if (payload.IsEmpty)
+                throw new InvalidOperationException("Outbox operation payload cannot be empty.");
+            byte opKind = payload[0];
+            if (opKind != entry.OpKind ||
+                (opKind != OpsConst.TagFieldWrite && opKind != OpsConst.TagFieldTomb &&
+                 opKind != OpsConst.TagRecordTomb))
+                throw new InvalidOperationException("Outbox operation kind does not match its canonical payload.");
+            bool recordTombstone = opKind == OpsConst.TagRecordTomb;
+            if (recordTombstone &&
+                (payload.Length < 17 || !payload.Slice(1, 16).SequenceEqual(entry.RecordId.Span)))
+                throw new InvalidOperationException("Record tombstone identity does not match its payload.");
+            w.Varint((ulong)authorIndexes[entry.AuthorNodeId]);
+            w.Varint((ulong)entry.Seq);
+            w.B128(entry.ChangeId);
+            w.Varint((ulong)payload.Length);
+            w.Raw(payload);
+            if (!recordTombstone) w.B128(entry.RecordId);
+            w.U64((ulong)entry.CreatedAt);
+            w.Varint((ulong)entry.CausalDeps.Count);
+            foreach (var dependency in entry.CausalDeps) w.B128(dependency);
+        }
+    }
+
+    private static List<OutboxEntry> ReadOutboxEntries(Reader r, int namespaceId, int count)
+    {
+        int authorCount = ReadCount(r, 16, "outbox author");
+        if ((count == 0) != (authorCount == 0) || authorCount > count)
+            throw new InvalidDataException("Invalid compact Outbox author table.");
+        var authors = new NodeId[authorCount];
+        var uniqueAuthors = new HashSet<NodeId>();
+        for (int i = 0; i < authorCount; i++)
+        {
+            authors[i] = NodeId.From(r.B128());
+            if (authors[i].IsZero || !uniqueAuthors.Add(authors[i]))
+                throw new InvalidDataException("Invalid or duplicate compact Outbox author.");
+        }
+        var entries = new List<OutboxEntry>(count);
+        for (int i = 0; i < count; i++)
+        {
+            int authorIndex = ReadInt32Varint(r);
+            if ((uint)authorIndex >= (uint)authors.Length)
+                throw new InvalidDataException("Compact Outbox author index is out of range.");
+            long sequence = ReadInt64Varint(r, "Outbox sequence");
+            var changeId = BatchId.From(r.B128());
+            byte[] payload = r.Raw(ReadByteLength(r, "Outbox payload"));
+            if (payload.Length == 0)
+                throw new InvalidDataException("Empty compact Outbox operation payload.");
+            byte opKind = payload[0];
+            if (opKind != OpsConst.TagFieldWrite && opKind != OpsConst.TagFieldTomb &&
+                opKind != OpsConst.TagRecordTomb)
+                throw new InvalidDataException("Unknown compact Outbox operation kind.");
+            RecordId recordId;
+            if (opKind == OpsConst.TagRecordTomb)
+            {
+                if (payload.Length < 17)
+                    throw new InvalidDataException("Truncated record-tombstone Outbox payload.");
+                recordId = RecordId.From(payload.AsSpan(1, 16));
+            }
+            else
+                recordId = RecordId.From(r.B128());
+            long createdAt = (long)r.U64();
+            int dependencyCount = ReadCount(r, 16, "causal dependency");
+            var entry = new OutboxEntry
+            {
+                NamespaceId = namespaceId, Seq = sequence, ChangeId = changeId,
+                RecordId = recordId, OpKind = opKind, Payload = payload,
+                AuthorNodeId = authors[authorIndex], CreatedAt = createdAt,
+            };
+            for (int di = 0; di < dependencyCount; di++)
+                entry.CausalDeps.Add(BatchId.From(r.B128()));
+            entries.Add(entry);
+        }
+        return entries;
+    }
+
+    private static List<OutboxEntry> ReadLegacyOutboxEntries(Reader r, int count)
+    {
+        var entries = new List<OutboxEntry>(count);
+        for (int i = 0; i < count; i++) entries.Add(ReadOutboxEntry(r));
+        return entries;
+    }
+
+    private static long ReadInt64Varint(Reader reader, string section)
+    {
+        ulong raw = reader.Varint();
+        if (raw > long.MaxValue)
+            throw new InvalidDataException($"Persisted {section} exceeds Int64 range.");
+        return (long)raw;
     }
 
     private static void WriteOutboxEntry(Writer w, OutboxEntry e)

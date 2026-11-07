@@ -396,7 +396,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v13_groups_receipts_by_author_and_roundtrips_all_entries()
+    public void Persistence_v14_groups_receipts_by_author_and_roundtrips_all_entries()
     {
         using var node = Fix.MakeNode(123);
         var issuer = Fix.Nid(124);
@@ -426,12 +426,12 @@ public class ChangeIdWireTests
         node.GlobalChangeLedger[(7, change2)] = new ChangeLedgerValue(default, false);
         node.GlobalChangeLedger[(8, change3)] = new ChangeLedgerValue(fingerprint, true);
 
-        var path = Path.Combine(Path.GetTempPath(), $"binsync-v13-{Guid.NewGuid():N}.bin");
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v14-{Guid.NewGuid():N}.bin");
         try
         {
             NodePersistence.Save(node, path);
             var bytes = File.ReadAllBytes(path);
-            Assert.Equal((ushort)13, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+            Assert.Equal((ushort)14, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
 
             // Namespace 7 has three receipts by two authors and should use author
             // subgroups; namespace 8 has two singleton author groups and should stay flat.
@@ -477,6 +477,78 @@ public class ChangeIdWireTests
             Assert.Equal(fingerprint, restored.GlobalChangeLedger[(7, change1)].Fingerprint);
             Assert.False(restored.GlobalChangeLedger[(7, change2)].IsKnown);
             Assert.True(restored.GlobalChangeLedger[(8, change3)].IsKnown);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Persistence_v14_compact_outbox_shares_namespace_and_author_and_recovers_record_tombstone_id()
+    {
+        using var node = Fix.MakeNode(127);
+        const int ns = 7;
+        var localAuthor = node.NodeId;
+        var relayAuthor = Fix.Nid(128);
+        var fieldRecord = Fix.Rid(129);
+        var tombRecord = Fix.Rid(130);
+        var fieldOp = new OpFieldWrite
+        {
+            FieldId = 0x0101, KeyEpoch = 0, Wall = 1000, Logical = 1,
+            Origin = 1, Value = Val("compact-outbox")
+        };
+        var tombOp = new OpRecordTombstone
+        {
+            RecordId = tombRecord, Wall = 1001, Logical = 0, Origin = 1
+        };
+        node.Outbox[ns] = new List<OutboxEntry>
+        {
+            new()
+            {
+                NamespaceId = ns, Seq = 1, ChangeId = BatchId.From(Id(0xC1)),
+                RecordId = fieldRecord, OpKind = OpsConst.TagFieldWrite,
+                Payload = Ops.EncodeOp(fieldOp, fullAuthor: false), AuthorNodeId = localAuthor,
+                CreatedAt = 1_700_000_000_000_000
+            },
+            new()
+            {
+                NamespaceId = ns, Seq = 4, ChangeId = BatchId.From(Id(0xC2)),
+                RecordId = tombRecord, OpKind = OpsConst.TagRecordTomb,
+                Payload = Ops.EncodeOp(tombOp, fullAuthor: false), AuthorNodeId = relayAuthor,
+                CreatedAt = 1_700_000_000_000_001
+            },
+            new()
+            {
+                NamespaceId = ns, Seq = 2, ChangeId = BatchId.From(Id(0xC3)),
+                RecordId = Fix.Rid(131), OpKind = OpsConst.TagFieldTomb,
+                Payload = Ops.EncodeOp(new OpFieldTomb
+                {
+                    FieldId = 0x0102, KeyEpoch = 0, Wall = 1002, Logical = 0, Origin = 1
+                }, fullAuthor: false),
+                AuthorNodeId = localAuthor, CreatedAt = 1_700_000_000_000_002
+            }
+        };
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v14-outbox-{Guid.NewGuid():N}.bin");
+        try
+        {
+            NodePersistence.Save(node, path);
+            using var restored = NodePersistence.Load(path);
+            var entries = restored.Outbox[ns];
+            Assert.Equal(3, entries.Count);
+            Assert.Equal(localAuthor, entries[0].AuthorNodeId);
+            Assert.Equal(relayAuthor, entries[1].AuthorNodeId);
+            Assert.Equal(localAuthor, entries[2].AuthorNodeId);
+            Assert.Equal(1, entries[0].Seq);
+            Assert.Equal(4, entries[1].Seq);
+            Assert.Equal(2, entries[2].Seq);
+            Assert.Equal(OpsConst.TagFieldWrite, entries[0].OpKind);
+            Assert.Equal(OpsConst.TagRecordTomb, entries[1].OpKind);
+            Assert.Equal(tombRecord, entries[1].RecordId);
+            Assert.Equal(OpsConst.TagFieldTomb, entries[2].OpKind);
+            Assert.Equal(fieldRecord, entries[0].RecordId);
+            Assert.Equal(1_700_000_000_000_001, entries[1].CreatedAt);
+            Assert.Equal(entries[0].Payload.ToArray(), restored.Outbox[ns][0].Payload.ToArray());
         }
         finally
         {
