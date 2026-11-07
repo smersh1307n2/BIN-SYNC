@@ -1173,10 +1173,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             requiredKey = StorageKey(root, 16, requiredSuffix);
         }
 
+        bool addPartitionIdentity = !current.IsPersisted;
+        byte[]? identityKey = addPartitionIdentity
+            ? StorageKey(root, 0, ReadOnlySpan<byte>.Empty)
+            : null;
+        byte[]? identityValue = addPartitionIdentity
+            ? Encoding.UTF8.GetBytes(partitionKey.ScopeId)
+            : null;
+
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
         if (actualBaseCommitSeq != current.StorageCommitSeq)
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        if (identityKey is not null)
+            batch.Put(identityKey, identityValue!);
         batch.Put(streamKey, streamValue);
         if (requiredKey is not null)
             batch.Put(requiredKey, Array.Empty<byte>());
@@ -1188,6 +1198,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         current.IsPersisted = true;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        if (identityKey is not null)
+            current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
         current.PersistedEntries[Convert.ToHexString(streamKey)] = (streamKey, streamValue);
         if (requiredKey is not null)
             current.PersistedEntries[Convert.ToHexString(requiredKey)] = (requiredKey, Array.Empty<byte>());
