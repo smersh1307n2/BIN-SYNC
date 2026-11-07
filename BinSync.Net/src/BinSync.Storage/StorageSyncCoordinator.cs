@@ -430,7 +430,7 @@ public sealed class StorageSyncCoordinator
                 persistNode(_node);
                 ApplyRemoteSnapshotToProvider(session.PeerNodeId, peerEpoch, chunks);
             }).ConfigureAwait(false);
-        if (!_node.HasInitialSyncComplete(peer, _namespaceId))
+        if (!_node.IsInitialSyncComplete(peer, _namespaceId))
             throw new SyncException("SNAPSHOT_REQUIRED");
         persistNode(_node);
         peerStore.CompletePeerInitialSync(
