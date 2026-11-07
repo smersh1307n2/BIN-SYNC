@@ -137,6 +137,42 @@ try
             bName != "valve-B" || bQuantity != "9" || bReplicaQuantity != "9")
             return 1;
 
+        // Exercise array-item deletion as a record lifecycle tombstone, not as
+        // a fan-out of unrelated field tombstones.
+        providerB.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordB,
+            FieldId = Model.LifecycleFieldId,
+            IsRecordTombstone = true,
+            AuthorNodeId = nodeB.NodeId,
+            HlcWall = 4000,
+            HlcLogical = 0,
+            Value = Array.Empty<byte>()
+        });
+        coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
+        if (metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 4)
+            throw new InvalidOperationException("Record deletion was not frozen into the durable outbound stream.");
+
+        int deleteRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
+        {
+            if (ReferenceEquals(receiver, nodeA))
+            {
+                NodePersistence.Save(receiver, nodeAPath);
+                coordinatorA.ApplyRemoteBatch(batch);
+            }
+            else
+            {
+                NodePersistence.Save(receiver, nodeBPath);
+                coordinatorB.ApplyRemoteBatch(batch);
+            }
+        });
+        if (deleteRound == 0 ||
+            providerA.TryReadCurrent(recordB, name, out _) ||
+            providerA.TryReadCurrent(recordB, quantity, out _) ||
+            providerB.TryReadCurrent(recordB, name, out _))
+            return 1;
+
+        Console.WriteLine($"record deletion sync rounds={deleteRound}; item B is hidden on both replicas");
         Console.WriteLine("Storage-backed array synchronization: PASS");
         return 0;
     }
