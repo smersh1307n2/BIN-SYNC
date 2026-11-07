@@ -650,6 +650,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), 0);
             ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
+            if (!state.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer, peerEpoch)))
+                throw new SyncException("SNAPSHOT_REQUIRED");
             var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
                 ? saved : EmptyPeerStreamValue();
@@ -681,6 +683,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), 0);
             ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
+            if (!state.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer, peerEpoch)))
+                throw new SyncException("SNAPSHOT_REQUIRED");
             var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
                 ? saved : EmptyPeerStreamValue();
@@ -756,6 +760,82 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
     }
 
+    public bool IsPeerInitialSyncComplete(
+        string scopeId, NodeId localReplica, NodeId peer, uint peerEpoch, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return false;
+            ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
+            return state.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer, peerEpoch));
+        }
+    }
+
+    public void CompletePeerInitialSync(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId,
+        IReadOnlyList<MetadataPeerStreamBaseline> streamBaselines)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, localReplica);
+            ArgumentNullException.ThrowIfNull(streamBaselines);
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            var current = GetOrCreatePartition(partitionKey);
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
+            var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
+            if (!current.InterestedPeers.Contains(rosterKey))
+                throw new InvalidOperationException("Peer must be durably registered before initial sync completion.");
+
+            var seen = new HashSet<NodeId>();
+            foreach (var baseline in streamBaselines)
+            {
+                if (baseline is null || baseline.AuthorStream.IsZero ||
+                    baseline.AuthorStream == peer || baseline.StreamOffset > long.MaxValue)
+                    throw new ArgumentException("Initial-sync author baseline is invalid.", nameof(streamBaselines));
+                if (!seen.Add(baseline.AuthorStream))
+                    throw new ArgumentException("Initial-sync author baselines must be unique.", nameof(streamBaselines));
+
+                var outboundKey = new OutboundKey(namespaceId, baseline.AuthorStream);
+                ulong outboundHigh = current.OutboundHighWatermarks.TryGetValue(outboundKey, out var outHigh)
+                    ? outHigh : 0;
+                bool hasRelayHistory = current.RelayHighWatermarks.ContainsKey(
+                    new RelayKey(namespaceId, baseline.AuthorStream));
+                if (baseline.StreamOffset > outboundHigh || (hasRelayHistory && baseline.StreamOffset != 0))
+                    throw new InvalidDataException("Snapshot baseline cannot skip relay history or exceed the outbound feed watermark.");
+            }
+
+            if (current.CompletedPeerBaselines.Contains(rosterKey))
+            {
+                foreach (var baseline in streamBaselines)
+                {
+                    var key = new PeerStreamKey(peer, peerEpoch, namespaceId, baseline.AuthorStream);
+                    if (!current.PeerStreams.TryGetValue(key, out var saved) ||
+                        saved.StreamOffset != baseline.StreamOffset || saved.IssuerEpoch != baseline.IssuerEpoch)
+                        throw new InvalidDataException("Repeated initial-sync completion conflicts with its durable feed baseline.");
+                }
+                return;
+            }
+
+            var next = current.Clone();
+            foreach (var baseline in streamBaselines)
+            {
+                var key = new PeerStreamKey(peer, peerEpoch, namespaceId, baseline.AuthorStream);
+                if (next.PeerStreams.TryGetValue(key, out var saved) &&
+                    (saved.AckedCursor != 0 || saved.PushedCursor != 0 || saved.PendingBatch is not null))
+                    throw new InvalidOperationException("Initial snapshot baseline cannot reset an active peer author stream.");
+                next.PeerStreams[key] = new PeerStreamStateValue(
+                    0, 0, baseline.StreamOffset, baseline.IssuerEpoch, new byte[16], null);
+                next.RequiredPeerStreams.Add(key);
+            }
+            next.CompletedPeerBaselines.Add(rosterKey);
+            PersistPartition(partitionKey, current, next);
+        }
+    }
+
     public uint? GetRetiredPeerEpoch(string scopeId, NodeId localReplica, NodeId peer, int namespaceId)
     {
         lock (_gate)
@@ -801,12 +881,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 current.PeerStreams.Keys.Any(key => key.NamespaceId == namespaceId &&
                     key.Peer == peer && key.PeerEpoch == retiredPeerEpoch) ||
                 current.RequiredPeerStreams.Any(key => key.NamespaceId == namespaceId &&
-                    key.Peer == peer && key.PeerEpoch == retiredPeerEpoch);
+                    key.Peer == peer && key.PeerEpoch == retiredPeerEpoch) ||
+                current.CompletedPeerBaselines.Contains(oldRosterKey);
             if (alreadyRetired && !hasOldRows)
                 return;
 
             var next = current.Clone();
             next.InterestedPeers.Remove(oldRosterKey);
+            next.CompletedPeerBaselines.Remove(oldRosterKey);
             foreach (var stream in next.PeerStreams.Keys
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
                     key.PeerEpoch == retiredPeerEpoch).ToArray())
@@ -911,6 +993,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (current.PeerStreams.TryGetValue(key, out var existing) && existing.PendingBatch is not null)
                 return CloneReservation(existing.PendingBatch);
+            if (!current.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer, peerEpoch)))
+                throw new SyncException("SNAPSHOT_REQUIRED");
 
             bool hasPrior = current.PeerStreams.TryGetValue(key, out existing);
             var prior = hasPrior ? existing! : EmptyPeerStreamValue();
@@ -1019,8 +1103,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         foreach (var peer in peers)
         {
             var key = new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream);
-            if (!state.PeerStreams.TryGetValue(key, out var progress)) return 0;
-            safe = Math.Min(safe, progress.AckedCursor);
+            if (!state.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer.Peer, peer.PeerEpoch)) ||
+                !state.PeerStreams.TryGetValue(key, out var progress)) return 0;
+            safe = Math.Min(safe, checked(progress.AckedCursor + progress.StreamOffset));
         }
         return safe == ulong.MaxValue ? 0 : safe;
     }
