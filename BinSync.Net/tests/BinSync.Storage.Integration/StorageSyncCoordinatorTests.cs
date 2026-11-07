@@ -11,6 +11,37 @@ public sealed class StorageSyncCoordinatorTests
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-coordinator-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public async Task Receive_batch_stages_metadata_intent_before_node_and_provider_apply()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-receive-intent"), 425);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(26);
+        using var receiver = NewNode(27);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "durable-receive-intent");
+
+        RecordId record = RecordId.From(Guid.Parse("26000000-0000-0000-0000-000000000026").ToByteArray());
+        sender.WriteField(1, record, 0x0811, "received-durably"u8.ToArray(), new Hlc(4000, 0));
+
+        var receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+        Assert.True(await initiator.PushBatchAsync(sender, 1));
+        BatchResult result = await receive;
+
+        Assert.Equal(1, result.Applied);
+        Assert.True(receiver.TryGetField(1, record, 0x0811, out var nodeValue));
+        Assert.Equal("received-durably", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.True(provider.TryReadCurrent(record, 0x0811, out var providerValue));
+        Assert.Equal("received-durably", Encoding.UTF8.GetString(providerValue!.Value));
+        Assert.Empty(metadata.ReadPendingApplyIntents("durable-receive-intent", receiver.NodeId));
+        Assert.Equal(new[] { sender.NodeId }, metadata.ReadRelayAuthors("durable-receive-intent", receiver.NodeId, 1));
+    }
+
+    [Fact]
     public async Task Sync_session_uses_durable_peer_reservations_for_sequential_batches()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-peer-session"), 420);
