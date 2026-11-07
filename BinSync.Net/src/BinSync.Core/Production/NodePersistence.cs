@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v11", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v12", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v11";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v12";
+    private const string Version11StateTag = "BIN-SYNC/NODESTATE/v11";
     private const string Version10StateTag = "BIN-SYNC/NODESTATE/v10";
     private const string Version9StateTag = "BIN-SYNC/NODESTATE/v9";
     private const string Version8StateTag = "BIN-SYNC/NODESTATE/v8";
@@ -39,7 +40,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 11;
+    private const ushort Version = 12;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -104,8 +105,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -120,6 +121,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 11)
+        {
+            var v11 = Blake3Core.TaggedHash(Version11StateTag, body);
+            validDigest = v11.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 10)
         {
@@ -220,8 +226,8 @@ public static class NodePersistence
             foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1.ToString()).ThenBy(kv => kv.Key.Item2))
             { w.B128(author); w.Varint((ulong)ns); w.U64((ulong)seq); }
 
-            // --- accepted-batch receipts grouped by issuer/namespace/epoch.
-            // The session key is written once for every batch in that group.
+            // --- accepted-batch receipts grouped by issuer/namespace/epoch/author.
+            // Each shared scope key and durable author is written once per group.
             var receiptGroups = n.InboxAuthors
                 .GroupBy(k => (k.Key.Issuer, k.Key.Ns, k.Key.Epoch))
                 .OrderBy(g => g.Key.Issuer.Lo).ThenBy(g => g.Key.Issuer.Hi)
@@ -232,19 +238,26 @@ public static class NodePersistence
                 w.B128(group.Key.Issuer);
                 w.Varint((ulong)group.Key.Ns);
                 w.Varint((ulong)group.Key.Epoch);
-                var receipts = group.OrderBy(k => k.Key.BatchId.Lo)
-                    .ThenBy(k => k.Key.BatchId.Hi).ToArray();
-                w.Varint((ulong)receipts.Length);
-                foreach (var (key, receipt) in receipts)
+                var authorGroups = group.GroupBy(k => k.Value.DurableAuthor)
+                    .OrderBy(g => g.Key.Lo).ThenBy(g => g.Key.Hi).ToArray();
+                w.Varint((ulong)authorGroups.Length);
+                foreach (var authorGroup in authorGroups)
                 {
-                    w.B128(key.BatchId); w.B128(receipt.DurableAuthor);
-                    byte receiptFlags = (byte)((receipt.HasCursorEnd ? 1 : 0) |
-                                               (receipt.HasFingerprint ? 2 : 0));
-                    w.U8(receiptFlags);
-                    if (receipt.HasCursorEnd) w.Varint((ulong)receipt.CursorEnd);
-                    if (receipt.HasFingerprint) w.B128(receipt.Fingerprint);
-                    w.Varint(receipt.AppliedAt);
-                    w.Varint(receipt.ExpiresAt);
+                    w.B128(authorGroup.Key);
+                    var receipts = authorGroup.OrderBy(k => k.Key.BatchId.Lo)
+                        .ThenBy(k => k.Key.BatchId.Hi).ToArray();
+                    w.Varint((ulong)receipts.Length);
+                    foreach (var (key, receipt) in receipts)
+                    {
+                        w.B128(key.BatchId);
+                        byte receiptFlags = (byte)((receipt.HasCursorEnd ? 1 : 0) |
+                                                   (receipt.HasFingerprint ? 2 : 0));
+                        w.U8(receiptFlags);
+                        if (receipt.HasCursorEnd) w.Varint((ulong)receipt.CursorEnd);
+                        if (receipt.HasFingerprint) w.B128(receipt.Fingerprint);
+                        w.Varint(receipt.AppliedAt);
+                        w.Varint(receipt.ExpiresAt);
+                    }
                 }
             }
 
@@ -426,7 +439,50 @@ public static class NodePersistence
         }
 
         HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)>? legacyInbox = null;
-        if (version >= 10)
+        if (version >= 12)
+        {
+            int groupCount = ReadCount(r, 19, "receipt group");
+            var receiptGroupKeys = new HashSet<(NodeId Issuer, int Ns, int Epoch)>();
+            for (int gi = 0; gi < groupCount; gi++)
+            {
+                var issuer = NodeId.From(r.B128());
+                var ns = ReadNamespaceId(r);
+                var ep = ReadInt32Varint(r);
+                int authorGroupCount = ReadCount(r, 17, "receipt author group");
+                if (authorGroupCount == 0 || issuer.IsZero ||
+                    !receiptGroupKeys.Add((issuer, ns, ep)))
+                    throw new InvalidDataException("Invalid or duplicate persisted receipt group.");
+                var receiptAuthors = new HashSet<NodeId>();
+                for (int ai = 0; ai < authorGroupCount; ai++)
+                {
+                    var author = NodeId.From(r.B128());
+                    int receiptCount = ReadCount(r, 35, "batch receipt");
+                    if (author.IsZero || receiptCount == 0 || !receiptAuthors.Add(author))
+                        throw new InvalidDataException("Invalid or duplicate persisted receipt author group.");
+                    for (int i = 0; i < receiptCount; i++)
+                    {
+                        var batchId = BatchId.From(r.B128());
+                        byte receiptFlags = r.U8();
+                        if (receiptFlags > 3 || ((receiptFlags & 2) != 0 && (receiptFlags & 1) == 0))
+                            throw new InvalidDataException("Invalid persisted receipt flags.");
+                        bool hasCursorEnd = (receiptFlags & 1) != 0;
+                        long cursorEnd = hasCursorEnd ? (long)r.Varint() : 0;
+                        bool hasFingerprint = (receiptFlags & 2) != 0;
+                        var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
+                        var appliedAt = r.Varint();
+                        var expiresAt = r.Varint();
+                        if (batchId.IsZero || cursorEnd < 0 ||
+                            (expiresAt != 0 && expiresAt < appliedAt))
+                            throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
+                        var receipt = new InboxReceipt(author, cursorEnd, hasCursorEnd,
+                            fingerprint, hasFingerprint, appliedAt, expiresAt);
+                        if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), receipt))
+                            throw new InvalidDataException("Duplicate persisted batch receipt.");
+                    }
+                }
+            }
+        }
+        else if (version >= 10)
         {
             int groupCount = ReadCount(r, 19, "receipt group");
             var receiptGroupKeys = new HashSet<(NodeId Issuer, int Ns, int Epoch)>();
@@ -436,8 +492,8 @@ public static class NodePersistence
                 var ns = ReadNamespaceId(r);
                 var ep = ReadInt32Varint(r);
                 int receiptCount = ReadCount(r, 35, "batch receipt");
-                if (receiptCount == 0 || issuer.IsZero || (uint)ns > ushort.MaxValue ||
-                    ep < 0 || !receiptGroupKeys.Add((issuer, ns, ep)))
+                if (receiptCount == 0 || issuer.IsZero ||
+                    !receiptGroupKeys.Add((issuer, ns, ep)))
                     throw new InvalidDataException("Invalid or duplicate persisted receipt group.");
                 for (int i = 0; i < receiptCount; i++)
                 {
@@ -452,7 +508,8 @@ public static class NodePersistence
                     var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
                     var appliedAt = r.Varint();
                     var expiresAt = r.Varint();
-                    if (batchId.IsZero || author.IsZero || cursorEnd < 0 || (expiresAt != 0 && expiresAt < appliedAt))
+                    if (batchId.IsZero || author.IsZero || cursorEnd < 0 ||
+                        (expiresAt != 0 && expiresAt < appliedAt))
                         throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
                     var receipt = new InboxReceipt(author, cursorEnd, hasCursorEnd,
                         fingerprint, hasFingerprint, appliedAt, expiresAt);
