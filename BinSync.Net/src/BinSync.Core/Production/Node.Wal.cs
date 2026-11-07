@@ -45,7 +45,7 @@ public sealed partial class Node
 
         // A WAL tail may still contain batches already included in a just-written
         // snapshot. Do not roll the snapshot's newer session map back to an older one.
-        if (!Inbox.Contains(inboxKey))
+        if (!InboxAuthors.ContainsKey(inboxKey))
         {
             if (aliases.Count > 0)
                 CommitSession(senderPeer, senderEpoch, aliases);
@@ -94,7 +94,6 @@ public sealed partial class Node
         _storage.EnsureCapacity(staged._storage.Count);
         Outbox.EnsureCapacity(staged.Outbox.Count);
         _outboxSeq.EnsureCapacity(staged._outboxSeq.Count);
-        Inbox.EnsureCapacity(staged.Inbox.Count);
         InboxAuthors.EnsureCapacity(staged.InboxAuthors.Count);
         LastBatchDigest.EnsureCapacity(staged.LastBatchDigest.Count);
         LastStreamDigest.EnsureCapacity(staged.LastStreamDigest.Count);
@@ -116,7 +115,6 @@ public sealed partial class Node
         ReplaceContents(_storage, staged._storage);
         ReplaceContents(Outbox, staged.Outbox);
         ReplaceContents(_outboxSeq, staged._outboxSeq);
-        ReplaceContents(Inbox, staged.Inbox);
         ReplaceContents(InboxAuthors, staged.InboxAuthors);
         ReplaceContents(LastBatchDigest, staged.LastBatchDigest);
         ReplaceContents(LastStreamDigest, staged.LastStreamDigest);
