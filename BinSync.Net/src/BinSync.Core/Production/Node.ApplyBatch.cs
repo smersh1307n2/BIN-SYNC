@@ -420,6 +420,8 @@ public sealed partial class Node
                 AuthorNodeId = resolvedAuthors[idx],
                 CreatedAt = (long)WallOf(op),
             };
+            if (e.CausalDepsOrNull is { } causalDeps)
+                stagedRelayEntries[ri].CausalDeps.AddRange(causalDeps);
         }
 
         if (stagedRelayEntries.Length > 0)
