@@ -138,6 +138,7 @@ For separate provider/metadata stores, pending intent is a recoverable protocol 
 - provider records the token/receipt atomically with its data effect;
 - metadata finalization materializes ordinary indexed metadata and compact receipt;
 - after both sides are durable, raw intent payload is removed;
+- `BeginPendingApply` distinguishes a token that was already finalized with `MetadataPendingApplyAlreadyFinalizedException`; unrelated `InvalidOperationException` state conflicts must propagate and must never be reinterpreted as duplicate delivery;
 - duplicate retry returns the compact receipt, not the old full payload;
 - restart discovers unfinished intents and resumes them before normal publication.
 
