@@ -70,6 +70,49 @@ public sealed class StorageSyncCoordinator
     /// The deterministic apply token makes an interrupted retry idempotent.
     /// </summary>
     public ProviderApplyReceipt? ApplyRemoteFields(IEnumerable<(RecordId RecordId, ushort FieldId)> fields)
+        => ApplyRemoteFieldsCore(fields, applyToken: null);
+
+    /// <summary>
+    /// Materializes only the field keys carried by an accepted BIN-SYNC batch.
+    /// The apply token is derived from the immutable batch identity, not the receiver's
+    /// current winners, so replay remains idempotent even if later batches have advanced
+    /// one or more of the same fields.
+    /// Whole-record tombstones are rejected until the provider contract has a durable
+    /// record-level tombstone representation; they must never be silently treated as fields.
+    /// </summary>
+    public ProviderApplyReceipt? ApplyRemoteBatch(Batch batch)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        if (batch.NamespaceId != _namespaceId)
+            throw new ArgumentException("Batch namespace does not match this coordinator.", nameof(batch));
+
+        var fields = new List<(RecordId RecordId, ushort FieldId)>(batch.Entries.Count);
+        foreach (var entry in batch.Entries)
+        {
+            if (entry.NamespaceId != _namespaceId || entry.Payload.IsEmpty)
+                throw new InvalidDataException("Batch entry has an invalid namespace or empty operation payload.");
+
+            object op = Ops.DecodeOp(entry.Payload).Op;
+            switch (op)
+            {
+                case OpFieldWrite write:
+                    fields.Add((entry.RecordId, write.FieldId));
+                    break;
+                case OpFieldTomb tomb:
+                    fields.Add((entry.RecordId, tomb.FieldId));
+                    break;
+                case OpRecordTombstone:
+                    throw new NotSupportedException("StorageDataProvider does not yet persist record-level tombstones.");
+                default:
+                    throw new InvalidDataException("Batch contains an unsupported operation type.");
+            }
+        }
+
+        return ApplyRemoteFieldsCore(fields, CreateBatchApplyToken(batch));
+    }
+
+    private ProviderApplyReceipt? ApplyRemoteFieldsCore(
+        IEnumerable<(RecordId RecordId, ushort FieldId)> fields, Guid? applyToken)
     {
         ArgumentNullException.ThrowIfNull(fields);
         lock (_gate)
@@ -110,9 +153,20 @@ public sealed class StorageSyncCoordinator
                 return c != 0 ? c : a.FieldId.CompareTo(b.FieldId);
             });
 
-            Guid token = CreateApplyToken(_namespaceId, mutations);
+            Guid token = applyToken ?? CreateApplyToken(_namespaceId, mutations);
             return _provider.ApplyRemoteBatch(token, mutations);
         }
+    }
+
+    private static Guid CreateBatchApplyToken(Batch batch)
+    {
+        Span<byte> identity = stackalloc byte[34];
+        BinaryPrimitives.WriteUInt16LittleEndian(identity, checked((ushort)batch.NamespaceId));
+        batch.IssuerNodeId.WriteTo(identity.Slice(2, 16));
+        batch.BatchId.WriteTo(identity.Slice(18, 16));
+        Span<byte> digest = stackalloc byte[32];
+        SHA256.HashData(identity, digest);
+        return new Guid(digest.Slice(0, 16));
     }
 
     private static int CompareRecordIds(RecordId left, RecordId right)
