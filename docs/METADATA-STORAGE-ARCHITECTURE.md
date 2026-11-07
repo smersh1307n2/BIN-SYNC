@@ -133,7 +133,7 @@ Persisted state is divided by purpose. This classification is logical; an implem
 
 ### 5.1. Replica and scope metadata
 
-Persist the durable identity/configuration required to reopen the replica consistently, including NodeId binding and any monotonic incarnation/epoch state whose rollback would invalidate protocol safety.
+Persist the durable identity/configuration required to reopen the replica consistently, including NodeId binding, node incarnation/epoch, and the local HLC clock state (LastWall/LastLogical) or an equivalent monotonic-clock recovery value. A restart must not silently roll back the local HLC behind a previously committed local operation. Persist local author-stream sequence allocators separately from physical WAL/commit sequence numbers.
 
 Do not persist transient transport objects, sockets, session handles, callbacks, or live locks.
 
@@ -166,7 +166,7 @@ Persist ChangeId deduplication/provenance state for the retention period require
 
 ### 5.4. Peer and stream state
 
-Persist peer-specific state that affects future protocol decisions, including applicable pushed/acked/received watermarks, stream offsets, safe-prefix inputs, peer incarnation/epoch and durable membership/retention facts.
+Persist peer-specific state that affects future protocol decisions, including LastPushed/LastReceived/LastAcked where used, per-author StreamPushed/StreamAcked/StreamOffsets, received-stream and batch replay mappings, InitialSyncComplete, peer incarnation/epoch, membership epoch, and durable membership/retention facts. Preserve author-stream identity; one scalar cursor per peer or namespace is insufficient.
 
 A peer's cursor mapping or ACK must not alter another peer's stream view. Unknown or newly introduced peers must not silently inherit an ACK that allows deletion of data they have not received.
 
@@ -190,9 +190,31 @@ Optional features may require additional durable state, such as causal dependenc
 
 Secrets and private keys should use an appropriate secret/key store. The Metadata Store may retain non-secret key identifiers, epochs, fingerprints, and protocol references, but must not become an implicit secret-management system.
 
-### 5.7. State that should normally remain ephemeral
+### 5.7. Existing NodePersistence inventory to account for
 
-Do not persist state merely because it exists in the current Node implementation. Session aliases, live transport state, temporary encode buffers, pending callbacks, diagnostics, transient locks and rebuildable digest caches are normally ephemeral.
+The current NodePersistence v5 is a useful completeness checklist, not a schema that the new Metadata Store must copy. The new boundary must account for each semantic category below and explicitly classify it as durable, reconstructible, or intentionally ephemeral:
+
+- node identity/incarnation and HLC clock state;
+- current replicated field state, lifecycle and tombstones;
+- local Outbox entries and per-(author, namespace) sequence allocators;
+- Inbox idempotency keys and InboxAuthors needed to reproduce the correct author-bound duplicate ACK;
+- LastBatchDigest checkpoints and per-stream digest-chain checkpoints;
+- peer state: received-stream mappings, StreamPushed, StreamAcked, StreamOffsets, batch range → BatchId/previous-digest mappings, initial-sync status, membership epoch and applicable last-seen/retention data;
+- SeenChanges keyed with the protocol-defined peer/provenance and namespace dimensions;
+- LastStreamAuthor mappings;
+- durable author registry and known author epochs;
+- peer-wide session/incarnation epochs, distinct from namespace-scoped epoch watermarks;
+- quarantine and forbidden-namespace policy state;
+- schema-version state;
+- peer identity registry keys required to reconnect/rebuild live peer objects.
+
+The current NodePersistence v5 also serializes AliasToNode and NodeToAlias tables per peer. These are session-negotiated mappings, but durable author resolution and relay must survive restart. Before dropping the serialized tables, the implementation must prove that the required mapping can always be reconstructed from the durable author registry and a completed handshake before any operation needing that mapping is replayed. Otherwise persist the semantic mapping/registry state, not necessarily the exact in-memory dictionaries.
+
+This inventory is deliberately exhaustive: a future storage adapter must not accidentally omit a less visible checkpoint merely because it is not part of the main data Outbox. Conversely, it must not persist an entire runtime object graph when a smaller semantic fact is sufficient.
+
+### 5.8. State that should normally remain ephemeral
+
+Do not persist live transport objects, sockets, session handles, callbacks, temporary encode buffers, diagnostics, transient locks, active tasks or rebuildable caches merely because they exist in the current Node implementation.
 
 If replay requires information currently held only in an ephemeral structure, normalize and persist the required semantic result at the durable acceptance boundary rather than blindly persisting the entire session object.
 
