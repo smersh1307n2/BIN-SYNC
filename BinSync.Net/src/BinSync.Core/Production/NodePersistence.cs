@@ -271,19 +271,19 @@ public static class NodePersistence
                 w.U8(ps.InitialSyncComplete ? (byte)1 : (byte)0);
                 w.Varint((ulong)ps.MembershipEpoch); w.U64((ulong)ps.LastSeen);
                 w.Varint((ulong)ps.ReceivedStreams.Count);
-                foreach (var ((issuer, rns, rep, bid), seq) in ps.ReceivedStreams
-                           .OrderBy(k => k.Key.Peer.Lo).ThenBy(k => k.Key.Peer.Hi).ThenBy(k => k.Key.Epoch).ThenBy(k => k.Key.Ns)
-                           .ThenBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi))
-                { w.B128(issuer); w.Varint((ulong)rns); w.Varint((ulong)rep); w.B128(bid); w.U64((ulong)seq); }
-                w.Varint((ulong)ps.StreamAcked.Count);
-                foreach (var (author, seq) in ps.StreamAcked.OrderBy(k => k.Key.ToString()))
-                { w.B128(author.ToArray()); w.U64((ulong)seq); }
-                w.Varint((ulong)ps.StreamPushed.Count);
-                foreach (var (author, seq) in ps.StreamPushed.OrderBy(k => k.Key.ToString()))
-                { w.B128(author.ToArray()); w.U64((ulong)seq); }
-                w.Varint((ulong)ps.StreamOffsets.Count);
-                foreach (var (author, offset) in ps.StreamOffsets.OrderBy(k => k.Key.ToString()))
-                { w.B128(author.ToArray()); w.U64((ulong)offset); }
+                foreach (var ((peer, epoch, author), seq) in ps.ReceivedStreams
+                           .OrderBy(k => k.Key.Peer.Lo).ThenBy(k => k.Key.Peer.Hi)
+                           .ThenBy(k => k.Key.Epoch).ThenBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi))
+                { w.B128(peer); w.Varint((ulong)epoch); w.B128(author); w.U64((ulong)seq); }
+                w.Varint((ulong)ps.AuthorProgress.Count);
+                foreach (var (author, progress) in ps.AuthorProgress.OrderBy(k => k.Key.ToString()))
+                {
+                    w.B128(author);
+                    w.U8(progress.Flags);
+                    if (progress.HasAcked) w.U64((ulong)progress.Acked);
+                    if (progress.HasPushed) w.U64((ulong)progress.Pushed);
+                    if (progress.HasOffset) w.U64((ulong)progress.Offset);
+                }
                 w.Varint((ulong)ps.Ids.Count);
                 foreach (var ((author, start, end), (id, prev)) in ps.Ids
                            .OrderBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi)
