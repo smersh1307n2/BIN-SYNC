@@ -119,6 +119,31 @@ Relay retention/compaction рассчитывается по ACK всех intere
 
 SeenChanges provenance dedup — отдельное состояние BIN-SYNC, не FLD relay journal. Текущая wire specification задаёт channel-scoped key через senderPeer/namespace/ChangeId, но не задаёт safe GC watermark/expiry для этого набора. До появления нормативного правила BIN-SYNC обязан удерживать exact dedup state; FLD не должен самостоятельно удалять opaque ProtocolStateDelta по TTL или по relay ACK.
 
+### 5.1. Текущая стоимость APPLY journal и целевое разделение
+
+Проверка FLD ApplyCommitCodec v2 и ApplyJournal выявила дополнительное дублирование payload:
+
+- RemoteBatchCommit требует, чтобы RelayWrites был точным подмножеством Writes по ChangeId и содержимому.
+- ApplyCommitCodec v2 кодирует полный Fields и затем отдельно полный RelayFields. Значит, relay-eligible payload повторяется внутри одного APPLY_COMMIT.
+- FldDatabase.ApplyRemoteBatch записывает один и тот же полный encoded APPLY_COMMIT сначала в WAL, затем в ApplyJournal.
+- ApplyJournal хранит полный входящий batch для TryFindBatch и позднее ReadRelayBatches читает полный payload и извлекает из него relay subset.
+- В проверенном ApplyJournal есть AppendIfMissing/TryFindBatch/ReadBatches/Flush, но нет ACK/compaction/truncation API. Receipt и relay payload имеют один append-only lifetime.
+
+Следовательно, relay subset дублируется уже внутри WAL record, а затем весь WAL payload дублируется в sidecar journal. Это нужно исправлять не удалением данных, а разделением их семантических сроков хранения.
+
+Целевая модель:
+
+1. WAL APPLY_COMMIT хранит все входящие операции один раз и компактную relay-selection bitmap/index list, а не вторую копию RelayFields.
+2. Durable batch receipt хранит только identity/cursor/digest/result/ProtocolStateDelta и данные для корректного duplicate ACK.
+3. Отдельный RelayJournal хранит только выбранные relay operations с исходным ChangeId/author/HLC/key epoch/payload.
+4. WAL остаётся authoritative commit point. Receipt и RelayJournal материализуются идемпотентно по CommitSeq; WAL prefix нельзя truncate до durable materialization sidecars.
+5. Inbox receipt GC и relay payload GC независимы: receipt удаляется только по Inbox GC rule, relay payload — только по safe downstream ACK.
+6. Duplicate BatchId после WAL truncation должен возвращать прежний receipt без хранения полного исходного Fields массива.
+
+Предпочтительный физический вариант — отдельный компактный RelayJournal с одной копией выбранных payload. Ссылка на WAL bytes возможна, но тогда WAL segment должен оставаться pinned до ACK всех relay consumers; это может удерживать unrelated commits и осложнить checkpoint. Не хранить одновременно полный ApplyJournal payload и отдельную полную копию RelayJournal.
+
+До появления отдельных receipt/relay retention операций ApplyJournal нельзя считать завершённым production storage contract.
+
 ## 6. Read snapshot
 
 Snapshot API должен давать один согласованный view поверх overlay и immutable runs:
@@ -145,6 +170,7 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 | FldDatabase.ApplyRemoteBatch(RemoteBatchCommit) | Реализован durable receive boundary: проверяет duplicate batch, формирует WAL APPLY commit, сохраняет protocol delta и relay subset, flush-ит WAL/apply journal, затем публикует LWW winners; remote writes не попадают в local Outbox |
 | RemoteBatchCommit.ProtocolStateDelta | Передаётся и сохраняется opaque; FLD не интерпретирует его. BIN-SYNC ещё должен обеспечить корректное формирование, применение/recovery и атомарное согласование этого delta со своим runtime state |
 | ApplyJournal / ReadRelayBatches | Durable append-only apply journal и чтение relay-eligible операций реализованы; отдельный safe relay ACK/retention/compaction boundary в публичном API ещё не подтверждён |
+| ApplyCommitCodec v2 / ApplyJournal payload | Fields и RelayFields кодируются отдельно, хотя RelayFields — точное подмножество Fields; тот же полный APPLY_COMMIT payload дублируется в ApplyJournal. Нужны relay-selection indexes и отдельные receipt/relay lifetimes |
 | AcquireOutboxLease / ReleaseOutboxLease / VisitOutboxBatch / AcknowledgeOutbox(..., lease) | Durable fenced lease, borrowed-span enumeration и fenced ACK реализованы |
 | GetOutboxHighWatermark | Отдельный high watermark реализован; WAL CommitSeq и OutboxSeq остаются разными шкалами |
 | FLD Storage-only Metadata Store | Не реализован как отдельная семантическая роль/API; текущий FldDatabase по-прежнему создаёт синхронизируемую модель данных с LocalAuthor/HLC/Outbox |
@@ -164,6 +190,10 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 8. Compaction/restart: OutboxSeq и relay cursors сохраняют continuity; новый peer получает корректный gap-normal cursor.
 9. Snapshot under concurrent commit/checkpoint: один стабильный view, без пропусков/дубликатов и без use-after-reclaim.
 10. Lifecycle/tombstone/KeyEpoch: digest и LWW результаты совпадают с BIN-SYNC comparator и FLD canonical encoding.
+11. APPLY_COMMIT stores each incoming payload once; relay selection does not duplicate selected field values.
+12. ApplyJournal receipt survives WAL checkpoint/truncation without retaining non-relay field payloads.
+13. RelayJournal contains only relay-selected operations and is retained independently of Inbox receipt expiry.
+14. Crash between WAL flush and receipt/relay sidecar flush rebuilds both sidecars exactly once from CommitSeq.
 
 ## 9. Решение по текущему этапу
 
