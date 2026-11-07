@@ -703,18 +703,29 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var current = GetOrCreatePartition(partitionKey);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             bool hasExisting = current.PeerStreams.TryGetValue(key, out var existing);
-            if (current.RequiredPeerStreams.Contains(key) && hasExisting) return;
-            var baseline = hasExisting
-                ? existing!
-                : new PeerStreamStateValue(baselineAckedCursor, baselineAckedCursor,
-                    streamOffset, issuerEpoch, lastBatchDigest.ToArray(), null);
-            if (hasExisting &&
-                (baseline.AckedCursor != baselineAckedCursor ||
-                 baseline.StreamOffset != streamOffset ||
-                 baseline.IssuerEpoch != issuerEpoch ||
-                 !baseline.LastBatchDigest.AsSpan().SequenceEqual(lastBatchDigest)))
+            if (hasExisting && IsPristinePeerStream(existing!))
+            {
+                bool sameBaseline = existing!.AckedCursor == baselineAckedCursor &&
+                    existing.StreamOffset == streamOffset &&
+                    existing.IssuerEpoch == issuerEpoch &&
+                    existing.LastBatchDigest.AsSpan().SequenceEqual(lastBatchDigest);
+                if (sameBaseline && current.RequiredPeerStreams.Contains(key)) return;
+                PersistPeerStreamState(partitionKey, current, key,
+                    new PeerStreamStateValue(baselineAckedCursor, baselineAckedCursor,
+                        streamOffset, issuerEpoch, lastBatchDigest.ToArray(), null),
+                    ensureRequired: true);
+                return;
+            }
+            if (hasExisting)
+            {
+                // A live or already-advanced stream is never reset by a repeated
+                // membership/snapshot registration call.
+                if (current.RequiredPeerStreams.Contains(key)) return;
                 throw new InvalidDataException("Interested peer registration conflicts with existing stream progress.");
+            }
 
+            var baseline = new PeerStreamStateValue(baselineAckedCursor, baselineAckedCursor,
+                streamOffset, issuerEpoch, lastBatchDigest.ToArray(), null);
             PersistPeerStreamState(partitionKey, current, key, baseline, ensureRequired: true);
         }
     }
@@ -852,6 +863,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             }, ensureRequired: true);
         }
     }
+
+    private static bool IsPristinePeerStream(PeerStreamStateValue value)
+        => value.AckedCursor == 0 && value.PushedCursor == 0 && value.StreamOffset == 0 &&
+           value.IssuerEpoch == 0 && value.PendingBatch is null &&
+           value.LastBatchDigest.AsSpan().IndexOfAnyExcept((byte)0) < 0;
 
     private static ulong GetSafePeerCursor(PartitionState state, int namespaceId, NodeId authorStream)
     {
