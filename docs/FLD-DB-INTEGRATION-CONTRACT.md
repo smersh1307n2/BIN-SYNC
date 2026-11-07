@@ -54,8 +54,8 @@ BIN-SYNC не должен держать вторую копию durable field 
 | `ReadLocalOutboxBatch(afterSeq, limit, lease)` | Читает только frozen локальные изменения FLD author; возвращает стабильные OutboxSeq/ChangeId и полные HLC/op/value |
 | `AcknowledgeLocalOutbox(safeThroughSeq, lease)` | Подтверждает только непрерывный безопасный prefix, вычисленный BIN-SYNC по всем interested peers |
 | `ApplyRemoteBatch(commit)` | Одна атомарная durable транзакция: field state + dedup/inbox/cursor + relay journal/protocol extension |
-| `ReadRelayBatch(author, afterSeq, limit, lease)` | Возвращает сохранённые relay-eligible mutations, включая операции, проигравшие LWW |
-| `AcknowledgeRelay(author, safeThroughSeq, lease)` | Удаляет relay prefix только после подтверждения всеми interested peers |
+| `ReadRelayBatchPage(author, afterJournalSeq, limit, lease)` | Возвращает relay-eligible mutations и отдельный `ScannedThroughJournalSeq`, включая пустые диапазоны; legacy `ReadRelayBatches` остаётся wrapper |
+| `AcknowledgeRelay(author, safeThroughJournalSeq, lease)` | Разрешает reclamation только по per-author JournalSeq watermark, вычисленному BIN-SYNC после ACK всех interested peers |
 
 ### 3.1 RemoteBatchCommit
 
