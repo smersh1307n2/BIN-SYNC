@@ -29,7 +29,7 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 | Lab / fuzz | §17 | in CI |
 | Schema evolution | §18 | **partial** — opt-in metadata compatibility gate; not a runtime merge-policy dispatcher |
 | Public examples | samples | all three build and execute in CI |
-| Errata E-1…E-13 | v2.3.7 | incorporated into current specification v2.4.19 FINAL |
+| Errata E-1…E-13 | v2.3.7 | incorporated into current specification v2.4.20 FINAL |
 | Errata E-24 / E-25 | v2.4.18 / v2.4.19 | normative route-independent ChangeId identity/equivocation and fail-closed tombstone retention |
 
 ## Verified correctness fixes in this audit
