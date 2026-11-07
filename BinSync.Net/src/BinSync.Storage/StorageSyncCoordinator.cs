@@ -636,7 +636,8 @@ public sealed class StorageSyncCoordinator
                 var accepted = plan ?? throw new InvalidOperationException("Receive intent was not durably staged.");
                 ApplyRemoteBatchAfterNodeApply(batch, accepted, persistNode);
             },
-            ct: ct);
+            ct: ct,
+            receiveStateOwnedByMetadataStore: true);
     }
 
     /// <summary>
@@ -749,7 +750,10 @@ public sealed class StorageSyncCoordinator
                 {
                     if (persistNode is null)
                         throw new InvalidOperationException("Recovering a pre-Node PendingApply intent requires a Node checkpoint callback.");
-                    _node.ApplyBatchPayload(intent.Batch.WirePayload, intent.Batch.SenderPeer);
+                    if (intent.Batch.ReceiveStateOwnedByMetadataStore)
+                        _node.ApplyBatchPayloadWithMetadataAuthority(intent.Batch.WirePayload, intent.Batch.SenderPeer);
+                    else
+                        _node.ApplyBatchPayload(intent.Batch.WirePayload, intent.Batch.SenderPeer);
                     persistNode(_node);
                 }
 
@@ -812,6 +816,7 @@ public sealed class StorageSyncCoordinator
             PreviousBatchDigest = batch.PrevBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
             WirePayload = wirePayload?.ToArray() ?? Array.Empty<byte>(),
+            ReceiveStateOwnedByMetadataStore = true,
             Operations = operations
         };
     }
