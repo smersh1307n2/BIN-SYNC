@@ -731,6 +731,44 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Legacy_pending_v4_and_v3_intents_do_not_claim_header_authority()
+    {
+        var batch = new MetadataIncomingBatch
+        {
+            ScopeId = "legacy-pending-codec",
+            LocalReplica = Node(91),
+            SenderPeer = Node(92),
+            SenderEpoch = 1,
+            AuthorStreamNodeId = Node(93),
+            NamespaceId = 9,
+            BatchId = Batch(94),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)95, 16).ToArray(),
+            ReceiveStateOwnedByMetadataStore = true,
+            Operations = Array.Empty<MetadataOperation>()
+        };
+        var encode = typeof(StorageMetadataStore).GetMethod(
+            "EncodeIncomingBatch", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var decode = typeof(StorageMetadataStore).GetMethod(
+            "DecodeIncomingBatch", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        byte[] version5 = (byte[])encode.Invoke(null, new object[] { batch })!;
+
+        byte[] version4 = version5[..^1];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version4.AsSpan(0, 4), -4);
+        var decoded4 = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version4 })!;
+        Assert.False(decoded4.ReceiveStateOwnedByMetadataStore);
+        Assert.Empty(decoded4.HeaderFingerprint);
+
+        byte[] version3 = version5[..^2];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version3.AsSpan(0, 4), -3);
+        var decoded3 = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version3 })!;
+        Assert.False(decoded3.ReceiveStateOwnedByMetadataStore);
+        Assert.Empty(decoded3.HeaderFingerprint);
+    }
+
+    [Fact]
     public void Peer_roster_baseline_and_epoch_retirement_commit_as_atomic_deltas()
     {
         string directory = Path.Combine(_root, "peer-lifecycle-deltas");
