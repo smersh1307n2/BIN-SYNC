@@ -1,10 +1,15 @@
-# BIN-SYNC CORE v2.4.17 FINAL
+# BIN-SYNC CORE v2.4.18 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.17 FINAL (canonical CRDT payloads; schema-map validation)  
-**Дата:** 2026-11-06  
-**Изменения v2.4.17 относительно v2.4.16:**
+**Версия:** 2.4.18 FINAL (route-independent ChangeId deduplication; canonical CRDT payloads; schema-map validation)  
+**Дата:** 2026-11-07  
+**Изменения v2.4.18 относительно v2.4.17:**
+- Зафиксирована глобальная в пределах реплики дедупликация (namespaceId, ChangeId) независимо от immediate sender/маршрута, с проверкой canonical semantic fingerprint и отказом при equivocation.
+- Локальные изменения записывают ChangeId identity в durable ledger атомарно с Outbox/WAL; повторное получение известного ChangeId не применяется и не ретранслируется.
+- Legacy identity без fingerprint консервативно считается уже виденной; первый повтор может заполнить fingerprint, но не пере-применяет операцию. Безопасный GC horizon не определён; удаление ledger по TTL запрещено.
+
+**Исторические изменения v2.4.17 относительно v2.4.16:**
 - Зафиксированы канонические wire layouts COUNTER_G, COUNTER_PN, SET_OR, SEQ_FRACTIONAL и BLOB_REF: строгая сортировка, уникальность идентификаторов, проверка EOF и ограничение count по оставшемуся payload.
 - Конфликтующие payloads с одинаковой идентичностью элемента SEQ_FRACTIONAL или одинаковым blobId отклоняются вместо выбора левого operand.
 - SCHEMA_MAP отклоняет повторные версии, повторные/неупорядоченные field IDs и пересечение активных и retired IDs; malformed descriptors не пропускаются молча.
@@ -2443,3 +2448,24 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 **Нормативно:** канонические wire layouts и проверки заданы непосредственно в §§8.4–8.8 и §18.4. Реализация обязана проверять counts до narrowing/allocation, строгий порядок и уникальность, полное потребление payload и конфликт идентичности до merge/publication. Для SCHEMA_MAP дубли descriptor keys и field IDs, неупорядоченные field IDs и пересечение active/retired IDs являются ошибкой всего payload.
 
 **Wire format:** байты, создаваемые корректными прежними encoder-ами, не меняются. Изменяется только приемная строгость: неканонические/неоднозначные payloads отклоняются.
+
+# ERRATA v2.4.18
+
+## E-24. §8.3 / §10.1 / §13.4 / §17.23 — глобальная идентичность ChangeId и защита от equivocation
+
+**Дефект:** дедупликация по (senderPeer, namespaceId, ChangeId) рассматривает одно логическое изменение, доставленное через независимые маршруты, как разные операции. После удаления/компактизации исходной Outbox-записи проверка только текущей очереди также перестаёт быть достаточной. Это позволяет повторно применить и ретранслировать кольцевое эхо. Обратная проблема — повторное использование одного ChangeId для другого содержимого — делает provenance неоднозначным.
+
+**Нормативно:**
+
+1. В пределах одной локальной реплики логическая идентичность операции определяется парой (namespaceId, ChangeId). NodeId локальной реплики задаётся самим durable state image и не повторяется в каждом ключе. Immediate sender, маршрут, session alias, issuer BatchId и relay-local sequence не входят в identity. Одинаковый ChangeId в разных namespace — разные identities.
+2. При первом принятии узел вычисляет semantic fingerprint операции после разрешения исходного AuthorNodeId. Fingerprint обязан быть независим от транспортного alias и включать namespace, envelope RecordId, opKind и все семантически значимые поля операции: тип операции, field ID (если применимо), KeyEpoch, HLC wall/logical, исходного AuthorNodeId и точные value bytes для FieldWrite; для FieldTomb и RecordTombstone — их tombstone/lifecycle semantics и соответствующие идентификаторы. Если для операции применим causal trailer, fingerprint включает множество ChangeId-зависимостей в canonical sorted-unique форме; отсутствие trailer и пустое множество эквивалентны.
+3. **Same identity + same fingerprint:** операция уже известна этой реплике независимо от sender/маршрута. Она не применяется повторно и не добавляется в relay Outbox повторно. При этом новый корректный входящий batch от другого peer всё равно проходит обычную проверку cursor/digest и фиксирует собственный batch receipt/receive cursor; peer получает обычный ACK после durable commit.
+4. **Same identity + different fingerprint:** это ChangeId equivocation/protocol conflict. Весь входящий batch отклоняется до WAL append и публикации field state, cursor, receipt, dedup ledger или relay entries. Частичный commit запрещён.
+5. Право на relay определяется первым принятием identity этой репликой, а не результатом LWW merge. Впервые увиденная операция, проигравшая текущему LWW winner, остаётся relay-eligible согласно E-8. Повторно увиденная identity не становится relay-eligible даже при доставке от другого peer.
+6. Локально созданная операция регистрирует (namespaceId, ChangeId, fingerprint) атомарно с локальным field state, Outbox и WAL до того, как операция может быть опубликована транспортом. Возврат собственной операции через mesh подавляется глобальным ledger даже после компактизации локального Outbox.
+7. Legacy identity, для которой мигрированное состояние не содержит fingerprint, является **unknown-but-seen**: её консервативно считают дубликатом и не применяют/не ретранслируют. При первом повторном получении узел может закрепить вычисленный fingerprint в том же durable commit, что и batch receipt/cursor, но не пере-применяет операцию. Это не даёт задним числом доказать отсутствие equivocation для исторической операции.
+8. Dedup ledger не удаляется по TTL, локальному Outbox ACK или relay payload ACK. GC допустим только после отдельного protocol-safe dedup horizon, который гарантирует невозможность легального повторного предъявления старого ChangeId. Пока такой horizon не определён, identity удерживается; настроенный resource cap при заполнении должен отклонить новый batch атомарно, а не вытеснять старые identities.
+
+**Fingerprint implementation:** текущая реализация использует BLAKE3-128 от canonical semantic representation; all-zero digest зарезервирован для unknown legacy marker. Fingerprint — локальный derived index, он не передаётся в DELTA_BATCH и не меняет RecordsRoot/BatchDigest. Реализации могут использовать иной collision-resistant fingerprint, если сохраняют перечисленную семантическую эквивалентность и fail-closed equivocation behavior.
+
+**Совместимость:** DELTA_BATCH, snapshot и ACK wire layouts не меняются. E-24 уточняет и усиливает E-8/E-13: route-scoped SeenChanges больше не является источником глобальной dedup истины; дополнительная E-13 проверка байт-идентичного собственного состояния остаётся допустимым локальным echo guard. NodePersistence v12 — локальный формат хранения, не wire revision.
