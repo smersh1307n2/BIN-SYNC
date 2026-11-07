@@ -1818,6 +1818,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ? null
             : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
 
+        var legacyKeys = current.PersistedEntries.Values
+            .Where(entry => entry.Key.Length > root.Length &&
+                entry.Key[root.Length] is 6 or 9 or 11)
+            .Select(entry => (Hex: Convert.ToHexString(entry.Key), entry.Key))
+            .ToArray();
+
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
         if (actualBaseCommitSeq != current.StorageCommitSeq)
@@ -1825,12 +1831,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (identityKey is not null)
             batch.Put(identityKey, identityValue!);
         batch.Put(storageKey, value);
+        foreach (var legacy in legacyKeys)
+            batch.Delete(legacy.Key);
         batch.Commit();
 
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         if (identityKey is not null)
             current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
+        foreach (var legacy in legacyKeys)
+            current.PersistedEntries.Remove(legacy.Hex);
         current.PersistedEntries[Convert.ToHexString(storageKey)] = (storageKey, value);
         current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
