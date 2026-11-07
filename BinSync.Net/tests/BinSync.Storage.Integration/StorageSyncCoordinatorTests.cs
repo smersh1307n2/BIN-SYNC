@@ -37,7 +37,8 @@ public sealed class StorageSyncCoordinatorTests
                 throw new InvalidOperationException("simulated interruption after durable intent");
             },
             beforeAck: null,
-            ct: receiveCts.Token);
+            ct: receiveCts.Token,
+            receiveStateOwnedByMetadataStore: true);
         var send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await receive);
