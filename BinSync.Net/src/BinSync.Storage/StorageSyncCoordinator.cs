@@ -359,6 +359,8 @@ public sealed class StorageSyncCoordinator
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(wirePayload);
+        if (wirePayload.Length == 0 || wirePayload.Length > 16 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(wirePayload));
         if (_metadataStore is null)
             throw new InvalidOperationException("A Metadata Store is required for durable receive staging.");
         if (batch.NamespaceId != _namespaceId)
@@ -396,7 +398,8 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(persistNode);
         if (_metadataStore is null)
             throw new InvalidOperationException("A Metadata Store is required for durable receive staging.");
-        if (batch.NamespaceId != _namespaceId || plan.Batch.BatchId != batch.BatchId ||
+        if (batch.NamespaceId != _namespaceId || plan.ApplyToken != CreateBatchApplyToken(batch) ||
+            plan.Batch.BatchId != batch.BatchId ||
             !plan.Batch.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest.ToArray()))
             throw new InvalidDataException("Pre-staged receive intent does not match the applied Node batch.");
 
@@ -452,8 +455,10 @@ public sealed class StorageSyncCoordinator
 
                 if (intent.Batch.WirePayload.Length > 0)
                 {
+                    if (persistNode is null)
+                        throw new InvalidOperationException("Recovering a pre-Node PendingApply intent requires a Node checkpoint callback.");
                     _node.ApplyBatchPayloadWithBatch(intent.Batch.WirePayload, intent.Batch.SenderPeer);
-                    persistNode?.Invoke(_node);
+                    persistNode(_node);
                 }
 
                 var mutations = CreateProviderMutations(intent.Batch.Operations);
