@@ -167,10 +167,10 @@ public sealed class StorageSyncCoordinatorTests
         });
 
         Append(fieldA, 1000, "a1");
-        Append(fieldB, 1500, "b-final");
+        Append(fieldB, 2500, "b-final");
         Append(fieldA, 2000, "a2");
         Append(fieldA, 3000, "a-final");
-        Append(fieldB, 2500, "b-old");
+        Append(fieldB, 2000, "b-old");
 
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce-pages");
         Assert.Equal(5, coordinator.PublishLocalChanges(_ => { }, limit: 2));
