@@ -274,7 +274,7 @@ public sealed partial class Node
             _outboxSeq[sequenceKey] = entry.Seq;
             sequenceChanged = true;
 
-            seenAdded = SeenChanges.Add((NodeId, entry.NamespaceId, entry.ChangeId));
+            seenAdded = SeenChanges.Add((entry.NamespaceId, entry.ChangeId));
             if (!seenAdded)
                 throw new InvalidOperationException("Local Outbox ChangeId is already present in SeenChanges.");
 
