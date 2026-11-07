@@ -603,6 +603,12 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
     }
 
+    private static MetadataRelayItem CloneRelayItem(MetadataRelayItem item)
+        => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray());
+
+    private static MetadataOutboundItem CloneOutboundItem(MetadataOutboundItem item)
+        => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray());
+
     private static void ValidateOutboundLease(PartitionState state, OutboundKey key, ulong generation)
     {
         if (!state.OutboundLeases.TryGetValue(key, out var lease) || lease.Generation != generation)
