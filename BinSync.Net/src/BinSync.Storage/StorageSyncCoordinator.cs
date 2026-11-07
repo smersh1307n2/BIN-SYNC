@@ -347,14 +347,21 @@ public sealed class StorageSyncCoordinator
             NodeId peer = session.PeerNodeId;
             uint peerEpoch = checked((uint)session.PeerEpoch);
             var known = peerStore.ReadPeerStreamStates(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId)
-                .Select(stream => stream.AuthorStream).ToHashSet();
+                .ToDictionary(stream => stream.AuthorStream, stream => stream.State);
             var authors = peerStore.ReadOutboundAuthors(_scopeId!, _node.NodeId, namespaceId)
                 .Concat(peerStore.ReadRelayAuthors(_scopeId!, _node.NodeId, namespaceId))
                 .Distinct()
                 .ToArray();
             foreach (NodeId author in authors)
             {
-                if (author == peer || known.Contains(author)) continue;
+                if (author == peer) continue;
+                var saved = known.TryGetValue(author, out var existing)
+                    ? existing
+                    : peerStore.GetPeerStreamState(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId, author);
+                bool pristine = saved.AckedCursor == 0 && saved.PushedCursor == 0 &&
+                    saved.StreamOffset == 0 && saved.IssuerEpoch == 0 &&
+                    saved.PendingBatch is null && saved.LastBatchDigest.All(value => value == 0);
+                if (!pristine) continue;
                 var legacy = _node.ReadPeerStreamProgress(peer, namespaceId, author);
                 if (legacy.PushedCursor > legacy.AckedCursor)
                     throw new InvalidDataException("Legacy Node peer state has an unacknowledged batch without a durable replay reservation.");
