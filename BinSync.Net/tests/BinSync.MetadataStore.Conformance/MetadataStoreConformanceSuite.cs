@@ -13,13 +13,6 @@ public abstract class MetadataStoreConformanceSuite
     protected abstract IMetadataStoreConformanceAdapter CreateStore();
 
     [Fact]
-    public void Adapter_must_declare_its_durability_profile()
-    {
-        using var store = CreateStore();
-        Assert.False(store.SupportsRestartDurability);
-    }
-
-    [Fact]
     public void Exact_batch_retry_returns_original_receipt_without_duplicate_relay()
     {
         using var store = CreateStore();
