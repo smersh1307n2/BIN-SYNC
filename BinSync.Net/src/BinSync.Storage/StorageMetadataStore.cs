@@ -711,9 +711,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         ulong previous = current.OutboundLeases.TryGetValue(key, out var prior) ? prior.Generation : 0;
         ulong generation = checked(previous + 1);
 
-        var next = current.Clone();
-        next.OutboundLeases[key] = new LeaseState(generation, consumerId);
-        PersistPartition(partitionKey, current, next);
+        PersistOutboundLease(partitionKey, current, key, new LeaseState(generation, consumerId));
         return generation;
     
         }
@@ -1803,6 +1801,40 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         next.IsPersisted = true;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
+    }
+
+    private void PersistOutboundLease(
+        PartitionKey partitionKey, PartitionState current, OutboundKey key, LeaseState lease)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] storageKey = StorageKey(root, 10, KeyNamespaceAuthor(key.NamespaceId, key.Author));
+        byte[] value = new byte[24];
+        BinaryPrimitives.WriteUInt64LittleEndian(value, lease.Generation);
+        lease.ConsumerId.TryWriteBytes(value.AsSpan(8));
+        byte[]? identityKey = current.IsPersisted
+            ? null
+            : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+        byte[]? identityValue = identityKey is null
+            ? null
+            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        if (identityKey is not null)
+            batch.Put(identityKey, identityValue!);
+        batch.Put(storageKey, value);
+        batch.Commit();
+
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        if (identityKey is not null)
+            current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
+        current.PersistedEntries[Convert.ToHexString(storageKey)] = (storageKey, value);
+        current.OutboundLeases[key] = lease;
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
     }
 
     private void PersistPeerBaselineMarker(
