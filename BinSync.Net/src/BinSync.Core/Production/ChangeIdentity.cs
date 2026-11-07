@@ -74,8 +74,26 @@ internal static class ChangeIdentity
 
     internal static Digest16 Fingerprint(OutboxEntry entry)
     {
+        if (!TryFingerprint(entry, out var fingerprint))
+            throw new InvalidDataException("Cannot fingerprint an Outbox operation with a deferred field value.");
+        return fingerprint;
+    }
+
+    internal static bool TryFingerprint(OutboxEntry entry, out Digest16 fingerprint)
+    {
         var operation = Ops.DecodeOp(entry.Payload).Op;
-        return Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind, operation,
-            entry.AuthorNodeId, entry.CausalDepsOrNull);
+        // Persistence may retain only the FieldWrite header when the value is
+        // recoverable from the current field state. That is not enough to prove
+        // the identity of an old relay loser, so keep its legacy marker unknown.
+        if (operation is OpFieldWrite fieldWrite &&
+            fieldWrite.ValueLenPos >= 0 && fieldWrite.Value.Length == 0)
+        {
+            fingerprint = default;
+            return false;
+        }
+
+        fingerprint = Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind,
+            operation, entry.AuthorNodeId, entry.CausalDepsOrNull);
+        return true;
     }
 }
