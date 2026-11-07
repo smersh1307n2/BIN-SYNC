@@ -177,7 +177,7 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 | AcquireOutboxLease / ReleaseOutboxLease / VisitOutboxBatch / AcknowledgeOutbox(..., lease) | Durable fenced lease, borrowed-span enumeration и fenced ACK реализованы |
 | GetOutboxHighWatermark | Отдельный high watermark реализован; WAL CommitSeq и OutboxSeq остаются разными шкалами |
 | FLD Storage-only Metadata Store | Не реализован; target is direct use of the domain-neutral `Fld1.Storage` API, without constructing `FldDatabase` or LocalAuthor/HLC/Outbox |
-| BIN-SYNC Node | Текущие Storage/Outbox/PeerStates/SeenChanges и другие протокольные структуры остаются внутренними коллекциями Node; общего Metadata Store boundary пока нет |
+| BIN-SYNC Node | Текущие Storage/Outbox/PeerStates/SeenChanges и другие протокольные структуры остаются внутренними коллекциями Node; общего Metadata Store boundary пока нет. Target persistence uses the global ChangeId ledger described in the architecture contract |
 
 **Запрет до появления целевого API:** не использовать последовательность `FldDatabase.ApplyRemote(...); FldDatabase.Commit();` как реализацию BIN-SYNC receive. Она не обеспечивает atomic batch/idempotency/relay semantics и может добавить remote author entries в локальный Outbox.
 
@@ -188,9 +188,9 @@ The physical engine must be independently reusable. `Fld1.Storage` exposes byte-
 ## 8. Приёмочные тесты контракта
 
 1. Local writes: restart сохраняет OutboxSeq, ChangeId, HLC и payload без renumbering.
-2. Remote commit: field winners, inbox cursor, SeenChanges и relay journal появляются атомарно.
+2. Remote commit: field winners, inbox cursor, global ChangeId ledger and relay journal appear atomically.
 3. Crash/lost ACK: повтор того же BatchId возвращает duplicate receipt; нет повторного применения и relay append.
-4. Cross-peer duplicate ChangeId: поле и relay не дублируются; cursor каждого входящего peer корректен.
+4. Cross-peer duplicate ChangeId: identical fingerprint does not reapply or relay twice; each incoming peer cursor and Inbox receipt still advance atomically. Conflicting fingerprint rejects the complete batch.
 5. LWW loser: field state не меняется, но новая операция остаётся relay-eligible.
 6. Remote apply → commit/reopen: remote operation не появляется в local Outbox.
 7. Safe ACK: один отставший/неизвестный peer удерживает local/relay prefix; stale lease token отклоняется.
