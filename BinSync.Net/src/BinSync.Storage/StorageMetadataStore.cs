@@ -886,10 +886,17 @@ public class StorageMetadataStore : IMetadataStore
             }
         }
 
-        foreach (var pair in state.RelayAck)
-            Add(StorageKey(root, 5, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
-        foreach (var pair in state.RelayHighWatermarks)
-            Add(StorageKey(root, 6, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
+        var relayWatermarkKeys = new HashSet<RelayKey>(state.RelayAck.Keys);
+        relayWatermarkKeys.UnionWith(state.RelayHighWatermarks.Keys);
+        foreach (var key in relayWatermarkKeys)
+        {
+            byte[] value = new byte[16];
+            if (state.RelayAck.TryGetValue(key, out ulong ack))
+                BinaryPrimitives.WriteUInt64LittleEndian(value, ack);
+            if (state.RelayHighWatermarks.TryGetValue(key, out ulong high))
+                BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), high);
+            Add(StorageKey(root, 5, KeyNamespaceAuthor(key.NamespaceId, key.Author)), value);
+        }
 
         foreach (var pair in state.Outbound)
         {
@@ -903,10 +910,17 @@ public class StorageMetadataStore : IMetadataStore
             }
         }
 
-        foreach (var pair in state.OutboundHighWatermarks)
-            Add(StorageKey(root, 8, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
-        foreach (var pair in state.OutboundAck)
-            Add(StorageKey(root, 9, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
+        var outboundWatermarkKeys = new HashSet<OutboundKey>(state.OutboundHighWatermarks.Keys);
+        outboundWatermarkKeys.UnionWith(state.OutboundAck.Keys);
+        foreach (var key in outboundWatermarkKeys)
+        {
+            byte[] value = new byte[16];
+            if (state.OutboundAck.TryGetValue(key, out ulong ack))
+                BinaryPrimitives.WriteUInt64LittleEndian(value, ack);
+            if (state.OutboundHighWatermarks.TryGetValue(key, out ulong high))
+                BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), high);
+            Add(StorageKey(root, 8, KeyNamespaceAuthor(key.NamespaceId, key.Author)), value);
+        }
 
         foreach (var pair in state.OutboundLeases)
         {
@@ -1039,13 +1053,38 @@ public class StorageMetadataStore : IMetadataStore
                 case 9:
                 {
                     RequireLength(key, 18);
-                    RequireLength(row.Value, 8);
                     var streamKey = new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
-                    ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
-                    if (kind == 5) state.RelayAck.Add(streamKey, value);
-                    else if (kind == 6) state.RelayHighWatermarks.Add(streamKey, value);
-                    else if (kind == 8) state.OutboundHighWatermarks.Add(new OutboundKey(streamKey.NamespaceId, streamKey.Author), value);
-                    else state.OutboundAck.Add(new OutboundKey(streamKey.NamespaceId, streamKey.Author), value);
+                    if (kind is 5 or 6)
+                    {
+                        if (kind == 5 && row.Value.Length == 16)
+                        {
+                            state.RelayAck.Add(streamKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
+                            state.RelayHighWatermarks.Add(streamKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
+                        }
+                        else
+                        {
+                            RequireLength(row.Value, 8);
+                            ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                            if (kind == 5) state.RelayAck.Add(streamKey, value);
+                            else state.RelayHighWatermarks.Add(streamKey, value);
+                        }
+                    }
+                    else
+                    {
+                        var outboundKey = new OutboundKey(streamKey.NamespaceId, streamKey.Author);
+                        if (kind == 8 && row.Value.Length == 16)
+                        {
+                            state.OutboundAck.Add(outboundKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
+                            state.OutboundHighWatermarks.Add(outboundKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
+                        }
+                        else
+                        {
+                            RequireLength(row.Value, 8);
+                            ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                            if (kind == 8) state.OutboundHighWatermarks.Add(outboundKey, value);
+                            else state.OutboundAck.Add(outboundKey, value);
+                        }
+                    }
                     break;
                 }
                 case 10:
