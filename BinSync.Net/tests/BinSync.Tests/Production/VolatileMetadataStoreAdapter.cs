@@ -75,12 +75,14 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 next.Relay.Add(relayKey, entries);
             }
 
-            ulong sequence = entries.Count == 0 ? 1 : checked(entries[^1].Sequence + 1);
+            ulong previousHighWatermark = next.RelayHighWatermarks.TryGetValue(relayKey, out var relayHighWatermark) ? relayHighWatermark : 0;
+            ulong sequence = checked(previousHighWatermark + 1);
             entries.Add(new MetadataRelayItem(
                 sequence,
                 operation.AuthorNodeId,
                 operation.ChangeId,
                 operation.Payload.ToArray()));
+            next.RelayHighWatermarks[relayKey] = sequence;
             relayAdded++;
         }
 
@@ -145,11 +147,13 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var frozen = new List<MetadataOutboundItem>(operations.Count);
         foreach (var operation in operations)
         {
-            ulong sequence = entries.Count == 0 ? 1 : checked(entries[^1].Sequence + 1);
+            ulong previousHighWatermark = next.OutboundHighWatermarks.TryGetValue(key, out var outboundHighWatermark) ? outboundHighWatermark : 0;
+            ulong sequence = checked(previousHighWatermark + 1);
             var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
             entries.Add(item);
             frozen.Add(CloneOutboundItem(item));
             next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
+            next.OutboundHighWatermarks[key] = sequence;
         }
 
         _partitions[partitionKey] = next;
@@ -204,7 +208,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), acknowledged);
         }
 
-        ulong highWatermark = entries.Count == 0 ? 0 : entries[^1].Sequence;
+        ulong highWatermark = state.OutboundHighWatermarks.TryGetValue(key, out var outboundHighWatermark) ? outboundHighWatermark : 0;
         if (afterSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(afterSequence));
 
@@ -237,14 +241,35 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var key = new OutboundKey(namespaceId, localAuthor);
         ValidateOutboundLease(current, key, leaseGeneration);
         ulong previous = current.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
-        ulong highWatermark = current.Outbound.TryGetValue(key, out var entries) && entries.Count != 0
-            ? entries[^1].Sequence
-            : 0;
+        ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var outboundHighWatermark) ? outboundHighWatermark : 0;
         if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
         var next = current.Clone();
         next.OutboundAck[key] = safeThroughSequence;
+        _partitions[partitionKey] = next;
+    }
+
+    public void CompactOutboundThrough(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor,
+        ulong safeThroughSequence)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        if (!_partitions.TryGetValue(partitionKey, out var current))
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+
+        var key = new OutboundKey(namespaceId, localAuthor);
+        ulong acknowledged = current.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
+        if (safeThroughSequence > acknowledged)
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+
+        var next = current.Clone();
+        if (next.Outbound.TryGetValue(key, out var entries))
+            entries.RemoveAll(entry => entry.Sequence <= safeThroughSequence);
         _partitions[partitionKey] = next;
     }
 
@@ -257,9 +282,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
-        return state.Outbound.TryGetValue(new OutboundKey(namespaceId, localAuthor), out var entries) &&
-               entries.Count != 0
-            ? entries[^1].Sequence
+        return state.OutboundHighWatermarks.TryGetValue(new OutboundKey(namespaceId, localAuthor), out var highWatermark)
+            ? highWatermark
             : 0;
     }
 
@@ -288,7 +312,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), acknowledged);
         }
 
-        ulong highWatermark = entries.Count == 0 ? 0 : entries[^1].Sequence;
+        ulong highWatermark = state.RelayHighWatermarks.TryGetValue(key, out var relayHighWatermark) ? relayHighWatermark : 0;
         if (afterSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(afterSequence));
 
@@ -323,9 +347,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
 
         var key = new RelayKey(namespaceId, originalAuthor);
         ulong previous = current.RelayAck.TryGetValue(key, out var ack) ? ack : 0;
-        ulong highWatermark = current.Relay.TryGetValue(key, out var entries) && entries.Count != 0
-            ? entries[^1].Sequence
-            : 0;
+        ulong highWatermark = current.RelayHighWatermarks.TryGetValue(key, out var relayHighWatermark) ? relayHighWatermark : 0;
 
         if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
@@ -350,6 +372,29 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             : 0;
     }
 
+    public void CompactRelayThrough(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId originalAuthor,
+        ulong safeThroughSequence)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        if (!_partitions.TryGetValue(partitionKey, out var current))
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+
+        var key = new RelayKey(namespaceId, originalAuthor);
+        ulong acknowledged = current.RelayAck.TryGetValue(key, out var ack) ? ack : 0;
+        if (safeThroughSequence > acknowledged)
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+
+        var next = current.Clone();
+        if (next.Relay.TryGetValue(key, out var entries))
+            entries.RemoveAll(entry => entry.Sequence <= safeThroughSequence);
+        _partitions[partitionKey] = next;
+    }
+
     public ulong GetRelayHighWatermark(
         string scopeId,
         NodeId localReplica,
@@ -359,9 +404,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
-        return state.Relay.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var entries) &&
-               entries.Count != 0
-            ? entries[^1].Sequence
+        return state.RelayHighWatermarks.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var highWatermark)
+            ? highWatermark
             : 0;
     }
 
@@ -465,7 +509,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         public Dictionary<LedgerKey, byte[]> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
+        public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, List<MetadataOutboundItem>> Outbound { get; } = new();
+        public Dictionary<OutboundKey, ulong> OutboundHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
         public HashSet<OutboundChangeKey> OutboundChangeIds { get; } = new();
@@ -488,6 +534,10 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 clone.Relay.Add(pair.Key, pair.Value.Select(CloneRelayItem).ToList());
             foreach (var pair in RelayAck)
                 clone.RelayAck.Add(pair.Key, pair.Value);
+            foreach (var pair in RelayHighWatermarks)
+                clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
+            foreach (var pair in OutboundHighWatermarks)
+                clone.OutboundHighWatermarks.Add(pair.Key, pair.Value);
             foreach (var pair in Outbound)
                 clone.Outbound.Add(pair.Key, pair.Value.Select(CloneOutboundItem).ToList());
             foreach (var pair in OutboundAck)
