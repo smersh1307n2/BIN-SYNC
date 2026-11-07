@@ -867,7 +867,10 @@ public class StorageMetadataStore : IMetadataStore
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            Add(StorageKey(root, 3, suffix), pair.Value.ToArray());
+            byte[] value = new byte[17];
+            pair.Value.Fingerprint.CopyTo(value, 0);
+            value[16] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            Add(StorageKey(root, 3, suffix), value);
         }
 
         foreach (var pair in state.Relay)
