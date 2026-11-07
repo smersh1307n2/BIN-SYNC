@@ -142,6 +142,8 @@ SeenChanges provenance dedup — отдельное состояние BIN-SYNC,
 
 Предпочтительный физический вариант — отдельный компактный RelayJournal с одной копией выбранных payload. Ссылка на WAL bytes возможна, но тогда WAL segment должен оставаться pinned до ACK всех relay consumers; это может удерживать unrelated commits и осложнить checkpoint. Не хранить одновременно полный ApplyJournal payload и отдельную полную копию RelayJournal.
 
+ProtocolStateDelta — recovery payload, принадлежащий BIN-SYNC. Его retention заканчивается, когда соответствующее protocol metadata state durably materialized/checkpointed и может быть восстановлено/прочитано из Metadata Store; он не должен автоматически жить столько же, сколько Inbox receipt или relay payload. Если delta остаётся единственным recovery source, удерживать её до checkpoint. Возвращать полный delta при duplicate receipt нужно только пока это требуется выбранным replay contract.
+
 До появления отдельных receipt/relay retention операций ApplyJournal нельзя считать завершённым production storage contract.
 
 ## 6. Read snapshot
