@@ -1823,6 +1823,21 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 entry.Key[root.Length] is 6 or 9 or 11)
             .Select(entry => (Hex: Convert.ToHexString(entry.Key), entry.Key))
             .ToArray();
+        var legacyLedgerRows = new List<(string Hex, byte[] Key, byte[] Value)>();
+        foreach (var pair in current.ChangeLedger)
+        {
+            byte[] suffix = new byte[18];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+            pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
+            byte[] ledgerKey = StorageKey(root, 3, suffix);
+            string hex = Convert.ToHexString(ledgerKey);
+            if (!current.PersistedEntries.TryGetValue(hex, out var previous) || previous.Value.Length != 16)
+                continue;
+            byte[] ledgerValue = new byte[17];
+            pair.Value.Fingerprint.CopyTo(ledgerValue, 0);
+            ledgerValue[16] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            legacyLedgerRows.Add((hex, ledgerKey, ledgerValue));
+        }
 
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
@@ -1833,6 +1848,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         batch.Put(storageKey, value);
         foreach (var legacy in legacyKeys)
             batch.Delete(legacy.Key);
+        foreach (var legacy in legacyLedgerRows)
+            batch.Put(legacy.Key, legacy.Value);
         batch.Commit();
 
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
@@ -1841,6 +1858,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
         foreach (var legacy in legacyKeys)
             current.PersistedEntries.Remove(legacy.Hex);
+        foreach (var legacy in legacyLedgerRows)
+            current.PersistedEntries[legacy.Hex] = (legacy.Key, legacy.Value);
         current.PersistedEntries[Convert.ToHexString(storageKey)] = (storageKey, value);
         current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
