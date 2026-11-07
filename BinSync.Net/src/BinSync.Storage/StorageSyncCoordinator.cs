@@ -457,7 +457,7 @@ public sealed class StorageSyncCoordinator
                 {
                     if (persistNode is null)
                         throw new InvalidOperationException("Recovering a pre-Node PendingApply intent requires a Node checkpoint callback.");
-                    _node.ApplyBatchPayloadWithBatch(intent.Batch.WirePayload, intent.Batch.SenderPeer);
+                    _node.ApplyBatchPayload(intent.Batch.WirePayload, intent.Batch.SenderPeer);
                     persistNode(_node);
                 }
 
