@@ -44,6 +44,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         byte[] streamSuffix = new byte[18];
         BinaryPrimitives.WriteUInt16LittleEndian(streamSuffix, 7);
         local.WriteTo(streamSuffix.AsSpan(2));
+        byte[] relaySuffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(relaySuffix, 7);
+        Node(20).WriteTo(relaySuffix.AsSpan(2));
         byte[] outboundSuffix = new byte[26];
         streamSuffix.CopyTo(outboundSuffix, 0);
         BinaryPrimitives.WriteUInt64BigEndian(outboundSuffix.AsSpan(18), 1);
@@ -60,7 +63,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 batch.Put(Suffix(0, ReadOnlySpan<byte>.Empty), scopeBytes);
                 batch.Put(Suffix(3, ledgerSuffix), frozen.Fingerprint.ToArray());
                 batch.Put(Suffix(7, outboundSuffix), outboundValue);
+                batch.Put(Suffix(5, relaySuffix), EncodeUInt64(1));
+                batch.Put(Suffix(6, relaySuffix), EncodeUInt64(3));
                 batch.Put(Suffix(8, streamSuffix), EncodeUInt64(1));
+                batch.Put(Suffix(9, streamSuffix), EncodeUInt64(1));
                 batch.Put(Suffix(11, ledgerSuffix), Array.Empty<byte>());
                 batch.Commit();
             }
@@ -76,10 +82,22 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             byte[] compactLedgerKey = Suffix(3, ledgerSuffix);
             using var snapshot = storage.OpenSnapshot();
             var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
-            Assert.DoesNotContain(rows, row => row.Key.Length > root.Length && row.Key[root.Length] == 11);
+            Assert.DoesNotContain(rows, row => row.Key.Length > root.Length && row.Key[root.Length] is 6 or 9 or 11);
             var compactLedger = Assert.Single(rows, row => row.Key.AsSpan().SequenceEqual(compactLedgerKey));
             Assert.Equal(17, compactLedger.Value.Length);
-            Assert.Equal(1, compactLedger.Value[16]);
+            Assert.Equal((byte)1, compactLedger.Value[16]);
+
+            var compactRelayWatermark = Assert.Single(rows, row =>
+                row.Key.AsSpan().SequenceEqual(Suffix(5, relaySuffix)));
+            Assert.Equal(16, compactRelayWatermark.Value.Length);
+            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(compactRelayWatermark.Value));
+            Assert.Equal(3UL, BinaryPrimitives.ReadUInt64LittleEndian(compactRelayWatermark.Value.AsSpan(8)));
+
+            var compactOutboundWatermark = Assert.Single(rows, row =>
+                row.Key.AsSpan().SequenceEqual(Suffix(8, streamSuffix)));
+            Assert.Equal(16, compactOutboundWatermark.Value.Length);
+            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(compactOutboundWatermark.Value));
+            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(compactOutboundWatermark.Value.AsSpan(8)));
         }
         finally
         {
