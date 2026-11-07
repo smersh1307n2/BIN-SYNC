@@ -9,7 +9,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-metadata-" + Guid.NewGuid().ToString("N"));
 
     protected override IMetadataStoreConformanceAdapter CreateStore()
-        => new StorageMetadataStoreAdapter(Path.Combine(_root, Guid.NewGuid().ToString("N")));
+        => new StorageMetadataStoreConformanceAdapter(Path.Combine(_root, Guid.NewGuid().ToString("N")));
 
     [Fact]
     public void Receipts_relay_outbound_leases_and_pending_apply_survive_restart_and_compaction()
@@ -25,7 +25,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         try
         {
-            using (var store = new StorageMetadataStoreAdapter(directory, 302, deleteOnDispose: false))
+            using (var store = new StorageMetadataStoreConformanceAdapter(directory, 302, deleteOnDispose: false))
             {
                 store.AcceptIncomingBatch(first);
                 store.FreezeOutbound("durable-scope", Node(1), 7, Node(1),
@@ -34,7 +34,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 store.BeginPendingApply(pending, token);
             }
 
-            using (var reopened = new StorageMetadataStoreAdapter(directory, 302, deleteOnDispose: false))
+            using (var reopened = new StorageMetadataStoreConformanceAdapter(directory, 302, deleteOnDispose: false))
             {
                 Assert.Equal(1UL, reopened.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
                 Assert.Equal(1UL, reopened.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
@@ -60,7 +60,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Empty(reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 1, 0, 10).Items);
             }
 
-            using (var afterCompaction = new StorageMetadataStoreAdapter(directory, 302, deleteOnDispose: false))
+            using (var afterCompaction = new StorageMetadataStoreConformanceAdapter(directory, 302, deleteOnDispose: false))
             {
                 Assert.Equal(2UL, afterCompaction.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
                 Assert.Equal(1UL, afterCompaction.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
