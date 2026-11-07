@@ -43,6 +43,12 @@ public interface IMetadataStoreSnapshot : IDisposable
     MetadataOutboundPage ReadOutbound(int namespaceId, NodeId localAuthor, ulong afterSequence, int limit);
 }
 
+public sealed class MetadataPendingApplyAlreadyFinalizedException : InvalidOperationException
+{
+    public MetadataPendingApplyAlreadyFinalizedException()
+        : base("Pending apply token has already been finalized.") { }
+}
+
 public sealed record MetadataProviderApplyReceipt(Guid ApplyToken, byte[] BatchDigest);
 public sealed record MetadataPendingApplyIntent(Guid ApplyToken, MetadataIncomingBatch Batch);
 
