@@ -31,9 +31,9 @@ public class ChangeIdWireTests
         Transport.MakeSession(remote, local);
         Assert.NotNull(Transport.DeliverBatch(remote, local, ns));
         Assert.True(local.GlobalChangeLedger.ContainsKey((ns, localChangeId)));
-        Assert.True(local.SeenChanges.Contains((ns, localChangeId)));
+        Assert.Contains((ns, localChangeId), local.SeenChanges);
         Assert.True(local.GlobalChangeLedger.ContainsKey((ns, remoteChangeId)));
-        Assert.False(local.SeenChanges.Contains((ns, remoteChangeId)));
+        Assert.DoesNotContain((ns, remoteChangeId), local.SeenChanges);
 
         int restoredRecords = local.RestoreProviderSnapshot(ns, new[]
         {
