@@ -521,6 +521,21 @@ public static class NodePersistence
             foreach (var (_, ns, changeId) in n.SeenChanges)
                 n.GlobalChangeLedger.TryAdd((ns, changeId),
                     new ChangeLedgerValue(default, isKnown: false));
+
+            // A retained legacy Outbox payload is sufficient to reconstruct its
+            // canonical fingerprint. Only compacted historical entries stay unknown.
+            foreach (var (ns, entries) in n.Outbox)
+            {
+                foreach (var entry in entries)
+                {
+                    if (entry.ChangeId.IsZero) continue;
+                    var key = (ns, entry.ChangeId);
+                    if (n.GlobalChangeLedger.TryGetValue(key, out var oldValue) && oldValue.IsKnown)
+                        continue;
+                    var fingerprint = ChangeIdentity.Fingerprint(entry);
+                    n.GlobalChangeLedger[key] = new ChangeLedgerValue(fingerprint, isKnown: true);
+                }
+            }
         }
 
         int lsaCount = (int)r.Varint();
