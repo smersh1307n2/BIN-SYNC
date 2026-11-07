@@ -851,10 +851,18 @@ public class StorageMetadataStore : IMetadataStore
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
             pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
-            byte[] value = new byte[24];
+            byte[] value = new byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorEnd);
-            pair.Value.LastBatchDigest.CopyTo(value, 8);
             Add(StorageKey(root, 2, suffix), value);
+        }
+
+        foreach (var pair in state.ReceiveChains)
+        {
+            byte[] suffix = new byte[22];
+            pair.Key.Sender.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            Add(StorageKey(root, 14, suffix), pair.Value.LastBatchDigest.ToArray());
         }
 
         foreach (var pair in state.ChangeLedger)
@@ -963,16 +971,35 @@ public class StorageMetadataStore : IMetadataStore
                 }
                 case 2:
                 {
-                    if (key.Length is not (22 or 38))
-                        throw new InvalidDataException("Metadata receive key has an invalid length.");
-                    RequireLength(row.Value, 24);
-                    var receiveKey = new ReceiveKey(NodeId.From(key.Slice(0, 16)),
+                    var sender = NodeId.From(key.Slice(0, 16));
+                    uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16));
+                    int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20));
+                    if (key.Length == 22 && row.Value.Length == 24)
+                    {
+                        // Legacy v1 combined receive cursor + digest-chain checkpoint.
+                        state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId, default),
+                            new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
+                        state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId),
+                            new ReceiveChainState(row.Value.AsSpan(8, 16).ToArray()));
+                    }
+                    else
+                    {
+                        RequireLength(key, 38);
+                        RequireLength(row.Value, 8);
+                        state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId,
+                            NodeId.From(key.Slice(22, 16))),
+                            new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
+                    }
+                    break;
+                }
+                case 14:
+                {
+                    RequireLength(key, 22);
+                    RequireLength(row.Value, 16);
+                    var chainKey = new ReceiveChainKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                        key.Length == 38 ? NodeId.From(key.Slice(22, 16)) : default);
-                    state.Receives.Add(receiveKey, new ReceiveState(
-                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
-                        row.Value.AsSpan(8, 16).ToArray()));
+                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
+                    state.ReceiveChains.Add(chainKey, new ReceiveChainState(row.Value.ToArray()));
                     break;
                 }
                 case 3:
