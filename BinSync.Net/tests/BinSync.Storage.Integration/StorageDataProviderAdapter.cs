@@ -249,7 +249,7 @@ public sealed class StorageDataProviderAdapter : IDataProviderConformanceAdapter
             {
                 if (!prior!.AsSpan().SequenceEqual(fingerprint))
                     throw new InvalidDataException("Apply token was reused with different canonical input.");
-                return new ProviderApplyReceipt(applyToken, prior.ToArray(), IsDuplicate: true);
+                return new ProviderApplyReceipt(applyToken, prior!.ToArray(), IsDuplicate: true);
             }
 
             using var batch = _storage.BeginWriteBatch();
