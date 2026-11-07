@@ -69,17 +69,16 @@ public sealed class StorageSyncCoordinatorTests
         RecordId recordId = RecordId.From(Guid.Parse("60000000-0000-0000-0000-000000000006").ToByteArray());
         const ushort fieldId = 0x0101;
         sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("committed"), new Hlc(3000, 1));
-        var fields = new[] { (recordId, fieldId) };
 
         Transport.MakeSession(sender, receiver);
         var coordinator = new StorageSyncCoordinator(receiver, provider, 1);
 
         Assert.Throws<IOException>(() => Transport.DeliverBatch(sender, receiver, 1,
-            beforeAck: (target, _, _) =>
+            beforeAck: (target, batch, _) =>
             {
                 // Receiver protocol receipt is durable before external provider apply.
                 NodePersistence.Save(target, nodePath);
-                coordinator.ApplyRemoteFields(fields);
+                coordinator.ApplyRemoteBatch(batch);
                 // Simulate process loss after provider commit but before sender ACK.
                 throw new IOException("simulated crash before ACK");
             }));
@@ -87,14 +86,31 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(provider.TryReadCurrent(recordId, fieldId, out var committed));
         Assert.Equal("committed", Encoding.UTF8.GetString(committed!.Value));
 
+        // Advance provider state after the original batch committed. Replaying the
+        // old immutable batch must hit its original receipt and must not fingerprint
+        // the provider's newer current winner as if it were the old batch payload.
+        provider.ApplyRemoteBatch(Guid.Parse("00000000-0000-0000-0000-000000000403"),
+            new[]
+            {
+                new ProviderMutation
+                {
+                    RecordId = recordId,
+                    FieldId = fieldId,
+                    HlcWall = 4000,
+                    HlcLogical = 0,
+                    AuthorNodeId = sender.NodeId,
+                    Value = Encoding.UTF8.GetBytes("newer")
+                }
+            });
+
         receiver = NodePersistence.Load(nodePath);
         Transport.MakeSession(sender, receiver);
         coordinator = new StorageSyncCoordinator(receiver, provider, 1);
         var retry = Transport.DeliverBatch(sender, receiver, 1,
-            beforeAck: (target, _, result) =>
+            beforeAck: (target, batch, result) =>
             {
                 Assert.True(result.Duplicate);
-                var receipt = coordinator.ApplyRemoteFields(fields);
+                var receipt = coordinator.ApplyRemoteBatch(batch);
                 Assert.True(receipt!.IsDuplicate);
                 NodePersistence.Save(target, nodePath);
             });
@@ -102,6 +118,8 @@ public sealed class StorageSyncCoordinatorTests
         Assert.NotNull(retry);
         Assert.True(retry!.Value.Duplicate);
         Assert.Null(Transport.DeliverBatch(sender, receiver, 1));
+        Assert.True(provider.TryReadCurrent(recordId, fieldId, out var latest));
+        Assert.Equal("newer", Encoding.UTF8.GetString(latest!.Value));
         Assert.Equal(0UL, provider.LocalChangeHighWatermark);
     }
 
