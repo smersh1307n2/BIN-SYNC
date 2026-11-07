@@ -99,14 +99,10 @@ public sealed class ResourceLimits
     /// provenance or relay entries. Counts are deltas computed from the staged batch.
     /// </summary>
     internal void EnsureCanApplyBatch(Node node, int namespaceId, int newRecords,
-        int relayEntries, int newSeenChanges, int newGlobalChanges)
+        int relayEntries, int newGlobalChanges)
     {
         if (MaxOutboxEntriesPerNamespace > 0 &&
             (long)node.OutboxSizeInternal(namespaceId) + relayEntries > MaxOutboxEntriesPerNamespace)
-            throw new SyncException("INTERNAL");
-
-        if (MaxSeenChanges > 0 &&
-            (long)node.SeenChanges.Count + newSeenChanges > MaxSeenChanges)
             throw new SyncException("INTERNAL");
 
         if (MaxGlobalChangeLedgerEntries > 0 &&
