@@ -2,7 +2,7 @@
 
 **Status:** Architecture contract v0.5 — two-assembly FLD Storage boundary and compact BIN-SYNC metadata implementation are recorded.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
-**Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, but still requires promotion into a normative protocol erratum and independent conformance vectors before release.  
+**Protocol baseline:** BIN-SYNC CORE v2.4.18 FINAL (E-24 defines route-independent ChangeId dedup semantics). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
 **Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v12, adaptive receipt indexing, compact 16-byte ledger values, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
 
 ## 1. Purpose
@@ -616,7 +616,7 @@ Target logical records:
 
 Do not add a per-change/per-peer delivery table or ACK bitmap. Do not merge receipt and global dedup: identities and retention horizons differ. Inbox/InboxAuthors/ReceivedStreams may be consolidated only after every retry/ACK path is covered by tests.
 
-The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint for now; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
+The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint as specified by E-24; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
 
 Order: baseline; global dedup, ACK-covered replay pruning, Inbox/InboxAuthors key consolidation and remote SeenChanges removal (implemented); compact header-bound InboxReceipt v8 (implemented; expiry/GC still open); APPLY single-encoding, relay-only materialization and FLD per-author relay ACK/compaction (implemented; BIN-SYNC now exposes the safe per-author ACK query and retained ChangeId→OutboxSeq resolver; durable source JournalSeq provenance and atomic adapter scan/ACK integration remain open); durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
 
