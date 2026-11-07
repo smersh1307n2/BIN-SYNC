@@ -80,8 +80,6 @@ try
         ushort quantity = providerB.ResolveFieldId("quantity"u8.ToArray());
         providerB.AppendLocalChange(Mutation(recordB, quantity, nodeB.NodeId, 3000, "9"u8));
         int published = coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
-        ulong metadataHigh = metadataB.GetOutboundHighWatermark("array-tcp-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId);
-        Console.WriteLine($"post-restart publish={published} B outbox={nodeB.GetOutboxCount(NamespaceId)} high={nodeB.GetOutboxHighWatermark(NamespaceId, nodeB.NodeId)} metadata={metadataHigh}");
         if (published != 1 || nodeB.GetOutboxCount(NamespaceId) == 0)
             throw new InvalidOperationException("Post-restart local update was not enqueued in the Node Outbox.");
 
@@ -132,30 +130,61 @@ static async Task<int> ExchangeOverTcpAsync(
     await using var sessionB = await TcpSync.ConnectAsync(nodeB, "127.0.0.1", listener.Port);
     await using var sessionA = await acceptTask;
 
-    int directions = 0;
-    Console.WriteLine($"TCP session outboxes: A={nodeA.GetOutboxCount(NamespaceId)}, B={nodeB.GetOutboxCount(NamespaceId)}");
-    if (nodeA.GetOutboxCount(NamespaceId) > 0)
+    int aToB = await PushUntilIdleAsync(sessionA, nodeA, sessionB, nodeB,
+        (batch, _) => coordinatorB.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageB, nodeB)));
+    int bToA = await PushUntilIdleAsync(sessionB, nodeB, sessionA, nodeA,
+        (batch, _) => coordinatorA.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageA, nodeA)));
+    Console.WriteLine($"TCP batches: A→B={aToB}, B→A={bToA}");
+    return aToB + bToA;
+}
+
+static async Task<int> PushUntilIdleAsync(
+    SyncSession senderSession,
+    Node sender,
+    SyncSession receiverSession,
+    Node receiver,
+    Action<Batch, BatchResult> beforeAck)
+{
+    int sentCount = 0;
+    while (true)
     {
-        Task<BatchResult> receive = sessionB.ReceiveBatchAsync(nodeB, beforeAck: (batch, _) =>
-            coordinatorB.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageB, nodeB)));
-        bool sent = await sessionA.PushBatchAsync(nodeA, NamespaceId);
-        if (!sent) throw new InvalidOperationException("Node A had an Outbox entry but did not send a batch.");
-        await receive;
-        directions++;
+        using var receiveCts = new CancellationTokenSource();
+        Task<BatchResult> receiveTask = receiverSession.ReceiveBatchAsync(receiver, receiveCts.Token, beforeAck);
+        Task<bool> pushTask = senderSession.PushBatchAsync(sender, NamespaceId);
+
+        Task first = await Task.WhenAny(pushTask, receiveTask);
+        if (ReferenceEquals(first, receiveTask) && receiveTask.IsFaulted)
+        {
+            receiveCts.Cancel();
+            try { await pushTask; } catch { }
+            await receiveTask;
+        }
+
+        bool sent;
+        try
+        {
+            sent = await pushTask;
+        }
+        catch
+        {
+            receiveCts.Cancel();
+            try { await receiveTask; } catch { }
+            throw;
+        }
+
+        if (!sent)
+        {
+            receiveCts.Cancel();
+            try { await receiveTask; }
+            catch (OperationCanceledException) { }
+            break;
+        }
+
+        await receiveTask;
+        sentCount++;
     }
 
-    if (nodeB.GetOutboxCount(NamespaceId) > 0)
-    {
-        Task<BatchResult> receive = sessionA.ReceiveBatchAsync(nodeA, beforeAck: (batch, _) =>
-            coordinatorA.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageA, nodeA)));
-        bool sent = await sessionB.PushBatchAsync(nodeB, NamespaceId);
-        if (!sent) throw new InvalidOperationException("Node B had an Outbox entry but did not send a batch.");
-        await receive;
-        directions++;
-    }
-
-    Console.WriteLine($"TCP session completed directions={directions}; remaining outboxes A={nodeA.GetOutboxCount(NamespaceId)}, B={nodeB.GetOutboxCount(NamespaceId)}");
-    return directions;
+    return sentCount;
 }
 
 static Node NewNode(byte seed)
