@@ -179,6 +179,8 @@ The implementation must make the transition from pending to frozen durable befor
 
 If a process crashes after freeze but before the first byte is sent, the operation remains frozen and will be sent on retry. This may retain one extra superseded operation, but it cannot cause divergence.
 
+For a snapshot-plus-tail transfer, the snapshot baseline and frozen Outbox cursor must share one barrier. Freeze all pending operations included in the snapshot boundary, then capture the stable source snapshot and its corresponding frozen high watermark (or use an equivalent atomic provider snapshot/feed token). Changes committed after that barrier remain pending and are frozen into the tail. Never take an arbitrary current-state snapshot and independently sample an unrelated Outbox cursor; that can omit a change or send it on both sides of the baseline.
+
 ## 6. Metadata minimization: what is stored where
 
 The Metadata Store should avoid storing the same information in several forms without a clear recovery reason.
