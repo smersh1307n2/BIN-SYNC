@@ -389,6 +389,48 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Pending_ChangeId_identity_is_scoped_by_namespace()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "pending-changeid-namespace"), 437);
+        NodeId local = Node(1), author = Node(3);
+        const string scope = "pending-changeid-namespace";
+        BatchId sharedChangeId = Batch(153);
+
+        MetadataIncomingBatch Create(NodeId sender, int namespaceId, byte batchSeed, byte fingerprint) => new()
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = namespaceId,
+            BatchId = Batch(batchSeed),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat(batchSeed, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = sharedChangeId,
+                    Fingerprint = Enumerable.Repeat(fingerprint, 16).ToArray(),
+                    Payload = new byte[] { batchSeed, 2 },
+                    RelayEligible = true
+                }
+            }
+        };
+
+        store.BeginPendingApply(Create(Node(2), 7, 20, 21),
+            Guid.Parse("00000000-0000-0000-0000-000000000437"));
+        store.BeginPendingApply(Create(Node(4), 8, 22, 23),
+            Guid.Parse("00000000-0000-0000-0000-000000000438"));
+
+        Assert.Equal(2, store.ReadPendingApplyIntents(scope, local).Count);
+    }
+
+    [Fact]
     public void Relay_page_is_read_from_metadata_at_each_downstream_peers_own_cursor()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-relay-page"), 422);
