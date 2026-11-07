@@ -1840,9 +1840,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
 
         var legacyWatermarkRows = new List<(string Hex, byte[] Key, byte[] Value)>();
-        foreach (var key in current.RelayAck.Keys.Concat(current.RelayHighWatermarks.Keys).Distinct())
+        foreach (var relayKey in current.RelayAck.Keys.Concat(current.RelayHighWatermarks.Keys).Distinct())
         {
-            byte[] suffix = KeyNamespaceAuthor(key.NamespaceId, key.Author);
+            byte[] suffix = KeyNamespaceAuthor(relayKey.NamespaceId, relayKey.Author);
             byte[] watermarkKey = StorageKey(root, 5, suffix);
             string hex = Convert.ToHexString(watermarkKey);
             bool hasLegacyAck = current.PersistedEntries.TryGetValue(hex, out var previous) &&
@@ -1851,15 +1851,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             bool hasLegacyHigh = current.PersistedEntries.ContainsKey(Convert.ToHexString(legacyHighKey));
             if (!hasLegacyAck && !hasLegacyHigh) continue;
             byte[] watermarkValue = new byte[16];
-            if (current.RelayAck.TryGetValue(key, out ulong ack))
+            if (current.RelayAck.TryGetValue(relayKey, out ulong ack))
                 BinaryPrimitives.WriteUInt64LittleEndian(watermarkValue, ack);
-            if (current.RelayHighWatermarks.TryGetValue(key, out ulong high))
+            if (current.RelayHighWatermarks.TryGetValue(relayKey, out ulong high))
                 BinaryPrimitives.WriteUInt64LittleEndian(watermarkValue.AsSpan(8), high);
             legacyWatermarkRows.Add((hex, watermarkKey, watermarkValue));
         }
-        foreach (var key in current.OutboundAck.Keys.Concat(current.OutboundHighWatermarks.Keys).Distinct())
+        foreach (var outboundKey in current.OutboundAck.Keys.Concat(current.OutboundHighWatermarks.Keys).Distinct())
         {
-            byte[] suffix = KeyNamespaceAuthor(key.NamespaceId, key.Author);
+            byte[] suffix = KeyNamespaceAuthor(outboundKey.NamespaceId, outboundKey.Author);
             byte[] watermarkKey = StorageKey(root, 8, suffix);
             string hex = Convert.ToHexString(watermarkKey);
             bool hasLegacyAck = current.PersistedEntries.TryGetValue(hex, out var previous) &&
@@ -1868,9 +1868,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             bool hasLegacyHigh = current.PersistedEntries.ContainsKey(Convert.ToHexString(legacyHighKey));
             if (!hasLegacyAck && !hasLegacyHigh) continue;
             byte[] watermarkValue = new byte[16];
-            if (current.OutboundAck.TryGetValue(key, out ulong ack))
+            if (current.OutboundAck.TryGetValue(outboundKey, out ulong ack))
                 BinaryPrimitives.WriteUInt64LittleEndian(watermarkValue, ack);
-            if (current.OutboundHighWatermarks.TryGetValue(key, out ulong high))
+            if (current.OutboundHighWatermarks.TryGetValue(outboundKey, out ulong high))
                 BinaryPrimitives.WriteUInt64LittleEndian(watermarkValue.AsSpan(8), high);
             legacyWatermarkRows.Add((hex, watermarkKey, watermarkValue));
         }
