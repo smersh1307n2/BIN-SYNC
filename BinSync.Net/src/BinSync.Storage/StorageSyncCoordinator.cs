@@ -49,7 +49,12 @@ public sealed class StorageSyncCoordinator
             if (page.Changes.Count == 0)
                 return 0;
 
-            foreach (var change in page.Changes)
+            // Source feeds may contain several local LWW edits for the same canonical
+            // field before synchronization. Collapse only this unpublished page to its
+            // deterministic HLC winner; once written to Node/Outbox, operations are immutable.
+            // Record lifecycle tombstones are coalesced independently from field state.
+            var pending = CoalescePendingLocalChanges(page.Changes);
+            foreach (var change in pending)
             {
                 ProviderMutation mutation = change.Mutation;
                 if (mutation.AuthorNodeId != _node.NodeId)
@@ -81,6 +86,49 @@ public sealed class StorageSyncCoordinator
     /// Metadata Store. Node sequence numbers are preserved exactly; a gap between the
     /// metadata high-watermark and the first retained Node entry fails closed.
     /// </summary>
+    private static IReadOnlyList<ProviderChange> CoalescePendingLocalChanges(
+        IReadOnlyList<ProviderChange> changes)
+    {
+        var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+        foreach (var change in changes)
+        {
+            ProviderMutation mutation = change.Mutation;
+            var key = (mutation.RecordId, mutation.FieldId, mutation.IsRecordTombstone);
+            if (!winners.TryGetValue(key, out var prior))
+            {
+                winners.Add(key, change);
+                continue;
+            }
+
+            ProviderMutation previous = prior.Mutation;
+            int comparison = HlcOps.CompareHlc(
+                new Hlc(mutation.HlcWall, mutation.HlcLogical), mutation.AuthorNodeId,
+                new Hlc(previous.HlcWall, previous.HlcLogical), previous.AuthorNodeId);
+            if (comparison == 0)
+            {
+                if (!SameMutation(mutation, previous))
+                    throw new InvalidDataException("Pending local feed contains conflicting mutations at the same HLC and author.");
+                continue;
+            }
+
+            if (comparison > 0)
+                winners[key] = change;
+        }
+
+        return winners.Values.OrderBy(change => change.Sequence).ToArray();
+    }
+
+    private static bool SameMutation(ProviderMutation left, ProviderMutation right)
+        => left.RecordId == right.RecordId
+            && left.FieldId == right.FieldId
+            && left.IsTombstone == right.IsTombstone
+            && left.IsRecordTombstone == right.IsRecordTombstone
+            && left.HlcWall == right.HlcWall
+            && left.HlcLogical == right.HlcLogical
+            && left.AuthorNodeId == right.AuthorNodeId
+            && left.KeyEpoch == right.KeyEpoch
+            && left.Value.AsSpan().SequenceEqual(right.Value);
+
     private void FreezeLocalOutboxToMetadata()
     {
         if (_metadataStore is null)
