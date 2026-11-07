@@ -81,6 +81,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch));
         }
 
+        ValidateIncomingBatchForStaging(current, batch, applyToken);
+
         var next = current.Clone();
         next.PendingApplies.Add(applyToken, new PendingApplyValue(CloneBatch(batch)));
         PersistPartition(partitionKey, current, next);
@@ -172,6 +174,68 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         var state = GetOrCreatePartition(partitionKey).Clone();
         return new VolatileSnapshot(state);
     
+        }
+    }
+
+    private static void ValidateIncomingBatchForStaging(
+        PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
+    {
+        var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, batch.BatchId, ResolveAuthorStream(batch));
+        if (state.Receipts.TryGetValue(receiptKey, out var receipt))
+        {
+            if (!receipt.Matches(batch))
+                throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
+            return;
+        }
+
+        var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, ResolveAuthorStream(batch));
+        foreach (var pending in state.PendingApplies)
+        {
+            if (pending.Key == applyToken) continue;
+            var other = pending.Value.Batch;
+            if (other.SenderPeer == receiveKey.Sender &&
+                other.SenderEpoch == receiveKey.Epoch &&
+                other.NamespaceId == receiveKey.NamespaceId &&
+                ResolveAuthorStream(other) == receiveKey.AuthorStream)
+                throw new InvalidOperationException("An earlier batch for this peer author stream is still pending apply.");
+        }
+
+        var receive = state.Receives.TryGetValue(receiveKey, out var priorReceive)
+            ? priorReceive
+            : new ReceiveState(0);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chain = state.ReceiveChains.TryGetValue(chainKey, out var priorChain)
+            ? priorChain
+            : new ReceiveChainState(new byte[16]);
+        if (batch.CursorStart != checked(receive.CursorEnd + 1) ||
+            !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
+            throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
+
+        var batchIdentities = new Dictionary<LedgerKey, byte[]>();
+        foreach (var operation in batch.Operations)
+        {
+            var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
+            if (batchIdentities.TryGetValue(key, out var inBatchFingerprint) &&
+                !inBatchFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint within one incoming batch.");
+            batchIdentities[key] = operation.Fingerprint;
+
+            if (state.ChangeLedger.TryGetValue(key, out var priorLedger) &&
+                !priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
+
+            foreach (var otherPending in state.PendingApplies.Values)
+            {
+                foreach (var pendingOperation in otherPending.Batch.Operations)
+                {
+                    if (pendingOperation.ChangeId == operation.ChangeId &&
+                        pendingOperation.AuthorNodeId == operation.AuthorNodeId &&
+                        !pendingOperation.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                        throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                }
+            }
         }
     }
 
