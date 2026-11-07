@@ -156,8 +156,9 @@ public partial class SyncSession
             peerStateStore.AcknowledgeOutboundBatch(scopeId, sender.NodeId,
                 PeerNodeId, peerEpoch, namespaceId, authorStream,
                 reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest);
-            sender.AdvanceStreamForTransport(PeerNodeId, namespaceId, batch);
-            sender.MirrorDurableAck(PeerNodeId, namespaceId, seq, authorStream);
+            // Metadata Store is authoritative in this overload. Do not mirror the committed
+            // ACK/digest back into Node: the next call restores the exact progress from
+            // durable peer state before building another batch.
             return true;
         }
         finally
