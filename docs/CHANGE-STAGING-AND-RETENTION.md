@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.8; global ChangeId dedup, remote SeenChanges removal, unified receipts, v8 header-bound duplicate ACKs, v9 compact peer progress and bounded Inbox receipt admission are implemented; receipt expiry/GC, tombstone GC safety, APPLY payload compaction and Storage physical format remain optimization gates.  
+**Status:** Architecture decision draft v0.9; global ChangeId dedup, remote SeenChanges removal, unified receipts, v8 header-bound duplicate ACKs, v9 compact peer progress, v10 grouped persistence scope keys and bounded Inbox receipt admission are implemented; receipt expiry/GC, tombstone GC safety, APPLY payload compaction and Storage physical format remain optimization gates.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
@@ -569,3 +569,9 @@ The target lifecycle decisions are:
 First implementation priority is route-independent ChangeId dedup, ACK-covered replay-cache pruning and receipt-path audit. The largest payload optimization is APPLY WAL single-encoding plus compact relay-selection indexes and a relay-only payload log. Durable PendingLocal coalescing follows; physical compact encodings come only after logical transitions are tested.
 
 No ChangeId generation change, OriginSeq extension, wire-format change or destructive GC policy is approved here. Detailed exit criteria and crash tests are in the roadmap.
+
+### 9.6. NodePersistence v10 grouped receipt and dedup encoding
+
+Accepted Inbox receipts are now serialized grouped by `(issuer, namespace, epoch)`; each group writes its shared issuer/session key once, then the BatchId and receipt values. Global ChangeId fingerprints are grouped by namespace. This reduces repeated scope-key bytes in snapshots while preserving the same logical dictionary keys and retention behavior. For each additional receipt in a group, the raw saving is approximately 16 bytes plus namespace/epoch varint widths; for each additional ledger entry in a namespace, it is the namespace varint width. Group count varints offset a small amount, and singleton groups may be slightly larger; these are format-derived estimates, not measured benchmarks.
+
+NodePersistence v10 reads the old flat v3-v9 layouts and writes the grouped layout. Tests cover v9 migration, v10 round-trip, unknown legacy markers, expiry fields and invalid cursor overflow. No wire-format change.
