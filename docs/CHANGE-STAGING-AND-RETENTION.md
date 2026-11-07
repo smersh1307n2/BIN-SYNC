@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.4; staging/Outbox lifecycle and runtime cross-peer ChangeId dedup are defined, while receipt consolidation and Storage physical format remain optimization gates.  
+**Status:** Architecture decision draft v0.5; global ChangeId dedup, remote SeenChanges removal and receipt-key consolidation are implemented; complete receipt tuple, APPLY payload compaction and Storage physical format remain optimization gates.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
@@ -352,7 +352,7 @@ The receiver recognizes the same original operation across direct peers and rela
 
 **Implemented exact ChangeId ledger:** each key retains a 16-byte BLAKE3 fingerprint (32 logical bytes per operation including the 16-byte ChangeId, before dictionary/page overhead). The fingerprint covers namespace, RecordId, OpKind, canonical FULL_AUTHOR_ID operation bytes (resolved permanent author, HLC, field/key epoch, value or tombstone), and a sorted unique causal-dependency set. Same ID/same fingerprint is suppressed across routes and after origin Outbox compaction; same ID/different known fingerprint rejects the complete batch before WAL/state publication. The ledger stores no operation payload and no duplicate author field.
 
-Local WAL replay markers remain separately represented by legacy `SeenChanges` entries in this implementation. The global ledger also records local ChangeIds atomically with local Outbox/WAL publication, so a later dedicated pass can evaluate safely shrinking the peer-scoped SeenChanges set without conflating local replay and remote provenance.
+Local WAL replay markers remain separately represented by `SeenChanges`, but this set now contains only local-node markers. Remote peer-scoped SeenChanges rows were redundant after the global ledger became authoritative and are no longer written or probed. v3-v5 migration folds all legacy remote identities into unknown global-ledger markers before dropping those peer-scoped rows; v6-v7 migration retains the already-persisted global ledger and filters SeenChanges to local markers. `MaxSeenChanges` therefore caps only local WAL replay markers; `MaxGlobalChangeLedgerEntries` caps global operation identities.
 
 **Candidate optimization — content-derived ChangeId:** ChangeId could be defined as BLAKE3-128 over a canonical semantic operation (namespace, record, op kind, permanent original author, HLC/key epoch and canonical value/tombstone bytes). The receiver would recompute it before apply. This would make conflicting payload reuse fail ID validation and reduce the exact dedup index from 32 logical bytes (ID + fingerprint) to a key-only 16-byte set. It still requires exact retention to suppress old relay loops; it does not by itself create a safe GC horizon. Audit provider-supplied IDs, API compatibility, E2EE/canonicalization, alias resolution, causal metadata and legacy wire compatibility before selecting it.
 
@@ -539,8 +539,9 @@ The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value b
 1. Global cross-peer ChangeId dedup correctness — implemented; retain exact ledger until a safe GC horizon exists.
 2. Prune acknowledged PeerState.Ids — implemented.
 3. Inbox + InboxAuthors key consolidation — implemented in NodePersistence v7; full receipt tuple/expiry remains open.
-4. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
-5. Pack per-author peer progress and compact batch receipts.
+4. Remove redundant remote SeenChanges rows — implemented; local WAL markers remain separate.
+5. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
+6. Pack per-author peer progress and compact batch receipts.
 5. Version and benchmark FLD Outbox encoding.
 6. Implement PendingLocal coalescing only before publication.
 7. Only then evaluate content-derived ChangeId, OriginSeq, batch-level alias and WAL-backed Outbox references.
