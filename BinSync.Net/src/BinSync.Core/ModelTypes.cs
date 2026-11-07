@@ -111,6 +111,10 @@ public sealed class OutboxEntry
         }
     }
 
+    // Avoid materializing deferred empty dependency lists on the fingerprint hot path.
+    internal IReadOnlyList<BatchId>? CausalDepsOrNull =>
+        _causalDepsDeferred || _causalDeps is null || _causalDeps.Count == 0 ? null : _causalDeps;
+
     // True only while a public delta batch still references an engine-owned outbox buffer.
     // Cleared as soon as the payload is detached into caller-owned storage.
     internal bool PayloadNeedsDetachment;
