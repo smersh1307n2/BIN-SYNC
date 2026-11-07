@@ -515,8 +515,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         ulong peerSafe = GetSafePeerCursor(current, namespaceId, localAuthor);
         bool hasPeerRequirements = current.InterestedPeers.Any(peer => peer.NamespaceId == namespaceId && peer.Peer != localAuthor) ||
             current.RequiredPeerStreams.Any(peer => peer.NamespaceId == namespaceId && peer.AuthorStream == localAuthor && peer.Peer != localAuthor);
-        if (safeThroughSequence > acknowledged ||
-            (hasPeerRequirements && safeThroughSequence > peerSafe))
+        bool hasLocalConsumer = current.OutboundLeases.ContainsKey(key);
+        if ((hasLocalConsumer && safeThroughSequence > acknowledged) ||
+            (hasPeerRequirements && safeThroughSequence > peerSafe) ||
+            (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
         var next = current.Clone();
@@ -1108,8 +1110,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             peer.NamespaceId == namespaceId && peer.Peer != originalAuthor) ||
             current.RequiredPeerStreams.Any(peer =>
                 peer.NamespaceId == namespaceId && peer.AuthorStream == originalAuthor && peer.Peer != originalAuthor);
-        if (safeThroughSequence > acknowledged ||
-            (hasPeerRequirements && safeThroughSequence > peerSafe))
+        bool hasLocalConsumer = current.RelayAck.ContainsKey(key);
+        if ((hasLocalConsumer && safeThroughSequence > acknowledged) ||
+            (hasPeerRequirements && safeThroughSequence > peerSafe) ||
+            (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
         var next = current.Clone();
