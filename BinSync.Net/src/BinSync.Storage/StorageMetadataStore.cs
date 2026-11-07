@@ -2603,9 +2603,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     }
 
     private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
-        => !batch.AuthorStreamNodeId.IsZero
-            ? batch.AuthorStreamNodeId
-            : batch.Operations.Count == 0 ? default : batch.Operations[0].AuthorNodeId;
+        => batch.AuthorStreamNodeId;
 
     private static void ValidateBatch(MetadataIncomingBatch batch)
     {
