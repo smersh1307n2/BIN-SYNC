@@ -7,6 +7,9 @@ namespace BinSync;
 /// </summary>
 public interface IMetadataPeerStateStore
 {
+    IReadOnlyList<MetadataPeerStreamSnapshot> ReadPeerStreamStates(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId);
+
     MetadataPeerStreamState GetPeerStreamState(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream);
 
@@ -36,6 +39,8 @@ public interface IMetadataPeerStateStore
 }
 
 /// <summary>Compact durable progress for one peer/epoch/namespace/author stream.</summary>
+public sealed record MetadataPeerStreamSnapshot(NodeId AuthorStream, MetadataPeerStreamState State);
+
 public sealed record MetadataPeerStreamState(
     ulong AckedCursor,
     ulong PushedCursor,
@@ -47,6 +52,7 @@ public sealed record MetadataPeerStreamState(
 public sealed class MetadataOutboundBatchReservation
 {
     public required BatchId BatchId { get; init; }
+    public required uint IssuerEpoch { get; init; }
     public required ulong CursorStart { get; init; }
     public required ulong CursorEnd { get; init; }
     public required byte[] PreviousBatchDigest { get; init; }
