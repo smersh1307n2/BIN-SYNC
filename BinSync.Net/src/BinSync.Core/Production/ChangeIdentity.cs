@@ -89,7 +89,7 @@ internal static class ChangeIdentity
             w.Varint((ulong)sorted.Length);
             foreach (var dependency in sorted) w.B128(dependency);
         }
-        var fingerprint = Digests.Blake3Digest16(w.Value());
+        var fingerprint = Digests.Blake3Digest16(w.WrittenSpan);
         if (fingerprint.IsZero)
             throw new InvalidDataException("The reserved zero ChangeId fingerprint was produced.");
         return fingerprint;
