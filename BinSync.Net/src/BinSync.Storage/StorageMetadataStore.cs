@@ -781,7 +781,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        PersistStreamWatermark(partitionKey, current, storageKind: 8,
+        PersistStreamWatermark(partitionKey, current, 8,
             namespaceId, localAuthor, safeThroughSequence, highWatermark);
     
         }
@@ -813,7 +813,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        CompactStreamPayload(partitionKey, current, storageKind: 7,
+        CompactStreamPayload(partitionKey, current, 7,
             namespaceId, localAuthor, safeThroughSequence, relay: false);
     
         }
@@ -1519,7 +1519,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        PersistStreamWatermark(partitionKey, current, storageKind: 5,
+        PersistStreamWatermark(partitionKey, current, 5,
             namespaceId, originalAuthor, safeThroughSequence, highWatermark);
     
         }
@@ -1591,7 +1591,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        CompactStreamPayload(partitionKey, current, storageKind: 4,
+        CompactStreamPayload(partitionKey, current, 4,
             namespaceId, originalAuthor, safeThroughSequence, relay: true);
     
         }
@@ -1673,6 +1673,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         PartitionKey partitionKey, PartitionState current, byte storageKind,
         int namespaceId, NodeId author, ulong acknowledged, ulong highWatermark)
     {
+        if (storageKind is not (5 or 8))
+            throw new ArgumentOutOfRangeException(nameof(storageKind));
         byte[] root = PartitionRoot(partitionKey);
         byte[] key = StorageKey(root, storageKind, KeyNamespaceAuthor(namespaceId, author));
         byte[] value = new byte[16];
@@ -1692,13 +1694,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         batch.Put(key, value);
         batch.Commit();
 
-        var streamKey = new RelayKey(namespaceId, author);
         if (storageKind == 5)
-            current.RelayAck[streamKey] = acknowledged;
-        else if (storageKind == 8)
-            current.OutboundAck[new OutboundKey(namespaceId, author)] = acknowledged;
+            current.RelayAck[new RelayKey(namespaceId, author)] = acknowledged;
         else
-            throw new ArgumentOutOfRangeException(nameof(storageKind));
+            current.OutboundAck[new OutboundKey(namespaceId, author)] = acknowledged;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         current.PersistedEntries[Convert.ToHexString(key)] = (key, value);
@@ -1710,6 +1709,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         PartitionKey partitionKey, PartitionState current, byte storageKind,
         int namespaceId, NodeId author, ulong safeThroughSequence, bool relay)
     {
+        if ((relay && storageKind != 4) || (!relay && storageKind != 7))
+            throw new ArgumentOutOfRangeException(nameof(storageKind));
         byte[] root = PartitionRoot(partitionKey);
         List<ulong> removedSequences;
         if (relay)
