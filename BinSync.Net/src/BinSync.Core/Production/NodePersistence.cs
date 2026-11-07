@@ -530,9 +530,11 @@ public static class NodePersistence
                 {
                     if (entry.ChangeId.IsZero) continue;
                     var key = (ns, entry.ChangeId);
-                    if (n.GlobalChangeLedger.TryGetValue(key, out var oldValue) && oldValue.IsKnown)
-                        continue;
-                    var fingerprint = ChangeIdentity.Fingerprint(entry);
+                    if (!ChangeIdentity.TryFingerprint(entry, out var fingerprint))
+                        continue; // retain the explicit unknown marker for deferred payloads
+                    if (n.GlobalChangeLedger.TryGetValue(key, out var oldValue) &&
+                        oldValue.IsKnown && oldValue.Fingerprint != fingerprint)
+                        throw new InvalidDataException("Legacy Outbox contains conflicting payloads for one ChangeId.");
                     n.GlobalChangeLedger[key] = new ChangeLedgerValue(fingerprint, isKnown: true);
                 }
             }
