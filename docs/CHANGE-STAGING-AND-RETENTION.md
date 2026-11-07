@@ -360,6 +360,8 @@ The current SeenChanges set can therefore be split into:
 - exact remote provenance entries, with a future protocol-defined GC horizon still unresolved;
 - local WAL replay markers, reclaimable at the proven WAL replay/truncation boundary.
 
+A related cross-peer question must be resolved: Node.ApplyBatch builds queuedChangeIds from the currently retained Outbox and uses it to avoid enqueuing the same ChangeId twice while it is still queued. After Outbox compaction, the inspected path has no separate global ChangeId-only relay-history index; SeenChanges remains keyed by direct sender peer. Therefore the implementation visibly guarantees at-most-once enqueue while the operation is present in Outbox and at-most-once receipt per direct sender, but it does not by itself prove lifetime-wide at-most-once relay across all peers. Decide whether a completed snapshot/membership baseline makes old relay IDs safely forgettable, or whether a separate exact RelayedChangeIds index and its own safe GC horizon are required. Do not infer the answer from the per-peer SeenChanges set.
+
 Pending coalescing can avoid allocating protocol ChangeIds for superseded unpublished local LWW writes, but it must not remove the separate idempotency marker required to replay local staging commits safely.
 ### 9.2. Inbox receipt compaction
 
@@ -465,6 +467,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 31. Local WAL replay markers are retained while their WAL records can replay and are reclaimed only after durable truncation/checkpoint; remote provenance entries follow a separate protocol retention rule.
 32. Deferring ChangeId allocation until freeze does not weaken local staging/WAL replay idempotency; a storage-native commit/staging generation handles that boundary.
 33. Reuse of an Inbox idempotency key with conflicting cursor/digest metadata is rejected using a compact receipt, without retaining the full incoming field payload.
+34. A ChangeId received from a second peer after its prior Outbox relay was compacted follows an explicitly tested lifetime relay-dedup/snapshot-baseline rule; it is not left to incidental Outbox contents.
 
 ## 12. Implementation sequence
 
