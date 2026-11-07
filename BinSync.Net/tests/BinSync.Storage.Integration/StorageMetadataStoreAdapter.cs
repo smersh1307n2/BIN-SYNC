@@ -633,7 +633,10 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         }
 
         if (changed) batch.Commit();
-        next.StorageCommitSeq = _storage.LastCommitSeq;
+        ulong committedThrough = _storage.LastCommitSeq;
+        foreach (var cached in _partitions.Values)
+            cached.StorageCommitSeq = committedThrough;
+        next.StorageCommitSeq = committedThrough;
         _partitions[key] = next;
     }
 
