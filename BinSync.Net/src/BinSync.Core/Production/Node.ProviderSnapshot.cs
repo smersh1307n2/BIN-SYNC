@@ -29,11 +29,12 @@ public sealed partial class Node
                     mutation.Value is null)
                     throw new InvalidDataException("Provider snapshot contains an invalid mutation identity.");
                 if (mutation.IsRecordTombstone &&
-                    (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId))
+                    (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
+                     mutation.KeyEpoch != 0 || mutation.Value.Length != 0))
                     throw new InvalidDataException("Provider record tombstone has an invalid lifecycle shape.");
                 if (!mutation.IsRecordTombstone && mutation.IsTombstone &&
-                    mutation.FieldId == Model.LifecycleFieldId)
-                    throw new InvalidDataException("Provider field tombstone cannot target the lifecycle field.");
+                    (mutation.FieldId == Model.LifecycleFieldId || mutation.Value.Length != 0))
+                    throw new InvalidDataException("Provider field tombstone has an invalid lifecycle shape.");
 
                 if (!restored.TryGetValue(mutation.RecordId, out var record))
                     restored.Add(mutation.RecordId,
