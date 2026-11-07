@@ -2,18 +2,15 @@ name: FLD Storage Integration
 
 on:
   push:
-    branches:
-      - "feature/fld-external-storage"
+    branches: ["**"]
     paths:
       - ".github/workflows/storage-integration.yml"
-      - ".gitmodules"
       - "external/Fld1.Storage/**"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
   pull_request:
     paths:
-      - ".github/workflows/storage-integration.yml"
       - "external/Fld1.Storage/**"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
@@ -24,22 +21,23 @@ permissions:
   contents: read
 
 jobs:
-  storage-integration:
+  test:
+    name: durable provider integration (.NET 10)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout BIN-SYNC and pinned FLD-DB Storage source
+      - name: Checkout
         uses: actions/checkout@v4
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: "10.0.x"
       - name: Restore
         run: dotnet restore BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj
-      - name: Build Release
+      - name: Build
         run: dotnet build BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-restore
-      - name: Run durable provider conformance
-        run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --logger "trx;LogFileName=storage-integration.trx"
+      - name: Test
+        run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --logger "console;verbosity=detailed" --logger "trx;LogFileName=storage-integration.trx"
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
