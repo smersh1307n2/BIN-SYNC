@@ -161,7 +161,7 @@ public abstract class DataProviderConformanceSuite
             RecordId = Record(record),
             FieldId = field,
             AuthorNodeId = Node(author),
-            HlcWall = 100 + value,
+            HlcWall = 100UL + value,
             HlcLogical = 0,
             KeyEpoch = 0,
             Value = new[] { value }
