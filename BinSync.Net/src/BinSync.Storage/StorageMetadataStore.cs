@@ -1789,6 +1789,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (changed) batch.Commit();
         next.StorageCommitSeq = _storage.LastCommitSeq;
         next.IsPersisted = true;
+        next.HasLegacyEncoding = false;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
     }
@@ -1804,14 +1805,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         ulong highWatermark)
     {
         byte[] root = PartitionRoot(partitionKey);
-        bool requiresLegacyRewrite = current.PersistedEntries.Values.Any(entry =>
-        {
-            if (entry.Key.Length <= root.Length) return false;
-            byte kind = entry.Key[root.Length];
-            return kind is 6 or 9 or 11 ||
-                (kind == 3 && entry.Value.Length == 16) ||
-                ((kind is 5 or 8) && entry.Value.Length == 8);
-        });
+        bool requiresLegacyRewrite = current.HasLegacyEncoding;
         if (requiresLegacyRewrite)
         {
             var migrated = current.Clone();
@@ -1930,20 +1924,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
+        current.HasLegacyEncoding = false;
     }
 
     private void PersistOutboundLease(
         PartitionKey partitionKey, PartitionState current, OutboundKey key, LeaseState lease)
     {
         byte[] root = PartitionRoot(partitionKey);
-        bool requiresLegacyRewrite = current.PersistedEntries.Values.Any(entry =>
-        {
-            if (entry.Key.Length <= root.Length) return false;
-            byte kind = entry.Key[root.Length];
-            return kind is 6 or 9 or 11 ||
-                (kind == 3 && entry.Value.Length == 16) ||
-                ((kind is 5 or 8) && entry.Value.Length == 8);
-        });
+        bool requiresLegacyRewrite = current.HasLegacyEncoding;
         if (requiresLegacyRewrite)
         {
             // Preserve all legacy row/key migrations on the first write to an old
@@ -1982,6 +1970,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
+        current.HasLegacyEncoding = false;
     }
 
     private void PersistPeerBaselineMarker(
@@ -2321,6 +2310,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
             if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
             byte kind = suffix[0];
+            if (kind is 6 or 9 or 11 ||
+                (kind == 3 && row.Value.Length == 16) ||
+                ((kind is 5 or 8) && row.Value.Length == 8))
+                state.HasLegacyEncoding = true;
             ReadOnlySpan<byte> key = suffix.Slice(1);
             switch (kind)
             {
@@ -2988,6 +2981,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         public ulong StorageCommitSeq { get; set; }
         public bool IsPersisted { get; set; }
+        public bool HasLegacyEncoding { get; set; }
         public Dictionary<string, (byte[] Key, byte[] Value)> PersistedEntries { get; set; } = new(StringComparer.Ordinal);
 
         public PartitionState Clone()
@@ -2999,6 +2993,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             {
                 StorageCommitSeq = StorageCommitSeq,
                 IsPersisted = IsPersisted,
+                HasLegacyEncoding = HasLegacyEncoding,
                 PersistedEntries = PersistedEntries
             };
             foreach (var pair in Receipts) clone.Receipts.Add(pair.Key, pair.Value);
