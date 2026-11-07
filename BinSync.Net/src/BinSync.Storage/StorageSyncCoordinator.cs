@@ -352,7 +352,7 @@ public sealed class StorageSyncCoordinator
                 .ToArray();
             foreach (NodeId author in authors)
             {
-                if (known.Contains(author)) continue;
+                if (author == peer || known.Contains(author)) continue;
                 var legacy = _node.ReadPeerStreamProgress(peer, namespaceId, author);
                 if (legacy.PushedCursor > legacy.AckedCursor)
                     throw new InvalidDataException("Legacy Node peer state has an unacknowledged batch without a durable replay reservation.");
