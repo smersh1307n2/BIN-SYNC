@@ -2,7 +2,7 @@ using System.IO;
 using BinSync;
 using BinSync.MetadataStore.Conformance;
 
-namespace BinSync.Tests.Production;
+namespace BinSync.Tests.MetadataStore;
 
 /// <summary>
 /// Volatile reference adapter for the semantic conformance suite. It is deliberately
