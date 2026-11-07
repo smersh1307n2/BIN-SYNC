@@ -250,7 +250,7 @@ Tombstone responsibility is split deliberately. Storage must durably store the o
 
 The cross-layer code audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md). It confirms that BIN-SYNC already shares one Outbox operation across peers and owns per-peer/per-author progress; FLD must not duplicate this progress model. The FLD APPLY payload duplication has been reduced with ApplyCommitCodec v3 and relay-only ApplyJournal materialization; remaining work is independent receipt/relay retention and bounded indexes.
 
-This audit is an internal storage design follow-up. It does not alter the wire contract or the atomic acceptance requirements in this document. The next implementation work must preserve the atomic transition and ACK-after-durable-acceptance guarantee while removing redundant payload copies.
+This audit is an internal storage design follow-up. It does not alter the wire contract or the atomic acceptance requirements in this document. Further implementation must preserve the atomic transition and ACK-after-durable-acceptance guarantee while completing independent receipt/relay retention and bounded/rebuildable journal indexing.
 
 ## 11. Storage compaction alignment (2026-11-07)
 
@@ -264,4 +264,4 @@ The cross-repository phase plan is in [Sync Storage Compaction Roadmap](https://
 - Local pending coalescing happens before the FLD Outbox freeze boundary. The Outbox itself remains immutable.
 - Per-peer progress and ACK aggregation remain BIN-SYNC responsibilities; FLD receives only the safe aggregate local Outbox watermark.
 
-These decisions do not weaken atomic APPLY or ACK-after-durable-acceptance. If FLD and BIN-SYNC metadata cannot share one atomic transaction, the recoverable apply protocol and idempotent sidecar promotion must be explicit and crash-tested. See roadmap Phases 1–3.
+These decisions do not weaken atomic APPLY or ACK-after-durable-acceptance. If FLD and BIN-SYNC metadata cannot share one atomic transaction, the recoverable apply protocol and idempotent sidecar promotion must be explicit and crash-tested. See roadmap §7.19 for the later synchronized-database provenance adapter and §7.20 for the controlling cross-repository implementation order.
