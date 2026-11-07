@@ -1338,39 +1338,23 @@ public class StorageMetadataStore : IMetadataStore
 
         public PartitionState Clone()
         {
+            // Stored values are immutable after insertion. Copy collection structure only;
+            // copy payload arrays only when they cross the public API boundary. Relay and
+            // outbound lists are the only nested mutable collections and need shallow copies.
             var clone = new PartitionState { StorageCommitSeq = StorageCommitSeq, IsPersisted = IsPersisted };
-            foreach (var pair in Receipts)
-                clone.Receipts.Add(pair.Key, new ReceiptValue(
-                    pair.Value.CursorStart,
-                    pair.Value.CursorEnd,
-                    pair.Value.PreviousBatchDigest.ToArray(),
-                    pair.Value.BatchDigest.ToArray(),
-                    pair.Value.NewRelayOperationCount));
-            foreach (var pair in Receives)
-                clone.Receives.Add(pair.Key, new ReceiveState(pair.Value.CursorEnd, pair.Value.LastBatchDigest.ToArray()));
-            foreach (var pair in ChangeLedger)
-                clone.ChangeLedger.Add(pair.Key, pair.Value.ToArray());
-            foreach (var pair in Relay)
-                clone.Relay.Add(pair.Key, pair.Value.Select(CloneRelayItem).ToList());
-            foreach (var pair in RelayAck)
-                clone.RelayAck.Add(pair.Key, pair.Value);
-            foreach (var pair in RelayHighWatermarks)
-                clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
-            foreach (var pair in OutboundHighWatermarks)
-                clone.OutboundHighWatermarks.Add(pair.Key, pair.Value);
-            foreach (var pair in Outbound)
-                clone.Outbound.Add(pair.Key, pair.Value.Select(CloneOutboundItem).ToList());
-            foreach (var pair in OutboundAck)
-                clone.OutboundAck.Add(pair.Key, pair.Value);
-            foreach (var pair in OutboundLeases)
-                clone.OutboundLeases.Add(pair.Key, pair.Value);
-            foreach (var key in OutboundChangeIds)
-                clone.OutboundChangeIds.Add(key);
-            foreach (var pair in PendingApplies)
-                clone.PendingApplies.Add(pair.Key, new PendingApplyValue(CloneBatch(pair.Value.Batch)));
-            foreach (var pair in CompletedPendingApplies)
-                clone.CompletedPendingApplies.Add(pair.Key, new CompletedPendingApplyValue(
-                    pair.Value.BatchDigest.ToArray(), CloneReceipt(pair.Value.Receipt, pair.Value.Receipt.IsDuplicate)));
+            foreach (var pair in Receipts) clone.Receipts.Add(pair.Key, pair.Value);
+            foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
+            foreach (var pair in ChangeLedger) clone.ChangeLedger.Add(pair.Key, pair.Value);
+            foreach (var pair in Relay) clone.Relay.Add(pair.Key, new List<MetadataRelayItem>(pair.Value));
+            foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
+            foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
+            foreach (var pair in Outbound) clone.Outbound.Add(pair.Key, new List<MetadataOutboundItem>(pair.Value));
+            foreach (var pair in OutboundHighWatermarks) clone.OutboundHighWatermarks.Add(pair.Key, pair.Value);
+            foreach (var pair in OutboundAck) clone.OutboundAck.Add(pair.Key, pair.Value);
+            foreach (var pair in OutboundLeases) clone.OutboundLeases.Add(pair.Key, pair.Value);
+            foreach (var key in OutboundChangeIds) clone.OutboundChangeIds.Add(key);
+            foreach (var pair in PendingApplies) clone.PendingApplies.Add(pair.Key, pair.Value);
+            foreach (var pair in CompletedPendingApplies) clone.CompletedPendingApplies.Add(pair.Key, pair.Value);
             return clone;
         }
     }
