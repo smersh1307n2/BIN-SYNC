@@ -162,4 +162,70 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public void Record_tombstone_hides_older_fields_but_newer_ghost_field_survives_restart_and_snapshot()
+    {
+        string directory = Path.Combine(_root, "record-tombstone");
+        Directory.CreateDirectory(directory);
+        RecordId record = RecordId.From(Guid.Parse("f1000000-0000-0000-0000-000000000001").ToByteArray());
+        NodeId author = NodeId.From(Guid.Parse("f2000000-0000-0000-0000-000000000002").ToByteArray());
+
+        using (var provider = new StorageDataProvider(directory, 82))
+        {
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record,
+                FieldId = 0x0101,
+                AuthorNodeId = author,
+                HlcWall = 1000,
+                Value = "before-delete"u8.ToArray()
+            });
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record,
+                FieldId = Model.LifecycleFieldId,
+                IsRecordTombstone = true,
+                AuthorNodeId = author,
+                HlcWall = 2000,
+                Value = Array.Empty<byte>()
+            });
+
+            Assert.False(provider.TryReadCurrent(record, 0x0101, out _));
+
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record,
+                FieldId = 0x0101,
+                AuthorNodeId = author,
+                HlcWall = 3000,
+                Value = "newer-ghost"u8.ToArray()
+            });
+            Assert.True(provider.TryReadCurrent(record, 0x0101, out var visible));
+            Assert.Equal("newer-ghost", System.Text.Encoding.UTF8.GetString(visible!.Value));
+
+            var snapshot = provider.OpenSnapshot();
+            try
+            {
+                var page = provider.ReadSnapshot(snapshot.Token, 0, 10);
+                Assert.True(page.IsComplete);
+                Assert.Contains(page.Entries, entry => entry.IsRecordTombstone);
+            }
+            finally
+            {
+                provider.ReleaseSnapshot(snapshot.Token);
+            }
+        }
+
+        using (var reopened = new StorageDataProvider(directory, 82))
+        {
+            Assert.True(reopened.TryReadCurrent(record, 0x0101, out var visible));
+            Assert.Equal("newer-ghost", System.Text.Encoding.UTF8.GetString(visible!.Value));
+            Assert.Equal(3, reopened.ReadLocalChanges(0, 10).Changes.Count);
+        }
+
+        try { Directory.Delete(directory, recursive: true); } catch { }
+    }
+
+
 }
