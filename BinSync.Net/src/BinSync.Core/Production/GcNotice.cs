@@ -22,7 +22,7 @@ public sealed class GcNoticeMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
     public int NamespaceId { get; set; }
-    /// <summary>Fields/records with wall strictly below this may be GC'd locally (advisory).</summary>
+    /// <summary>Advisory wall cutoff only; it never authorizes tombstone or ghost deletion by itself.</summary>
     public ulong TombstoneCutoffWall { get; set; }
     /// <summary>Peers currently quarantined from sync.</summary>
     public List<GcQuarantineEntry> Quarantined { get; set; } = new();
