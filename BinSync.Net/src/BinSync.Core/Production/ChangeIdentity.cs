@@ -77,7 +77,7 @@ internal static class ChangeIdentity
         }
         var fingerprint = Digests.Blake3Digest16(w.Value());
         if (fingerprint.IsZero)
-            throw new CryptographicException("The reserved zero ChangeId fingerprint was produced.");
+            throw new InvalidDataException("The reserved zero ChangeId fingerprint was produced.");
         return fingerprint;
     }
 
