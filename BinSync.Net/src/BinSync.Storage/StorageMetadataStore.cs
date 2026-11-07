@@ -567,9 +567,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                  baseline.PendingBatch is not null))
                 throw new InvalidDataException("Interested peer registration conflicts with existing stream progress.");
 
-            if (current.RequiredPeerStreams.Contains(key)) return;
+            if (current.RequiredPeerStreams.Contains(key) && current.PeerStreams.ContainsKey(key)) return;
             var next = current.Clone();
-            next.PeerStreams.TryAdd(key, baseline);
+            next.PeerStreams[key] = baseline;
             next.RequiredPeerStreams.Add(key);
             PersistPartition(partitionKey, current, next);
         }
