@@ -781,9 +781,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        var next = current.Clone();
-        next.OutboundAck[key] = safeThroughSequence;
-        PersistPartition(partitionKey, current, next);
+        PersistStreamWatermark(partitionKey, current, storageKind: 8,
+            namespaceId, localAuthor, safeThroughSequence, highWatermark);
     
         }
     }
@@ -814,10 +813,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        var next = current.Clone();
-        if (next.Outbound.TryGetValue(key, out var entries))
-            entries.RemoveAll(entry => entry.Sequence <= safeThroughSequence);
-        PersistPartition(partitionKey, current, next);
+        CompactStreamPayload(partitionKey, current, storageKind: 7,
+            namespaceId, localAuthor, safeThroughSequence, relay: false);
     
         }
     }
@@ -1522,9 +1519,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (safeThroughSequence < previous || safeThroughSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        var next = current.Clone();
-        next.RelayAck[key] = safeThroughSequence;
-        PersistPartition(partitionKey, current, next);
+        PersistStreamWatermark(partitionKey, current, storageKind: 5,
+            namespaceId, originalAuthor, safeThroughSequence, highWatermark);
     
         }
     }
@@ -1595,10 +1591,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        var next = current.Clone();
-        if (next.Relay.TryGetValue(key, out var entries))
-            entries.RemoveAll(entry => entry.Sequence <= safeThroughSequence);
-        PersistPartition(partitionKey, current, next);
+        CompactStreamPayload(partitionKey, current, storageKind: 4,
+            namespaceId, originalAuthor, safeThroughSequence, relay: true);
     
         }
     }
@@ -1672,6 +1666,89 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             StringComparer.Ordinal);
         _partitions[key] = state;
         return true;
+    }
+
+
+    private void PersistStreamWatermark(
+        PartitionKey partitionKey, PartitionState current, byte storageKind,
+        int namespaceId, NodeId author, ulong acknowledged, ulong highWatermark)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] key = StorageKey(root, storageKind, KeyNamespaceAuthor(namespaceId, author));
+        byte[] value = new byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(value, acknowledged);
+        BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), highWatermark);
+
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        batch.Put(key, value);
+        batch.Commit();
+
+        var streamKey = new RelayKey(namespaceId, author);
+        if (storageKind == 5)
+            current.RelayAck[streamKey] = acknowledged;
+        else if (storageKind == 8)
+            current.OutboundAck[new OutboundKey(namespaceId, author)] = acknowledged;
+        else
+            throw new ArgumentOutOfRangeException(nameof(storageKind));
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        current.PersistedEntries[Convert.ToHexString(key)] = (key, value);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+    }
+
+    private void CompactStreamPayload(
+        PartitionKey partitionKey, PartitionState current, byte storageKind,
+        int namespaceId, NodeId author, ulong safeThroughSequence, bool relay)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        List<ulong> removedSequences;
+        if (relay)
+        {
+            if (!current.Relay.TryGetValue(new RelayKey(namespaceId, author), out var entries))
+                return;
+            removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
+                .Select(item => item.Sequence).ToList();
+        }
+        else
+        {
+            if (!current.Outbound.TryGetValue(new OutboundKey(namespaceId, author), out var entries))
+                return;
+            removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
+                .Select(item => item.Sequence).ToList();
+        }
+        if (removedSequences.Count == 0) return;
+
+        var keys = new List<byte[]>(removedSequences.Count);
+        foreach (ulong sequence in removedSequences)
+        {
+            byte[] suffix = new byte[26];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+            author.WriteTo(suffix.AsSpan(2));
+            BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), sequence);
+            keys.Add(StorageKey(root, storageKind, suffix));
+        }
+
+        using (var batch = _storage.BeginWriteBatch())
+        {
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != current.StorageCommitSeq)
+                throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+            foreach (var key in keys) batch.Delete(key);
+            batch.Commit();
+        }
+
+        if (relay)
+            current.Relay[new RelayKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
+        else
+            current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
+        foreach (var key in keys)
+            current.PersistedEntries.Remove(Convert.ToHexString(key));
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
     }
 
     private void PersistPartition(PartitionKey key, PartitionState current, PartitionState next)
