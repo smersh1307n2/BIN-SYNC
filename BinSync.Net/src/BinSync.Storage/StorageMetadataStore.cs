@@ -549,7 +549,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return Array.Empty<NodeId>();
-            return state.Outbound.Keys.Where(key => key.NamespaceId == namespaceId)
+            return state.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId)
                 .Select(key => key.Author).Distinct()
                 .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
                 .ToArray();
@@ -564,7 +564,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return Array.Empty<NodeId>();
-            return state.Relay.Keys.Where(key => key.NamespaceId == namespaceId)
+            return state.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId)
                 .Select(key => key.Author).Distinct()
                 .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
                 .ToArray();
@@ -593,7 +593,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException("Outbound high-watermark has no recoverable payload rows.");
             var page = entries.Where(item => item.Sequence > cursor)
                 .Take(limit).Select(CloneOutboundItem).ToArray();
-            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, "outbound");
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, "outbound");
             return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
     }
@@ -620,13 +620,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException("Relay high-watermark has no recoverable payload rows.");
             var page = entries.Where(item => item.Sequence > cursor)
                 .Take(limit).Select(CloneRelayItem).ToArray();
-            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, "relay");
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, "relay");
             return new MetadataRelayPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
     }
 
     private static void ValidatePeerPageContinuity(IEnumerable<ulong> sequences,
-        ulong cursor, ulong highWatermark, int count, string streamName)
+        ulong cursor, ulong highWatermark, int count, int limit, string streamName)
     {
         ulong expected = checked(cursor + 1);
         foreach (ulong sequence in sequences)
@@ -635,7 +635,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException($"Peer {streamName} page contains a gap after its durable cursor.");
             expected = checked(expected + 1);
         }
-        if (count == 0 && cursor < highWatermark)
+        ulong scanned = count == 0 ? cursor : expected - 1;
+        if (count < limit && scanned < highWatermark)
             throw new InvalidDataException($"Peer {streamName} payload is missing below its durable high-watermark.");
     }
 
