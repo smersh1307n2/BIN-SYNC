@@ -28,11 +28,9 @@ public partial class SyncSession
             var streams = peerStateStore.ReadPeerStreamStates(
                 scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId);
 
-            foreach (var stream in streams)
+            foreach (var stream in streams.Where(stream => stream.State.PendingBatch is not null))
             {
-                if (stream.State.PendingBatch is null && stream.State.PushedCursor > stream.State.AckedCursor)
-                    throw new InvalidDataException("Durable peer pushed cursor has no immutable replay reservation.");
-                uint issuerEpoch = stream.State.PendingBatch?.IssuerEpoch ?? stream.State.IssuerEpoch;
+                uint issuerEpoch = stream.State.PendingBatch!.IssuerEpoch;
                 sender.RestorePeerStreamProgress(PeerNodeId, namespaceId, stream.AuthorStream,
                     issuerEpoch, stream.State.AckedCursor, stream.State.PushedCursor,
                     stream.State.StreamOffset, Digest16.From(stream.State.LastBatchDigest));
@@ -63,7 +61,12 @@ public partial class SyncSession
                 foreach (NodeId candidateAuthor in authors)
                 {
                     if (candidateAuthor == PeerNodeId) continue;
-                    if (!streams.Any(stream => stream.AuthorStream == candidateAuthor))
+                    var saved = peerStateStore.GetPeerStreamState(
+                        scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, candidateAuthor);
+                    bool pristine = saved.AckedCursor == 0 && saved.PushedCursor == 0 &&
+                        saved.StreamOffset == 0 && saved.IssuerEpoch == 0 &&
+                        saved.PendingBatch is null && saved.LastBatchDigest.All(value => value == 0);
+                    if (pristine)
                     {
                         var legacy = sender.ReadPeerStreamProgress(PeerNodeId, namespaceId, candidateAuthor);
                         if (legacy.PushedCursor > legacy.AckedCursor)
@@ -71,10 +74,15 @@ public partial class SyncSession
                         peerStateStore.RegisterInterestedPeerStream(scopeId, sender.NodeId,
                             PeerNodeId, peerEpoch, namespaceId, candidateAuthor,
                             legacy.AckedCursor, legacy.StreamOffset, legacy.IssuerEpoch, legacy.LastBatchDigest);
-                        sender.RestorePeerStreamProgress(PeerNodeId, namespaceId, candidateAuthor,
-                            legacy.IssuerEpoch, legacy.AckedCursor, legacy.PushedCursor,
-                            legacy.StreamOffset, Digest16.From(legacy.LastBatchDigest));
+                        saved = peerStateStore.GetPeerStreamState(
+                            scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, candidateAuthor);
                     }
+                    if (saved.PendingBatch is null && saved.PushedCursor > saved.AckedCursor)
+                        throw new InvalidDataException("Durable peer pushed cursor has no immutable replay reservation.");
+                    uint savedIssuerEpoch = saved.PendingBatch?.IssuerEpoch ?? saved.IssuerEpoch;
+                    sender.RestorePeerStreamProgress(PeerNodeId, namespaceId, candidateAuthor,
+                        savedIssuerEpoch, saved.AckedCursor, saved.PushedCursor,
+                        saved.StreamOffset, Digest16.From(saved.LastBatchDigest));
 
                     IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> pageItems;
                     if (candidateAuthor == sender.NodeId)
