@@ -248,6 +248,62 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Storage_initial_reconcile_persists_snapshot_and_commits_durable_feed_baseline()
+    {
+        using var storageA = StorageDatabase.Open(Path.Combine(_root, "snapshot-baseline-a"), 441);
+        using var storageB = StorageDatabase.Open(Path.Combine(_root, "snapshot-baseline-b"), 442);
+        using var providerA = new StorageDataProvider(storageA);
+        using var providerB = new StorageDataProvider(storageB);
+        using var metadataA = new StorageMetadataStore(storageA);
+        using var metadataB = new StorageMetadataStore(storageB);
+        using var nodeA = NewNode(44);
+        using var nodeB = NewNode(45);
+        const string scopeA = "snapshot-baseline-a";
+        const string scopeB = "snapshot-baseline-b";
+        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, 1, metadataA, scopeA);
+        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, scopeB);
+        var (aToB, bFromA) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
+        var connectTask = SyncSession.ConnectAsync(nodeA, aToB);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        RecordId record = RecordId.From(Guid.Parse("44000000-0000-0000-0000-000000000044").ToByteArray());
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0104, AuthorNodeId = nodeA.NodeId,
+            HlcWall = 4400, Value = "snapshot-baseline"u8.ToArray()
+        });
+
+        await Task.WhenAll(
+            coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
+            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false));
+
+        Assert.True(metadataA.IsPeerInitialSyncComplete(scopeA, nodeA.NodeId,
+            nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
+        Assert.True(metadataB.IsPeerInitialSyncComplete(scopeB, nodeB.NodeId,
+            nodeA.NodeId, checked((uint)nodeA.Epoch), 1));
+        Assert.True(providerB.TryReadCurrent(record, 0x0104, out var snapshotValue));
+        Assert.Equal("snapshot-baseline", Encoding.UTF8.GetString(snapshotValue!.Value));
+        Assert.Equal(1UL, metadataA.GetSafePeerStreamCompactionCursor(scopeA, nodeA.NodeId, 1, nodeA.NodeId));
+        Assert.Empty(metadataA.ReadOutboundForPeer(scopeA, nodeA.NodeId,
+            nodeB.NodeId, checked((uint)nodeB.Epoch), 1, nodeA.NodeId, 10).Items);
+
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0105, AuthorNodeId = nodeA.NodeId,
+            HlcWall = 4500, Value = "after-snapshot"u8.ToArray()
+        });
+        coordinatorA.PublishLocalChanges(_ => { });
+        var receive = coordinatorB.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+        Assert.True(await initiator.PushBatchAsync(nodeA, 1, metadataA, scopeA));
+        Assert.Equal(1, (await receive).Applied);
+        Assert.True(providerB.TryReadCurrent(record, 0x0105, out var deltaValue));
+        Assert.Equal("after-snapshot", Encoding.UTF8.GetString(deltaValue!.Value));
+        Assert.Equal(2UL, metadataA.GetSafePeerStreamCompactionCursor(scopeA, nodeA.NodeId, 1, nodeA.NodeId));
+    }
+
+    [Fact]
     public async Task Durable_push_materializes_metadata_without_mutating_node_outbox_before_ack()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-materialization-isolated"), 433);
