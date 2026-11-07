@@ -1,6 +1,6 @@
 # Metadata Store authority migration
 
-**Status:** implementation plan verified against BIN-SYNC `feature/fld-external-storage` at `e0333aa322e0c98ae656f806594fcfd284bbc070` (2026-11-07). Durable Storage adapters and compact metadata rows are implemented; full Node/Transport authority migration remains open. Both `BinSync.Net` and `FLD Storage Integration` workflows pass on this head. This document does not change the wire protocol.
+**Status:** implementation plan verified against BIN-SYNC `feature/fld-external-storage` at `865247d05d99c9817b254f20a1b9ccf699b33a4b` (2026-11-07). Durable per-peer progress and immutable batch reservations are implemented in the optional `IMetadataPeerStateStore` capability and `StorageMetadataStore`; `SyncSession` has an opt-in durable push path. Full outbound-payload and receive-side authority migration remains open. This document does not change the wire protocol.
 
 ## 1. Current boundary (verified in code)
 
@@ -12,7 +12,7 @@ The current path is:
 2. `StorageSyncCoordinator.PublishLocalChanges` imports feed entries into `Node.WriteField/WriteTombField/WriteRecordTombstone`.
 3. `Node` allocates ChangeId/author sequence and owns the actual Outbox entries.
 4. `FreezeLocalOutboxToMetadata` copies those entries to `IMetadataStore.FreezeOutbound`; it validates sequence continuity but does not make the metadata copy the source used by transport.
-5. `SyncSession.PushBatchAsync` calls Node transport batch creation. The transport reads Node's Outbox and Node's peer progress/replay state.
+5. The legacy `SyncSession.PushBatchAsync` still reads Node's Outbox and peer state. The new overload accepting `IMetadataPeerStateStore` restores per-peer progress from Metadata Store, resumes any immutable reserved payload, persists a new reservation before send, and commits the matching ACK durably. For a new reservation, the first payload is still built from Node.Outbox; the Storage Outbound stream is not yet the payload source.
 6. On receive, `SyncSession.ReceiveBatchAsync` first applies the batch to Node, then invokes `beforeAck`. The coordinator checkpoints Node, applies the immutable batch to the provider, finalizes Metadata Store PendingApply and returns; only then does SyncSession send ACK.
 
 The TCP array sample proves this sequence across independent Storage databases, close/reopen, a subsequent update and a record tombstone. It does not change the ownership described above.
@@ -39,7 +39,7 @@ A critical implementation detail: Node's per-peer progress is not a single ACK c
 
 ## 3. Existing contract is not yet sufficient
 
-The current `IMetadataStore` already exposes durable incoming receipts, PendingApply, outbound/relay pages, local consumer leases, receive cursors and high-watermarks. Those methods are necessary but do not replace Node's peer-specific delivery state.
+The current `IMetadataStore` exposes durable incoming receipts, PendingApply, outbound/relay pages, local consumer leases, receive cursors and high-watermarks. The optional `IMetadataPeerStateStore` now adds peer/epoch/namespace/author progress and immutable outbound reservations without forcing volatile or third-party `IMetadataStore` implementations to change. This is a staged migration capability, not yet the complete authority boundary.
 
 In particular:
 
@@ -55,7 +55,7 @@ Do not solve these gaps by merely adding more mirror calls around existing Node 
 
 The public contract should express semantic transitions, not expose FLD or Node implementation dictionaries.
 
-### 4.1 Peer author progress
+### 4.1 Peer author progress — implemented first slice
 
 Key: `(scopeId, localReplica, peer, namespaceId, authorNodeId)`.
 
@@ -70,7 +70,7 @@ Required durable values:
 
 The store must distinguish an absent watermark from an explicit zero where protocol rules require that distinction.
 
-### 4.2 Outbound replay reservation
+### 4.2 Outbound replay reservation — implemented first slice
 
 Key: `(scopeId, localReplica, peer, namespaceId, authorNodeId, cursorStart, cursorEnd)`.
 
@@ -84,6 +84,8 @@ Persist enough immutable data to reproduce an in-flight batch exactly:
 
 Reservation must be idempotent for the same range and must reject conflicting reuse. The digest-chain checkpoint advances only after the frame has been handed to the transport, matching the existing `AdvanceStream` boundary.
 
+Current implementation detail: `StorageMetadataStore` persists one compact peer-stream row (keyed by peer, peer epoch, namespace and author) containing ACK/pushed cursor, snapshot offset, issuer epoch, digest checkpoint and at most one exact encoded pending batch payload. The reservation is committed before send; `MarkOutboundBatchPushed` follows a successful send; ACK validation and reservation release are one metadata transaction. The first reservation can bootstrap its starting cursor, previous digest and offset from the existing Node checkpoint. The new `SyncSession.PushBatchAsync(..., IMetadataPeerStateStore, scopeId)` path restores the Node mirror from durable progress before selecting or retrying a batch. These rows are durable and tested across reopen; they do not yet make Metadata Store the source of the first outbound payload.
+
 ### 4.3 Inbound acceptance
 
 The existing `AcceptIncomingBatch` semantics remain the model: sender/epoch/namespace/author-stream cursors, exact digest-chain continuity, route-independent ChangeId dedup and immutable receipts must be committed atomically. A duplicate through another peer advances that peer's receipt/cursor but must not create a second relay operation.
@@ -94,10 +96,10 @@ Outbound payload reclamation is based on the minimum durable peer ACK across all
 
 ## 5. Migration order
 
-1. **Freeze the semantic contract.** Add conformance cases for per-peer/per-author progress, explicit-zero vs absent state, stream offsets, batch replay reservation, lost ACK, stale sender fencing and multi-peer minimum ACK.
-2. **Extend neutral API and codec.** Add the peer-progress and outbound-replay semantic operations to `IMetadataStore`; implement them in `StorageMetadataStore`. Keep the storage engine byte-oriented and BIN-SYNC-independent.
-3. **Make outbound reads authoritative.** Add a storage-backed Node/runtime path that reads immutable outbound pages from Metadata Store, performs the same alias/origin translation and batch encoding, and uses durable replay reservations. The old in-memory path remains for volatile mode and compatibility tests.
-4. **Move send transitions.** Route pushed cursor/digest and ACK validation into Metadata Store transactions. Compute safe retention from all interested peers; only then compact outbound payloads and replay mappings.
+1. **Freeze the semantic contract.** The first per-peer/per-author progress and immutable reservation contract is implemented and covered by Storage integration tests, including restart, offset bootstrap, epoch digest-chain rollover, peer isolation and ACK fencing. Still add conformance coverage for lost ACK through a real transport, stale sender fencing and multi-peer minimum ACK.
+2. **Extend neutral API and codec.** The optional `IMetadataPeerStateStore` capability and Storage row codec are implemented. Keep the base `IMetadataStore` source-compatible; later decide whether the optional capability should become mandatory after every adapter implements it.
+3. **Make outbound reads authoritative.** Still open. The durable send overload currently uses Node.Outbox to build a first payload, then persists and replays its exact encoded bytes. Replace that first-build source with immutable `MetadataOutboundPage` records while preserving alias/origin translation, record-root calculation and digest semantics.
+4. **Move send transitions.** The opt-in durable path now persists pushed state and ACK/digest transitions in Metadata Store. Still add peer-set registration/fencing, safe-prefix calculation as the minimum ACK across every interested peer, and transactional replay/payload compaction. Missing or unknown peer progress must fail closed.
 5. **Move receive authority.** Validate and durably accept incoming batches in Metadata Store before treating them as accepted in the runtime. Apply provider state under PendingApply; finalize the durable receipt; send ACK last. Node's in-memory receipt/digest maps become disposable caches.
 6. **Recover without a second authority.** Reopen runtime state from Metadata Store and provider snapshots/feeds. Any Node checkpoint retained for performance must be explicitly a cache/checkpoint, never a competing source of protocol truth.
 7. **Prove multi-peer behavior.** Run at least three replicas with one offline peer, relay through a second peer, restart at each boundary, lost ACK, duplicate delivery by alternate route, peer-specific compaction, multiple author streams, and concurrent senders using fencing.
@@ -107,7 +109,7 @@ Outbound payload reclamation is based on the minimum durable peer ACK across all
 
 The migration is complete only when all of the following are true:
 
-- Storage-backed transport obtains outbound payloads and peer progress from Metadata Store, not Node.Outbox/PeerStates.
+- Storage-backed transport obtains peer progress and replay reservations from Metadata Store; first-time payload construction no longer reads Node.Outbox, and the legacy path remains explicitly separate.
 - Node does not independently commit a second durable inbox/receipt/digest authority.
 - Every ACK is preceded by durable metadata acceptance and recoverable provider effects.
 - Repeated sends after lost ACK reproduce the exact BatchId, digest and cursor range.
@@ -140,6 +142,6 @@ The current Storage-backed adapter baseline has advanced beyond the initial real
 - BIN-SYNC CI at code baseline `d264d4a9` passes 642/642 tests, 72.1% line coverage, public samples, Fuzz and Lab; Storage Integration passes 49/49, including legacy-format migration and real TCP samples.
 - Documentation-only commits through `e0333aa3` were revalidated by GitHub Actions: `BinSync.Net` run `42379342614` and `FLD Storage Integration` run `42379342571` both completed successfully.
 
-The main authority gap remains: transport reads Node.Outbox and Node.PeerStates; the Storage outbound stream is still populated as a durable mirror. On current head `e0333aa3`, `SyncSession.PushBatchAsync` still calls Node transport batch creation, which advances Node peer ACK/pushed and digest-chain state. The next implementation gate remains the peer/author progress and outbound batch reservation contract, followed by transport read/ACK migration and receive-side authority migration.
+The main authority gap is now narrower but still material: the opt-in `SyncSession` durable push overload reads/restores per-peer progress and replays immutable reservations from Metadata Store; the legacy overload remains Node-backed, and first-time payload construction in the durable overload still uses Node.Outbox. Receive acceptance/dedup still occurs in Node before the external provider/Metadata PendingApply callback. Next gates are Metadata-Store-backed payload construction, safe multi-peer ACK/GC, and receive-side acceptance authority migration.
 
 **Scope:** this is the BIN-SYNC + generic Storage stage only. FLD Database and its JournalSeq provenance adapter are deferred.
