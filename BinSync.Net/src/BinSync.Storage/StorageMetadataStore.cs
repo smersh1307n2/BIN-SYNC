@@ -541,6 +541,104 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
     }
 
+    public IReadOnlyList<NodeId> ReadOutboundAuthors(string scopeId, NodeId localReplica, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return Array.Empty<NodeId>();
+            return state.Outbound.Keys.Where(key => key.NamespaceId == namespaceId)
+                .Select(key => key.Author).Distinct()
+                .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
+                .ToArray();
+        }
+    }
+
+    public IReadOnlyList<NodeId> ReadRelayAuthors(string scopeId, NodeId localReplica, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return Array.Empty<NodeId>();
+            return state.Relay.Keys.Where(key => key.NamespaceId == namespaceId)
+                .Select(key => key.Author).Distinct()
+                .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
+                .ToArray();
+        }
+    }
+
+    public MetadataOutboundPage ReadOutboundForPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream, int limit)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, authorStream);
+            if (limit < 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), 0);
+            var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
+            var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
+                ? saved : EmptyPeerStreamValue();
+            ulong cursor = checked(progress.AckedCursor + progress.StreamOffset);
+            var key = new OutboundKey(namespaceId, authorStream);
+            ulong high = state.OutboundHighWatermarks.TryGetValue(key, out var watermark) ? watermark : 0;
+            if (cursor >= high || limit == 0)
+                return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), Math.Min(cursor, high));
+            if (!state.Outbound.TryGetValue(key, out var entries))
+                throw new InvalidDataException("Outbound high-watermark has no recoverable payload rows.");
+            var page = entries.Where(item => item.Sequence > cursor)
+                .Take(limit).Select(CloneOutboundItem).ToArray();
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, "outbound");
+            return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
+        }
+    }
+
+    public MetadataRelayPage ReadRelayForPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream, int limit)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, authorStream);
+            if (limit < 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), 0);
+            var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
+            var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
+                ? saved : EmptyPeerStreamValue();
+            ulong cursor = checked(progress.AckedCursor + progress.StreamOffset);
+            var key = new RelayKey(namespaceId, authorStream);
+            ulong high = state.RelayHighWatermarks.TryGetValue(key, out var watermark) ? watermark : 0;
+            if (cursor >= high || limit == 0)
+                return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), Math.Min(cursor, high));
+            if (!state.Relay.TryGetValue(key, out var entries))
+                throw new InvalidDataException("Relay high-watermark has no recoverable payload rows.");
+            var page = entries.Where(item => item.Sequence > cursor)
+                .Take(limit).Select(CloneRelayItem).ToArray();
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, "relay");
+            return new MetadataRelayPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
+        }
+    }
+
+    private static void ValidatePeerPageContinuity(IEnumerable<ulong> sequences,
+        ulong cursor, ulong highWatermark, int count, string streamName)
+    {
+        ulong expected = checked(cursor + 1);
+        foreach (ulong sequence in sequences)
+        {
+            if (sequence != expected)
+                throw new InvalidDataException($"Peer {streamName} page contains a gap after its durable cursor.");
+            expected = checked(expected + 1);
+        }
+        if (count == 0 && cursor < highWatermark)
+            throw new InvalidDataException($"Peer {streamName} payload is missing below its durable high-watermark.");
+    }
+
     public void RegisterInterestedPeerStream(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         ulong baselineAckedCursor, ulong streamOffset, uint issuerEpoch, byte[] lastBatchDigest)
