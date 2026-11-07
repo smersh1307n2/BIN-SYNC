@@ -236,6 +236,79 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(2UL, store.GetReceiveCursor("author-stream-test", local, sender, 1, 1));
     }
 
+
+    [Fact]
+    public void Coordinator_recovers_persisted_metadata_intent_and_provider_apply_after_restart()
+    {
+        string directory = Path.Combine(_root, "pending-apply-recovery");
+        Node local = NewNode(12);
+        Node sender = NewNode(13);
+        RecordId recordId = RecordId.From(Guid.Parse("c1000000-0000-0000-0000-00000000000c").ToByteArray());
+        const ushort fieldId = 0x0401;
+        byte[] value = Encoding.UTF8.GetBytes("recovered");
+        var op = new OpFieldWrite
+        {
+            FieldId = fieldId,
+            KeyEpoch = 0,
+            Wall = 6000,
+            Logical = 4,
+            AuthorNodeId = sender.NodeId,
+            Value = value
+        };
+        byte[] operationPayload = Ops.EncodeOpFull(op);
+        byte[] envelope = new byte[16 + operationPayload.Length];
+        recordId.WriteTo(envelope);
+        operationPayload.CopyTo(envelope, 16);
+        BatchId changeId = BatchId.From(Guid.Parse("c2000000-0000-0000-0000-00000000000c").ToByteArray());
+        byte[] fingerprint = ChangeIdentity.Fingerprint(1, recordId, OpsConst.TagFieldWrite,
+            op, sender.NodeId).ToArray();
+        byte[] batchDigest = Enumerable.Repeat((byte)0xC3, 16).ToArray();
+        Guid applyToken = Guid.Parse("c3000000-0000-0000-0000-00000000000c");
+
+        using (var storage = StorageDatabase.Open(directory, 407))
+        using (var metadata = new StorageMetadataStore(storage))
+        {
+            metadata.BeginPendingApply(new MetadataIncomingBatch
+            {
+                ScopeId = "pending-recovery",
+                LocalReplica = local.NodeId,
+                SenderPeer = sender.NodeId,
+                SenderEpoch = checked((uint)sender.Epoch),
+                AuthorStreamNodeId = sender.NodeId,
+                NamespaceId = 1,
+                BatchId = BatchId.From(Guid.Parse("c4000000-0000-0000-0000-00000000000c").ToByteArray()),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = batchDigest,
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender.NodeId,
+                        ChangeId = changeId,
+                        Fingerprint = fingerprint,
+                        Payload = envelope
+                    }
+                }
+            }, applyToken);
+        }
+
+        using (var storage = StorageDatabase.Open(directory, 407))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        {
+            var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, "pending-recovery");
+            Assert.Equal(1, coordinator.RecoverPendingApplies());
+            Assert.Equal(0, coordinator.RecoverPendingApplies());
+            Assert.True(provider.TryReadCurrent(recordId, fieldId, out var current));
+            Assert.Equal("recovered", Encoding.UTF8.GetString(current!.Value));
+            Assert.Equal(1UL, metadata.GetReceiveCursor("pending-recovery", local.NodeId,
+                sender.NodeId, checked((uint)sender.Epoch), 1, sender.NodeId));
+            Assert.Empty(metadata.ReadPendingApplyIntents("pending-recovery", local.NodeId));
+        }
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
