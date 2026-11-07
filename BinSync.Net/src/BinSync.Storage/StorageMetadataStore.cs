@@ -85,11 +85,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch));
         }
 
-        ValidateIncomingBatchForStaging(current, batch, applyToken);
-
+        bool isDuplicate = ValidateIncomingBatchForStaging(current, batch, applyToken);
         var pendingValue = new PendingApplyValue(CloneBatch(batch));
         PersistPendingApply(partitionKey, current, applyToken, pendingValue);
-        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch));
+        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch)) { IsDuplicate = isDuplicate };
     
         }
     }
@@ -405,7 +404,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         return receipt;
     }
 
-    private static void ValidateIncomingBatchForStaging(
+    private static bool ValidateIncomingBatchForStaging(
         PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
     {
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
@@ -414,7 +413,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         {
             if (!receipt.Matches(batch))
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
-            return;
+            return true;
         }
 
         var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch,
@@ -473,6 +472,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 !pendingFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                 throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
         }
+        return false;
     }
 
     private MetadataBatchReceipt AcceptIncomingBatchDelta(
