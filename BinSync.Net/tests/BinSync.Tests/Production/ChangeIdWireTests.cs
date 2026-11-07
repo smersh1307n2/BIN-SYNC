@@ -312,6 +312,39 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Persistence_v7_receipt_migrates_as_explicit_legacy_unknown()
+    {
+        var issuer = NodeId.From(Id(0x95));
+        var batchId = BatchId.From(Id(0x96));
+        var author = NodeId.From(Id(0x97));
+        var writer = new Writer();
+        writer.B128(NodeId.From(Id(0x94))).Varint(0).U64(0).U32(0);
+        // Storage, Outbox and per-author sequence map.
+        for (int i = 0; i < 3; i++) writer.Varint(0);
+        // v7 unified receipt key -> author map (without the v8 fingerprint/times).
+        writer.Varint(1).B128(issuer).Varint(9).Varint(2).B128(batchId).B128(author);
+        // LastBatchDigest, LastStreamDigest, aliases, durable authors, peer states,
+        // SeenChanges, GlobalChangeLedger, LastStreamAuthor, KnownEpochs,
+        // PeerSessionEpochs, quarantine, forbidden namespaces, schemas and peers.
+        for (int i = 0; i < 15; i++) writer.Varint(0);
+        var body = writer.Value();
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v7", body);
+        var image = new byte[46 + body.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 7);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
+        digest.CopyTo(image.AsSpan(14, 32));
+        body.CopyTo(image.AsSpan(46));
+
+        using var restored = NodePersistence.LoadFromBytes(image);
+        var receipt = restored.InboxAuthors[(issuer, 9, 2, batchId)];
+        Assert.Equal(author, receipt.DurableAuthor);
+        Assert.False(receipt.HasFingerprint);
+        Assert.Equal(0UL, receipt.AppliedAt);
+        Assert.Equal(0UL, receipt.ExpiresAt);
+    }
+
+    [Fact]
     public void Duplicate_batch_id_rejects_changed_payload_or_unbound_header_fields()
     {
         using var sender = Fix.MakeNode(121);
