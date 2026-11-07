@@ -188,7 +188,7 @@ public class ChangeIdWireTests
         var echoResult = a.ApplyBatch(echoBatch, c.NodeId);
         Assert.Equal(0, echoResult.Applied);
         Assert.Equal(0, a.OutboxSize(1));
-        Assert.DoesNotContain((c.NodeId, 1, changeId), a.SeenChanges);
+        Assert.DoesNotContain((1, changeId), a.SeenChanges);
 
         // The same operation also arrives directly from A through another route.
         // Re-establish A as alias 1 so the saved compact payload remains valid.
