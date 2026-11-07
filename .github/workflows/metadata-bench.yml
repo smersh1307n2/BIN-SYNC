@@ -40,6 +40,14 @@ jobs:
           --filter '*MetadataPeer*'
           --artifacts BenchmarkDotNet.Artifacts
 
+      - name: Fail if any benchmark case failed
+        working-directory: BinSync.Net
+        run: |
+          if grep -R -E '\\|[[:space:]]*NA[[:space:]]*\\|' BenchmarkDotNet.Artifacts/results/*.md; then
+            echo "One or more metadata benchmark cases failed."
+            exit 1
+          fi
+
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
