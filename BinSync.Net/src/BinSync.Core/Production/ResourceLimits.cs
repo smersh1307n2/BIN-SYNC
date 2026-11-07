@@ -10,6 +10,7 @@ public sealed class ResourceLimits
 {
     private int _maxOutboxEntriesPerNamespace = 100_000;
     private int _maxSeenChanges = 1_000_000;
+    private int _maxGlobalChangeLedgerEntries = 1_000_000;
     private int _maxRecords;
 
     /// <summary>Default resource-limit configuration.</summary>
@@ -40,6 +41,17 @@ public sealed class ResourceLimits
         {
             if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxSeenChanges));
             _maxSeenChanges = value;
+        }
+    }
+
+    /// <summary>Max globally retained ChangeId fingerprints (0 = unlimited).</summary>
+    public int MaxGlobalChangeLedgerEntries
+    {
+        get => _maxGlobalChangeLedgerEntries;
+        init
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxGlobalChangeLedgerEntries));
+            _maxGlobalChangeLedgerEntries = value;
         }
     }
 
@@ -74,12 +86,20 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
+    /// <summary>Throw if a local write would exceed the global ChangeId ledger cap.</summary>
+    internal void EnsureGlobalChangeLedgerCapacity(Node node)
+    {
+        if (MaxGlobalChangeLedgerEntries > 0 &&
+            node.GlobalChangeLedger.Count >= MaxGlobalChangeLedgerEntries)
+            throw new SyncException("INTERNAL");
+    }
+
     /// <summary>
     /// Preflight a complete inbound batch before ApplyBatch publishes storage, cursors,
     /// provenance or relay entries. Counts are deltas computed from the staged batch.
     /// </summary>
     internal void EnsureCanApplyBatch(Node node, int namespaceId, int newRecords,
-        int relayEntries, int newSeenChanges)
+        int relayEntries, int newSeenChanges, int newGlobalChanges)
     {
         if (MaxOutboxEntriesPerNamespace > 0 &&
             (long)node.OutboxSizeInternal(namespaceId) + relayEntries > MaxOutboxEntriesPerNamespace)
@@ -87,6 +107,10 @@ public sealed class ResourceLimits
 
         if (MaxSeenChanges > 0 &&
             (long)node.SeenChanges.Count + newSeenChanges > MaxSeenChanges)
+            throw new SyncException("INTERNAL");
+
+        if (MaxGlobalChangeLedgerEntries > 0 &&
+            (long)node.GlobalChangeLedger.Count + newGlobalChanges > MaxGlobalChangeLedgerEntries)
             throw new SyncException("INTERNAL");
 
         if (MaxRecords > 0)
