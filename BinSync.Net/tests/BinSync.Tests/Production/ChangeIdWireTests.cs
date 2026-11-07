@@ -134,6 +134,130 @@ public class ChangeIdWireTests
         Assert.True(c.Storage[1].ContainsKey(Fix.Rid(0x41)));
     }
 
+    private static void ForceFullAuthor(Batch batch, NodeId author)
+    {
+        foreach (var entry in batch.Entries)
+        {
+            var op = Ops.DecodeOp(entry.Payload).Op;
+            switch (op)
+            {
+                case OpFieldWrite x: x.AuthorNodeId = author; x.FullAuthorMode = true; break;
+                case OpFieldTomb x: x.AuthorNodeId = author; x.FullAuthorMode = true; break;
+                case OpRecordTombstone x: x.AuthorNodeId = author; x.FullAuthorMode = true; break;
+            }
+            entry.Payload = Ops.EncodeOp(op, fullAuthor: true);
+            entry.AuthorNodeId = author;
+        }
+        Rehash(batch);
+    }
+
+    [Fact]
+    public void Global_ChangeId_dedup_survives_origin_outbox_compaction_and_second_route()
+    {
+        using var a = Fix.MakeNode(111);
+        using var b = Fix.MakeNode(112);
+        using var c = Fix.MakeNode(113);
+
+        Transport.MakeSession(a, b);
+        Assert.True(a.WriteField(1, Fix.Rid(0x71), 0x100, new byte[] { 0xCA, 0xFE }));
+        var original = a.CreateDeltaBatch(b.NodeId, 1)!;
+        a.SignBatchFor(original, b.NodeId);
+        ForceFullAuthor(original, a.NodeId);
+        var originalPayload = a.EncodeBatchPayload(original);
+
+        var acceptedByB = b.ApplyBatchPayload(originalPayload, a.NodeId);
+        a.AdvanceStream(b.NodeId, 1, original);
+        a.ProcessAck(b.NodeId, 1, acceptedByB.CursorEnd, acceptedByB.DurableAuthor);
+        Assert.Equal(0, a.OutboxSize(1)); // original operation payload is now gone
+
+        Transport.MakeSession(b, c);
+        Assert.NotNull(Transport.DeliverBatch(b, c, 1));
+        Assert.Single(c.Outbox[1]);
+        var changeId = original.Entries[0].ChangeId;
+        Assert.True(c.GlobalChangeLedger.ContainsKey((1, changeId)));
+
+        // The same operation arrives directly from A after B already relayed it.
+        // Full-author encoding makes this independent of each session's alias table.
+        Transport.MakeSession(a, c);
+        var replay = c.ApplyBatchPayload(originalPayload, a.NodeId);
+        Assert.Equal(0, replay.Applied);
+        Assert.Single(c.Outbox[1]);
+        Assert.Equal(1, c.GlobalChangeLedger.Count);
+        Assert.True(a.GlobalChangeLedger.ContainsKey((1, changeId)));
+        Assert.True(b.GlobalChangeLedger.ContainsKey((1, changeId)));
+    }
+
+    [Fact]
+    public void Global_ChangeId_reuse_with_different_operation_is_rejected_atomically()
+    {
+        using var a = Fix.MakeNode(114);
+        using var b = Fix.MakeNode(115);
+        using var c = Fix.MakeNode(116);
+
+        Transport.MakeSession(a, b);
+        Assert.True(a.WriteField(1, Fix.Rid(0x72), 0x100, new byte[] { 0x11 }));
+        var original = a.CreateDeltaBatch(b.NodeId, 1)!;
+        a.SignBatchFor(original, b.NodeId);
+        ForceFullAuthor(original, a.NodeId);
+        var payload = a.EncodeBatchPayload(original);
+        var accepted = b.ApplyBatchPayload(payload, a.NodeId);
+        a.AdvanceStream(b.NodeId, 1, original);
+        a.ProcessAck(b.NodeId, 1, accepted.CursorEnd, accepted.DurableAuthor);
+
+        Transport.MakeSession(b, c);
+        Assert.NotNull(Transport.DeliverBatch(b, c, 1));
+        var recordId = original.Entries[0].RecordId;
+        Assert.True(c.TryGetField(1, recordId, 0x100, out var before));
+        Assert.Equal(new byte[] { 0x11 }, before!.Value);
+        int outboxBefore = c.OutboxSize(1);
+        int inboxBefore = c.Inbox.Count;
+
+        Transport.MakeSession(a, c);
+        var conflict = new Batch(original.NamespaceId, original.SchemaId, original.SchemaVersion,
+            original.MergePolicy, original.Flags, original.IssuerNodeId, original.IssuerEpoch,
+            original.CursorStart, original.CursorEnd, original.BatchId, original.PrevBatchDigest,
+            original.RecordsRoot, original.BatchDigest,
+            original.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                RecordId = e.RecordId,
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId,
+                CreatedAt = e.CreatedAt
+            }).ToList());
+        var changedOp = Ops.DecodeOp(conflict.Entries[0].Payload).Op;
+        ((OpFieldWrite)changedOp).Value = new byte[] { 0x22 };
+        conflict.Entries[0].Payload = Ops.EncodeOp(changedOp, fullAuthor: true);
+        Rehash(conflict);
+
+        var error = Assert.Throws<SyncException>(() => c.ApplyBatch(conflict, a.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Equal(inboxBefore, c.Inbox.Count);
+        Assert.Equal(outboxBefore, c.OutboxSize(1));
+        Assert.True(c.TryGetField(1, recordId, 0x100, out var after));
+        Assert.Equal(new byte[] { 0x11 }, after!.Value);
+    }
+
+    [Fact]
+    public void Global_ChangeId_ledger_survives_node_persistence_including_unknown_legacy_marker()
+    {
+        using var node = Fix.MakeNode(117);
+        Assert.True(node.WriteField(1, Fix.Rid(0x73), 0x100, new byte[] { 0x33 }));
+        var known = Assert.Single(node.GlobalChangeLedger);
+        var legacyId = BatchId.From(Id(0xF1));
+        node.GlobalChangeLedger[(9, legacyId)] = new ChangeLedgerValue(default, isKnown: false);
+
+        var bytes = NodePersistence.SaveToBytes(node);
+        using var restored = NodePersistence.LoadFromBytes(bytes);
+
+        Assert.Equal(known.Value.Fingerprint, restored.GlobalChangeLedger[known.Key].Fingerprint);
+        Assert.True(restored.GlobalChangeLedger[known.Key].IsKnown);
+        Assert.False(restored.GlobalChangeLedger[(9, legacyId)].IsKnown);
+    }
+
     [Fact]
     public void Snapshot_apply_rejects_zero_or_duplicate_change_ids_before_mutating_storage()
     {
