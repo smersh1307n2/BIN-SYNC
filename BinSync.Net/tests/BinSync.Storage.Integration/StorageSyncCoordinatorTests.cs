@@ -86,6 +86,51 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task New_peer_incarnation_retires_old_epoch_without_inheriting_its_ack_cursor()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "peer-new-incarnation"), 439);
+        using var metadata = new StorageMetadataStore(storage);
+        using var provider = new StorageDataProvider(storage);
+        using var local = NewNode(40);
+        byte[] peerBytes = new byte[16];
+        peerBytes[0] = 41;
+        peerBytes[15] = (byte)(41 ^ 0xA5);
+        using var peer = new NodeBuilder().WithNodeId(peerBytes).WithEpoch(2).Build();
+        const string scope = "peer-new-incarnation";
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("40000000-0000-0000-0000-000000000040").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0104, AuthorNodeId = local.NodeId,
+            HlcWall = 4000, Value = "must-replay-for-new-incarnation"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
+
+        metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 1, 1);
+        local.RestorePeerStreamProgress(peer.NodeId, 1, local.NodeId, 1,
+            1, 1, 0, Digest16.From(Enumerable.Repeat((byte)161, 16).ToArray()));
+
+        var (toLocal, toPeer) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(peer, toPeer);
+        var connectTask = SyncSession.ConnectAsync(local, toLocal);
+        await using var acceptor = await acceptTask;
+        await using var session = await connectTask;
+
+        coordinator.RegisterInterestedPeer(session, 1);
+
+        var newEpochState = metadata.GetPeerStreamState(scope, local.NodeId,
+            peer.NodeId, 2, 1, local.NodeId);
+        Assert.Equal(0UL, newEpochState.AckedCursor);
+        Assert.Equal(0UL, newEpochState.PushedCursor);
+        Assert.Equal(0UL, newEpochState.StreamOffset);
+        Assert.Equal(0U, newEpochState.IssuerEpoch);
+        Assert.Equal(1U, metadata.GetRetiredPeerEpoch(scope, local.NodeId, peer.NodeId, 1));
+        Assert.Equal(2U, Assert.Single(metadata.ReadInterestedPeers(scope, local.NodeId, 1)).PeerEpoch);
+        Assert.Single(metadata.ReadOutboundForPeer(scope, local.NodeId,
+            peer.NodeId, 2, 1, local.NodeId, 10).Items);
+    }
+
+    [Fact]
     public async Task Three_replica_relay_retains_one_shared_payload_until_every_downstream_peer_acks()
     {
         using var storageA = StorageDatabase.Open(Path.Combine(_root, "relay-three-a"), 434);
