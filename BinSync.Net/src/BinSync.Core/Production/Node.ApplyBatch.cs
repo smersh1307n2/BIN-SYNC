@@ -59,8 +59,10 @@ public sealed partial class Node
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
 
         var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
-        if (!Inbox.Contains(key))
+        if (!InboxAuthors.TryGetValue(key, out var acceptedAuthor))
             return false;
+        if (acceptedAuthor.IsZero)
+            throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
 
         // Preserve the public-copy path's structural null checks without allocating
         // entry objects, payload arrays, or causal-dependency lists for a replay.
@@ -74,12 +76,7 @@ public sealed partial class Node
         AcksOut.Add(batch.BatchId);
         result.Duplicate = true;
         result.Acked = true;
-        if (InboxAuthors.TryGetValue(key, out var acceptedAuthor))
-            result.DurableAuthor = acceptedAuthor;
-        else if (LastStreamAuthor.TryGetValue((senderPeer, batch.NamespaceId), out var priorAuthor))
-            result.DurableAuthor = priorAuthor;
-        else
-            result.DurableAuthor = batch.DurableAuthor;
+        result.DurableAuthor = acceptedAuthor;
         return true;
     }
 
@@ -114,19 +111,16 @@ public sealed partial class Node
             throw new SyncException("SCHEMA_PENDING", batch.BatchId);
         // STEP 1: idempotency FIRST ([S7], [П7], §10.2.2 lost-ACK replay)
         var key = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
-        if (Inbox.Contains(key))
+        if (InboxAuthors.TryGetValue(key, out var acceptedAuthor))
         {
+            if (acceptedAuthor.IsZero)
+                throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
             AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
-            // ACK must name the author stream of THIS batch, not merely the last
-            // stream seen from this peer. A peer may interleave several authors.
-            if (InboxAuthors.TryGetValue(key, out var acceptedAuthor))
-                result.DurableAuthor = acceptedAuthor;
-            else if (LastStreamAuthor.TryGetValue((senderPeer, batch.NamespaceId), out var priorAuthor))
-                result.DurableAuthor = priorAuthor; // defensive fallback for pre-v3 in-memory state
-            else
-                result.DurableAuthor = batch.DurableAuthor;
+            // The receipt map stores the exact author stream for this batch; never
+            // infer it from LastStreamAuthor because a peer may interleave authors.
+            result.DurableAuthor = acceptedAuthor;
             return result;
         }
         // STEP 2: cursor check [S2]/[П2] — errata E-3: keyed per SESSION stream.
@@ -451,7 +445,6 @@ public sealed partial class Node
                 nsStore.EnsureCapacity(nsStore.Count + newRecordCount);
         }
 
-        Inbox.EnsureCapacity(Inbox.Count + 1);
         InboxAuthors.EnsureCapacity(InboxAuthors.Count + 1);
         if (ps is null)
             PeerStates.EnsureCapacity(PeerStates.Count + 1);
@@ -494,7 +487,6 @@ public sealed partial class Node
         if (ps is null)
             PeerStates[pkey] = ps = peerStateToPublish;
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        Inbox.Add(key);
         InboxAuthors[key] = streamAuthor;
         ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
