@@ -1189,16 +1189,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 return;
             }
 
-            var streamKeys = current.OutboundHighWatermarks.Keys
+            var candidateStreams = current.OutboundHighWatermarks.Keys
                 .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
                 .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author))
                 .Concat(current.RelayHighWatermarks.Keys
                     .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
                     .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author)))
                 .Distinct()
-                .Where(key => !current.PeerStreams.ContainsKey(key))
                 .ToArray();
-            var requiredKeys = streamKeys.Where(key => !current.RequiredPeerStreams.Contains(key)).ToArray();
+            var streamKeys = candidateStreams.Where(key => !current.PeerStreams.ContainsKey(key)).ToArray();
+            var requiredKeys = candidateStreams.Where(key => !current.RequiredPeerStreams.Contains(key)).ToArray();
             var writes = new List<(byte[] Key, byte[] Value)>(1 + streamKeys.Length + requiredKeys.Length);
             writes.Add((EncodeInterestedPeerKey(partitionKey, rosterKey), Array.Empty<byte>()));
             foreach (var key in streamKeys)
