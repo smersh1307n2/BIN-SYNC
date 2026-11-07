@@ -221,7 +221,7 @@ The current NodePersistence v5 is a useful completeness checklist, not a schema 
 - Inbox idempotency keys and InboxAuthors needed to reproduce the correct author-bound duplicate ACK; the wire spec also defines cursorStart/cursorEnd/appliedAt/expiresAt, while current NodePersistence v5 serializes the key set and related stream checkpoints rather than the complete InboxEntry tuple, so the durable expiry/range lifecycle must be explicitly preserved or safely derived;
 - LastBatchDigest checkpoints and per-stream digest-chain checkpoints;
 - peer state: received-stream mappings, StreamPushed, StreamAcked, StreamOffsets, batch range → BatchId/previous-digest replay mappings, initial-sync status, membership epoch and applicable last-seen/retention data. The replay mapping is needed only while its range may be retried and can be pruned after a valid per-author ACK covers that range end; the current inspected ProcessAckInternal path does not appear to prune PeerState.Ids, so this is a concrete metadata-growth item;
-- SeenChanges keyed with the protocol-defined peer/provenance and namespace dimensions;
+- exact global ChangeId ledger keyed by (scope, namespace, ChangeId), with a canonical payload fingerprint and namespace/scope-epoch retention;
 - LastStreamAuthor mappings;
 - durable author registry and known author epochs;
 - peer-wide session/incarnation epochs, distinct from namespace-scoped epoch watermarks;
@@ -281,9 +281,9 @@ Relay enumeration and acknowledgement must be independent of the local-origin ou
 
 The store must provide a consistent read view for any operation that compares or exports metadata. A snapshot must remain valid for its documented lifetime while concurrent commits/checkpoints/compaction occur. Independently, the Data Provider must expose a source snapshot tied to a stable version/change-feed watermark. The runtime must be able to establish a baseline at that watermark and then consume every later source change without a gap. A provider that cannot provide this boundary must use an equivalent write barrier or durable journal protocol; taking an arbitrary source snapshot and separately reading an unrelated metadata cursor is not sufficient.
 
-A state snapshot is not automatically an acknowledgement of every frozen Outbox or relay operation that predates its source watermark. The runtime and provider contract must explicitly define which operations are semantically covered by the snapshot baseline and which provenance/relay operations still require delivery. This is especially important for LWW losers, which are not present in the current-state snapshot but may remain relay-eligible. Until that coverage rule is specified and tested, snapshot completion must not by itself advance Outbox/relay safe-ACK or GC boundaries, or discard pending/frozen changes.
+A state snapshot is not an acknowledgement of every frozen Outbox or relay operation that predates its source watermark. The current 80-byte SnapshotTail contains three digests but does not define a per-author checkpoint vector or a snapshot-completion ACK/fencing contract; the current runtime DTO omits SnapshotTail. It is therefore an integrity descriptor only for now, not a stream cursor or retention proof. Snapshot completion MUST NOT advance Outbox/relay safe-ACK, ChangeId-ledger GC or peer stream offsets, and MUST NOT discard pending/frozen changes. A future snapshot-baseline protocol must explicitly bind the snapshot state to per-author stream cuts and prove completion before any such compaction.
 
-The current BIN-SYNC SnapshotChunkMessage/BuildSnapshotChunks path is a current-state LWW snapshot and does not expose a per-field ChangeId or Outbox cursor in the inspected DTO. The normative specification separately describes SnapshotTail/outbox checkpoint information; reconcile that spec/runtime boundary before designing storage operations that rely on snapshot-tail coverage.
+The current BIN-SYNC SnapshotChunkMessage/BuildSnapshotChunks path is a current-state LWW snapshot and does not expose a per-field ChangeId or Outbox cursor in the inspected DTO. Until the protocol adds a verifiable snapshot-baseline barrier, a new peer must not be treated as having received old operation history merely because it installed current field state; the sender must retain/reconcile the required author streams or require a full rebootstrap path.
 
 Recovery must be deterministic. A store must not expose a state where an inbox cursor is advanced but the corresponding accepted data/relay state is missing, or vice versa.
 
@@ -488,19 +488,19 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 3. Exact scope/replica identifier representation and how it is supplied at construction.
 4. Which protocol state is mandatory in the first implementation versus capability-gated.
 5. Whether a built-in in-memory store ships in the core package or only in test utilities.
-6. Whether FLD Storage-only is a dedicated public engine/facade or an adapter over a separated internal storage core.
+6. **Decided:** FLD Storage-only opens the domain-neutral `Fld1.Storage` engine directly; it does not instantiate `FldDatabase`. One DLL initially, extractable namespace/API/source boundary.
 7. How to represent storage-native ordering/version information without fabricating protocol HLC/author fields required by the current FLD1 run format.
 8. How a multi-scope/multi-namespace Metadata Store maps onto FLD's currently namespace-scoped physical runs and database options.
 9. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
 10. How current NodePersistence/WAL state migrates to the new provider/store boundary.
 11. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
 12. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
-13. Exact snapshot-to-tail coverage semantics: whether a state snapshot can subsume frozen local LWW operations, how relay-eligible LWW losers are retained/delivered, and how the normative SnapshotTail/outbox checkpoint maps to the current runtime.
-14. A finite, protocol-safe remote SeenChanges/provenance dedup GC rule. Current NodePersistence stores the exact peer/namespace/ChangeId set, but the normative spec has no corresponding expiry or safe watermark; production storage cannot safely compact remote provenance by an invented TTL. Local WAL replay markers are a separate category and may be reclaimed only after their WAL replay horizon closes.
-15. Exact Inbox receipt retention representation: preserve or safely derive the specification's cursor range, applied time and expiry condition in addition to the current durable idempotency key/author/checkpoint state.
-16. Ensure the per-peer batch replay cache (PeerState.Ids) is pruned only after the matching per-author ACK covers its cursor range; the current runtime persists these entries but the inspected ACK path does not remove them.
+13. **Conservative rule decided:** current snapshot completion never advances stream offsets or Outbox/relay/ChangeId GC. A future snapshot-baseline protocol still needs a per-author cut vector and explicit completion/fencing semantics.
+14. **Conservative rule decided:** one exact global `(scope, namespace, ChangeId)` ledger with canonical operation fingerprint; retain for namespace/scope epoch. No safe finite GC exists in the current protocol. Local WAL replay markers are separate and reclaimable only after their WAL replay horizon closes.
+15. **Decided:** compact Inbox receipt retains cursor range, resolved author, BatchDigest, RecordsRoot, PreviousBatchDigest, ACK result, appliedAt/expiresAt and storage commit identity; duplicate keys must match all identity/chain fields.
+16. **Decided:** prune PeerState.Ids only in the same durable ACK transaction when the matching peer/namespace/author StreamAcked covers the entire cursorEnd; implementation remains pending.
 17. Define the lifecycle of ProtocolStateDelta: whether it is an opaque replay log or is materialized into queryable current protocol metadata, when its recovery payload can be checkpointed/removed, and whether duplicate-batch receipts still need to return the full delta after that point.
-18. Align Inbox receipt duplicate-key validation across BIN-SYNC and FLD: decide which digest/range fields are normative and persist them compactly so a reused BatchId with conflicting content is not accepted as the original batch.
+18. Implement and test the decided Inbox duplicate validation consistently in BIN-SYNC and FLD; conflicting reuse must fail closed without retaining the full original payload.
 19. Define whether relay ChangeId dedup is at-most-once for the lifetime of the namespace or only while the Outbox entry is retained; after Outbox compaction, decide whether snapshot/membership state safely subsumes old IDs or a separate exact relay-history index is required.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
