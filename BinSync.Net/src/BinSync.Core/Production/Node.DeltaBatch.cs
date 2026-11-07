@@ -422,6 +422,8 @@ public sealed partial class Node
                 CreatedAt = e.CreatedAt,
                 PayloadNeedsDetachment = detachPublicBuffers && shared,
             });
+            if (e.CausalDepsOrNull is { } causalDeps)
+                entries[^1].CausalDeps.AddRange(causalDeps);
         }
         if (detachPublicBuffers)
             DetachPublicBatchPayloads(entries);
