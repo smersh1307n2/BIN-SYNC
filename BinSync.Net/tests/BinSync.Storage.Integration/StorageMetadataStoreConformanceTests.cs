@@ -194,6 +194,17 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 };
                 Assert.Equal(Batch(44), afterAck.ReserveOutboundBatch(
                     scope, local, peer, 7, 9, author, next).BatchId);
+
+                // An unrelated full-partition mutation must preserve the targeted peer rows.
+                afterAck.FreezeOutbound(scope, local, 8, local, new[] { FrozenOperation(90, 91) });
+            }
+
+            using (var afterUnrelatedMutation = new StorageMetadataStore(directory, 415, deleteOnDispose: false))
+            {
+                var state = afterUnrelatedMutation.GetPeerStreamState(scope, local, peer, 7, 9, author);
+                Assert.Equal(3UL, state.AckedCursor);
+                Assert.Equal(Batch(44), Assert.IsType<MetadataOutboundBatchReservation>(state.PendingBatch).BatchId);
+                Assert.Equal(1UL, afterUnrelatedMutation.GetOutboundHighWatermark(scope, local, 8, local));
             }
         }
         finally
