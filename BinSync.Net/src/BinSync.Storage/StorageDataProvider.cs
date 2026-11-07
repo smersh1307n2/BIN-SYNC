@@ -441,7 +441,10 @@ public class StorageDataProvider : IDataProvider
     private static int CompareCanonicalKey(ProviderMutation left, ProviderMutation right)
     {
         int c = CompareRecordIds(left.RecordId, right.RecordId);
-        return c != 0 ? c : left.FieldId.CompareTo(right.FieldId);
+        if (c != 0) return c;
+        if (left.IsRecordTombstone != right.IsRecordTombstone)
+            return left.IsRecordTombstone ? -1 : 1;
+        return left.FieldId.CompareTo(right.FieldId);
     }
 
     private static int CompareRecordIds(RecordId left, RecordId right)
