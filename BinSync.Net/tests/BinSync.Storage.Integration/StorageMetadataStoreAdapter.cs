@@ -624,10 +624,10 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         bool changed = false;
         foreach (var old in oldEntries)
         {
-            string hex = Convert.ToHexString(old.Key);
+            string hex = old.Key;
             if (!newEntries.ContainsKey(hex))
             {
-                batch.Delete(old.Key);
+                batch.Delete(old.Value.Key);
                 changed = true;
             }
         }
