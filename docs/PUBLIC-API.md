@@ -253,6 +253,7 @@ Blind merge compares ciphertext with open HLC + author.
 | `InvalidVarintException` / `InvalidFloatException` | Codec |
 | `ClockDriftException` | HLC skew |
 | `SessionException` / `NoSessionException` / `PeerRejectedException` | Session / loopback |
+| `MetadataPendingApplyAlreadyFinalizedException` | Explicit idempotent retry signal; not a generic metadata state conflict |
 
 ### Lab / test helpers (not product contract)
 
