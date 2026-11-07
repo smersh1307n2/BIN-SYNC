@@ -247,7 +247,7 @@ public partial class SyncSession : IAsyncDisposable
 
             // Decode without mutation so a host can persist the exact wire payload as
             // a PendingApply intent before Node's receive cursor or records advance.
-            var decoded = receiver.DecodeBatchPayloadForTransport(frame.Payload);
+            var decoded = receiver.PrepareBatchPayloadForMetadata(frame.Payload, PeerNodeId);
             beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId, checked((uint)PeerEpoch));
 
             var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
