@@ -1,9 +1,9 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.8 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store/Data Provider semantic conformance and PendingLocal/source-feed handoff ownership are recorded. NodePersistence v13/v14 compact the alias and Outbox encodings. Durable external adapters remain unimplemented.  
+**Status:** Architecture contract v0.9 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store/Data Provider semantic conformance and PendingLocal/source-feed handoff ownership are recorded. NodePersistence v13/v14/v15 compact the alias, Outbox and peer-progress encodings. Durable external adapters remain unimplemented.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
-**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v14, including adaptive receipt indexing, compact 16-byte ledger values, single-direction alias persistence, shared Outbox author tables, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
+**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v15, including adaptive receipt indexing, compact 16-byte ledger values, single-direction alias persistence, shared Outbox author tables, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
 
 ## 1. Purpose
 
@@ -783,14 +783,32 @@ For the focused three-entry test (two authors, small sequence values, one record
 
 The following are audit findings, not approved changes:
 
-1. **PeerState fixed-width counters.** v14 still stores `LastPushedSeq`, `LastReceivedSeq`, `LastAckedSeq`, `LastSeen`, per-stream receive cursors, per-author ACK/pushed/offset values, and replay-range start/end values as U64. `OutboxSeqRef` values are also U64. Non-negative sequence values can be evaluated for varint encoding in a future state version. Timestamp values such as `LastSeen` and Outbox `CreatedAt` are likely to save about one byte at current Unix-microsecond magnitudes. Measure representative states before changing the encoding.
+1. **Outbox run grouping / shared BaseSeq.** v14 shares AuthorNodeId through a per-namespace author table; v15 also varint-encodes each sequence. A further candidate is grouping consecutive Outbox entries with the same author and contiguous sequence into an ordered run: one `AuthorNodeId` and `BaseSeq` per run, with entry offsets implicit from run order. This is the persistence-level analogue of the earlier `CommitGroup` idea. It must preserve the original Outbox order, split on author changes or sequence gaps, and use a flat/single-entry form when grouping costs more. It is an encoding group only; it must not imply that separate local API calls were one atomic transaction. Measure real retained Outbox distributions (including ACK-created gaps and relayed authors) before adopting it.
 
-2. **Compatibility mirrors in PeerState.** Production code writes `LastReceivedSeq` when a receive-stream cursor is written, but the inspected production paths do not read it. `LastAckedSeq` is assigned from `MinStreamAcked` and is likewise not read by the inspected production paths. They may be removable or reconstructible, but verify every source/test/API consumer and the exact restart semantics before dropping them. Do not remove `LastPushedSeq` on the same assumption: legacy aggregate ACK validation reads it, and the transport path can advance it before per-author stream progress is published.
+2. **PeerState compatibility mirrors.** v15 keeps `LastReceivedSeq` as a varint for exact round-trip/diagnostic compatibility, although inspected production paths do not read it. `LastAckedSeq` is no longer persisted; it is reconstructed from `MinStreamAcked`/per-author progress on load. `LastPushedSeq` remains because legacy aggregate ACK validation reads it, and the transport path can advance it before per-author stream progress is published. Removing `LastReceivedSeq` from memory/API is a separate compatibility decision, not part of the v15 byte-format change.
 
-3. **Inbox expiry encoding.** New receipts currently use `ExpiresAt = 0`; v14 still emits its zero varint. A presence bit in the existing receipt flags could omit that byte for receipts without a scheduled expiry. Keep the expiry field and its independent lifecycle semantics; this is only an encoding optimization, not permission to introduce TTL-based receipt GC.
+3. **Global ChangeId ledger.** The logical key and 16-byte fingerprint remain necessary for E-24 equivocation detection. A content-derived ChangeId could potentially make the fingerprint redundant, but this changes identity semantics and remains unapproved. Do not replace exact deduplication with a Bloom filter or reclaim entries using TTL/ordinary ACK.
 
-4. **Global ChangeId ledger.** The logical key and 16-byte fingerprint remain necessary for E-24 equivocation detection. A content-derived ChangeId could potentially make the fingerprint redundant, but this changes identity semantics and remains unapproved. Do not replace exact deduplication with a Bloom filter or reclaim entries using TTL/ordinary ACK.
+4. **Do not merge distinct protocol facts.** `LastBatchDigest` and `LastStreamDigest` have different chain scopes. `ReceivedStreams` includes the original stream issuer, which may differ from the direct relay peer owning the PeerState. `PeerState.Ids` stores replay mappings for outstanding ranges; its ACK-pruning behavior is already implemented. These are not duplicate fields merely because they contain related identifiers or digests.
 
-5. **Do not merge distinct protocol facts.** `LastBatchDigest` and `LastStreamDigest` have different chain scopes. `ReceivedStreams` includes the original stream issuer, which may differ from the direct relay peer owning the PeerState. `PeerState.Ids` stores replay mappings for outstanding ranges; its ACK-pruning behavior is already implemented. These are not duplicate fields merely because they contain related identifiers or digests.
+The next measurement target is a representative Node snapshot with many Outbox entries, several authors and ACK-created sequence gaps. Record exact serialized byte counts by section and run-length distribution before deciding whether BaseSeq grouping justifies another format version. Receipt/ledger GC and E-24/E-25 semantics remain separate correctness problems, not size optimizations.
 
-The next low-risk measurement target is a representative Node snapshot with many Outbox entries and several peers/authors. Record exact serialized byte counts by section before deciding whether PeerState varints and mirror removal justify another format version. Receipt/ledger GC and E-24/E-25 semantics remain separate correctness problems, not size optimizations.
+
+## 37. NodePersistence v15: compact peer progress and receipt expiry
+
+v15 applies varint encoding to non-negative synchronization counters that were still stored as fixed U64 values:
+- `OutboxSeqRef` counters;
+- `PeerState.LastPushedSeq` and `LastReceivedSeq`;
+- `PeerState.LastSeen`;
+- `ReceivedStreams` cursors;
+- per-author ACK, pushed and stream-offset watermarks;
+- outstanding replay-range start/end values;
+- Outbox `CreatedAt`.
+
+The in-memory values and protocol semantics are unchanged. Values are range-checked on read and negative values are rejected on write. The count-before-allocation bounds were lowered only to the exact minimum sizes of the new v15 encodings; the v3-v14 readers retain their old fixed-width layouts.
+
+`LastAckedSeq` was a persisted compatibility mirror of `MinStreamAcked`. v15 no longer writes it and reconstructs it from the per-author ACK progress on load. `LastReceivedSeq` remains persisted as a varint to preserve exact state round-trips and diagnostics, despite no read in the inspected production paths. `LastPushedSeq` remains authoritative for the legacy aggregate ACK guard.
+
+For receipts, v15 uses the previously unused bit 2 of the existing receipt-flags byte to indicate a nonzero `ExpiresAt`. When expiry is zero, the expiry varint is omitted; nonzero expiry values are still written and restored. `AppliedAt`, cursorEnd and fingerprint behavior are unchanged. This is not a receipt-GC policy and does not introduce TTL-based deletion.
+
+The v15 tests cover mixed Outbox authors, sequence and timestamp round-trip, RecordTombstone RecordId reconstruction, peer progress round-trip, adaptive receipt layouts, and both zero/nonzero expiry. GitHub Actions run [42364523691](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42364523691) passed Release build, 638 tests, public samples, coverage threshold and fuzz/lab hardening at commit `ad78fb8f68906944a3c8aac4588dda6b8d29a3a7`. The v3-v14 snapshot readers remain supported. No network wire-format change.
