@@ -753,7 +753,8 @@ public sealed partial class Node
         AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId(), batch.IssuerEpoch,
             batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
 
-    internal MetadataPeerStreamState ReadPeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author)
+    /// <summary>Returns the in-memory peer cursor used to bootstrap durable Metadata Store progress.</summary>
+    public MetadataPeerStreamState ReadPeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
