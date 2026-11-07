@@ -356,7 +356,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(1UL, snapshotted.State.StreamOffset);
         Assert.Equal(1U, snapshotted.State.IssuerEpoch);
         Assert.Equal(snapshotDigest, snapshotted.State.LastBatchDigest);
-        Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, local));
+        Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
         Assert.Equal(2, store.ReadInterestedPeers(scope, local, 7).Count);
     }
 
@@ -401,7 +401,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
             Batch(134), 1, Enumerable.Repeat((byte)135, 16).ToArray());
 
-        Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+        Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
         Assert.Throws<ArgumentOutOfRangeException>(() => store.CompactRelayThrough(scope, local, 7, author, 1));
         Assert.Single(store.ReadRelayForPeer(scope, local, peerB, 1, 7, author, 10).Items);
 
@@ -409,7 +409,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(136));
         store.AcknowledgeOutboundBatch(scope, local, peerB, 1, 7, author,
             Batch(136), 1, Enumerable.Repeat((byte)137, 16).ToArray());
-        Assert.Equal(1UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+        Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
         store.CompactRelayThrough(scope, local, 7, author, 1);
         Assert.Empty(store.ReadRelayForPeer(scope, local, peerB, 1, 7, author, 10).Items);
     }
@@ -448,7 +448,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
                     Batch(92), 1, Enumerable.Repeat((byte)92, 16).ToArray());
 
-                Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+                Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
                 Assert.Throws<ArgumentOutOfRangeException>(() =>
                     store.CompactOutboundThrough(scope, local, 7, author, 1));
                 Assert.Equal(1UL, store.GetOutboundHighWatermark(scope, local, 7, author));
@@ -457,13 +457,13 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(93));
                 store.AcknowledgeOutboundBatch(scope, local, peerB, 1, 7, author,
                     Batch(93), 1, Enumerable.Repeat((byte)93, 16).ToArray());
-                Assert.Equal(1UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+                Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
                 store.CompactOutboundThrough(scope, local, 7, author, 1);
                 Assert.Empty(store.ReadOutbound(scope, local, 7, author, 1, 0, 10).Items);
             }
 
             using var reopened = new StorageMetadataStore(directory, 421, deleteOnDispose: false);
-            Assert.Equal(1UL, reopened.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+            Assert.Equal(1UL, reopened.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
             Assert.Empty(reopened.ReadOutbound(scope, local, 7, author, 1, 0, 10).Items);
         }
         finally
