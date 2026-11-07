@@ -113,6 +113,122 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Peer_batch_reservation_is_immutable_durable_and_acknowledged_atomically()
+    {
+        string directory = Path.Combine(_root, "peer-reservation");
+        Directory.CreateDirectory(directory);
+        NodeId local = Node(1);
+        NodeId peer = Node(2);
+        NodeId author = Node(3);
+        const string scope = "peer-reservation-scope";
+        var first = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(40),
+            CursorStart = 1,
+            CursorEnd = 3,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)41, 16).ToArray(),
+            Payload = new byte[] { 1, 2, 3, 4, 5 }
+        };
+
+        try
+        {
+            using (var store = new StorageMetadataStore(directory, 415, deleteOnDispose: false))
+            {
+                var reserved = store.ReserveOutboundBatch(scope, local, peer, 7, 9, author, first);
+                reserved.Payload[0] = 99;
+                var retryCandidate = new MetadataOutboundBatchReservation
+                {
+                    BatchId = Batch(42),
+                    CursorStart = 1,
+                    CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)43, 16).ToArray(),
+                    Payload = new byte[] { 9 }
+                };
+                var retry = store.ReserveOutboundBatch(scope, local, peer, 7, 9, author, retryCandidate);
+                Assert.Equal(Batch(40), retry.BatchId);
+                Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, retry.Payload);
+                store.MarkOutboundBatchPushed(scope, local, peer, 7, 9, author, Batch(40));
+                var state = store.GetPeerStreamState(scope, local, peer, 7, 9, author);
+                Assert.Equal(0UL, state.AckedCursor);
+                Assert.Equal(3UL, state.PushedCursor);
+                Assert.NotNull(state.PendingBatch);
+            }
+
+            using (var reopened = new StorageMetadataStore(directory, 415, deleteOnDispose: false))
+            {
+                var pending = Assert.IsType<MetadataOutboundBatchReservation>(
+                    reopened.GetPendingOutboundBatch(scope, local, peer, 7, 9, author));
+                Assert.Equal(Batch(40), pending.BatchId);
+                Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, pending.Payload);
+                reopened.AcknowledgeOutboundBatch(scope, local, peer, 7, 9, author,
+                    pending.BatchId, pending.CursorEnd, pending.BatchDigest.ToArray());
+
+                var state = reopened.GetPeerStreamState(scope, local, peer, 7, 9, author);
+                Assert.Equal(3UL, state.AckedCursor);
+                Assert.Equal(3UL, state.PushedCursor);
+                Assert.Equal(pending.BatchDigest, state.LastBatchDigest);
+                Assert.Null(state.PendingBatch);
+                Assert.Throws<InvalidOperationException>(() =>
+                    reopened.AcknowledgeOutboundBatch(scope, local, peer, 7, 9, author,
+                        pending.BatchId, pending.CursorEnd, pending.BatchDigest));
+            }
+
+            using (var afterAck = new StorageMetadataStore(directory, 415, deleteOnDispose: false))
+            {
+                var state = afterAck.GetPeerStreamState(scope, local, peer, 7, 9, author);
+                Assert.Equal(3UL, state.AckedCursor);
+                Assert.Equal(3UL, state.PushedCursor);
+                Assert.Null(state.PendingBatch);
+                var next = new MetadataOutboundBatchReservation
+                {
+                    BatchId = Batch(44),
+                    CursorStart = 4,
+                    CursorEnd = 4,
+                    PreviousBatchDigest = state.LastBatchDigest.ToArray(),
+                    BatchDigest = Enumerable.Repeat((byte)45, 16).ToArray(),
+                    Payload = new byte[] { 6, 7 }
+                };
+                Assert.Equal(Batch(44), afterAck.ReserveOutboundBatch(
+                    scope, local, peer, 7, 9, author, next).BatchId);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Peer_batch_reservation_rejects_unpushed_or_equivocated_ack_and_cursor_gaps()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-reservation-validation"), 416);
+        NodeId local = Node(1), peer = Node(2), author = Node(3);
+        const string scope = "peer-reservation-validation";
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(50), CursorStart = 1, CursorEnd = 2,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)51, 16).ToArray(),
+            Payload = new byte[] { 1 }
+        };
+        store.ReserveOutboundBatch(scope, local, peer, 1, 7, author, reservation);
+        Assert.Throws<InvalidDataException>(() => store.AcknowledgeOutboundBatch(
+            scope, local, peer, 1, 7, author, Batch(50), 2, reservation.BatchDigest));
+        Assert.Throws<InvalidDataException>(() => store.AcknowledgeOutboundBatch(
+            scope, local, peer, 1, 7, author, Batch(50), 2, Enumerable.Repeat((byte)99, 16).ToArray()));
+        Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
+            new MetadataOutboundBatchReservation
+            {
+                BatchId = Batch(52), CursorStart = 3, CursorEnd = 3,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)53, 16).ToArray(),
+                Payload = new byte[] { 2 }
+            }));
+    }
+
+    [Fact]
     public void Receipts_relay_outbound_leases_and_pending_apply_survive_restart_and_compaction()
     {
         string directory = Path.Combine(_root, "restart");
