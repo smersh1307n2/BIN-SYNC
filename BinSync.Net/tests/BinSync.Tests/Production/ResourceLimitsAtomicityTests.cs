@@ -169,11 +169,11 @@ public sealed class ResourceLimitsAtomicityTests
     }
 
     [Fact]
-    public void Apply_batch_rejects_seen_change_overflow_before_any_commit()
+    public void Apply_batch_rejects_global_change_ledger_overflow_before_any_commit()
     {
         var sender = Fix.MakeNode(43);
         var receiver = new Node(Fix.Nid(44), epoch: 1, nowFn: () => 44_000_000,
-            limits: new ResourceLimits { MaxSeenChanges = 1 });
+            limits: new ResourceLimits { MaxGlobalChangeLedgerEntries = 1 });
         Transport.MakeSession(sender, receiver);
 
         Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
@@ -235,24 +235,47 @@ public sealed class ResourceLimitsAtomicityTests
     }
 
     [Fact]
-    public void Apply_batch_does_not_count_already_seen_change_ids_against_capacity()
+    public void Apply_batch_does_not_count_global_duplicate_against_ledger_capacity()
     {
         var sender = Fix.MakeNode(54);
-        using var receiver = new Node(Fix.Nid(55), epoch: 1, nowFn: () => 55_000_000,
-            limits: new ResourceLimits { MaxSeenChanges = 1 });
+        using var receiver = new Node(Fix.Nid(55), epoch: 1, nowFn: () => 55_000_000);
         Transport.MakeSession(sender, receiver);
 
         Assert.True(sender.WriteField(3, Fix.Rid(1), 0x100, [1]));
-        var changeId = BatchId.From(Fix.Nid(56));
-        sender.Outbox[3][^1].ChangeId = changeId;
-        receiver.SeenChanges.Add((sender.NodeId, 3, changeId));
-        var batch = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+        var first = sender.CreateDeltaBatch(receiver.NodeId, 3)!;
+        Assert.Equal(1, receiver.ApplyBatch(first, sender.NodeId).Applied);
+        var changeId = first.Entries[0].ChangeId;
+        Assert.True(receiver.GlobalChangeLedger.ContainsKey((3, changeId)));
+        receiver.Limits = new ResourceLimits { MaxGlobalChangeLedgerEntries = 1 };
 
-        var result = receiver.ApplyBatch(batch, sender.NodeId);
-        Assert.Equal(1, result.Applied);
+        // Same ChangeId in the next contiguous author-stream batch, but a new
+        // BatchId: this is a global operation duplicate, not an Inbox replay.
+        var secondId = BatchId.From(Fix.Nid(56));
+        var secondEntry = new OutboxEntry
+        {
+            NamespaceId = first.NamespaceId,
+            Seq = 2,
+            ChangeId = changeId,
+            RecordId = first.Entries[0].RecordId,
+            OpKind = first.Entries[0].OpKind,
+            Payload = first.Entries[0].Payload.ToArray(),
+            AuthorNodeId = first.Entries[0].AuthorNodeId,
+            CreatedAt = first.Entries[0].CreatedAt
+        };
+        var root = Node.ComputeRecordsRoot(new List<OutboxEntry> { secondEntry });
+        var digest = Node.ComputeBatchDigest(secondId, first.NamespaceId, first.IssuerNodeId,
+            first.IssuerEpoch, 2, 2, root, first.BatchDigest);
+        var second = new Batch(first.NamespaceId, first.SchemaId, first.SchemaVersion,
+            first.MergePolicy, first.Flags, first.IssuerNodeId, first.IssuerEpoch,
+            2, 2, secondId, first.BatchDigest, root, digest,
+            new List<OutboxEntry> { secondEntry });
+
+        var result = receiver.ApplyBatch(second, sender.NodeId);
+        Assert.Equal(0, result.Applied);
         Assert.Equal(1, receiver.GetRecordCount(3));
         Assert.Equal(0, receiver.GetOutboxCount(3));
-        Assert.Single(receiver.SeenChanges);
+        Assert.Single(receiver.GlobalChangeLedger);
+        Assert.Empty(receiver.SeenChanges);
     }
 
     [Fact]
@@ -280,16 +303,19 @@ public sealed class ResourceLimitsAtomicityTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxOutboxEntriesPerNamespace = -1 }; });
         Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxSeenChanges = -1 }; });
+        Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxGlobalChangeLedgerEntries = -1 }; });
         Assert.Throws<ArgumentOutOfRangeException>(() => { _ = new ResourceLimits { MaxRecords = -1 }; });
 
         var unlimited = new ResourceLimits
         {
             MaxOutboxEntriesPerNamespace = 0,
             MaxSeenChanges = 0,
+            MaxGlobalChangeLedgerEntries = 0,
             MaxRecords = 0,
         };
         Assert.Equal(0, unlimited.MaxOutboxEntriesPerNamespace);
         Assert.Equal(0, unlimited.MaxSeenChanges);
+        Assert.Equal(0, unlimited.MaxGlobalChangeLedgerEntries);
         Assert.Equal(0, unlimited.MaxRecords);
     }
 
