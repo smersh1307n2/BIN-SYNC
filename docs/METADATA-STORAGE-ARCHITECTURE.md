@@ -197,7 +197,7 @@ The current NodePersistence v5 is a useful completeness checklist, not a schema 
 - node identity/incarnation and HLC clock state;
 - current replicated field state, lifecycle and tombstones;
 - local Outbox entries and per-(author, namespace) sequence allocators;
-- Inbox idempotency keys and InboxAuthors needed to reproduce the correct author-bound duplicate ACK;
+- Inbox idempotency keys and InboxAuthors needed to reproduce the correct author-bound duplicate ACK; the wire spec also defines cursorStart/cursorEnd/appliedAt/expiresAt, while current NodePersistence v5 serializes the key set and related stream checkpoints rather than the complete InboxEntry tuple, so the durable expiry/range lifecycle must be explicitly preserved or safely derived;
 - LastBatchDigest checkpoints and per-stream digest-chain checkpoints;
 - peer state: received-stream mappings, StreamPushed, StreamAcked, StreamOffsets, batch range → BatchId/previous-digest mappings, initial-sync status, membership epoch and applicable last-seen/retention data;
 - SeenChanges keyed with the protocol-defined peer/provenance and namespace dimensions;
@@ -476,6 +476,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 12. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
 13. Exact snapshot-to-tail coverage semantics: whether a state snapshot can subsume frozen local LWW operations, how relay-eligible LWW losers are retained/delivered, and how the normative SnapshotTail/outbox checkpoint maps to the current runtime.
 14. A finite, protocol-safe SeenChanges/provenance dedup GC rule. Current NodePersistence stores the exact peer/namespace/ChangeId set, but the normative spec has no corresponding expiry or safe watermark; production storage cannot safely compact it by an invented TTL.
+15. Exact Inbox receipt retention representation: preserve or safely derive the specification's cursor range, applied time and expiry condition in addition to the current durable idempotency key/author/checkpoint state.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
