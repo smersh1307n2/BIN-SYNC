@@ -73,6 +73,7 @@ public sealed record MetadataRelayPage(IReadOnlyList<MetadataRelayItem> Items, u
 public sealed class MetadataFrozenOperation
 {
     public required BatchId ChangeId { get; init; }
+    public required byte[] Fingerprint { get; init; }
     public required byte[] Payload { get; init; }
 }
 public sealed record MetadataOutboundItem(ulong Sequence, NodeId AuthorNodeId, BatchId ChangeId, byte[] Payload);
