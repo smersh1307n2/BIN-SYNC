@@ -312,6 +312,20 @@ The provider's idempotency receipt must be committed atomically with the source 
 
 A provider may instead expose a transaction coordinator or a durable transactional inbox/outbox that gives equivalent guarantees. The exact mechanism is provider-specific.
 
+### 7.2.1. ProtocolStateDelta lifecycle
+
+`ProtocolStateDelta` is a bounded, versioned recovery envelope for the metadata mutations associated with one incoming batch. It is not a second long-term database, a serialized Node snapshot, or a permanent duplicate of Inbox/SeenChanges/peer state.
+
+The target lifecycle is:
+
+1. BIN-SYNC constructs a small delta containing only the metadata mutations for this batch.
+2. In a shared provider/metadata transaction, the runtime materializes those mutations as normal indexed metadata records atomically with the provider data effect and Inbox receipt. The raw delta is not retained after commit.
+3. With separate stores, the raw delta is retained only inside the durable pending-apply intent while the provider idempotently applies the batch and the Metadata Store finalizes its metadata transaction.
+4. Once both sides are durably finalized, remove the raw delta/intent payload. Keep the materialized metadata records and compact Inbox receipt.
+5. A duplicate BatchId returns the compact original receipt/ACK result; it does not return or reconstruct the full ProtocolStateDelta.
+
+The delta must not contain a full Node/PeerStates/ChangeIdLedger image. A normal batch updates only bounded records affected by that batch. If a store cannot materialize and query the resulting metadata after restart, its Metadata Store contract is incomplete; retaining an ever-growing raw delta log is not an acceptable substitute.
+
 ### 7.3. Unsupported weak mode
 
 If the provider cannot offer a shared transaction, durable idempotent apply, or an equivalent recoverable protocol, the integration cannot promise crash-safe exactly-once effects. It may still offer weaker best-effort or at-least-once behavior, but that mode must be explicit, must not send an ACK that implies stronger durability, and must document possible duplicate application or reconciliation requirements.
@@ -499,7 +513,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 14. **Conservative rule decided:** one exact global `(scope, localReplicaId, namespace, ChangeId)` ledger with canonical operation fingerprint; retain for namespace/scope epoch. No safe finite GC exists in the current protocol. Local WAL replay markers are separate and reclaimable only after their WAL replay horizon closes.
 15. **Decided:** compact Inbox receipt retains cursor range, resolved author, BatchDigest, RecordsRoot, PreviousBatchDigest, ACK result, appliedAt/expiresAt and storage commit identity; duplicate keys must match all identity/chain fields.
 16. **Decided:** prune PeerState.Ids only in the same durable ACK transaction when the matching peer/namespace/author StreamAcked covers the entire cursorEnd; implementation remains pending.
-17. Define the lifecycle of ProtocolStateDelta: whether it is an opaque replay log or is materialized into queryable current protocol metadata, when its recovery payload can be checkpointed/removed, and whether duplicate-batch receipts still need to return the full delta after that point.
+17. **Decided:** ProtocolStateDelta is a bounded per-batch recovery envelope, materialized into normal indexed metadata records during finalization. Retain the raw delta only in a pending-apply intent across separate-store recovery; delete it after provider and metadata finalization. Duplicate batches return only the compact receipt/ACK result, never the full delta.
 18. Implement and test the decided Inbox duplicate validation consistently in BIN-SYNC and FLD; conflicting reuse must fail closed without retaining the full original payload.
 19. **Decided:** lifetime-wide at-most-once relay suppression is provided by the exact global ChangeId ledger, retained until a fenced namespace/scope epoch reset. Relay payload may be compacted independently after safe downstream ACK.
 
