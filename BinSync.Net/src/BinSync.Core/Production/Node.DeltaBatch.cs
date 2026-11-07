@@ -753,6 +753,32 @@ public sealed partial class Node
         AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId(), batch.IssuerEpoch,
             batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
 
+    internal MetadataPeerStreamState ReadPeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author)
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            ValidateNamespaceId(namespaceId);
+            if (targetPeer.IsZero || author.IsZero)
+                throw new ArgumentException("Peer and author identities must be non-zero.");
+            var key = (targetPeer, namespaceId);
+            if (!PeerStates.TryGetValue(key, out var state))
+                return new MetadataPeerStreamState(0, 0, 0,
+                    checked((uint)AuthorEpochInternal(author)), new byte[16], null);
+            ulong acked = checked((ulong)state.AckedFor(author));
+            ulong pushed = state.TryGetStreamPushed(author, out var pushedValue)
+                ? checked((ulong)pushedValue) : acked;
+            ulong offset = state.TryGetStreamOffset(author, out var offsetValue)
+                ? checked((ulong)offsetValue) : 0;
+            int issuerEpoch = AuthorEpochInternal(author);
+            Digest16 digest = LastStreamDigest.TryGetValue(
+                ((author, namespaceId, issuerEpoch), targetPeer), out var savedDigest)
+                ? savedDigest : default;
+            return new MetadataPeerStreamState(acked, pushed, offset,
+                checked((uint)issuerEpoch), digest.ToArray(), null);
+        }
+    }
+
     internal OutboundBatchPayload? CreateDeltaBatchPayloadFromMetadata(
         NodeId targetPeer, int namespaceId, NodeId authorStream,
         IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> metadataEntries,
