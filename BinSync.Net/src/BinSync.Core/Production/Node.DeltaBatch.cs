@@ -94,8 +94,8 @@ public sealed partial class Node
                 {
                     foreach (var e in all)
                     {
-                        long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
-                        long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
+                        long offset = ps!.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                        long localAck = checked(ps!.AckedFor(e.AuthorNodeId) + offset);
                         if (e.Seq > localAck &&
                             (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
                             firstPending[e.AuthorNodeId] = e.Seq;
@@ -106,13 +106,13 @@ public sealed partial class Node
                 stream = default;
                 foreach (var kv in firstPending)
                 {
-                    long offset = ps.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
-                    long localAck = checked(ps.AckedFor(kv.Key) + offset);
+                    long offset = ps!.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
+                    long localAck = checked(ps!.AckedFor(kv.Key) + offset);
                     if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
                 }
                 if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
                 if (!found) return null;
-                wm = ps.AckedFor(stream);
+                wm = ps!.AckedFor(stream);
             }
 
             long streamOffset;
@@ -124,7 +124,7 @@ public sealed partial class Node
             }
             else if (ps!.TryGetStreamOffset(stream, out var savedStreamOffset))
             {
-                if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
+                if (savedStreamOffset > 0 && !ps!.InitialSyncComplete)
                     throw new SyncException("SNAPSHOT_REQUIRED");
                 streamOffset = savedStreamOffset;
             }
@@ -270,7 +270,7 @@ public sealed partial class Node
                     Guid.NewGuid().TryWriteBytes(gbuf);
                     cached = (BatchId.From(gbuf),
                         LastStreamDigest.TryGetValue(streamKey, out var previous) ? previous : default);
-                    ps.Ids[idKey] = cached;
+                    ps!.Ids[idKey] = cached;
                 }
                 (batchId, previousDigest) = cached;
             }
