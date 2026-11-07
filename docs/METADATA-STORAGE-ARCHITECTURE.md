@@ -554,7 +554,9 @@ PeerState.Ids stores the deterministic outgoing batch replay mapping keyed by au
 
 NodePersistence serializes StreamAcked, StreamPushed and StreamOffsets independently, repeating the author ID in each map. A versioned per-author progress tuple with presence flags can store the author once while preserving sparse values. This is a format optimization, not a semantic change.
 
-Inbox and InboxAuthors also persist the same batch key separately, while ReceivedStreams stores batch-to-cursor information. Treat these as overlapping receipt facts and audit every duplicate-replay/ACK use before consolidation. The target is one compact receipt per accepted batch, not a payload copy per field.
+The duplicate key storage in Inbox and InboxAuthors has been consolidated: runtime now stores one dictionary entry keyed by (issuer, namespace, epoch, BatchId) with the resolved author as its value. The old Inbox property is a read-only key view and owns no second set. NodePersistence v7 serializes the key and author once; v3-v6 loaders still validate exact parity between the old set and author map before migrating. ReceivedStreams remains a separate per-peer/per-author cursor fact and is not part of this key consolidation.
+
+This closes only the duplicated key representation. The receipt still does not retain the full cursor range/digest/expiry tuple discussed in the protocol audit, and the existing duplicate path still follows the legacy issuer+BatchId idempotency behavior. Full receipt-tuple validation and safe expiry/GC remain open.
 
 ### 8.3. Global ChangeId ledger — implemented
 
@@ -619,3 +621,17 @@ Implemented on `feature/fld-external-storage`:
 Focused tests cover second-route duplicates after origin Outbox compaction, returned local echoes, equivocation rejection without partial mutation, v5 unknown-marker migration, v6 persistence, causal trailer relay and WAL replay. GitHub Actions run [42344100307](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42344100307) passed .NET 10 build/tests, public samples, coverage threshold and fuzz/lab hardening jobs.
 
 Not included: a safe dedup GC horizon, receipt consolidation, APPLY payload de-duplication, or a ChangeId/wire-format change. The backup branch remains untouched.
+
+## 20. Inbox receipt key consolidation implementation status (2026-11-07)
+
+Implemented on `feature/fld-external-storage`:
+- replaced the separate Inbox HashSet plus InboxAuthors Dictionary with one key-to-author Dictionary;
+- duplicate ACK resolution reads the exact author from that single map and no longer falls back to LastStreamAuthor;
+- the legacy Inbox property is a read-only view over dictionary keys, not separately retained storage;
+- NodePersistence v7 writes each issuer/namespace/epoch/BatchId key once with its durable author;
+- v3-v6 migration reads the old set and map, rejects missing/orphan/duplicate/zero-author entries, then publishes the single v7 map;
+- WAL replay and atomic state publication now copy only the one receipt dictionary.
+
+The raw serialized saving is one duplicate receipt key per accepted batch (issuer 16 B + BatchId 16 B + namespace/epoch varints, approximately 34 bytes for the common one-byte varint case), plus removal of the second in-memory hash-set entry and its buckets. This is a format-derived estimate, not a benchmark. GitHub Actions run [42344555045](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42344555045) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening.
+
+Not solved by this slice: a full durable receipt tuple containing cursor range, batch/records/previous digests, expiry and WAL-to-sidecar generation; conflicting payload reuse under an already accepted BatchId; receipt expiry/GC proof. `ReceivedStreams` remains a distinct author-stream cursor structure. No wire-format change.
