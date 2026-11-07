@@ -996,25 +996,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (!current.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer, peerEpoch)))
                 throw new SyncException("SNAPSHOT_REQUIRED");
 
-            bool hasPrior = current.PeerStreams.TryGetValue(key, out existing);
-            var prior = hasPrior ? existing! : EmptyPeerStreamValue();
-            if (!hasPrior)
-            {
-                // One-time bootstrap from the already durable Node checkpoint. This
-                // carries the peer-relative cursor, digest chain and snapshot offset.
-                prior = prior with
-                {
-                    AckedCursor = reservation.CursorStart - 1,
-                    PushedCursor = reservation.CursorStart - 1,
-                    StreamOffset = reservation.StreamOffset,
-                    IssuerEpoch = reservation.IssuerEpoch,
-                    LastBatchDigest = reservation.PreviousBatchDigest.ToArray()
-                };
-            }
-            else if (prior.StreamOffset != reservation.StreamOffset)
-            {
+            if (!current.PeerStreams.TryGetValue(key, out existing))
+                throw new SyncException("SNAPSHOT_REQUIRED");
+            var prior = existing;
+            if (prior.StreamOffset != reservation.StreamOffset)
                 throw new InvalidDataException("Outbound reservation changed the durable snapshot stream offset.");
-            }
             if (reservation.CursorStart != checked(prior.AckedCursor + 1))
                 throw new InvalidDataException("Outbound batch reservation is not contiguous with the durable peer ACK cursor.");
             byte[] expectedPreviousDigest = prior.IssuerEpoch == reservation.IssuerEpoch
