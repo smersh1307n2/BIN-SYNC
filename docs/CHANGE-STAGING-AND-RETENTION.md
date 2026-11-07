@@ -372,7 +372,7 @@ The inspected FLD implementation has another material storage-amplification poin
 - ApplyCommitCodec v2 serializes both Fields and RelayFields as separate full field arrays. Therefore, every relay-eligible operation's payload is serialized twice inside the same APPLY_COMMIT WAL payload.
 - FldDatabase.ApplyRemoteBatch appends that full encoded APPLY_COMMIT payload to WAL, flushes it, then appends the same payload again to ApplyJournal and flushes the journal.
 - ApplyJournal stores/indexes the full payload by batch identity. ReadRelayBatches later reads the full batch record and filters out the RelayFields subset. The receipt lookup also reads the same full record.
-- The inspected ApplyJournal has AppendIfMissing, TryFindBatch, ReadBatches and Flush, but no ACK, compaction or truncation API. Receipt retention and relay-payload retention are therefore coupled to one append-only sidecar.
+- The inspected ApplyJournal has AppendIfMissing, TryFindBatch, ReadBatches and Flush, but no ACK, compaction or truncation API. It retains every IndexEntry in both an in-memory List and a BatchKey Dictionary, so growth is unbounded in both disk and RAM. ReadBatches(afterJournalSeq, limit) currently scans the List from its beginning and skips entries at/below the cursor; repeated paging therefore becomes progressively more expensive as historical entries accumulate. Receipt retention and relay-payload retention are coupled to one append-only sidecar.
 
 For a remote batch with N incoming operations and R relay-eligible operations (R ≤ N), the current APPLY_COMMIT body contains N operation payloads plus another R copies. The sidecar then stores another copy of that entire body. Ignoring headers/indexes and current-state runs, the WAL plus ApplyJournal therefore retain approximately 2 × (N + R) operation-payload copies until WAL truncation and indefinitely in the current ApplyJournal unless another external lifecycle exists. This is a structural observation, not a benchmark estimate.
 
@@ -403,7 +403,7 @@ There are two viable physical strategies for relay payload lifetime:
 - **Copy relay subset once into a dedicated RelayJournal:** simplest compaction and WAL truncation. It duplicates relay payload once relative to the WAL apply record, but avoids retaining non-relay operations and allows independent relay ACK/GC.
 - **Reference immutable WAL payload ranges:** avoids copying relay payload, but pins the WAL segment until all referenced relay entries are safely retired. This can retain unrelated local/remote commits in the same segment and complicate checkpoint/truncation.
 
-The preferred default is a dedicated compact RelayJournal unless measurements show that WAL segment pinning is materially cheaper for the target workload. Never keep both a full ApplyJournal copy and a separate full RelayJournal copy.
+The preferred default is a dedicated compact RelayJournal unless measurements show that WAL segment pinning is materially cheaper for the target workload. Never keep both a full ApplyJournal copy and a separate full RelayJournal copy. Its read path should seek from a retained sequence/index boundary (e.g. lower-bound over a sorted page index or segment index), not rescan all historical entries for every page. Compaction must reclaim both file bytes and in-memory batch/index entries.
 
 A receipt should not retain the full incoming field array merely to answer a duplicate batch. A compact receipt record is sufficient once the original apply effects are committed and the relay subset has its own durable owner. The same principle applies to ProtocolStateDelta: its lifetime is tied to recovery/materialization of BIN-SYNC metadata, not automatically to the lifetime of the batch receipt or relay payload. The current API returns ProtocolStateDelta on duplicate; whether that remains necessary after the runtime has a durable Metadata Store and can query committed protocol state is an explicit API decision.
 
@@ -450,6 +450,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 27. Duplicate-batch receipt remains available after WAL checkpoint/truncation without retaining the full original field array.
 28. Relay payload survives WAL truncation and is reclaimed only after safe downstream ACK; receipt expiry and relay ACK are tested independently.
 29. Crash after WAL flush but before receipt/relay sidecar materialization reconstructs both sidecars exactly once from the WAL commit.
+30. Relay journal paging starts at the requested retained sequence without scanning all previously acknowledged history; compaction releases both disk bytes and in-memory indexes.
 
 ## 12. Implementation sequence
 
