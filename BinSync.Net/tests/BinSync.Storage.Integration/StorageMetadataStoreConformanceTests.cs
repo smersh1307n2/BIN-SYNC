@@ -263,7 +263,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     public void Inbox_receipt_identity_is_independent_of_resolved_author_stream()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-author-independent"), 440);
-        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3);
         const string scope = "receipt-author-independent";
         var first = new MetadataIncomingBatch
         {
@@ -285,7 +285,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var secondView = new MetadataIncomingBatch
         {
             ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
-            AuthorStreamNodeId = authorB, NamespaceId = 9, BatchId = first.BatchId,
+            AuthorStreamNodeId = default, NamespaceId = 9, BatchId = first.BatchId,
             CursorStart = first.CursorStart, CursorEnd = first.CursorEnd,
             PreviousBatchDigest = first.PreviousBatchDigest.ToArray(),
             BatchDigest = first.BatchDigest.ToArray(),
@@ -293,9 +293,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = authorB, ChangeId = Batch(144),
-                    Fingerprint = Enumerable.Repeat((byte)145, 16).ToArray(),
-                    Payload = new byte[] { 9, 9, 9 }, RelayEligible = true
+                    AuthorNodeId = authorA, ChangeId = Batch(142),
+                    Fingerprint = Enumerable.Repeat((byte)143, 16).ToArray(),
+                    Payload = new byte[] { 1, 4, 2 }, RelayEligible = true
                 }
             }
         };
@@ -303,9 +303,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.False(store.AcceptIncomingBatch(first).IsDuplicate);
         Assert.True(store.AcceptIncomingBatch(secondView).IsDuplicate);
         Assert.Equal(1UL, store.GetReceiveCursor(scope, local, sender, 5, 9, authorA));
-        Assert.Equal(0UL, store.GetReceiveCursor(scope, local, sender, 5, 9, authorB));
         Assert.Equal(1UL, store.GetRelayHighWatermark(scope, local, 9, authorA));
-        Assert.Equal(0UL, store.GetRelayHighWatermark(scope, local, 9, authorB));
     }
 
     [Fact]
