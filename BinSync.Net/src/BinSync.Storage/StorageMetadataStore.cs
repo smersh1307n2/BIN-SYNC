@@ -2067,8 +2067,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                        BatchId.From(key.Slice(22, 16)),
-                        );
+                        BatchId.From(key.Slice(22, 16)));
                     state.Receipts.Add(receiptKey, new ReceiptValue(
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
