@@ -27,6 +27,11 @@ public interface IMetadataStoreConformanceAdapter : IDisposable
 
     IMetadataStoreSnapshot OpenSnapshot(string scopeId, NodeId localReplica);
 
+    /// <summary>
+    /// Atomically publishes a complete immutable batch. An exact retry of the
+    /// same complete batch returns its original sequences; conflicting reuse
+    /// or partial overlap fails without appending any entries.
+    /// </summary>
     IReadOnlyList<MetadataOutboundItem> FreezeOutbound(
         string scopeId,
         NodeId localReplica,
