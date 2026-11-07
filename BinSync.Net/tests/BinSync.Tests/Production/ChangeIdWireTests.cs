@@ -278,6 +278,28 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Global_ChangeId_fingerprint_and_relay_preserve_causal_dependency_set()
+    {
+        using var origin = Fix.MakeNode(118);
+        using var relay = Fix.MakeNode(119);
+        using var receiver = Fix.MakeNode(120);
+        Transport.MakeSession(origin, relay);
+        Assert.True(origin.WriteField(1, Fix.Rid(0x74), 0x100, new byte[] { 0x44 }));
+
+        var batch = origin.CreateDeltaBatch(relay.NodeId, 1)!;
+        var dependency = BatchId.From(Id(0xE1));
+        batch.Entries[0].CausalDeps.Add(dependency);
+        Assert.Equal(1, relay.ApplyBatch(batch, origin.NodeId).Applied);
+        Assert.Equal(new[] { dependency }, Assert.Single(relay.Outbox[1]).CausalDeps);
+
+        Transport.MakeSession(relay, receiver);
+        var forwarded = relay.CreateDeltaBatch(receiver.NodeId, 1)!;
+        Assert.Equal(new[] { dependency }, Assert.Single(forwarded.Entries).CausalDeps);
+        var decoded = receiver.DecodeBatchPayloadCausal(relay.EncodeBatchPayloadCausal(forwarded));
+        Assert.Equal(new[] { dependency }, Assert.Single(decoded.Entries).CausalDeps);
+    }
+
+    [Fact]
     public void Persistence_v5_seen_changes_migrate_to_explicit_unknown_global_fingerprints()
     {
         var peer = NodeId.From(Id(0x81));
