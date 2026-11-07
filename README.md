@@ -7,6 +7,8 @@ Compact binary sync protocol (BIN-SYNC CORE) and a .NET 10 reference implementat
 | Spec (v2.4.17) | [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt) |
 | Historical addendum (v2.3.7) | [BIN-SYNC-v2.3.7-ADDENDUM.txt](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [docs/PRODUCTION-STATUS.md](docs/PRODUCTION-STATUS.md) |
+| Metadata storage / external provider architecture | [docs/METADATA-STORAGE-ARCHITECTURE.md](docs/METADATA-STORAGE-ARCHITECTURE.md) |
+| FLD-DB synchronized-database contract | [docs/FLD-DB-INTEGRATION-CONTRACT.md](docs/FLD-DB-INTEGRATION-CONTRACT.md) |
 | Public API surface (3.0.0) | [docs/PUBLIC-API.md](docs/PUBLIC-API.md) |
 | Changelog | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
 | License | [LICENSE.md](LICENSE.md) |
