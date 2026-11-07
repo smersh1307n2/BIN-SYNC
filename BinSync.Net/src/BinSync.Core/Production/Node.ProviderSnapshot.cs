@@ -23,11 +23,24 @@ public sealed partial class Node
         {
             ThrowIfDisposed();
             var restored = new Dictionary<RecordId, Record>();
+            var seenFields = new HashSet<(RecordId RecordId, ushort FieldId)>();
+            var seenRecordTombstones = new HashSet<RecordId>();
             foreach (var mutation in mutations)
             {
                 if (mutation is null || mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero ||
                     mutation.Value is null)
                     throw new InvalidDataException("Provider snapshot contains an invalid mutation identity.");
+                if (mutation.IsRecordTombstone)
+                {
+                    if (!seenRecordTombstones.Add(mutation.RecordId))
+                        throw new InvalidDataException("Provider snapshot contains duplicate record lifecycle rows.");
+                }
+                else
+                {
+                    if (mutation.FieldId == Model.LifecycleFieldId ||
+                        !seenFields.Add((mutation.RecordId, mutation.FieldId)))
+                        throw new InvalidDataException("Provider snapshot contains a reserved or duplicate field row.");
+                }
                 if (mutation.IsRecordTombstone &&
                     (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
                      mutation.KeyEpoch != 0 || mutation.Value.Length != 0))
