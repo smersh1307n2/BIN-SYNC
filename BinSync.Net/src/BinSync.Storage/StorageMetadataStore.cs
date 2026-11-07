@@ -894,6 +894,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         if (string.IsNullOrWhiteSpace(scopeId)) throw new ArgumentException("ScopeId is required.", nameof(scopeId));
         if (localReplica.IsZero || peer.IsZero || authorStream.IsZero)
             throw new ArgumentException("Replica, peer and author identities must be non-zero.");
+        if (peer == localReplica || peer == authorStream)
+            throw new ArgumentException("A replica cannot register itself or the author as a downstream interested peer.");
         if ((uint)namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
     }
 
