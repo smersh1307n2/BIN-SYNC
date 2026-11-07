@@ -33,6 +33,7 @@ public interface IMetadataStore : IDisposable
 public interface IMetadataStoreSnapshot : IDisposable
 {
     ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId);
+    ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream);
     ulong GetRelayHighWatermark(int namespaceId, NodeId originalAuthor);
     ulong GetOutboundHighWatermark(int namespaceId, NodeId localAuthor);
     MetadataRelayPage ReadRelay(int namespaceId, NodeId originalAuthor, ulong afterSequence, int limit);
@@ -57,6 +58,8 @@ public sealed class MetadataIncomingBatch
     public required NodeId LocalReplica { get; init; }
     public required NodeId SenderPeer { get; init; }
     public required uint SenderEpoch { get; init; }
+    /// <summary>Original author stream carried by this batch; cursors are independent per author.</summary>
+    public NodeId AuthorStreamNodeId { get; init; }
     public required int NamespaceId { get; init; }
     public required BatchId BatchId { get; init; }
     public required ulong CursorStart { get; init; }
