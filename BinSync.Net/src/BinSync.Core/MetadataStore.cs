@@ -86,7 +86,11 @@ public sealed class MetadataIncomingBatch
 }
 
 public sealed record MetadataBatchReceipt(ulong CursorStart, ulong CursorEnd, byte[] BatchDigest,
-    int NewRelayOperationCount, bool IsDuplicate);
+    int NewRelayOperationCount, bool IsDuplicate)
+{
+    /// <summary>Original author resolved from the accepted batch; never trust a replay-supplied value.</summary>
+    public NodeId DurableAuthor { get; init; }
+}
 public sealed record MetadataRelayItem(ulong Sequence, NodeId OriginalAuthor, BatchId ChangeId, byte[] Payload);
 public sealed record MetadataRelayPage(IReadOnlyList<MetadataRelayItem> Items, ulong ScannedThroughSequence);
 public sealed class MetadataFrozenOperation
