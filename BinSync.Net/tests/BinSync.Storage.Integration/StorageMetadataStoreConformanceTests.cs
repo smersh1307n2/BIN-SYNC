@@ -663,6 +663,13 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Directory.CreateDirectory(directory);
         const string scope = "header-fingerprint-receipt";
         NodeId local = Node(81), sender = Node(82), author = Node(83);
+        static byte[] Fingerprint(byte seed)
+        {
+            var bytes = new byte[16];
+            bytes[15] = seed;
+            return bytes;
+        }
+
         var batch = new MetadataIncomingBatch
         {
             ScopeId = scope,
@@ -671,21 +678,21 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             SenderEpoch = 3,
             AuthorStreamNodeId = author,
             NamespaceId = 9,
-            BatchId = BatchId.From(Bytes(84)),
+            BatchId = Batch(84),
             CursorStart = 1,
             CursorEnd = 1,
-            PreviousBatchDigest = Bytes(0),
-            BatchDigest = Bytes(85),
-            HeaderFingerprint = Bytes(86),
+            PreviousBatchDigest = Fingerprint(0),
+            BatchDigest = Fingerprint(85),
+            HeaderFingerprint = Fingerprint(86),
             ReceiveStateOwnedByMetadataStore = true,
             Operations = new[]
             {
                 new MetadataOperation
                 {
                     AuthorNodeId = author,
-                    ChangeId = BatchId.From(Bytes(87)),
-                    Fingerprint = Bytes(88),
-                    Payload = Bytes(89),
+                    ChangeId = Batch(87),
+                    Fingerprint = Fingerprint(88),
+                    Payload = new byte[] { 89 },
                     RelayEligible = false
                 }
             }
@@ -703,7 +710,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             CursorEnd = batch.CursorEnd,
             PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
-            HeaderFingerprint = Bytes(90),
+            HeaderFingerprint = Fingerprint(90),
             ReceiveStateOwnedByMetadataStore = true,
             Operations = batch.Operations
         };
