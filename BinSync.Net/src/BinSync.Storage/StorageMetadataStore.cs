@@ -572,17 +572,22 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
             bool hasPrior = current.PeerStreams.TryGetValue(key, out existing);
             var prior = hasPrior ? existing! : EmptyPeerStreamValue();
-            if (!hasPrior && reservation.CursorStart > 1)
+            if (!hasPrior)
             {
-                // One-time bootstrap from the already durable Node checkpoint. Once this
-                // row exists, Metadata Store progress is authoritative for this stream.
+                // One-time bootstrap from the already durable Node checkpoint. This
+                // carries the peer-relative cursor, digest chain and snapshot offset.
                 prior = prior with
                 {
                     AckedCursor = reservation.CursorStart - 1,
                     PushedCursor = reservation.CursorStart - 1,
+                    StreamOffset = reservation.StreamOffset,
                     IssuerEpoch = reservation.IssuerEpoch,
                     LastBatchDigest = reservation.PreviousBatchDigest.ToArray()
                 };
+            }
+            else if (prior.StreamOffset != reservation.StreamOffset)
+            {
+                throw new InvalidDataException("Outbound reservation changed the durable snapshot stream offset.");
             }
             if (reservation.CursorStart != checked(prior.AckedCursor + 1))
                 throw new InvalidDataException("Outbound batch reservation is not contiguous with the durable peer ACK cursor.");
@@ -687,7 +692,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     private static MetadataOutboundBatchReservation CloneReservation(MetadataOutboundBatchReservation value)
         => new()
         {
-            BatchId = value.BatchId, IssuerEpoch = value.IssuerEpoch,
+            BatchId = value.BatchId, IssuerEpoch = value.IssuerEpoch, StreamOffset = value.StreamOffset,
             CursorStart = value.CursorStart, CursorEnd = value.CursorEnd,
             PreviousBatchDigest = value.PreviousBatchDigest.ToArray(),
             BatchDigest = value.BatchDigest.ToArray(), Payload = value.Payload.ToArray()
@@ -1365,7 +1370,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     private static byte[] EncodePeerStreamState(PeerStreamStateValue state)
     {
         int payloadLength = state.PendingBatch?.Payload.Length ?? 0;
-        byte[] bytes = new byte[46 + (state.PendingBatch is null ? 0 : 72 + payloadLength)];
+        byte[] bytes = new byte[46 + (state.PendingBatch is null ? 0 : 80 + payloadLength)];
         bytes[0] = 1;
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(1), state.AckedCursor);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(9), state.PushedCursor);
@@ -1379,6 +1384,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             int offset = 46;
             pending.BatchId.WriteTo(bytes.AsSpan(offset)); offset += 16;
             BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(offset), pending.IssuerEpoch); offset += 4;
+            BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(offset), pending.StreamOffset); offset += 8;
             BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(offset), pending.CursorStart); offset += 8;
             BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(offset), pending.CursorEnd); offset += 8;
             pending.PreviousBatchDigest.CopyTo(bytes, offset); offset += 16;
@@ -1404,10 +1410,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             RequireLength(bytes, 46);
             return new PeerStreamStateValue(acked, pushed, streamOffset, stateIssuerEpoch, digest, null);
         }
-        if (bytes.Length < 118) throw new InvalidDataException("Stored peer batch reservation is truncated.");
+        if (bytes.Length < 126) throw new InvalidDataException("Stored peer batch reservation is truncated.");
         int offset = 46;
         var batchId = BatchId.From(bytes.AsSpan(offset, 16)); offset += 16;
         uint reservationIssuerEpoch = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(offset)); offset += 4;
+        ulong reservationStreamOffset = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(offset)); offset += 8;
         ulong cursorStart = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(offset)); offset += 8;
         ulong cursorEnd = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(offset)); offset += 8;
         byte[] previous = bytes.AsSpan(offset, 16).ToArray(); offset += 16;
@@ -1415,12 +1422,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         int payloadLength = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset)); offset += 4;
         if (payloadLength <= 0 || bytes.Length != offset + payloadLength ||
             batchId.IsZero || cursorStart == 0 || cursorEnd < cursorStart ||
-            cursorStart != checked(acked + 1) || reservationIssuerEpoch != stateIssuerEpoch ||
+            cursorStart != checked(acked + 1) || reservationIssuerEpoch != stateIssuerEpoch || reservationStreamOffset != streamOffset ||
             !previous.AsSpan().SequenceEqual(digest))
             throw new InvalidDataException("Stored peer batch reservation is inconsistent.");
         var pending = new MetadataOutboundBatchReservation
         {
-            BatchId = batchId, IssuerEpoch = reservationIssuerEpoch, CursorStart = cursorStart, CursorEnd = cursorEnd,
+            BatchId = batchId, IssuerEpoch = reservationIssuerEpoch, StreamOffset = reservationStreamOffset, CursorStart = cursorStart, CursorEnd = cursorEnd,
             PreviousBatchDigest = previous, BatchDigest = batchDigest,
             Payload = bytes.AsSpan(offset, payloadLength).ToArray()
         };
