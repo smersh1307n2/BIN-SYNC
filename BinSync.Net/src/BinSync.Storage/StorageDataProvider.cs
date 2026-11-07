@@ -280,13 +280,12 @@ public class StorageDataProvider : IDataProvider
             if (mutations.Count == 0)
                 throw new ArgumentException("Remote batch must not be empty.", nameof(mutations));
 
-            var seen = new HashSet<(RecordId, ushort)>();
+            // A single BIN-SYNC batch may contain several immutable operations
+            // for one field (for example, multiple commits before the next sync).
+            // Keep all operations in the receipt fingerprint; the LWW comparison below
+            // folds them into one current value without losing batch identity.
             foreach (var mutation in mutations)
-            {
                 ValidateMutation(mutation);
-                if (!seen.Add((mutation.RecordId, mutation.FieldId)))
-                    throw new InvalidDataException("Remote batch contains duplicate canonical field keys.");
-            }
 
             byte[] fingerprint = Fingerprint(mutations);
             byte[] receiptKey = Prefixed(ApplyReceipt, applyToken.ToByteArray());
