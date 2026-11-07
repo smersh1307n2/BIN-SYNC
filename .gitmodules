@@ -1,4 +1,0 @@
-[submodule "external/FLD-DB"]
-	path = external/FLD-DB
-	url = https://github.com/smersh1307n2/FLD-DB.git
-	branch = fix/crash-consistency-outbox
