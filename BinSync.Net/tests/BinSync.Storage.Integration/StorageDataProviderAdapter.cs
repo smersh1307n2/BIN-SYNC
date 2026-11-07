@@ -20,6 +20,7 @@ public sealed class StorageDataProviderAdapter : IDataProviderConformanceAdapter
     private const byte LocalChange = 0x20;
     private const byte LocalHighWatermark = 0x21;
     private const byte LocalAckWatermark = 0x22;
+    private const byte LocalReadWatermark = 0x23;
     private const byte ApplyReceipt = 0x30;
 
     private readonly object _gate = new();
@@ -137,8 +138,9 @@ public sealed class StorageDataProviderAdapter : IDataProviderConformanceAdapter
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
             ulong high = ReadUInt64(_storage, [LocalHighWatermark]);
             ulong acked = ReadUInt64(_storage, [LocalAckWatermark]);
-            if (afterSequence > high)
-                throw new InvalidDataException("Requested local change cursor is beyond the durable high watermark.");
+            ulong highestRead = ReadUInt64(_storage, [LocalReadWatermark]);
+            if (afterSequence > highestRead)
+                throw new InvalidDataException("Requested local change cursor skips changes that have not been scanned.");
 
             ulong start = Math.Max(afterSequence, acked);
             using var snapshot = _storage.OpenSnapshot();
@@ -151,6 +153,13 @@ public sealed class StorageDataProviderAdapter : IDataProviderConformanceAdapter
             }
 
             ulong scanned = changes.Count == limit ? changes[^1].Sequence : high;
+            if (scanned > highestRead)
+            {
+                using var cursorBatch = _storage.BeginWriteBatch();
+                cursorBatch.Put([LocalReadWatermark], EncodeUInt64(scanned));
+                cursorBatch.Commit();
+            }
+
             return new ProviderChangePage(changes, scanned);
         }
     }
@@ -162,7 +171,8 @@ public sealed class StorageDataProviderAdapter : IDataProviderConformanceAdapter
             ThrowIfDisposed();
             ulong high = ReadUInt64(_storage, [LocalHighWatermark]);
             ulong acked = ReadUInt64(_storage, [LocalAckWatermark]);
-            if (safeThroughSequence > high)
+            ulong highestRead = ReadUInt64(_storage, [LocalReadWatermark]);
+            if (safeThroughSequence > high || safeThroughSequence > highestRead)
                 throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
             if (safeThroughSequence <= acked) return;
 
