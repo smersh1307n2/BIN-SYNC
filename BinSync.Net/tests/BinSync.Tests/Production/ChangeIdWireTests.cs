@@ -182,7 +182,7 @@ public class ChangeIdWireTests
         var replay = c.ApplyBatchPayload(originalPayload, a.NodeId);
         Assert.Equal(0, replay.Applied);
         Assert.Single(c.Outbox[1]);
-        Assert.Equal(1, c.GlobalChangeLedger.Count);
+        Assert.Single(c.GlobalChangeLedger);
         Assert.True(a.GlobalChangeLedger.ContainsKey((1, changeId)));
         Assert.True(b.GlobalChangeLedger.ContainsKey((1, changeId)));
     }
