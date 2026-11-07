@@ -202,6 +202,53 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void ChangeIdentity_fingerprint_is_alias_independent_but_covers_all_semantic_inputs()
+    {
+        var author = Fix.Nid(129);
+        var recordId = Fix.Rid(130);
+        var depA = BatchId.From(Id(0xA9));
+        var depB = BatchId.From(Id(0xAA));
+        var first = new OpFieldWrite
+        {
+            FieldId = 0x1234, KeyEpoch = 7, Wall = 123456, Logical = 9,
+            Origin = 1, Value = new byte[] { 1, 2, 3 }
+        };
+        var second = new OpFieldWrite
+        {
+            FieldId = 0x1234, KeyEpoch = 7, Wall = 123456, Logical = 9,
+            Origin = 37, Value = new byte[] { 1, 2, 3 }
+        };
+
+        var fingerprint = ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
+            first, author, new[] { depA, depB, depA });
+        Assert.Equal(fingerprint, ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
+            second, author, new[] { depB, depA }));
+
+        Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
+            second, Fix.Nid(131), new[] { depA, depB }));
+        var changedKeyEpoch = new OpFieldWrite
+        {
+            FieldId = 0x1234, KeyEpoch = 8, Wall = 123456, Logical = 9,
+            Origin = 37, Value = new byte[] { 1, 2, 3 }
+        };
+        Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
+            changedKeyEpoch, author, new[] { depA, depB }));
+        var changedValue = new OpFieldWrite
+        {
+            FieldId = 0x1234, KeyEpoch = 7, Wall = 123456, Logical = 9,
+            Origin = 37, Value = new byte[] { 1, 2, 4 }
+        };
+        Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
+            changedValue, author, new[] { depA, depB }));
+        Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(6, recordId, OpsConst.TagFieldWrite,
+            second, author, new[] { depA, depB }));
+        Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(5, Fix.Rid(132), OpsConst.TagFieldWrite,
+            second, author, new[] { depA, depB }));
+        Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
+            second, author, new[] { depA }));
+    }
+
+    [Fact]
     public void Global_ChangeId_reuse_with_different_operation_is_rejected_atomically()
     {
         using var a = Fix.MakeNode(114);
