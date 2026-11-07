@@ -178,7 +178,7 @@ public class StorageMetadataStore : IMetadataStore
     private static MetadataBatchReceipt ApplyIncomingBatch(PartitionState next, MetadataIncomingBatch batch)
     {
         var receiptKey = new ReceiptKey(
-            batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId);
+            batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId, ResolveAuthorStream(batch));
         if (next.Receipts.TryGetValue(receiptKey, out var priorReceipt))
         {
             if (!priorReceipt.Matches(batch))
@@ -830,11 +830,12 @@ public class StorageMetadataStore : IMetadataStore
 
         foreach (var pair in state.Receipts)
         {
-            byte[] suffix = new byte[38];
+            byte[] suffix = new byte[54];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
             pair.Key.BatchId.WriteTo(suffix.AsSpan(22));
+            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(38));
             byte[] value = new byte[52];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorStart);
             BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), pair.Value.CursorEnd);
@@ -955,12 +956,14 @@ public class StorageMetadataStore : IMetadataStore
                     break;
                 case 1:
                 {
-                    RequireLength(key, 38);
+                    if (key.Length is not (38 or 54))
+                        throw new InvalidDataException("Metadata receipt key has an invalid length.");
                     RequireLength(row.Value, 52);
                     var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                        BatchId.From(key.Slice(22, 16)));
+                        BatchId.From(key.Slice(22, 16)),
+                        key.Length == 54 ? NodeId.From(key.Slice(38, 16)) : default);
                     state.Receipts.Add(receiptKey, new ReceiptValue(
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
@@ -1385,7 +1388,7 @@ public class StorageMetadataStore : IMetadataStore
     }
 
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
-    private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
+    private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId, NodeId AuthorStream);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
