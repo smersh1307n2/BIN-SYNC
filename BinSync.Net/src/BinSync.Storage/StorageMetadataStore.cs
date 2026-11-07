@@ -628,10 +628,28 @@ public class StorageMetadataStore : IMetadataStore
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
-        return state.Receives.TryGetValue(new ReceiveKey(sender, senderEpoch, namespaceId), out var receive)
-            ? receive.CursorEnd
-            : 0;
+        ulong cursor = 0;
+        foreach (var pair in state.Receives)
+            if (pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
+                pair.Key.NamespaceId == namespaceId && pair.Value.CursorEnd > cursor)
+                cursor = pair.Value.CursorEnd;
+        return cursor;
     
+        }
+    }
+
+    public ulong GetReceiveCursor(
+        string scopeId, NodeId localReplica, NodeId sender, uint senderEpoch,
+        int namespaceId, NodeId authorStream)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return 0;
+            return state.Receives.TryGetValue(
+                new ReceiveKey(sender, senderEpoch, namespaceId, authorStream), out var receive)
+                ? receive.CursorEnd : 0;
         }
     }
 
@@ -1267,9 +1285,20 @@ public class StorageMetadataStore : IMetadataStore
         public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId)
         {
             var state = GetState();
-            return state.Receives.TryGetValue(new ReceiveKey(sender, senderEpoch, namespaceId), out var receive)
-                ? receive.CursorEnd
-                : 0;
+            ulong cursor = 0;
+            foreach (var pair in state.Receives)
+                if (pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
+                    pair.Key.NamespaceId == namespaceId && pair.Value.CursorEnd > cursor)
+                    cursor = pair.Value.CursorEnd;
+            return cursor;
+        }
+
+        public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream)
+        {
+            var state = GetState();
+            return state.Receives.TryGetValue(
+                new ReceiveKey(sender, senderEpoch, namespaceId, authorStream), out var receive)
+                ? receive.CursorEnd : 0;
         }
 
         public ulong GetRelayHighWatermark(int namespaceId, NodeId originalAuthor)
