@@ -8,16 +8,22 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage.Integration;
 
 /// <summary>
-/// Volatile reference adapter for the semantic conformance suite. It is deliberately
-/// test-only and makes no restart-durability claim.
+/// Durable Storage-backed adapter for the test-only Metadata Store conformance contract.
+/// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
 public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapter
 {
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
     private readonly StorageDatabase _storage;
+    private readonly string _directory;
+    private readonly bool _deleteOnDispose;
 
-    public StorageMetadataStoreAdapter(string directory, ulong partitionId = 301)
-        => _storage = StorageDatabase.Open(directory, partitionId);
+    public StorageMetadataStoreAdapter(string directory, ulong partitionId = 301, bool deleteOnDispose = true)
+    {
+        _directory = directory;
+        _deleteOnDispose = deleteOnDispose;
+        _storage = StorageDatabase.Open(directory, partitionId);
+    }
 
     public bool SupportsRestartDurability => true;
 
@@ -574,6 +580,11 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
     {
         _storage.Dispose();
         _partitions.Clear();
+        if (_deleteOnDispose)
+        {
+            try { Directory.Delete(_directory, recursive: true); }
+            catch { /* isolated test directory cleanup */ }
+        }
     }
 
 
