@@ -161,8 +161,8 @@ public class ChangeIdWireTests
         Transport.MakeSession(a, b);
         Assert.True(a.WriteField(1, Fix.Rid(0x71), 0x100, new byte[] { 0xCA, 0xFE }));
         var original = a.CreateDeltaBatch(b.NodeId, 1)!;
-        a.SignBatchFor(original, b.NodeId);
         ForceFullAuthor(original, a.NodeId);
+        a.SignBatchFor(original, b.NodeId);
         var originalPayload = a.EncodeBatchPayload(original);
 
         var acceptedByB = b.ApplyBatchPayload(originalPayload, a.NodeId);
