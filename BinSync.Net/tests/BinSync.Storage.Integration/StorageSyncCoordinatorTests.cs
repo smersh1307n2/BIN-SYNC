@@ -86,6 +86,56 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Durable_push_materializes_metadata_without_mutating_node_outbox_before_ack()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-materialization-isolated"), 433);
+        using var metadata = new StorageMetadataStore(storage);
+        using var provider = new StorageDataProvider(storage);
+        using var sender = NewNode(34);
+        using var receiver = NewNode(35);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        const string scope = "metadata-materialization-isolated";
+        var coordinator = new StorageSyncCoordinator(sender, provider, 1, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("34000000-0000-0000-0000-000000000034").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0102, AuthorNodeId = sender.NodeId,
+            HlcWall = 3400, Value = "metadata-source"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
+        coordinator.RegisterInterestedPeer(initiator, 1);
+        var before = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
+            .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray())).ToArray();
+
+        using var cts = new CancellationTokenSource();
+        var receive = acceptor.ReceiveBatchAsync(receiver, ct: CancellationToken.None,
+            beforeAck: (_, _) => throw new InvalidOperationException("stop before ACK"));
+        var push = initiator.PushBatchAsync(sender, 1, metadata, scope, ct: cts.Token);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await receive);
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await push);
+
+        var after = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
+            .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray())).ToArray();
+        Assert.Equal(before.Length, after.Length);
+        for (int i = 0; i < before.Length; i++)
+        {
+            Assert.Equal(before[i].Seq, after[i].Seq);
+            Assert.Equal(before[i].ChangeId, after[i].ChangeId);
+            Assert.Equal(before[i].Payload, after[i].Payload);
+        }
+        var state = metadata.GetPeerStreamState(scope, sender.NodeId,
+            receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId);
+        Assert.Equal(1UL, state.PushedCursor);
+        Assert.Equal(0UL, state.AckedCursor);
+        Assert.NotNull(state.PendingBatch);
+    }
+
+    [Fact]
     public async Task Durable_push_requires_snapshot_when_first_retained_outbound_sequence_is_not_one()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-push-snapshot-barrier"), 432);
@@ -151,20 +201,9 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 1000, HlcLogical = 0, Value = "first"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
-        var outboxBefore = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
-            .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray())).ToArray();
         var firstReceive = acceptor.ReceiveBatchAsync(receiver);
         Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, "durable-peer-session"));
         Assert.Equal(1, (await firstReceive).Applied);
-        var outboxAfter = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
-            .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray())).ToArray();
-        Assert.Equal(outboxBefore.Length, outboxAfter.Length);
-        for (int i = 0; i < outboxBefore.Length; i++)
-        {
-            Assert.Equal(outboxBefore[i].Seq, outboxAfter[i].Seq);
-            Assert.Equal(outboxBefore[i].ChangeId, outboxAfter[i].ChangeId);
-            Assert.Equal(outboxBefore[i].Payload, outboxAfter[i].Payload);
-        }
 
         var firstState = metadata.GetPeerStreamState("durable-peer-session", sender.NodeId,
             receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId);
