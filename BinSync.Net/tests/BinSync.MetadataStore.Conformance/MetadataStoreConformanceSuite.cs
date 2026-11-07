@@ -238,6 +238,26 @@ public abstract class MetadataStoreConformanceSuite
     }
 
     [Fact]
+    public void Outbound_freeze_exact_retry_returns_original_sequences_without_appending()
+    {
+        using var store = CreateStore();
+        var batch = new[] { FrozenOperation(30, 50), FrozenOperation(31, 51) };
+
+        var first = store.FreezeOutbound("scope-a", Node(1), 7, Node(20), batch);
+        var retry = store.FreezeOutbound("scope-a", Node(1), 7, Node(20), batch);
+
+        Assert.Equal(new ulong[] { 1, 2 }, first.Select(item => item.Sequence));
+        Assert.Equal(first.Select(item => item.Sequence), retry.Select(item => item.Sequence));
+        Assert.Equal(first.Select(item => item.ChangeId), retry.Select(item => item.ChangeId));
+        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+
+        Assert.Throws<InvalidDataException>(() =>
+            store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+                new[] { FrozenOperation(30, 50), FrozenOperation(32, 52) }));
+        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+    }
+
+    [Fact]
     public void Outbound_streams_are_partitioned_by_namespace_and_author()
     {
         using var store = CreateStore();
