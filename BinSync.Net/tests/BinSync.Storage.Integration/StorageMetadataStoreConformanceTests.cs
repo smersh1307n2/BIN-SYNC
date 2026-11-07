@@ -218,11 +218,15 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             scope, local, peer, 1, 7, author, Batch(50), 2, reservation.BatchDigest));
         Assert.Throws<InvalidDataException>(() => store.AcknowledgeOutboundBatch(
             scope, local, peer, 1, 7, author, Batch(50), 2, Enumerable.Repeat((byte)99, 16).ToArray()));
+
+        store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, author, Batch(50));
+        store.AcknowledgeOutboundBatch(scope, local, peer, 1, 7, author,
+            Batch(50), 2, reservation.BatchDigest);
         Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
             new MetadataOutboundBatchReservation
             {
-                BatchId = Batch(52), CursorStart = 3, CursorEnd = 3,
-                PreviousBatchDigest = new byte[16],
+                BatchId = Batch(52), CursorStart = 4, CursorEnd = 4,
+                PreviousBatchDigest = reservation.BatchDigest.ToArray(),
                 BatchDigest = Enumerable.Repeat((byte)53, 16).ToArray(),
                 Payload = new byte[] { 2 }
             }));
