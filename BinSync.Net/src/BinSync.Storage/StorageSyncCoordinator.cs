@@ -155,12 +155,10 @@ public sealed class StorageSyncCoordinator
         => ApplyRemoteFieldsCore(fields, applyToken: null);
 
     /// <summary>
-    /// Materializes only the field keys carried by an accepted BIN-SYNC batch.
-    /// The apply token is derived from the immutable batch identity, not the receiver's
-    /// current winners, so replay remains idempotent even if later batches have advanced
-    /// one or more of the same fields.
-    /// Whole-record tombstones are rejected until the provider contract has a durable
-    /// record-level tombstone representation; they must never be silently treated as fields.
+    /// Materializes exact immutable FieldWrite, FieldTomb and RecordTombstone operations
+    /// carried by an accepted BIN-SYNC batch. The apply token is derived from the
+    /// immutable batch identity, not the receiver's current winners, so replay remains
+    /// idempotent even if later batches have advanced one or more of the same fields.
     /// </summary>
     public ProviderApplyReceipt? ApplyRemoteBatch(Batch batch)
     {
@@ -255,6 +253,20 @@ public sealed class StorageSyncCoordinator
             }
             return providerReceipt;
         }
+    }
+
+    /// <summary>
+    /// Complete the receiver-side durability sequence for a pre-ACK callback:
+    /// checkpoint Node, commit provider state and finalize Metadata Store PendingApply.
+    /// The caller may ACK the sender only after this method returns successfully.
+    /// </summary>
+    public ProviderApplyReceipt? ApplyRemoteBatchBeforeAck(
+        Batch batch, Action<Node> persistNode)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        persistNode(_node);
+        return ApplyRemoteBatch(batch);
     }
 
     /// <summary>Recover pending provider commits after restart before accepting new sync work.</summary>
