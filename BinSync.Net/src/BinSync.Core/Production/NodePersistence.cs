@@ -2,12 +2,12 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v3", in-tree Blake3Core, zero dependencies). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v6", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
 //    half-written state file.
-//  * Consistency — SerializeBody holds the node's re-entrant gate (_gate) so the
+//  * Consistency — SerializeBody holds Storage → Outbox → Meta gates so the
 //    image is a point-in-time snapshot even while other threads mutate the node.
 //
 // Persisted state mirrors every field of BinSync.Node:
@@ -16,7 +16,7 @@
 //  per-(author,ns) outbox seq counters, Inbox idempotency set, LastBatchDigest and
 //  LastStreamDigest chain checkpoints, AliasToNode/NodeToAlias, DurableAuthors,
 //  InboxAuthors (accepted batch -> durable author), PeerStates (cursors + ReceivedStreams/StreamAcked/StreamPushed/Ids caches), SeenChanges,
-//  LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
+//  GlobalChangeLedger (namespace + ChangeId -> canonical semantic fingerprint), LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
 //
 // Wire format: big-endian header (magic/version/bodyLen/digest), LE canonical body
 // written with the core Writer/Reader codec (varint-prefixed byte keys keep content
