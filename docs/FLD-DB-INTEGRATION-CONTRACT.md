@@ -77,7 +77,7 @@ JournalSeq is global to the namespace ApplyJournal and is not interchangeable wi
 
 The adapter must atomically persist the returned page's relay operations/provenance and its `ScannedThroughJournalSeq` before advancing the scan cursor. It must durably preserve the provenance mapping from each relay-selected ChangeId to its source JournalSeq and to the local BIN-SYNC OutboxSeq assigned when the operation is republished. This mapping must survive restart; it cannot be reconstructed from current field winners because relay-eligible LWW losers may no longer be visible in field state. A scan cursor is a read-progress marker only; it is not authorization to reclaim relay payload.
 
-`AcknowledgeRelay(author, safeThroughJournalSeq, lease)` may advance only to the largest contiguous source JournalSeq for which every relay operation for that author has been durably published and all interested downstream peers have validated ACKs covering the corresponding local Outbox entries. BIN-SYNC computes the minimum safe watermark across peers; FLD must not infer or calculate peer safety. The acknowledgement is per original author, not per immediate sender. If one source batch contains relay operations from multiple authors, each author's source payload can be released independently only after its own safe watermark covers that batch.
+`AcknowledgeRelay(author, safeThroughJournalSeq, lease)` maps to FLD's implemented `FldDatabase.AcknowledgeRelayBatches(author, safeThroughJournalSeq)`. It may advance only to the largest contiguous source JournalSeq for which every relay operation for that author has been durably published and all interested downstream peers have validated ACKs covering the corresponding local Outbox entries. BIN-SYNC computes the minimum safe watermark across peers; FLD must not infer or calculate peer safety. FLD persists the watermark immediately and hides those payloads from reads, but physical removal is deferred until a checkpoint has sealed and truncated the corresponding APPLY WAL commits. The acknowledgement is per original author, not per immediate sender. If one source batch contains relay operations from multiple authors, each author's source payload can be released independently only after its own safe watermark covers that batch.
 
 Never pass CommitSeq, OutboxSeq or a peer-relative ACK cursor as this API's JournalSeq. Consumed/read is not the same as durably acknowledged downstream.
 
@@ -147,8 +147,8 @@ Global ChangeId ledger — отдельное состояние BIN-SYNC, не 
 
 Оставшиеся ограничения:
 - Receipt metadata и relay payload всё ещё co-located в одном append-only ApplyJournal файле; физические retention lifetimes пока не независимы.
-- Нет публичного ACK/compaction/truncation API для relay payload.
-- List и BatchKey Dictionary по-прежнему растут с полной историей; bounded/rebuildable indexes ещё не реализованы.
+- FLD now exposes `AcknowledgeRelayBatches(author, safeThroughJournalSeq)`: it persists a per-author watermark; reads suppress acknowledged payload immediately, and physical compaction runs only after WAL seal/truncation. The BIN-SYNC adapter does not yet call it because source-to-Outbox provenance/min-ACK aggregation is not implemented.
+- BatchKey Dictionary still grows with receipt history; a disk-backed/rebuildable index and independent receipt GC are not implemented.
 - Receipt GC требует отдельного Inbox retry horizon; relay payload GC — минимального safe ACK всех interested downstream peers по каждому author stream. Эти watermark должен вычислять BIN-SYNC, а не FLD.
 
 Целевая модель:
