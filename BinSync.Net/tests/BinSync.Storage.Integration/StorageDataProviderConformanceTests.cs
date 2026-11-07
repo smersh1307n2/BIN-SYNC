@@ -81,4 +81,35 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+    [Fact]
+    public void Out_of_order_local_feed_keeps_current_value_at_the_lww_winner()
+    {
+        string directory = Path.Combine(_root, "lww-order");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProviderConformanceAdapter(directory, partitionId: 80, deleteOnDispose: false);
+            RecordId record = RecordId.From(new byte[] { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+            NodeId author = NodeId.From(new byte[] { 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record, FieldId = 0x0101, AuthorNodeId = author,
+                HlcWall = 200, Value = "newer"u8.ToArray()
+            });
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record, FieldId = 0x0101, AuthorNodeId = author,
+                HlcWall = 100, Value = "older"u8.ToArray()
+            });
+
+            Assert.True(provider.TryReadCurrent(record, 0x0101, out var current));
+            Assert.Equal("newer", System.Text.Encoding.UTF8.GetString(current!.Value));
+            Assert.Equal(2, provider.ReadLocalChanges(0, 10).Changes.Count);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
