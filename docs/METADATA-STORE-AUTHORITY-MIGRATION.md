@@ -168,7 +168,7 @@ The main remaining authority gaps are the durable initial snapshot/feed barrier 
 
 The previous implementation cloned every dictionary in the partition and rebuilt `StateEntries` for a single finalize. The new path is proportional to the incoming operation count plus the affected peer-stream registrations; it does not enumerate unrelated historical receipts, ChangeIds, relay entries or peer state. Pending ChangeId validation is separately O(pending operations + incoming operations), rather than rescanning all pending batches for every incoming operation.
 
-This is a structural complexity improvement, not a benchmark claim. Release evidence still requires measurements at increasing partition sizes (e.g. 10k / 100k / 1m ledger rows), reporting bytes written, allocations, p50/p95 latency and reopen time. The generic `PersistPartition` path remains in use for other state transitions and still performs whole-partition materialization/diffing; it is a separate optimization gate.
+This is a structural complexity improvement, not a benchmark claim. Release evidence still requires measurements at increasing partition sizes (e.g. 10k / 100k / 1m ledger rows), reporting bytes written, allocations, p50/p95 latency and reopen time. The generic `PersistPartition` path remains in use for other state transitions and still performs whole-partition materialization/diffing; it is a separate optimization gate. Relay/outbound ACK watermark updates and per-stream payload compaction now also use direct row-level write/delete batches instead of cloning and diffing the whole partition. These paths retain the same fail-closed safe-prefix checks and update the in-memory projection only after the Storage transaction commits.
 
 ## 9. Deterministic receive crash matrix
 
