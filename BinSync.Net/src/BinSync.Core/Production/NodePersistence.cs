@@ -757,7 +757,7 @@ public static class NodePersistence
             // v3-v5 only had route-scoped SeenChanges and no semantic fingerprint.
             // Preserve every historical identity conservatively as an explicit
             // unknown marker before dropping redundant remote peer provenance.
-            foreach (var (_, ns, changeId) in persistedLegacySeen ?? Enumerable.Empty<(NodeId Peer, int Ns, BatchId ChangeId)>())
+            foreach (var (_, ns, changeId) in persistedLegacySeen!)
                 n.GlobalChangeLedger.TryAdd((ns, changeId),
                     new ChangeLedgerValue(default, isKnown: false));
         }
