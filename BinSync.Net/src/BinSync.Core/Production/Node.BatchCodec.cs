@@ -172,10 +172,6 @@ public sealed partial class Node
         return DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)owned);
     }
 
-    /// <summary>Decode an incoming transport batch before any state mutation.</summary>
-    internal Batch DecodeBatchPayloadForTransport(byte[] data)
-        => DecodeBatchPayload(data);
-
     /// <summary>Decode from memory; returned entry slices are backed by one owned copy. Lock-free.</summary>
     public Batch DecodeBatchPayload(ReadOnlyMemory<byte> data)
     {
