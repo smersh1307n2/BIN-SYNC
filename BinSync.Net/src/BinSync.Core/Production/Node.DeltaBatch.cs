@@ -263,7 +263,7 @@ public sealed partial class Node
 
             ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
             return new OutboundBatchPayload(payload, batchId, stream, stream, namespaceId,
-                issuerEpoch, cursorStart, cursorEnd, previousDigest, batchDigest);
+                issuerEpoch, cursorStart, cursorEnd, (ulong)streamOffset, previousDigest, batchDigest);
             }
             finally
             {
@@ -815,12 +815,13 @@ internal readonly struct OutboundBatchPayload
     public int IssuerEpoch { get; }
     public long CursorStart { get; }
     public long CursorEnd { get; }
+    public ulong StreamOffset { get; }
     public Digest16 PreviousBatchDigest { get; }
     public Digest16 BatchDigest { get; }
 
     public OutboundBatchPayload(byte[] payload, BatchId batchId, NodeId authorStreamId,
         NodeId durableAuthor, int namespaceId, int issuerEpoch, long cursorStart,
-        long cursorEnd, Digest16 previousBatchDigest, Digest16 batchDigest)
+        long cursorEnd, ulong streamOffset, Digest16 previousBatchDigest, Digest16 batchDigest)
     {
         Payload = payload;
         BatchId = batchId;
@@ -830,6 +831,7 @@ internal readonly struct OutboundBatchPayload
         IssuerEpoch = issuerEpoch;
         CursorStart = cursorStart;
         CursorEnd = cursorEnd;
+        StreamOffset = streamOffset;
         PreviousBatchDigest = previousBatchDigest;
         BatchDigest = batchDigest;
     }
