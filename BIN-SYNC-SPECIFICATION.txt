@@ -1,4 +1,4 @@
-# BIN-SYNC CORE v2.4.19 FINAL
+# BIN-SYNC CORE v2.4.20 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
@@ -765,7 +765,15 @@ InboxReceipt {
 
 ### 10.2.1. Inbox GC
 
-Удаляется при: `expiresAt < now` И обе стороны подтвердили участок лога.
+`expiresAt` — только условие допуска к рассмотрению retention, но не доказательство безопасности удаления. Для удаления receipt необходимы одновременно:
+
+1. `expiresAt > 0` и `expiresAt < now`;
+2. durable per-author receive checkpoint и digest-chain checkpoint уже покрывают весь batch;
+3. отправитель явно подтвердил durable продвижение за этот batch так, что корректный sender больше не имеет права повторять его;
+4. старые сессии/эпохи, способные воспроизвести batch, fenced или обязаны пройти полный resync;
+5. после удаления receipt остаётся достаточно durable dedup/equivocation state, чтобы старый batch не мог быть применён как новый.
+
+Протокол v2.4.20 не определяет отдельный wire-level receipt-retention confirmation. Поэтому обычный ACK, локальное истечение времени, последующий batch или snapshot сами по себе не дают полной двусторонней гарантии для произвольного reconnect/replay. **Текущее нормативное поведение: Inbox receipt GC выключен; новые receipts используют `expiresAt=0` и удерживаются бессрочно.** Будущий GC требует отдельного protocol extension с явным checkpoint/fencing contract.
 
 ### 10.2.2. Потерянный ACK
 
@@ -781,23 +789,43 @@ InboxReceipt {
 
 ## 10.3. Peer state
 
+Peer membership/session state и author-stream progress — разные координаты:
+
 ```
-PeerState {
-    peerId, peerNodeId, namespaceId
-    lastPushedSeq, lastReceivedSeq, lastAckedSeq
+PeerSession {
+    peerNodeId, peerEpoch, namespaceId
     initialSyncComplete, membershipEpoch, lastSeen
+}
+
+PeerAuthorStream {
+    peerNodeId, peerEpoch, namespaceId, authorNodeId
+    ackedCursor, pushedCursor, localStreamOffset
+    lastBatchDigest
+    pendingImmutableBatch?   // at most one unacknowledged reservation
+}
+
+ReceiveAuthorStream {
+    senderNodeId, senderEpoch, namespaceId, authorNodeId
+    lastReceivedSeq
+}
+
+ReceiveDigestChain {
+    senderNodeId, senderEpoch, namespaceId
+    lastBatchDigest
 }
 ```
 
+Peer/session membership is not a substitute for author-specific cursors. A shared Outbox sequence is local and immutable; the peer's wire cursor is derived from its own ACK plus the proven local stream offset. A reservation is durable before send and is released only by its matching pushed ACK.
+
 ## 10.4. Range cursor
 
-Изменения от одного пира применяются строго в порядке `[cursorStart .. cursorEnd]`.
+Изменения одного author stream от одного пира применяются строго в порядке `[cursorStart .. cursorEnd]`.
 
-**Инвариант [S2]:** `cursorStart == lastReceivedSeq + 1`.
+**Инвариант [S2]:** `cursorStart == lastReceivedSeq(sender, epoch, namespace, authorStream) + 1`.
 
 ## 10.5. Коалесцирование
 
-Батч покрывает весь диапазон `[acked+1 .. currentSeq]`.
+Батч покрывает непрерывный диапазон `[ackedCursor+1 .. currentPeerCursor]` только для одного author stream. Нельзя объединять курсоры разных авторов в один scalar.
 
 ## 10.6. Резолв authorNodeId
 
@@ -813,9 +841,15 @@ Compact mode: `origin` → `authorNodeId` через `ALIAS_MAP`. Unknown → re
 
 ## 11.2. Watermark
 
+Safe retention is calculated independently for every `(namespaceId, authorNodeId)` stream:
+
 ```
-safeOutboxSeq = min(lastAckedSeq активных с initialSyncComplete)
+safeOutboxSeq[author] =
+    min(peer.ackedCursor[author] + peer.localStreamOffset[author])
+    over every durably interested peer whose initialSyncComplete baseline is committed
 ```
+
+An absent peer-stream row, unknown membership baseline, stale/unretired epoch or incomplete snapshot/feed barrier contributes zero and fails closed. A new peer joins the retention set only after its complete baseline is durably committed. A retired peer is excluded only after its old epoch is durably fenced. No interested-peer proof means no positive safe prefix.
 
 ## 11.3–11.4. Новый/ушедший член
 
@@ -1060,10 +1094,14 @@ Handshake → Discovery → Reconcile → Transfer → GC.
 ```
 applyBatch(batch):
     // ШАГ 1: Проверка идемпотентности (ПЕРЕД проверкой цепочки!)
-    if inbox.contains(batch.issuerNodeId, batch.namespaceId, 
-                      batch.issuerEpoch, batch.batchId):
-        // Повторная доставка — no-op, но ACK обязателен
-        send ACK(batch.batchId, batch.cursorEnd, 0, 0)
+    receipt = inbox.lookup(batch.issuerNodeId, batch.namespaceId,
+                            batch.issuerEpoch, batch.batchId)
+    if receipt exists:
+        if receipt.headerFingerprint is known and
+           receipt.headerFingerprint != fingerprint(batch.header):
+            reject BATCH_TRANSACTION_FAILED
+        // ACK uses the durable receipt, never replay-supplied cursor/author.
+        send ACK(batch.batchId, receipt.cursorEnd, 0, receipt.durableAuthor)
         return
     
     // ШАГ 2: Проверка курсора
@@ -1130,7 +1168,7 @@ createDeltaBatchPacket(targetPeerId, filterAuthorNodeId):
         // Трансляция псевдонима в пространство получателя
         targetOrigin = aliasMap[targetPeerId].getAlias(filterAuthorNodeId)
         if targetOrigin is None:
-            continue  // получатель не знает этого автора
+            reject the entire batch with UNKNOWN_ALIAS  // never skip and create a stream hole
         
         fieldOp = outboxEntry.payload.copy()
         fieldOp.origin = targetOrigin  // ПЕРЕЗАПИСЬ псевдонима
@@ -2497,3 +2535,16 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 **Текущая реализация:** `GcNotice.PurgeBelowCutoff` возвращает 0 и не удаляет live fields, field tombstones или record lifecycle tombstones. Это намеренный fail-closed behavior, а не завершённый GC.
 
 **Wire format:** без изменений. E-25 ужесточает интерпретацию существующего GC_NOTICE и запрещает небезопасное поведение; будущий durable frontier может потребовать отдельной protocol revision после определения полного handshake/ACK contract.
+
+
+## 10.7. Receipt identity and resolved author
+
+The durable Inbox idempotency key is exactly `(senderNodeId, senderEpoch, namespaceId, batchId)`. The resolved `authorNodeId` is a separate receive-stream coordinate and MUST NOT be appended to the receipt key: otherwise the same BatchId could create multiple receipts by changing the resolved author. The receipt commitment validates the batch header; per-author receive progress is updated only on first acceptance.
+
+## 11.9. Per-author retention and receipt separation
+
+Outbox/relay payload compaction, Inbox receipt retention, ChangeId dedup retention and tombstone reclamation are independent horizons. A peer ACK may authorize a contiguous payload prefix only. It MUST NOT delete Inbox receipts, ChangeId fingerprints, provider idempotency tokens or tombstones. In the absence of a durable protocol-defined checkpoint for one of those domains, retain the corresponding metadata (fail closed).
+
+## 13.7. Relay alias failure atomicity
+
+If any retained relay operation's original author has no alias in the target session, the sender MUST fail the complete batch with `UNKNOWN_ALIAS`; it MUST NOT silently skip the operation. Skipping would create an author-stream sequence hole and make later cursor continuity impossible.
