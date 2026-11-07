@@ -15,6 +15,11 @@ public interface IMetadataPeerStateStore
     /// fail-closed: a newly registered peer starts at the supplied proven baseline,
     /// or at cursor zero when no snapshot baseline is supplied.
     /// </summary>
+    void RegisterInterestedPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId);
+    IReadOnlyList<MetadataInterestedPeer> ReadInterestedPeers(
+        string scopeId, NodeId localReplica, int namespaceId);
+
     void RegisterInterestedPeerStream(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         ulong baselineAckedCursor, ulong streamOffset, uint issuerEpoch, byte[] lastBatchDigest);
@@ -67,6 +72,8 @@ public interface IMetadataPeerStateStore
 
 /// <summary>Compact durable progress for one peer/epoch/namespace/author stream.</summary>
 public sealed record MetadataPeerStreamSnapshot(NodeId AuthorStream, MetadataPeerStreamState State);
+
+public sealed record MetadataInterestedPeer(NodeId Peer, uint PeerEpoch, int NamespaceId);
 
 public sealed record MetadataPeerStreamState(
     ulong AckedCursor,
