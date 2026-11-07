@@ -733,3 +733,18 @@ The focused tests verify that alias changes do not change a fingerprint while au
 ## 33. Tombstone GC remains disabled by E-25
 
 A tombstone is part of replicated database semantics, not disposable Storage-layer metadata. E-25 clarifies that `TOMBSTONE_MIN_TTL` is only an age threshold and `GC_NOTICE.TombstoneCutoffWall` is advisory; neither authorizes deletion. A future safe GC needs a durable namespace frontier covering all relevant author streams, confirmed baseline by every current peer, fencing and full resync for stale peers, and one atomic snapshot/feed barrier. Until that protocol is fully implemented and enforced before every incremental and snapshot apply path, field tombstones, record lifecycle tombstones and ghost state must remain durable. The current BIN-SYNC helper is intentionally a no-op. E-25 and the fail-closed helper passed GitHub Actions run [42355154761](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42355154761), including 609 .NET 10 tests and fuzz/lab hardening.
+
+
+## 10. Tombstone retention research and E-25
+
+The cross-project research note is maintained in FLD-DB: [Tombstone Retention and Safe Garbage Collection](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/TOMBSTONE-RETENTION-RESEARCH.md).
+
+The note compares Microsoft Sync Framework ForgottenKnowledge, WinFS P2P knowledge summaries, CRDT causal stability/commitment, Cassandra tombstone grace periods, CouchDB purge checkpoints and Couchbase Sync Gateway retention. Its design recommendation preserves E-25:
+
+- TTL/HLC age is never sufficient to delete a tombstone.
+- Tombstone payload, relay payload, global ChangeId ledger, Inbox receipts and forgotten-frontier/GC-epoch metadata have independent retention conditions.
+- Safe tombstone reclamation requires a durable namespace membership baseline, explicit stale-peer fencing, mandatory full resync/bootstrap, contiguous processed ACK plus exact provenance, and an atomic snapshot/feed barrier.
+- A compact forgotten frontier must survive individual tombstone removal; local OutboxSeq/JournalSeq/CommitSeq values must not be treated as globally comparable origin sequence numbers.
+- Until all receive, reconcile and snapshot paths enforce these conditions, destructive tombstone GC remains disabled.
+
+This is a research-backed design proposal, not an implementation or wire-format change. No OriginSeq extension or ChangeId-generation change is approved by this note.
