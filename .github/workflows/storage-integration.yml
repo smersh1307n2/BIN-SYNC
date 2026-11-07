@@ -11,6 +11,7 @@ on:
       - "BinSync.Net/src/BinSync.Core/**"
       - "BinSync.Net/src/BinSync.Storage/**"
       - "samples/StorageArraySync/**"
+      - "samples/StorageArrayTcpSync/**"
   pull_request:
     paths:
       - "external/Fld1.Storage/**"
@@ -42,6 +43,8 @@ jobs:
         run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --logger "console;verbosity=detailed" --logger "trx;LogFileName=storage-integration.trx"
       - name: Run durable array synchronization sample
         run: dotnet run --project samples/StorageArraySync/StorageArraySync.csproj --configuration Release
+      - name: Run Storage-backed TCP array synchronization sample
+        run: dotnet run --project samples/StorageArrayTcpSync/StorageArrayTcpSync.csproj --configuration Release
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
