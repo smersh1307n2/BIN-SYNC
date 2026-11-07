@@ -12,6 +12,7 @@ namespace BinSync.Storage;
 /// </summary>
 public class StorageMetadataStore : IMetadataStore
 {
+    private readonly object _gate = new();
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
     private readonly StorageDatabase _storage;
     private readonly string _directory;
@@ -28,6 +29,8 @@ public class StorageMetadataStore : IMetadataStore
 
     public MetadataBatchReceipt AcceptIncomingBatch(MetadataIncomingBatch batch)
     {
+        lock (_gate)
+        {
         ArgumentNullException.ThrowIfNull(batch);
         ValidateBatch(batch);
 
@@ -37,10 +40,14 @@ public class StorageMetadataStore : IMetadataStore
         var receipt = ApplyIncomingBatch(next, batch);
         PersistPartition(partitionKey, current, next);
         return receipt;
+    
+        }
     }
 
     public MetadataPendingApplyIntent BeginPendingApply(MetadataIncomingBatch batch, Guid applyToken)
     {
+        lock (_gate)
+        {
         ArgumentNullException.ThrowIfNull(batch);
         ValidateBatch(batch);
         if (applyToken == Guid.Empty)
@@ -67,12 +74,16 @@ public class StorageMetadataStore : IMetadataStore
         next.PendingApplies.Add(applyToken, new PendingApplyValue(CloneBatch(batch)));
         PersistPartition(partitionKey, current, next);
         return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch));
+    
+        }
     }
 
     public IReadOnlyList<MetadataPendingApplyIntent> ReadPendingApplyIntents(
         string scopeId,
         NodeId localReplica)
     {
+        lock (_gate)
+        {
         if (string.IsNullOrWhiteSpace(scopeId))
             throw new ArgumentException("ScopeId is required.", nameof(scopeId));
         if (localReplica.IsZero)
@@ -83,6 +94,8 @@ public class StorageMetadataStore : IMetadataStore
         return state.PendingApplies
             .Select(pair => new MetadataPendingApplyIntent(pair.Key, CloneBatch(pair.Value.Batch)))
             .ToArray();
+    
+        }
     }
 
     public MetadataBatchReceipt FinalizePendingApply(
@@ -90,6 +103,8 @@ public class StorageMetadataStore : IMetadataStore
         NodeId localReplica,
         MetadataProviderApplyReceipt providerReceipt)
     {
+        lock (_gate)
+        {
         ArgumentNullException.ThrowIfNull(providerReceipt);
         if (string.IsNullOrWhiteSpace(scopeId))
             throw new ArgumentException("ScopeId is required.", nameof(scopeId));
@@ -125,10 +140,14 @@ public class StorageMetadataStore : IMetadataStore
             new CompletedPendingApplyValue(providerReceipt.BatchDigest.ToArray(), CloneReceipt(receipt, receipt.IsDuplicate)));
         PersistPartition(partitionKey, current, next);
         return receipt;
+    
+        }
     }
 
     public IMetadataStoreSnapshot OpenSnapshot(string scopeId, NodeId localReplica)
     {
+        lock (_gate)
+        {
         if (string.IsNullOrWhiteSpace(scopeId))
             throw new ArgumentException("ScopeId is required.", nameof(scopeId));
         if (localReplica.IsZero)
@@ -137,6 +156,8 @@ public class StorageMetadataStore : IMetadataStore
         var partitionKey = new PartitionKey(scopeId, localReplica);
         var state = GetOrCreatePartition(partitionKey).Clone();
         return new VolatileSnapshot(state);
+    
+        }
     }
 
     private static MetadataBatchReceipt ApplyIncomingBatch(PartitionState next, MetadataIncomingBatch batch)
@@ -259,6 +280,8 @@ public class StorageMetadataStore : IMetadataStore
         NodeId localAuthor,
         IReadOnlyList<MetadataFrozenOperation> operations)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         ArgumentNullException.ThrowIfNull(operations);
 
@@ -326,6 +349,8 @@ public class StorageMetadataStore : IMetadataStore
 
         PersistPartition(partitionKey, current, next);
         return frozen;
+    
+        }
     }
 
     public ulong AcquireOutboundLease(
@@ -335,6 +360,8 @@ public class StorageMetadataStore : IMetadataStore
         NodeId localAuthor,
         Guid consumerId)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         if (consumerId == Guid.Empty)
             throw new ArgumentException("ConsumerId must be non-empty.", nameof(consumerId));
@@ -349,6 +376,8 @@ public class StorageMetadataStore : IMetadataStore
         next.OutboundLeases[key] = new LeaseState(generation, consumerId);
         PersistPartition(partitionKey, current, next);
         return generation;
+    
+        }
     }
 
     public MetadataOutboundPage ReadOutbound(
@@ -360,6 +389,8 @@ public class StorageMetadataStore : IMetadataStore
         ulong afterSequence,
         int limit)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             throw new InvalidOperationException("Outbound lease is not active.");
@@ -389,6 +420,8 @@ public class StorageMetadataStore : IMetadataStore
             .ToArray();
         ulong scannedThrough = page.Length == 0 ? cursor : page[^1].Sequence;
         return new MetadataOutboundPage(page, scannedThrough);
+    
+        }
     }
 
     public void AcknowledgeOutbound(
@@ -399,6 +432,8 @@ public class StorageMetadataStore : IMetadataStore
         ulong leaseGeneration,
         ulong safeThroughSequence)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -414,6 +449,8 @@ public class StorageMetadataStore : IMetadataStore
         var next = current.Clone();
         next.OutboundAck[key] = safeThroughSequence;
         PersistPartition(partitionKey, current, next);
+    
+        }
     }
 
     public void CompactOutboundThrough(
@@ -423,6 +460,8 @@ public class StorageMetadataStore : IMetadataStore
         NodeId localAuthor,
         ulong safeThroughSequence)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -437,6 +476,8 @@ public class StorageMetadataStore : IMetadataStore
         if (next.Outbound.TryGetValue(key, out var entries))
             entries.RemoveAll(entry => entry.Sequence <= safeThroughSequence);
         PersistPartition(partitionKey, current, next);
+    
+        }
     }
 
     public ulong GetOutboundHighWatermark(
@@ -445,12 +486,16 @@ public class StorageMetadataStore : IMetadataStore
         int namespaceId,
         NodeId localAuthor)
     {
+        lock (_gate)
+        {
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
         return state.OutboundHighWatermarks.TryGetValue(new OutboundKey(namespaceId, localAuthor), out var highWatermark)
             ? highWatermark
             : 0;
+    
+        }
     }
 
     public MetadataRelayPage ReadRelay(
@@ -461,6 +506,8 @@ public class StorageMetadataStore : IMetadataStore
         ulong afterSequence,
         int limit)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
         {
@@ -494,6 +541,8 @@ public class StorageMetadataStore : IMetadataStore
 
         ulong scannedThrough = page.Length == 0 ? cursor : page[^1].Sequence;
         return new MetadataRelayPage(page, scannedThrough);
+    
+        }
     }
 
     public void AcknowledgeRelay(
@@ -503,6 +552,8 @@ public class StorageMetadataStore : IMetadataStore
         NodeId originalAuthor,
         ulong safeThroughSequence)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -521,6 +572,8 @@ public class StorageMetadataStore : IMetadataStore
         var next = current.Clone();
         next.RelayAck[key] = safeThroughSequence;
         PersistPartition(partitionKey, current, next);
+    
+        }
     }
 
     public ulong GetReceiveCursor(
@@ -530,12 +583,16 @@ public class StorageMetadataStore : IMetadataStore
         uint senderEpoch,
         int namespaceId)
     {
+        lock (_gate)
+        {
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
         return state.Receives.TryGetValue(new ReceiveKey(sender, senderEpoch, namespaceId), out var receive)
             ? receive.CursorEnd
             : 0;
+    
+        }
     }
 
     public void CompactRelayThrough(
@@ -545,6 +602,8 @@ public class StorageMetadataStore : IMetadataStore
         NodeId originalAuthor,
         ulong safeThroughSequence)
     {
+        lock (_gate)
+        {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -559,6 +618,8 @@ public class StorageMetadataStore : IMetadataStore
         if (next.Relay.TryGetValue(key, out var entries))
             entries.RemoveAll(entry => entry.Sequence <= safeThroughSequence);
         PersistPartition(partitionKey, current, next);
+    
+        }
     }
 
     public ulong GetRelayHighWatermark(
@@ -567,22 +628,30 @@ public class StorageMetadataStore : IMetadataStore
         int namespaceId,
         NodeId originalAuthor)
     {
+        lock (_gate)
+        {
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
         return state.RelayHighWatermarks.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var highWatermark)
             ? highWatermark
             : 0;
+    
+        }
     }
 
     public void Dispose()
     {
+        lock (_gate)
+        {
         _storage.Dispose();
         _partitions.Clear();
         if (_deleteOnDispose)
         {
             try { Directory.Delete(_directory, recursive: true); }
             catch { /* isolated test directory cleanup */ }
+        }
+    
         }
     }
 
