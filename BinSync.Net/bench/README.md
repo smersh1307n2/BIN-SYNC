@@ -42,6 +42,8 @@ MemoryDiagnoser is on by default (`B/op`, `Gen0`). Metadata peer lifecycle setup
 | `MetadataPeerBaselineBench` | durable snapshot-baseline commit vs unrelated payload scale |
 | `MetadataPeerRetirementBench` | durable peer-epoch retirement vs unrelated payload scale |
 
+See [METADATA-STORE-BENCHMARKS.md](../../../docs/METADATA-STORE-BENCHMARKS.md) for the first durable peer-lifecycle scaling run and its limitations.
+
 ## Interpreting results
 
 1. Save the first run as **baseline** (commit hash + machine).
