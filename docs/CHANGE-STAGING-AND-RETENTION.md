@@ -338,9 +338,10 @@ The current Node implementation stores remote SeenChanges under (senderPeer, nam
 
 **Target ChangeId ledger entry:**
 - key: (scopeId, namespaceId, ChangeId);
-- compact fingerprint: BLAKE3-128 over the canonical operation identity and payload (original author, RecordId, operation kind, field/key epoch, HLC, value/tombstone bytes and any canonical causal dependency data);
-- original author identity;
-- compact flags for local-origin/legacy-migration state where required.
+- compact fingerprint: BLAKE3-128 over the canonical operation identity and payload (resolved original author, RecordId, operation kind, field/key epoch, HLC, value/tombstone bytes and any canonical causal dependency data);
+- only the minimal format/legacy marker needed to distinguish imported IDs whose old payload fingerprint is unavailable.
+
+The original author is already included in the fingerprint and must not be stored a second time in this index. Scope and namespace should be encoded by the owning store/partition prefix, not repeated in every value.
 
 The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes. Its exact lookup must be disk/page-backed with a bounded hot cache; a Bloom filter is allowed only as a negative prefilter, never as the authoritative answer. Do not keep one in-memory object per historical ChangeId.
 
