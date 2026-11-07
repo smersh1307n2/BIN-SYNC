@@ -83,9 +83,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         ValidateIncomingBatchForStaging(current, batch, applyToken);
 
-        var next = current.Clone();
-        next.PendingApplies.Add(applyToken, new PendingApplyValue(CloneBatch(batch)));
-        PersistPartition(partitionKey, current, next);
+        var pendingValue = new PendingApplyValue(CloneBatch(batch));
+        PersistPendingApply(partitionKey, current, applyToken, pendingValue);
         return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch));
     
         }
@@ -1381,6 +1380,36 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         next.IsPersisted = true;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
+    }
+
+    private void PersistPendingApply(
+        PartitionKey partitionKey, PartitionState current, Guid applyToken, PendingApplyValue value)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] key = StorageKey(root, 12, applyToken.ToByteArray());
+        byte[] encoded = EncodeIncomingBatch(value.Batch);
+        byte[]? identityKey = current.IsPersisted
+            ? null
+            : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+        byte[]? identityValue = identityKey is null
+            ? null
+            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        if (identityKey is not null)
+            batch.Put(identityKey, identityValue!);
+        batch.Put(key, encoded);
+        batch.Commit();
+
+        current.PendingApplies.Add(applyToken, value);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+        current.PersistedEntries[Convert.ToHexString(key)] = (key, encoded);
+        if (identityKey is not null)
+            current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
     }
 
     private void PersistPeerStreamState(
