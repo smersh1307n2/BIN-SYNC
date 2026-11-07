@@ -67,9 +67,72 @@ public sealed class StorageSyncCoordinator
             // Do not ACK if persistence fails. A restart can replay the same HLCs
             // into the restored Node without creating a second logical operation.
             persistNode(_node);
+            FreezeLocalOutboxToMetadata();
             if (page.ScannedThroughSequence > 0)
                 _provider.AcknowledgeLocalChanges(page.ScannedThroughSequence);
             return page.Changes.Count;
+        }
+    }
+
+    /// <summary>
+    /// Freezes newly appended local Node Outbox entries into the attached durable
+    /// Metadata Store. Node sequence numbers are preserved exactly; a gap between the
+    /// metadata high-watermark and the first retained Node entry fails closed.
+    /// </summary>
+    private void FreezeLocalOutboxToMetadata()
+    {
+        if (_metadataStore is null)
+            return;
+
+        ulong high = _metadataStore.GetOutboundHighWatermark(
+            _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+        if (high > long.MaxValue)
+            throw new InvalidDataException("Metadata outbound high-watermark exceeds Node Outbox sequence range.");
+
+        long after = (long)high;
+        const int pageSize = 1024;
+        while (true)
+        {
+            var entries = _node.ReadOutboxEntries(_namespaceId, _node.NodeId, after, pageSize);
+            if (entries.Count == 0)
+                return;
+
+            var frozen = new List<MetadataFrozenOperation>(entries.Count);
+            long expected = checked(after + 1);
+            foreach (var entry in entries)
+            {
+                if (entry.Seq != expected)
+                    throw new InvalidDataException("Node Outbox sequence gap prevents safe Metadata Store freeze.");
+
+                object op = Ops.DecodeOp(entry.Payload).Op;
+                Digest16 fingerprint = ChangeIdentity.Fingerprint(
+                    _namespaceId, entry.RecordId, entry.OpKind, op,
+                    entry.AuthorNodeId, entry.CausalDeps);
+
+                byte[] envelope = new byte[16 + entry.Payload.Length];
+                entry.RecordId.WriteTo(envelope);
+                entry.Payload.Span.CopyTo(envelope.AsSpan(16));
+                frozen.Add(new MetadataFrozenOperation
+                {
+                    ChangeId = entry.ChangeId,
+                    Fingerprint = fingerprint.ToArray(),
+                    Payload = envelope
+                });
+                expected = checked(expected + 1);
+            }
+
+            var published = _metadataStore.FreezeOutbound(
+                _scopeId!, _node.NodeId, _namespaceId, _node.NodeId, frozen);
+            if (published.Count != entries.Count)
+                throw new InvalidDataException("Metadata Store freeze returned an unexpected operation count.");
+            for (int i = 0; i < published.Count; i++)
+                if (published[i].Sequence != checked((ulong)entries[i].Seq) ||
+                    published[i].ChangeId != entries[i].ChangeId)
+                    throw new InvalidDataException("Metadata Store sequence diverged from the Node Outbox.");
+
+            after = entries[^1].Seq;
+            if (entries.Count < pageSize)
+                return;
         }
     }
 
