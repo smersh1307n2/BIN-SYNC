@@ -62,8 +62,8 @@ public class TransportBatchPayloadTests
             authorStream: outbound.Value.DurableAuthor);
 
         Assert.Equal(0, sender.OutboxSize(7));
-        Assert.Equal(outbound.Value.CursorEnd,
-            sender.PeerStates[(receiver.NodeId, 7)].StreamPushed[outbound.Value.AuthorStreamId]);
+        Assert.True(sender.PeerStates[(receiver.NodeId, 7)].TryGetStreamPushed(outbound.Value.AuthorStreamId, out var pushed));
+        Assert.Equal(outbound.Value.CursorEnd, pushed);
         Assert.Equal(outbound.Value.CursorEnd,
             sender.PeerStates[(receiver.NodeId, 7)].AckedFor(outbound.Value.AuthorStreamId));
     }
