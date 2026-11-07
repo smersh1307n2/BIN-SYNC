@@ -698,14 +698,14 @@ public class StorageMetadataStore : IMetadataStore
 
     private void PersistPartition(PartitionKey key, PartitionState current, PartitionState next)
     {
-        if (_storage.LastCommitSeq != current.StorageCommitSeq)
-            throw new StorageConflictException(current.StorageCommitSeq, _storage.LastCommitSeq);
-
         var oldEntries = current.IsPersisted
             ? StateEntries(key, current)
             : new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         var newEntries = StateEntries(key, next);
         using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         bool changed = false;
         foreach (var old in oldEntries)
         {
