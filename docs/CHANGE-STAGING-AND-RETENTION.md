@@ -180,6 +180,18 @@ The implementation must make the transition from pending to frozen durable befor
 
 If a process crashes after freeze but before the first byte is sent, the operation remains frozen and will be sent on retry. This may retain one extra superseded operation, but it cannot cause divergence.
 
+### 5.5. E-13 self-echo lookup across storage stages
+
+BIN-SYNC E-13 requires a durable self-echo check in addition to the channel-scoped SeenChanges set. With a pending/frozen split, the check must not become blind to an operation merely because it has not yet been frozen.
+
+For the exact canonical field key, the runtime needs an efficient lookup over:
+- the latest pending local operation, if present;
+- the relevant frozen/unconfirmed local Outbox winner(s).
+
+The comparison must use the protocol's exact self-echo tuple (operation tag/kind, HLC, resolved original author and value bytes). A stored value hash may be used as a fast prefilter, but hash equality alone is not proof of byte equality. The query must not use the current visible field winner alone: a remote APPLY may have replaced that winner while a local pending operation still exists.
+
+This lookup is a derived view over pending staging and frozen Outbox, not a third authoritative history. It may be implemented as an index keyed by canonical field key and referencing the owning staged/frozen payload. The index must be rebuilt or transactionally maintained and must not duplicate full payload bytes. It must preserve E-13's distinction between a true local echo and a first-seen remote operation that merely loses LWW.
+
 For a future snapshot-plus-tail transfer, the source snapshot and change-feed watermark must share one barrier, but that alone does not prove that every frozen operation is covered by the snapshot. The current snapshot payload is a current-state LWW slice, while Outbox/relay journals may contain operations (including LWW losers) that are not represented as current field winners. The implementation must explicitly define, per target peer, which frozen operations are semantically subsumed by the snapshot baseline and which provenance/relay operations still require delivery. Until that rule is specified and tested, a snapshot MUST NOT implicitly advance Outbox ACK/GC, discard pending staging, or suppress relay entries. Never take an arbitrary current-state snapshot and independently sample an unrelated feed cursor; that can omit a change or send it on both sides of the baseline.
 
 ## 6. Metadata minimization: what is stored where
