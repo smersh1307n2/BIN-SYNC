@@ -537,3 +537,37 @@ These open points must not be resolved by adding speculative flags or prematurel
 10. Only then freeze public API and update package/version documentation.
 
 **Design rule:** do not begin by replacing Node dictionaries with a thin collection of callbacks. First establish the complete atomic state transitions and ownership of every durable datum.
+
+## 8. Code audit addendum — shared operations and peer delivery (2026-11-07)
+
+The current runtime has been checked against branch feature/fld-external-storage at HEAD dd2dd969d70b6fd46371679903855a69ae9399c3. The detailed cross-repository audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md).
+
+### 8.1. Do not create per-peer operation copies
+
+BIN-SYNC already keeps one shared Outbox entry per logical operation. PeerState is keyed by peer/namespace and stores author-stream progress (StreamPushed, StreamAcked and StreamOffsets). Batch construction reads the same operation for each target peer; the wire batch is one author stream at a time. This is the desired separation: one immutable payload, independent per-peer cursors. Do not add a change×peer delivery table or per-operation ACK bitmap.
+
+CompactOutbox currently checks every interested peer for every entry. A later CPU optimization may precompute the minimum safe local ACK per author and then scan entries once. A peer with no PeerState must still block reclamation; no peers must preserve the existing keep-the-log behavior.
+
+### 8.2. Replay cache and peer-state encoding
+
+PeerState.Ids stores the deterministic outgoing batch replay mapping keyed by author and cursor range, with BatchId and previous digest as its value. It is serialized, but the current ProcessAckInternal path advances StreamAcked and compacts the Outbox without pruning acknowledged Ids. Prune only ranges fully covered by the validated contiguous ACK, atomically with durable ACK state; keep the current digest-chain checkpoint.
+
+NodePersistence serializes StreamAcked, StreamPushed and StreamOffsets independently, repeating the author ID in each map. A versioned per-author progress tuple with presence flags can store the author once while preserving sparse values. This is a format optimization, not a semantic change.
+
+Inbox and InboxAuthors also persist the same batch key separately, while ReceivedStreams stores batch-to-cursor information. Treat these as overlapping receipt facts and audit every duplicate-replay/ACK use before consolidation. The target is one compact receipt per accepted batch, not a payload copy per field.
+
+### 8.3. Current SeenChanges is not the target global ledger
+
+The current runtime key is peer-scoped (senderPeer, namespace, ChangeId). The current Outbox queue also suppresses a second enqueue while a ChangeId is still present in that queue, but this is not a durable cross-peer identity ledger after Outbox compaction.
+
+The target remains the exact replica/scope/namespace-scoped ChangeId ledger with a canonical operation fingerprint described in §5.3. Same ChangeId + same fingerprint is a duplicate regardless of route; same ChangeId + different fingerprint is a conflict. Local WAL replay markers remain separate. Batch receipts remain issuer-specific. Do not claim cross-peer dedup is implemented until the runtime key and tests enforce this contract.
+
+### 8.4. ChangeId and OriginSeq remain open gates
+
+Current relay nodes allocate their own local author-stream sequence for relayed entries. That Seq is not a stable original-operation identity and cannot replace ChangeId. A true OriginSeq must be assigned by the original author and preserved through relay, with incarnation, backup/clone and equivocation rules.
+
+Content-derived BLAKE3-128 ChangeId remains a candidate for eliminating the separate fingerprint from the exact ledger, but changes ID-generation semantics and needs compatibility and canonicalization tests. No ChangeId or wire-format change is approved by this addendum.
+
+### 8.5. Independent retention lifetimes
+
+Keep these separate even if a compact physical encoding stores them in one transactional batch: (1) batch receipt / duplicate-ACK horizon, (2) global ChangeId dedup fact, (3) relay payload retention, (4) outgoing batch replay cache, and (5) peer/author cursor state. A relay ACK does not automatically expire a batch receipt; receipt expiry does not authorize deletion of relay payload or dedup identity. Current-state snapshot completion is not a GC proof until the per-author snapshot cut and completion/fencing contract exists.
