@@ -65,6 +65,56 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Provider_snapshot_restore_rejects_duplicate_and_reserved_rows_atomically()
+    {
+        using var node = Fix.MakeNode(203);
+        const int ns = 7;
+        RecordId existingRecord = RecordId.From(Fix.Rid(0x73));
+        byte[] originalValue = { 0x51, 0x52 };
+        Assert.True(node.WriteField(ns, existingRecord, 0x130, originalValue, new Hlc(7300, 0)));
+
+        var duplicateRows = new[]
+        {
+            new ProviderMutation
+            {
+                RecordId = existingRecord,
+                FieldId = 0x130,
+                HlcWall = 7400,
+                AuthorNodeId = node.NodeId,
+                Value = new byte[] { 0x61 }
+            },
+            new ProviderMutation
+            {
+                RecordId = existingRecord,
+                FieldId = 0x130,
+                HlcWall = 7500,
+                AuthorNodeId = node.NodeId,
+                Value = new byte[] { 0x62 }
+            }
+        };
+        Assert.Throws<InvalidDataException>(() =>
+            node.RestoreProviderSnapshot(ns, duplicateRows, Array.Empty<BatchId>()));
+        Assert.True(node.TryGetField(ns, existingRecord, 0x130, out var preserved));
+        Assert.Equal(originalValue, preserved!.Value);
+
+        var reservedRow = new[]
+        {
+            new ProviderMutation
+            {
+                RecordId = existingRecord,
+                FieldId = Model.LifecycleFieldId,
+                HlcWall = 7600,
+                AuthorNodeId = node.NodeId,
+                Value = new byte[] { 0x01 }
+            }
+        };
+        Assert.Throws<InvalidDataException>(() =>
+            node.RestoreProviderSnapshot(ns, reservedRow, Array.Empty<BatchId>()));
+        Assert.True(node.TryGetField(ns, existingRecord, 0x130, out preserved));
+        Assert.Equal(originalValue, preserved!.Value);
+    }
+
+    [Fact]
     public void Batch_payload_roundtrip_preserves_change_id_and_binds_it_to_records_root()
     {
         var node = new Node(Id(1));
