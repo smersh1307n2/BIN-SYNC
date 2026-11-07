@@ -2,6 +2,7 @@
 
 **Status:** semantic contract plus initial executable conformance harness. Twenty provider-independent semantic tests plus one reference-adapter durability-profile assertion are implemented; the volatile reference adapter makes no restart-durability claim, and no durable Metadata Store implementation exists yet.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
+**Related provider contract:** [Data Provider Semantic Contract and Conformance Plan](DATA-PROVIDER-CONFORMANCE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL; this document does not change wire format.  
 **Purpose:** define the observable operations and provider-independent tests required before moving Node persistence behind a durable Metadata Store.
 

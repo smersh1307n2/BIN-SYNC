@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.5 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1 and provider-independent Metadata Store semantic/conformance baseline are recorded.  
+**Status:** Architecture contract v0.6 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store conformance baseline and Data Provider semantic/conformance plan are recorded.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
 **Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v12, adaptive receipt indexing, compact 16-byte ledger values, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
@@ -493,13 +493,14 @@ The architecture and eventual contract implementation must be validated against 
 - **BIN-SYNC-SPECIFICATION.txt** remains the normative wire/protocol specification. This architecture document does not change wire layouts or protocol invariants.
 - **docs/FLD-DB-INTEGRATION-CONTRACT.md** remains the specialized contract for FLD-DB when it stores synchronized field data. It must conform to this architecture but may define stronger FLD-specific guarantees such as atomic field-data + metadata commit, local Outbox, FLD snapshots and FLD WAL behavior.
 - **docs/CHANGE-STAGING-AND-RETENTION.md** defines the detailed lifecycle and safe coalescing/retention rules for local staged changes, frozen Outbox entries and remote relay operations.
+- **docs/DATA-PROVIDER-CONFORMANCE.md** defines the provider-side source mapping, durable change-feed, snapshot/feed barrier, idempotent remote-apply and local/remote-origin guarantees, with a test-only conformance plan.
 - FLD's kernel specification owns FLD physical format, WAL, run, manifest and Storage-only implementation details. It must not redefine BIN-SYNC protocol semantics.
 
 If a specialized contract conflicts with this document, the conflict must be resolved explicitly. A FLD-specific optimization must not weaken a general durability or isolation guarantee.
 
 ## 15. Decisions and remaining implementation questions
 
-The following are not decided by v0.2 and must be resolved before freezing public API:
+The following remain open in architecture contract v0.6 and must be resolved before freezing public API:
 
 1. Exact public names and signatures for provider and metadata interfaces.
 2. Whether the runtime exposes a unified transaction object, semantic atomic commands, or both.
@@ -520,6 +521,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 17. **Decided:** ProtocolStateDelta is a bounded per-batch recovery envelope, materialized into normal indexed metadata records during finalization. Retain the raw delta only in a pending-apply intent across separate-store recovery; delete it after provider and metadata finalization. Duplicate batches return only the compact receipt/ACK result, never the full delta.
 18. Implement and test the decided Inbox duplicate validation consistently in BIN-SYNC and FLD; conflicting reuse must fail closed without retaining the full original payload.
 19. **Correctness baseline, representation open:** cross-peer at-most-once relay suppression must survive payload compaction. Exact ChangeId + fingerprint remains the safe fallback; do not finalize permanent per-operation storage until origin-sequence/range and snapshot-fencing alternatives have been proved against mesh replay, equivocation and bootstrap scenarios.
+20. **Added in v0.6:** the provider-side semantic contract is documented in `DATA-PROVIDER-CONFORMANCE.md`; the test-only volatile suite covers mapping, feed paging/ACK, snapshot/feed watermark, idempotent remote apply and origin separation. Public signatures and durable provider implementation remain open.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
@@ -528,7 +530,7 @@ These open points must not be resolved by adding speculative flags or prematurel
 1. Review and approve the architecture and resolve the open decisions that affect the contract.
 2. Approve the change staging/coalescing lifecycle and its crash/relay conformance tests.
 3. Define the neutral Metadata Store semantic operations and conformance tests.
-4. Define the Data Provider change-capture/apply contract and its atomicity modes.
+4. **Semantic contract and initial volatile tests implemented:** define/validate Data Provider change capture, snapshot/feed barrier and shared-transaction/separate-store idempotent apply modes. Durable provider and end-to-end feed-to-metadata transaction tests remain open.
 5. Refactor BIN-SYNC persistence behind the neutral boundary without changing wire behavior.
 6. Implement FLD Storage-only semantics using reusable physical storage primitives.
 7. Implement the FLD Metadata Store adapter.

@@ -1,6 +1,6 @@
 # BIN-SYNC Data Provider Semantic Contract and Conformance Plan
 
-**Status:** design contract and test plan; public C# signatures are intentionally not frozen.  
+**Status:** semantic contract plus initial volatile conformance suite (six semantic tests and one durability-profile assertion); no durable provider implementation exists yet. Public C# signatures are intentionally not frozen.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Related metadata contract:** [Metadata Store Semantic Contract and Conformance Plan](METADATA-STORE-CONFORMANCE.md).  
 **Change lifecycle:** [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).  
@@ -153,3 +153,12 @@ The volatile reference provider is for semantic testing only. A durable provider
 4. Define how PendingLocal coalescing is owned: provider-native staging, Metadata Store staging, or a shared transactional capability. Do not force all providers into a single storage layout.
 5. Only then finalize neutral Data Provider interfaces and refactor BIN-SYNC Runtime/Node persistence.
 6. Validate shared-transaction and separate-store adapters independently. Keep the FLD synchronized-database provenance adapter as a separate integration gate.
+
+
+## 11. Initial executable conformance status (2026-11-07)
+
+The test-only contract and inherited suite are implemented in `BinSync.Net/tests/BinSync.MetadataStore.Conformance`; `VolatileDataProviderAdapter` is a reference model only. Six semantic tests cover stable item/field mappings, bounded and resumable local feed pages, source-feed cursor/ACK fencing, input/output payload ownership, the snapshot/feed watermark barrier, snapshot lifetime across local/remote writes, idempotent remote apply, token equivocation and atomic rejection. A separate test asserts that the reference provider does not claim restart durability.
+
+GitHub Actions run `42359566433` passed the full BIN-SYNC Release build/tests, public samples and fuzz/lab hardening at commit `b9adbd3749e689b2019f48f8b500881293d5cc2c`: 637 tests passed, line coverage 72.5%. The follow-up feed-gap/input-ownership assertion is in the subsequent commit and is being revalidated separately.
+
+**Still open:** a durable provider adapter and reopen/fault-injection tests; end-to-end proof that feed ACK follows durable staging; a real MVCC snapshot/feed barrier under concurrent writes; shared-transaction and separate-store integration with actual providers. The volatile reference provider is not evidence of any disk durability or process-restart guarantee.
