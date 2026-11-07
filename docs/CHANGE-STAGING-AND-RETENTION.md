@@ -331,20 +331,20 @@ The following lifetimes are independent:
 
 No generic DeleteOldMetadata operation is sufficient. Each category needs its own safe-retention condition.
 
-### 9.1. ChangeId deduplication GC is currently an unresolved protocol requirement
+### 9.1. Separate remote provenance dedup from local WAL replay markers
 
-The current wire specification defines first-seen ChangeId as the relay-eligibility gate (E-8), and E-13 defines the durable self-echo check plus a provenance-scoped SeenChanges key of (senderPeer, namespaceId, changeId). The current local-write path also inserts (local NodeId, namespaceId, ChangeId) into SeenChanges when it appends a local Outbox entry; remote receive inserts the direct sender/namespace/ChangeId key. Current NodePersistence v5 serializes this SeenChanges set, but the inspected normative specification does not define a safe GC rule, expiry, or watermark for these entries.
+The current Node implementation stores both roles in one SeenChanges set keyed by (peer, namespaceId, ChangeId), but their retention rules are different.
 
-The specification does define Inbox expiry/GC (expiresAt < now and both sides have confirmed the relevant log segment) and separate tombstone GC rules. Those rules do not automatically apply to SeenChanges. The current persisted SeenChanges key also contains no per-entry timestamp, originating author-stream cursor, or expiry value from which a safe horizon could be derived.
+**Remote provenance markers** are inserted by ApplyBatch using (senderPeer, namespaceId, ChangeId). The current wire specification defines first-seen ChangeId as the relay-eligibility gate (E-8), and E-13 requires durable provenance-scoped duplicate/self-echo handling. The inspected normative specification does not define a safe GC rule, expiry, or watermark for these remote entries. Inbox GC and tombstone GC are separate and cannot be reused as an assumed rule.
 
-Consequences:
+Consequences for remote provenance:
 
-- Do not apply an arbitrary TTL to SeenChanges. An old ChangeId may return through a different mesh route after the TTL and be treated as first-seen again, re-enqueued, and potentially create a relay/echo growth loop.
+- Do not apply an arbitrary TTL. An old ChangeId may return through a different mesh route after the TTL and be treated as first-seen again, re-enqueued, and potentially create a relay/echo growth loop.
 - Do not replace the exact set with a Bloom filter as the only source of truth. False positives can suppress a legitimate first-seen operation and violate relay eligibility.
 - Do not assume Inbox GC makes SeenChanges redundant. Inbox deduplicates a batch identity; SeenChanges deduplicates operation provenance across different batches/routes.
-- Until a protocol-safe compaction rule is specified, the conservative behavior is to retain exact SeenChanges entries. This is correct but potentially unbounded. The pending-staging design can at least avoid allocating a protocol ChangeId and local SeenChanges entry for every superseded unpublished LWW write: create the ChangeId and add its durable local provenance entry only when the final staged operation is frozen. This reduces write amplification but does not solve retention for published/received operations.
+- Until a protocol-safe compaction rule is specified, retain exact remote provenance entries. This is correct but potentially unbounded.
 
-A future protocol/storage design must choose and prove one of these approaches before production metadata retention is considered complete:
+A future protocol/storage design must choose and prove one of these approaches before production metadata retention is complete:
 
 1. **Cursor-bound provenance retention:** persist enough association between each seen ChangeId and the relevant direct-sender/author-stream cursor, then prune only after a protocol-defined sender/channel watermark proves that the sender can no longer legally replay or reintroduce that operation. The mapping must respect per-author streams and channel-scoped provenance; a peer-wide scalar watermark is not enough.
 2. **Stable origin sequence identity:** define a protocol-level derivation or binding between ChangeId and an immutable origin author/namespace/sequence so exact dedup history can be represented by compact ranges plus exceptions. This changes identity semantics and requires a wire/spec compatibility decision; it is not an implementation-only optimization.
@@ -352,6 +352,15 @@ A future protocol/storage design must choose and prove one of these approaches b
 
 The first option is the most compatible direction if the runtime can reliably associate each record's ChangeId with its origin stream sequence. That association is not assumed by this draft; it must be verified against DELTA_BATCH batching, relay author streams, cursor translation and E-13 before adoption.
 
+**Local replay markers are different.** The current local-write path inserts (local NodeId, namespaceId, ChangeId) into SeenChanges, and Node.Wal.ReplayLocalMutation checks that key to avoid replaying a local WAL mutation twice. These entries are not the same as remote provenance history. Their safe lifetime is tied to the local WAL replay horizon: they may be removed only after the corresponding WAL record is irreversibly truncated or a durable checkpoint/watermark guarantees that recovery will never replay it. If WAL records remain physically replayable (for example, truncation is disabled), the marker must remain or be replaced by an equivalent durable replay watermark.
+
+The target staging design should not use protocol ChangeId as the only local WAL/staging replay identity. If ChangeId allocation is deferred until freeze, local commit/staging recovery needs its own storage-native commit sequence or staging generation. Keep local replay markers and remote provenance dedup logically separate even if an implementation temporarily stores them in one physical index.
+
+The current SeenChanges set can therefore be split into:
+- exact remote provenance entries, with a future protocol-defined GC horizon still unresolved;
+- local WAL replay markers, reclaimable at the proven WAL replay/truncation boundary.
+
+Pending coalescing can avoid allocating protocol ChangeIds for superseded unpublished local LWW writes, but it must not remove the separate idempotency marker required to replay local staging commits safely.
 ### 9.2. Inbox receipt compaction
 
 Inbox batch receipts have a separate lifecycle. The wire specification defines an idempotency key (issuerNodeId, namespaceId, issuerEpoch, batchId) and an expiry condition requiring both elapsed expiry and confirmation of the relevant log segment. Preserve the receipt/author information needed to replay the original ACK until that condition is met.
@@ -451,6 +460,8 @@ This policy reduces redundant outbound history; it does not promise that every p
 28. Relay payload survives WAL truncation and is reclaimed only after safe downstream ACK; receipt expiry and relay ACK are tested independently.
 29. Crash after WAL flush but before receipt/relay sidecar materialization reconstructs both sidecars exactly once from the WAL commit.
 30. Relay journal paging starts at the requested retained sequence without scanning all previously acknowledged history; compaction releases both disk bytes and in-memory indexes.
+31. Local WAL replay markers are retained while their WAL records can replay and are reclaimed only after durable truncation/checkpoint; remote provenance entries follow a separate protocol retention rule.
+32. Deferring ChangeId allocation until freeze does not weaken local staging/WAL replay idempotency; a storage-native commit/staging generation handles that boundary.
 
 ## 12. Implementation sequence
 
