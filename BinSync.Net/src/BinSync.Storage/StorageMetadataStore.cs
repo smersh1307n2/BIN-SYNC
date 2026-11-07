@@ -361,6 +361,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             storageBatch.Commit();
         }
 
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         if (identityKey is not null)
         {
             current.IsPersisted = true;
@@ -390,8 +392,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         foreach (var pair in newPeerStreams) current.PeerStreams.Add(pair.Key, pair.Value);
         foreach (var key in newRequiredStreams) current.RequiredPeerStreams.Add(key);
 
-        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
-            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         foreach (var write in writes)
             current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
         foreach (var delete in deletes)
