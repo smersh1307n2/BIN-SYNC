@@ -6,7 +6,7 @@
 - Added provider-independent Metadata Store semantic conformance contract and volatile reference fixture (20 semantic tests plus a durability-profile assertion).
 - Added Data Provider semantic contract and volatile reference conformance fixture (six semantic tests plus a durability-profile assertion).
 - Added cross-repository storage documentation map and clarified the two-DLL FLD boundary. This documentation/test-only work does not ship a production Metadata Store/Data Provider API.
-- Optimized `ChangeIdentity.Fingerprint`: write canonical FULL_AUTHOR operation bytes directly into one writer, hash its written span, and handle the zero/one-causal-dependency cases without intermediate operation buffers or a dependency set. Added parity coverage for field write/tombstone/record tombstone. Allocation/throughput benchmark remains a validation gate; no measured speedup is claimed.
+- Optimized `ChangeIdentity.Fingerprint`: write canonical FULL_AUTHOR operation bytes directly into one writer, hash its written span, and handle zero/one causal dependencies without intermediate operation buffers or a dependency set. Multi-dependency normalization now uses one array with in-place sort/dedup instead of `HashSet` + LINQ + `ToArray`. Added parity coverage for field write/tombstone/record tombstone. Allocation/throughput benchmark remains a validation gate; no measured speedup is claimed.
 
 
 ## 3.0.0 — 2026-11-06
