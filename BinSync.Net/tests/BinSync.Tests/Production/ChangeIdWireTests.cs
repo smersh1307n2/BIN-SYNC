@@ -307,6 +307,9 @@ public class ChangeIdWireTests
         Assert.Equal(1, wal.Replay(recovered));
         Assert.Equal(new[] { dependency }, Assert.Single(recovered.Outbox[1]).CausalDeps);
         Assert.True(recovered.GlobalChangeLedger.ContainsKey((1, batch.Entries[0].ChangeId)));
+        var receiptKey = (origin.NodeId, 1, origin.Epoch, batch.BatchId);
+        Assert.Equal(relay.InboxAuthors[receiptKey].Fingerprint,
+            recovered.InboxAuthors[receiptKey].Fingerprint);
         wal.Dispose();
         if (File.Exists(walPath)) File.Delete(walPath);
     }
