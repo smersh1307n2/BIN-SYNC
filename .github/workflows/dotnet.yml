@@ -48,6 +48,10 @@ jobs:
         working-directory: BinSync.Net
         run: dotnet build BinSync.slnx --configuration Release --no-restore
 
+      - name: Build performance benchmarks
+        working-directory: BinSync.Net
+        run: dotnet build bench/BinSync.Bench/BinSync.Bench.csproj --configuration Release
+
       - name: Test
         working-directory: BinSync.Net
         run: >
