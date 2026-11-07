@@ -523,29 +523,77 @@ public static class NodePersistence
             int rsCount = (int)r.Varint();
             for (int j = 0; j < rsCount; j++)
             {
-                var issuer = r.B128(); var rns = (int)r.Varint(); var rep = (int)r.Varint();
-                var bid = r.B128(); var seq = (long)r.U64();
-                ps.ReceivedStreams[((NodeId)issuer, rns, rep, (NodeId)bid)] = seq;
-            }
-            int saCount = (int)r.Varint();
-            for (int j = 0; j < saCount; j++)
-            {
-                var author = r.B128(); var seq = (long)r.U64();
-                ps.StreamAcked[(NodeId)author] = seq;
-            }
-            int spCount = (int)r.Varint();
-            for (int j = 0; j < spCount; j++)
-            {
-                var author = r.B128(); var seq = (long)r.U64();
-                ps.StreamPushed[(NodeId)author] = seq;
-            }
-            if (version >= 4)
-            {
-                int offsetCount = (int)r.Varint();
-                for (int j = 0; j < offsetCount; j++)
+                NodeId streamPeer;
+                int streamEpoch;
+                NodeId streamAuthor;
+                long seq;
+                if (version >= 9)
                 {
-                    var author = r.B128(); var offset = (long)r.U64();
-                    ps.StreamOffsets[(NodeId)author] = offset;
+                    streamPeer = NodeId.From(r.B128());
+                    streamEpoch = (int)r.Varint();
+                    streamAuthor = NodeId.From(r.B128());
+                    seq = (long)r.U64();
+                }
+                else
+                {
+                    streamPeer = NodeId.From(r.B128());
+                    var rns = (int)r.Varint();
+                    streamEpoch = (int)r.Varint();
+                    streamAuthor = NodeId.From(r.B128());
+                    seq = (long)r.U64();
+                    if (rns != ns)
+                        throw new InvalidDataException("Received-stream namespace does not match its PeerState.");
+                }
+                if (streamPeer.IsZero || streamEpoch < 0 || streamAuthor.IsZero || seq < 0 ||
+                    !ps.ReceivedStreams.TryAdd((streamPeer, streamEpoch, streamAuthor), seq))
+                    throw new InvalidDataException("Invalid or duplicate persisted received-stream cursor.");
+            }
+
+            if (version >= 9)
+            {
+                int progressCount = (int)r.Varint();
+                for (int j = 0; j < progressCount; j++)
+                {
+                    var author = NodeId.From(r.B128());
+                    byte flags = r.U8();
+                    if (author.IsZero || flags == 0 || (flags & ~7) != 0)
+                        throw new InvalidDataException("Invalid persisted peer author-progress flags.");
+                    var progress = new PeerAuthorProgress { Flags = flags };
+                    if ((flags & PeerAuthorProgress.AckedFlag) != 0) progress.Acked = (long)r.U64();
+                    if ((flags & PeerAuthorProgress.PushedFlag) != 0) progress.Pushed = (long)r.U64();
+                    if ((flags & PeerAuthorProgress.OffsetFlag) != 0) progress.Offset = (long)r.U64();
+                    if ((progress.HasAcked && progress.Acked < 0) ||
+                        (progress.HasPushed && progress.Pushed < 0) ||
+                        (progress.HasOffset && progress.Offset < 0) ||
+                        !ps.AuthorProgress.TryAdd(author, progress))
+                        throw new InvalidDataException("Invalid or duplicate persisted peer author progress.");
+                }
+            }
+            else
+            {
+                int saCount = (int)r.Varint();
+                for (int j = 0; j < saCount; j++)
+                {
+                    var author = NodeId.From(r.B128()); var seq = (long)r.U64();
+                    if (author.IsZero) throw new InvalidDataException("Zero author in persisted ACK watermark.");
+                    ps.SetStreamAcked(author, seq);
+                }
+                int spCount = (int)r.Varint();
+                for (int j = 0; j < spCount; j++)
+                {
+                    var author = NodeId.From(r.B128()); var seq = (long)r.U64();
+                    if (author.IsZero) throw new InvalidDataException("Zero author in persisted pushed watermark.");
+                    ps.SetStreamPushed(author, seq);
+                }
+                if (version >= 4)
+                {
+                    int offsetCount = (int)r.Varint();
+                    for (int j = 0; j < offsetCount; j++)
+                    {
+                        var author = NodeId.From(r.B128()); var offset = (long)r.U64();
+                        if (author.IsZero) throw new InvalidDataException("Zero author in persisted stream offset.");
+                        ps.SetStreamOffset(author, offset);
+                    }
                 }
             }
             int idsCount = (int)r.Varint();
