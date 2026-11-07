@@ -162,7 +162,7 @@ The local change lifecycle has two durable stages before acknowledgement: (a) co
 
 Persist the state required to recognize a previously accepted batch and safely answer a retry after a lost ACK. This includes the relevant sender/issuer identity, namespace, epoch, BatchId, accepted cursor range, digest-chain checkpoint, and durable receipt/result needed by the protocol.
 
-Persist ChangeId deduplication/provenance state for the retention period required by the protocol's relay and GC rules. Deduplication keys must include the correct scope and provenance dimensions; a global ChangeId set without the protocol-required context is not a valid substitute.
+Persist ChangeId deduplication/provenance state with the protocol-defined sender/channel and namespace dimensions; a global ChangeId set without the required context is not a valid substitute. Important current gap: E-8/E-13 define first-seen relay eligibility and the durable SeenChanges key, but the current normative specification does not define a safe SeenChanges GC horizon. Inbox GC and tombstone GC are separate and cannot be reused as an assumed rule. Until a protocol-safe deduplication watermark/expiry is defined, exact SeenChanges entries must be retained; an arbitrary TTL or Bloom-filter-only replacement can re-enable relay loops or suppress legitimate first-seen changes. See the detailed retention analysis in [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
 
 ### 5.4. Peer and stream state
 
@@ -475,6 +475,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 11. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
 12. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
 13. Exact snapshot-to-tail coverage semantics: whether a state snapshot can subsume frozen local LWW operations, how relay-eligible LWW losers are retained/delivered, and how the normative SnapshotTail/outbox checkpoint maps to the current runtime.
+14. A finite, protocol-safe SeenChanges/provenance dedup GC rule. Current NodePersistence stores the exact peer/namespace/ChangeId set, but the normative spec has no corresponding expiry or safe watermark; production storage cannot safely compact it by an invented TTL.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
