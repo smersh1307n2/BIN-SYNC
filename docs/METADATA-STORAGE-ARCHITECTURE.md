@@ -812,3 +812,16 @@ The in-memory values and protocol semantics are unchanged. Values are range-chec
 For receipts, v15 uses the previously unused bit 2 of the existing receipt-flags byte to indicate a nonzero `ExpiresAt`. When expiry is zero, the expiry varint is omitted; nonzero expiry values are still written and restored. `AppliedAt`, cursorEnd and fingerprint behavior are unchanged. This is not a receipt-GC policy and does not introduce TTL-based deletion.
 
 The v15 tests cover mixed Outbox authors, sequence and timestamp round-trip, RecordTombstone RecordId reconstruction, peer progress round-trip, adaptive receipt layouts, and both zero/nonzero expiry. GitHub Actions run [42364523691](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42364523691) passed Release build, 638 tests, public samples, coverage threshold and fuzz/lab hardening at commit `ad78fb8f68906944a3c8aac4588dda6b8d29a3a7`. The v3-v14 snapshot readers remain supported. No network wire-format change.
+
+
+## Implementation status: FLD Storage integration (2026-11-07)
+
+The first cross-repository integration slice is now executable.
+
+- `Fld1.Storage` is built as an independent assembly with no reference to FLD Database, FLD Engine or BIN-SYNC.
+- Its byte-key/value API provides atomic write batches, read-your-writes, optimistic conflict detection, stable snapshots, ordered prefix scans, durable WAL recovery and independently rooted snapshots.
+- `BinSync.Storage.Integration` compiles against a pinned source snapshot of the authoritative FLD-DB `Fld1.Storage` project. The source snapshot is vendored because the FLD-DB repository is private and cannot be fetched by the public BIN-SYNC GitHub Actions runner. Its provenance is recorded in `external/Fld1.Storage/README.md`.
+- The durable Storage-backed Data Provider adapter passes the provider conformance suite (8/8), including restart, snapshot/feed barrier, bounded cursor paging, ACK cleanup, remote idempotency and equivocation rejection.
+- `samples/StorageArraySync` demonstrates two BIN-SYNC nodes exchanging a structured array backed by independent Storage partitions, including node and Storage reopen followed by a second update.
+
+This is deliberately a **Data Provider integration milestone**, not completion of the Metadata Store implementation or a claim that the public Data Provider API has shipped. The current adapter implements the test-only conformance contract. The remaining integration gate is a durable Storage-backed Metadata Store adapter covering receipt/ChangeId ledgers, relay and outbound streams, lease fencing, ACK/compaction, snapshots and Pending Apply recovery. Its implementation must preserve the one-payload/many-peers model and persist only changed logical metadata entries; a whole-partition rewrite per operation is not an acceptable final design.
