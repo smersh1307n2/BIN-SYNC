@@ -118,7 +118,7 @@ Relay journal сохраняет исходную mutation identity и соде�
 
 Relay retention/compaction рассчитывается по ACK всех interested peers. LWW loser остаётся relay-eligible: локальное значение может быть новее, но операция всё равно нужна другим узлам для детерминированной сходимости. Global ChangeId ledger отдельно подавляет повторную постановку этой операции после compaction payload.
 
-Global ChangeId ledger — отдельное состояние BIN-SYNC, не FLD relay journal. Его ключ — (scope, namespace, ChangeId), fingerprint проверяет неизменность canonical operation across peers. В текущем protocol revision нет safe GC watermark; ledger удерживается до fenced namespace/scope epoch reset. FLD не должен самостоятельно удалять opaque ProtocolStateDelta или ChangeId ledger по TTL либо по relay ACK.
+Global ChangeId ledger — отдельное состояние BIN-SYNC, не FLD relay journal. Его ключ — (scope, localReplicaId, namespace, ChangeId), fingerprint проверяет неизменность canonical operation across peers. В текущем protocol revision нет safe GC watermark; ledger удерживается до fenced namespace/scope epoch reset. FLD не должен самостоятельно удалять opaque ProtocolStateDelta или ChangeId ledger по TTL либо по relay ACK.
 
 ### 5.1. Текущая стоимость APPLY journal и целевое разделение
 
