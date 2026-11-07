@@ -197,9 +197,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var other = pending.Value.Batch;
             if (other.SenderPeer == receiveKey.Sender &&
                 other.SenderEpoch == receiveKey.Epoch &&
-                other.NamespaceId == receiveKey.NamespaceId &&
-                ResolveAuthorStream(other) == receiveKey.AuthorStream)
-                throw new InvalidOperationException("An earlier batch for this peer author stream is still pending apply.");
+                other.NamespaceId == receiveKey.NamespaceId)
+                throw new InvalidOperationException("An earlier batch for this sender session namespace is still pending apply.");
         }
 
         var receive = state.Receives.TryGetValue(receiveKey, out var priorReceive)
@@ -231,7 +230,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 foreach (var pendingOperation in otherPending.Batch.Operations)
                 {
                     if (pendingOperation.ChangeId == operation.ChangeId &&
-                        pendingOperation.AuthorNodeId == operation.AuthorNodeId &&
                         !pendingOperation.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                         throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
                 }
