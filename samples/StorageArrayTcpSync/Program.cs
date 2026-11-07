@@ -82,7 +82,11 @@ try
         RecordId recordB = providerB.ResolveRecordId(itemB.ToByteArray());
         ushort quantity = providerB.ResolveFieldId("quantity"u8.ToArray());
         providerB.AppendLocalChange(Mutation(recordB, quantity, nodeB.NodeId, 3000, "9"u8));
-        coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
+        int published = coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
+        ulong metadataHigh = metadataB.GetOutboundHighWatermark("array-tcp-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId);
+        Console.WriteLine($"post-restart publish={published} B outbox={nodeB.GetOutboxCount(NamespaceId)} high={nodeB.GetOutboxHighWatermark(NamespaceId, nodeB.NodeId)} metadata={metadataHigh}");
+        if (published != 1 || nodeB.GetOutboxCount(NamespaceId) == 0)
+            throw new InvalidOperationException("Post-restart local update was not enqueued in the Node Outbox.");
 
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
         StorageNodePersistence.Save(storageA, nodeA);
