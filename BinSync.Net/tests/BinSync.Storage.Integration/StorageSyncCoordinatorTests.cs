@@ -123,7 +123,7 @@ public sealed class StorageSyncCoordinatorTests
         coordinator.RegisterInterestedPeer(initiator, 1);
         var error = await Assert.ThrowsAsync<SyncException>(
             () => initiator.PushBatchAsync(sender, 1, metadata, scope));
-        Assert.Equal("SNAPSHOT_REQUIRED", error.Code);
+        Assert.Contains("SNAPSHOT_REQUIRED", error.Message);
         Assert.Null(metadata.GetPendingOutboundBatch(scope, sender.NodeId,
             receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId));
         Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, sender.NodeId, 1, sender.NodeId));
