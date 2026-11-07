@@ -665,7 +665,7 @@ public sealed class StorageSyncCoordinator
             {
                 _metadataStore.BeginPendingApply(metadataBatch, token);
             }
-            catch (InvalidOperationException)
+            catch (MetadataPendingApplyAlreadyFinalizedException)
             {
                 var prior = _metadataStore.AcceptIncomingBatch(metadataBatch);
                 if (!prior.IsDuplicate)
