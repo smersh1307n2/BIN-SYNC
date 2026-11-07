@@ -1,6 +1,6 @@
 # Metadata Store authority migration
 
-**Status:** implementation plan updated against BIN-SYNC `feature/fld-external-storage` at `d264d4a9c58998a6ff3baea9458b5f9fb61ab202` (2026-11-07). Durable Storage adapters and compact metadata rows are implemented; full Node/Transport authority migration remains open. This document does not change the wire protocol.
+**Status:** implementation plan verified against BIN-SYNC `feature/fld-external-storage` at `e0333aa322e0c98ae656f806594fcfd284bbc070` (2026-11-07). Durable Storage adapters and compact metadata rows are implemented; full Node/Transport authority migration remains open. Both `BinSync.Net` and `FLD Storage Integration` workflows pass on this head. This document does not change the wire protocol.
 
 ## 1. Current boundary (verified in code)
 
@@ -119,7 +119,7 @@ The migration is complete only when all of the following are true:
 
 ## 7. Current verified milestone
 
-At BIN-SYNC `aa5c52e2`:
+Historical adapter milestone (earlier baseline: BIN-SYNC `aa5c52e2`):
 
 - BIN-SYNC CI and fuzz/lab workflows pass.
 - FLD Storage Integration passes 47/47 tests.
@@ -137,8 +137,9 @@ The current Storage-backed adapter baseline has advanced beyond the initial real
 - The global ChangeId ledger now stores a 16-byte fingerprint plus a one-byte local-origin flag. The previous separate local-outbound marker key is read for compatibility and migrated on the next transaction.
 - Relay and local Outbound ACK/high-watermark pairs are each encoded in one 16-byte per-author row. Legacy separate 8-byte rows are still decoded and are rewritten in the compact form on the next metadata transaction.
 - Unpublished local LWW updates are coalesced within each bounded source-feed page before the Node Outbox is appended. This is not yet cross-page durable PendingLocal staging.
-- BIN-SYNC CI at this baseline passes 642/642 tests, 72.1% line coverage, public samples, Fuzz and Lab; Storage Integration passes 49/49, including legacy-format migration and real TCP samples.
+- BIN-SYNC CI at code baseline `d264d4a9` passes 642/642 tests, 72.1% line coverage, public samples, Fuzz and Lab; Storage Integration passes 49/49, including legacy-format migration and real TCP samples.
+- Documentation-only commits through `e0333aa3` were revalidated by GitHub Actions: `BinSync.Net` run `42379342614` and `FLD Storage Integration` run `42379342571` both completed successfully.
 
-The main authority gap is unchanged: transport reads Node.Outbox and Node.PeerStates; the Storage outbound stream is still populated as a durable mirror. The next implementation gate remains the peer/author progress and outbound batch reservation contract, followed by transport read/ACK migration and receive-side authority migration.
+The main authority gap remains: transport reads Node.Outbox and Node.PeerStates; the Storage outbound stream is still populated as a durable mirror. On current head `e0333aa3`, `SyncSession.PushBatchAsync` still calls Node transport batch creation, which advances Node peer ACK/pushed and digest-chain state. The next implementation gate remains the peer/author progress and outbound batch reservation contract, followed by transport read/ACK migration and receive-side authority migration.
 
 **Scope:** this is the BIN-SYNC + generic Storage stage only. FLD Database and its JournalSeq provenance adapter are deferred.
