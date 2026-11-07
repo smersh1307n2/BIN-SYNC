@@ -52,8 +52,8 @@ public class LabEdgeTests
         var oldBatch = donor.CreateDeltaBatch(oldPeer.NodeId, NS);
         Assert.NotNull(oldBatch);
         var oldState = donor.PeerStates[(oldPeer.NodeId, NS)];
-        oldState.StreamPushed[donor.NodeId] = 2;
-        oldState.StreamAcked[donor.NodeId] = 2;
+        oldState.SetStreamPushed(donor.NodeId, 2);
+        oldState.SetStreamAcked(donor.NodeId, 2);
         oldState.LastPushedSeq = 2;
         oldState.LastAckedSeq = 2;
 
