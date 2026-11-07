@@ -30,7 +30,7 @@ public sealed class ResourceLimits
         }
     }
 
-    /// <summary>Max SeenChanges provenance entries (0 = unlimited).</summary>
+    /// <summary>Max local WAL replay markers retained in SeenChanges (0 = unlimited).</summary>
     public int MaxSeenChanges
     {
         get
@@ -78,7 +78,7 @@ public sealed class ResourceLimits
             throw new SyncException("INTERNAL");
     }
 
-    /// <summary>Throw if the provenance seen-set would exceed configured capacity.</summary>
+    /// <summary>Throw if the local WAL replay-marker set would exceed configured capacity.</summary>
     internal void EnsureSeenChangesCapacity(Node node)
     {
         if (MaxSeenChanges <= 0) return;
@@ -96,7 +96,7 @@ public sealed class ResourceLimits
 
     /// <summary>
     /// Preflight a complete inbound batch before ApplyBatch publishes storage, cursors,
-    /// provenance or relay entries. Counts are deltas computed from the staged batch.
+    /// global dedup ledger or relay entries. Counts are deltas computed from the staged batch.
     /// </summary>
     internal void EnsureCanApplyBatch(Node node, int namespaceId, int newRecords,
         int relayEntries, int newGlobalChanges)
