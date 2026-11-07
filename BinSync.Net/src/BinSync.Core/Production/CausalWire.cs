@@ -23,7 +23,7 @@ public static class CausalWire
     {
         ArgumentNullException.ThrowIfNull(entries);
         for (int i = 0; i < entries.Count; i++)
-            if (entries[i].CausalDeps.Count > 0) return true;
+            if (entries[i].CausalDepsOrNull is not null) return true;
         return false;
     }
 
@@ -44,7 +44,7 @@ public static class CausalWire
             if (changeId.IsZero)
                 throw new ArgumentException("Causal trailer changeId cannot be zero.", nameof(entries));
 
-            var sourceDeps = entry.CausalDeps ?? throw new ArgumentException("CausalDeps cannot be null.", nameof(entries));
+            var sourceDeps = entry.CausalDepsOrNull ?? Array.Empty<BatchId>();
             if (sourceDeps.Count > MaxDepsPerEntry ||
                 (totalDeps = checked(totalDeps + sourceDeps.Count)) > MaxTotalDeps)
                 throw new ArgumentOutOfRangeException(nameof(entries), "Causal dependency count exceeds the configured limit.");
@@ -70,6 +70,24 @@ public static class CausalWire
         System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
             trailer.AsSpan(body.Length), (uint)body.Length);
         return trailer;
+    }
+
+    /// <summary>Validate a standard batch payload and its optional causal trailer without materializing public DTOs.</summary>
+    internal static void ValidatePayload(byte[] payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        if (payload.Length < 8)
+            throw new InvalidDataException("Truncated DELTA_BATCH header.");
+        bool hasTrailer = (payload[7] & FlagHasCausalTrailer) != 0;
+        if (!hasTrailer)
+        {
+            _ = Node.DecodeBatchPayloadInternal(payload);
+            return;
+        }
+
+        int bodyLength = GetBodyLength(payload);
+        var batch = Node.DecodeBatchPayloadInternal(payload.AsMemory(0, bodyLength));
+        ApplyTrailerStrict(payload, bodyLength, batch.Entries);
     }
 
     /// <summary>Return the standard batch body length using the fixed trailer footer.</summary>
