@@ -842,7 +842,12 @@ public sealed partial class Node
             var key = (targetPeer, namespaceId);
             if (!PeerStates.TryGetValue(key, out var state))
                 PeerStates[key] = state = new PeerState(targetPeer, namespaceId);
-            state.SetStreamAcked(author, checked((long)ackedCursor));
+            bool hasEstablishedBaseline = ackedCursor != 0 || streamOffset != 0 ||
+                lastBatchDigest.ToArray().AsSpan().IndexOfAnyExcept((byte)0) >= 0;
+            if (hasEstablishedBaseline)
+                state.SetStreamAcked(author, checked((long)ackedCursor));
+            else
+                state.ClearStreamAcked(author);
             state.SetStreamPushed(author, checked((long)pushedCursor));
             state.SetStreamOffset(author, checked((long)streamOffset));
             if (streamOffset > 0) state.InitialSyncComplete = true;
