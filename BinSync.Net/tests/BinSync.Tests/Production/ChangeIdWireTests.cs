@@ -294,6 +294,9 @@ public class ChangeIdWireTests
             new InboxReceipt(author, 12, true, fingerprint, true, 101, 0);
         node.InboxAuthors[(issuer, 8, 3, BatchId.From(Id(0xA3)))] =
             new InboxReceipt(author, 1, true, fingerprint, true, 102, 0);
+        var legacyBatch = BatchId.From(Id(0xA4));
+        node.InboxAuthors[(issuer, 8, 3, legacyBatch)] =
+            new InboxReceipt(author, 0, false, default, false, 103, 200);
 
         var change1 = BatchId.From(Id(0xB1));
         var change2 = BatchId.From(Id(0xB2));
@@ -310,10 +313,15 @@ public class ChangeIdWireTests
             Assert.Equal((ushort)10, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
             using var restored = NodePersistence.Load(path);
 
-            Assert.Equal(3, restored.InboxAuthors.Count);
+            Assert.Equal(4, restored.InboxAuthors.Count);
             Assert.Equal(11, restored.InboxAuthors[(issuer, 7, 3, batch1)].CursorEnd);
             Assert.Equal(12, restored.InboxAuthors[(issuer, 7, 3, batch2)].CursorEnd);
             Assert.Equal(fingerprint, restored.InboxAuthors[(issuer, 7, 3, batch1)].Fingerprint);
+            var legacyReceipt = restored.InboxAuthors[(issuer, 8, 3, legacyBatch)];
+            Assert.False(legacyReceipt.HasCursorEnd);
+            Assert.False(legacyReceipt.HasFingerprint);
+            Assert.Equal(103UL, legacyReceipt.AppliedAt);
+            Assert.Equal(200UL, legacyReceipt.ExpiresAt);
             Assert.Equal(3, restored.GlobalChangeLedger.Count);
             Assert.Equal(fingerprint, restored.GlobalChangeLedger[(7, change1)].Fingerprint);
             Assert.False(restored.GlobalChangeLedger[(7, change2)].IsKnown);
@@ -323,6 +331,34 @@ public class ChangeIdWireTests
         {
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void Persistence_v10_rejects_receipt_cursor_that_overflows_signed_range()
+    {
+        var nodeId = NodeId.From(Id(0xD0));
+        var issuer = NodeId.From(Id(0xD1));
+        var author = NodeId.From(Id(0xD2));
+        var batchId = BatchId.From(Id(0xD3));
+        var writer = new Writer();
+        writer.B128(nodeId).Varint(0).U64(0).U32(0);
+        for (int i = 0; i < 3; i++) writer.Varint(0);
+        // One v10 receipt group containing an invalid Int64 cursor.
+        writer.Varint(1).B128(issuer).Varint(7).Varint(2).Varint(1)
+            .B128(batchId).B128(author).U8(1).Varint(ulong.MaxValue).Varint(0).Varint(0);
+        for (int i = 0; i < 7; i++) writer.Varint(0);
+        writer.Varint(0); // grouped global ledger
+        for (int i = 0; i < 7; i++) writer.Varint(0);
+        var body = writer.Value();
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v10", body);
+        var image = new byte[46 + body.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 10);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
+        digest.CopyTo(image.AsSpan(14, 32));
+        body.CopyTo(image.AsSpan(46));
+
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(image));
     }
 
     [Fact]
