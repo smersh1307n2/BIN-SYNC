@@ -496,7 +496,7 @@ public class ChangeIdWireTests
         var fieldOp = new OpFieldWrite
         {
             FieldId = 0x0101, KeyEpoch = 0, Wall = 1000, Logical = 1,
-            Origin = 1, Value = Val("compact-outbox")
+            Origin = 1, Value = System.Text.Encoding.UTF8.GetBytes("compact-outbox")
         };
         var tombOp = new OpRecordTombstone
         {
