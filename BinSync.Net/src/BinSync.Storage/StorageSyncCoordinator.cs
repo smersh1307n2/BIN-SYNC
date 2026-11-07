@@ -94,7 +94,7 @@ public sealed class StorageSyncCoordinator
                     RecordId = item.RecordId,
                     FieldId = item.FieldId,
                     IsTombstone = tombstone,
-                    HlcWall = field.Timestamp.Wall,
+                    HlcWall = field!.Timestamp.Wall,
                     HlcLogical = field.Timestamp.Logical,
                     AuthorNodeId = field.AuthorNodeId,
                     KeyEpoch = 0,
@@ -122,9 +122,9 @@ public sealed class StorageSyncCoordinator
         BinaryPrimitives.WriteInt32LittleEndian(header.Slice(2), mutations.Count);
         hash.AppendData(header);
 
+        Span<byte> fixedPart = stackalloc byte[51];
         foreach (var mutation in mutations)
         {
-            Span<byte> fixedPart = stackalloc byte[51];
             mutation.RecordId.WriteTo(fixedPart);
             BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(16), mutation.FieldId);
             fixedPart[18] = mutation.IsTombstone ? (byte)1 : (byte)0;
