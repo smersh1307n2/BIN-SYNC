@@ -228,9 +228,9 @@ public sealed partial class Node : IDisposable
     internal Dictionary<NodeId, int> DurableAuthors { get; } = new();
     /// <summary>Per-peer session cursors and ACK watermarks keyed by (peer, namespace).</summary>
     internal Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
-    // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
-    /// <summary>Provenance seen-set of (sender, ns, changeId) for relay (Errata E-10).</summary>
-    internal HashSet<(NodeId Peer, int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
+    // Local WAL replay markers only. NodeId is implicit in this Node instance.
+    /// <summary>Local WAL replay markers keyed by (namespace, ChangeId).</summary>
+    internal HashSet<(int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
     // Route-independent operation identity. Key is (namespace, ChangeId); values
     // retain only a compact semantic fingerprint, never the operation payload.
     internal Dictionary<(int Ns, BatchId ChangeId), ChangeLedgerValue> GlobalChangeLedger { get; } = new();
