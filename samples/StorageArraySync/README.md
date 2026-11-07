@@ -1,14 +1,15 @@
 # Storage-backed array synchronization
 
-This executable demonstrates an application-owned array persisted by `Fld1.Storage` and synchronized between two BIN-SYNC nodes.
+This executable demonstrates the production `BinSync.Storage` assembly with two BIN-SYNC nodes and two durable Storage-backed Data Providers.
 
 It covers:
-- stable record IDs derived from array item GUIDs;
+- stable record IDs derived from array item GUIDs and stable field IDs derived from field names;
 - multiple fields per array item;
-- durable local change feed and acknowledgement;
-- BIN-SYNC bidirectional synchronization;
-- remote state materialization into Storage without re-entering the local feed;
-- closing and reopening both Storage partitions and BIN-SYNC node persistence before a second update.
+- durable local change feeds and acknowledgement only after the Node checkpoint callback succeeds;
+- replay-safe publication using the original HLC and local author identity;
+- bidirectional BIN-SYNC synchronization;
+- remote materialization into Storage without re-entering the local change feed;
+- closing and reopening both Storage providers and BIN-SYNC node state before a second update.
 
 Run from the repository root:
 
@@ -16,4 +17,4 @@ Run from the repository root:
 dotnet run --project samples/StorageArraySync/StorageArraySync.csproj -c Release
 ```
 
-The sample intentionally uses the current public `Node` write/sync API and a small host-side Storage bridge. It does not claim that the future public Data Provider API has shipped; the durable adapter contract is separately exercised by `BinSync.Storage.Integration`.
+The sample uses the public `IDataProvider`, `StorageDataProvider` and `StorageSyncCoordinator` APIs. Durable protocol metadata is provided by `IMetadataStore` / `StorageMetadataStore`; its conformance and restart behavior are exercised separately by `BinSync.Storage.Integration`.
