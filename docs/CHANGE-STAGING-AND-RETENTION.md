@@ -551,7 +551,7 @@ The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value b
 3. Consolidate Inbox/InboxAuthors into one header-bound receipt map — implemented; receipt expiry/GC remains open.
 4. Remove redundant remote `SeenChanges` rows and compact the remaining local WAL marker key — implemented; NodePersistence v11 migration is covered.
 5. APPLY single-encoding, relay-only materialization, sparse journal paging and FLD per-author relay ACK/physical payload compaction — implemented in FLD-DB.
-6. BIN-SYNC source `JournalSeq → ChangeId → OutboxSeq` provenance, durable scan cursor and per-author minimum downstream ACK aggregation — still open; this is the next integration implementation gate.
+6. BIN-SYNC source `JournalSeq → ChangeId → OutboxSeq` provenance, durable scan cursor and per-author minimum downstream ACK aggregation — still open as a later FLD synchronized-database integration gate. It is not the immediate implementation task: first establish the neutral Data Provider/Metadata Store contracts, refactor runtime persistence, and extract the two-DLL Storage Core.
 7. Inbox receipt expiry/GC, bounded/rebuildable receipt indexing, and Storage physical format — still open; no unsafe time-only deletion is authorized.
 8. PendingLocal cross-commit coalescing — design contract and baseline tests exist; implementation belongs to FLD-DB and is not yet available.
 9. Only after the above, evaluate compact Outbox encoding, content-derived ChangeId, OriginSeq and WAL-backed Outbox references.
