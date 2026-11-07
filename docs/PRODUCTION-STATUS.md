@@ -2,7 +2,7 @@
 
 **Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
 **Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged)  
-**CI:** GitHub Actions run [42359682214](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42359682214) successful — 637/637 tests, public samples pass, fuzz/lab hardening pass, line coverage 72.5%.  
+**CI:** GitHub Actions run [42360397431](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42359682214) successful — 637/637 tests, public samples pass, fuzz/lab hardening pass, line coverage 72.5%.  
 **Audit status:** stream/fragment binding audited; Metadata Store architecture v0.6, Metadata Store semantic conformance, Data Provider semantic conformance, change-staging/retention policy and the specialized FLD synchronized-database contract are documented. Test-only volatile reference fixtures cover 20 Metadata Store and six Data Provider semantic scenarios. They do not constitute durable providers/stores or restart guarantees. External-store runtime boundary, durable PendingLocal staging/freeze and FLD Storage-only implementation are not implemented. Full normative §§4–18 audit remains in progress; no percentage-based spec-parity claim is made.
 
 Legend: **implemented** · **partial** · **helper-only** · **not implemented**
