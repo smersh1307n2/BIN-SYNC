@@ -58,7 +58,9 @@ public sealed class StorageSyncCoordinator
                     throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
 
                 var hlc = new Hlc(mutation.HlcWall, mutation.HlcLogical);
-                if (mutation.IsTombstone)
+                if (mutation.IsRecordTombstone)
+                    _node.DeleteRecord(_namespaceId, mutation.RecordId, hlc);
+                else if (mutation.IsTombstone)
                     _node.TombField(_namespaceId, mutation.RecordId, mutation.FieldId, hlc);
                 else
                     _node.WriteField(_namespaceId, mutation.RecordId, mutation.FieldId, mutation.Value, hlc);
@@ -192,8 +194,19 @@ public sealed class StorageSyncCoordinator
                         Value = Array.Empty<byte>()
                     });
                     break;
-                case OpRecordTombstone:
-                    throw new NotSupportedException("StorageDataProvider does not yet persist record-level tombstones.");
+                case OpRecordTombstone recordTombstone:
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = recordTombstone.RecordId,
+                        FieldId = Model.LifecycleFieldId,
+                        IsRecordTombstone = true,
+                        HlcWall = recordTombstone.Wall,
+                        HlcLogical = recordTombstone.Logical,
+                        AuthorNodeId = batch.DurableAuthor,
+                        KeyEpoch = 0,
+                        Value = Array.Empty<byte>()
+                    });
+                    break;
                 default:
                     throw new InvalidDataException("Batch contains an unsupported operation type.");
             }
@@ -345,8 +358,19 @@ public sealed class StorageSyncCoordinator
                         Value = Array.Empty<byte>()
                     });
                     break;
-                case OpRecordTombstone:
-                    throw new NotSupportedException("StorageDataProvider does not yet persist record-level tombstones.");
+                case OpRecordTombstone recordTombstone:
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = recordTombstone.RecordId,
+                        FieldId = Model.LifecycleFieldId,
+                        IsRecordTombstone = true,
+                        HlcWall = recordTombstone.Wall,
+                        HlcLogical = recordTombstone.Logical,
+                        AuthorNodeId = operation.AuthorNodeId,
+                        KeyEpoch = 0,
+                        Value = Array.Empty<byte>()
+                    });
+                    break;
                 default:
                     throw new InvalidDataException("Pending metadata operation has an unsupported operation type.");
             }
