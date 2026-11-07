@@ -207,10 +207,10 @@ public sealed partial class Node : IDisposable
     internal Dictionary<int, List<OutboxEntry>> Outbox { get; } = new();
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
-    /// <summary>Set of applied batch keys for idempotent replay detection.</summary>
-    internal HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox { get; } = new();
-    /// <summary>Durable author stream for each accepted batch, retained for exact duplicate ACKs.</summary>
+    /// <summary>Accepted batch receipt and exact durable author stream for duplicate ACKs.</summary>
     internal Dictionary<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId), NodeId> InboxAuthors { get; } = new();
+    /// <summary>Read-only receipt-key view retained for diagnostics and tests; no duplicate key set is stored.</summary>
+    internal IReadOnlyCollection<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox => InboxAuthors.Keys;
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
     /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
     internal Dictionary<(NodeId Issuer, int Ns, int Epoch), Digest16> LastBatchDigest { get; } = new();
@@ -411,7 +411,6 @@ public sealed partial class Node : IDisposable
         {
             _storage.Clear();
             Outbox.Clear();
-            Inbox.Clear();
             InboxAuthors.Clear();
             PeerStates.Clear();
             AliasToNode.Clear();
