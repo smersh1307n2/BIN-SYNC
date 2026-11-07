@@ -1,21 +1,22 @@
 # Контракт интеграции BIN-SYNC ↔ FLD-DB
 
-**Статус:** проект контракта, точка завершения текущего аудита.  
-**Область:** только граница хранения и протокола. Это не wire-spec и не реализация адаптера.  
-**Владелец durable field state:** FLD-DB.  
-**Владелец протокольной семантики:** BIN-SYNC.  
-**Важно:** до согласования и реализации этого контракта прямое подключение текущего `FldDatabase` к текущему `Node` не считается безопасным.
+**Статус:** специализированный проект контракта интеграции FLD-DB как синхронизируемой базы.  
+**Общая архитектура:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
+**Область:** FLD-специфичная граница между durable field state и BIN-SYNC. Это не wire-spec и не контракт универсального Metadata Store.  
+**Владелец durable field state и физических гарантий хранения:** FLD-DB.  
+**Владелец протокольной семантики и решений синхронизации:** BIN-SYNC.  
+**Важно:** этот документ описывает режим, когда FLD-DB хранит сами синхронизируемые пользовательские данные. Режим FLD-DB как отдельного Storage-only Metadata Store описывается общей архитектурой и требует отдельной реализации. До реализации полной транзакционной границы прямое подключение текущего `FldDatabase` к текущему `Node` не считается безопасным.
 
 ## 1. Цель и разделение ответственности
 
-### FLD-DB owns
+### FLD-DB owns (в режиме синхронизируемой базы)
 
 - durable field values, field/record tombstones и lifecycle state;
 - локальный author identity и генерацию HLC для локальных записей;
 - локальный durable Outbox и его namespace cursor;
-- WAL v2, group commit, checkpoint, recovery и compaction;
-- LWW application remote mutations к field state;
-- durable storage для протокольного commit receipt / inbox metadata и relay journal, необходимого для восстановления BIN-SYNC после сбоя.
+- WAL, group commit, checkpoint, recovery и compaction;
+- физическую атомарность durable field state и переданных BIN-SYNC metadata updates;
+- durable хранение opaque protocol commit receipt/state delta и relay journal, не интерпретируя их протокольный смысл.
 
 ### BIN-SYNC owns
 
@@ -26,7 +27,7 @@
 - relay policy и назначение relay sequence для author stream;
 - формирование DELTA_BATCH, STATE_DIGEST, IBLT и snapshot protocol messages.
 
-BIN-SYNC не должен держать вторую копию durable field state или второй WAL с теми же field mutations в external-storage режиме. FLD-DB не должен самостоятельно интерпретировать wire protocol.
+BIN-SYNC не должен держать вторую копию durable field state или второй WAL с теми же field mutations при использовании FLD как Data Provider/Metadata Store. FLD-DB не должен самостоятельно интерпретировать wire protocol, вычислять peer-safe ACK или определять протокольную политику хранения. Общая модель разделения ответственности, включая независимые внешние источники данных и Storage-only режим FLD, определена в [общей архитектуре](METADATA-STORAGE-ARCHITECTURE.md).
 
 ## 2. Идентичность и отображение курсоров
 
@@ -119,17 +120,17 @@ FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest1
 
 Проверено по FLD-DB `fix/crash-consistency-outbox` на commit `6d83b509` и BIN-SYNC PR #16:
 
-| Текущее API / состояние | Почему недостаточно для интеграции |
+| Текущее API / состояние (проверено на FLD fix/crash-consistency-outbox) | Статус / оставшийся разрыв |
 |---|---|
-| `FldDatabase.ApplyRemote(ReadOnlySpan<RemoteFieldWrite>)` | Возвращает только count LWW winners; не принимает BatchId/peer/cursor/digest-chain/protocol delta |
-| `RemoteFieldWrite.ChangeId` nullable | Для remote apply ChangeId должен быть обязательным и стабильным |
-| `ApplyRemote` пропускает LWW losers | Операции, проигравшие локальному значению, не сохраняются для relay |
-| `ApplyRemote` добавляет изменения в общий `_dirty` | Следующий `Commit()` записывает все dirty mutations в локальный Outbox, включая remote author; это создаёт ошибочный self/relay echo |
-| `Commit()` формирует WAL group и Outbox из всего dirty set | Нет разделения local commit vs remote commit |
-| `ReadOutboxBatch/AcknowledgeOutbox/GetOutboxWatermark/CompactOutbox` | Есть базовый local Outbox API, но нет consumer lease/fencing и отдельного high-watermark API |
-| Нет durable relay journal API | Нельзя безопасно восстановить и повторно отправить принятые remote operations после checkpoint/restart |
-| Нет atomic protocol extension/inbox commit API | Нельзя атомарно закрепить field state, incoming cursor/digest, SeenChanges и relay journal |
-| BIN-SYNC `Node` хранит Storage/Outbox/PeerStates/SeenChanges в собственных коллекциях и имеет собственный WAL v2 | В external mode пока нет storage-provider boundary; прямое подключение FLD создаст две копии состояния |
+| FldDatabase.ApplyRemote(ReadOnlySpan<RemoteFieldWrite>) | Оставлен как obsolete volatile merge-only compatibility API; не durable и запрещён для BIN-SYNC receive |
+| RemoteFieldWrite.ChangeId | Теперь обязательный 16-byte nonzero идентификатор; конструктор валидирует длину и ненулевое значение |
+| FldDatabase.ApplyRemoteBatch(RemoteBatchCommit) | Реализован durable receive boundary: проверяет duplicate batch, формирует WAL APPLY commit, сохраняет protocol delta и relay subset, flush-ит WAL/apply journal, затем публикует LWW winners; remote writes не попадают в local Outbox |
+| RemoteBatchCommit.ProtocolStateDelta | Передаётся и сохраняется opaque; FLD не интерпретирует его. BIN-SYNC ещё должен обеспечить корректное формирование, применение/recovery и атомарное согласование этого delta со своим runtime state |
+| ApplyJournal / ReadRelayBatches | Durable append-only apply journal и чтение relay-eligible операций реализованы; отдельный safe relay ACK/retention/compaction boundary в публичном API ещё не подтверждён |
+| AcquireOutboxLease / ReleaseOutboxLease / VisitOutboxBatch / AcknowledgeOutbox(..., lease) | Durable fenced lease, borrowed-span enumeration и fenced ACK реализованы |
+| GetOutboxHighWatermark | Отдельный high watermark реализован; WAL CommitSeq и OutboxSeq остаются разными шкалами |
+| FLD Storage-only Metadata Store | Не реализован как отдельная семантическая роль/API; текущий FldDatabase по-прежнему создаёт синхронизируемую модель данных с LocalAuthor/HLC/Outbox |
+| BIN-SYNC Node | Текущие Storage/Outbox/PeerStates/SeenChanges и другие протокольные структуры остаются внутренними коллекциями Node; общего Metadata Store boundary пока нет |
 
 **Запрет до появления целевого API:** не использовать последовательность `FldDatabase.ApplyRemote(...); FldDatabase.Commit();` как реализацию BIN-SYNC receive. Она не обеспечивает atomic batch/idempotency/relay semantics и может добавить remote author entries в локальный Outbox.
 
@@ -148,4 +149,4 @@ FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest1
 
 ## 9. Решение по текущему этапу
 
-Аудит BIN-SYNC должен завершиться на этой границе. Следующий этап — согласовать и реализовать neutral DTO + FLD durable operations и BIN-SYNC external-store adapter. До этого не заменять внутренние Node dictionaries точечными callback-ами: горячий путь, atomic publication, WAL replay и relay retention требуют единой транзакционной границы.
+Следующий этап — согласовать общую Metadata Store архитектуру, определить нейтральные semantic operations и conformance tests, затем спроектировать Storage-only роль FLD и вынести durable state BIN-SYNC за storage boundary. Уже реализованные FLD primitives (ApplyRemoteBatch, apply journal, Outbox lease) следует переиспользовать и довести, а не переписывать. До появления единой транзакционной границы не подключать FLD к Node набором точечных callback-ов.
