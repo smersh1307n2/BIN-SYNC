@@ -81,6 +81,56 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void Source_feed_retry_is_idempotent_and_same_version_equivocation_fails_closed()
+    {
+        string directory = Path.Combine(_root, "source-retry");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProviderConformanceAdapter(directory, partitionId: 81, deleteOnDispose: false);
+            var mutation = new ProviderMutation
+            {
+                RecordId = RecordId.From(new byte[] { 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+                FieldId = 0x0101,
+                AuthorNodeId = NodeId.From(new byte[] { 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+                HlcWall = 500,
+                HlcLogical = 2,
+                Value = "stable"u8.ToArray()
+            };
+
+            provider.AppendLocalChange(mutation);
+            provider.AppendLocalChange(mutation);
+            Assert.Equal(1UL, provider.LocalChangeHighWatermark);
+            Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+
+            var equivocation = new ProviderMutation
+            {
+                RecordId = mutation.RecordId,
+                FieldId = mutation.FieldId,
+                AuthorNodeId = mutation.AuthorNodeId,
+                HlcWall = mutation.HlcWall,
+                HlcLogical = mutation.HlcLogical,
+                Value = "conflict"u8.ToArray()
+            };
+            Assert.Throws<InvalidDataException>(() => provider.AppendLocalChange(equivocation));
+            Assert.Equal(1UL, provider.LocalChangeHighWatermark);
+            Assert.True(provider.TryReadCurrent(mutation.RecordId, mutation.FieldId, out var current));
+            Assert.Equal("stable", System.Text.Encoding.UTF8.GetString(current!.Value));
+
+            Guid firstToken = Guid.Parse("00000000-0000-0000-0000-000000000501");
+            Guid conflictingToken = Guid.Parse("00000000-0000-0000-0000-000000000502");
+            provider.ApplyRemoteBatch(firstToken, new[] { mutation });
+            Assert.Throws<InvalidDataException>(() => provider.ApplyRemoteBatch(conflictingToken, new[] { equivocation }));
+            Assert.False(provider.ApplyRemoteBatch(conflictingToken, new[] { mutation }).IsDuplicate);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void Out_of_order_local_feed_keeps_current_value_at_the_lww_winner()
     {
