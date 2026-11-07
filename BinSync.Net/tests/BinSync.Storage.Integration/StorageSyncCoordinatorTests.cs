@@ -107,6 +107,8 @@ public sealed class StorageSyncCoordinatorTests
         coordinator.PublishLocalChanges(_ => { });
 
         metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 1, 1);
+        metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, 1, 1,
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, checked((uint)local.Epoch)) });
         var oldEpochBatch = new MetadataOutboundBatchReservation
         {
             BatchId = BatchId.From(Guid.Parse("a2000000-0000-0000-0000-0000000000a2").ToByteArray()),
@@ -134,6 +136,8 @@ public sealed class StorageSyncCoordinatorTests
         await using var session = await connectTask;
 
         coordinator.RegisterInterestedPeer(session, 1);
+        metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, 2, 1,
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, checked((uint)local.Epoch)) });
 
         var newEpochState = metadata.GetPeerStreamState(scope, local.NodeId,
             peer.NodeId, 2, 1, local.NodeId);
@@ -188,6 +192,10 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 3600, Value = "shared-relay-payload"u8.ToArray()
         });
         coordinatorA.PublishLocalChanges(_ => { });
+        coordinatorA.RegisterInterestedPeer(aConnect, 1);
+        metadataA.CompletePeerInitialSync(scopeA, nodeA.NodeId, nodeB.NodeId,
+            checked((uint)nodeB.Epoch), 1,
+            new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, checked((uint)nodeA.Epoch)) });
         var receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(bAccept, _ => { });
         Assert.True(await aConnect.PushBatchAsync(nodeA, 1, metadataA, scopeA));
         Assert.Equal(1, (await receiveAtB).Applied);
@@ -197,12 +205,19 @@ public sealed class StorageSyncCoordinatorTests
         // single shared relay payload needed by D.
         metadataB.RegisterInterestedPeer(scopeB, nodeB.NodeId, nodeD.NodeId,
             checked((uint)nodeD.Epoch), 1);
+        metadataB.CompletePeerInitialSync(scopeB, nodeB.NodeId, nodeD.NodeId,
+            checked((uint)nodeD.Epoch), 1,
+            new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, checked((uint)nodeA.Epoch)) });
 
         var (bToC, cFromB) = PipeTransport.CreatePair();
         var cAcceptTask = SyncSession.AcceptAsync(nodeC, cFromB);
         var bConnectCTask = SyncSession.ConnectAsync(nodeB, bToC);
         await using var cAccept = await cAcceptTask;
         await using var bConnectC = await bConnectCTask;
+        coordinatorB.RegisterInterestedPeer(bConnectC, 1);
+        metadataB.CompletePeerInitialSync(scopeB, nodeB.NodeId, nodeC.NodeId,
+            checked((uint)nodeC.Epoch), 1,
+            new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, checked((uint)nodeA.Epoch)) });
         var receiveAtC = coordinatorC.ReceiveBatchBeforeAckAsync(cAccept, _ => { });
         Assert.True(await bConnectC.PushBatchAsync(nodeB, 1, metadataB, scopeB));
         Assert.Equal(1, (await receiveAtC).Applied);
@@ -218,6 +233,7 @@ public sealed class StorageSyncCoordinatorTests
         var bConnectDTask = SyncSession.ConnectAsync(nodeB, bToD);
         await using var dAccept = await dAcceptTask;
         await using var bConnectD = await bConnectDTask;
+        coordinatorB.RegisterInterestedPeer(bConnectD, 1);
         var receiveAtD = coordinatorD.ReceiveBatchBeforeAckAsync(dAccept, _ => { });
         Assert.True(await bConnectD.PushBatchAsync(nodeB, 1, metadataB, scopeB));
         Assert.Equal(1, (await receiveAtD).Applied);
@@ -254,6 +270,9 @@ public sealed class StorageSyncCoordinatorTests
         });
         coordinator.PublishLocalChanges(_ => { });
         coordinator.RegisterInterestedPeer(initiator, 1);
+        metadata.CompletePeerInitialSync(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1,
+            new[] { new MetadataPeerStreamBaseline(sender.NodeId, 0, checked((uint)sender.Epoch)) });
         var before = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
             .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray())).ToArray();
 
@@ -306,6 +325,10 @@ public sealed class StorageSyncCoordinatorTests
         await using (var firstAcceptor = await firstAcceptTask)
         await using (var firstInitiator = await firstConnectTask)
         {
+            coordinator.RegisterInterestedPeer(firstInitiator, 1);
+            metadata.CompletePeerInitialSync(scope, originalSender.NodeId, receiver.NodeId,
+                checked((uint)receiver.Epoch), 1,
+                new[] { new MetadataPeerStreamBaseline(originalSender.NodeId, 0, checked((uint)originalSender.Epoch)) });
             using var cts = new CancellationTokenSource();
             var receive = firstAcceptor.ReceiveBatchAsync(receiver,
                 beforeAck: (_, _) => throw new IOException("simulated ACK loss"));
@@ -422,6 +445,10 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 1000, HlcLogical = 0, Value = "first"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
+        coordinator.RegisterInterestedPeer(initiator, 1);
+        metadata.CompletePeerInitialSync("durable-peer-session", sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1,
+            new[] { new MetadataPeerStreamBaseline(sender.NodeId, 0, checked((uint)sender.Epoch)) });
         var firstReceive = acceptor.ReceiveBatchAsync(receiver);
         Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, "durable-peer-session"));
         Assert.Equal(1, (await firstReceive).Applied);
