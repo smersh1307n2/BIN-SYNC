@@ -23,6 +23,17 @@ public interface IMetadataPeerStateStore
     /// Returns the minimum ACK cursor across every durably registered interested peer.
     /// Returns zero when no peer is registered or any required progress is unavailable.
     /// </summary>
+    IReadOnlyList<NodeId> ReadOutboundAuthors(string scopeId, NodeId localReplica, int namespaceId);
+    IReadOnlyList<NodeId> ReadRelayAuthors(string scopeId, NodeId localReplica, int namespaceId);
+
+    /// <summary>Reads the local-origin outbound page after this peer's durable local cursor.</summary>
+    MetadataOutboundPage ReadOutboundForPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream, int limit);
+
+    /// <summary>Reads the relay page after this peer's durable local cursor.</summary>
+    MetadataRelayPage ReadRelayForPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream, int limit);
+
     ulong GetSafeOutboundCompactionCursor(string scopeId, NodeId localReplica,
         int namespaceId, NodeId authorStream);
 
