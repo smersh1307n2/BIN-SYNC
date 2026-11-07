@@ -120,7 +120,7 @@ public class ChangeIdWireTests
         Assert.NotNull(Transport.DeliverBatch(a, c, 1));
         Assert.Single(c.Outbox[1]);
         Assert.Equal(originalChangeId, c.Outbox[1][0].ChangeId);
-        Assert.DoesNotContain((a.NodeId, 1, originalChangeId), c.SeenChanges);
+        Assert.DoesNotContain((1, originalChangeId), c.SeenChanges);
         Assert.True(c.GlobalChangeLedger.ContainsKey((1, originalChangeId)));
 
         // C -> A closes the mesh loop. A already owns this ChangeId, so it must
@@ -128,7 +128,7 @@ public class ChangeIdWireTests
         Assert.NotNull(Transport.DeliverBatch(c, a, 1));
         Assert.False(a.Outbox.TryGetValue(1, out var returnedEntries) &&
                      returnedEntries.Any(e => e.ChangeId == originalChangeId));
-        Assert.DoesNotContain((c.NodeId, 1, originalChangeId), a.SeenChanges);
+        Assert.DoesNotContain((1, originalChangeId), a.SeenChanges);
         Assert.True(a.GlobalChangeLedger.ContainsKey((1, originalChangeId)));
 
         Assert.True(a.Storage[1].ContainsKey(Fix.Rid(0x41)));
