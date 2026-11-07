@@ -123,7 +123,7 @@ public sealed class StorageSyncCoordinator
         BinaryPrimitives.WriteInt32LittleEndian(header.Slice(2), mutations.Count);
         hash.AppendData(header);
 
-        Span<byte> fixedPart = stackalloc byte[51];
+        Span<byte> fixedPart = stackalloc byte[53];
         foreach (var mutation in mutations)
         {
             mutation.RecordId.WriteTo(fixedPart);
