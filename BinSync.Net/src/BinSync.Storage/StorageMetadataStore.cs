@@ -211,14 +211,14 @@ public class StorageMetadataStore : IMetadataStore
         foreach (var operation in batch.Operations)
         {
             var ledgerKey = new LedgerKey(batch.NamespaceId, operation.ChangeId);
-            if (next.ChangeLedger.TryGetValue(ledgerKey, out var priorFingerprint))
+            if (next.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
             {
-                if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                 continue;
             }
 
-            next.ChangeLedger.Add(ledgerKey, operation.Fingerprint.ToArray());
+            next.ChangeLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: false));
             if (!operation.RelayEligible)
                 continue;
 
@@ -329,19 +329,15 @@ public class StorageMetadataStore : IMetadataStore
         int existingCount = 0;
         foreach (var operation in operations)
         {
-            var changeKey = new OutboundChangeKey(namespaceId, operation.ChangeId);
             var ledgerKey = new LedgerKey(namespaceId, operation.ChangeId);
-            bool alreadyFrozen = current.OutboundChangeIds.Contains(changeKey);
-            if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorFingerprint))
+            bool alreadyFrozen = current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger)
+                && priorLedger.IsLocalOutbound;
+            if (priorLedger is not null)
             {
-                if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                     throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId ledger.");
                 if (!alreadyFrozen)
                     throw new InvalidDataException("ChangeId is already known from an incoming route and cannot be published as a new local operation.");
-            }
-            else if (alreadyFrozen)
-            {
-                throw new InvalidDataException("Frozen outbound ChangeId is missing its global fingerprint.");
             }
 
             if (!alreadyFrozen) continue;
@@ -379,8 +375,8 @@ public class StorageMetadataStore : IMetadataStore
             var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
             entries.Add(item);
             frozen.Add(CloneOutboundItem(item));
-            next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
-            next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId), operation.Fingerprint.ToArray());
+            next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
+                new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
             next.OutboundHighWatermarks[key] = sequence;
         }
 
@@ -917,14 +913,6 @@ public class StorageMetadataStore : IMetadataStore
             Add(StorageKey(root, 10, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), value);
         }
 
-        foreach (var key in state.OutboundChangeIds)
-        {
-            byte[] suffix = new byte[18];
-            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)key.NamespaceId));
-            key.ChangeId.WriteTo(suffix.AsSpan(2));
-            Add(StorageKey(root, 11, suffix), Array.Empty<byte>());
-        }
-
         foreach (var pair in state.PendingApplies)
             Add(StorageKey(root, 12, pair.Key.ToByteArray()), EncodeIncomingBatch(pair.Value.Batch));
         foreach (var pair in state.CompletedPendingApplies)
@@ -1008,10 +996,14 @@ public class StorageMetadataStore : IMetadataStore
                 case 3:
                 {
                     RequireLength(key, 18);
-                    RequireLength(row.Value, 16);
+                    if (row.Value.Length is not (16 or 17) ||
+                        (row.Value.Length == 17 && row.Value[16] > 1))
+                        throw new InvalidDataException("Stored ChangeId ledger value has an invalid length or origin flag.");
                     state.ChangeLedger.Add(new LedgerKey(
                         BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        BatchId.From(key.Slice(2, 16))), row.Value.ToArray());
+                        BatchId.From(key.Slice(2, 16))),
+                        new ChangeLedgerValue(row.Value.AsSpan(0, 16).ToArray(),
+                            row.Value.Length == 17 && row.Value[16] == 1));
                     break;
                 }
                 case 4:
@@ -1065,10 +1057,16 @@ public class StorageMetadataStore : IMetadataStore
                 }
                 case 11:
                 {
+                    // Legacy local-origin marker. vNext folds this bit into the
+                    // ChangeId ledger value and omits the redundant marker key.
                     RequireLength(key, 18);
-                    state.OutboundChangeIds.Add(new OutboundChangeKey(
+                    RequireLength(row.Value, 0);
+                    var ledgerKey = new LedgerKey(
                         BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        BatchId.From(key.Slice(2, 16))));
+                        BatchId.From(key.Slice(2, 16)));
+                    if (!state.ChangeLedger.TryGetValue(ledgerKey, out var ledger))
+                        throw new InvalidDataException("Legacy outbound-origin marker has no ChangeId ledger entry.");
+                    state.ChangeLedger[ledgerKey] = ledger with { IsLocalOutbound = true };
                     break;
                 }
                 case 12:
@@ -1394,7 +1392,6 @@ public class StorageMetadataStore : IMetadataStore
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
-    private readonly record struct OutboundChangeKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct LeaseState(ulong Generation, Guid ConsumerId);
     private readonly record struct ReceiveState(ulong CursorEnd);
     private readonly record struct ReceiveChainState(byte[] LastBatchDigest);
@@ -1422,12 +1419,14 @@ public class StorageMetadataStore : IMetadataStore
     private sealed record PendingApplyValue(MetadataIncomingBatch Batch);
     private sealed record CompletedPendingApplyValue(byte[] BatchDigest, MetadataBatchReceipt Receipt);
 
+    private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound);
+
     private sealed class PartitionState
     {
         public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
         public Dictionary<ReceiveKey, ReceiveState> Receives { get; } = new();
         public Dictionary<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; } = new();
-        public Dictionary<LedgerKey, byte[]> ChangeLedger { get; } = new();
+        public Dictionary<LedgerKey, ChangeLedgerValue> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
         public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
@@ -1435,7 +1434,6 @@ public class StorageMetadataStore : IMetadataStore
         public Dictionary<OutboundKey, ulong> OutboundHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
-        public HashSet<OutboundChangeKey> OutboundChangeIds { get; } = new();
         public Dictionary<Guid, PendingApplyValue> PendingApplies { get; } = new();
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
 
@@ -1465,7 +1463,6 @@ public class StorageMetadataStore : IMetadataStore
             foreach (var pair in OutboundHighWatermarks) clone.OutboundHighWatermarks.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundAck) clone.OutboundAck.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundLeases) clone.OutboundLeases.Add(pair.Key, pair.Value);
-            foreach (var key in OutboundChangeIds) clone.OutboundChangeIds.Add(key);
             foreach (var pair in PendingApplies) clone.PendingApplies.Add(pair.Key, pair.Value);
             foreach (var pair in CompletedPendingApplies) clone.CompletedPendingApplies.Add(pair.Key, pair.Value);
             return clone;
