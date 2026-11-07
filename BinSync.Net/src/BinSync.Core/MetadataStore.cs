@@ -43,6 +43,11 @@ public interface IMetadataStoreSnapshot : IDisposable
     MetadataOutboundPage ReadOutbound(int namespaceId, NodeId localAuthor, ulong afterSequence, int limit);
 }
 
+/// <summary>
+/// Indicates that a PendingApply token already has a durable completed receipt.
+/// Callers may treat this specific condition as an idempotent retry; other state
+/// conflicts must remain failures.
+/// </summary>
 public sealed class MetadataPendingApplyAlreadyFinalizedException : InvalidOperationException
 {
     public MetadataPendingApplyAlreadyFinalizedException()
