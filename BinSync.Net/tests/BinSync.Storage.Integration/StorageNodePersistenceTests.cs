@@ -19,7 +19,7 @@ public sealed class StorageNodePersistenceTests
         using (var storage = StorageDatabase.Open(directory, 410))
         {
             Assert.False(StorageNodePersistence.TryLoad(storage, node.NodeId, out _));
-            Assert.True(node.WriteField(1, recordId, 0x0101, "stored-in-storage"u8, new Hlc(9000, 2)));
+            Assert.True(node.WriteField(1, recordId, 0x0101, "stored-in-storage"u8.ToArray(), new Hlc(9000, 2)));
             StorageNodePersistence.Save(storage, node);
             Assert.True(StorageNodePersistence.TryLoad(storage, node.NodeId, out var inProcess));
             Assert.Equal(node.NodeId, inProcess!.NodeId);
