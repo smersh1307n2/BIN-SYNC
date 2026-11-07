@@ -500,3 +500,46 @@ This policy reduces redundant outbound history; it does not promise that every p
 9. Only after conformance tests pass, consider changing defaults or freezing the public API.
 
 **Core rule:** coalesce only operations that have never been externally observable; preserve every operation once it may have been observed. Current state, unpublished staging, frozen outbound history, relay payloads, Inbox receipts and cross-peer dedup state has separate ownership and retention rules.
+
+## 9. Cross-repository code audit addendum (2026-11-07)
+
+This addendum supersedes older implementation baselines cited in §3 for current-code claims. FLD-DB is now at branch fix/crash-consistency-outbox HEAD b488dafcfda81d6383717ceaf05a3717a3959923; its implementation code is unchanged since 196628a49d6034559a7041237af7feec36fd9b20, with subsequent commits in that branch documenting the two-assembly Storage boundary and related architecture. BIN-SYNC is at feature/fld-external-storage HEAD dd2dd969d70b6fd46371679903855a69ae9399c3.
+
+The full code-backed audit, target data model, size accounting, risks and tests are in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md).
+
+### 9.1. One operation, many peers is already the BIN-SYNC model
+
+The current BIN-SYNC Outbox stores each logical operation once. Per-peer PeerState holds per-author StreamPushed/StreamAcked/StreamOffsets; batch construction reads the same Outbox entry for each peer. Do not introduce per-peer payload copies or per-operation ACK bitmaps. The one-author-per-DELTA_BATCH rule is a stream-ordering boundary, not a requirement to duplicate payloads.
+
+Current implementation gaps found during the audit:
+
+- ProcessAckInternal does not prune PeerState.Ids after a validated ACK covers its author/cursor range. The map is serialized and can grow with historical batches. Prune acknowledged ranges atomically with ACK persistence, retaining the current digest-chain checkpoint.
+- StreamAcked, StreamPushed and StreamOffsets are serialized as three maps and repeat author IDs. A per-author tuple with presence flags can reduce metadata without changing semantics.
+- SeenChanges is currently keyed by immediate sender peer, not globally by ChangeId. The live Outbox queue suppresses an already queued ChangeId, but that is not durable after Outbox compaction. Implement the exact global ChangeId+fingerprint ledger described in the metadata architecture; keep local WAL replay markers separate.
+- Inbox, InboxAuthors and ReceivedStreams contain overlapping batch receipt/cursor facts. Consolidation is a candidate only after all duplicate replay and ACK paths are mapped.
+
+### 9.2. FLD remote APPLY has confirmed payload amplification
+
+Current RemoteBatchCommit validates RelayWrites as an exact subset of Writes, but ApplyCommitCodec v2 serializes Fields and RelayFields as two full arrays. The same full APPLY_COMMIT payload is persisted in WAL and ApplyJournal. Therefore, at the operation-payload level, a non-relay operation is represented twice (WAL + ApplyJournal), while a relay-selected operation is represented four times (Fields + RelayFields in each file), before counting the current-state run/overlay.
+
+ApplyJournal also retains an index entry in both a List and a BatchKey Dictionary for every historical batch. It has no ACK/compaction/truncation boundary, and ReadBatches scans the list from its beginning for each cursor page. This is an unbounded disk/RAM/paging cost, not merely a theoretical layout concern.
+
+Preferred internal redesign: encode each incoming operation once in WAL and represent relay selection with a compact bitmap or operation indexes; keep a compact metadata-only batch receipt; materialize only relay-selected payloads into a relay-only journal before truncating the authoritative WAL segment. Receipt GC, relay-payload GC and ChangeId-ledger GC must remain independent. This does not require a DELTA_BATCH wire change.
+
+### 9.3. FLD local Outbox and WAL
+
+FLD local Commit currently flushes the WAL group commit and then appends the field payloads to Outbox. Thus local operation bytes exist in both files until WAL checkpoint/truncation. A WAL-backed Outbox reference with promotion of unacknowledged payloads before WAL truncation is a possible later optimization, but it is more invasive than removing the APPLY duplication.
+
+The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value bytes. The local AuthorNodeId is constant for the database and is repeated in every namespace Outbox row; this can be removed from each row in a versioned format. OutboxSeq can potentially be derived from a segment base plus ordinal, and CommitSeq can be group-encoded/delta-encoded. Keep ChangeId until its identity contract is deliberately changed. A rough fixed-record target is 60–65 bytes before group framing/CRC overhead; this is not a benchmark.
+
+### 9.4. Priority
+
+1. Global cross-peer ChangeId dedup correctness.
+2. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
+3. Prune acknowledged PeerState.Ids.
+4. Pack per-author peer progress and compact batch receipts.
+5. Version and benchmark FLD Outbox encoding.
+6. Implement PendingLocal coalescing only before publication.
+7. Only then evaluate content-derived ChangeId, OriginSeq, batch-level alias and WAL-backed Outbox references.
+
+No wire-format or ChangeId change is authorized by this addendum.
