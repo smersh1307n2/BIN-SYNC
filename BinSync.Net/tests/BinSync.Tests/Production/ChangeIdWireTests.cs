@@ -250,12 +250,20 @@ public class ChangeIdWireTests
         var legacyId = BatchId.From(Id(0xF1));
         node.GlobalChangeLedger[(9, legacyId)] = new ChangeLedgerValue(default, isKnown: false);
 
-        var bytes = NodePersistence.SaveToBytes(node);
-        using var restored = NodePersistence.LoadFromBytes(bytes);
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-ledger-{Guid.NewGuid():N}.bin");
+        try
+        {
+            NodePersistence.Save(node, path);
+            using var restored = NodePersistence.Load(path);
 
-        Assert.Equal(known.Value.Fingerprint, restored.GlobalChangeLedger[known.Key].Fingerprint);
-        Assert.True(restored.GlobalChangeLedger[known.Key].IsKnown);
-        Assert.False(restored.GlobalChangeLedger[(9, legacyId)].IsKnown);
+            Assert.Equal(known.Value.Fingerprint, restored.GlobalChangeLedger[known.Key].Fingerprint);
+            Assert.True(restored.GlobalChangeLedger[known.Key].IsKnown);
+            Assert.False(restored.GlobalChangeLedger[(9, legacyId)].IsKnown);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Fact]
