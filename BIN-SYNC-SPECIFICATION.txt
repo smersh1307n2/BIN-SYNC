@@ -736,19 +736,23 @@ OutboxEntry {
 ## 10.2. Inbox
 
 ```
-InboxEntry {
-    namespaceId : u16
-    issuerNodeId: b128
-    issuerEpoch : u32
-    cursorStart : u64
-    cursorEnd   : u64
-    batchId     : b128
-    appliedAt   : u64
-    expiresAt   : u64
+InboxReceipt {
+    namespaceId      : u16
+    issuerNodeId     : b128
+    issuerEpoch      : u32
+    batchId          : b128
+    durableAuthor    : b128
+    cursorEnd        : u64
+    headerFingerprint: b128
+    appliedAt        : u64   // HLC wall, Unix microseconds
+    expiresAt        : u64   // 0 = expiry is not scheduled
 }
-```
 
 **Ключ идемпотентности:** `(issuerNodeId, namespaceId, issuerEpoch, batchId)`.
+
+**Компактное receipt-представление:** `cursorStart` не хранится отдельным полем: он, как и `cursorEnd`, `prevBatchDigest`, `recordsRoot` и `batchDigest`, committed в `headerFingerprint`. Fingerprint — BLAKE3-128 с domain `BIN-SYNC/INBOX-RECEIPT/v1` над namespace, issuer, epoch, batchId, cursorStart/end, prevBatchDigest, recordsRoot, batchDigest, schemaId, schemaVersion, mergePolicy и flags (кроме transport-only бита causal trailer). Он не включает entry payload и causal dependency trailer.
+
+Для legacy state v3-v7 `headerFingerprint` и сохранённый `cursorEnd` могут отсутствовать; такой receipt явно помечается как legacy-unknown и сохраняет прежний duplicate-ACK behavior. Новые receipts всегда содержат оба поля. `expiresAt=0` означает, что срок удаления ещё не назначен; GC не может трактовать ноль как истёкший срок.
 
 ### 10.2.1. Inbox GC
 
@@ -756,11 +760,15 @@ InboxEntry {
 
 ### 10.2.2. Потерянный ACK
 
-1. B применил batch, отправил ACK.
+1. B применил batch и атомарно сохранил InboxReceipt, затем отправил ACK.
 2. ACK потерян.
 3. A по таймауту повторно шлёт тот же `batchId`.
-4. B проверяет inbox, находит `batchId`.
-5. B игнорирует batch, но **обязан** повторно выслать ACK.
+4. B проверяет receipt по ключу `(issuerNodeId, namespaceId, issuerEpoch, batchId)`.
+5. Если headerFingerprint известен и отличается от receipt, B отклоняет повтор как `BATCH_TRANSACTION_FAILED`; если совпадает — повторяет ACK с сохранёнными `cursorEnd` и `durableAuthor`.
+6. Entry payload, replay-supplied ChangeIds и causal dependencies на duplicate path не декодируются/не применяются; duplicate обязан обходить causal gate. Изменённый payload при неизменном BatchId и неизменном header commitment игнорируется как повтор, а не применяется.
+7. Для legacy-unknown receipt без headerFingerprint сохраняется прежнее поведение: batch считается duplicate, но conflicting-header validation до миграции невозможна.
+
+`appliedAt` фиксирует HLC wall time принятия. `expiresAt=0` — бессрочное удержание до отдельного доказанного retention horizon; receipt GC не включается автоматически.
 
 ## 10.3. Peer state
 
@@ -2325,7 +2333,7 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 
 **Дефект:** LastStreamAuthor хранит только последнего автора, принятого от peer в namespace. Если peer передавал несколько author streams, повтор старого batch после более нового мог получить ACK с чужим автором.
 
-**Нормативно:** при первом принятии узел сохраняет durable author отдельно для ключа Inbox (issuer, namespace, epoch, batchId). При duplicate replay ACK строится по этой записи, а не по последнему автору сессии. Соответствие InboxAuthors сохраняется в node-state; восстановление не меняет автора ACK.
+**Нормативно:** при первом принятии узел сохраняет единый InboxReceipt для ключа (issuer, namespace, epoch, batchId): durable author, original cursorEnd, headerFingerprint, appliedAt и expiresAt. При duplicate replay ACK строится по сохранённым cursorEnd/author, а не по replay header или LastStreamAuthor. Fingerprint проверяет committed header, но намеренно не декодирует повторный payload и causal trailer. Node-state v8 сохраняет receipt атомарно; legacy v3-v7 receipts мигрируют с explicit unknown cursor/fingerprint markers.
 
 ## E-17. §10.5 / §12.17.2 — sequence Outbox неизменяема; cursor offset принадлежит peer
 
