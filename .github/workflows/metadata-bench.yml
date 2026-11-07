@@ -1,0 +1,50 @@
+name: Durable Metadata Bench
+
+on:
+  push:
+    branches: ["feature/fld-external-storage"]
+    paths:
+      - "BinSync.Net/bench/**"
+      - ".github/workflows/metadata-bench.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  metadata-peer-lifecycle:
+    name: metadata peer lifecycle benchmarks (.NET 10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Restore benchmark project
+        working-directory: BinSync.Net
+        run: dotnet restore bench/BinSync.Bench/BinSync.Bench.csproj
+
+      - name: Run durable metadata benchmarks
+        working-directory: BinSync.Net
+        run: >
+          dotnet run --configuration Release
+          --project bench/BinSync.Bench
+          --
+          --filter '*MetadataPeer*'
+          --artifacts BenchmarkDotNet.Artifacts
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-metadata-benchmarks
+          path: BinSync.Net/BenchmarkDotNet.Artifacts
+          retention-days: 30
+          if-no-files-found: warn
