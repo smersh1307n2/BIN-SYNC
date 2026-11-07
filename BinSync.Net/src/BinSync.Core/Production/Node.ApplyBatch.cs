@@ -63,18 +63,19 @@ public sealed partial class Node
             return false;
         if (acceptedReceipt.DurableAuthor.IsZero)
             throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
-        var replayFingerprint = InboxReceiptIdentity.ValidateAndCompute(batch);
-        if (acceptedReceipt.HasFingerprint && acceptedReceipt.Fingerprint != replayFingerprint)
-            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
-
         // Preserve the public-copy path's structural null checks without allocating
-        // entry objects, payload arrays, or causal-dependency lists for a replay.
+        // entry objects, payload arrays, or deferred causal-dependency lists for a replay.
         for (int i = 0; i < batch.Entries.Count; i++)
         {
             var entry = batch.Entries[i];
             ArgumentNullException.ThrowIfNull(entry);
-            ArgumentNullException.ThrowIfNull(entry.CausalDeps);
+            if (!entry.HasCausalDepsStorage)
+                throw new ArgumentNullException(nameof(entry.CausalDeps));
         }
+
+        var replayFingerprint = InboxReceiptIdentity.ValidateAndCompute(batch);
+        if (acceptedReceipt.HasFingerprint && acceptedReceipt.Fingerprint != replayFingerprint)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
 
         AcksOut.Add(batch.BatchId);
         result.Duplicate = true;
