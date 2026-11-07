@@ -45,6 +45,7 @@ public sealed record MetadataPeerStreamState(
     ulong AckedCursor,
     ulong PushedCursor,
     ulong StreamOffset,
+    uint IssuerEpoch,
     byte[] LastBatchDigest,
     MetadataOutboundBatchReservation? PendingBatch);
 
