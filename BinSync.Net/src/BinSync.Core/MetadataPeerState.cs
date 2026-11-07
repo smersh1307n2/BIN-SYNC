@@ -19,6 +19,7 @@ public interface IMetadataPeerStateStore
         NodeId peer, uint peerEpoch, int namespaceId);
     IReadOnlyList<MetadataInterestedPeer> ReadInterestedPeers(
         string scopeId, NodeId localReplica, int namespaceId);
+    uint? GetRetiredPeerEpoch(string scopeId, NodeId localReplica, NodeId peer, int namespaceId);
 
     /// <summary>
     /// Retires an older peer incarnation after a newer epoch has completed session
