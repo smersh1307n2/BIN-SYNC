@@ -153,34 +153,17 @@ public static class GcNotice
         return added;
     }
 
-    /// <summary>Purge records whose lifecycle wall is strictly below the cutoff; returns how many were removed.</summary>
+    /// <summary>
+    /// Tombstone reclamation is deliberately disabled until the namespace cutoff is
+    /// durably enforced against stale DELTA_BATCH and snapshot peers. The previous
+    /// implementation deleted ordinary live fields solely by age, which is unsafe.
+    /// </summary>
     public static int PurgeBelowCutoff(Node node, int namespaceId, ulong cutoffWall)
     {
         ArgumentNullException.ThrowIfNull(node);
         Node.ValidateNamespaceId(namespaceId);
-        if (cutoffWall == 0) return 0;
-        int removed = 0;
-        using (node.EnterAllGates())
-        {
-            if (node.Storage.TryGetValue(namespaceId, out var map))
-            {
-                foreach (var rec in map.Values)
-                {
-                    var dead = new List<ushort>();
-                    foreach (var (fid, fs) in rec.State)
-                    {
-                        if (fs.Timestamp.Wall < cutoffWall)
-                            dead.Add(fid);
-                    }
-                    foreach (var fid in dead)
-                    {
-                        rec.State.Remove(fid);
-                        removed++;
-                    }
-                }
-            }
-        }
-        if (removed > 0) node.RaiseGarbageCollected(namespaceId, removed, cutoffWall);
-        return removed;
-    }
-}
+        // A time cutoff by itself is not proof that any peer can no longer replay
+        // pre-cutoff state. Keep live values and tombstones until the watermark/resync
+        // protocol gate and tombstone-specific reclamation rules are implemented.
+        return 0;
+    }}
