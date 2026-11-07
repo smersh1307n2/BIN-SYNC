@@ -199,7 +199,7 @@ The current NodePersistence v5 is a useful completeness checklist, not a schema 
 - local Outbox entries and per-(author, namespace) sequence allocators;
 - Inbox idempotency keys and InboxAuthors needed to reproduce the correct author-bound duplicate ACK; the wire spec also defines cursorStart/cursorEnd/appliedAt/expiresAt, while current NodePersistence v5 serializes the key set and related stream checkpoints rather than the complete InboxEntry tuple, so the durable expiry/range lifecycle must be explicitly preserved or safely derived;
 - LastBatchDigest checkpoints and per-stream digest-chain checkpoints;
-- peer state: received-stream mappings, StreamPushed, StreamAcked, StreamOffsets, batch range → BatchId/previous-digest mappings, initial-sync status, membership epoch and applicable last-seen/retention data;
+- peer state: received-stream mappings, StreamPushed, StreamAcked, StreamOffsets, batch range → BatchId/previous-digest replay mappings, initial-sync status, membership epoch and applicable last-seen/retention data. The replay mapping is needed only while its range may be retried and can be pruned after a valid per-author ACK covers that range end; the current inspected ProcessAckInternal path does not appear to prune PeerState.Ids, so this is a concrete metadata-growth item;
 - SeenChanges keyed with the protocol-defined peer/provenance and namespace dimensions;
 - LastStreamAuthor mappings;
 - durable author registry and known author epochs;
@@ -477,6 +477,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 13. Exact snapshot-to-tail coverage semantics: whether a state snapshot can subsume frozen local LWW operations, how relay-eligible LWW losers are retained/delivered, and how the normative SnapshotTail/outbox checkpoint maps to the current runtime.
 14. A finite, protocol-safe SeenChanges/provenance dedup GC rule. Current NodePersistence stores the exact peer/namespace/ChangeId set, but the normative spec has no corresponding expiry or safe watermark; production storage cannot safely compact it by an invented TTL.
 15. Exact Inbox receipt retention representation: preserve or safely derive the specification's cursor range, applied time and expiry condition in addition to the current durable idempotency key/author/checkpoint state.
+16. Ensure the per-peer batch replay cache (PeerState.Ids) is pruned only after the matching per-author ACK covers its cursor range; the current runtime persists these entries but the inspected ACK path does not remove them.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
