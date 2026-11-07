@@ -478,7 +478,6 @@ public sealed partial class Node
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
         InboxAuthors[key] = new InboxReceipt(streamAuthor, batch.CursorEnd, hasCursorEnd: true,
             receiptFingerprint, hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
-        ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
         LastBatchDigest[chain] = batch.BatchDigest;
         // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns).
@@ -650,10 +649,6 @@ public sealed partial class Node
                     ps.SetStreamAcked(author, contiguous - offset);
             }
         }
-
-        // legacy mirror: monotone scalar = min over known streams' watermarks.
-        if (ps.StreamAckedCount > 0)
-            ps.LastAckedSeq = ps.MinStreamAcked;
 
         // Ids only makes retransmission deterministic while a cursor range is
         // outstanding. Once a validated contiguous ACK covers the complete range,

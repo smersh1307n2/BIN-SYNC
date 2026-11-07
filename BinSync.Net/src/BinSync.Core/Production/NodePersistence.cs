@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v14", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v15", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v14";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v15";
+    private const string Version14StateTag = "BIN-SYNC/NODESTATE/v14";
     private const string Version13StateTag = "BIN-SYNC/NODESTATE/v13";
     private const string Version12StateTag = "BIN-SYNC/NODESTATE/v12";
     private const string Version11StateTag = "BIN-SYNC/NODESTATE/v11";
@@ -42,7 +43,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 14;
+    private const ushort Version = 15;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -107,8 +108,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 13 && ver != 12 && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 14 && ver != 13 && ver != 12 && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -123,6 +124,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 14)
+        {
+            var v14 = Blake3Core.TaggedHash(Version14StateTag, body);
+            validDigest = v14.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 13)
         {
@@ -235,7 +241,7 @@ public static class NodePersistence
             var seqMap = n.OutboxSeqRef;
             w.Varint((ulong)seqMap.Count);
             foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1.ToString()).ThenBy(kv => kv.Key.Item2))
-            { w.B128(author); w.Varint((ulong)ns); w.U64((ulong)seq); }
+            { w.B128(author); w.Varint((ulong)ns); WriteNonNegativeVarint(w, seq, "Outbox sequence counter"); }
 
             // --- accepted-batch receipts grouped by issuer/namespace/epoch.
             // Use author subgroups only when removing repeated 16-byte authors beats
@@ -330,28 +336,28 @@ public static class NodePersistence
             foreach (var ((peer, ns), ps) in n.PeerStates.OrderBy(k => k.Key.Item1.ToString()).ThenBy(k => k.Key.Item2))
             {
                 w.B128(peer); w.Varint((ulong)ns);
-                w.U64((ulong)ps.LastPushedSeq); w.U64((ulong)ps.LastReceivedSeq); w.U64((ulong)ps.LastAckedSeq);
+                WriteNonNegativeVarint(w, ps.LastPushedSeq, "peer pushed sequence");
                 w.U8(ps.InitialSyncComplete ? (byte)1 : (byte)0);
-                w.Varint((ulong)ps.MembershipEpoch); w.U64((ulong)ps.LastSeen);
+                w.Varint((ulong)ps.MembershipEpoch); WriteNonNegativeVarint(w, ps.LastSeen, "peer last-seen time");
                 w.Varint((ulong)ps.ReceivedStreams.Count);
                 foreach (var ((streamPeer, epoch, author), seq) in ps.ReceivedStreams
                            .OrderBy(k => k.Key.Peer.Lo).ThenBy(k => k.Key.Peer.Hi)
                            .ThenBy(k => k.Key.Epoch).ThenBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi))
-                { w.B128(streamPeer); w.Varint((ulong)epoch); w.B128(author); w.U64((ulong)seq); }
+                { w.B128(streamPeer); w.Varint((ulong)epoch); w.B128(author); WriteNonNegativeVarint(w, seq, "received stream cursor"); }
                 w.Varint((ulong)ps.AuthorProgress.Count);
                 foreach (var (author, progress) in ps.AuthorProgress.OrderBy(k => k.Key.ToString()))
                 {
                     w.B128(author);
                     w.U8(progress.Flags);
-                    if (progress.HasAcked) w.U64((ulong)progress.Acked);
-                    if (progress.HasPushed) w.U64((ulong)progress.Pushed);
-                    if (progress.HasOffset) w.U64((ulong)progress.Offset);
+                    if (progress.HasAcked) WriteNonNegativeVarint(w, progress.Acked, "author ACK watermark");
+                    if (progress.HasPushed) WriteNonNegativeVarint(w, progress.Pushed, "author pushed watermark");
+                    if (progress.HasOffset) WriteNonNegativeVarint(w, progress.Offset, "author stream offset");
                 }
                 w.Varint((ulong)ps.Ids.Count);
                 foreach (var ((author, start, end), (id, prev)) in ps.Ids
                            .OrderBy(k => k.Key.Author.Lo).ThenBy(k => k.Key.Author.Hi)
                            .ThenBy(k => k.Key.Start).ThenBy(k => k.Key.End))
-                { w.B128(author); w.U64((ulong)start); w.U64((ulong)end); w.B128(id); w.B128(prev); }
+                { w.B128(author); WriteNonNegativeVarint(w, start, "replay range start"); WriteNonNegativeVarint(w, end, "replay range end"); w.B128(id); w.B128(prev); }
             }
 
             // --- local WAL replay markers; NodeId is implicit in this state image.
@@ -453,7 +459,7 @@ public static class NodePersistence
             var ns = ReadNamespaceId(r);
             int cnt = ReadCount(r, version >= 14 ? 1 : 68, "outbox entry");
             n.Outbox[ns] = version >= 14
-                ? ReadOutboxEntries(r, ns, cnt)
+                ? ReadOutboxEntries(r, ns, cnt, version)
                 : ReadLegacyOutboxEntries(r, cnt);
         }
 
@@ -461,7 +467,8 @@ public static class NodePersistence
         int seqCount = ReadCount(r, 25, "outbox sequence");
         for (int i = 0; i < seqCount; i++)
         {
-            var author = r.B128(); var ns = ReadNamespaceId(r); var seq = (long)r.U64();
+            var author = r.B128(); var ns = ReadNamespaceId(r);
+            var seq = version >= 15 ? ReadInt64Varint(r, "Outbox sequence counter") : (long)r.U64();
             seqMap[((NodeId)author, ns)] = seq;
         }
 
@@ -488,7 +495,7 @@ public static class NodePersistence
                     {
                         var batchId = BatchId.From(r.B128());
                         var author = NodeId.From(r.B128());
-                        var receipt = ReadReceiptValue(r, author, batchId);
+                        var receipt = ReadReceiptValue(r, author, batchId, version);
                         if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), receipt))
                             throw new InvalidDataException("Duplicate persisted batch receipt.");
                     }
@@ -508,7 +515,7 @@ public static class NodePersistence
                         for (int i = 0; i < receiptCount; i++)
                         {
                             var batchId = BatchId.From(r.B128());
-                            var receipt = ReadReceiptValue(r, author, batchId);
+                            var receipt = ReadReceiptValue(r, author, batchId, version);
                             if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), receipt))
                                 throw new InvalidDataException("Duplicate persisted batch receipt.");
                         }
@@ -690,14 +697,26 @@ public static class NodePersistence
         for (int i = 0; i < psCount; i++)
         {
             var peer = r.B128(); var ns = ReadNamespaceId(r);
+            long lastPushedSeq;
+            if (version >= 15)
+                lastPushedSeq = ReadInt64Varint(r, "peer pushed sequence");
+            else
+            {
+                lastPushedSeq = (long)r.U64();
+                _ = r.U64(); // v3-v14 LastReceivedSeq compatibility mirror
+                _ = r.U64(); // v3-v14 LastAckedSeq compatibility mirror
+            }
+            bool initialSyncComplete = r.U8() != 0;
+            int membershipEpoch = ReadInt32Varint(r);
+            long lastSeen = version >= 15
+                ? ReadInt64Varint(r, "peer last-seen time")
+                : (long)r.U64();
             var ps = new PeerState(peer, ns)
             {
-                LastPushedSeq = (long)r.U64(),
-                LastReceivedSeq = (long)r.U64(),
-                LastAckedSeq = (long)r.U64(),
-                InitialSyncComplete = r.U8() != 0,
-                MembershipEpoch = ReadInt32Varint(r),
-                LastSeen = (long)r.U64(),
+                LastPushedSeq = lastPushedSeq,
+                InitialSyncComplete = initialSyncComplete,
+                MembershipEpoch = membershipEpoch,
+                LastSeen = lastSeen,
             };
             int rsCount = ReadCount(r, 41, "received stream");
             for (int j = 0; j < rsCount; j++)
@@ -711,7 +730,7 @@ public static class NodePersistence
                     streamPeer = NodeId.From(r.B128());
                     streamEpoch = ReadInt32Varint(r);
                     streamAuthor = NodeId.From(r.B128());
-                    seq = (long)r.U64();
+                    seq = version >= 15 ? ReadInt64Varint(r, "received stream cursor") : (long)r.U64();
                 }
                 else
                 {
@@ -738,9 +757,9 @@ public static class NodePersistence
                     if (author.IsZero || flags == 0 || (flags & ~7) != 0)
                         throw new InvalidDataException("Invalid persisted peer author-progress flags.");
                     var progress = new PeerAuthorProgress { Flags = flags };
-                    if ((flags & PeerAuthorProgress.AckedFlag) != 0) progress.Acked = (long)r.U64();
-                    if ((flags & PeerAuthorProgress.PushedFlag) != 0) progress.Pushed = (long)r.U64();
-                    if ((flags & PeerAuthorProgress.OffsetFlag) != 0) progress.Offset = (long)r.U64();
+                    if ((flags & PeerAuthorProgress.AckedFlag) != 0) progress.Acked = version >= 15 ? ReadInt64Varint(r, "author ACK watermark") : (long)r.U64();
+                    if ((flags & PeerAuthorProgress.PushedFlag) != 0) progress.Pushed = version >= 15 ? ReadInt64Varint(r, "author pushed watermark") : (long)r.U64();
+                    if ((flags & PeerAuthorProgress.OffsetFlag) != 0) progress.Offset = version >= 15 ? ReadInt64Varint(r, "author stream offset") : (long)r.U64();
                     if ((progress.HasAcked && progress.Acked < 0) ||
                         (progress.HasPushed && progress.Pushed < 0) ||
                         (progress.HasOffset && progress.Offset < 0) ||
@@ -778,7 +797,9 @@ public static class NodePersistence
             int idsCount = ReadCount(r, 64, "peer batch replay mapping");
             for (int j = 0; j < idsCount; j++)
             {
-                var author = r.B128(); var start = (long)r.U64(); var end = (long)r.U64();
+                var author = r.B128();
+                var start = version >= 15 ? ReadInt64Varint(r, "replay range start") : (long)r.U64();
+                var end = version >= 15 ? ReadInt64Varint(r, "replay range end") : (long)r.U64();
                 var id = r.B128(); var prev = r.B128();
                 ps.Ids[((NodeId)author, start, end)] = (BatchId.From(id), Digest16.From(prev));
             }
@@ -1015,17 +1036,20 @@ public static class NodePersistence
         return new ChangeLedgerValue(fingerprint, isKnown: true);
     }
 
-    private static InboxReceipt ReadReceiptValue(Reader reader, NodeId author, BatchId batchId)
+    private static InboxReceipt ReadReceiptValue(Reader reader, NodeId author, BatchId batchId, ushort version)
     {
         byte flags = reader.U8();
-        if (author.IsZero || batchId.IsZero || flags > 3 || ((flags & 2) != 0 && (flags & 1) == 0))
+        byte allowedFlags = version >= 15 ? (byte)7 : (byte)3;
+        if (author.IsZero || batchId.IsZero || flags > allowedFlags ||
+            ((flags & 2) != 0 && (flags & 1) == 0))
             throw new InvalidDataException("Invalid persisted receipt identity or flags.");
         bool hasCursorEnd = (flags & 1) != 0;
         long cursorEnd = hasCursorEnd ? (long)reader.Varint() : 0;
         bool hasFingerprint = (flags & 2) != 0;
         var fingerprint = hasFingerprint ? Digest16.From(reader.B128()) : default;
         var appliedAt = reader.Varint();
-        var expiresAt = reader.Varint();
+        bool hasExpiry = version >= 15 && (flags & 4) != 0;
+        var expiresAt = version >= 15 ? (hasExpiry ? reader.Varint() : 0UL) : reader.Varint();
         if (cursorEnd < 0 || (expiresAt != 0 && expiresAt < appliedAt))
             throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
         return new InboxReceipt(author, cursorEnd, hasCursorEnd,
@@ -1034,13 +1058,15 @@ public static class NodePersistence
 
     private static void WriteReceiptValue(Writer writer, InboxReceipt receipt)
     {
+        bool hasExpiry = receipt.ExpiresAt != 0;
         byte flags = (byte)((receipt.HasCursorEnd ? 1 : 0) |
-                            (receipt.HasFingerprint ? 2 : 0));
+                            (receipt.HasFingerprint ? 2 : 0) |
+                            (hasExpiry ? 4 : 0));
         writer.U8(flags);
         if (receipt.HasCursorEnd) writer.Varint((ulong)receipt.CursorEnd);
         if (receipt.HasFingerprint) writer.B128(receipt.Fingerprint);
         writer.Varint(receipt.AppliedAt);
-        writer.Varint(receipt.ExpiresAt);
+        if (hasExpiry) writer.Varint(receipt.ExpiresAt);
     }
 
     private static int ReadInt32Varint(Reader reader)
@@ -1181,13 +1207,13 @@ public static class NodePersistence
             w.Varint((ulong)payload.Length);
             w.Raw(payload);
             if (!recordTombstone) w.B128(entry.RecordId);
-            w.U64((ulong)entry.CreatedAt);
+            WriteNonNegativeVarint(w, entry.CreatedAt, "Outbox CreatedAt");
             w.Varint((ulong)entry.CausalDeps.Count);
             foreach (var dependency in entry.CausalDeps) w.B128(dependency);
         }
     }
 
-    private static List<OutboxEntry> ReadOutboxEntries(Reader r, int namespaceId, int count)
+    private static List<OutboxEntry> ReadOutboxEntries(Reader r, int namespaceId, int count, ushort version)
     {
         int authorCount = ReadCount(r, 16, "outbox author");
         if ((count == 0) != (authorCount == 0) || authorCount > count)
@@ -1224,7 +1250,7 @@ public static class NodePersistence
             }
             else
                 recordId = RecordId.From(r.B128());
-            long createdAt = (long)r.U64();
+            long createdAt = version >= 15 ? ReadInt64Varint(r, "Outbox CreatedAt") : (long)r.U64();
             int dependencyCount = ReadCount(r, 16, "causal dependency");
             var entry = new OutboxEntry
             {
@@ -1244,6 +1270,13 @@ public static class NodePersistence
         var entries = new List<OutboxEntry>(count);
         for (int i = 0; i < count; i++) entries.Add(ReadOutboxEntry(r));
         return entries;
+    }
+
+    private static void WriteNonNegativeVarint(Writer writer, long value, string section)
+    {
+        if (value < 0)
+            throw new InvalidOperationException($"Cannot persist negative {section}.");
+        writer.Varint((ulong)value);
     }
 
     private static long ReadInt64Varint(Reader reader, string section)

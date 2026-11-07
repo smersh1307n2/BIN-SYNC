@@ -113,8 +113,7 @@ public class Production : IDisposable
         foreach (var (k, ps) in x.PeerStates)
         {
             if (!y.PeerStates.TryGetValue(k, out var ops)) return false;
-            if (ps.LastPushedSeq != ops.LastPushedSeq || ps.LastReceivedSeq != ops.LastReceivedSeq ||
-                ps.LastAckedSeq != ops.LastAckedSeq || ps.InitialSyncComplete != ops.InitialSyncComplete) return false;
+            if (ps.LastPushedSeq != ops.LastPushedSeq || ps.InitialSyncComplete != ops.InitialSyncComplete) return false;
             if (ps.ReceivedStreams.Count != ops.ReceivedStreams.Count) return false;
             foreach (var (streamKey, seq) in ps.ReceivedStreams)
                 if (!ops.ReceivedStreams.TryGetValue(streamKey, out var otherSeq) || otherSeq != seq) return false;
@@ -242,19 +241,19 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V14TagAndAuthorProgressAndAliasIndexesRoundTrip()
+    public void Persistence_V15TagAndAuthorProgressAndAliasIndexesRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
         var author = a.NodeId;
         peer.SetStreamOffset(author, 17);
-        var path = Path.Combine(_dir, "tag-v14.state");
+        var path = Path.Combine(_dir, "tag-v15.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)14, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)15, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v14", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v15", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
