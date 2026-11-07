@@ -304,6 +304,46 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Initial_reconcile_rehydrates_empty_node_from_provider_snapshot_after_feed_ack()
+    {
+        using var storageA = StorageDatabase.Open(Path.Combine(_root, "provider-rehydrate-a"), 443);
+        using var storageB = StorageDatabase.Open(Path.Combine(_root, "provider-rehydrate-b"), 444);
+        using var providerA = new StorageDataProvider(storageA);
+        using var providerB = new StorageDataProvider(storageB);
+        using var metadataA = new StorageMetadataStore(storageA);
+        using var metadataB = new StorageMetadataStore(storageB);
+        using var nodeA = NewNode(46);
+        using var nodeB = NewNode(47);
+        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, 1, metadataA, "provider-rehydrate-a");
+        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, "provider-rehydrate-b");
+        var (aToB, bFromA) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
+        var connectTask = SyncSession.ConnectAsync(nodeA, aToB);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        RecordId record = RecordId.From(Guid.Parse("46000000-0000-0000-0000-000000000046").ToByteArray());
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0106, AuthorNodeId = nodeA.NodeId,
+            HlcWall = 4600, Value = "provider-owned"u8.ToArray()
+        });
+        providerA.AcknowledgeLocalChanges(providerA.LocalChangeHighWatermark);
+        Assert.True(nodeA.IsPristine);
+
+        await Task.WhenAll(
+            coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
+            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false));
+
+        Assert.True(nodeA.TryGetField(1, record, 0x0106, out var nodeValue));
+        Assert.Equal("provider-owned", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.True(providerB.TryReadCurrent(record, 0x0106, out var providerValue));
+        Assert.Equal("provider-owned", Encoding.UTF8.GetString(providerValue!.Value));
+        Assert.True(metadataA.IsPeerInitialSyncComplete("provider-rehydrate-a", nodeA.NodeId,
+            nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
+    }
+
+    [Fact]
     public async Task Durable_push_materializes_metadata_without_mutating_node_outbox_before_ack()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-materialization-isolated"), 433);
