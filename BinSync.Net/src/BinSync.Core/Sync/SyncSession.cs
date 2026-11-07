@@ -222,7 +222,7 @@ public partial class SyncSession : IAsyncDisposable
 
     /// <summary>Receive one DELTA_BATCH, apply it and return the ACK.</summary>
     public async Task<BatchResult> ReceiveBatchAsync(Node receiver, CancellationToken ct = default,
-        Action<BatchResult>? beforeAck = null)
+        Action<Batch, BatchResult>? beforeAck = null)
     {
         await _batchReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -233,11 +233,11 @@ public partial class SyncSession : IAsyncDisposable
             throw new FrameException("FRAME_REJECTED");
         int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(frame.Payload);
         ValidateNamespaceStream(frame, namespaceId);
-        var result = receiver.ApplyBatchPayload(frame.Payload, PeerNodeId);
+        var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
         // A host can durably apply the accepted batch to its external Data Provider
         // before this session acknowledges it to the sender. A callback failure leaves
         // the sender unacknowledged; a retry is delivered as a duplicate and is safe.
-        beforeAck?.Invoke(result);
+        beforeAck?.Invoke(batch, result);
         var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
         await SendFrameAsync(0x0B, 0x0001_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
         return result;
