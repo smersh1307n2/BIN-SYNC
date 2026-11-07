@@ -211,7 +211,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         byte[] previous = Enumerable.Repeat((byte)61, 16).ToArray();
         var reservation = new MetadataOutboundBatchReservation
         {
-            BatchId = Batch(62), IssuerEpoch = 5,
+            BatchId = Batch(62), IssuerEpoch = 5, StreamOffset = 100,
             CursorStart = 4, CursorEnd = 6,
             PreviousBatchDigest = previous,
             BatchDigest = Enumerable.Repeat((byte)63, 16).ToArray(),
@@ -223,6 +223,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(3UL, state.AckedCursor);
         Assert.Equal(3UL, state.PushedCursor);
         Assert.Equal(5u, state.IssuerEpoch);
+        Assert.Equal(100UL, state.StreamOffset);
         Assert.Equal(previous, state.LastBatchDigest);
         Assert.Equal(Batch(62), Assert.IsType<MetadataOutboundBatchReservation>(state.PendingBatch).BatchId);
         Assert.Equal(author, Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 2, 7)).AuthorStream);
