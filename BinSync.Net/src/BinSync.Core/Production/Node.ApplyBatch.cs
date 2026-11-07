@@ -635,7 +635,30 @@ public sealed partial class Node
         // legacy mirror: monotone scalar = min over known streams' watermarks.
         if (ps.StreamAcked.Count > 0)
             ps.LastAckedSeq = ps.StreamAcked.Values.Min();
+
+        // Ids only makes retransmission deterministic while a cursor range is
+        // outstanding. Once a validated contiguous ACK covers the complete range,
+        // the cached BatchId/previous-digest mapping is no longer needed. Keep
+        // LastStreamDigest untouched: it is the chain checkpoint for later batches.
+        PruneAcknowledgedBatchIds(ps);
         CompactOutbox(namespaceId);
+    }
+
+    private static void PruneAcknowledgedBatchIds(PeerState peerState)
+    {
+        List<(NodeId Author, long Start, long End)>? acknowledged = null;
+        foreach (var key in peerState.Ids.Keys)
+        {
+            if (peerState.StreamAcked.TryGetValue(key.Author, out var acked) &&
+                key.End <= acked)
+            {
+                (acknowledged ??= new List<(NodeId Author, long Start, long End)>()).Add(key);
+            }
+        }
+
+        if (acknowledged is null) return;
+        foreach (var key in acknowledged)
+            peerState.Ids.Remove(key);
     }
 
     private static bool HasContiguousOutboxRange(List<OutboxEntry>? entries, NodeId author,
