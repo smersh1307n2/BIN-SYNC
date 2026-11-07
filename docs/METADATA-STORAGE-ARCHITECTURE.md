@@ -304,6 +304,8 @@ The preferred direction is to separate FLD's reusable physical storage primitive
 
 Do not force the ordinary FldDatabase API to represent metadata-only writes by fabricating authors, HLCs, ChangeIds or local Outbox entries. Do not create a second physical engine if the existing core can safely serve both roles; equally, do not compromise the synchronized database semantics merely to share one public class.
 
+A specific FLD design constraint must be resolved before implementation: the current FLD1 run model stores HLC and AuthorNodeId alongside field values because it is designed for synchronized field state. Storage-only metadata writes must not acquire protocol meaning from those fields. If the physical format still needs an ordering/version token, it must be explicitly storage-native and isolated from BIN-SYNC identity/comparison semantics; otherwise the storage-only path needs a representation that does not require synthetic protocol authors or HLC values. Reusing the current Put/Commit path with fabricated identities is not an acceptable shortcut.
+
 Whether the implementation should be a dedicated FldStorage API, a separate FldMetadataStore adapter, or an internal storage-core facade is an implementation decision to validate against FLD's current architecture. The semantic separation is mandatory; the exact public type name is not yet fixed.
 
 ### 8.3. Metadata layout
@@ -312,7 +314,7 @@ The neutral contract must not require FLD's RecordId/FieldId layout. The FLD ada
 
 Prefer compact, bounded binary records and batched updates over many tiny allocations or one physical record per scalar. Keep independently updated state independently addressable where that avoids rewriting large blobs. Group related state when atomicity or scan locality requires it.
 
-No concrete record layout is approved by this document. It must be designed after the operation model, access patterns, retention and transaction boundaries are settled.
+No concrete record layout is approved by this document. It must be designed after the operation model, access patterns, retention and transaction boundaries are settled. The current FLD run format is namespace-scoped, while a generic Metadata Store may host many independent sync scopes and namespaces. The FLD adapter must define an explicit, collision-free mapping or physical partitioning strategy; it must not treat the wire NamespaceId as the complete store tenancy key.
 
 ### 8.4. Two FLD usage modes
 
@@ -430,10 +432,12 @@ The following are not decided by v0.1 and must be resolved before freezing publi
 4. Which protocol state is mandatory in the first implementation versus capability-gated.
 5. Whether a built-in in-memory store ships in the core package or only in test utilities.
 6. Whether FLD Storage-only is a dedicated public engine/facade or an adapter over a separated internal storage core.
-7. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
-8. How current NodePersistence/WAL state migrates to the new provider/store boundary.
-9. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
-10. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
+7. How to represent storage-native ordering/version information without fabricating protocol HLC/author fields required by the current FLD1 run format.
+8. How a multi-scope/multi-namespace Metadata Store maps onto FLD's currently namespace-scoped physical runs and database options.
+9. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
+10. How current NodePersistence/WAL state migrates to the new provider/store boundary.
+11. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
+12. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
