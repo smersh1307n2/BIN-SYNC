@@ -348,15 +348,55 @@ public class StorageDataProvider : IDataProvider
 
     private static byte[] Fingerprint(IReadOnlyList<ProviderMutation> mutations)
     {
-        using var stream = new MemoryStream();
-        using var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, leaveOpen: true);
-        var ordered = mutations.OrderBy(x => Convert.ToHexString(x.RecordId.ToArray()), StringComparer.Ordinal)
-            .ThenBy(x => x.FieldId);
-        writer.Write(mutations.Count);
+        var ordered = mutations.ToArray();
+        Array.Sort(ordered, CompareCanonicalKey);
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> count = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(count, ordered.Length);
+        hash.AppendData(count);
+
+        Span<byte> fixedPart = stackalloc byte[53];
         foreach (var mutation in ordered)
-            writer.Write(EncodeMutation(mutation));
-        writer.Flush();
-        return SHA256.HashData(stream.ToArray());
+        {
+            mutation.RecordId.WriteTo(fixedPart);
+            BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(16), mutation.FieldId);
+            fixedPart[18] = mutation.IsTombstone ? (byte)1 : (byte)0;
+            BinaryPrimitives.WriteUInt64LittleEndian(fixedPart.Slice(19), mutation.HlcWall);
+            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(27), mutation.HlcLogical);
+            mutation.AuthorNodeId.WriteTo(fixedPart.Slice(31));
+            BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(47), mutation.KeyEpoch);
+            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(49), checked((uint)mutation.Value.Length));
+            hash.AppendData(fixedPart);
+            hash.AppendData(mutation.Value);
+        }
+
+        return hash.GetHashAndReset();
+    }
+
+    private static int CompareCanonicalKey(ProviderMutation left, ProviderMutation right)
+    {
+        int c = CompareRecordIds(left.RecordId, right.RecordId);
+        return c != 0 ? c : left.FieldId.CompareTo(right.FieldId);
+    }
+
+    private static int CompareRecordIds(RecordId left, RecordId right)
+    {
+        ulong leftLo = left.Lo, rightLo = right.Lo;
+        for (int i = 0; i < sizeof(ulong); i++)
+        {
+            int c = ((byte)(leftLo >> (i * 8))).CompareTo((byte)(rightLo >> (i * 8)));
+            if (c != 0) return c;
+        }
+
+        ulong leftHi = left.Hi, rightHi = right.Hi;
+        for (int i = 0; i < sizeof(ulong); i++)
+        {
+            int c = ((byte)(leftHi >> (i * 8))).CompareTo((byte)(rightHi >> (i * 8)));
+            if (c != 0) return c;
+        }
+
+        return 0;
     }
 
     private static byte[] EncodeMutation(ProviderMutation mutation)
