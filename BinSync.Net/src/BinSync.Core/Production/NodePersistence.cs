@@ -27,13 +27,14 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v5";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v6";
+    private const string Version5StateTag = "BIN-SYNC/NODESTATE/v5";
     private const string Version4StateTag = "BIN-SYNC/NODESTATE/v4";
     private const string Version3StateTag = "BIN-SYNC/NODESTATE/v3";
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 5;
+    private const ushort Version = 6;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -98,8 +99,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 4 or legacy 3).");
+        if (ver != Version && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -114,6 +115,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 5)
+        {
+            var v5 = Blake3Core.TaggedHash(Version5StateTag, body);
+            validDigest = v5.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 4)
         {
@@ -270,6 +276,18 @@ public static class NodePersistence
             foreach (var (peer, ns, cid) in n.SeenChanges.OrderBy(k => k.Peer.Lo).ThenBy(k => k.Peer.Hi).ThenBy(k => k.Ns)
                                                          .ThenBy(k => k.ChangeId.Lo).ThenBy(k => k.ChangeId.Hi))
             { w.B128(peer); w.Varint((ulong)ns); w.B128(cid); }
+
+            // --- route-independent global ChangeId fingerprints
+            w.Varint((ulong)n.GlobalChangeLedger.Count);
+            foreach (var (key, value) in n.GlobalChangeLedger
+                         .OrderBy(k => k.Key.Ns)
+                         .ThenBy(k => k.Key.ChangeId.Lo).ThenBy(k => k.Key.ChangeId.Hi))
+            {
+                w.Varint((ulong)key.Ns);
+                w.B128(key.ChangeId);
+                w.U8(value.IsKnown ? (byte)1 : (byte)0);
+                if (value.IsKnown) w.B128(value.Fingerprint);
+            }
 
             // --- last accepted stream author (Errata E-11)
             w.Varint((ulong)n.LastStreamAuthor.Count);
@@ -476,6 +494,33 @@ public static class NodePersistence
         {
             var peer = r.B128(); var ns = (int)r.Varint(); var cid = r.B128();
             n.SeenChanges.Add(((NodeId)peer, ns, BatchId.From(cid)));
+        }
+
+        if (version >= 6)
+        {
+            int ledgerCount = (int)r.Varint();
+            for (int i = 0; i < ledgerCount; i++)
+            {
+                int ns = (int)r.Varint();
+                var changeId = BatchId.From(r.B128());
+                byte known = r.U8();
+                if (known > 1 || changeId.IsZero || (uint)ns > ushort.MaxValue)
+                    throw new InvalidDataException("Invalid persisted global ChangeId ledger entry.");
+                var value = known == 1
+                    ? new ChangeLedgerValue(Digest16.From(r.B128()), isKnown: true)
+                    : new ChangeLedgerValue(default, isKnown: false);
+                if (!n.GlobalChangeLedger.TryAdd((ns, changeId), value))
+                    throw new InvalidDataException("Duplicate persisted global ChangeId ledger key.");
+            }
+        }
+        else
+        {
+            // v3-v5 only had route-scoped SeenChanges and no semantic fingerprint.
+            // Preserve every historical identity conservatively as an explicit
+            // unknown marker; first matching arrival upgrades it without relay.
+            foreach (var (_, ns, changeId) in n.SeenChanges)
+                n.GlobalChangeLedger.TryAdd((ns, changeId),
+                    new ChangeLedgerValue(default, isKnown: false));
         }
 
         int lsaCount = (int)r.Varint();
