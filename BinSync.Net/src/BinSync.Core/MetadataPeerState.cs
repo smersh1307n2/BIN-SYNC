@@ -10,6 +10,22 @@ public interface IMetadataPeerStateStore
     IReadOnlyList<MetadataPeerStreamSnapshot> ReadPeerStreamStates(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId);
 
+    /// <summary>
+    /// Registers a peer as requiring this author stream. Registration is durable and
+    /// fail-closed: a newly registered peer starts at the supplied proven baseline,
+    /// or at cursor zero when no snapshot baseline is supplied.
+    /// </summary>
+    void RegisterInterestedPeerStream(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
+        ulong baselineAckedCursor, ulong streamOffset, uint issuerEpoch, byte[] lastBatchDigest);
+
+    /// <summary>
+    /// Returns the minimum ACK cursor across every durably registered interested peer.
+    /// Returns zero when no peer is registered or any required progress is unavailable.
+    /// </summary>
+    ulong GetSafeOutboundCompactionCursor(string scopeId, NodeId localReplica,
+        int namespaceId, NodeId authorStream);
+
     MetadataPeerStreamState GetPeerStreamState(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream);
 
