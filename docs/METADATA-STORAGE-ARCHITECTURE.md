@@ -599,7 +599,7 @@ Do not add a per-change/per-peer delivery table or ACK bitmap. Do not merge rece
 
 The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint for now; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
 
-Order: baseline; global dedup, ACK-covered replay pruning and Inbox/InboxAuthors key consolidation (implemented); full receipt-tuple/expiry audit; APPLY payload dedup and relay/receipt split; durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
+Order: baseline; global dedup, ACK-covered replay pruning, Inbox/InboxAuthors key consolidation and remote SeenChanges removal (implemented); full receipt-tuple/expiry audit; APPLY payload dedup and relay/receipt split; durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
 
 
 ## 18. Replay-cache pruning implementation status (2026-11-07)
