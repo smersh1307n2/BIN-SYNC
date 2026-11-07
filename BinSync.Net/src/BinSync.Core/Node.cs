@@ -231,6 +231,9 @@ public sealed partial class Node : IDisposable
     // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
     /// <summary>Provenance seen-set of (sender, ns, changeId) for relay (Errata E-10).</summary>
     internal HashSet<(NodeId Peer, int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
+    // Route-independent operation identity. Key is (namespace, ChangeId); values
+    // retain only a compact semantic fingerprint, never the operation payload.
+    internal Dictionary<(int Ns, BatchId ChangeId), ChangeLedgerValue> GlobalChangeLedger { get; } = new();
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
     internal Dictionary<(NodeId, int), NodeId> LastStreamAuthor { get; } = new();
