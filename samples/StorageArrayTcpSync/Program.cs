@@ -124,7 +124,7 @@ static async Task<int> ExchangeOverTcpAsync(
     Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB)
 {
     await using var listener = TcpSyncListener.Start();
-    Task<SyncSession> acceptTask = listener.AcceptAsync(nodeA);
+    var acceptTask = listener.AcceptAsync(nodeA);
     await using var sessionB = await TcpSync.ConnectAsync(nodeB, "127.0.0.1", listener.Port);
     await using var sessionA = await acceptTask;
 
