@@ -2,6 +2,7 @@
 
 **Статус:** специализированный проект контракта интеграции FLD-DB как синхронизируемой базы.  
 **Общая архитектура:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
+**Физический движок:** [FLD Storage Core architecture](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-STORAGE-CORE-ARCHITECTURE.md).  
 **Область:** FLD-специфичная граница между durable field state и BIN-SYNC. Это не wire-spec и не контракт универсального Metadata Store.  
 **Владелец durable field state и физических гарантий хранения:** FLD-DB.  
 **Владелец протокольной семантики и решений синхронизации:** BIN-SYNC.  
@@ -175,10 +176,14 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 | ApplyCommitCodec v2 / ApplyJournal payload | Fields и RelayFields кодируются отдельно, хотя RelayFields — точное подмножество Fields; тот же полный APPLY_COMMIT payload дублируется в ApplyJournal. Нужны relay-selection indexes и отдельные receipt/relay lifetimes |
 | AcquireOutboxLease / ReleaseOutboxLease / VisitOutboxBatch / AcknowledgeOutbox(..., lease) | Durable fenced lease, borrowed-span enumeration и fenced ACK реализованы |
 | GetOutboxHighWatermark | Отдельный high watermark реализован; WAL CommitSeq и OutboxSeq остаются разными шкалами |
-| FLD Storage-only Metadata Store | Не реализован как отдельная семантическая роль/API; текущий FldDatabase по-прежнему создаёт синхронизируемую модель данных с LocalAuthor/HLC/Outbox |
+| FLD Storage-only Metadata Store | Не реализован; target is direct use of the domain-neutral `Fld1.Storage` API, without constructing `FldDatabase` or LocalAuthor/HLC/Outbox |
 | BIN-SYNC Node | Текущие Storage/Outbox/PeerStates/SeenChanges и другие протокольные структуры остаются внутренними коллекциями Node; общего Metadata Store boundary пока нет |
 
 **Запрет до появления целевого API:** не использовать последовательность `FldDatabase.ApplyRemote(...); FldDatabase.Commit();` как реализацию BIN-SYNC receive. Она не обеспечивает atomic batch/idempotency/relay semantics и может добавить remote author entries в локальный Outbox.
+
+## 7.1. Storage Core boundary
+
+The physical engine must be independently reusable. `Fld1.Storage` exposes byte-oriented atomic batches, WAL/recovery, snapshots, ordered scans and storage-native commit IDs. It has no dependency on `FldDatabase`, RecordId/FieldId, HLC, NodeId, ChangeId, BinSync.Core or wire DTOs. `Fld1.Database` is a consumer of this API. Both namespaces may ship in one DLL initially; source boundaries, public API and dependency tests must allow extraction into a separate Storage package without rewriting the engine. Storage-only mode opens the engine directly and creates no synthetic synchronized field state. See the FLD-DB Storage Core architecture document.
 
 ## 8. Приёмочные тесты контракта
 
