@@ -139,8 +139,10 @@ public sealed class StorageDataProviderAdapter : IDataProviderConformanceAdapter
             ulong high = ReadUInt64(_storage, [LocalHighWatermark]);
             ulong acked = ReadUInt64(_storage, [LocalAckWatermark]);
             ulong highestRead = ReadUInt64(_storage, [LocalReadWatermark]);
-            if (afterSequence > highestRead)
-                throw new InvalidDataException("Requested local change cursor skips changes that have not been scanned.");
+            bool snapshotBarrier = _snapshots.Values.Any(snapshot =>
+                ReadUInt64(snapshot, [LocalHighWatermark]) == afterSequence);
+            if (afterSequence > highestRead && !snapshotBarrier)
+                throw new InvalidDataException("Requested local change cursor skips changes that have not been scanned or covered by a source snapshot.");
 
             ulong start = Math.Max(afterSequence, acked);
             using var snapshot = _storage.OpenSnapshot();
