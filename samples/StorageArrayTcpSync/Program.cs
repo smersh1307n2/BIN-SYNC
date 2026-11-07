@@ -52,6 +52,8 @@ try
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
 
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
         AssertValue(providerA, recordB, nameA, "valve-B");
         AssertValue(providerB, recordA, nameB, "pump-A");
         AssertValue(providerA, recordB, quantityA, "7");
@@ -80,6 +82,8 @@ try
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
 
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
         AssertValue(providerA, recordB, quantity, "9");
         AssertValue(providerB, recordB, quantity, "9");
         Console.WriteLine("Restart + subsequent TCP update: PASS");
@@ -97,6 +101,8 @@ try
         });
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
 
         if (providerA.TryReadCurrent(recordB, quantity, out _) ||
             providerB.TryReadCurrent(recordB, quantity, out _))
