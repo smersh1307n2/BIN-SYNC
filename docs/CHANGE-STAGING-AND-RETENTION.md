@@ -513,7 +513,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 
 ## 9. Cross-repository code audit addendum (2026-11-07)
 
-This addendum supersedes older implementation baselines cited in §3 for current-code claims. Current documentation heads (2026-11-07): FLD-DB `fix/crash-consistency-outbox` at `59ab0c0f39cc2888138bede7906cce9cadbb40ee`; BIN-SYNC `feature/fld-external-storage` at `24ac8e7f98db351e0846b9641eef4f7a5f3d63fa`. The code baselines are FLD-DB `eacff36f1d3ff513508100d27f9d572bf3cfff66` and BIN-SYNC `d2e0313c7de685066d663d5e14901b3a67abd1b7`; comparison with current heads shows only documentation and test/conformance-fixture changes after those code baselines, with no production runtime source changes in this review.
+This addendum supersedes older implementation baselines cited in §3 for current-code claims. Revalidated source-code baselines (2026-11-07): FLD-DB `fix/crash-consistency-outbox` at `eacff36f1d3ff513508100d27f9d572bf3cfff66`; BIN-SYNC `feature/fld-external-storage` at `d2e0313c7de685066d663d5e14901b3a67abd1b7`. The FLD baseline includes the per-author relay ACK/compaction implementation; the BIN-SYNC baseline includes the current ChangeId/Outbox/ACK primitives and the latest GcNotice source change. Comparing current branch heads with these baselines shows only documentation and test/conformance-fixture changes after them, with no production runtime source changes in this review.
 
 The full code-backed audit, target data model, size accounting, risks and tests are in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md).
 
