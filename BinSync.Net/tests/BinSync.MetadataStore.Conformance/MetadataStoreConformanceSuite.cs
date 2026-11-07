@@ -156,6 +156,106 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(1UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
     }
 
+    [Fact]
+    public void Frozen_outbound_sequences_are_stable_bounded_and_payloads_are_owned()
+    {
+        using var store = CreateStore();
+        var frozen = store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+            new[]
+            {
+                FrozenOperation(30, 50),
+                FrozenOperation(31, 51),
+                FrozenOperation(32, 52)
+            });
+        ulong lease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+
+        Assert.Equal(new ulong[] { 1, 2, 3 }, frozen.Select(x => x.Sequence));
+        var first = store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 0, 2);
+        Assert.Equal(new ulong[] { 1, 2 }, first.Items.Select(x => x.Sequence));
+        Assert.Equal(2UL, first.ScannedThroughSequence);
+
+        first.Items[0].Payload[0] = 99;
+        var reread = store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 0, 2);
+        Assert.Equal(50, reread.Items[0].Payload[0]);
+
+        var second = store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, first.ScannedThroughSequence, 2);
+        Assert.Equal(new ulong[] { 3 }, second.Items.Select(x => x.Sequence));
+        Assert.Equal(3UL, second.ScannedThroughSequence);
+    }
+
+    [Fact]
+    public void Outbound_lease_generation_fences_stale_readers_and_acknowledgers()
+    {
+        using var store = CreateStore();
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(30, 50) });
+
+        ulong staleLease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        ulong currentLease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000002"));
+
+        Assert.Throws<InvalidOperationException>(() =>
+            store.ReadOutbound("scope-a", Node(1), 7, Node(20), staleLease, 0, 10));
+        Assert.Throws<InvalidOperationException>(() =>
+            store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), staleLease, 1));
+
+        Assert.Single(store.ReadOutbound("scope-a", Node(1), 7, Node(20), currentLease, 0, 10).Items);
+        store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), currentLease, 1);
+        Assert.Empty(store.ReadOutbound("scope-a", Node(1), 7, Node(20), currentLease, 0, 10).Items);
+    }
+
+    [Fact]
+    public void Outbound_ack_rejects_backward_and_out_of_range_prefixes()
+    {
+        using var store = CreateStore();
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+            new[] { FrozenOperation(30, 50), FrozenOperation(31, 51) });
+        ulong lease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+
+        store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), lease, 2);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), lease, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), lease, 3));
+    }
+
+    [Fact]
+    public void Outbound_freeze_rejects_reused_change_ids_without_partial_sequence_assignment()
+    {
+        using var store = CreateStore();
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(30, 50) });
+
+        Assert.Throws<InvalidDataException>(() =>
+            store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+                new[] { FrozenOperation(31, 51), FrozenOperation(30, 52) }));
+        Assert.Equal(1UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+
+        var next = store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(31, 51) });
+        Assert.Equal(2UL, Assert.Single(next).Sequence);
+    }
+
+    [Fact]
+    public void Outbound_streams_are_partitioned_by_namespace_and_author()
+    {
+        using var store = CreateStore();
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(30, 50) });
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(21), new[] { FrozenOperation(31, 51) });
+        store.FreezeOutbound("scope-a", Node(1), 8, Node(20), new[] { FrozenOperation(32, 52) });
+
+        ulong leaseA = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        ulong leaseB = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(21), Guid.Parse("00000000-0000-0000-0000-000000000002"));
+        ulong leaseC = store.AcquireOutboundLease(
+            "scope-a", Node(1), 8, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000003"));
+
+        Assert.Equal(Batch(30), Assert.Single(store.ReadOutbound("scope-a", Node(1), 7, Node(20), leaseA, 0, 10).Items).ChangeId);
+        Assert.Equal(Batch(31), Assert.Single(store.ReadOutbound("scope-a", Node(1), 7, Node(21), leaseB, 0, 10).Items).ChangeId);
+        Assert.Equal(Batch(32), Assert.Single(store.ReadOutbound("scope-a", Node(1), 8, Node(20), leaseC, 0, 10).Items).ChangeId);
+    }
+
     protected static MetadataIncomingBatch CreateBatch(
         string scope,
         byte replica,
@@ -182,6 +282,9 @@ public abstract class MetadataStoreConformanceSuite
             BatchDigest = Bytes(digest),
             Operations = operations
         };
+
+    protected static MetadataFrozenOperation FrozenOperation(byte change, byte payload)
+        => new() { ChangeId = Batch(change), Payload = new[] { payload } };
 
     protected static MetadataOperation Operation(byte author, byte change, byte fingerprint, byte payload)
         => new()
