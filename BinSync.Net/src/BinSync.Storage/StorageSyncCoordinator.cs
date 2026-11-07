@@ -91,13 +91,19 @@ public sealed class StorageSyncCoordinator
         if (high > long.MaxValue)
             throw new InvalidDataException("Metadata outbound high-watermark exceeds Node Outbox sequence range.");
 
+        long nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+        if (high > (ulong)nodeHigh)
+            throw new InvalidDataException("Metadata outbound high-watermark is ahead of the restored Node Outbox.");
         long after = (long)high;
+        if (after == nodeHigh)
+            return;
+
         const int pageSize = 1024;
         while (true)
         {
             var entries = _node.ReadOutboxEntries(_namespaceId, _node.NodeId, after, pageSize);
             if (entries.Count == 0)
-                return;
+                throw new InvalidDataException("Node Outbox entries required by the Metadata Store high-watermark have been compacted or lost.");
 
             var frozen = new List<MetadataFrozenOperation>(entries.Count);
             long expected = checked(after + 1);
@@ -133,8 +139,10 @@ public sealed class StorageSyncCoordinator
                     throw new InvalidDataException("Metadata Store sequence diverged from the Node Outbox.");
 
             after = entries[^1].Seq;
-            if (entries.Count < pageSize)
+            if (after == nodeHigh)
                 return;
+            if (entries.Count < pageSize)
+                throw new InvalidDataException("Node Outbox page ended before its allocated high-watermark.");
         }
     }
 
