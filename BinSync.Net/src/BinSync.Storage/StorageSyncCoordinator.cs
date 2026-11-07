@@ -337,6 +337,8 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(session);
         if (_metadataStore is not IMetadataPeerStateStore peerStore)
             throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
+        if (string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException("A stable Metadata Store scope is required for peer registration.");
         if ((uint)namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
 
