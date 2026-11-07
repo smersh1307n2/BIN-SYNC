@@ -9,8 +9,8 @@ string root = Path.Combine(Path.GetTempPath(), "binsync-storage-array-" + Guid.N
 Directory.CreateDirectory(root);
 string providerAPath = Path.Combine(root, "provider-a");
 string providerBPath = Path.Combine(root, "provider-b");
-string nodeAPath = Path.Combine(root, "node-a.state");
-string nodeBPath = Path.Combine(root, "node-b.state");
+NodeId nodeAId = default;
+NodeId nodeBId = default;
 
 Guid itemA = Guid.Parse("10000000-0000-0000-0000-000000000001");
 Guid itemB = Guid.Parse("20000000-0000-0000-0000-000000000002");
@@ -26,6 +26,8 @@ try
     using (var metadataA = new StorageMetadataStore(storageA))
     using (var metadataB = new StorageMetadataStore(storageB))
     {
+        nodeA = StorageNodePersistence.Load(storageA, nodeAId);
+        nodeB = StorageNodePersistence.Load(storageB, nodeBId);
         RecordId recordA = providerA.ResolveRecordId(itemA.ToByteArray());
         RecordId recordB = providerB.ResolveRecordId(itemB.ToByteArray());
         ushort nameA = providerA.ResolveFieldId("name"u8.ToArray());
@@ -37,6 +39,8 @@ try
 
         nodeA = NewNode(1);
         nodeB = NewNode(2);
+        nodeAId = nodeA.NodeId;
+        nodeBId = nodeB.NodeId;
         var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId, metadataA, "array-demo");
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId, metadataB, "array-demo");
 
@@ -45,8 +49,8 @@ try
         providerB.AppendLocalChange(Mutation(recordB, nameB, nodeB.NodeId, 2000, "valve-B"u8));
         providerB.AppendLocalChange(Mutation(recordB, quantityB, nodeB.NodeId, 2001, "7"u8));
 
-        coordinatorA.PublishLocalChanges(n => NodePersistence.Save(n, nodeAPath));
-        coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
+        coordinatorA.PublishLocalChanges(n => StorageNodePersistence.Save(storageA, n));
+        coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
         if (metadataA.GetOutboundHighWatermark("array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId) != 2 ||
             metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 2)
             throw new InvalidOperationException("Local Node Outbox was not frozen into durable Storage metadata.");
@@ -65,24 +69,22 @@ try
             // external provider. Transport sends ACK only after this callback returns.
             if (ReferenceEquals(receiver, nodeA))
             {
-                NodePersistence.Save(receiver, nodeAPath);
+                StorageNodePersistence.Save(storageA, receiver);
                 coordinatorA.ApplyRemoteBatch(batch);
             }
             else
             {
-                NodePersistence.Save(receiver, nodeBPath);
+                StorageNodePersistence.Save(storageB, receiver);
                 coordinatorB.ApplyRemoteBatch(batch);
             }
         });
-        NodePersistence.Save(nodeA, nodeAPath);
-        NodePersistence.Save(nodeB, nodeBPath);
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
 
         Console.WriteLine($"initial sync rounds={firstRound}; each Storage provider now has both array items");
     }
 
     // Reopen both durable providers and both BIN-SYNC nodes before the next edit.
-    nodeA = NodePersistence.Load(nodeAPath);
-    nodeB = NodePersistence.Load(nodeBPath);
     using (var storageA = StorageDatabase.Open(providerAPath, 201))
     using (var storageB = StorageDatabase.Open(providerBPath, 202))
     using (var providerA = new StorageDataProvider(storageA))
@@ -101,7 +103,7 @@ try
             throw new InvalidOperationException("Unexpected pending apply in clean restart scenario.");
 
         providerB.AppendLocalChange(Mutation(recordB, quantity, nodeB.NodeId, 3000, "9"u8));
-        coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
+        coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
         if (metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 3)
             throw new InvalidOperationException("Post-restart update was not frozen into the existing outbound stream.");
 
@@ -110,17 +112,17 @@ try
         {
             if (ReferenceEquals(receiver, nodeA))
             {
-                NodePersistence.Save(receiver, nodeAPath);
+                StorageNodePersistence.Save(storageA, receiver);
                 coordinatorA.ApplyRemoteBatch(batch);
             }
             else
             {
-                NodePersistence.Save(receiver, nodeBPath);
+                StorageNodePersistence.Save(storageB, receiver);
                 coordinatorB.ApplyRemoteBatch(batch);
             }
         });
-        NodePersistence.Save(nodeA, nodeAPath);
-        NodePersistence.Save(nodeB, nodeBPath);
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
 
         string aName = Read(providerA, recordA, name);
         string aQuantity = Read(providerA, recordA, quantity);
@@ -149,7 +151,7 @@ try
             HlcLogical = 0,
             Value = Array.Empty<byte>()
         });
-        coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
+        coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
         if (metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 4)
             throw new InvalidOperationException("Record deletion was not frozen into the durable outbound stream.");
 
@@ -157,12 +159,12 @@ try
         {
             if (ReferenceEquals(receiver, nodeA))
             {
-                NodePersistence.Save(receiver, nodeAPath);
+                StorageNodePersistence.Save(storageA, receiver);
                 coordinatorA.ApplyRemoteBatch(batch);
             }
             else
             {
-                NodePersistence.Save(receiver, nodeBPath);
+                StorageNodePersistence.Save(storageB, receiver);
                 coordinatorB.ApplyRemoteBatch(batch);
             }
         });
