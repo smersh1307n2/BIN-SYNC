@@ -45,6 +45,13 @@ public interface IMetadataStoreConformanceAdapter : IDisposable
         ulong leaseGeneration,
         ulong safeThroughSequence);
 
+    void CompactOutboundThrough(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId localAuthor,
+        ulong safeThroughSequence);
+
     ulong GetOutboundHighWatermark(
         string scopeId,
         NodeId localReplica,
@@ -60,6 +67,13 @@ public interface IMetadataStoreConformanceAdapter : IDisposable
         int limit);
 
     void AcknowledgeRelay(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId originalAuthor,
+        ulong safeThroughSequence);
+
+    void CompactRelayThrough(
         string scopeId,
         NodeId localReplica,
         int namespaceId,
