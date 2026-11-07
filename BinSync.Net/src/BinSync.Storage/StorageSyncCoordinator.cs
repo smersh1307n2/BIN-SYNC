@@ -400,9 +400,19 @@ public sealed class StorageSyncCoordinator
         if (string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("A stable Metadata Store scope is required for initial-sync baseline.");
 
+        ProviderSnapshotHandle providerSnapshot = _provider.OpenSnapshot();
+        try
+        {
+            RecoverPendingApplies(persistNode);
+            PublishLocalChanges(persistNode);
+            MergeProviderSnapshotIntoNode(providerSnapshot, persistNode);
+        }
+        finally
+        {
+            _provider.ReleaseSnapshot(providerSnapshot.Token);
+        }
+
         RegisterInterestedPeer(session, _namespaceId);
-        RecoverPendingApplies(persistNode);
-        PublishLocalChanges(persistNode);
         persistNode(_node);
 
         NodeId peer = session.PeerNodeId;
@@ -436,6 +446,107 @@ public sealed class StorageSyncCoordinator
         peerStore.CompletePeerInitialSync(
             _scopeId!, _node.NodeId, peer, peerEpoch, _namespaceId, baselines);
         return result;
+    }
+
+    private void MergeProviderSnapshotIntoNode(
+        ProviderSnapshotHandle snapshot, Action<Node> persistNode)
+    {
+        var recordsById = new Dictionary<RecordId, SnapshotRecord>();
+        int afterIndex = 0;
+        while (true)
+        {
+            ProviderSnapshotPage page = _provider.ReadSnapshot(snapshot.Token, afterIndex, 512);
+            foreach (ProviderMutation mutation in page.Entries)
+            {
+                if (!recordsById.TryGetValue(mutation.RecordId, out var record))
+                {
+                    record = new SnapshotRecord { RecordId = mutation.RecordId };
+                    recordsById.Add(mutation.RecordId, record);
+                }
+
+                if (mutation.IsRecordTombstone)
+                {
+                    record.HasLifecycle = true;
+                    record.LifecycleValue = Model.Dead;
+                    record.LifecycleWall = mutation.HlcWall;
+                    record.LifecycleLogical = mutation.HlcLogical;
+                    record.LifecycleAuthor = mutation.AuthorNodeId;
+                }
+                else
+                {
+                    record.Fields.Add(new SnapshotField
+                    {
+                        FieldId = mutation.FieldId,
+                        IsTombstone = mutation.IsTombstone,
+                        Wall = mutation.HlcWall,
+                        Logical = mutation.HlcLogical,
+                        AuthorNodeId = mutation.AuthorNodeId,
+                        KeyEpoch = mutation.KeyEpoch,
+                        Value = mutation.Value.ToArray()
+                    });
+                }
+            }
+
+            if (page.IsComplete) break;
+            if (page.NextIndex <= afterIndex)
+                throw new InvalidDataException("Provider snapshot page did not advance.");
+            afterIndex = page.NextIndex;
+        }
+
+        if (recordsById.Count == 0) return;
+        var records = recordsById.Values.ToList();
+        foreach (var record in records)
+            record.Fields.Sort(static (left, right) => left.FieldId.CompareTo(right.FieldId));
+
+        var partitions = new List<List<SnapshotRecord>>();
+        var current = new List<SnapshotRecord>();
+        void AddPartition(List<SnapshotRecord> candidate)
+        {
+            var probe = new SnapshotChunkMessage
+            {
+                NamespaceId = _namespaceId,
+                ChunkIndex = 0,
+                ChunkCount = 1,
+                Records = candidate
+            };
+            if (Reconcile.EncodeSnapshotChunk(probe).Length <= Frames.MAX_PAYLOAD_SIZE)
+            {
+                partitions.Add(candidate);
+                if (partitions.Count > 4096) throw new SyncException("PAYLOAD_TOO_LARGE");
+                return;
+            }
+            if (candidate.Count <= 1) throw new SyncException("PAYLOAD_TOO_LARGE");
+            int middle = candidate.Count / 2;
+            AddPartition(candidate.GetRange(0, middle));
+            AddPartition(candidate.GetRange(middle, candidate.Count - middle));
+        }
+
+        foreach (var record in records)
+        {
+            current.Add(record);
+            if (current.Count == 64)
+            {
+                AddPartition(current);
+                current = new List<SnapshotRecord>();
+            }
+        }
+        if (current.Count > 0) AddPartition(current);
+
+        uint chunkCount = checked((uint)partitions.Count);
+        var chunks = new List<SnapshotChunkMessage>(partitions.Count);
+        for (int i = 0; i < partitions.Count; i++)
+        {
+            chunks.Add(new SnapshotChunkMessage
+            {
+                NamespaceId = _namespaceId,
+                ChunkIndex = checked((uint)i),
+                ChunkCount = chunkCount,
+                Records = partitions[i]
+            });
+        }
+
+        Reconcile.ApplySnapshotChunks(_node, chunks);
+        persistNode(_node);
     }
 
     private void ApplyRemoteSnapshotToProvider(
