@@ -39,7 +39,7 @@ These are semantic clarifications/hardening changes; they do not change the wire
 
 ## 3. Remaining implementation/specification gaps
 
-- **Receipt DTO parity:** the current Storage `MetadataBatchReceipt` does not itself carry the full protocol `headerFingerprint` and `durableAuthor` fields described by §10.2. Node's inbox mirror still supplies part of this information. The authoritative cutover must move the full duplicate-ACK/equivocation decision into durable Metadata Store state.
+- **Receipt DTO parity:** Storage `MetadataBatchReceipt` now returns and persists `durableAuthor`, including completed PendingApply retries. The full protocol `headerFingerprint` (including schema/merge-policy/flags commitments) is still supplied by Node's transitional inbox path. The authoritative cutover must move the complete duplicate-ACK/equivocation decision into durable Metadata Store state.
 - **Receive authority:** Node currently validates and mutates its inbox/cursor/digest cache after Metadata Store staging. This is a transitional dual-authority arrangement, not final conformance to the Metadata Store ownership model.
 - **Provider rehydration:** a fresh runtime must reconstruct user-visible state and pending recovery exclusively from the Data Provider plus Metadata Store; no stale NodePersistence copy may be required.
 - **Crash proof:** deterministic fault injection is required before and after PendingApply commit, provider effect/receipt, Metadata Store finalize, ACK emission, and checkpoint/compaction. Ordinary restart tests do not cover all these cuts.
