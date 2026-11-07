@@ -226,8 +226,9 @@ public static class NodePersistence
             foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1.ToString()).ThenBy(kv => kv.Key.Item2))
             { w.B128(author); w.Varint((ulong)ns); w.U64((ulong)seq); }
 
-            // --- accepted-batch receipts grouped by issuer/namespace/epoch/author.
-            // Each shared scope key and durable author is written once per group.
+            // --- accepted-batch receipts grouped by issuer/namespace/epoch.
+            // Use author subgroups only when removing repeated 16-byte authors beats
+            // the extra subgroup-count varints; singleton-heavy sessions stay flat.
             var receiptGroups = n.InboxAuthors
                 .GroupBy(k => (k.Key.Issuer, k.Key.Ns, k.Key.Epoch))
                 .OrderBy(g => g.Key.Issuer.Lo).ThenBy(g => g.Key.Issuer.Hi)
@@ -238,25 +239,46 @@ public static class NodePersistence
                 w.B128(group.Key.Issuer);
                 w.Varint((ulong)group.Key.Ns);
                 w.Varint((ulong)group.Key.Epoch);
-                var authorGroups = group.GroupBy(k => k.Value.DurableAuthor)
-                    .OrderBy(g => g.Key.Lo).ThenBy(g => g.Key.Hi).ToArray();
-                w.Varint((ulong)authorGroups.Length);
+                var groupReceipts = group.ToArray();
+                var authorGroups = groupReceipts.GroupBy(k => k.Value.DurableAuthor)
+                    .OrderBy(g => g.Key.Lo).ThenBy(g => g.Key.Hi)
+                    .Select(g => new
+                    {
+                        Author = g.Key,
+                        Receipts = g.OrderBy(k => k.Key.BatchId.Lo)
+                            .ThenBy(k => k.Key.BatchId.Hi).ToArray()
+                    }).ToArray();
+                int flatCountBytes = Codec.VarintLength((ulong)groupReceipts.Length);
+                int groupedCountBytes = Codec.VarintLength((ulong)authorGroups.Length);
                 foreach (var authorGroup in authorGroups)
+                    groupedCountBytes += Codec.VarintLength((ulong)authorGroup.Receipts.Length);
+                long repeatedAuthorBytes = 16L * (groupReceipts.Length - authorGroups.Length);
+                bool useAuthorGroups = repeatedAuthorBytes > groupedCountBytes - flatCountBytes + 1;
+
+                w.U8(useAuthorGroups ? (byte)1 : (byte)0);
+                if (!useAuthorGroups)
                 {
-                    w.B128(authorGroup.Key);
-                    var receipts = authorGroup.OrderBy(k => k.Key.BatchId.Lo)
+                    var receipts = groupReceipts.OrderBy(k => k.Key.BatchId.Lo)
                         .ThenBy(k => k.Key.BatchId.Hi).ToArray();
                     w.Varint((ulong)receipts.Length);
                     foreach (var (key, receipt) in receipts)
                     {
-                        w.B128(key.BatchId);
-                        byte receiptFlags = (byte)((receipt.HasCursorEnd ? 1 : 0) |
-                                                   (receipt.HasFingerprint ? 2 : 0));
-                        w.U8(receiptFlags);
-                        if (receipt.HasCursorEnd) w.Varint((ulong)receipt.CursorEnd);
-                        if (receipt.HasFingerprint) w.B128(receipt.Fingerprint);
-                        w.Varint(receipt.AppliedAt);
-                        w.Varint(receipt.ExpiresAt);
+                        w.B128(key.BatchId); w.B128(receipt.DurableAuthor);
+                        WriteReceiptValue(w, receipt);
+                    }
+                }
+                else
+                {
+                    w.Varint((ulong)authorGroups.Length);
+                    foreach (var authorGroup in authorGroups)
+                    {
+                        w.B128(authorGroup.Author);
+                        w.Varint((ulong)authorGroup.Receipts.Length);
+                        foreach (var (key, receipt) in authorGroup.Receipts)
+                        {
+                            w.B128(key.BatchId);
+                            WriteReceiptValue(w, receipt);
+                        }
                     }
                 }
             }
@@ -441,45 +463,54 @@ public static class NodePersistence
         HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)>? legacyInbox = null;
         if (version >= 12)
         {
-            int groupCount = ReadCount(r, 19, "receipt group");
+            int groupCount = ReadCount(r, 20, "receipt group");
             var receiptGroupKeys = new HashSet<(NodeId Issuer, int Ns, int Epoch)>();
             for (int gi = 0; gi < groupCount; gi++)
             {
                 var issuer = NodeId.From(r.B128());
                 var ns = ReadNamespaceId(r);
                 var ep = ReadInt32Varint(r);
-                int authorGroupCount = ReadCount(r, 17, "receipt author group");
-                if (authorGroupCount == 0 || issuer.IsZero ||
-                    !receiptGroupKeys.Add((issuer, ns, ep)))
+                byte layout = r.U8();
+                if (issuer.IsZero || !receiptGroupKeys.Add((issuer, ns, ep)))
                     throw new InvalidDataException("Invalid or duplicate persisted receipt group.");
-                var receiptAuthors = new HashSet<NodeId>();
-                for (int ai = 0; ai < authorGroupCount; ai++)
+
+                if (layout == 0)
                 {
-                    var author = NodeId.From(r.B128());
-                    int receiptCount = ReadCount(r, 19, "batch receipt");
-                    if (author.IsZero || receiptCount == 0 || !receiptAuthors.Add(author))
-                        throw new InvalidDataException("Invalid or duplicate persisted receipt author group.");
+                    int receiptCount = ReadCount(r, 35, "flat batch receipt");
+                    if (receiptCount == 0)
+                        throw new InvalidDataException("Empty persisted receipt group.");
                     for (int i = 0; i < receiptCount; i++)
                     {
                         var batchId = BatchId.From(r.B128());
-                        byte receiptFlags = r.U8();
-                        if (receiptFlags > 3 || ((receiptFlags & 2) != 0 && (receiptFlags & 1) == 0))
-                            throw new InvalidDataException("Invalid persisted receipt flags.");
-                        bool hasCursorEnd = (receiptFlags & 1) != 0;
-                        long cursorEnd = hasCursorEnd ? (long)r.Varint() : 0;
-                        bool hasFingerprint = (receiptFlags & 2) != 0;
-                        var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
-                        var appliedAt = r.Varint();
-                        var expiresAt = r.Varint();
-                        if (batchId.IsZero || cursorEnd < 0 ||
-                            (expiresAt != 0 && expiresAt < appliedAt))
-                            throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
-                        var receipt = new InboxReceipt(author, cursorEnd, hasCursorEnd,
-                            fingerprint, hasFingerprint, appliedAt, expiresAt);
+                        var author = NodeId.From(r.B128());
+                        var receipt = ReadReceiptValue(r, author, batchId);
                         if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), receipt))
                             throw new InvalidDataException("Duplicate persisted batch receipt.");
                     }
                 }
+                else if (layout == 1)
+                {
+                    int authorGroupCount = ReadCount(r, 17, "receipt author group");
+                    if (authorGroupCount == 0)
+                        throw new InvalidDataException("Empty persisted receipt author groups.");
+                    var receiptAuthors = new HashSet<NodeId>();
+                    for (int ai = 0; ai < authorGroupCount; ai++)
+                    {
+                        var author = NodeId.From(r.B128());
+                        int receiptCount = ReadCount(r, 19, "batch receipt");
+                        if (author.IsZero || receiptCount == 0 || !receiptAuthors.Add(author))
+                            throw new InvalidDataException("Invalid or duplicate persisted receipt author group.");
+                        for (int i = 0; i < receiptCount; i++)
+                        {
+                            var batchId = BatchId.From(r.B128());
+                            var receipt = ReadReceiptValue(r, author, batchId);
+                            if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), receipt))
+                                throw new InvalidDataException("Duplicate persisted batch receipt.");
+                        }
+                    }
+                }
+                else
+                    throw new InvalidDataException("Unknown persisted receipt group layout.");
             }
         }
         else if (version >= 10)
@@ -951,6 +982,34 @@ public static class NodePersistence
         }
 
         return n;
+    }
+
+    private static InboxReceipt ReadReceiptValue(Reader reader, NodeId author, BatchId batchId)
+    {
+        byte flags = reader.U8();
+        if (author.IsZero || batchId.IsZero || flags > 3 || ((flags & 2) != 0 && (flags & 1) == 0))
+            throw new InvalidDataException("Invalid persisted receipt identity or flags.");
+        bool hasCursorEnd = (flags & 1) != 0;
+        long cursorEnd = hasCursorEnd ? (long)reader.Varint() : 0;
+        bool hasFingerprint = (flags & 2) != 0;
+        var fingerprint = hasFingerprint ? Digest16.From(reader.B128()) : default;
+        var appliedAt = reader.Varint();
+        var expiresAt = reader.Varint();
+        if (cursorEnd < 0 || (expiresAt != 0 && expiresAt < appliedAt))
+            throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
+        return new InboxReceipt(author, cursorEnd, hasCursorEnd,
+            fingerprint, hasFingerprint, appliedAt, expiresAt);
+    }
+
+    private static void WriteReceiptValue(Writer writer, InboxReceipt receipt)
+    {
+        byte flags = (byte)((receipt.HasCursorEnd ? 1 : 0) |
+                            (receipt.HasFingerprint ? 2 : 0));
+        writer.U8(flags);
+        if (receipt.HasCursorEnd) writer.Varint((ulong)receipt.CursorEnd);
+        if (receipt.HasFingerprint) writer.B128(receipt.Fingerprint);
+        writer.Varint(receipt.AppliedAt);
+        writer.Varint(receipt.ExpiresAt);
     }
 
     private static int ReadInt32Varint(Reader reader)
