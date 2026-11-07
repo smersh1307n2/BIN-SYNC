@@ -328,7 +328,8 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = record, FieldId = 0x0106, AuthorNodeId = nodeA.NodeId,
             HlcWall = 4600, Value = "provider-owned"u8.ToArray()
         });
-        providerA.AcknowledgeLocalChanges(providerA.LocalChangeHighWatermark);
+        var seededFeed = providerA.ReadLocalChanges(0, 16);
+        providerA.AcknowledgeLocalChanges(seededFeed.ScannedThroughSequence);
         Assert.True(nodeA.IsPristine);
 
         await Task.WhenAll(
