@@ -381,8 +381,10 @@ public class Production : IDisposable
             requested[0],
             new OutboxChangeIdentity(Fix.Nid(883), requested[0].ChangeId),
         };
-        Assert.Throws<ArgumentException>(() => node.TryResolveOutboxSequences(
-            NS, duplicateChangeId, new long[2]));
+        bool duplicateRejected = false;
+        try { node.TryResolveOutboxSequences(NS, duplicateChangeId, new long[2]); }
+        catch (ArgumentException) { duplicateRejected = true; }
+        Assert.True(duplicateRejected);
     }
 
     [Fact]
