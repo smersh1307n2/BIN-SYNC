@@ -302,6 +302,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(80, 81));
         store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(82, 83));
+        store.RegisterInterestedPeerStream(scope, local, peerB, 1, 7, author, 0, 0, 1, new byte[16]);
         store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(80));
         store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
             Batch(80), 1, Enumerable.Repeat((byte)81, 16).ToArray());
