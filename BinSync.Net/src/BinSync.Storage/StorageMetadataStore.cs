@@ -1678,6 +1678,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         byte[] value = new byte[16];
         BinaryPrimitives.WriteUInt64LittleEndian(value, acknowledged);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), highWatermark);
+        string hexKey = Convert.ToHexString(key);
+        if (current.PersistedEntries.TryGetValue(hexKey, out var existing) &&
+            existing.Value.AsSpan().SequenceEqual(value))
+            return;
+        if (!current.PersistedEntries.ContainsKey(hexKey) && acknowledged == 0 && highWatermark == 0)
+            return;
 
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
@@ -1745,6 +1751,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             current.Relay[new RelayKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
         else
             current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         foreach (var key in keys)
             current.PersistedEntries.Remove(Convert.ToHexString(key));
         current.StorageCommitSeq = _storage.LastCommitSeq;
