@@ -39,7 +39,7 @@ public interface IMetadataPeerStateStore
     MetadataRelayPage ReadRelayForPeer(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream, int limit);
 
-    ulong GetSafeOutboundCompactionCursor(string scopeId, NodeId localReplica,
+    ulong GetSafePeerStreamCompactionCursor(string scopeId, NodeId localReplica,
         int namespaceId, NodeId authorStream);
 
     MetadataPeerStreamState GetPeerStreamState(string scopeId, NodeId localReplica,
