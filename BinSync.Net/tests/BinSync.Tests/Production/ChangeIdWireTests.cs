@@ -334,6 +334,32 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Persistence_v10_migrates_local_seen_marker_without_repeated_node_id()
+    {
+        var nodeId = NodeId.From(Id(0xD7));
+        var changeId = BatchId.From(Id(0xD8));
+        var writer = new Writer();
+        writer.B128(nodeId).Varint(0).U64(0).U32(0);
+        for (int i = 0; i < 3; i++) writer.Varint(0); // Storage, Outbox, sequence map
+        writer.Varint(0); // v10 grouped receipt count
+        for (int i = 0; i < 6; i++) writer.Varint(0); // digests, aliases, authors, peer states
+        writer.Varint(1).B128(nodeId).Varint(7).B128(changeId); // v10 legacy local marker
+        writer.Varint(0); // grouped global ledger
+        for (int i = 0; i < 7; i++) writer.Varint(0); // remaining metadata sections
+        var body = writer.Value();
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v10", body);
+        var image = new byte[46 + body.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 10);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
+        digest.CopyTo(image.AsSpan(14, 32));
+        body.CopyTo(image.AsSpan(46));
+
+        using var restored = NodePersistence.LoadFromBytes(image);
+        Assert.Contains((7, changeId), restored.SeenChanges);
+    }
+
+    [Fact]
     public void Persistence_v10_rejects_receipt_cursor_that_overflows_signed_range()
     {
         var nodeId = NodeId.From(Id(0xD0));
