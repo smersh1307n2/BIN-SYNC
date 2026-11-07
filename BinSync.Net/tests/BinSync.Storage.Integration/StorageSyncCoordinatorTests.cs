@@ -11,6 +11,49 @@ public sealed class StorageSyncCoordinatorTests
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-coordinator-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public async Task Sync_session_uses_durable_peer_reservations_for_sequential_batches()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-peer-session"), 420);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(18);
+        using var receiver = NewNode(19);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        RecordId firstRecord = RecordId.From(Guid.Parse("18000000-0000-0000-0000-000000000018").ToByteArray());
+        sender.WriteField(1, firstRecord, 0x0101, "first"u8.ToArray(), new Hlc(1000, 0));
+        var firstReceive = acceptor.ReceiveBatchAsync(receiver);
+        Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, "durable-peer-session"));
+        Assert.Equal(1, (await firstReceive).Applied);
+
+        var firstState = metadata.GetPeerStreamState("durable-peer-session", sender.NodeId,
+            receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId);
+        Assert.Equal(1UL, firstState.AckedCursor);
+        Assert.Equal(1UL, firstState.PushedCursor);
+        Assert.Equal((uint)sender.Epoch, firstState.IssuerEpoch);
+        Assert.Null(firstState.PendingBatch);
+
+        RecordId secondRecord = RecordId.From(Guid.Parse("19000000-0000-0000-0000-000000000019").ToByteArray());
+        sender.WriteField(1, secondRecord, 0x0101, "second"u8.ToArray(), new Hlc(2000, 0));
+        var secondReceive = acceptor.ReceiveBatchAsync(receiver);
+        Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, "durable-peer-session"));
+        Assert.Equal(1, (await secondReceive).Applied);
+
+        var secondState = metadata.GetPeerStreamState("durable-peer-session", sender.NodeId,
+            receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId);
+        Assert.Equal(2UL, secondState.AckedCursor);
+        Assert.Equal(2UL, secondState.PushedCursor);
+        Assert.Null(secondState.PendingBatch);
+        Assert.True(receiver.TryGetField(1, firstRecord, 0x0101, out var firstValue));
+        Assert.Equal("first", Encoding.UTF8.GetString(firstValue!.Value));
+        Assert.True(receiver.TryGetField(1, secondRecord, 0x0101, out var secondValue));
+        Assert.Equal("second", Encoding.UTF8.GetString(secondValue!.Value));
+    }
+
+    [Fact]
     public void Failed_node_checkpoint_does_not_ack_feed_and_replay_does_not_duplicate_outbox()
     {
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 401, deleteOnDispose: true);
