@@ -588,9 +588,13 @@ public sealed partial class Node
             GlobalChangeLedger.EnsureCapacity(GlobalChangeLedger.Count +
                 stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
 
-        // The accepted batch must be durable before publishing any effects. ReceiveBatchAsync
-        // sends its ACK only after this method returns, so a crash after ACK cannot lose it.
-        if (persistWal && _wal is not null)
+        // The accepted batch must be durable before publishing any new effects. In
+        // metadata-authoritative mode the durable PendingApply is the protocol WAL; Node's
+        // RemoteBatch WAL remains the record-cache recovery log and need not duplicate a
+        // batch whose every ChangeId is already present in the atomically checkpointed ledger.
+        bool alreadyAppliedInNode = receiveStateOwnedByMetadataStore &&
+            (nEnt == 0 || globalDuplicateFlags.All(isDuplicate => isDuplicate));
+        if (persistWal && _wal is not null && !alreadyAppliedInNode)
         {
             var aliases = AliasToNode.TryGetValue(senderPeer, out var sessionMap)
                 ? sessionMap.OrderBy(x => x.Key)
