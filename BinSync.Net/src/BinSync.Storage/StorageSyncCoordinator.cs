@@ -439,14 +439,14 @@ public sealed class StorageSyncCoordinator
     }
 
     private void ApplyRemoteSnapshotToProvider(
-        Node senderPeer, uint senderEpoch, IReadOnlyList<SnapshotChunkMessage> chunks)
+        NodeId senderPeer, uint senderEpoch, IReadOnlyList<SnapshotChunkMessage> chunks)
     {
         var mutations = new List<ProviderMutation>();
         foreach (var chunk in chunks)
         {
             foreach (var record in chunk.Records)
             {
-                if (record.HasLifecycle && record.LifecycleValue == Model.Tombstone)
+                if (record.HasLifecycle && record.LifecycleValue == Model.Dead)
                 {
                     mutations.Add(new ProviderMutation
                     {
