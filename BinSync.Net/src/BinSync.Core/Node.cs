@@ -208,7 +208,7 @@ public sealed partial class Node : IDisposable
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
     /// <summary>Accepted batch receipt and exact durable author stream for duplicate ACKs.</summary>
-    internal Dictionary<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId), InboxReceipt> InboxAuthors { get; } = new();
+    internal InboxReceiptStore InboxAuthors { get; } = new();
     /// <summary>Read-only receipt-key view retained for diagnostics and tests; no duplicate key set is stored.</summary>
     internal IReadOnlyCollection<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox => InboxAuthors.Keys;
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
