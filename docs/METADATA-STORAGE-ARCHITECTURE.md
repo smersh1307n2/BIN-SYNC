@@ -178,6 +178,8 @@ The relay journal must preserve original change identity, author, HLC, key epoch
 
 The relay journal is distinct from the local-origin outbound journal. Their cursors, ownership and retention rules must not be conflated.
 
+The durable batch receipt and relay payload journal also have independent lifetimes. A duplicate-batch receipt may expire under the Inbox GC rule while relay payload remains needed by downstream peers; relay ACK may complete while the receipt's duplicate-retry horizon has not elapsed. Do not store them in one indivisible record/file unless the physical layout supports independent reclamation. FLD's current ApplyCommitCodec v2 duplicates RelayFields inside Fields and ApplyJournal copies the full APPLY_COMMIT payload again; the target FLD design is one operation payload array plus compact relay-selection indexes, a compact receipt, and a relay-only journal. See [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
+
 ### 5.6. Optional protocol state
 
 Optional features may require additional durable state, such as causal dependency tracking, schema evolution state, trust/key epochs, or GC/membership checkpoints. Each feature must declare:
