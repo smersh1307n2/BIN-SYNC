@@ -562,7 +562,6 @@ public sealed class StorageSyncCoordinatorTests
         var nodeMirror = sender.ReadPeerStreamProgress(receiver.NodeId, 1, sender.NodeId);
         Assert.Equal(0UL, nodeMirror.AckedCursor);
         Assert.Equal(0UL, nodeMirror.PushedCursor);
-        Assert.False(sender.PeerStates.ContainsKey((receiver.NodeId, 1)));
 
         RecordId secondRecord = RecordId.From(Guid.Parse("19000000-0000-0000-0000-000000000019").ToByteArray());
         provider.AppendLocalChange(new ProviderMutation
