@@ -192,7 +192,7 @@ FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest1
 
 ## 7. Текущее состояние API и блокирующие расхождения
 
-Code/API baseline revalidated: FLD-DB `fix/crash-consistency-outbox` commit `978249df5998a3a929840f429a243b5136785e7e`; BIN-SYNC `feature/fld-external-storage` code commit `c612ce1552a0c7ac444f14661fb7e57fa77c22a2`. The BIN-SYNC branch includes source changes for persistence v12, bounded snapshot parsing, adaptive in-memory receipt grouping, per-author Outbox compaction, the public safe-ACK query and Outbox ChangeId-to-sequence resolver; the FLD branch includes the relay-only ApplyJournal/ACK boundary.
+Code/API baseline revalidated for this documentation pass: FLD-DB `fix/crash-consistency-outbox` code baseline `eacff36f1d3ff513508100d27f9d572bf3cfff66`; BIN-SYNC `feature/fld-external-storage` code baseline `d2e0313c7de685066d663d5e14901b3a67abd1b7`. Comparing each baseline with the current branch head shows only documentation and test/conformance-fixture changes after these code baselines; no production runtime source changes were made in this review. The BIN-SYNC baseline includes persistence v12, bounded snapshot parsing, adaptive in-memory receipt grouping, per-author Outbox compaction, the public safe-ACK query and Outbox ChangeId-to-sequence resolver; the FLD baseline includes the relay-only ApplyJournal and per-author ACK/retention boundary.
 
 | Текущее API / состояние (проверено на FLD fix/crash-consistency-outbox) | Статус / оставшийся разрыв |
 |---|---|
