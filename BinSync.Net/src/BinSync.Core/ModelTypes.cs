@@ -298,6 +298,15 @@ internal sealed partial class PeerState
         AuthorProgress[author] = p;
     }
 
+    public void ClearStreamAcked(NodeId author)
+    {
+        if (!AuthorProgress.TryGetValue(author, out var progress) || !progress.HasAcked)
+            return;
+        progress.Flags = (byte)(progress.Flags & ~PeerAuthorProgress.AckedFlag);
+        if (progress.Flags == 0) AuthorProgress.Remove(author);
+        else AuthorProgress[author] = progress;
+    }
+
     public void SetStreamPushed(NodeId author, long value)
     {
         AuthorProgress.TryGetValue(author, out var p);
