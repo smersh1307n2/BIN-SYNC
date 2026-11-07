@@ -223,44 +223,118 @@ public sealed partial class Batch
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
+internal struct PeerAuthorProgress
+{
+    internal const byte AckedFlag = 1;
+    internal const byte PushedFlag = 2;
+    internal const byte OffsetFlag = 4;
+
+    internal long Acked;
+    internal long Pushed;
+    internal long Offset;
+    internal byte Flags;
+
+    internal bool HasAcked => (Flags & AckedFlag) != 0;
+    internal bool HasPushed => (Flags & PushedFlag) != 0;
+    internal bool HasOffset => (Flags & OffsetFlag) != 0;
+}
+
+/// <summary>Per-peer session cursors and compact per-author stream progress for one namespace.</summary>
 internal sealed partial class PeerState
 {
-    /// <summary>Remote peer node id this state is tracked for.</summary>
     public NodeId PeerNodeId { get; set; }
-    /// <summary>Logical namespace this entity belongs to.</summary>
     public int NamespaceId { get; set; }
-    /// <summary>Highest sequence the local node has pushed to this peer stream.</summary>
     public long LastPushedSeq { get; set; }
-    /// <summary>Gets or sets last received seq.</summary>
     public long LastReceivedSeq { get; set; }
-    /// <summary>Highest sequence the peer has ACKed on this stream.</summary>
     public long LastAckedSeq { get; set; }
-    /// <summary>Per-author receive cursors: last contiguous seq accepted.</summary>
-    public Dictionary<(NodeId Peer, int Epoch, int Ns, NodeId Author), long> ReceivedStreams { get; } = new();
-    /// <summary>Per-author ACK watermarks used when building the next delta.</summary>
-    public Dictionary<NodeId, long> StreamAcked { get; } = new();
-    /// <summary>Highest sequence successfully handed to this peer for each author stream.</summary>
-    public Dictionary<NodeId, long> StreamPushed { get; } = new();
-    /// <summary>Local Outbox sequence minus this peer's wire cursor for each author stream.</summary>
-    public Dictionary<NodeId, long> StreamOffsets { get; } = new();
-    /// <summary>Gets or sets initial sync complete.</summary>
+
+    /// <summary>Receive cursors keyed by sender/epoch/author; namespace is the owning PeerState key.</summary>
+    public Dictionary<(NodeId Peer, int Epoch, NodeId Author), long> ReceivedStreams { get; } = new();
+    /// <summary>Combined ACK/pushed/offset watermarks; one author key per stream.</summary>
+    internal Dictionary<NodeId, PeerAuthorProgress> AuthorProgress { get; } = new();
+
     public bool InitialSyncComplete { get; set; }
-    /// <summary>Gets or sets membership epoch.</summary>
     public int MembershipEpoch { get; set; }
-    /// <summary>Last time this peer or stream was observed.</summary>
     public long LastSeen { get; set; }
-    /// <summary>Deterministic batch-id cache keyed by author stream + cursor range.</summary>
     internal Dictionary<(NodeId Author, long Start, long End), (BatchId Id, Digest16 Prev)> Ids { get; } = new();
 
-    /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
     public PeerState(NodeId peer, int ns)
     {
         PeerNodeId = peer;
         NamespaceId = ns;
     }
 
-    /// <summary>Return the ACK watermark for a given author stream.</summary>
-    public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
+    public bool TryGetStreamAcked(NodeId author, out long value)
+    {
+        if (AuthorProgress.TryGetValue(author, out var p) && p.HasAcked)
+        { value = p.Acked; return true; }
+        value = 0; return false;
+    }
+
+    public bool TryGetStreamPushed(NodeId author, out long value)
+    {
+        if (AuthorProgress.TryGetValue(author, out var p) && p.HasPushed)
+        { value = p.Pushed; return true; }
+        value = 0; return false;
+    }
+
+    public bool TryGetStreamOffset(NodeId author, out long value)
+    {
+        if (AuthorProgress.TryGetValue(author, out var p) && p.HasOffset)
+        { value = p.Offset; return true; }
+        value = 0; return false;
+    }
+
+    public bool HasStreamAcked(NodeId author) => TryGetStreamAcked(author, out _);
+
+    public void SetStreamAcked(NodeId author, long value)
+    {
+        AuthorProgress.TryGetValue(author, out var p);
+        p.Acked = value;
+        p.Flags |= PeerAuthorProgress.AckedFlag;
+        AuthorProgress[author] = p;
+    }
+
+    public void SetStreamPushed(NodeId author, long value)
+    {
+        AuthorProgress.TryGetValue(author, out var p);
+        p.Pushed = value;
+        p.Flags |= PeerAuthorProgress.PushedFlag;
+        AuthorProgress[author] = p;
+    }
+
+    public void SetStreamOffset(NodeId author, long value)
+    {
+        AuthorProgress.TryGetValue(author, out var p);
+        p.Offset = value;
+        p.Flags |= PeerAuthorProgress.OffsetFlag;
+        AuthorProgress[author] = p;
+    }
+
+    public long AckedFor(NodeId author) =>
+        TryGetStreamAcked(author, out var value) ? value : 0;
+
+    public int StreamAckedCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (var progress in AuthorProgress.Values)
+                if (progress.HasAcked) count++;
+            return count;
+        }
+    }
+
+    public long MinStreamAcked
+    {
+        get
+        {
+            long min = long.MaxValue;
+            foreach (var progress in AuthorProgress.Values)
+                if (progress.HasAcked && progress.Acked < min) min = progress.Acked;
+            return min;
+        }
+    }
 }
 
 /// <summary>
