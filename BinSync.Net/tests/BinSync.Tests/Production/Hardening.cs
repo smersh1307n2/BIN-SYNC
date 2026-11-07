@@ -236,7 +236,7 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V6TagAndStreamOffsetsRoundTrip()
+    public void Persistence_V7TagAndStreamOffsetsRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
@@ -245,10 +245,10 @@ public class Production : IDisposable
         var path = Path.Combine(_dir, "tag-v6.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)6, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)7, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v6", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v7", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
@@ -311,16 +311,19 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_RejectsIncompleteOrInvalidInboxAuthorMap()
+    public void Persistence_UnifiedInboxReceiptMapDoesNotDuplicateKeysAndRejectsZeroAuthor()
     {
         var (a, _) = BuildHistory();
         Assert.NotEmpty(a.Inbox);
         var key = a.Inbox.First();
 
-        var missingPath = Path.Combine(_dir, "missing-inbox-author.state");
+        // Removing a receipt removes its key and author together; there is no
+        // second set whose key could remain orphaned.
         a.InboxAuthors.Remove(key);
+        var missingPath = Path.Combine(_dir, "missing-inbox-receipt.state");
         NodePersistence.Save(a, missingPath);
-        Assert.Throws<InvalidDataException>(() => NodePersistence.Load(missingPath));
+        using (var restored = NodePersistence.Load(missingPath))
+            Assert.DoesNotContain(key, restored.Inbox);
 
         a.InboxAuthors[key] = default;
         var zeroPath = Path.Combine(_dir, "zero-inbox-author.state");
