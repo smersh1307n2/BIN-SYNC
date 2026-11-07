@@ -211,6 +211,22 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
             throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
 
+        // Index pending identities once. The durable identity key is
+        // (namespace, ChangeId), not ChangeId alone; scanning every pending batch
+        // for every incoming operation made staging O(pending × incoming).
+        var pendingIdentities = new Dictionary<LedgerKey, byte[]>();
+        foreach (var otherPending in state.PendingApplies.Values)
+        {
+            foreach (var pendingOperation in otherPending.Batch.Operations)
+            {
+                var pendingKey = new LedgerKey(batch.NamespaceId, pendingOperation.ChangeId);
+                if (pendingIdentities.TryGetValue(pendingKey, out var knownFingerprint) &&
+                    !knownFingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint))
+                    throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                pendingIdentities[pendingKey] = pendingOperation.Fingerprint;
+            }
+        }
+
         var batchIdentities = new Dictionary<LedgerKey, byte[]>();
         foreach (var operation in batch.Operations)
         {
@@ -224,15 +240,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 !priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
 
-            foreach (var otherPending in state.PendingApplies.Values)
-            {
-                foreach (var pendingOperation in otherPending.Batch.Operations)
-                {
-                    if (pendingOperation.ChangeId == operation.ChangeId &&
-                        !pendingOperation.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                        throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
-                }
-            }
+            if (pendingIdentities.TryGetValue(key, out var pendingFingerprint) &&
+                !pendingFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
         }
     }
 
