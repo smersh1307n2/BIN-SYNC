@@ -39,10 +39,13 @@ public abstract class DataProviderConformanceSuite
     public void Local_change_feed_is_bounded_resumable_and_acknowledgement_gated()
     {
         using var provider = CreateProvider();
-        provider.AppendLocalChange(Mutation(1, 1, 10, 1));
+        var original = Mutation(1, 1, 10, 1);
+        provider.AppendLocalChange(original);
+        original.Value[0] = 99;
         provider.AppendLocalChange(Mutation(1, 2, 20, 1));
         provider.AppendLocalChange(Mutation(2, 1, 30, 1));
 
+        Assert.Throws<InvalidDataException>(() => provider.ReadLocalChanges(2, 10));
         var first = provider.ReadLocalChanges(0, 2);
         Assert.Equal(new ulong[] { 1, 2 }, first.Changes.Select(x => x.Sequence));
         Assert.Equal(2UL, first.ScannedThroughSequence);
