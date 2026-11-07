@@ -182,13 +182,14 @@ If a process crashes after freeze but before the first byte is sent, the operati
 
 ### 5.5. E-13 self-echo lookup across storage stages
 
-BIN-SYNC E-13 requires a durable self-echo check in addition to the channel-scoped SeenChanges set. With a pending/frozen split, the check must not become blind to an operation merely because it has not yet been frozen.
+BIN-SYNC E-13 requires durable self-echo suppression. The target global ChangeId ledger covers every frozen local-origin operation even after its Outbox payload is compacted. Pending operations have no published ChangeId yet and remain independently visible to the local self-echo lookup only if an external provider supplies a stable operation identity.
 
 For the exact canonical field key, the runtime needs an efficient lookup over:
-- the latest pending local operation, if present;
-- the relevant frozen/unconfirmed local Outbox winner(s).
+- the latest pending local operation, if it has an externally stable source operation identity;
+- the global ChangeId ledger for frozen local-origin operations (fingerprint only; no full payload needed);
+- the relevant frozen/unconfirmed local Outbox payload where byte comparison is required.
 
-The comparison must use the protocol's exact self-echo tuple (operation tag/kind, HLC, resolved original author and value bytes). A stored value hash may be used as a fast prefilter, but hash equality alone is not proof of byte equality. The query must not use the current visible field winner alone: a remote APPLY may have replaced that winner while a local pending operation still exists.
+The ledger comparison uses ChangeId plus the canonical operation fingerprint. Where the protocol self-echo rule is based on an operation tuple rather than a ChangeId, compare operation kind, HLC, resolved original author and exact value bytes; a hash may be a prefilter but not proof of equality. The query must not use the current visible field winner alone: a remote APPLY may have replaced that winner while a local pending operation still exists.
 
 This lookup is a derived view over pending staging and frozen Outbox, not a third authoritative history. It may be implemented as an index keyed by canonical field key and referencing the owning staged/frozen payload. The index must be rebuilt or transactionally maintained and must not duplicate full payload bytes. It must preserve E-13's distinction between a true local echo and a first-seen remote operation that merely loses LWW.
 
@@ -459,7 +460,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 18. Checkpoint/compaction cannot reclaim payload bytes still referenced by pending or frozen operations.
 19. Concurrent same-key local writes that reach the staging lock out of HLC order retain the canonical LWW winner, not merely the last callback to acquire the lock.
 20. A snapshot transfer does not silently ACK, GC or discard frozen/relay operations whose provenance is not represented by the snapshot payload.
-21. SeenChanges entries are not pruned by arbitrary TTL; any future GC test proves a protocol-defined sender/channel/author-stream horizon before exact dedup entries are removed.
+21. The global exact ChangeId ledger survives Outbox/RelayJournal payload compaction and is not pruned by TTL or peer ACK; it is cleared only at a fenced namespace/scope epoch reset. Its disk-backed lookup remains bounded in RAM.
 22. Inbox receipt expiry/GC requires the protocol's elapsed-expiry plus confirmed-log-segment condition and survives restart.
 23. E-13 self-echo suppression sees the correct durable local winner across pending staging and frozen/unconfirmed Outbox without treating staged entries as published stream records.
 24. Per-peer PeerState.Ids replay-cache entries survive lost ACK/restart and are pruned only after a valid ACK covers their author-stream cursorEnd.
