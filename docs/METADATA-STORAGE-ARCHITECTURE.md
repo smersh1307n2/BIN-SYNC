@@ -565,7 +565,7 @@ The runtime now has a route-independent ledger keyed by (namespace, ChangeId), l
 - Same ChangeId + same known fingerprint: do not re-apply and do not enqueue another relay copy, even after the original Outbox payload has been ACK-compacted. This also prevents an old operation from resurrecting state after tombstone/state reclamation.
 - Same ChangeId + different known fingerprint: reject the complete batch with BATCH_TRANSACTION_FAILED before WAL append or state publication.
 - Local operations insert their ledger fact in the same gated commit as Storage/Outbox and the local WAL frame. Remote facts publish only after the accepted remote-batch WAL frame is durable. WAL replay reconstructs the same facts.
-- Peer-scoped SeenChanges is retained for legacy provenance/local WAL replay compatibility in this implementation slice; it is not the global dedup authority. Batch Inbox receipts remain issuer-specific.
+- SeenChanges now retains only local WAL replay markers. Remote peer-scoped entries are migrated into the global ledger (unknown when old payload fingerprints are unavailable) and then discarded; new remote batches do not write per-peer ChangeId markers. Batch Inbox receipts remain issuer-specific.
 - Causal dependencies participate in the fingerprint and are preserved through relay, causal trailer encoding and remote WAL replay.
 
 NodePersistence is now v6. Loading v3-v5 creates explicit unknown-fingerprint markers for legacy SeenChanges. A retained legacy Outbox payload upgrades its marker when its complete semantic value is available; a truncated/deferred legacy field value remains unknown. An unknown marker suppresses relay as an already-seen identity and is upgraded on its first matching arrival, but cannot validate historical equivocation until then.
@@ -635,3 +635,13 @@ Implemented on `feature/fld-external-storage`:
 The raw serialized saving is one duplicate receipt key per accepted batch (issuer 16 B + BatchId 16 B + namespace/epoch varints, approximately 34 bytes for the common one-byte varint case), plus removal of the second in-memory hash-set entry and its buckets. This is a format-derived estimate, not a benchmark. GitHub Actions run [42344555045](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42344555045) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening.
 
 Not solved by this slice: a full durable receipt tuple containing cursor range, batch/records/previous digests, expiry and WAL-to-sidecar generation; conflicting payload reuse under an already accepted BatchId; receipt expiry/GC proof. `ReceivedStreams` remains a distinct author-stream cursor structure. No wire-format change.
+
+## 21. Remove redundant remote SeenChanges provenance (2026-11-07)
+
+After the global ledger became the remote dedup authority, the per-peer `SeenChanges(senderPeer, namespace, ChangeId)` rows became redundant. Remote ApplyBatch no longer inserts or probes those keys. A new accepted remote operation is recorded once in `GlobalChangeLedger(namespace, ChangeId)`; same-ID retries from any peer are resolved there. `SeenChanges` now holds only the distinct local WAL replay markers, preserving their separate replay lifetime.
+
+NodePersistence remains v7: no layout change was needed. When loading v3-v5, all old SeenChanges identities are first folded into explicit unknown global-ledger markers, then only entries whose peer is the local NodeId remain in SeenChanges. v6-v7 already carry the global ledger; their remote SeenChanges keys are dropped while local WAL markers are retained. Thus old route-dedup facts are not lost.
+
+The removed remote row repeated peer NodeId (16 B), namespace varint and ChangeId (16 B) per received operation—about 33 raw bytes per remote marker for common namespace values—plus HashSet entry/bucket overhead. The global ledger still stores the identity and fingerprint once. This is a format-derived estimate, not a benchmark. `MaxSeenChanges` now bounds local WAL replay markers; `MaxGlobalChangeLedgerEntries` bounds global remote/local dedup facts.
+
+GitHub Actions run [42345011358](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42345011358) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening. No wire-format or NodePersistence-version change.
