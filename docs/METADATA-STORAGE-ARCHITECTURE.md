@@ -571,3 +571,22 @@ Content-derived BLAKE3-128 ChangeId remains a candidate for eliminating the sepa
 ### 8.5. Independent retention lifetimes
 
 Keep these separate even if a compact physical encoding stores them in one transactional batch: (1) batch receipt / duplicate-ACK horizon, (2) global ChangeId dedup fact, (3) relay payload retention, (4) outgoing batch replay cache, and (5) peer/author cursor state. A relay ACK does not automatically expire a batch receipt; receipt expiry does not authorize deletion of relay payload or dedup identity. Current-state snapshot completion is not a GC proof until the per-author snapshot cut and completion/fencing contract exists.
+
+## 17. Compact metadata target and implementation order (2026-11-07)
+
+The cross-repository sequence is maintained in [FLD-DB Sync Storage Compaction Roadmap](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-STORAGE-COMPACTION-ROADMAP.md); code-backed findings remain in [Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md).
+
+Target logical records:
+- one immutable payload per published/relay-eligible ChangeId, shared by every destination peer;
+- one route-independent ChangeId/fingerprint fact per replica/scope/namespace;
+- one issuer-specific metadata-only receipt per accepted batch;
+- one progress tuple per peer/namespace/author stream;
+- replay mappings only for unacknowledged ranges, pruned atomically with validated contiguous ACK while preserving digest-chain checkpoint;
+- relay selection as indexes into accepted batch operations, not a second payload array;
+- independent retention rules for payload, receipt, dedup, replay cache and peer progress.
+
+Do not add a per-change/per-peer delivery table or ACK bitmap. Do not merge receipt and global dedup: identities and retention horizons differ. Inbox/InboxAuthors/ReceivedStreams may be consolidated only after every retry/ACK path is covered by tests.
+
+The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint for now; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
+
+Order: baseline; global dedup/replay pruning/receipt audit; APPLY payload dedup and relay/receipt split; durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
