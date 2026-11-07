@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Store Semantic Contract and Conformance Plan
 
-**Status:** semantic contract plus initial executable conformance harness. Eight provider-independent semantic tests pass against a test-only volatile reference adapter; no durable Metadata Store implementation exists yet.  
+**Status:** semantic contract plus initial executable conformance harness. Eight provider-independent semantic tests plus one reference-adapter durability-profile assertion are implemented; the volatile reference adapter makes no restart-durability claim, and no durable Metadata Store implementation exists yet.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL; this document does not change wire format.  
 **Purpose:** define the observable operations and provider-independent tests required before moving Node persistence behind a durable Metadata Store.
@@ -256,11 +256,11 @@ The refactor must preserve existing tests for local writes, remote apply, WAL re
 
 The first executable slice is present in the BIN-SYNC branch:
 
-- `BinSync.Net/tests/BinSync.MetadataStore.Conformance` contains the test-only semantic adapter contract and inherited conformance suite.
+- `BinSync.Net/tests/BinSync.MetadataStore.Conformance` contains the test-only semantic adapter contract and inherited conformance suite; it is referenced by `BinSync.Tests` but intentionally not a standalone solution test target.
 - `BinSync.Net/tests/BinSync.Tests/Production/VolatileMetadataStoreAdapter.cs` is a reference model only; it clones partition state before acceptance so a validation failure cannot publish a partial receipt/cursor/dedup/relay transition.
-- `VolatileMetadataStoreConformanceTests` runs the shared suite against that model.
-- The eight current tests cover exact batch retry, route-independent ChangeId suppression, atomic equivocation rejection, per-author relay ACK, bounded/resumable relay reads, scope/replica isolation, receive cursor/digest-chain gaps and conflicting receipt reuse, and explicit non-durability declaration.
+- `VolatileMetadataStoreConformanceTests` runs the shared suite against that model and separately asserts that the reference adapter does not claim restart durability.
+- The eight semantic tests cover exact batch retry, route-independent ChangeId suppression, atomic equivocation rejection, per-author relay ACK, bounded/resumable relay reads, scope/replica isolation, receive cursor/digest-chain gaps and conflicting receipt reuse, and preservation of receipts/ChangeId dedup facts after relay ACK.
 
-GitHub Actions run `42357469032` passed the Release solution build, all 617 tests, public samples, coverage threshold and fuzz/lab hardening at commit `cfc0c2b429e6988a84cf7b9de5b1bae2d7c844c5`. The conformance project was subsequently added explicitly to `BinSync.slnx` so it is also built as a first-class solution project; that solution-file-only change awaits its own CI result.
+GitHub Actions run `42357469032` passed the Release solution build, 617 tests, public samples, coverage threshold and fuzz/lab hardening at commit `cfc0c2b429e6988a84cf7b9de5b1bae2d7c844c5`. A later run executed all 618 `BinSync.Tests` tests successfully (including the ninth new test) and measured 71.7% line coverage, but the overall solution test command failed because it also attempted to launch the helper class library as a standalone test target and its independent deps file lacked the core's Blake3 package. The helper was removed from `BinSync.slnx`; it remains a project reference of `BinSync.Tests`, where the inherited suite is discovered and runs in the normal test host. The corrected CI run is pending.
 
 **Not covered yet:** frozen local Outbox operations, consumer lease fencing, validated outbound safe-prefix ACK, stable snapshot lifetime under compaction, provider idempotency receipts, crash/reopen persistence and FLD Storage-only behavior. The current volatile model is not evidence for any durability guarantee.
