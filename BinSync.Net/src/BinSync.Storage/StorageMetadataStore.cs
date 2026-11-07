@@ -192,15 +192,20 @@ public class StorageMetadataStore : IMetadataStore
                 IsDuplicate: true);
         }
 
-        var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
+        var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, ResolveAuthorStream(batch));
         var receive = next.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
-            : new ReceiveState(0, new byte[16]);
+            : new ReceiveState(0);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chain = next.ReceiveChains.TryGetValue(chainKey, out var priorChain)
+            ? priorChain
+            : new ReceiveChainState(new byte[16]);
 
         ulong expectedStart = checked(receive.CursorEnd + 1);
         if (batch.CursorStart != expectedStart ||
-            !receive.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
-            throw new InvalidDataException("Incoming batch does not continue the durable receive cursor and digest chain.");
+            !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
+            throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
 
         int relayAdded = 0;
         foreach (var operation in batch.Operations)
@@ -234,7 +239,8 @@ public class StorageMetadataStore : IMetadataStore
             relayAdded++;
         }
 
-        next.Receives[receiveKey] = new ReceiveState(batch.CursorEnd, batch.BatchDigest.ToArray());
+        next.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
+        next.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
         next.Receipts.Add(receiptKey, new ReceiptValue(
             batch.CursorStart,
             batch.CursorEnd,
@@ -1354,12 +1360,14 @@ public class StorageMetadataStore : IMetadataStore
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
     private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
+    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundChangeKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct LeaseState(ulong Generation, Guid ConsumerId);
-    private readonly record struct ReceiveState(ulong CursorEnd, byte[] LastBatchDigest);
+    private readonly record struct ReceiveState(ulong CursorEnd);
+    private readonly record struct ReceiveChainState(byte[] LastBatchDigest);
 
     private sealed class ReceiptValue(
         ulong cursorStart,
@@ -1388,6 +1396,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
         public Dictionary<ReceiveKey, ReceiveState> Receives { get; } = new();
+        public Dictionary<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; } = new();
         public Dictionary<LedgerKey, byte[]> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
@@ -1417,6 +1426,7 @@ public class StorageMetadataStore : IMetadataStore
             };
             foreach (var pair in Receipts) clone.Receipts.Add(pair.Key, pair.Value);
             foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
+            foreach (var pair in ReceiveChains) clone.ReceiveChains.Add(pair.Key, pair.Value);
             foreach (var pair in ChangeLedger) clone.ChangeLedger.Add(pair.Key, pair.Value);
             foreach (var pair in Relay) clone.Relay.Add(pair.Key, new List<MetadataRelayItem>(pair.Value));
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
