@@ -268,7 +268,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var first = new MetadataIncomingBatch
         {
             ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
-            AuthorStreamNodeId = authorA, NamespaceId = 9, BatchId = Batch(140),
+            AuthorStreamNodeId = default, NamespaceId = 9, BatchId = Batch(140),
             CursorStart = 1, CursorEnd = 1,
             PreviousBatchDigest = new byte[16],
             BatchDigest = Enumerable.Repeat((byte)141, 16).ToArray(),
