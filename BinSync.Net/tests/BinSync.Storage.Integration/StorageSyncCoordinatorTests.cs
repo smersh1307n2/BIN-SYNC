@@ -100,7 +100,7 @@ public sealed class StorageSyncCoordinatorTests
             });
 
         Assert.NotNull(retry);
-        Assert.True(retry!.Duplicate);
+        Assert.True(retry!.Value.Duplicate);
         Assert.Null(Transport.DeliverBatch(sender, receiver, 1));
         Assert.Equal(0UL, provider.LocalChangeHighWatermark);
     }
