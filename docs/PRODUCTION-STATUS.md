@@ -49,6 +49,7 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
 - Complete normative audit of remaining §§4–18 and cross-check every normative scenario against executable tests.
 - **Decision recorded:** snapshot completion is not an Outbox ACK, relay-retention boundary or ChangeId-ledger GC watermark. Current SnapshotTail semantics/runtime DTO are insufficient to establish a safe cursor baseline; do not advance cursors or reclaim history from snapshot alone.
+- Promote the global ChangeId ledger and conflicting-fingerprint rejection rules into a normative protocol erratum; the storage architecture is a target decision, not yet part of v2.4.17 FINAL.
 - **Decision recorded:** target an exact global `(scope, localReplicaId, namespace, ChangeId)` ledger with canonical operation fingerprint. Retain it for the namespace/scope epoch; current protocol has no safe TTL/ACK/snapshot GC proof. Implementation and legacy v5 migration remain pending.
 - **Decision recorded:** compact Inbox receipts retain cursor range, resolved author, BatchDigest, RecordsRoot, PreviousBatchDigest, original ACK result, appliedAt/expiresAt and durable commit identity. NodePersistence v5 migration must preserve or safely derive these facts; implementation remains pending.
 - **Decision recorded:** duplicate Inbox key is valid only when cursor range, author stream and all stored digest/chain fields match; conflicting BatchId reuse is rejected. Node.ApplyBatch validation is not yet aligned.
