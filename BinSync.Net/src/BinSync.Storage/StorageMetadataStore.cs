@@ -47,10 +47,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
-        var next = current.Clone();
-        var receipt = ApplyIncomingBatch(next, batch);
-        PersistPartition(partitionKey, current, next);
-        return receipt;
+        if (current.HasLegacyEncoding)
+        {
+            var migrated = current.Clone();
+            var legacyReceipt = ApplyIncomingBatch(migrated, batch);
+            PersistPartition(partitionKey, current, migrated);
+            return legacyReceipt;
+        }
+        return AcceptIncomingBatchDelta(partitionKey, current, batch);
     
         }
     }
@@ -469,6 +473,223 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 !pendingFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                 throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
         }
+    }
+
+    private MetadataBatchReceipt AcceptIncomingBatchDelta(
+        PartitionKey partitionKey, PartitionState current, MetadataIncomingBatch batch)
+    {
+        var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId);
+        if (current.Receipts.TryGetValue(receiptKey, out var priorReceipt))
+        {
+            if (!priorReceipt.Matches(batch))
+                throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
+            return new MetadataBatchReceipt(priorReceipt.CursorStart, priorReceipt.CursorEnd,
+                priorReceipt.BatchDigest.ToArray(), priorReceipt.NewRelayOperationCount, IsDuplicate: true)
+            { DurableAuthor = priorReceipt.DurableAuthor };
+        }
+
+        var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, ResolveAuthorStream(batch));
+        var receive = current.Receives.TryGetValue(receiveKey, out var priorReceive)
+            ? priorReceive
+            : new ReceiveState(0);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chain = current.ReceiveChains.TryGetValue(chainKey, out var priorChain)
+            ? priorChain
+            : new ReceiveChainState(new byte[16]);
+        if (batch.CursorStart != checked(receive.CursorEnd + 1) ||
+            !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
+            throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
+
+        var newLedger = new Dictionary<LedgerKey, ChangeLedgerValue>();
+        var newRelay = new Dictionary<RelayKey, List<MetadataRelayItem>>();
+        var relayHigh = new Dictionary<RelayKey, ulong>();
+        var peerStreamStates = new Dictionary<PeerStreamKey, PeerStreamStateValue>();
+        var requiredStreams = new HashSet<PeerStreamKey>();
+        var registeredAuthors = new HashSet<NodeId>();
+        int relayAdded = 0;
+
+        foreach (var operation in batch.Operations)
+        {
+            var ledgerKey = new LedgerKey(batch.NamespaceId, operation.ChangeId);
+            if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
+            {
+                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                    throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
+                continue;
+            }
+            if (newLedger.TryGetValue(ledgerKey, out var stagedLedger))
+            {
+                if (!stagedLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                    throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint within one incoming batch.");
+                continue;
+            }
+
+            newLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: false));
+            if (!operation.RelayEligible)
+                continue;
+
+            var relayKey = new RelayKey(batch.NamespaceId, operation.AuthorNodeId);
+            ulong previousHigh = relayHigh.TryGetValue(relayKey, out ulong stagedHigh)
+                ? stagedHigh
+                : current.RelayHighWatermarks.TryGetValue(relayKey, out ulong currentHigh) ? currentHigh : 0;
+            ulong sequence = checked(previousHigh + 1);
+            if (!newRelay.TryGetValue(relayKey, out var relayItems))
+                newRelay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
+            relayItems.Add(new MetadataRelayItem(
+                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray()));
+            relayHigh[relayKey] = sequence;
+            relayAdded++;
+
+            if (registeredAuthors.Add(operation.AuthorNodeId))
+            {
+                var peers = current.InterestedPeers.Where(peer => peer.NamespaceId == batch.NamespaceId)
+                    .Select(peer => (peer.Peer, peer.PeerEpoch))
+                    .Concat(current.RequiredPeerStreams.Where(peer => peer.NamespaceId == batch.NamespaceId)
+                        .Select(peer => (peer.Peer, peer.PeerEpoch)))
+                    .Distinct();
+                foreach (var peer in peers.Where(peer => peer.Peer != operation.AuthorNodeId))
+                {
+                    var streamKey = new PeerStreamKey(peer.Peer, peer.PeerEpoch,
+                        batch.NamespaceId, operation.AuthorNodeId);
+                    if (!current.PeerStreams.ContainsKey(streamKey) && !peerStreamStates.ContainsKey(streamKey))
+                        peerStreamStates.Add(streamKey,
+                            EmptyPeerStreamValue() with { IssuerEpoch = batch.SenderEpoch });
+                    if (!current.RequiredPeerStreams.Contains(streamKey))
+                        requiredStreams.Add(streamKey);
+                }
+            }
+        }
+
+        var receipt = new MetadataBatchReceipt(batch.CursorStart, batch.CursorEnd,
+            batch.BatchDigest.ToArray(), relayAdded, IsDuplicate: false)
+        { DurableAuthor = ResolveAuthorStream(batch) };
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] receiptSuffix = new byte[38];
+        batch.SenderPeer.WriteTo(receiptSuffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), batch.SenderEpoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
+        batch.BatchId.WriteTo(receiptSuffix.AsSpan(22));
+        byte[] receiptValue = new byte[68];
+        BinaryPrimitives.WriteUInt64LittleEndian(receiptValue, batch.CursorStart);
+        BinaryPrimitives.WriteUInt64LittleEndian(receiptValue.AsSpan(8), batch.CursorEnd);
+        batch.PreviousBatchDigest.CopyTo(receiptValue, 16);
+        batch.BatchDigest.CopyTo(receiptValue, 32);
+        BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), relayAdded);
+        receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
+
+        byte[] receiveSuffix = new byte[38];
+        batch.SenderPeer.WriteTo(receiveSuffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(receiveSuffix.AsSpan(16), batch.SenderEpoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(receiveSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
+        receiveKey.AuthorStream.WriteTo(receiveSuffix.AsSpan(22));
+        byte[] receiveValue = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(receiveValue, batch.CursorEnd);
+
+        byte[] chainSuffix = new byte[22];
+        batch.SenderPeer.WriteTo(chainSuffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(chainSuffix.AsSpan(16), batch.SenderEpoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(chainSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
+
+        var writes = new List<(byte[] Key, byte[] Value)>(
+            3 + newLedger.Count + newRelay.Values.Sum(items => items.Count) + relayHigh.Count + peerStreamStates.Count + requiredStreams.Count);
+        writes.Add((StorageKey(root, 1, receiptSuffix), receiptValue));
+        writes.Add((StorageKey(root, 2, receiveSuffix), receiveValue));
+        writes.Add((StorageKey(root, 14, chainSuffix), batch.BatchDigest.ToArray()));
+
+        foreach (var pair in newLedger)
+        {
+            byte[] suffix = new byte[18];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+            pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
+            byte[] value = new byte[17];
+            pair.Value.Fingerprint.CopyTo(value, 0);
+            value[16] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            writes.Add((StorageKey(root, 3, suffix), value));
+        }
+        foreach (var pair in newRelay)
+        {
+            foreach (var item in pair.Value)
+            {
+                byte[] suffix = new byte[26];
+                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+                pair.Key.Author.WriteTo(suffix.AsSpan(2));
+                BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
+                writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.ChangeId, item.Payload)));
+            }
+        }
+        foreach (var pair in relayHigh)
+        {
+            byte[] value = new byte[16];
+            if (current.RelayAck.TryGetValue(pair.Key, out ulong ack))
+                BinaryPrimitives.WriteUInt64LittleEndian(value, ack);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), pair.Value);
+            writes.Add((StorageKey(root, 5, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), value));
+        }
+        foreach (var pair in peerStreamStates)
+        {
+            byte[] suffix = new byte[38];
+            pair.Key.Peer.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.PeerEpoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
+            writes.Add((StorageKey(root, 15, suffix), EncodePeerStreamState(pair.Value)));
+        }
+        foreach (var key in requiredStreams)
+        {
+            byte[] suffix = new byte[38];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)key.NamespaceId));
+            key.AuthorStream.WriteTo(suffix.AsSpan(2));
+            key.Peer.WriteTo(suffix.AsSpan(18));
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(34), key.PeerEpoch);
+            writes.Add((StorageKey(root, 16, suffix), Array.Empty<byte>()));
+        }
+
+        byte[]? identityKey = current.IsPersisted
+            ? null
+            : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+        byte[]? identityValue = identityKey is null
+            ? null
+            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+        using var storageBatch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        if (identityKey is not null)
+            storageBatch.Put(identityKey, identityValue!);
+        foreach (var write in writes)
+            storageBatch.Put(write.Key, write.Value);
+        storageBatch.Commit();
+
+        current.Receipts.Add(receiptKey, new ReceiptValue(batch.CursorStart, batch.CursorEnd,
+            batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded, receipt.DurableAuthor));
+        current.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
+        current.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
+        foreach (var pair in newLedger)
+            current.ChangeLedger.Add(pair.Key, pair.Value);
+        foreach (var pair in newRelay)
+        {
+            if (!current.Relay.TryGetValue(pair.Key, out var entries))
+                current.Relay.Add(pair.Key, entries = new List<MetadataRelayItem>());
+            entries.AddRange(pair.Value);
+        }
+        foreach (var pair in relayHigh)
+            current.RelayHighWatermarks[pair.Key] = pair.Value;
+        foreach (var pair in peerStreamStates)
+            current.PeerStreams.Add(pair.Key, pair.Value);
+        foreach (var key in requiredStreams)
+            current.RequiredPeerStreams.Add(key);
+
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        if (identityKey is not null)
+            current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
+        foreach (var write in writes)
+            current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+        current.HasLegacyEncoding = false;
+        return receipt;
     }
 
     private static MetadataBatchReceipt ApplyIncomingBatch(PartitionState next, MetadataIncomingBatch batch)
