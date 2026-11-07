@@ -556,11 +556,19 @@ NodePersistence serializes StreamAcked, StreamPushed and StreamOffsets independe
 
 Inbox and InboxAuthors also persist the same batch key separately, while ReceivedStreams stores batch-to-cursor information. Treat these as overlapping receipt facts and audit every duplicate-replay/ACK use before consolidation. The target is one compact receipt per accepted batch, not a payload copy per field.
 
-### 8.3. Current SeenChanges is not the target global ledger
+### 8.3. Global ChangeId ledger — implemented
 
-The current runtime key is peer-scoped (senderPeer, namespace, ChangeId). The current Outbox queue also suppresses a second enqueue while a ChangeId is still present in that queue, but this is not a durable cross-peer identity ledger after Outbox compaction.
+The runtime now has a route-independent ledger keyed by (namespace, ChangeId), local to the receiving replica. Each value is a BLAKE3-128 fingerprint over a domain-separated canonical semantic operation: namespace, envelope RecordId, OpKind, FULL_AUTHOR_ID operation encoding (resolved author, HLC, field/key epoch, value or tombstone semantics), plus the normalized sorted set of causal dependencies. Compact aliases, issuer route and relay-local Seq are excluded.
 
-The target remains the exact replica/scope/namespace-scoped ChangeId ledger with a canonical operation fingerprint described in §5.3. Same ChangeId + same fingerprint is a duplicate regardless of route; same ChangeId + different fingerprint is a conflict. Local WAL replay markers remain separate. Batch receipts remain issuer-specific. Do not claim cross-peer dedup is implemented until the runtime key and tests enforce this contract.
+- Same ChangeId + same known fingerprint: do not re-apply and do not enqueue another relay copy, even after the original Outbox payload has been ACK-compacted. This also prevents an old operation from resurrecting state after tombstone/state reclamation.
+- Same ChangeId + different known fingerprint: reject the complete batch with BATCH_TRANSACTION_FAILED before WAL append or state publication.
+- Local operations insert their ledger fact in the same gated commit as Storage/Outbox and the local WAL frame. Remote facts publish only after the accepted remote-batch WAL frame is durable. WAL replay reconstructs the same facts.
+- Peer-scoped SeenChanges is retained for legacy provenance/local WAL replay compatibility in this implementation slice; it is not the global dedup authority. Batch Inbox receipts remain issuer-specific.
+- Causal dependencies participate in the fingerprint and are preserved through relay, causal trailer encoding and remote WAL replay.
+
+NodePersistence is now v6. Loading v3-v5 creates explicit unknown-fingerprint markers for legacy SeenChanges. A retained legacy Outbox payload upgrades its marker when its complete semantic value is available; a truncated/deferred legacy field value remains unknown. An unknown marker suppresses relay as an already-seen identity and is upgraded on its first matching arrival, but cannot validate historical equivocation until then.
+
+The global ledger has an independent MaxGlobalChangeLedgerEntries cap (default 1,000,000; zero means unlimited). No TTL or destructive GC is implemented: a protocol-safe dedup retention horizon is still unproven.
 
 ### 8.4. ChangeId and OriginSeq remain open gates
 
@@ -596,4 +604,18 @@ Order: baseline; global dedup/replay pruning/receipt audit; APPLY payload dedup 
 
 Implemented: `Node.ProcessAckInternal` prunes `PeerState.Ids` entries only when the validated contiguous ACK for that author covers `cursorEnd`. `LastStreamDigest` remains intact as the independent digest-chain checkpoint. Restart and duplicate-ACK coverage was added in `ChangeIdWireTests`. Implementation commit `dc9a1304de00e75bacb0d2bdd864e0f48e687361`; test commit `402b801e4b2d2781e048f3785766c0abf0425016`; GitHub Actions run 42342495367 passed.
 
-This does not implement global ChangeId dedup or receipt consolidation; those remain separate work items.
+Global ChangeId dedup is now implemented as described in §8.3 and §19. Receipt consolidation remains a separate work item.
+
+## 19. Global ChangeId dedup implementation status (2026-11-07)
+
+Implemented on `feature/fld-external-storage`:
+- canonical route-independent BLAKE3-128 semantic fingerprint and per-replica (namespace, ChangeId) ledger;
+- duplicate suppression after Outbox compaction and local-origin echo suppression;
+- same-ID/different-fingerprint batch rejection before durable commit;
+- local commit, remote WAL commit/replay, persistence v6, v3-v5 migration and legacy unknown-fingerprint handling;
+- causal dependency inclusion in fingerprints and preservation through relay and WAL replay;
+- a configurable global-ledger resource cap.
+
+Focused tests cover second-route duplicates after origin Outbox compaction, returned local echoes, equivocation rejection without partial mutation, v5 unknown-marker migration, v6 persistence, causal trailer relay and WAL replay. GitHub Actions run [42344100307](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42344100307) passed .NET 10 build/tests, public samples, coverage threshold and fuzz/lab hardening jobs.
+
+Not included: a safe dedup GC horizon, receipt consolidation, APPLY payload de-duplication, or a ChangeId/wire-format change. The backup branch remains untouched.
