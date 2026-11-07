@@ -242,8 +242,14 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.RegisterInterestedPeer(scope, local, peer, 2, 7);
         store.RegisterInterestedPeerStream(scope, local, peer, 2, 7, author,
             3, 100, 5, previous);
-        var state = store.GetPeerStreamState(scope, local, peer, 2, 7, author);
+        var baselineState = store.GetPeerStreamState(scope, local, peer, 2, 7, author);
+        Assert.Equal(3UL, baselineState.AckedCursor);
+        Assert.Equal(3UL, baselineState.PushedCursor);
+        Assert.Equal(5u, baselineState.IssuerEpoch);
+        Assert.Equal(100UL, baselineState.StreamOffset);
+        Assert.Equal(previous, baselineState.LastBatchDigest);
         store.ReserveOutboundBatch(scope, local, peer, 2, 7, author, reservation);
+        var state = store.GetPeerStreamState(scope, local, peer, 2, 7, author);
         Assert.Equal(3UL, state.AckedCursor);
         Assert.Equal(3UL, state.PushedCursor);
         Assert.Equal(5u, state.IssuerEpoch);
