@@ -367,6 +367,66 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("ghost", Encoding.UTF8.GetString(current!.Value));
     }
 
+
+    [Fact]
+    public void Conflicting_metadata_freeze_does_not_ack_local_provider_feed()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "freeze-conflict"), 409);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        Node node = NewNode(16);
+        NodeId foreignAuthor = NodeId.From(Guid.Parse("f3000000-0000-0000-0000-000000000003").ToByteArray());
+        RecordId recordId = RecordId.From(Guid.Parse("f4000000-0000-0000-0000-000000000004").ToByteArray());
+        const ushort fieldId = 0x0601;
+        byte[] value = Encoding.UTF8.GetBytes("same-operation");
+
+        Assert.True(node.WriteField(1, recordId, fieldId, value, new Hlc(8000, 1)));
+        OutboxEntry localEntry = Assert.Single(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
+
+        metadata.AcceptIncomingBatch(new MetadataIncomingBatch
+        {
+            ScopeId = "freeze-conflict",
+            LocalReplica = node.NodeId,
+            SenderPeer = foreignAuthor,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = foreignAuthor,
+            NamespaceId = 1,
+            BatchId = BatchId.From(Guid.Parse("f5000000-0000-0000-0000-000000000005").ToByteArray()),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0xF5, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = foreignAuthor,
+                    ChangeId = localEntry.ChangeId,
+                    Fingerprint = Enumerable.Repeat((byte)0xA5, 16).ToArray(),
+                    Payload = new byte[] { 0x01 }
+                }
+            }
+        });
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId,
+            FieldId = fieldId,
+            AuthorNodeId = node.NodeId,
+            HlcWall = 8000,
+            HlcLogical = 1,
+            Value = value
+        });
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "freeze-conflict");
+
+        Assert.Throws<InvalidDataException>(() =>
+            coordinator.PublishLocalChanges(_ => { }));
+
+        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(0UL, metadata.GetOutboundHighWatermark(
+            "freeze-conflict", node.NodeId, 1, node.NodeId));
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
