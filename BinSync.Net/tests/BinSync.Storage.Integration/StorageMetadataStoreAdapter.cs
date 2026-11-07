@@ -525,7 +525,7 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         uint senderEpoch,
         int namespaceId)
     {
-        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+        if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
         return state.Receives.TryGetValue(new ReceiveKey(sender, senderEpoch, namespaceId), out var receive)
@@ -562,7 +562,7 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
         int namespaceId,
         NodeId originalAuthor)
     {
-        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+        if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
         return state.RelayHighWatermarks.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var highWatermark)
@@ -574,6 +574,474 @@ public sealed class StorageMetadataStoreAdapter : IMetadataStoreConformanceAdapt
     {
         _storage.Dispose();
         _partitions.Clear();
+    }
+
+
+    private PartitionState GetOrCreatePartition(PartitionKey key)
+    {
+        if (TryGetPartition(key, out var state)) return state;
+        state = new PartitionState { StorageCommitSeq = _storage.LastCommitSeq };
+        _partitions.Add(key, state);
+        return state;
+    }
+
+    private bool TryGetPartition(PartitionKey key, out PartitionState state)
+    {
+        if (_partitions.TryGetValue(key, out state!)) return true;
+        byte[] root = PartitionRoot(key);
+        using var snapshot = _storage.OpenSnapshot();
+        var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, int.MaxValue);
+        if (rows.Count == 0)
+        {
+            state = null!;
+            return false;
+        }
+
+        state = DecodePartition(key, root, rows, snapshot.CommitSeq);
+        _partitions.Add(key, state);
+        return true;
+    }
+
+    private void PersistPartition(PartitionKey key, PartitionState current, PartitionState next)
+    {
+        if (_storage.LastCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, _storage.LastCommitSeq);
+
+        var oldEntries = StateEntries(key, current);
+        var newEntries = StateEntries(key, next);
+        using var batch = _storage.BeginWriteBatch();
+        bool changed = false;
+        foreach (var old in oldEntries)
+        {
+            string hex = Convert.ToHexString(old.Key);
+            if (!newEntries.ContainsKey(hex))
+            {
+                batch.Delete(old.Key);
+                changed = true;
+            }
+        }
+
+        foreach (var entry in newEntries.Values)
+        {
+            string hex = Convert.ToHexString(entry.Key);
+            if (!oldEntries.TryGetValue(hex, out var previous) ||
+                !previous.Value.AsSpan().SequenceEqual(entry.Value))
+            {
+                batch.Put(entry.Key, entry.Value);
+                changed = true;
+            }
+        }
+
+        if (changed) batch.Commit();
+        next.StorageCommitSeq = _storage.LastCommitSeq;
+        _partitions[key] = next;
+    }
+
+    private static byte[] PartitionRoot(PartitionKey key)
+    {
+        byte[] scope = Encoding.UTF8.GetBytes(key.ScopeId);
+        byte[] hash = SHA256.HashData(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        hash.CopyTo(root, 1);
+        key.LocalReplica.WriteTo(root.AsSpan(33));
+        return root;
+    }
+
+    private static byte[] StorageKey(byte[] root, byte kind, ReadOnlySpan<byte> suffix)
+    {
+        byte[] key = new byte[root.Length + 1 + suffix.Length];
+        root.CopyTo(key, 0);
+        key[root.Length] = kind;
+        suffix.CopyTo(key.AsSpan(root.Length + 1));
+        return key;
+    }
+
+    private static Dictionary<string, (byte[] Key, byte[] Value)> StateEntries(
+        PartitionKey partition,
+        PartitionState state)
+    {
+        byte[] root = PartitionRoot(partition);
+        var entries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        void Add(byte[] key, byte[] value) => entries.Add(Convert.ToHexString(key), (key, value));
+        Add(StorageKey(root, 0, ReadOnlySpan<byte>.Empty), Encoding.UTF8.GetBytes(partition.ScopeId));
+
+        foreach (var pair in state.Receipts)
+        {
+            byte[] suffix = new byte[38];
+            pair.Key.Sender.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            pair.Key.BatchId.WriteTo(suffix.AsSpan(22));
+            byte[] value = new byte[52];
+            BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorStart);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), pair.Value.CursorEnd);
+            pair.Value.PreviousBatchDigest.CopyTo(value, 16);
+            pair.Value.BatchDigest.CopyTo(value, 32);
+            BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(48), pair.Value.NewRelayOperationCount);
+            Add(StorageKey(root, 1, suffix), value);
+        }
+
+        foreach (var pair in state.Receives)
+        {
+            byte[] suffix = new byte[22];
+            pair.Key.Sender.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            byte[] value = new byte[24];
+            BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorEnd);
+            pair.Value.LastBatchDigest.CopyTo(value, 8);
+            Add(StorageKey(root, 2, suffix), value);
+        }
+
+        foreach (var pair in state.ChangeLedger)
+        {
+            byte[] suffix = new byte[18];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+            pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
+            Add(StorageKey(root, 3, suffix), pair.Value.ToArray());
+        }
+
+        foreach (var pair in state.Relay)
+        {
+            foreach (var item in pair.Value)
+            {
+                byte[] suffix = new byte[26];
+                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+                pair.Key.Author.WriteTo(suffix.AsSpan(2));
+                BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
+                byte[] value = EncodePayloadItem(item.ChangeId, item.Payload);
+                Add(StorageKey(root, 4, suffix), value);
+            }
+        }
+
+        foreach (var pair in state.RelayAck)
+            Add(StorageKey(root, 5, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
+        foreach (var pair in state.RelayHighWatermarks)
+            Add(StorageKey(root, 6, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
+
+        foreach (var pair in state.Outbound)
+        {
+            foreach (var item in pair.Value)
+            {
+                byte[] suffix = new byte[26];
+                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+                pair.Key.Author.WriteTo(suffix.AsSpan(2));
+                BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
+                Add(StorageKey(root, 7, suffix), EncodePayloadItem(item.ChangeId, item.Payload));
+            }
+        }
+
+        foreach (var pair in state.OutboundHighWatermarks)
+            Add(StorageKey(root, 8, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
+        foreach (var pair in state.OutboundAck)
+            Add(StorageKey(root, 9, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), EncodeUInt64(pair.Value));
+
+        foreach (var pair in state.OutboundLeases)
+        {
+            byte[] value = new byte[24];
+            BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.Generation);
+            pair.Value.ConsumerId.TryWriteBytes(value.AsSpan(8));
+            Add(StorageKey(root, 10, KeyNamespaceAuthor(pair.Key.NamespaceId, pair.Key.Author)), value);
+        }
+
+        foreach (var key in state.OutboundChangeIds)
+        {
+            byte[] suffix = new byte[18];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)key.NamespaceId));
+            key.ChangeId.WriteTo(suffix.AsSpan(2));
+            Add(StorageKey(root, 11, suffix), Array.Empty<byte>());
+        }
+
+        foreach (var pair in state.PendingApplies)
+            Add(StorageKey(root, 12, pair.Key.ToByteArray()), EncodeIncomingBatch(pair.Value.Batch));
+        foreach (var pair in state.CompletedPendingApplies)
+            Add(StorageKey(root, 13, pair.Key.ToByteArray()), EncodeCompleted(pair.Value));
+
+        return entries;
+    }
+
+    private static PartitionState DecodePartition(
+        PartitionKey partition,
+        byte[] root,
+        IReadOnlyList<StorageEntry> rows,
+        ulong commitSeq)
+    {
+        var state = new PartitionState { StorageCommitSeq = commitSeq };
+        bool identitySeen = false;
+        foreach (var row in rows)
+        {
+            ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
+            if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
+            byte kind = suffix[0];
+            ReadOnlySpan<byte> key = suffix.Slice(1);
+            switch (kind)
+            {
+                case 0:
+                    if (!Encoding.UTF8.GetString(row.Value).Equals(partition.ScopeId, StringComparison.Ordinal))
+                        throw new InvalidDataException("Metadata partition scope hash collision.");
+                    identitySeen = true;
+                    break;
+                case 1:
+                {
+                    RequireLength(key, 38);
+                    RequireLength(row.Value, 52);
+                    var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
+                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
+                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
+                        BatchId.From(key.Slice(22, 16)));
+                    state.Receipts.Add(receiptKey, new ReceiptValue(
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
+                        row.Value.AsSpan(16, 16).ToArray(),
+                        row.Value.AsSpan(32, 16).ToArray(),
+                        BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(48))));
+                    break;
+                }
+                case 2:
+                {
+                    RequireLength(key, 22);
+                    RequireLength(row.Value, 24);
+                    var receiveKey = new ReceiveKey(NodeId.From(key.Slice(0, 16)),
+                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
+                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
+                    state.Receives.Add(receiveKey, new ReceiveState(
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
+                        row.Value.AsSpan(8, 16).ToArray()));
+                    break;
+                }
+                case 3:
+                {
+                    RequireLength(key, 18);
+                    RequireLength(row.Value, 16);
+                    state.ChangeLedger.Add(new LedgerKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        BatchId.From(key.Slice(2, 16))), row.Value.ToArray());
+                    break;
+                }
+                case 4:
+                case 7:
+                {
+                    RequireLength(key, 26);
+                    var relayKey = new RelayKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)));
+                    ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(key.Slice(18, 8));
+                    var item = DecodePayloadItem(sequence, relayKey.Author, row.Value);
+                    if (kind == 4)
+                    {
+                        if (!state.Relay.TryGetValue(relayKey, out var relayItems))
+                            state.Relay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
+                        relayItems.Add(new MetadataRelayItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload));
+                    }
+                    else
+                    {
+                        var outboundKey = new OutboundKey(relayKey.NamespaceId, relayKey.Author);
+                        if (!state.Outbound.TryGetValue(outboundKey, out var outboundItems))
+                            state.Outbound.Add(outboundKey, outboundItems = new List<MetadataOutboundItem>());
+                        outboundItems.Add(new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload));
+                    }
+                    break;
+                }
+                case 5:
+                case 6:
+                case 8:
+                case 9:
+                {
+                    RequireLength(key, 18);
+                    RequireLength(row.Value, 8);
+                    var streamKey = new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
+                    ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                    if (kind == 5) state.RelayAck.Add(streamKey, value);
+                    else if (kind == 6) state.RelayHighWatermarks.Add(streamKey, value);
+                    else if (kind == 8) state.OutboundHighWatermarks.Add(new OutboundKey(streamKey.NamespaceId, streamKey.Author), value);
+                    else state.OutboundAck.Add(new OutboundKey(streamKey.NamespaceId, streamKey.Author), value);
+                    break;
+                }
+                case 10:
+                {
+                    RequireLength(key, 18);
+                    RequireLength(row.Value, 24);
+                    var outboundKey = new OutboundKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
+                    state.OutboundLeases.Add(outboundKey, new LeaseState(
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
+                        new Guid(row.Value.AsSpan(8, 16))));
+                    break;
+                }
+                case 11:
+                {
+                    RequireLength(key, 18);
+                    state.OutboundChangeIds.Add(new OutboundChangeKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        BatchId.From(key.Slice(2, 16))));
+                    break;
+                }
+                case 12:
+                    RequireLength(key, 16);
+                    state.PendingApplies.Add(new Guid(key), new PendingApplyValue(DecodeIncomingBatch(row.Value)));
+                    break;
+                case 13:
+                    RequireLength(key, 16);
+                    state.CompletedPendingApplies.Add(new Guid(key), DecodeCompleted(row.Value));
+                    break;
+                default:
+                    throw new InvalidDataException($"Unknown metadata storage key kind {kind}.");
+            }
+        }
+
+        if (!identitySeen)
+            throw new InvalidDataException("Metadata partition is missing its scope identity record.");
+        return state;
+    }
+
+    private static byte[] KeyNamespaceAuthor(int namespaceId, NodeId author)
+    {
+        byte[] key = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(key, checked((ushort)namespaceId));
+        author.WriteTo(key.AsSpan(2));
+        return key;
+    }
+
+    private static byte[] EncodeUInt64(ulong value)
+    {
+        byte[] bytes = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        return bytes;
+    }
+
+    private static byte[] EncodePayloadItem(BatchId changeId, byte[] payload)
+    {
+        byte[] bytes = new byte[20 + payload.Length];
+        changeId.WriteTo(bytes);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(16), payload.Length);
+        payload.CopyTo(bytes, 20);
+        return bytes;
+    }
+
+    private static MetadataOutboundItem DecodePayloadItem(ulong sequence, NodeId author, byte[] bytes)
+    {
+        if (bytes.Length < 20) throw new InvalidDataException("Stored stream payload is truncated.");
+        int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(16));
+        if (length < 0 || bytes.Length != 20 + length)
+            throw new InvalidDataException("Stored stream payload length is invalid.");
+        return new MetadataOutboundItem(sequence, author, BatchId.From(bytes.AsSpan(0, 16)), bytes.AsSpan(20).ToArray());
+    }
+
+    private static void RequireLength(ReadOnlySpan<byte> bytes, int length)
+    {
+        if (bytes.Length != length) throw new InvalidDataException("Metadata storage key/value has an invalid length.");
+    }
+
+    private static byte[] EncodeCompleted(CompletedPendingApplyValue completed)
+    {
+        byte[] bytes = new byte[53];
+        completed.BatchDigest.CopyTo(bytes, 0);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(16), completed.Receipt.CursorStart);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(24), completed.Receipt.CursorEnd);
+        completed.Receipt.BatchDigest.CopyTo(bytes, 32);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(48), completed.Receipt.NewRelayOperationCount);
+        bytes[52] = completed.Receipt.IsDuplicate ? (byte)1 : (byte)0;
+        return bytes;
+    }
+
+    private static CompletedPendingApplyValue DecodeCompleted(byte[] bytes)
+    {
+        RequireLength(bytes, 53);
+        if (bytes[52] > 1) throw new InvalidDataException("Completed apply receipt flags are invalid.");
+        byte[] digest = bytes.AsSpan(0, 16).ToArray();
+        var receipt = new MetadataBatchReceipt(
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(16)),
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(24)),
+            bytes.AsSpan(32, 16).ToArray(),
+            BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(48)),
+            bytes[52] != 0);
+        return new CompletedPendingApplyValue(digest, receipt);
+    }
+
+    private static byte[] EncodeIncomingBatch(MetadataIncomingBatch batch)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        byte[] scope = Encoding.UTF8.GetBytes(batch.ScopeId);
+        writer.Write(scope.Length); writer.Write(scope);
+        writer.Write(batch.LocalReplica.ToArray());
+        writer.Write(batch.SenderPeer.ToArray());
+        writer.Write(batch.SenderEpoch);
+        writer.Write(checked((ushort)batch.NamespaceId));
+        writer.Write(batch.BatchId.ToArray());
+        writer.Write(batch.CursorStart); writer.Write(batch.CursorEnd);
+        writer.Write(batch.PreviousBatchDigest); writer.Write(batch.BatchDigest);
+        writer.Write(batch.Operations.Count);
+        foreach (var operation in batch.Operations)
+        {
+            writer.Write(operation.AuthorNodeId.ToArray());
+            writer.Write(operation.ChangeId.ToArray());
+            writer.Write(operation.Fingerprint);
+            writer.Write(operation.RelayEligible);
+            writer.Write(operation.Payload.Length);
+            writer.Write(operation.Payload);
+        }
+        writer.Flush();
+        return stream.ToArray();
+    }
+
+    private static MetadataIncomingBatch DecodeIncomingBatch(byte[] bytes)
+    {
+        using var stream = new MemoryStream(bytes, writable: false);
+        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
+        int scopeLength = reader.ReadInt32();
+        string scope = Encoding.UTF8.GetString(ReadExactly(reader, scopeLength));
+        NodeId local = NodeId.From(ReadExactly(reader, 16));
+        NodeId sender = NodeId.From(ReadExactly(reader, 16));
+        uint epoch = reader.ReadUInt32();
+        int ns = reader.ReadUInt16();
+        BatchId batchId = BatchId.From(ReadExactly(reader, 16));
+        ulong cursorStart = reader.ReadUInt64();
+        ulong cursorEnd = reader.ReadUInt64();
+        byte[] previous = ReadExactly(reader, 16);
+        byte[] digest = ReadExactly(reader, 16);
+        int count = reader.ReadInt32();
+        if (count < 0 || count > 100_000) throw new InvalidDataException("Pending batch operation count is invalid.");
+        var operations = new MetadataOperation[count];
+        for (int i = 0; i < count; i++)
+        {
+            var author = NodeId.From(ReadExactly(reader, 16));
+            var changeId = BatchId.From(ReadExactly(reader, 16));
+            byte[] fingerprint = ReadExactly(reader, 16);
+            bool relay = reader.ReadBoolean();
+            int payloadLength = reader.ReadInt32();
+            operations[i] = new MetadataOperation
+            {
+                AuthorNodeId = author,
+                ChangeId = changeId,
+                Fingerprint = fingerprint,
+                RelayEligible = relay,
+                Payload = ReadExactly(reader, payloadLength)
+            };
+        }
+        if (stream.Position != stream.Length) throw new InvalidDataException("Pending batch has trailing bytes.");
+        return new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = epoch,
+            NamespaceId = ns,
+            BatchId = batchId,
+            CursorStart = cursorStart,
+            CursorEnd = cursorEnd,
+            PreviousBatchDigest = previous,
+            BatchDigest = digest,
+            Operations = operations
+        };
+    }
+
+    private static byte[] ReadExactly(BinaryReader reader, int length)
+    {
+        if (length < 0 || length > 16 * 1024 * 1024) throw new InvalidDataException("Metadata field length is invalid.");
+        byte[] bytes = reader.ReadBytes(length);
+        if (bytes.Length != length) throw new InvalidDataException("Metadata payload is truncated.");
+        return bytes;
     }
 
     private static void ValidateBatch(MetadataIncomingBatch batch)
