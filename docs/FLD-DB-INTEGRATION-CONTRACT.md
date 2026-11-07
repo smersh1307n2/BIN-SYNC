@@ -132,7 +132,7 @@ FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest1
 
 ## 7. Текущее состояние API и блокирующие расхождения
 
-Проверено по FLD-DB `fix/crash-consistency-outbox` на branch HEAD `331206106f7d7d645dabe849957278a3a5a8b008` и BIN-SYNC `feature/fld-external-storage` HEAD `f31e043cddaf269df313e5201fc45f75b06c9ec8`:
+Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206106f7d7d645dabe849957278a3a5a8b008`; BIN-SYNC runtime/spec baseline commit `f31e043cddaf269df313e5201fc45f75b06c9ec8`. Later commits in these branches during this documentation pass update architecture documents only:
 
 | Текущее API / состояние (проверено на FLD fix/crash-consistency-outbox) | Статус / оставшийся разрыв |
 |---|---|
