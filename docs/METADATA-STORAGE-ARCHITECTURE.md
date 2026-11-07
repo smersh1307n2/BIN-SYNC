@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract draft v0.1 — design baseline for subsequent API design and implementation.  
+**Status:** Architecture contract draft v0.2 — design baseline for subsequent API design and implementation.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Wire protocol:** unchanged; this document does not revise BIN-SYNC CORE v2.4.17.  
 **Implementation status:** proposed architecture; the current Node API is not yet an implementation of this contract.
@@ -154,6 +154,8 @@ A cursor without a recoverable payload is not a durable outbound journal. If the
 
 The implementation must choose one authoritative outbound journal for each change stream. It must not maintain two independently advancing journals with ambiguous ownership.
 
+The local change lifecycle has two durable stages before acknowledgement: (a) coalescible pending local changes that have never been exposed to any peer, and (b) immutable frozen Outbox entries that may have been sent and therefore must never be rewritten. For LWW_FIELD, pending changes may be coalesced per exact canonical field key; frozen or potentially published entries may not. Sequence numbers are assigned at freeze, not while an operation remains coalescible. The detailed rules, policy matrix, current FLD behavior, payload ownership and test requirements are defined in [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
+
 ### 5.3. Incoming batch acceptance and deduplication
 
 Persist the state required to recognize a previously accepted batch and safely answer a retry after a lost ACK. This includes the relevant sender/issuer identity, namespace, epoch, BatchId, accepted cursor range, digest-chain checkpoint, and durable receipt/result needed by the protocol.
@@ -212,15 +214,17 @@ A successful durable acceptance must mean that a restart can recover the same lo
 
 The exact data-provider coordination strategy is defined in §7. The Metadata Store must not claim atomicity over an external source that it cannot control.
 
-### 6.2. Read outbound changes
+### 6.2. Freeze and read outbound changes
 
-The runtime must be able to read a bounded, stable batch of pending local changes with immutable identities and payloads/references. Enumeration must not require holding a global writer lock while network I/O is performed.
+The store/provider must expose an atomic freeze transition that converts a stable set of eligible pending local changes into immutable Outbox entries, assigns permanent per-author/per-namespace sequence numbers and stable ChangeIds, and durably commits the transition before any transport can expose those entries to a peer. Pending LWW changes may be coalesced before this transition according to the separate change-retention contract.
+
+The runtime then reads a bounded, stable batch of **frozen** outbound entries with immutable identities and payloads/references. Enumeration must not require holding a global writer lock while network I/O is performed. A frozen entry remains byte-identical across retries, even when no ACK has yet been received.
 
 If multiple consumers may read the same stream, the store/provider must support fencing or an equivalent ownership mechanism so that a stale consumer cannot ACK after a newer consumer takes over.
 
 ### 6.3. Acknowledge outbound changes
 
-ACK processing is a protocol decision owned by BIN-SYNC. The Metadata Store receives only a validated safe contiguous prefix or equivalent commit instruction.
+ACK processing is a protocol decision owned by BIN-SYNC. The Metadata Store receives only a validated safe contiguous prefix of frozen entries or equivalent commit instruction. ACK does not authorize rewriting an entry; it authorizes retention/compaction only after all applicable peer and protocol conditions are met.
 
 The store must reject out-of-range, non-contiguous, stale-lease or stale-generation ACKs. It must never infer a safe prefix by looking at one peer when the protocol requires aggregation across all interested peers.
 
@@ -265,7 +269,7 @@ If the provider cannot offer a shared transaction, durable idempotent apply, or 
 
 ### 7.4. Local source change capture
 
-The reverse direction has the same issue. If the provider reports a local change, it must not discard that change until the canonical operation is durably recorded in the outbound journal. A provider-native change feed with durable retention and consumer fencing is acceptable. A transient event callback alone is not a durable change feed.
+The reverse direction has the same issue. If the provider reports a local change, it must not discard that change until the canonical operation is durably represented in pending staging or a durable provider-owned feed under an agreed transfer boundary. Pending LWW changes may be coalesced only before freeze; non-coalescible operations remain distinct. A provider-native change feed with durable retention and consumer fencing is acceptable. A transient event callback alone is not a durable change feed. See [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
 
 ## 8. FLD-DB as a Metadata Store
 
@@ -413,11 +417,15 @@ The architecture and eventual contract implementation must be validated against 
 14. **Compaction/retention:** no required inbox, dedup, Outbox or relay information is deleted before the protocol's safe-retention condition.
 15. **Storage-only isolation:** FLD metadata writes do not generate HLC/ChangeId/local Outbox or appear as synchronized user changes.
 16. **Migration/reopen:** metadata format upgrades preserve scope isolation, cursor continuity and duplicate recognition.
+17. **Unpublished local coalescing:** multiple LWW writes to one field before freeze produce one pending operation; a frozen operation is never rewritten.
+18. **Pending local vs remote winner:** a remote APPLY that wins LWW does not destroy the payload of a still-pending local operation.
+19. **Non-LWW operations:** CRDT, BLOB_REF, MANUAL and audit/event operations do not use generic LWW coalescing.
 
 ## 14. Relationship to existing documents
 
 - **BIN-SYNC-SPECIFICATION.txt** remains the normative wire/protocol specification. This architecture document does not change wire layouts or protocol invariants.
 - **docs/FLD-DB-INTEGRATION-CONTRACT.md** remains the specialized contract for FLD-DB when it stores synchronized field data. It must conform to this architecture but may define stronger FLD-specific guarantees such as atomic field-data + metadata commit, local Outbox, FLD snapshots and FLD WAL behavior.
+- **docs/CHANGE-STAGING-AND-RETENTION.md** defines the detailed lifecycle and safe coalescing/retention rules for local staged changes, frozen Outbox entries and remote relay operations.
 - FLD's kernel specification owns FLD physical format, WAL, run, manifest and Storage-only implementation details. It must not redefine BIN-SYNC protocol semantics.
 
 If a specialized contract conflicts with this document, the conflict must be resolved explicitly. A FLD-specific optimization must not weaken a general durability or isolation guarantee.
@@ -444,13 +452,14 @@ These open points must not be resolved by adding speculative flags or prematurel
 ## 16. Recommended implementation sequence
 
 1. Review and approve the architecture and resolve the open decisions that affect the contract.
-2. Define the neutral Metadata Store semantic operations and conformance tests.
-3. Define the Data Provider change-capture/apply contract and its atomicity modes.
-4. Refactor BIN-SYNC persistence behind the neutral boundary without changing wire behavior.
-5. Implement FLD Storage-only semantics using reusable physical storage primitives.
-6. Implement the FLD Metadata Store adapter.
-7. Adapt the existing FLD synchronized-database integration to the same durable protocol semantics while preserving its stronger atomic transaction path.
-8. Validate SQL, array/file and custom-store scenarios.
-9. Only then freeze public API and update package/version documentation.
+2. Approve the change staging/coalescing lifecycle and its crash/relay conformance tests.
+3. Define the neutral Metadata Store semantic operations and conformance tests.
+4. Define the Data Provider change-capture/apply contract and its atomicity modes.
+5. Refactor BIN-SYNC persistence behind the neutral boundary without changing wire behavior.
+6. Implement FLD Storage-only semantics using reusable physical storage primitives.
+7. Implement the FLD Metadata Store adapter.
+8. Adapt the existing FLD synchronized-database integration to the same durable protocol semantics while preserving its stronger atomic transaction path.
+9. Validate SQL, array/file and custom-store scenarios.
+10. Only then freeze public API and update package/version documentation.
 
 **Design rule:** do not begin by replacing Node dictionaries with a thin collection of callbacks. First establish the complete atomic state transitions and ownership of every durable datum.
