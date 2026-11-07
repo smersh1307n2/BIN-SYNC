@@ -554,6 +554,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 }
             }
         });
+        store.CompletePeerInitialSync(scope, local, peerA, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+        store.CompletePeerInitialSync(scope, local, peerB, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
         MetadataOutboundBatchReservation Make(byte id, byte digest) => new()
         {
             BatchId = Batch(id), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
