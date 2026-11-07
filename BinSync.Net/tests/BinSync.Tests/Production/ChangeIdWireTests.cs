@@ -158,8 +158,15 @@ public class ChangeIdWireTests
         var changeId = original.Entries[0].ChangeId;
         Assert.True(c.GlobalChangeLedger.ContainsKey((1, changeId)));
 
-        // The same operation arrives directly from A after B already relayed it.
-        // The two A sessions resolve A's own compact alias consistently.
+        // C echoes the operation back to its original author after A's Outbox
+        // payload was compacted. A's local ledger suppresses a second relay.
+        Transport.MakeSession(c, a);
+        Assert.NotNull(Transport.DeliverBatch(c, a, 1));
+        Assert.Equal(0, a.OutboxSize(1));
+        Assert.Contains((c.NodeId, 1, changeId), a.SeenChanges);
+
+        // The same operation also arrives directly from A through another route.
+        // Re-establish A as alias 1 so the saved compact payload remains valid.
         Transport.MakeSession(a, c);
         var replay = c.ApplyBatchPayload(originalPayload, a.NodeId);
         Assert.Equal(0, replay.Applied);
