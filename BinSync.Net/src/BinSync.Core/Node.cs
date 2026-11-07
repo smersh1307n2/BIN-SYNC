@@ -417,6 +417,7 @@ public sealed partial class Node : IDisposable
             AliasToNode.Clear();
             NodeToAlias.Clear();
             SeenChanges.Clear();
+            GlobalChangeLedger.Clear();
             LastBatchDigest.Clear();
             LastStreamDigest.Clear();
             DurableAuthors.Clear();
