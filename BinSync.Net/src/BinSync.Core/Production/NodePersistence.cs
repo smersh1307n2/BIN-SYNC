@@ -444,7 +444,7 @@ public static class NodePersistence
                     var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
                     var appliedAt = r.Varint();
                     var expiresAt = r.Varint();
-                    if (batchId.IsZero || author.IsZero || (expiresAt != 0 && expiresAt < appliedAt))
+                    if (batchId.IsZero || author.IsZero || cursorEnd < 0 || (expiresAt != 0 && expiresAt < appliedAt))
                         throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
                     var receipt = new InboxReceipt(author, cursorEnd, hasCursorEnd,
                         fingerprint, hasFingerprint, appliedAt, expiresAt);
