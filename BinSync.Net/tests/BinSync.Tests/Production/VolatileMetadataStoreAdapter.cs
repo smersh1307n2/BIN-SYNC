@@ -147,7 +147,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 priorReceipt.CursorEnd,
                 priorReceipt.BatchDigest.ToArray(),
                 priorReceipt.NewRelayOperationCount,
-                IsDuplicate: true);
+                IsDuplicate: true)
+            { DurableAuthor = priorReceipt.DurableAuthor };
         }
 
         var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
@@ -198,14 +199,16 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             batch.CursorEnd,
             batch.PreviousBatchDigest.ToArray(),
             batch.BatchDigest.ToArray(),
-            relayAdded));
+            relayAdded,
+            ResolveAuthorStream(batch)));
 
         return new MetadataBatchReceipt(
             batch.CursorStart,
             batch.CursorEnd,
             batch.BatchDigest.ToArray(),
             relayAdded,
-            IsDuplicate: false);
+            IsDuplicate: false)
+        { DurableAuthor = ResolveAuthorStream(batch) };
     }
 
     private static bool SamePendingBatch(MetadataIncomingBatch left, MetadataIncomingBatch right)
@@ -213,6 +216,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             && left.LocalReplica == right.LocalReplica
             && left.SenderPeer == right.SenderPeer
             && left.SenderEpoch == right.SenderEpoch
+            && left.AuthorStreamNodeId == right.AuthorStreamNodeId
             && left.NamespaceId == right.NamespaceId
             && left.BatchId == right.BatchId
             && left.CursorStart == right.CursorStart
@@ -226,6 +230,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             LocalReplica = batch.LocalReplica,
             SenderPeer = batch.SenderPeer,
             SenderEpoch = batch.SenderEpoch,
+            AuthorStreamNodeId = batch.AuthorStreamNodeId,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
             CursorStart = batch.CursorStart,
@@ -243,8 +248,13 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         };
 
     private static MetadataBatchReceipt CloneReceipt(MetadataBatchReceipt receipt, bool isDuplicate)
-        => new(receipt.CursorStart, receipt.CursorEnd, receipt.BatchDigest.ToArray(),
-            receipt.NewRelayOperationCount, isDuplicate);
+        => new MetadataBatchReceipt(receipt.CursorStart, receipt.CursorEnd, receipt.BatchDigest.ToArray(),
+            receipt.NewRelayOperationCount, isDuplicate) { DurableAuthor = receipt.DurableAuthor };
+
+    private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
+        => !batch.AuthorStreamNodeId.IsZero
+            ? batch.AuthorStreamNodeId
+            : batch.Operations.Count == 0 ? default : batch.Operations[0].AuthorNodeId;
 
     public IReadOnlyList<MetadataOutboundItem> FreezeOutbound(
         string scopeId,
@@ -731,13 +741,15 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         ulong cursorEnd,
         byte[] previousBatchDigest,
         byte[] batchDigest,
-        int newRelayOperationCount)
+        int newRelayOperationCount,
+        NodeId durableAuthor = default)
     {
         public ulong CursorStart { get; } = cursorStart;
         public ulong CursorEnd { get; } = cursorEnd;
         public byte[] PreviousBatchDigest { get; } = previousBatchDigest;
         public byte[] BatchDigest { get; } = batchDigest;
         public int NewRelayOperationCount { get; } = newRelayOperationCount;
+        public NodeId DurableAuthor { get; } = durableAuthor;
 
         public bool Matches(MetadataIncomingBatch batch)
             => CursorStart == batch.CursorStart
@@ -774,7 +786,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                     pair.Value.CursorEnd,
                     pair.Value.PreviousBatchDigest.ToArray(),
                     pair.Value.BatchDigest.ToArray(),
-                    pair.Value.NewRelayOperationCount));
+                    pair.Value.NewRelayOperationCount,
+                    pair.Value.DurableAuthor));
             foreach (var pair in Receives)
                 clone.Receives.Add(pair.Key, new ReceiveState(pair.Value.CursorEnd, pair.Value.LastBatchDigest.ToArray()));
             foreach (var pair in ChangeLedger)
