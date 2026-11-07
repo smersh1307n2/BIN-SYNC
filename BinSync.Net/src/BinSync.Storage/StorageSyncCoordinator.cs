@@ -383,6 +383,57 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Runs bidirectional anti-entropy and commits the matching durable peer snapshot/feed
+    /// baseline. The feed watermarks are captured before reconciliation: changes after
+    /// that barrier remain eligible for DELTA_BATCH, even if a later snapshot happens
+    /// to include them. Relay streams always retain offset zero because snapshots do not
+    /// replace relay/event history.
+    /// </summary>
+    public async Task<(int Prefixes, int FieldsApplied)> AutoReconcileWithMetadataAsync(
+        SyncSession session, Action<Node> persistNode, bool initiate,
+        int maxPrefixes = 16, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (_metadataStore is not IMetadataPeerStateStore peerStore)
+            throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
+        if (string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException("A stable Metadata Store scope is required for initial-sync baseline.");
+
+        RegisterInterestedPeer(session, _namespaceId);
+        RecoverPendingApplies(persistNode);
+        PublishLocalChanges(persistNode);
+        persistNode(_node);
+
+        NodeId peer = session.PeerNodeId;
+        uint peerEpoch = checked((uint)session.PeerEpoch);
+        var relayAuthors = peerStore.ReadRelayAuthors(_scopeId!, _node.NodeId, _namespaceId).ToHashSet();
+        var authors = peerStore.ReadOutboundAuthors(_scopeId!, _node.NodeId, _namespaceId)
+            .Concat(relayAuthors)
+            .Where(author => author != peer)
+            .Distinct()
+            .ToArray();
+        var baselines = new List<MetadataPeerStreamBaseline>(authors.Length);
+        foreach (NodeId author in authors)
+        {
+            ulong offset = relayAuthors.Contains(author)
+                ? 0
+                : _metadataStore.GetOutboundHighWatermark(_scopeId!, _node.NodeId, _namespaceId, author);
+            uint issuerEpoch = _node.ReadPeerStreamProgress(peer, _namespaceId, author).IssuerEpoch;
+            baselines.Add(new MetadataPeerStreamBaseline(author, offset, issuerEpoch));
+        }
+
+        var result = await session.AutoReconcileAsync(
+            _node, _namespaceId, initiate, maxPrefixes, ct).ConfigureAwait(false);
+        if (!_node.HasInitialSyncComplete(peer, _namespaceId))
+            throw new SyncException("SNAPSHOT_REQUIRED");
+        persistNode(_node);
+        peerStore.CompletePeerInitialSync(
+            _scopeId!, _node.NodeId, peer, peerEpoch, _namespaceId, baselines);
+        return result;
+    }
+
+    /// <summary>
     /// Receive through SyncSession with a durable PendingApply intent committed before
     /// Node mutation. The ACK is emitted only after Node checkpoint, provider apply and
     /// metadata receipt finalization all succeed.
