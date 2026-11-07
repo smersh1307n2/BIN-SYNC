@@ -507,18 +507,21 @@ public class SnapshotTests
         {
             InitialSyncComplete = false,
         };
-        peerState.StreamOffsets[source.NodeId] = 4;
-        peerState.StreamAcked[source.NodeId] = 7;
-        peerState.StreamPushed[source.NodeId] = 9;
+        peerState.SetStreamOffset(source.NodeId, 4);
+        peerState.SetStreamAcked(source.NodeId, 7);
+        peerState.SetStreamPushed(source.NodeId, 9);
         target.PeerStates[(source.NodeId, 1)] = peerState;
 
         void AssertPeerCursorsUnchanged()
         {
             Assert.Same(peerState, target.PeerStates[(source.NodeId, 1)]);
             Assert.False(peerState.InitialSyncComplete);
-            Assert.Equal(4, peerState.StreamOffsets[source.NodeId]);
-            Assert.Equal(7, peerState.StreamAcked[source.NodeId]);
-            Assert.Equal(9, peerState.StreamPushed[source.NodeId]);
+            Assert.True(peerState.TryGetStreamOffset(source.NodeId, out var offset));
+            Assert.Equal(4, offset);
+            Assert.True(peerState.TryGetStreamAcked(source.NodeId, out var acked));
+            Assert.Equal(7, acked);
+            Assert.True(peerState.TryGetStreamPushed(source.NodeId, out var pushed));
+            Assert.Equal(9, pushed);
         }
         source.WriteField(1, firstId, 0x100, new byte[9 * 1024 * 1024]);
         source.WriteField(1, secondId, 0x100, new byte[9 * 1024 * 1024]);
