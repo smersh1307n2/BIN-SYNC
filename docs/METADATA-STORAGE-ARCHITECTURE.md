@@ -2,7 +2,7 @@
 
 **Status:** Architecture contract draft v0.3 — includes the FLD Storage Core extraction boundary and resolved metadata-retention decisions.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
-**Wire protocol:** unchanged; this document does not revise BIN-SYNC CORE v2.4.17.  
+**Wire format:** unchanged. This draft defines target durable metadata and cross-peer dedup semantics; the latter must be promoted into a normative protocol erratum and conformance tests before release.  
 **Implementation status:** proposed architecture; the current Node API is not yet an implementation of this contract.
 
 ## 1. Purpose
