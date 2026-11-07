@@ -296,8 +296,9 @@ public class ChangeIdWireTests
         var batchOtherAuthor = BatchId.From(Id(0xA6));
         node.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)] =
             new InboxReceipt(author2, 1, true, fingerprint, true, 101, 0);
-        node.InboxAuthors[(issuer, 8, 3, BatchId.From(Id(0xA3)))] =
-            new InboxReceipt(author, 1, true, fingerprint, true, 102, 0);
+        var batchDifferentAuthor = BatchId.From(Id(0xA3));
+        node.InboxAuthors[(issuer, 8, 3, batchDifferentAuthor)] =
+            new InboxReceipt(author2, 1, true, fingerprint, true, 102, 0);
         var legacyBatch = BatchId.From(Id(0xA4));
         node.InboxAuthors[(issuer, 8, 3, legacyBatch)] =
             new InboxReceipt(author, 0, false, default, false, 103, 200);
@@ -315,12 +316,41 @@ public class ChangeIdWireTests
             NodePersistence.Save(node, path);
             var bytes = File.ReadAllBytes(path);
             Assert.Equal((ushort)12, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+
+            // Namespace 7 has three receipts by two authors and should use author
+            // subgroups; namespace 8 has two singleton author groups and should stay flat.
+            var bodyReader = new Reader(bytes.AsSpan(46).ToArray());
+            bodyReader.B128(); bodyReader.Varint(); bodyReader.U64(); bodyReader.U32();
+            Assert.Equal(0UL, bodyReader.Varint()); // Storage
+            Assert.Equal(0UL, bodyReader.Varint()); // Outbox
+            Assert.Equal(0UL, bodyReader.Varint()); // Outbox sequence map
+            Assert.Equal(2UL, bodyReader.Varint()); // receipt session groups
+            bodyReader.B128(); bodyReader.Varint(); bodyReader.Varint();
+            Assert.Equal((byte)1, bodyReader.U8()); // author-grouped layout
+            int authorGroups = (int)bodyReader.Varint();
+            for (int ai = 0; ai < authorGroups; ai++)
+            {
+                bodyReader.B128();
+                int receiptCount = (int)bodyReader.Varint();
+                for (int ri = 0; ri < receiptCount; ri++)
+                {
+                    bodyReader.B128();
+                    byte flags = bodyReader.U8();
+                    if ((flags & 1) != 0) bodyReader.Varint();
+                    if ((flags & 2) != 0) bodyReader.B128();
+                    bodyReader.Varint(); bodyReader.Varint();
+                }
+            }
+            bodyReader.B128(); bodyReader.Varint(); bodyReader.Varint();
+            Assert.Equal((byte)0, bodyReader.U8()); // flat layout avoids subgroup overhead
+
             using var restored = NodePersistence.Load(path);
 
             Assert.Equal(5, restored.InboxAuthors.Count);
             Assert.Equal(11, restored.InboxAuthors[(issuer, 7, 3, batch1)].CursorEnd);
             Assert.Equal(12, restored.InboxAuthors[(issuer, 7, 3, batch2)].CursorEnd);
             Assert.Equal(author2, restored.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)].DurableAuthor);
+            Assert.Equal(author2, restored.InboxAuthors[(issuer, 8, 3, batchDifferentAuthor)].DurableAuthor);
             Assert.Equal(fingerprint, restored.InboxAuthors[(issuer, 7, 3, batch1)].Fingerprint);
             var legacyReceipt = restored.InboxAuthors[(issuer, 8, 3, legacyBatch)];
             Assert.False(legacyReceipt.HasCursorEnd);
