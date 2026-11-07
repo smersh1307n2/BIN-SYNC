@@ -81,6 +81,21 @@ For every returned relay operation, the adapter forms `OutboxChangeIdentity(auth
 
 Never pass CommitSeq, OutboxSeq or a peer-relative ACK cursor as this API's JournalSeq. Consumed/read is not the same as durably acknowledged downstream.
 
+### 3.1.2 Outbound publication gate and ACK translation
+
+The ordering above requires an adapter-level publication gate; the requirement cannot be satisfied by merely calling the resolver eventually:
+
+1. The adapter is the sole owner of transport scheduling for the BIN-SYNC Node/namespace. After a remote APPLY may have created relay Outbox entries, it MUST NOT expose those entries to any sender until their source JournalSeq provenance mappings and scan cursor are durably committed. In particular, no `CreateDeltaBatch`, Outbox lease/read, or transport send may race ahead of provenance persistence.
+2. On process start, the namespace remains gated until the adapter has resumed its persisted scan cursor, reconciled any uncommitted page, resolved every returned `(author, ChangeId)` against retained Outbox entries and committed the page mapping + new scan cursor. A crash before that commit is recovered by rereading the same FLD page; the resolver is idempotent and no cursor may be advanced on partial resolution.
+3. Use an adapter-owned per-namespace async gate around inbound apply→relay-page publication and outbound batch construction. Do not hold FLD internal locks while waiting for network I/O, and do not hold BIN-SYNC Node locks while performing disk I/O in FLD. The gate serializes only the adapter's protocol publication boundary; the two engines retain their own lock order.
+4. Mapping records are keyed by original author and contain `(JournalSeq, ChangeId, OutboxSeq)`. All mappings from one page and `ScannedThroughJournalSeq` are one durable atomic update. A page with zero operations for an author still advances that author's scan cursor.
+5. To translate BIN-SYNC `safeOutboxSeq` back to FLD, find the first mapped source JournalSeq for that author containing any OutboxSeq greater than the safe watermark. The source safe-through is one less than that JournalSeq; if none exists, it is the persisted scanned-through cursor. This is valid only because the adapter publishes source pages in increasing JournalSeq order and BIN-SYNC assigns monotonically increasing OutboxSeq within each original author stream. Validate this monotonicity; on violation, fail closed rather than sorting away the discrepancy.
+6. Call FLD `AcknowledgeRelayBatches(author, safeThroughJournalSeq)` only after the translated source watermark is durable in adapter state. Prune mapping rows only after FLD confirms the relay ACK sidecar is durable; if the process crashes between the FLD ACK and mapping cleanup, stale mapping rows are harmless and may be pruned on restart. Never delete the mapping first.
+7. If `TryResolveOutboxSequences` returns false because any operation is no longer retained and no prior durable mapping exists, stop publication/ACK advancement for that namespace and require recovery/reconciliation. Do not reconstruct OutboxSeq from current field winners or allocate a replacement sequence.
+
+This gate is a correctness requirement for the future adapter, not an API currently enforced inside `BinSync.Core`. Keeping the source JournalSeq mapping outside the protocol core avoids leaking FLD-specific journal coordinates into BIN-SYNC's peer/author stream model.
+
+
 ### 3.2 Семантика ApplyRemoteBatch
 
 `ApplyRemoteBatch` обязана выполнять атомарно:
