@@ -58,3 +58,53 @@ These are semantic clarifications/hardening changes; they do not change the wire
 - [ ] Every partial feature in §§8, 14, 16.19 and 18 is explicitly labelled in API/docs.
 - [ ] Current-head .NET, Storage Integration, sample, Fuzz and Lab CI all pass.
 - [ ] Public API breaking changes and package version are reviewed before release.
+
+
+## 5. Executable §17 scenario index
+
+The named baseline scenarios 1–25 map directly to executable test methods. Extended scenarios 26–42 are additional regressions; they do not replace the baseline.
+
+| Spec scenario | Exact test method(s) |
+|---|---|
+| 1. Field parallelism | `ScenariosA.Scenario01_FieldParallelism` |
+| 2. Delete vs late write | `ScenariosA.Scenario02_DeleteVsLateWrite` |
+| 3. Reconnect with new alias map | `ScenariosA.Scenario03_ReconnectNewAliasMap` |
+| 4. Snapshot plus tail | `ScenariosA.Scenario04_SnapshotPlusTail`; `LabEdgeTests.S4_Snapshot_plus_tail_brings_new_peer_current`; `S4_NewPeerTailCursor_DoesNotRenumberExistingPeerOutbox` |
+| 5. Counter with departed node | `ScenariosA.Scenario05_CounterWithGoneNode` |
+| 6. Clock skew | `ScenariosA.Scenario06_ClockSkew` |
+| 7. Epoch regression | `ScenariosA.Scenario07_EpochRegression` |
+| 8. Canonical digest | `ScenariosA.Scenario08_CanonicalDigest`; `Hardening.Blake3_MatchesOfficialTestVectors` |
+| 9. Incremental bucket digest | `ScenariosA.Scenario09_BucketIncremental`; `ScenariosB.Scenario41_BucketCommutativityPermutations` |
+| 10. Tombstone GC prevention | `ScenariosA.Scenario10_TombstoneGcPrevention`; `LabEdgeTests.S13_PurgeBelowCutoff_preserves_live_fields_until_safe_watermark_gate` |
+| 11. Blind encrypted merge | `ScenariosA.Scenario11_BlindMerge` |
+| 12. Fragmentation | `ScenariosA.Scenario12_Fragmentation`; `LabEdgeTests.S12_Fragment_split_and_reassemble_roundtrip` |
+| 13. Zombie quarantine | `ScenariosA.Scenario13_ZombieQuarantine`; `LabEdgeTests.S13_GcNotice_quarantine_propagates` |
+| 14. Decompression bomb guard | `ScenariosA.Scenario14_DecompressionBombGuard` |
+| 15. Flow-control backpressure | `ScenariosA.Scenario15_FlowControlBackpressure` |
+| 16. Key rotation | `ScenariosA.Scenario16_KeyRotation` |
+| 17. Range cursor coalescing | `ScenariosA.Scenario17_RangeCursorCoalescing` |
+| 18. Lost ACK | `ScenariosA.Scenario18_LostAck` |
+| 19. Manual conflict resolution | `ScenariosA.Scenario19_ManualConflictResolve` |
+| 20. Multi-namespace isolation | `ScenariosA.Scenario20_MultiNamespaceIsolation` |
+| 21. Bucket rollup | `ScenariosB.Scenario21_BucketRollup` |
+| 22. TOFU | `ScenariosB.Scenario22_TrustOnFirstUse` |
+| 23. Relay preserves authorship | `ScenariosB.Scenario23_RelayPreservesAuthorship`; `Scenario27_DigestConsistencyThroughRelay`; `Scenario28_RelaySeparateBatchesPerAuthor` |
+| 24. Unknown alias atomic rollback | `ScenariosB.Scenario24_UnknownAliasAtomicRollback` |
+| 25. Concurrent delete by author | `ScenariosB.Scenario25_ConcurrentDeleteByAuthor` |
+
+Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 642 passing core tests and 31 passing Fuzz/Lab cases on the last verified full CI head.
+
+**Interpretation guard:** a scenario test proves only the assertions inside that method. In particular, scenario 10 proves fail-closed behavior, not that destructive tombstone GC is implemented; scenario 13 proves quarantine behavior, not that a complete safe-frontier GC engine exists.
+
+## 6. §16 invariant mapping status
+
+The §16 invariant set is broader than the 25 named scenarios. The following test families provide current evidence:
+
+- **Merge/lifecycle/tombstone:** `MergeFieldTombTests`, `MergeCrdtTests`, `InvariantsAndAdvanced`, `Hardening`.
+- **Sequence, idempotency, ChangeId and transactionality:** `ChangeIdWireTests`, `RemoteBatchWalAtomicityTests`, `WalTests`, `StorageMetadataStoreConformanceTests`.
+- **Codec/canonicalization/frame integrity/resource bounds:** `CodecExtendedTests`, `CodecIdentityNormalizationTests`, `ResourceLimitsAtomicityTests`, `TcpFragmentTests`, `FuzzTests`.
+- **Authorship/relay/snapshot binding:** `InvariantsAndAdvanced`, `SnapshotTests`, `ReconcileExchangeTests`, `StorageSyncCoordinatorTests`.
+- **Trust/security/E2EE:** `TrustStoreTests`, `TrustPersistTests`, `BatchSignatureTests`, `E2eeWriteTests`, `KeyRotationTests`.
+- **Causal dependency experimental invariants:** `CausalApplyTests`, `CausalDepsTests`, `CausalWireTests`, `Scenario33_CausalDepTimeout`, `Scenario34_CausalCycleDetection`.
+
+The exact §16 requirement-ID → test-method matrix is still a release gate. The test families above are evidence sources, not a claim that every invariant has a unique positive and negative test. The highest-risk unmapped families remain retention/GC proof, crash cuts across separate stores, E2EE nonce uniqueness under all replay modes, and runtime schema-policy dispatch.
