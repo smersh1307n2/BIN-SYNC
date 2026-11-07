@@ -69,6 +69,16 @@ BIN-SYNC не должен держать вторую копию durable field 
 
 FLD хранит opaque protocol extension как часть той же durable transaction, не разбирая wire semantics. BIN-SYNC остаётся владельцем кодирования и интерпретации extension.
 
+### 3.1.1 Relay journal cursor and safe acknowledgement
+
+`ReadRelayBatch(author, afterSeq, limit)` returns the FLD-local `JournalSeq` for each source batch. This cursor is global to the namespace ApplyJournal and is not interchangeable with BIN-SYNC OutboxSeq, peer cursor, author stream sequence or WAL CommitSeq. For a given author, JournalSeq values may have gaps because intervening batches can contain no relay operation for that author.
+
+The adapter must durably preserve the provenance mapping from each relay-selected ChangeId to its source JournalSeq and to the local BIN-SYNC OutboxSeq assigned when the operation is republished. This mapping must survive restart; it cannot be reconstructed from current field winners because relay-eligible LWW losers may no longer be visible in field state.
+
+`AcknowledgeRelay(author, safeThroughJournalSeq, lease)` may advance only to the largest contiguous source JournalSeq for which every relay operation for that author has been durably published and all interested downstream peers have validated ACKs covering the corresponding local Outbox entries. BIN-SYNC computes the minimum safe watermark across peers; FLD must not infer or calculate peer safety. The acknowledgement is per original author, not per immediate sender. If one source batch contains relay operations from multiple authors, each author's source payload can be released independently only after its own safe watermark covers that batch.
+
+Never pass CommitSeq, OutboxSeq or a peer-relative ACK cursor as this API's JournalSeq. Consumed/read is not the same as durably acknowledged downstream.
+
 ### 3.2 Семантика ApplyRemoteBatch
 
 `ApplyRemoteBatch` обязана выполнять атомарно:
