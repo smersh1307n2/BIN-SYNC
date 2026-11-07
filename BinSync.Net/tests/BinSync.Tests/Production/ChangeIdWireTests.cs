@@ -278,6 +278,68 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void ChangeIdentity_direct_encoding_matches_canonical_reference_for_all_operation_kinds()
+    {
+        static Digest16 Reference(int ns, RecordId recordId, byte opKind, object operation,
+            NodeId author, IReadOnlyList<BatchId>? dependencies)
+        {
+            object canonical = operation switch
+            {
+                OpFieldWrite x => new OpFieldWrite
+                {
+                    FieldId = x.FieldId, KeyEpoch = x.KeyEpoch, Wall = x.Wall,
+                    Logical = x.Logical, AuthorNodeId = author, FullAuthorMode = true,
+                    Value = x.Value.ToArray()
+                },
+                OpFieldTomb x => new OpFieldTomb
+                {
+                    FieldId = x.FieldId, KeyEpoch = x.KeyEpoch, Wall = x.Wall,
+                    Logical = x.Logical, AuthorNodeId = author, FullAuthorMode = true
+                },
+                OpRecordTombstone x => new OpRecordTombstone
+                {
+                    RecordId = x.RecordId, Wall = x.Wall, Logical = x.Logical,
+                    AuthorNodeId = author, FullAuthorMode = true
+                },
+                _ => throw new InvalidDataException()
+            };
+            var encoded = Ops.EncodeOp(canonical, fullAuthor: true);
+            var writer = new Writer();
+            writer.Raw(System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-ID/v1"))
+                .U16((ushort)ns).B128(recordId).U8(opKind)
+                .Varint((ulong)encoded.Length).Raw(encoded);
+            if (dependencies is null || dependencies.Count == 0)
+                writer.Varint(0);
+            else
+            {
+                var unique = dependencies.Distinct().OrderBy(id => id.Lo).ThenBy(id => id.Hi).ToArray();
+                writer.Varint((ulong)unique.Length);
+                foreach (var dependency in unique) writer.B128(dependency);
+            }
+            return Digests.Blake3Digest16(writer.WrittenSpan);
+        }
+
+        var author = Fix.Nid(201);
+        var record = Fix.Rid(202);
+        var dependencies = new[] { BatchId.From(Id(0xA1)), BatchId.From(Id(0xA2)), BatchId.From(Id(0xA1)) };
+        object[] operations =
+        [
+            new OpFieldWrite { FieldId = 0x1234, KeyEpoch = 7, Wall = 123456, Logical = 9, Origin = 5, Value = [1, 2, 3, 4] },
+            new OpFieldTomb { FieldId = 0x2345, KeyEpoch = 8, Wall = 123457, Logical = 10, Origin = 6 },
+            new OpRecordTombstone { RecordId = record, Wall = 123458, Logical = 11, Origin = 7 }
+        ];
+        byte[] kinds = [OpsConst.TagFieldWrite, OpsConst.TagFieldTomb, OpsConst.TagRecordTomb];
+
+        for (int i = 0; i < operations.Length; i++)
+        {
+            var deps = i == 0 ? dependencies : i == 1 ? Array.Empty<BatchId>() : new[] { dependencies[0] };
+            var expected = Reference(17, record, kinds[i], operations[i], author, deps);
+            var actual = ChangeIdentity.Fingerprint(17, record, kinds[i], operations[i], author, deps);
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    [Fact]
     public void Global_ChangeId_reuse_with_different_operation_is_rejected_atomically()
     {
         using var a = Fix.MakeNode(114);
