@@ -356,6 +356,34 @@ public class Production : IDisposable
     }
 
     [Fact]
+    public void Persistence_RejectsCollectionCountLargerThanRemainingBodyBeforeAllocation()
+    {
+        using var node = Fix.MakeNode(887);
+        var path = Path.Combine(_dir, "count-overflow-source.state");
+        NodePersistence.Save(node, path);
+        var original = File.ReadAllBytes(path);
+        var body = original.AsSpan(46).ToArray();
+
+        // The namespace-count varint follows NodeId, Epoch, HLC wall and logical.
+        const int namespaceCountOffset = 16 + 1 + 8 + 4;
+        var hugeCount = Codec.EncodeVarint(ulong.MaxValue);
+        var malformedBody = new byte[body.Length - 1 + hugeCount.Length];
+        body.AsSpan(0, namespaceCountOffset).CopyTo(malformedBody);
+        hugeCount.CopyTo(malformedBody.AsSpan(namespaceCountOffset));
+        body.AsSpan(namespaceCountOffset + 1).CopyTo(
+            malformedBody.AsSpan(namespaceCountOffset + hugeCount.Length));
+
+        var malformed = new byte[46 + malformedBody.Length];
+        original.AsSpan(0, 14).CopyTo(malformed);
+        BinaryPrimitives.WriteUInt64BigEndian(malformed.AsSpan(6, 8), (ulong)malformedBody.Length);
+        var digest = Blake3Core.TaggedHash(NodePersistence.StateTag, malformedBody);
+        digest.CopyTo(malformed.AsSpan(14, 32));
+        malformedBody.CopyTo(malformed.AsSpan(46));
+
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(malformed));
+    }
+
+    [Fact]
     public void Persistence_BadMagicAndVersion_IsRejected()
     {
         var (a, _) = BuildHistory();
