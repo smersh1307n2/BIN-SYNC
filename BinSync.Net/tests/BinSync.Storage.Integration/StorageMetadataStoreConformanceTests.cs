@@ -300,8 +300,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             }
         };
 
-        Assert.False(store.AcceptIncomingBatch(first).IsDuplicate);
-        Assert.True(store.AcceptIncomingBatch(secondView).IsDuplicate);
+        var accepted = store.AcceptIncomingBatch(first);
+        Assert.False(accepted.IsDuplicate);
+        Assert.Equal(authorA, accepted.DurableAuthor);
+        var duplicate = store.AcceptIncomingBatch(secondView);
+        Assert.True(duplicate.IsDuplicate);
+        Assert.Equal(authorA, duplicate.DurableAuthor);
         var equivocation = new MetadataIncomingBatch
         {
             ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
