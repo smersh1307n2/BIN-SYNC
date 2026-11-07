@@ -107,7 +107,6 @@ public sealed partial class Node
                 return batch;
             }
 
-            var decoded = new object[batch.Entries.Count];
             NodeId streamAuthor = default;
             for (int i = 0; i < batch.Entries.Count; i++)
             {
@@ -118,7 +117,6 @@ public sealed partial class Node
                 if (i == 0) streamAuthor = author;
                 else if (author != streamAuthor)
                     throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
-                decoded[i] = operation;
             }
             if (streamAuthor.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
