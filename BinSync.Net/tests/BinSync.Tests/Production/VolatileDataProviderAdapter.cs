@@ -19,6 +19,7 @@ public sealed class VolatileDataProviderAdapter : IDataProviderConformanceAdapte
     private Dictionary<FieldKey, ProviderMutation> _current = new();
     private readonly List<ProviderChange> _changes = new();
     private readonly Dictionary<Guid, ProviderMutation[]> _snapshots = new();
+    private readonly HashSet<ulong> _snapshotWatermarks = new();
     private readonly Dictionary<Guid, ProviderApplyReceipt> _applyReceipts = new();
     private ulong _ackedThrough;
     private ulong _highestContiguousRead;
@@ -87,7 +88,11 @@ public sealed class VolatileDataProviderAdapter : IDataProviderConformanceAdapte
         if (afterSequence > _changeHighWatermark)
             throw new ArgumentOutOfRangeException(nameof(afterSequence));
         if (afterSequence > _ackedThrough && afterSequence > _highestContiguousRead)
-            throw new InvalidDataException("Provider feed cursor skips an unread source change.");
+        {
+            if (!_snapshotWatermarks.Contains(afterSequence))
+                throw new InvalidDataException("Provider feed cursor skips an unread source change and is not a captured snapshot watermark.");
+            _highestContiguousRead = afterSequence;
+        }
         if (limit <= 0)
             throw new ArgumentOutOfRangeException(nameof(limit));
 
@@ -109,6 +114,7 @@ public sealed class VolatileDataProviderAdapter : IDataProviderConformanceAdapte
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
         _ackedThrough = safeThroughSequence;
         _changes.RemoveAll(change => change.Sequence <= safeThroughSequence);
+        _snapshotWatermarks.RemoveWhere(watermark => watermark <= safeThroughSequence);
     }
 
     public ProviderSnapshotHandle OpenSnapshot()
@@ -121,6 +127,7 @@ public sealed class VolatileDataProviderAdapter : IDataProviderConformanceAdapte
             .Select(CloneMutation)
             .ToArray();
         _snapshots.Add(token, entries);
+        _snapshotWatermarks.Add(_changeHighWatermark);
         return new ProviderSnapshotHandle(token, _changeHighWatermark);
     }
 
@@ -206,6 +213,7 @@ public sealed class VolatileDataProviderAdapter : IDataProviderConformanceAdapte
         _current.Clear();
         _changes.Clear();
         _snapshots.Clear();
+        _snapshotWatermarks.Clear();
         _applyReceipts.Clear();
     }
 

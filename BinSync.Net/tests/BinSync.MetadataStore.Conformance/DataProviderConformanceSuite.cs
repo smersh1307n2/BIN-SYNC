@@ -147,7 +147,7 @@ public abstract class DataProviderConformanceSuite
         var invalidBatch = new[]
         {
             Mutation(2, 1, 20, 2),
-            Mutation(3, 1, 30, 2) with { AuthorNodeId = default }
+            Mutation(3, 1, 30, 0)
         };
         Assert.Throws<ArgumentException>(() =>
             provider.ApplyRemoteBatch(Guid.Parse("00000000-0000-0000-0000-000000000204"), invalidBatch));
