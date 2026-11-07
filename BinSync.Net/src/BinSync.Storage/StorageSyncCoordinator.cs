@@ -332,7 +332,8 @@ public sealed class StorageSyncCoordinator
     /// If the process stops at any point after this call, recovery can replay the same
     /// wire payload into Node and the provider before the sender is acknowledged.
     /// </summary>
-    public StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApply(Batch batch, byte[] wirePayload)
+    public StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApply(Batch batch, byte[] wirePayload,
+        NodeId senderPeer, uint senderEpoch)
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(wirePayload);
@@ -343,7 +344,7 @@ public sealed class StorageSyncCoordinator
 
         lock (_gate)
         {
-            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload);
+            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload, senderPeer, senderEpoch);
             Guid token = CreateBatchApplyToken(batch);
             bool finalizeMetadata = true;
             try
@@ -447,7 +448,8 @@ public sealed class StorageSyncCoordinator
         }
     }
 
-    private MetadataIncomingBatch CreateMetadataBatch(Batch batch, byte[]? wirePayload = null)
+    private MetadataIncomingBatch CreateMetadataBatch(Batch batch, byte[]? wirePayload = null,
+        NodeId? senderPeer = null, uint? senderEpoch = null)
     {
         var operations = new List<MetadataOperation>(batch.Entries.Count);
         foreach (var entry in batch.Entries)
@@ -476,8 +478,8 @@ public sealed class StorageSyncCoordinator
         {
             ScopeId = _scopeId!,
             LocalReplica = _node.NodeId,
-            SenderPeer = batch.IssuerNodeId,
-            SenderEpoch = checked((uint)batch.IssuerEpoch),
+            SenderPeer = senderPeer ?? batch.IssuerNodeId,
+            SenderEpoch = senderEpoch ?? checked((uint)batch.IssuerEpoch),
             AuthorStreamNodeId = batch.DurableAuthor,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
