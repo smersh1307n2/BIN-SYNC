@@ -364,6 +364,49 @@ The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorSt
 
 Unlike SeenChanges, this cache has a direct safe deletion condition: after a valid ACK advances the same peer/namespace/author stream through cursorEnd, the cached BatchId/previous-digest tuple for that fully acknowledged range is no longer needed for retry. Prune only entries whose cursorEnd is at or below that stream's acknowledged wire cursor, in the same durable metadata transaction as ACK progress. Do not prune on StreamPushed alone, and do not prune a range partially covered by ACK. Keep LastStreamDigest as the current chain checkpoint; it is not a reason to retain every prior batch tuple.
 
+### 9.4. FLD remote APPLY currently duplicates payloads across WAL and ApplyJournal
+
+The inspected FLD implementation has another material storage-amplification point:
+
+- RemoteBatchCommit.ValidateRelaySubset requires RelayWrites to be an exact subset of Writes, matched by ChangeId and byte-identical operation fields.
+- ApplyCommitCodec v2 serializes both Fields and RelayFields as separate full field arrays. Therefore, every relay-eligible operation's payload is serialized twice inside the same APPLY_COMMIT WAL payload.
+- FldDatabase.ApplyRemoteBatch appends that full encoded APPLY_COMMIT payload to WAL, flushes it, then appends the same payload again to ApplyJournal and flushes the journal.
+- ApplyJournal stores/indexes the full payload by batch identity. ReadRelayBatches later reads the full batch record and filters out the RelayFields subset. The receipt lookup also reads the same full record.
+- The inspected ApplyJournal has AppendIfMissing, TryFindBatch, ReadBatches and Flush, but no ACK, compaction or truncation API. Receipt retention and relay-payload retention are therefore coupled to one append-only sidecar.
+
+For a remote batch with N incoming operations and R relay-eligible operations (R ≤ N), the current APPLY_COMMIT body contains N operation payloads plus another R copies. The sidecar then stores another copy of that entire body. Ignoring headers/indexes and current-state runs, the WAL plus ApplyJournal therefore retain approximately 2 × (N + R) operation-payload copies until WAL truncation and indefinitely in the current ApplyJournal unless another external lifecycle exists. This is a structural observation, not a benchmark estimate.
+
+### 9.5. Preferred remote-APPLY storage decomposition
+
+The logical lifetimes must be separated:
+
+1. **WAL apply transaction:** retain the complete incoming operation set exactly once for crash recovery/application. Store relay selection as compact indexes/bitset over that operation array, not a second copy of each selected payload. This is an internal WAL format change/version, not a wire-format change.
+2. **Durable inbox receipt:** retain only the metadata required to recognize a duplicate batch and reproduce the same ACK/result: sender/issuer identity and epochs, namespace, BatchId, cursor range, previous/current digest, RecordsRoot, CommitSeq, AppliedCount, protocol-state delta or a durable reference to it, plus the protocol-defined expiry/confirmation state.
+3. **Relay journal:** retain only the exact relay-eligible operations, with original ChangeId, author, HLC, key epoch, canonical key, operation payload and the batch/provenance metadata needed to reconstruct the outbound relay. Do not retain non-relay operations here.
+4. **Current field state:** retain only the current LWW winner per field key in runs/overlay; this is not a substitute for relay payloads.
+5. **BIN-SYNC SeenChanges and peer state:** remain protocol-owned metadata and are not silently folded into FLD's relay payload log.
+
+The WAL APPLY record is the authoritative atomic commit. Receipt and relay sidecar records may be materialized idempotently from that WAL record using CommitSeq as their recovery identity. The WAL prefix must not be truncated until the required receipt and relay materialization is durable. A crash between WAL flush and sidecar flush must rebuild the missing sidecar state on open without duplicating entries.
+
+The receipt and relay journals need independent retention:
+
+- A receipt may be removed only under the normative Inbox GC condition (expiry elapsed and both sides have confirmed the corresponding log segment).
+- A relay payload may be removed only after BIN-SYNC's safe downstream retention/ACK calculation says no interested peer still needs it.
+- Receipt expiry does not imply relay completion; relay completion does not necessarily imply that duplicate-batch receipt expiry has elapsed.
+
+The public FLD API should therefore expose separate semantic read/ack/retention operations for relay payloads and batch receipts, or one transactional metadata API with independent receipt and relay watermarks. A single ApplyJournal sequence must not be treated as both lifetimes unless the physical format supports independent segment reclamation.
+
+### 9.6. Payload-sharing alternatives
+
+There are two viable physical strategies for relay payload lifetime:
+
+- **Copy relay subset once into a dedicated RelayJournal:** simplest compaction and WAL truncation. It duplicates relay payload once relative to the WAL apply record, but avoids retaining non-relay operations and allows independent relay ACK/GC.
+- **Reference immutable WAL payload ranges:** avoids copying relay payload, but pins the WAL segment until all referenced relay entries are safely retired. This can retain unrelated local/remote commits in the same segment and complicate checkpoint/truncation.
+
+The preferred default is a dedicated compact RelayJournal unless measurements show that WAL segment pinning is materially cheaper for the target workload. Never keep both a full ApplyJournal copy and a separate full RelayJournal copy.
+
+A receipt should not retain the full incoming field array merely to answer a duplicate batch. A compact receipt record is sufficient once the original apply effects are committed and the relay subset has its own durable owner.
+
 ## 10. Storage cost example
 
 Let one field value have payload size V. Ignore filesystem allocation, index growth and checkpoint overhead for a simple comparison.
@@ -402,6 +445,11 @@ This policy reduces redundant outbound history; it does not promise that every p
 22. Inbox receipt expiry/GC requires the protocol's elapsed-expiry plus confirmed-log-segment condition and survives restart.
 23. E-13 self-echo suppression sees the correct durable local winner across pending staging and frozen/unconfirmed Outbox without treating staged entries as published stream records.
 24. Per-peer PeerState.Ids replay-cache entries survive lost ACK/restart and are pruned only after a valid ACK covers their author-stream cursorEnd.
+25. APPLY_COMMIT encodes every incoming operation payload once; relay selection is represented without duplicating selected payload bytes.
+26. ApplyJournal/receipt storage does not retain non-relay operation payloads after the WAL recovery boundary has passed.
+27. Duplicate-batch receipt remains available after WAL checkpoint/truncation without retaining the full original field array.
+28. Relay payload survives WAL truncation and is reclaimed only after safe downstream ACK; receipt expiry and relay ACK are tested independently.
+29. Crash after WAL flush but before receipt/relay sidecar materialization reconstructs both sidecars exactly once from the WAL commit.
 
 ## 12. Implementation sequence
 
