@@ -408,7 +408,7 @@ The FLD remote APPLY path has been changed:
 
 Until WAL truncation, non-relay operations exist only in WAL and relay operations exist in WAL plus the relay-only journal. After WAL truncation, only relay-selected payloads remain in the journal. The metadata receipt and relay payload are still co-located in one append-only journal record/file, so their physical retention lifetimes are not yet independent.
 
-ReadBatches now uses a lower-bound binary search on JournalSeq, so page selection is O(log N + page size) rather than rescanning the consumed prefix. The remaining ApplyJournal issues are no ACK/compaction/truncation API and unbounded in-memory List and BatchKey Dictionary. Receipt GC, relay payload GC and bounded/rebuildable indexes remain open.
+ReadBatches now uses a sparse JournalSeq anchor every 256 records and binary-searches the nearest anchor, scanning at most one bounded stride before the requested page. The full IndexEntry List has been removed. The BatchKey→IndexEntry Dictionary and on-disk receipt history remain unbounded; no ACK/compaction/truncation API or disk-backed batch index exists. Receipt GC, relay payload GC and bounded/rebuildable batch indexing remain open.
 
 ### 9.5. Preferred remote-APPLY storage decomposition
 
