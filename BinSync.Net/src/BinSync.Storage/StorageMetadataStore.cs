@@ -555,19 +555,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var partitionKey = new PartitionKey(scopeId, localReplica);
             var current = GetOrCreatePartition(partitionKey);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
-            var baseline = current.PeerStreams.TryGetValue(key, out var existing)
-                ? existing
+            bool hasExisting = current.PeerStreams.TryGetValue(key, out var existing);
+            if (current.RequiredPeerStreams.Contains(key) && hasExisting) return;
+            var baseline = hasExisting
+                ? existing!
                 : new PeerStreamStateValue(baselineAckedCursor, baselineAckedCursor,
                     streamOffset, issuerEpoch, lastBatchDigest.ToArray(), null);
-            if (existing is not null &&
+            if (hasExisting &&
                 (baseline.AckedCursor != baselineAckedCursor ||
                  baseline.StreamOffset != streamOffset ||
                  baseline.IssuerEpoch != issuerEpoch ||
-                 !baseline.LastBatchDigest.AsSpan().SequenceEqual(lastBatchDigest) ||
-                 baseline.PendingBatch is not null))
+                 !baseline.LastBatchDigest.AsSpan().SequenceEqual(lastBatchDigest)))
                 throw new InvalidDataException("Interested peer registration conflicts with existing stream progress.");
 
-            if (current.RequiredPeerStreams.Contains(key) && current.PeerStreams.ContainsKey(key)) return;
             var next = current.Clone();
             next.PeerStreams[key] = baseline;
             next.RequiredPeerStreams.Add(key);
