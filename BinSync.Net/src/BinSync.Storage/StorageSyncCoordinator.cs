@@ -339,8 +339,8 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(persistNode);
         StorageRemoteApplyPlan? plan = null;
         return session.ReceiveBatchAsync(_node,
-            beforeApply: (batch, payload, senderPeer, senderEpoch) =>
-                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer, senderEpoch),
+            beforeApply: (batch, payload, senderPeer) =>
+                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer),
             beforeAck: (batch, _) =>
             {
                 var accepted = plan ?? throw new InvalidOperationException("Receive intent was not durably staged.");
@@ -355,7 +355,7 @@ public sealed class StorageSyncCoordinator
     /// wire payload into Node and the provider before the sender is acknowledged.
     /// </summary>
     public StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApply(Batch batch, byte[] wirePayload,
-        NodeId senderPeer, uint senderEpoch)
+        NodeId senderPeer)
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(wirePayload);
@@ -368,7 +368,7 @@ public sealed class StorageSyncCoordinator
 
         lock (_gate)
         {
-            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload, senderPeer, senderEpoch);
+            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload, senderPeer);
             Guid token = CreateBatchApplyToken(batch);
             bool finalizeMetadata = true;
             try
@@ -476,7 +476,7 @@ public sealed class StorageSyncCoordinator
     }
 
     private MetadataIncomingBatch CreateMetadataBatch(Batch batch, byte[]? wirePayload = null,
-        NodeId? senderPeer = null, uint? senderEpoch = null)
+        NodeId? senderPeer = null)
     {
         var operations = new List<MetadataOperation>(batch.Entries.Count);
         foreach (var entry in batch.Entries)
@@ -506,7 +506,7 @@ public sealed class StorageSyncCoordinator
             ScopeId = _scopeId!,
             LocalReplica = _node.NodeId,
             SenderPeer = senderPeer ?? batch.IssuerNodeId,
-            SenderEpoch = senderEpoch ?? checked((uint)batch.IssuerEpoch),
+            SenderEpoch = checked((uint)batch.IssuerEpoch),
             AuthorStreamNodeId = batch.DurableAuthor,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
