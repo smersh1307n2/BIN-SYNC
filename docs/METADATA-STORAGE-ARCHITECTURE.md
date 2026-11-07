@@ -480,6 +480,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 14. A finite, protocol-safe SeenChanges/provenance dedup GC rule. Current NodePersistence stores the exact peer/namespace/ChangeId set, but the normative spec has no corresponding expiry or safe watermark; production storage cannot safely compact it by an invented TTL.
 15. Exact Inbox receipt retention representation: preserve or safely derive the specification's cursor range, applied time and expiry condition in addition to the current durable idempotency key/author/checkpoint state.
 16. Ensure the per-peer batch replay cache (PeerState.Ids) is pruned only after the matching per-author ACK covers its cursor range; the current runtime persists these entries but the inspected ACK path does not remove them.
+17. Define the lifecycle of ProtocolStateDelta: whether it is an opaque replay log or is materialized into queryable current protocol metadata, when its recovery payload can be checkpointed/removed, and whether duplicate-batch receipts still need to return the full delta after that point.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
