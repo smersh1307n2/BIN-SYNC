@@ -26,8 +26,6 @@ try
     using (var metadataA = new StorageMetadataStore(storageA))
     using (var metadataB = new StorageMetadataStore(storageB))
     {
-        nodeA = StorageNodePersistence.Load(storageA, nodeAId);
-        nodeB = StorageNodePersistence.Load(storageB, nodeBId);
         RecordId recordA = providerA.ResolveRecordId(itemA.ToByteArray());
         RecordId recordB = providerB.ResolveRecordId(itemB.ToByteArray());
         ushort nameA = providerA.ResolveFieldId("name"u8.ToArray());
@@ -92,6 +90,8 @@ try
     using (var metadataA = new StorageMetadataStore(storageA))
     using (var metadataB = new StorageMetadataStore(storageB))
     {
+        nodeA = StorageNodePersistence.Load(storageA, nodeAId);
+        nodeB = StorageNodePersistence.Load(storageB, nodeBId);
         RecordId recordA = providerA.ResolveRecordId(itemA.ToByteArray());
         RecordId recordB = providerB.ResolveRecordId(itemB.ToByteArray());
         ushort name = providerA.ResolveFieldId("name"u8.ToArray());
