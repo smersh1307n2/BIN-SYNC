@@ -343,6 +343,7 @@ public class ChangeIdWireTests
         var receipt = restored.InboxAuthors[(issuer, 9, 2, batchId)];
         Assert.Equal(author, receipt.DurableAuthor);
         Assert.False(receipt.HasFingerprint);
+        Assert.False(receipt.HasCursorEnd);
         Assert.Equal(0UL, receipt.AppliedAt);
         Assert.Equal(0UL, receipt.ExpiresAt);
     }
