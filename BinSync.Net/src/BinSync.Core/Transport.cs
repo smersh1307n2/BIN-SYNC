@@ -171,7 +171,7 @@ public static partial class Transport
     /// Full pairwise delta exchange A→B then B→A. Returns count of delivered batches.
     /// <summary>Exchange pending batches A→B then B→A until drained.</summary>
     public static int SyncRound(Node a, Node b, int namespaceId, int schemaVersion = 1,
-        Action<Node, BatchResult>? beforeAck = null)
+        Action<Node, Batch, BatchResult>? beforeAck = null)
     {
         int n = 0;
         foreach (var (src, dst) in new[] { (a, b), (b, a) })
