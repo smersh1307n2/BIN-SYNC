@@ -23,8 +23,9 @@ public class StorageDataProvider : IDataProvider
 
     private readonly object _gate = new();
     private readonly StorageDatabase _storage;
-    private readonly string _directory;
+    private readonly string? _directory;
     private readonly bool _deleteOnDispose;
+    private readonly bool _ownsStorage;
     private readonly Dictionary<Guid, StorageSnapshot> _snapshots = new();
     private bool _disposed;
 
@@ -33,7 +34,16 @@ public class StorageDataProvider : IDataProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         _directory = directory;
         _deleteOnDispose = deleteOnDispose;
+        _ownsStorage = true;
         _storage = StorageDatabase.Open(directory, partitionId);
+    }
+
+    /// <summary>Attach to a caller-owned shared Storage database.</summary>
+    public StorageDataProvider(StorageDatabase storage)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _ownsStorage = false;
+        _deleteOnDispose = false;
     }
 
     public bool SupportsRestartDurability => true;
