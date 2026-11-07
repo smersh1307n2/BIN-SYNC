@@ -55,7 +55,10 @@ public sealed class MetadataPendingApplyAlreadyFinalizedException : InvalidOpera
 }
 
 public sealed record MetadataProviderApplyReceipt(Guid ApplyToken, byte[] BatchDigest);
-public sealed record MetadataPendingApplyIntent(Guid ApplyToken, MetadataIncomingBatch Batch);
+public sealed record MetadataPendingApplyIntent(Guid ApplyToken, MetadataIncomingBatch Batch)
+{
+    public bool IsDuplicate { get; init; }
+}
 
 public sealed class MetadataOperation
 {
