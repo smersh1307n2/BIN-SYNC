@@ -70,7 +70,7 @@ One successful strong-profile acceptance must atomically or recoverably establis
 7. coordinate the Data Provider effect using the selected atomicity mode;
 8. make the committed result recoverable before the Runtime emits ACK.
 
-Same batch identity with the same canonical content returns the original duplicate result and does not reapply or relay. Conflicting cursor/digest/author metadata for the same receipt key is rejected. Same ChangeId and same fingerprint arriving by another route is not reapplied or relayed, but the new sender's own receipt/cursor is still committed. Same ChangeId with a different fingerprint rejects the whole batch before any visible mutation.
+Same batch identity with the same canonical content returns the original duplicate result and does not reapply or relay. The receipt key is exactly `(sender, senderEpoch, namespaceId, BatchId)`; resolved author-stream identity belongs to receive progress and cannot create a second receipt for the same protocol batch. Conflicting cursor/digest/author metadata for the same receipt key is rejected. Same ChangeId and same fingerprint arriving by another route is not reapplied or relayed, but the new sender's own receipt/cursor is still committed. Same ChangeId with a different fingerprint rejects the whole batch before any visible mutation.
 
 **Atomicity modes:**
 
