@@ -570,7 +570,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (current.PeerStreams.TryGetValue(key, out var existing) && existing.PendingBatch is not null)
                 return CloneReservation(existing.PendingBatch);
 
-            var prior = current.PeerStreams.TryGetValue(key, out existing) ? existing : EmptyPeerStreamValue();
+            bool hasPrior = current.PeerStreams.TryGetValue(key, out existing);
+            var prior = hasPrior ? existing! : EmptyPeerStreamValue();
+            if (!hasPrior && reservation.CursorStart > 1)
+            {
+                // One-time bootstrap from the already durable Node checkpoint. Once this
+                // row exists, Metadata Store progress is authoritative for this stream.
+                prior = prior with
+                {
+                    AckedCursor = reservation.CursorStart - 1,
+                    PushedCursor = reservation.CursorStart - 1,
+                    IssuerEpoch = reservation.IssuerEpoch,
+                    LastBatchDigest = reservation.PreviousBatchDigest.ToArray()
+                };
+            }
             if (reservation.CursorStart != checked(prior.AckedCursor + 1))
                 throw new InvalidDataException("Outbound batch reservation is not contiguous with the durable peer ACK cursor.");
             byte[] expectedPreviousDigest = prior.IssuerEpoch == reservation.IssuerEpoch
