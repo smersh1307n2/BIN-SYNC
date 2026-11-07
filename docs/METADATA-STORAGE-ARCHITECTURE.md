@@ -544,19 +544,19 @@ The current runtime has been checked against branch feature/fld-external-storage
 
 ### 8.1. Do not create per-peer operation copies
 
-BIN-SYNC already keeps one shared Outbox entry per logical operation. PeerState is keyed by peer/namespace and stores author-stream progress (StreamPushed, StreamAcked and StreamOffsets). Batch construction reads the same operation for each target peer; the wire batch is one author stream at a time. This is the desired separation: one immutable payload, independent per-peer cursors. Do not add a change×peer delivery table or per-operation ACK bitmap.
+BIN-SYNC already keeps one shared Outbox entry per logical operation. PeerState is keyed by peer/namespace and stores one combined author-progress entry (ACK, pushed and offset watermarks) per author, plus per-session received cursors. Batch construction reads the same operation for each target peer; the wire batch is one author stream at a time. This is the desired separation: one immutable payload, independent per-peer cursors. Do not add a change×peer delivery table or per-operation ACK bitmap.
 
 CompactOutbox currently checks every interested peer for every entry. A later CPU optimization may precompute the minimum safe local ACK per author and then scan entries once. A peer with no PeerState must still block reclamation; no peers must preserve the existing keep-the-log behavior.
 
-### 8.2. Replay cache and peer-state encoding
+### 8.2. Replay cache and compact peer-state encoding
 
-PeerState.Ids stores the deterministic outgoing batch replay mapping keyed by author and cursor range, with BatchId and previous digest as its value. It is serialized, but the current ProcessAckInternal path advances StreamAcked and compacts the Outbox without pruning acknowledged Ids. Prune only ranges fully covered by the validated contiguous ACK, atomically with durable ACK state; keep the current digest-chain checkpoint.
+PeerState.Ids stores the deterministic batch replay mapping only while a peer may retry an unacknowledged cursor range. A validated contiguous ACK now prunes fully covered mappings while preserving LastStreamDigest as the independent digest-chain checkpoint.
 
-NodePersistence serializes StreamAcked, StreamPushed and StreamOffsets independently, repeating the author ID in each map. A versioned per-author progress tuple with presence flags can store the author once while preserving sparse values. This is a format optimization, not a semantic change.
+The v9 in-memory peer state consolidates StreamAcked, StreamPushed and StreamOffsets into one per-author value entry with presence flags. This removes repeated author keys and separate dictionary entry sets for authors that have multiple watermarks. ReceivedStreams no longer repeats NamespaceId in each key because the containing PeerState is already scoped by (peer, namespace); its key is now (senderPeer, issuerEpoch, author). NodePersistence v9 writes these compact structures once per author/stream.
 
-The duplicate key storage in Inbox and InboxAuthors has been consolidated: runtime stores one dictionary entry keyed by (issuer, namespace, epoch, BatchId). The value is now an InboxReceipt with durable author, original cursorEnd, header fingerprint, appliedAt and expiresAt. The old Inbox property is a read-only key view and owns no second set. NodePersistence v8 serializes the unified receipt; v3-v6 loaders validate old key-set/map parity, and v7 loaders migrate author-only receipts as explicit legacy-unknown entries. ReceivedStreams remains a separate per-peer/per-author cursor fact.
+NodePersistence v3-v8 remains readable. The v3-v8 reader validates the legacy ReceivedStreams namespace against its containing PeerState and migrates the three independent watermark dictionaries into the combined v9 author-progress map. The v9 reader validates flags, nonnegative values, ACK≤pushed and overflow-safe offset arithmetic. No wire format changes: this is a local persistence/in-memory representation change.
 
-The header fingerprint commits to cursorStart/end, previous/records/batch digests, schema/mode fields and flags, but intentionally excludes entry payload and causal trailer. Duplicate replay compares the stored header commitment and returns the stored cursorEnd/author without decoding replay entries; same BatchId + same committed header is a no-op even if replay-supplied ChangeIds/CausalDeps differ. Changed committed header is rejected. Legacy v3-v7 receipts lack cursor/fingerprint and preserve old duplicate behavior. Receipt expiry/GC and a WAL-generation field remain open; new receipts use expiresAt=0 (no scheduled expiry).
+The byte reduction depends on how many of the three watermarks exist per author and on dictionary implementation overhead. The structural reduction is deterministic (one author key and one dictionary value instead of up to three repeated author keys/entries); measured disk/RAM results should be published separately rather than claiming a fixed percentage.
 
 ### 8.3. Global ChangeId ledger — implemented
 
