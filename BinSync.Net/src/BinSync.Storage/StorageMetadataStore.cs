@@ -724,6 +724,10 @@ public class StorageMetadataStore : IMetadataStore
         }
 
         state = DecodePartition(key, root, rows, snapshot.CommitSeq);
+        state.PersistedEntries = rows.ToDictionary(
+            row => Convert.ToHexString(row.Key),
+            row => (row.Key, row.Value),
+            StringComparer.Ordinal);
         _partitions[key] = state;
         return true;
     }
@@ -731,8 +735,8 @@ public class StorageMetadataStore : IMetadataStore
     private void PersistPartition(PartitionKey key, PartitionState current, PartitionState next)
     {
         var oldEntries = current.IsPersisted
-            ? StateEntries(key, current)
-            : new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+            ? current.PersistedEntries
+            : EmptyEntries;
         var newEntries = StateEntries(key, next);
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
@@ -763,8 +767,11 @@ public class StorageMetadataStore : IMetadataStore
         if (changed) batch.Commit();
         next.StorageCommitSeq = _storage.LastCommitSeq;
         next.IsPersisted = true;
+        next.PersistedEntries = newEntries;
         _partitions[key] = next;
     }
+
+    private static readonly Dictionary<string, (byte[] Key, byte[] Value)> EmptyEntries = new(StringComparer.Ordinal);
 
     private static byte[] PartitionRoot(PartitionKey key)
     {
@@ -1349,13 +1356,19 @@ public class StorageMetadataStore : IMetadataStore
 
         public ulong StorageCommitSeq { get; set; }
         public bool IsPersisted { get; set; }
+        public Dictionary<string, (byte[] Key, byte[] Value)> PersistedEntries { get; set; } = new(StringComparer.Ordinal);
 
         public PartitionState Clone()
         {
             // Stored values are immutable after insertion. Copy collection structure only;
             // copy payload arrays only when they cross the public API boundary. Relay and
             // outbound lists are the only nested mutable collections and need shallow copies.
-            var clone = new PartitionState { StorageCommitSeq = StorageCommitSeq, IsPersisted = IsPersisted };
+            var clone = new PartitionState
+            {
+                StorageCommitSeq = StorageCommitSeq,
+                IsPersisted = IsPersisted,
+                PersistedEntries = PersistedEntries
+            };
             foreach (var pair in Receipts) clone.Receipts.Add(pair.Key, pair.Value);
             foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
             foreach (var pair in ChangeLedger) clone.ChangeLedger.Add(pair.Key, pair.Value);
