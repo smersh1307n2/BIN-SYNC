@@ -50,6 +50,23 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Equal(2UL, finalized.CursorEnd);
             Assert.Empty(reopened.ReadPendingApplyIntents("durable-scope", Node(1)));
             Assert.Equal(2UL, reopened.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
+            reopened.AcknowledgeRelay("durable-scope", Node(1), 7, Node(20), 1);
+            reopened.CompactRelayThrough("durable-scope", Node(1), 7, Node(20), 1);
+            reopened.AcknowledgeOutbound("durable-scope", Node(1), 7, Node(1), 1, 1);
+            reopened.CompactOutboundThrough("durable-scope", Node(1), 7, Node(1), 1);
+            Assert.Empty(reopened.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
+            Assert.Empty(reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 1, 0, 10).Items);
+        }
+
+        using (var afterCompaction = new StorageMetadataStoreAdapter(directory, 302, deleteOnDispose: false))
+        {
+            Assert.Equal(2UL, afterCompaction.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
+            Assert.Equal(1UL, afterCompaction.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
+            Assert.Equal(1UL, afterCompaction.GetOutboundHighWatermark("durable-scope", Node(1), 7, Node(1)));
+            Assert.Empty(afterCompaction.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
+            Assert.Throws<InvalidDataException>(() => afterCompaction.FreezeOutbound(
+                "durable-scope", Node(1), 7, Node(1), new[] { FrozenOperation(60, 70) }));
+            Assert.True(afterCompaction.AcceptIncomingBatch(first).IsDuplicate);
         }
         finally
         {
