@@ -25,6 +25,16 @@ public partial class SyncSession
         try
         {
             uint peerEpoch = checked((uint)PeerEpoch);
+            var priorPeerEpochs = peerStateStore.ReadInterestedPeers(scopeId, sender.NodeId, namespaceId)
+                .Where(peer => peer.Peer == PeerNodeId && peer.PeerEpoch < peerEpoch)
+                .Select(peer => peer.PeerEpoch).Distinct().ToArray();
+            bool hasPriorIncarnation = priorPeerEpochs.Length != 0 ||
+                peerStateStore.GetRetiredPeerEpoch(scopeId, sender.NodeId, PeerNodeId, namespaceId) is not null;
+            peerStateStore.RegisterInterestedPeer(scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId);
+            foreach (uint oldEpoch in priorPeerEpochs)
+                peerStateStore.RetireInterestedPeer(scopeId, sender.NodeId, PeerNodeId,
+                    oldEpoch, peerEpoch, namespaceId);
+
             var streams = peerStateStore.ReadPeerStreamStates(
                 scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId);
 
@@ -66,7 +76,7 @@ public partial class SyncSession
                     bool pristine = saved.AckedCursor == 0 && saved.PushedCursor == 0 &&
                         saved.StreamOffset == 0 && saved.IssuerEpoch == 0 &&
                         saved.PendingBatch is null && saved.LastBatchDigest.All(value => value == 0);
-                    if (pristine)
+                    if (pristine && !hasPriorIncarnation)
                     {
                         var legacy = sender.ReadPeerStreamProgress(PeerNodeId, namespaceId, candidateAuthor);
                         if (legacy.PushedCursor > legacy.AckedCursor)
@@ -123,7 +133,6 @@ public partial class SyncSession
                     break;
                 }
 
-                peerStateStore.RegisterInterestedPeer(scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId);
                 if (!found) return false;
             }
 
