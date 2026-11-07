@@ -315,10 +315,10 @@ public class StorageDataProvider : IDataProvider
             _disposed = true;
             foreach (var snapshot in _snapshots.Values) snapshot.Dispose();
             _snapshots.Clear();
-            _storage.Dispose();
-            if (_deleteOnDispose)
+            if (_ownsStorage) _storage.Dispose();
+            if (_deleteOnDispose && _directory is { } directory)
             {
-                try { Directory.Delete(_directory, recursive: true); }
+                try { Directory.Delete(directory, recursive: true); }
                 catch { /* best-effort cleanup for isolated test directories */ }
             }
         }
