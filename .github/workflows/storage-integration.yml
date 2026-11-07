@@ -9,6 +9,7 @@ on:
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
+      - "BinSync.Net/src/BinSync.Storage/**"
       - "samples/StorageArraySync/**"
   pull_request:
     paths:
