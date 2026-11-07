@@ -485,9 +485,10 @@ public class StorageDataProvider : IDataProvider
     {
         if (bytes.Length < 53) throw new InvalidDataException("Stored provider mutation is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
-        if (valueLength > int.MaxValue || bytes.Length != 53 + (int)valueLength || bytes[18] > 3)
+        if (valueLength > int.MaxValue || bytes.Length != 53 + (int)valueLength ||
+            bytes[18] > 3 || bytes[18] == 3)
             throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
-        return new ProviderMutation
+        var mutation = new ProviderMutation
         {
             RecordId = RecordId.From(bytes.Slice(0, 16)),
             FieldId = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(16)),
@@ -499,6 +500,12 @@ public class StorageDataProvider : IDataProvider
             KeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(47)),
             Value = bytes.Slice(53).ToArray()
         };
+        try { ValidateMutation(mutation); }
+        catch (ArgumentException exception)
+        {
+            throw new InvalidDataException("Stored provider mutation violates its canonical contract.", exception);
+        }
+        return mutation;
     }
 
     private static ProviderMutation CloneMutation(ProviderMutation mutation)
