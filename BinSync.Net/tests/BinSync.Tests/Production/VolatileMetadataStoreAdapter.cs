@@ -23,10 +23,121 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var current = _partitions.TryGetValue(partitionKey, out var stored)
             ? stored
             : new PartitionState();
+        var next = current.Clone();
+        var receipt = ApplyIncomingBatch(next, batch);
+        _partitions[partitionKey] = next;
+        return receipt;
+    }
 
+    public MetadataPendingApplyIntent BeginPendingApply(MetadataIncomingBatch batch, Guid applyToken)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ValidateBatch(batch);
+        if (applyToken == Guid.Empty)
+            throw new ArgumentException("ApplyToken must be non-empty.", nameof(applyToken));
+
+        var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
+        var current = _partitions.TryGetValue(partitionKey, out var stored)
+            ? stored
+            : new PartitionState();
+
+        if (current.CompletedPendingApplies.TryGetValue(applyToken, out var completed))
+        {
+            if (!completed.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest))
+                throw new InvalidDataException("Completed apply token was reused for different input.");
+            throw new InvalidOperationException("Pending apply token has already been finalized.");
+        }
+
+        if (current.PendingApplies.TryGetValue(applyToken, out var pending))
+        {
+            if (!SamePendingBatch(pending.Batch, batch))
+                throw new InvalidDataException("Pending apply token was reused for different input.");
+            return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch));
+        }
+
+        var next = current.Clone();
+        next.PendingApplies.Add(applyToken, new PendingApplyValue(CloneBatch(batch)));
+        _partitions[partitionKey] = next;
+        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch));
+    }
+
+    public IReadOnlyList<MetadataPendingApplyIntent> ReadPendingApplyIntents(
+        string scopeId,
+        NodeId localReplica)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("ScopeId is required.", nameof(scopeId));
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+            return Array.Empty<MetadataPendingApplyIntent>();
+
+        return state.PendingApplies
+            .Select(pair => new MetadataPendingApplyIntent(pair.Key, CloneBatch(pair.Value.Batch)))
+            .ToArray();
+    }
+
+    public MetadataBatchReceipt FinalizePendingApply(
+        string scopeId,
+        NodeId localReplica,
+        MetadataProviderApplyReceipt providerReceipt)
+    {
+        ArgumentNullException.ThrowIfNull(providerReceipt);
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("ScopeId is required.", nameof(scopeId));
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (providerReceipt.ApplyToken == Guid.Empty)
+            throw new ArgumentException("ApplyToken must be non-empty.", nameof(providerReceipt));
+        ValidateDigest(providerReceipt.BatchDigest, nameof(providerReceipt.BatchDigest));
+
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        if (!_partitions.TryGetValue(partitionKey, out var current))
+            throw new InvalidOperationException("Pending apply intent does not exist.");
+
+        if (current.CompletedPendingApplies.TryGetValue(providerReceipt.ApplyToken, out var completed))
+        {
+            if (!completed.BatchDigest.AsSpan().SequenceEqual(providerReceipt.BatchDigest))
+                throw new InvalidDataException("Provider receipt conflicts with the completed apply token.");
+            return CloneReceipt(completed.Receipt, isDuplicate: true);
+        }
+
+        if (!current.PendingApplies.TryGetValue(providerReceipt.ApplyToken, out var pending))
+            throw new InvalidOperationException("Pending apply intent does not exist.");
+        if (!pending.Batch.BatchDigest.AsSpan().SequenceEqual(providerReceipt.BatchDigest))
+            throw new InvalidDataException("Provider receipt does not match the pending apply input.");
+
+        // Apply incoming metadata and remove the raw intent in one state publication.
+        // A durable adapter must implement this as one metadata transaction.
+        var next = current.Clone();
+        var batch = next.PendingApplies[providerReceipt.ApplyToken].Batch;
+        var receipt = ApplyIncomingBatch(next, batch);
+        next.PendingApplies.Remove(providerReceipt.ApplyToken);
+        next.CompletedPendingApplies.Add(providerReceipt.ApplyToken,
+            new CompletedPendingApplyValue(providerReceipt.BatchDigest.ToArray(), CloneReceipt(receipt, receipt.IsDuplicate)));
+        _partitions[partitionKey] = next;
+        return receipt;
+    }
+
+    public IMetadataStoreSnapshot OpenSnapshot(string scopeId, NodeId localReplica)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("ScopeId is required.", nameof(scopeId));
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        var state = _partitions.TryGetValue(partitionKey, out var stored)
+            ? stored.Clone()
+            : new PartitionState();
+        return new VolatileSnapshot(state);
+    }
+
+    private static MetadataBatchReceipt ApplyIncomingBatch(PartitionState next, MetadataIncomingBatch batch)
+    {
         var receiptKey = new ReceiptKey(
             batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId);
-        if (current.Receipts.TryGetValue(receiptKey, out var priorReceipt))
+        if (next.Receipts.TryGetValue(receiptKey, out var priorReceipt))
         {
             if (!priorReceipt.Matches(batch))
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
@@ -40,7 +151,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         }
 
         var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
-        var receive = current.Receives.TryGetValue(receiveKey, out var priorReceive)
+        var receive = next.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0, new byte[16]);
 
@@ -49,9 +160,6 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             !receive.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
             throw new InvalidDataException("Incoming batch does not continue the durable receive cursor and digest chain.");
 
-        // Stage against a private copy. Any validation failure below leaves the
-        // published partition, receive cursor, ledger and relay journal unchanged.
-        var next = current.Clone();
         int relayAdded = 0;
         foreach (var operation in batch.Operations)
         {
@@ -60,7 +168,6 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             {
                 if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
-
                 continue;
             }
 
@@ -75,13 +182,12 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 next.Relay.Add(relayKey, entries);
             }
 
-            ulong previousHighWatermark = next.RelayHighWatermarks.TryGetValue(relayKey, out var relayHighWatermark) ? relayHighWatermark : 0;
+            ulong previousHighWatermark = next.RelayHighWatermarks.TryGetValue(relayKey, out var relayHighWatermark)
+                ? relayHighWatermark
+                : 0;
             ulong sequence = checked(previousHighWatermark + 1);
             entries.Add(new MetadataRelayItem(
-                sequence,
-                operation.AuthorNodeId,
-                operation.ChangeId,
-                operation.Payload.ToArray()));
+                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray()));
             next.RelayHighWatermarks[relayKey] = sequence;
             relayAdded++;
         }
@@ -94,7 +200,6 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             batch.BatchDigest.ToArray(),
             relayAdded));
 
-        _partitions[partitionKey] = next;
         return new MetadataBatchReceipt(
             batch.CursorStart,
             batch.CursorEnd,
@@ -102,6 +207,44 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             relayAdded,
             IsDuplicate: false);
     }
+
+    private static bool SamePendingBatch(MetadataIncomingBatch left, MetadataIncomingBatch right)
+        => left.ScopeId == right.ScopeId
+            && left.LocalReplica == right.LocalReplica
+            && left.SenderPeer == right.SenderPeer
+            && left.SenderEpoch == right.SenderEpoch
+            && left.NamespaceId == right.NamespaceId
+            && left.BatchId == right.BatchId
+            && left.CursorStart == right.CursorStart
+            && left.CursorEnd == right.CursorEnd
+            && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest);
+
+    private static MetadataIncomingBatch CloneBatch(MetadataIncomingBatch batch)
+        => new()
+        {
+            ScopeId = batch.ScopeId,
+            LocalReplica = batch.LocalReplica,
+            SenderPeer = batch.SenderPeer,
+            SenderEpoch = batch.SenderEpoch,
+            NamespaceId = batch.NamespaceId,
+            BatchId = batch.BatchId,
+            CursorStart = batch.CursorStart,
+            CursorEnd = batch.CursorEnd,
+            PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
+            BatchDigest = batch.BatchDigest.ToArray(),
+            Operations = batch.Operations.Select(operation => new MetadataOperation
+            {
+                AuthorNodeId = operation.AuthorNodeId,
+                ChangeId = operation.ChangeId,
+                Fingerprint = operation.Fingerprint.ToArray(),
+                Payload = operation.Payload.ToArray(),
+                RelayEligible = operation.RelayEligible
+            }).ToArray()
+        };
+
+    private static MetadataBatchReceipt CloneReceipt(MetadataBatchReceipt receipt, bool isDuplicate)
+        => new(receipt.CursorStart, receipt.CursorEnd, receipt.BatchDigest.ToArray(),
+            receipt.NewRelayOperationCount, isDuplicate);
 
     public IReadOnlyList<MetadataOutboundItem> FreezeOutbound(
         string scopeId,
@@ -460,16 +603,76 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
     }
 
-    private static MetadataRelayItem CloneRelayItem(MetadataRelayItem item)
-        => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray());
-
-    private static MetadataOutboundItem CloneOutboundItem(MetadataOutboundItem item)
-        => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray());
-
     private static void ValidateOutboundLease(PartitionState state, OutboundKey key, ulong generation)
     {
         if (!state.OutboundLeases.TryGetValue(key, out var lease) || lease.Generation != generation)
             throw new InvalidOperationException("Outbound lease was superseded by a newer consumer.");
+    }
+
+    private sealed class VolatileSnapshot : IMetadataStoreSnapshot
+    {
+        private PartitionState? _state;
+
+        public VolatileSnapshot(PartitionState state) => _state = state;
+
+        public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId)
+        {
+            var state = GetState();
+            return state.Receives.TryGetValue(new ReceiveKey(sender, senderEpoch, namespaceId), out var receive)
+                ? receive.CursorEnd
+                : 0;
+        }
+
+        public ulong GetRelayHighWatermark(int namespaceId, NodeId originalAuthor)
+        {
+            var state = GetState();
+            return state.RelayHighWatermarks.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var high)
+                ? high
+                : 0;
+        }
+
+        public ulong GetOutboundHighWatermark(int namespaceId, NodeId localAuthor)
+        {
+            var state = GetState();
+            return state.OutboundHighWatermarks.TryGetValue(new OutboundKey(namespaceId, localAuthor), out var high)
+                ? high
+                : 0;
+        }
+
+        public MetadataRelayPage ReadRelay(int namespaceId, NodeId originalAuthor, ulong afterSequence, int limit)
+        {
+            var state = GetState();
+            var key = new RelayKey(namespaceId, originalAuthor);
+            ulong acknowledged = state.RelayAck.TryGetValue(key, out var ack) ? ack : 0;
+            ulong high = state.RelayHighWatermarks.TryGetValue(key, out var watermark) ? watermark : 0;
+            if (afterSequence > high)
+                throw new ArgumentOutOfRangeException(nameof(afterSequence));
+            ulong cursor = Math.Max(afterSequence, acknowledged);
+            if (limit <= 0 || !state.Relay.TryGetValue(key, out var entries))
+                return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), cursor);
+            var page = entries.Where(item => item.Sequence > cursor).Take(limit).Select(CloneRelayItem).ToArray();
+            return new MetadataRelayPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
+        }
+
+        public MetadataOutboundPage ReadOutbound(int namespaceId, NodeId localAuthor, ulong afterSequence, int limit)
+        {
+            var state = GetState();
+            var key = new OutboundKey(namespaceId, localAuthor);
+            ulong acknowledged = state.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
+            ulong high = state.OutboundHighWatermarks.TryGetValue(key, out var watermark) ? watermark : 0;
+            if (afterSequence > high)
+                throw new ArgumentOutOfRangeException(nameof(afterSequence));
+            ulong cursor = Math.Max(afterSequence, acknowledged);
+            if (limit <= 0 || !state.Outbound.TryGetValue(key, out var entries))
+                return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), cursor);
+            var page = entries.Where(item => item.Sequence > cursor).Take(limit).Select(CloneOutboundItem).ToArray();
+            return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
+        }
+
+        public void Dispose() => _state = null;
+
+        private PartitionState GetState()
+            => _state ?? throw new ObjectDisposedException(nameof(VolatileSnapshot));
     }
 
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
@@ -502,6 +705,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 && BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest);
     }
 
+    private sealed record PendingApplyValue(MetadataIncomingBatch Batch);
+    private sealed record CompletedPendingApplyValue(byte[] BatchDigest, MetadataBatchReceipt Receipt);
+
     private sealed class PartitionState
     {
         public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
@@ -515,6 +721,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
         public HashSet<OutboundChangeKey> OutboundChangeIds { get; } = new();
+        public Dictionary<Guid, PendingApplyValue> PendingApplies { get; } = new();
+        public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
 
         public PartitionState Clone()
         {
@@ -546,6 +754,11 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 clone.OutboundLeases.Add(pair.Key, pair.Value);
             foreach (var key in OutboundChangeIds)
                 clone.OutboundChangeIds.Add(key);
+            foreach (var pair in PendingApplies)
+                clone.PendingApplies.Add(pair.Key, new PendingApplyValue(CloneBatch(pair.Value.Batch)));
+            foreach (var pair in CompletedPendingApplies)
+                clone.CompletedPendingApplies.Add(pair.Key, new CompletedPendingApplyValue(
+                    pair.Value.BatchDigest.ToArray(), CloneReceipt(pair.Value.Receipt, pair.Value.Receipt.IsDuplicate)));
             return clone;
         }
     }

@@ -14,6 +14,19 @@ public interface IMetadataStoreConformanceAdapter : IDisposable
 
     MetadataBatchReceipt AcceptIncomingBatch(MetadataIncomingBatch batch);
 
+    MetadataPendingApplyIntent BeginPendingApply(MetadataIncomingBatch batch, Guid applyToken);
+
+    IReadOnlyList<MetadataPendingApplyIntent> ReadPendingApplyIntents(
+        string scopeId,
+        NodeId localReplica);
+
+    MetadataBatchReceipt FinalizePendingApply(
+        string scopeId,
+        NodeId localReplica,
+        MetadataProviderApplyReceipt providerReceipt);
+
+    IMetadataStoreSnapshot OpenSnapshot(string scopeId, NodeId localReplica);
+
     IReadOnlyList<MetadataOutboundItem> FreezeOutbound(
         string scopeId,
         NodeId localReplica,
@@ -92,6 +105,28 @@ public interface IMetadataStoreConformanceAdapter : IDisposable
         NodeId localReplica,
         int namespaceId,
         NodeId originalAuthor);
+}
+
+/// <summary>A stable provider-side idempotency receipt proving that the data effect committed.</summary>
+public sealed record MetadataProviderApplyReceipt(Guid ApplyToken, byte[] BatchDigest);
+
+/// <summary>
+/// Durable intent returned during recovery. Batch contains the canonical input
+/// or equivalent durable payload reference needed to retry the provider effect.
+/// </summary>
+public sealed record MetadataPendingApplyIntent(Guid ApplyToken, MetadataIncomingBatch Batch);
+
+/// <summary>
+/// Consistent metadata read view. Implementations keep it valid until Dispose;
+/// a durable adapter must pin/release the underlying storage generation.
+/// </summary>
+public interface IMetadataStoreSnapshot : IDisposable
+{
+    ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId);
+    ulong GetRelayHighWatermark(int namespaceId, NodeId originalAuthor);
+    ulong GetOutboundHighWatermark(int namespaceId, NodeId localAuthor);
+    MetadataRelayPage ReadRelay(int namespaceId, NodeId originalAuthor, ulong afterSequence, int limit);
+    MetadataOutboundPage ReadOutbound(int namespaceId, NodeId localAuthor, ulong afterSequence, int limit);
 }
 
 public sealed class MetadataOperation

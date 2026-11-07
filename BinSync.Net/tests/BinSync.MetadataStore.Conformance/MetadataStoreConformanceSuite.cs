@@ -293,6 +293,107 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(3UL, Assert.Single(next).Sequence);
     }
 
+
+    [Fact]
+    public void Snapshot_remains_consistent_while_new_commits_and_compaction_advance_live_state()
+    {
+        using var store = CreateStore();
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50)));
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(31, 51) });
+
+        using var snapshot = store.OpenSnapshot("scope-a", Node(1));
+
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 11, 2, 2, 10, 11,
+            Operation(20, 32, 42, 52)));
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(33, 53) });
+
+        ulong lease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), lease, 1);
+        store.CompactOutboundThrough("scope-a", Node(1), 7, Node(20), 1);
+        store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 1);
+        store.CompactRelayThrough("scope-a", Node(1), 7, Node(20), 1);
+
+        Assert.Equal(1UL, snapshot.GetReceiveCursor(Node(2), 1, 7));
+        Assert.Equal(1UL, snapshot.GetRelayHighWatermark(7, Node(20)));
+        Assert.Equal(1UL, snapshot.GetOutboundHighWatermark(7, Node(20)));
+        Assert.Single(snapshot.ReadRelay(7, Node(20), 0, 10).Items);
+        Assert.Single(snapshot.ReadOutbound(7, Node(20), 0, 10).Items);
+
+        Assert.Equal(2UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
+        Assert.Equal(2UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
+        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+        Assert.Single(store.ReadRelay("scope-a", Node(1), 7, Node(20), 1, 10).Items);
+        Assert.Single(store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 1, 10).Items);
+    }
+
+    [Fact]
+    public void Disposed_snapshot_releases_its_read_view_and_rejects_further_access()
+    {
+        using var store = CreateStore();
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50)));
+        var snapshot = store.OpenSnapshot("scope-a", Node(1));
+
+        Assert.Single(snapshot.ReadRelay(7, Node(20), 0, 10).Items);
+        snapshot.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => snapshot.GetReceiveCursor(Node(2), 1, 7));
+    }
+
+    [Fact]
+    public void Pending_apply_recovers_provider_commit_and_finalizes_metadata_exactly_once()
+    {
+        using var store = CreateStore();
+        var provider = new IdempotentTestProvider();
+        var batch = CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50));
+        var token = Guid.Parse("00000000-0000-0000-0000-000000000123");
+
+        store.BeginPendingApply(batch, token);
+        var firstIntent = Assert.Single(store.ReadPendingApplyIntents("scope-a", Node(1)));
+        Assert.Equal(token, firstIntent.ApplyToken);
+
+        // Simulate a crash after the provider committed but before metadata finalization.
+        provider.ApplyOnce(token, firstIntent.Batch);
+        var recoveredIntent = Assert.Single(store.ReadPendingApplyIntents("scope-a", Node(1)));
+        var providerReceipt = provider.ApplyOnce(token, recoveredIntent.Batch);
+
+        Assert.Equal(1, provider.ApplyCount);
+        var finalized = store.FinalizePendingApply("scope-a", Node(1), providerReceipt);
+        Assert.False(finalized.IsDuplicate);
+        Assert.Empty(store.ReadPendingApplyIntents("scope-a", Node(1)));
+
+        var retry = store.FinalizePendingApply("scope-a", Node(1), providerReceipt);
+        Assert.True(retry.IsDuplicate);
+        Assert.Equal(finalized.CursorEnd, retry.CursorEnd);
+        Assert.Equal(finalized.BatchDigest, retry.BatchDigest);
+        Assert.Equal(1UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
+        Assert.Single(store.ReadRelay("scope-a", Node(1), 7, Node(20), 0, 10).Items);
+    }
+
+    [Fact]
+    public void Pending_apply_rejects_token_or_provider_receipt_equivocation_without_losing_intent()
+    {
+        using var store = CreateStore();
+        var batch = CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50));
+        var token = Guid.Parse("00000000-0000-0000-0000-000000000124");
+        store.BeginPendingApply(batch, token);
+
+        var conflictingBatch = CreateBatch("scope-a", 1, 2, 1, 7, 11, 1, 1, 0, 11,
+            Operation(20, 31, 41, 51));
+        Assert.Throws<InvalidDataException>(() => store.BeginPendingApply(conflictingBatch, token));
+
+        var wrongProviderReceipt = new MetadataProviderApplyReceipt(token, Bytes(99));
+        Assert.Throws<InvalidDataException>(() =>
+            store.FinalizePendingApply("scope-a", Node(1), wrongProviderReceipt));
+        var retained = Assert.Single(store.ReadPendingApplyIntents("scope-a", Node(1)));
+        Assert.Equal(batch.BatchId, retained.Batch.BatchId);
+        Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
+    }
+
     protected static MetadataIncomingBatch CreateBatch(
         string scope,
         byte replica,
@@ -335,6 +436,27 @@ public abstract class MetadataStoreConformanceSuite
 
     protected static NodeId Node(byte seed) => NodeId.From(Bytes(seed));
     protected static BatchId Batch(byte seed) => BatchId.From(Bytes(seed));
+
+    private sealed class IdempotentTestProvider
+    {
+        private readonly Dictionary<Guid, byte[]> _receipts = new();
+
+        public int ApplyCount { get; private set; }
+
+        public MetadataProviderApplyReceipt ApplyOnce(Guid token, MetadataIncomingBatch batch)
+        {
+            if (_receipts.TryGetValue(token, out var priorDigest))
+            {
+                if (!priorDigest.AsSpan().SequenceEqual(batch.BatchDigest))
+                    throw new InvalidDataException("Provider apply token was reused for different input.");
+                return new MetadataProviderApplyReceipt(token, priorDigest.ToArray());
+            }
+
+            _receipts.Add(token, batch.BatchDigest.ToArray());
+            ApplyCount++;
+            return new MetadataProviderApplyReceipt(token, batch.BatchDigest.ToArray());
+        }
+    }
 
     private static byte[] Bytes(byte seed)
     {
