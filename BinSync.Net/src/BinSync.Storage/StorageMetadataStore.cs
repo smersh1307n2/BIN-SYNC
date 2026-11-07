@@ -733,12 +733,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidOperationException("Only the newest registered peer epoch can retire an older incarnation.");
 
             var retiredKey = (NamespaceId: namespaceId, Peer: peer);
-            if (current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint retiredThrough) &&
-                retiredThrough >= retiredPeerEpoch)
+            bool alreadyRetired = current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint retiredThrough) &&
+                retiredThrough >= retiredPeerEpoch;
+            var oldRosterKey = new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch);
+            bool hasOldRows = current.InterestedPeers.Contains(oldRosterKey) ||
+                current.PeerStreams.Keys.Any(key => key.NamespaceId == namespaceId &&
+                    key.Peer == peer && key.PeerEpoch == retiredPeerEpoch) ||
+                current.RequiredPeerStreams.Any(key => key.NamespaceId == namespaceId &&
+                    key.Peer == peer && key.PeerEpoch == retiredPeerEpoch);
+            if (alreadyRetired && !hasOldRows)
                 return;
 
             var next = current.Clone();
-            next.InterestedPeers.Remove(new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch));
+            next.InterestedPeers.Remove(oldRosterKey);
             foreach (var stream in next.PeerStreams.Keys
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
                     key.PeerEpoch == retiredPeerEpoch).ToArray())
