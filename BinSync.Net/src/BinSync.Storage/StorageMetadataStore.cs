@@ -1736,6 +1736,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             Add(StorageKey(root, 18, suffix), value);
         }
 
+        foreach (var peer in state.CompletedPeerBaselines)
+        {
+            byte[] suffix = new byte[22];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
+            peer.Peer.WriteTo(suffix.AsSpan(2));
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), peer.PeerEpoch);
+            Add(StorageKey(root, 19, suffix), Array.Empty<byte>());
+        }
+
         foreach (var pair in state.PeerStreams)
         {
             byte[] suffix = new byte[38];
@@ -1934,6 +1943,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     state.RetiredPeerEpochs.Add(
                         (BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16))),
                         BinaryPrimitives.ReadUInt32LittleEndian(row.Value));
+                    break;
+                }
+                case 19:
+                {
+                    RequireLength(key, 22);
+                    RequireLength(row.Value, 0);
+                    state.CompletedPeerBaselines.Add(new InterestedPeerKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)),
+                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18))));
                     break;
                 }
                 case 17:
@@ -2413,6 +2432,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         public Dictionary<PeerStreamKey, PeerStreamStateValue> PeerStreams { get; } = new();
         public HashSet<PeerStreamKey> RequiredPeerStreams { get; } = new();
         public HashSet<InterestedPeerKey> InterestedPeers { get; } = new();
+        public HashSet<InterestedPeerKey> CompletedPeerBaselines { get; } = new();
         public Dictionary<(int NamespaceId, NodeId Peer), uint> RetiredPeerEpochs { get; } = new();
 
         public ulong StorageCommitSeq { get; set; }
@@ -2446,6 +2466,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             foreach (var pair in PeerStreams) clone.PeerStreams.Add(pair.Key, pair.Value);
             foreach (var peer in RequiredPeerStreams) clone.RequiredPeerStreams.Add(peer);
             foreach (var peer in InterestedPeers) clone.InterestedPeers.Add(peer);
+            foreach (var peer in CompletedPeerBaselines) clone.CompletedPeerBaselines.Add(peer);
             foreach (var pair in RetiredPeerEpochs) clone.RetiredPeerEpochs.Add(pair.Key, pair.Value);
             return clone;
         }
