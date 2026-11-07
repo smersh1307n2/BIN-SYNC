@@ -265,6 +265,8 @@ public sealed class StorageSyncCoordinator
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(persistNode);
+        if (batch.NamespaceId != _namespaceId)
+            throw new ArgumentException("Batch namespace does not match this coordinator.", nameof(batch));
         persistNode(_node);
         return ApplyRemoteBatch(batch);
     }
