@@ -3,6 +3,9 @@ using System.Security.Cryptography;
 
 namespace BinSync.Storage;
 
+public sealed record StorageRemoteApplyPlan(
+    Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata);
+
 /// <summary>
 /// Coordinates a BIN-SYNC Node with an application-owned durable Data Provider.
 /// The caller supplies the durable Node checkpoint action so the source-feed ACK
@@ -325,6 +328,72 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Persist the exact incoming batch as a recoverable intent before mutating Node.
+    /// If the process stops at any point after this call, recovery can replay the same
+    /// wire payload into Node and the provider before the sender is acknowledged.
+    /// </summary>
+    public StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApply(Batch batch, byte[] wirePayload)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(wirePayload);
+        if (_metadataStore is null)
+            throw new InvalidOperationException("A Metadata Store is required for durable receive staging.");
+        if (batch.NamespaceId != _namespaceId)
+            throw new ArgumentException("Batch namespace does not match this coordinator.", nameof(batch));
+
+        lock (_gate)
+        {
+            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload);
+            Guid token = CreateBatchApplyToken(batch);
+            bool finalizeMetadata = true;
+            try
+            {
+                _metadataStore.BeginPendingApply(metadataBatch, token);
+            }
+            catch (InvalidOperationException)
+            {
+                var prior = _metadataStore.AcceptIncomingBatch(metadataBatch);
+                if (!prior.IsDuplicate)
+                    throw;
+                finalizeMetadata = false;
+            }
+            return new StorageRemoteApplyPlan(token, metadataBatch, finalizeMetadata);
+        }
+    }
+
+    /// <summary>
+    /// Complete a pre-staged receive after Node has applied the decoded batch:
+    /// persist Node, apply the exact immutable provider mutations, then finalize receipt.
+    /// </summary>
+    public ProviderApplyReceipt ApplyRemoteBatchAfterNodeApply(
+        Batch batch, StorageRemoteApplyPlan plan, Action<Node> persistNode)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (_metadataStore is null)
+            throw new InvalidOperationException("A Metadata Store is required for durable receive staging.");
+        if (batch.NamespaceId != _namespaceId || plan.Batch.BatchId != batch.BatchId ||
+            !plan.Batch.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest.ToArray()))
+            throw new InvalidDataException("Pre-staged receive intent does not match the applied Node batch.");
+
+        lock (_gate)
+        {
+            persistNode(_node);
+            var mutations = CreateProviderMutations(plan.Batch.Operations);
+            if (mutations.Count == 0)
+                throw new InvalidDataException("Pre-staged receive intent contains no provider mutations.");
+            var receipt = _provider.ApplyRemoteBatch(plan.ApplyToken, mutations);
+            if (plan.FinalizeMetadata)
+            {
+                _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
+                    new MetadataProviderApplyReceipt(plan.ApplyToken, plan.Batch.BatchDigest.ToArray()));
+            }
+            return receipt;
+        }
+    }
+
+    /// <summary>
     /// Complete the receiver-side durability sequence for a pre-ACK callback:
     /// checkpoint Node, commit provider state and finalize Metadata Store PendingApply.
     /// The caller may ACK the sender only after this method returns successfully.
@@ -344,7 +413,7 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>Recover pending provider commits after restart before accepting new sync work.</summary>
-    public int RecoverPendingApplies()
+    public int RecoverPendingApplies(Action<Node>? persistNode = null)
     {
         if (_metadataStore is null)
             throw new InvalidOperationException("No Metadata Store is attached to this coordinator.");
@@ -357,6 +426,12 @@ public sealed class StorageSyncCoordinator
             {
                 if (intent.Batch.NamespaceId != _namespaceId)
                     throw new InvalidDataException("Pending apply intent belongs to a different namespace.");
+
+                if (intent.Batch.WirePayload.Length > 0)
+                {
+                    _node.ApplyBatchPayloadWithBatch(intent.Batch.WirePayload, intent.Batch.SenderPeer);
+                    persistNode?.Invoke(_node);
+                }
 
                 var mutations = CreateProviderMutations(intent.Batch.Operations);
                 if (mutations.Count == 0)
@@ -372,7 +447,7 @@ public sealed class StorageSyncCoordinator
         }
     }
 
-    private MetadataIncomingBatch CreateMetadataBatch(Batch batch)
+    private MetadataIncomingBatch CreateMetadataBatch(Batch batch, byte[]? wirePayload = null)
     {
         var operations = new List<MetadataOperation>(batch.Entries.Count);
         foreach (var entry in batch.Entries)
@@ -410,6 +485,7 @@ public sealed class StorageSyncCoordinator
             CursorEnd = checked((ulong)batch.CursorEnd),
             PreviousBatchDigest = batch.PrevBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
+            WirePayload = wirePayload?.ToArray() ?? Array.Empty<byte>(),
             Operations = operations
         };
     }
