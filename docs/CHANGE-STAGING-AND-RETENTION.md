@@ -2,7 +2,7 @@
 
 **Status:** Architecture decision draft v0.2; retention and Storage Core decisions resolved for API design.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
-**Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. No wire-layout change is required for the storage decisions; the global ChangeId dedup behavior must be promoted into a normative protocol erratum before release.  
+**Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
 
 ## 1. Executive decision
@@ -182,11 +182,11 @@ If a process crashes after freeze but before the first byte is sent, the operati
 
 ### 5.5. E-13 self-echo lookup across storage stages
 
-BIN-SYNC E-13 requires durable self-echo suppression. The target global ChangeId ledger covers every frozen local-origin operation even after its Outbox payload is compacted. Pending operations have no published ChangeId yet and remain independently visible to the local self-echo lookup only if an external provider supplies a stable operation identity.
+BIN-SYNC E-13 requires durable self-echo suppression. The cross-peer dedup mechanism must cover every published operation even after its Outbox payload is compacted. An exact ChangeId ledger is the safe fallback; an origin-sequence/checkpoint representation is under protocol-level evaluation. Pending operations have no published ChangeId yet and remain independently visible to the local self-echo lookup only if an external provider supplies a stable operation identity.
 
 For the exact canonical field key, the runtime needs an efficient lookup over:
 - the latest pending local operation, if it has an externally stable source operation identity;
-- the global ChangeId ledger for frozen local-origin operations (fingerprint only; no full payload needed);
+- durable cross-peer dedup state for frozen local-origin operations (exact ChangeId fingerprints as the safe fallback; no full payload copy);
 - the relevant frozen/unconfirmed local Outbox payload where byte comparison is required.
 
 The ledger comparison uses ChangeId plus the canonical operation fingerprint. Where the protocol self-echo rule is based on an operation tuple rather than a ChangeId, compare operation kind, HLC, resolved original author and exact value bytes; a hash may be a prefilter but not proof of equality. The query must not use the current visible field winner alone: a remote APPLY may have replaced that winner while a local pending operation still exists.
@@ -332,33 +332,23 @@ The following lifetimes are independent:
 
 No generic DeleteOldMetadata operation is sufficient. Each category needs its own safe-retention condition.
 
-### 9.1. Global ChangeId ledger and local WAL replay markers
+### 9.1. Cross-peer deduplication and local WAL replay markers
 
-The current Node implementation stores remote SeenChanges under (senderPeer, namespaceId, ChangeId), while the target model uses one exact ledger entry per (scope, localReplicaId, namespaceId, ChangeId). ChangeId is stable across relay hops and unique within a namespace; direct sender is not part of the operation identity.
+The receiver must recognize the same original operation when it arrives through different direct peers or relay paths. Immediate sender identity is not part of the operation identity. Local WAL replay markers are a separate mechanism and must never be merged into remote-operation dedup state.
 
-**Target ChangeId ledger entry:**
-- key: (namespaceId, ChangeId) within the owning (scopeId, localReplicaId) partition;
-- compact fingerprint: BLAKE3-128 over the canonical operation identity and payload (resolved original author, RecordId, operation kind, field/key epoch, HLC, value/tombstone bytes and any canonical causal dependency data);
-- only the minimal format/legacy marker needed to distinguish imported IDs whose old payload fingerprint is unavailable.
+**Safe fallback — exact ChangeId ledger:** key by `(scope, localReplicaId, namespaceId, ChangeId)` and retain a canonical operation fingerprint. A 16-byte ChangeId plus a 16-byte fingerprint is 32 logical bytes per operation before page/index overhead. This is not a physical-size guarantee and is not yet the selected final representation. Same ID/same fingerprint is a duplicate; same ID/different fingerprint is a conflict. Never store the full payload or duplicate original author in the ledger.
 
-The original author is already included in the fingerprint and must not be stored a second time in this index. Scope and local replica identity define the owning partition; namespace belongs in the key prefix. Do not repeat these values in every ledger record. The logical ledger payload is therefore 32 bytes per unique operation (16-byte ChangeId key + 16-byte fingerprint), before page/index/record overhead; there is no peer multiplier and no operation payload copy.
+**Candidate optimization — origin sequence:** Outbox already has immutable `u64 Seq` per `(authorNodeId, namespaceId)`, but the wire protocol currently carries peer-relative batch cursors rather than a stable per-operation origin sequence. Investigate carrying an explicit origin sequence per operation and maintaining per-origin contiguous high-watermarks plus compact sparse gaps/ranges. This can reduce retained state substantially when sequences are received contiguously. It is NOT safe to implement a watermark-only design until all of the following are specified and tested:
+1. sequence assignment is durable, monotonic, never reused, and preserved unchanged by every relay;
+2. the receiver can distinguish origin sequence from peer-relative transport cursor and bind it to the resolved permanent author and namespace;
+3. snapshot/bootstrap establishes an authenticated, two-sided checkpoint for every covered author stream and cannot hide relay-relevant operations (including LWW losers);
+4. gaps remain represented until filled or explicitly fenced; no watermark may cross an unknown missing operation;
+5. the protocol defines how same-sequence/different-payload equivocation is detected. A high-watermark alone suppresses replay but cannot compare an old payload fingerprint. If this conflict check remains mandatory, retain a compact commitment or provide authenticated origin hash-chain proofs;
+6. a node cannot accept an older sequence from a newly discovered route after it has safely compacted that sequence's dedup evidence.
 
-The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes. Its exact lookup must be disk/page-backed with a bounded hot cache; a Bloom filter is allowed only as a negative prefilter, never as the authoritative answer. Do not keep one in-memory object per historical ChangeId.
+**Current retention rule:** until the origin-sequence and checkpoint contract is proven, exact ChangeId fingerprints remain the safe fallback and have no TTL/ACK-only GC rule in the current protocol. Do not reclaim dedup facts using a peer cursor, local relay ACK, Inbox expiry, tombstone GC or arbitrary TTL. A Bloom filter may accelerate lookup but cannot be the only source of truth.
 
-**Receive rule:** on the first valid occurrence, atomically insert the fingerprint, apply the operation if appropriate, and append its relay payload if it is relay-eligible. On a later occurrence from any peer:
-- same ChangeId and same fingerprint: do not reapply or enqueue another relay entry; still commit the new sender's Inbox receipt and receive-stream cursor so its author stream can progress;
-- same ChangeId but different fingerprint: reject the incoming batch as a protocol conflict before publishing any mutation or cursor advancement;
-- local-origin ChangeId: treat a returning echo as already known and do not relay it again, even after the local Outbox payload has been compacted.
-
-This replaces the current peer-scoped remote SeenChanges as the target semantic index. It is smaller than retaining one copy per (peer, ChangeId), prevents a three-or-more-peer relay loop after Outbox compaction, and gives the receiver a way to detect conflicting ChangeId reuse. Per-peer batch retry remains the responsibility of Inbox and PeerState; it is not a reason to multiply the ChangeId ledger by peer count.
-
-**Retention decision for the current protocol revision:** retain exact ChangeId ledger entries for the lifetime of the namespace/scope epoch. The current protocol has neither a proven snapshot-baseline completion barrier nor an immutable origin sequence carried independently of peer-relative stream cursors. Therefore no finite TTL, relay ACK, Inbox expiry, tombstone GC or one peer's ACK proves that an old ChangeId cannot return through another route. A namespace reset may clear the ledger only after all old members are fenced from sending deltas and must rebootstrap from a new baseline. This is safe but unbounded.
-
-A future protocol revision may add an immutable origin sequence distinct from peer-relative transport cursors, or a scope-wide snapshot-baseline epoch with explicit completion/fencing. Only then may exact IDs be compacted into author/namespace sequence ranges. Do not treat the current DELTA_BATCH cursorStart/cursorEnd as an origin sequence without proving that it remains invariant across relay hops and peer-relative offset translation. A Bloom filter is not an acceptable sole source of truth.
-
-**Migration from NodePersistence v5:** old SeenChanges entries do not contain a canonical payload fingerprint. Classify entries whose peer key equals the persisted local NodeId as local WAL replay markers; keep their WAL-bound lifetime separate. Collapse all other peer-scoped entries into one legacy global ChangeId marker per namespace/ChangeId with an unknown-fingerprint flag. If the persisted local NodeId is unavailable, retain the old representation until identity is resolved rather than guessing. For legacy remote IDs, preserve duplicate-suppression behavior and do not infer a fingerprint from the current field winner. New IDs use full fingerprint validation. Remove legacy global markers only at a future fenced namespace/scope epoch reset; do not invent a migration expiry.
-
-**Local WAL replay markers are separate.** The current local-write path also inserts a local NodeId/namespace/ChangeId marker, and Node.Wal.ReplayLocalMutation uses it to prevent replaying a local WAL mutation twice. The target must use a storage-native commit/staging generation for WAL replay idempotency, especially if protocol ChangeId allocation is deferred until freeze. Such markers can be reclaimed only after the WAL record is irreversibly truncated or a durable replay watermark proves it cannot be replayed.
+**Legacy migration:** NodePersistence v5 SeenChanges entries do not contain a canonical payload fingerprint. Keep entries whose peer key equals the persisted local NodeId as local WAL replay markers. Collapse remote peer-scoped entries into legacy global markers only if the old representation proves they refer to the same ChangeId; mark the fingerprint unknown and preserve conservative duplicate suppression. If the local NodeId is unavailable, retain the old representation until identity is resolved. Do not infer a fingerprint from the current field winner.
 
 ### 9.2. Inbox receipt compaction
 
@@ -382,7 +372,7 @@ Current NodePersistence v5 serializes Inbox keys/authors and related checkpoints
 
 The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorStream, cursorStart, cursorEnd), with the stable BatchId and previous digest needed to reproduce the exact same wire batch after a lost ACK. This cache is necessary while the batch may be retried. The inspected ProcessAckInternal path advances the per-author StreamAcked watermark and compacts Outbox, but does not remove acknowledged PeerState.Ids entries. Because NodePersistence serializes this dictionary, it can grow with every historical batch even after the corresponding Outbox entries are compacted.
 
-Unlike the global ChangeId ledger, this cache has a direct safe deletion condition: after a valid ACK advances the same peer/namespace/author stream through cursorEnd, the cached BatchId/previous-digest tuple for that fully acknowledged range is no longer needed for retry. Prune only entries whose cursorEnd is at or below that stream's acknowledged wire cursor, in the same durable metadata transaction as ACK progress. Do not prune on StreamPushed alone, and do not prune a range partially covered by ACK. Keep LastStreamDigest as the current chain checkpoint; it is not a reason to retain every prior batch tuple.
+Unlike the cross-peer dedup state, this cache has a direct safe deletion condition: after a valid ACK advances the same peer/namespace/author stream through cursorEnd, the cached BatchId/previous-digest tuple for that fully acknowledged range is no longer needed for retry. Prune only entries whose cursorEnd is at or below that stream's acknowledged wire cursor, in the same durable metadata transaction as ACK progress. Do not prune on StreamPushed alone, and do not prune a range partially covered by ACK. Keep LastStreamDigest as the current chain checkpoint; it is not a reason to retain every prior batch tuple.
 
 ### 9.4. FLD remote APPLY currently duplicates payloads across WAL and ApplyJournal
 
@@ -461,7 +451,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 18. Checkpoint/compaction cannot reclaim payload bytes still referenced by pending or frozen operations.
 19. Concurrent same-key local writes that reach the staging lock out of HLC order retain the canonical LWW winner, not merely the last callback to acquire the lock.
 20. A snapshot transfer does not silently ACK, GC or discard frozen/relay operations whose provenance is not represented by the snapshot payload.
-21. The global exact ChangeId ledger survives Outbox/RelayJournal payload compaction and is not pruned by TTL or peer ACK; it is cleared only at a fenced namespace/scope epoch reset. Its disk-backed lookup remains bounded in RAM.
+21. Cross-peer dedup survives Outbox/RelayJournal payload compaction. Until an origin-sequence/checkpoint protocol is proven, exact ChangeId fingerprints are not pruned by TTL or peer ACK; disk-backed lookup remains bounded in RAM.
 22. Inbox receipt expiry/GC requires the protocol's elapsed-expiry plus confirmed-log-segment condition and survives restart.
 23. E-13 self-echo suppression sees the correct durable local winner across pending staging and frozen/unconfirmed Outbox without treating staged entries as published stream records.
 24. Per-peer PeerState.Ids replay-cache entries survive lost ACK/restart and are pruned only after a valid ACK covers their author-stream cursorEnd.
@@ -474,7 +464,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 31. Local WAL replay markers are retained while their WAL records can replay and are reclaimed only after durable truncation/checkpoint; the global ChangeId ledger follows the namespace/scope epoch lifetime described in §9.1.
 32. Deferring ChangeId allocation until freeze does not weaken local staging/WAL replay idempotency; a storage-native commit/staging generation handles that boundary.
 33. Reuse of an Inbox idempotency key with conflicting cursor/digest metadata is rejected using a compact receipt, without retaining the full incoming field payload.
-34. A ChangeId received from a second peer after its prior Outbox/RelayJournal payload was compacted is suppressed by the global exact ChangeId ledger; a conflicting payload fingerprint is rejected.
+34. A ChangeId received from a second peer after its prior Outbox/RelayJournal payload was compacted is suppressed by durable cross-peer dedup; conflicting operation identity reuse is rejected. Test both the exact-ledger fallback and any future origin-sequence representation.
 35. A same BatchId with changed cursorStart/cursorEnd, author, BatchDigest, RecordsRoot or PreviousBatchDigest is rejected using the compact Inbox receipt.
 36. PeerState.Ids entries are pruned atomically only when a valid ACK covers their complete per-author cursorEnd; partial ACK and lost-ACK restart preserve the entries.
 37. Freezing a local operation inserts its ChangeId fingerprint atomically with the immutable Outbox entry; crash/reopen cannot leave one without the other.
@@ -493,4 +483,4 @@ This policy reduces redundant outbound history; it does not promise that every p
 8. Measure bytes per pending/frozen field, WAL amplification, allocation, commit latency and freeze throughput before choosing physical record layout.
 9. Only after conformance tests pass, consider changing defaults or freezing the public API.
 
-**Core rule:** coalesce only operations that have never been externally observable; preserve every operation once it may have been observed. Current state, unpublished staging, frozen outbound history, relay payloads, Inbox receipts and the global ChangeId ledger have separate ownership and retention rules.
+**Core rule:** coalesce only operations that have never been externally observable; preserve every operation once it may have been observed. Current state, unpublished staging, frozen outbound history, relay payloads, Inbox receipts and cross-peer dedup state has separate ownership and retention rules.
