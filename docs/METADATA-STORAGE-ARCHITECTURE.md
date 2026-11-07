@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract draft v0.2 — design baseline for subsequent API design and implementation.  
+**Status:** Architecture contract draft v0.3 — includes the FLD Storage Core extraction boundary and resolved metadata-retention decisions.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Wire protocol:** unchanged; this document does not revise BIN-SYNC CORE v2.4.17.  
 **Implementation status:** proposed architecture; the current Node API is not yet an implementation of this contract.
@@ -89,6 +89,19 @@ The store must expose semantic atomic operations or transactions. A generic key/
 
 A Metadata Store may also retain canonical change payloads when required for durable outbound delivery or relay. It must not be forced to store the entire current user dataset.
 
+A low-level embedded engine and the BIN-SYNC Metadata Store are separate layers. The engine provides atomic byte-key/value batches, durable logs, recovery, snapshots and ordered scans. The Metadata Store adapter implements BIN-SYNC-specific receipts, ChangeId ledger, peer cursors, Outbox/relay retention and semantic transactions on top of that engine. The adapter must not be confused with the physical storage engine.
+
+### 3.2.1. FLD Storage Core extraction boundary
+
+FLD-DB's reusable Storage Core is a domain-neutral byte engine, not the FldDatabase facade and not a BIN-SYNC-specific store. It may initially ship in the same DLL as FLD Database, but its public API and source dependency graph must be independently extractable.
+
+- Storage Core owns WAL, recovery, atomic batches, immutable runs/pages, manifest/checkpoint publication, snapshots, ordered scans, storage-native commit IDs, checksums and safe generation reclamation.
+- FLD Database owns RecordId/FieldId, HLC, LWW/lifecycle, local pending staging, frozen Outbox, remote APPLY and field APIs.
+- BIN-SYNC owns ChangeId/BatchId semantics, peer/author cursors, inbox/relay/dedup policy and protocol GC.
+- The BIN-SYNC↔FLD adapter depends on both the neutral Storage API and BIN-SYNC contracts; FLD Storage Core does not depend on BIN-SYNC or FldDatabase.
+
+The Storage API uses opaque byte keys/values and storage-native identifiers. It must not expose field, author, HLC, ChangeId, BatchId, peer or protocol DTO types. The same physical WAL/run/manifest engine should serve FldDatabase and Storage-only consumers; Storage-only mode must not create synthetic field records, LocalAuthor, HLC or Outbox entries. See the FLD-DB [Storage Core architecture](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-STORAGE-CORE-ARCHITECTURE.md).
+
 ### 3.3. BIN-SYNC Runtime
 
 The runtime owns:
@@ -162,7 +175,13 @@ The local change lifecycle has two durable stages before acknowledgement: (a) co
 
 Persist the state required to recognize a previously accepted batch and safely answer a retry after a lost ACK. This includes the relevant sender/issuer identity, namespace, epoch, BatchId, accepted cursor range, BatchDigest, RecordsRoot, PreviousBatchDigest/chain checkpoint, author-bound duplicate ACK result, and protocol-defined receipt expiry/confirmation state. A compact receipt must be able to reject reuse of the same idempotency key with conflicting cursor/digest metadata without retaining the original full field payload.
 
-Persist remote ChangeId provenance deduplication with the protocol-defined sender/channel and namespace dimensions; a global ChangeId set without the required context is not a valid substitute. Important current gap: E-8/E-13 define first-seen relay eligibility and the durable remote SeenChanges key, but the current normative specification does not define a safe remote provenance GC horizon. Inbox GC and tombstone GC are separate and cannot be reused as an assumed rule. The current Node SeenChanges set also contains local WAL replay markers (local NodeId/namespace/ChangeId), which have a different lifetime: those may be reclaimed only after the corresponding local WAL record is irreversibly truncated or a durable replay watermark makes reapplication impossible. The target contract must separate these two roles logically. Until a protocol-safe remote deduplication watermark/expiry is defined, exact remote provenance entries must be retained; an arbitrary TTL or Bloom-filter-only replacement can re-enable relay loops or suppress legitimate first-seen changes. See the detailed retention analysis in [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
+Persist an exact ChangeId ledger keyed by (scope, namespaceId, ChangeId), not one independent dedup fact per direct sender. ChangeId is immutable across relay hops and unique within its namespace. The ledger stores a compact fingerprint of the canonical operation plus its original author; the payload remains in the appropriate Outbox/relay journal, not in the dedup index. A repeated ChangeId with the same fingerprint is a duplicate regardless of which peer delivers it: do not reapply or enqueue it for relay again, but still commit the new sender's batch receipt and receive-cursor advancement. Reuse of the same ChangeId with a different fingerprint is a protocol conflict and must be rejected before mutation.
+
+The current Node SeenChanges key is peer-scoped and also contains local WAL replay markers. This is a legacy implementation detail, not the target key model. Migrate remote entries into the scope/namespace ChangeId ledger where possible; retain a legacy-unknown-fingerprint marker for imported IDs whose old payload fingerprint was not persisted. Keep local WAL replay markers separate and reclaim them only after the corresponding WAL record is irreversibly truncated or a durable replay watermark makes reapplication impossible.
+
+The current protocol has no proven global snapshot barrier or immutable origin-sequence field that makes old ChangeIds impossible to reintroduce. Therefore the exact ChangeId ledger has no safe TTL or ACK-only GC rule in this protocol revision: retain entries for the lifetime of the namespace/scope epoch. A namespace reset may clear the ledger only when all old members are fenced from sending deltas and must rebootstrap from a new baseline. Do not use a peer cursor, local relay ACK, Inbox expiry, tombstone GC or arbitrary TTL as a substitute. A future protocol revision may add a stable origin sequence distinct from peer-relative transport cursors, or a fully acknowledged snapshot-baseline epoch, to enable exact compact-range GC. Until then, exact retention is the safe decision, even though it is unbounded. Do not use a Bloom filter as the only source of truth.
+
+See [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md) for the implementation and migration details.
 
 ### 5.4. Peer and stream state
 
@@ -176,7 +195,7 @@ Remote changes that are accepted for relay must remain recoverable until the rel
 
 The relay journal must preserve original change identity, author, HLC, key epoch, operation and payload/reference. It must include operations selected for relay even when they lose the local LWW comparison, where required by BIN-SYNC relay semantics.
 
-The relay journal is distinct from the local-origin outbound journal. Their cursors, ownership and retention rules must not be conflated. The inspected runtime's cross-peer queuedChangeIds check is derived from the currently retained Outbox, while SeenChanges is keyed by direct sender. After Outbox compaction, the runtime does not visibly retain a separate global ChangeId relay-history index. The protocol must define whether a completed snapshot/membership baseline makes an old relay ID forgettable or whether a separate exact RelayedChangeIds index is required; do not assume per-peer SeenChanges proves lifetime-wide at-most-once relay.
+The relay journal is distinct from the local-origin outbound journal. Their cursors, ownership and retention rules must not be conflated. The target global ChangeId ledger provides lifetime-wide duplicate suppression after Outbox/relay payload compaction; the relay journal itself retains payload only until safe downstream ACK. The ledger and payload journal therefore have separate lifetimes: ACK may reclaim the payload but must not remove the ChangeId fingerprint. The current implementation does not yet provide this target global ledger or a safe GC horizon.
 
 The durable batch receipt and relay payload journal also have independent lifetimes. A duplicate-batch receipt may expire under the Inbox GC rule while relay payload remains needed by downstream peers; relay ACK may complete while the receipt's duplicate-retry horizon has not elapsed. Do not store them in one indivisible record/file unless the physical layout supports independent reclamation. FLD's current ApplyCommitCodec v2 duplicates RelayFields inside Fields and ApplyJournal copies the full APPLY_COMMIT payload again; the target FLD design is one operation payload array plus compact relay-selection indexes, a compact receipt, and a relay-only journal. See [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
 
