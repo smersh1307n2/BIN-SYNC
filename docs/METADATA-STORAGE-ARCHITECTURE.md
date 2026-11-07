@@ -238,6 +238,10 @@ Relay enumeration and acknowledgement must be independent of the local-origin ou
 
 The store must provide a consistent read view for any operation that compares or exports metadata. A snapshot must remain valid for its documented lifetime while concurrent commits/checkpoints/compaction occur. Independently, the Data Provider must expose a source snapshot tied to a stable version/change-feed watermark. The runtime must be able to establish a baseline at that watermark and then consume every later source change without a gap. A provider that cannot provide this boundary must use an equivalent write barrier or durable journal protocol; taking an arbitrary source snapshot and separately reading an unrelated metadata cursor is not sufficient.
 
+A state snapshot is not automatically an acknowledgement of every frozen Outbox or relay operation that predates its source watermark. The runtime and provider contract must explicitly define which operations are semantically covered by the snapshot baseline and which provenance/relay operations still require delivery. This is especially important for LWW losers, which are not present in the current-state snapshot but may remain relay-eligible. Until that coverage rule is specified and tested, snapshot completion must not by itself advance Outbox/relay safe-ACK or GC boundaries, or discard pending/frozen changes.
+
+The current BIN-SYNC SnapshotChunkMessage/BuildSnapshotChunks path is a current-state LWW snapshot and does not expose a per-field ChangeId or Outbox cursor in the inspected DTO. The normative specification separately describes SnapshotTail/outbox checkpoint information; reconcile that spec/runtime boundary before designing storage operations that rely on snapshot-tail coverage.
+
 Recovery must be deterministic. A store must not expose a state where an inbox cursor is advanced but the corresponding accepted data/relay state is missing, or vice versa.
 
 ## 7. Data and metadata transaction boundary
@@ -434,7 +438,7 @@ If a specialized contract conflicts with this document, the conflict must be res
 
 ## 15. Decisions intentionally left open
 
-The following are not decided by v0.1 and must be resolved before freezing public API:
+The following are not decided by v0.2 and must be resolved before freezing public API:
 
 1. Exact public names and signatures for provider and metadata interfaces.
 2. Whether the runtime exposes a unified transaction object, semantic atomic commands, or both.
@@ -448,6 +452,7 @@ The following are not decided by v0.1 and must be resolved before freezing publi
 10. How current NodePersistence/WAL state migrates to the new provider/store boundary.
 11. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
 12. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
+13. Exact snapshot-to-tail coverage semantics: whether a state snapshot can subsume frozen local LWW operations, how relay-eligible LWW losers are retained/delivered, and how the normative SnapshotTail/outbox checkpoint maps to the current runtime.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
