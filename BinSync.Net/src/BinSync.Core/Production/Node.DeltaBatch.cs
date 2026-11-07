@@ -544,31 +544,32 @@ public sealed partial class Node
         if (outboxSequences.Length != changes.Length)
             throw new ArgumentException("Output length must match the requested identity count.", nameof(outboxSequences));
         outboxSequences.Clear();
-        if (changes.Length == 0) return true;
 
-        var slots = new Dictionary<(NodeId Author, BatchId ChangeId), int>(changes.Length);
+        var slots = new Dictionary<BatchId, int>(changes.Length);
         for (int i = 0; i < changes.Length; i++)
         {
             var identity = changes[i];
             if (identity.AuthorNodeId.IsZero || identity.ChangeId.IsZero)
                 throw new ArgumentException("Outbox change identities must be non-zero.", nameof(changes));
-            if (!slots.TryAdd((identity.AuthorNodeId, identity.ChangeId), i))
-                throw new ArgumentException("Outbox change identities must be unique.", nameof(changes));
+            if (!slots.TryAdd(identity.ChangeId, i))
+                throw new ArgumentException("ChangeIds must be unique within a namespace.", nameof(changes));
         }
 
         lock (_lockStorage) lock (_lockOutbox)
         {
             ThrowIfDisposed();
+            if (changes.Length == 0) return true;
             if (!Outbox.TryGetValue(namespaceId, out var entries))
                 return false;
 
             int found = 0;
             foreach (var entry in entries)
             {
-                if (!slots.TryGetValue((entry.AuthorNodeId, entry.ChangeId), out int slot))
+                if (!slots.TryGetValue(entry.ChangeId, out int slot))
                     continue;
-                if (outboxSequences[slot] != 0 || entry.Seq <= 0)
-                    throw new InvalidDataException("Outbox contains a duplicate or invalid change identity.");
+                if (entry.AuthorNodeId != changes[slot].AuthorNodeId ||
+                    outboxSequences[slot] != 0 || entry.Seq <= 0)
+                    throw new InvalidDataException("Outbox contains a duplicate or conflicting change identity.");
                 outboxSequences[slot] = entry.Seq;
                 found++;
             }
