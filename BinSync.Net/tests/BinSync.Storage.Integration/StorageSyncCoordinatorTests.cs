@@ -123,6 +123,30 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(0UL, provider.LocalChangeHighWatermark);
     }
 
+
+    [Fact]
+    public void Received_batch_materializes_multiple_immutable_updates_to_same_field()
+    {
+        using var provider = new StorageDataProvider(Path.Combine(_root, "multi-update"), 404, deleteOnDispose: true);
+        Node sender = NewNode(8);
+        Node receiver = NewNode(9);
+        RecordId recordId = RecordId.From(Guid.Parse("80000000-0000-0000-0000-000000000008").ToByteArray());
+        const ushort fieldId = 0x0201;
+
+        sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("one"), new Hlc(1000, 0));
+        sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("two"), new Hlc(2000, 0));
+        sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("three"), new Hlc(3000, 0));
+
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1);
+        var delivered = Transport.DeliverBatch(sender, receiver, 1,
+            beforeAck: (_, batch, _) => coordinator.ApplyRemoteBatch(batch));
+
+        Assert.NotNull(delivered);
+        Assert.True(provider.TryReadCurrent(recordId, fieldId, out var current));
+        Assert.Equal("three", Encoding.UTF8.GetString(current!.Value));
+        Assert.Equal(0UL, provider.LocalChangeHighWatermark);
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
