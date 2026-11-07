@@ -1,7 +1,6 @@
 # Metadata Store authority migration
 
-**Status:** in progress, verified against BIN-SYNC `feature/fld-external-storage` through `5f3987723847` (2026-11-07). The optional `IMetadataPeerStateStore` persists the namespace peer roster, per-peer/per-author cursors, immutable batch reservations, ACK/digest progress, retired epoch watermarks and explicit initial snapshot/feed-baseline completion. New peers cannot read or reserve DELTA_BATCH before the baseline is durably completed. `StorageSyncCoordinator.AutoReconcileWithMetadataAsync` captures outbound feed watermarks before reconciliation, applies received snapshots to the provider before the reconciliation terminator, and commits peer baseline offsets only after both reconciliation rounds complete; relay streams retain offset zero. Confirmed outbound baseline offsets contribute to the safe local-sequence compaction horizon, while relay history still requires explicit ACK. Lost-ACK replay is tested across Metadata Store reopen and sender Node recreation; durable ACK mirroring no longer requires retained Node Outbox payloads. Receive validates sender cursor/digest continuity and ChangeId equivocation in Metadata Store before Node mutation, persists PendingApply, then commits provider state and receipt before ACK. Cross-page PendingLocal coalescing and stale-epoch fencing/retirement are implemented. Remaining gates: complete Node/Transport authority cutover, provider rehydration/restart model, full receive crash matrix, bounded finalization/general metadata mutation cost, receipt/dedup GC horizons, and complete normative audit. This document does not change the wire protocol.
-
+**Status:** in progress, verified against BIN-SYNC `feature/fld-external-storage` through the current authority-migration work. The optional `IMetadataPeerStateStore` persists the namespace peer roster, per-peer/per-author cursors, immutable batch reservations, ACK/digest progress, retired epoch watermarks and explicit initial snapshot/feed-baseline completion. Durable receive staging validates cursor/digest continuity and ChangeId equivocation before Node mutation, then records PendingApply and finalizes provider/metadata receipts before ACK. The receive/transport path is still transitional: Node retains a second inbox, receive cursor/digest cache, local Outbox allocation and runtime mirror; the Metadata Store is not yet the sole protocol authority. The latest hardening changes make PendingApply finalization a delta-only metadata transaction (no whole-partition clone/re-encode) and index pending ChangeIds once per validation pass. This improves mutation cost but does not complete Node/Transport cutover. Remaining gates: authoritative receive/transport state migration, provider rehydration/restart model, deterministic crash matrix, measured metadata mutation/compaction costs, receipt/dedup GC horizons, and normative §§4–18 audit. This document does not change the wire protocol.
 ## 1. Current boundary (verified in code)
 
 The Storage integration is durable and usable, including over real TCP, but `IMetadataStore` is not yet the authoritative protocol-state source.
@@ -159,3 +158,58 @@ The current Storage-backed adapter baseline has advanced beyond the initial real
 The main remaining authority gaps are the durable initial snapshot/feed barrier for new peers and final receive authority cutover: Metadata Store now validates cursor/digest/ChangeId before Node mutation, but Node still repeats the validation and maintains an inbox/digest mirror. The opt-in durable push overload reads per-peer Outbound/Relay pages, restores per-peer progress, reserves exact payloads before send and commits ACKs durably; the live Node Outbox is not swapped during encoding. The durable namespace peer roster and minimum-ACK horizon retain one shared payload until every interested downstream peer acknowledges it. Cross-page local feed changes are coalesced before Node writes and only final LWW winners are frozen; the provider feed remains unacknowledged until Node persistence and metadata freeze succeed. Remaining gates are explicit peer-epoch retirement/fencing, fully authoritative receive validation, restart/lost-ACK and alternate-route fault matrix, bounded metadata mutation cost for non-peer operations, receipt/dedup GC horizons and safe tombstone retention.
 
 **Scope:** this is the BIN-SYNC + generic Storage stage only. FLD Database and its JournalSeq provenance adapter are deferred.
+
+
+## 8. Delta finalization and mutation-cost boundary
+
+`StorageMetadataStore.FinalizePendingApply` now commits only the records affected by one incoming batch. The transaction deletes the raw PendingApply intent, writes the compact completed-token receipt, and—when the incoming receipt is new—writes the inbox receipt, author receive cursor, sender digest checkpoint, new ChangeId ledger rows, relay payload rows/high-watermarks and newly required peer-stream rows. In-memory indexes are published only after the Storage transaction commits.
+
+The previous implementation cloned every dictionary in the partition and rebuilt `StateEntries` for a single finalize. The new path is proportional to the incoming operation count plus the affected peer-stream registrations; it does not enumerate unrelated historical receipts, ChangeIds, relay entries or peer state. Pending ChangeId validation is separately O(pending operations + incoming operations), rather than rescanning all pending batches for every incoming operation.
+
+This is a structural complexity improvement, not a benchmark claim. Release evidence still requires measurements at increasing partition sizes (e.g. 10k / 100k / 1m ledger rows), reporting bytes written, allocations, p50/p95 latency and reopen time. The generic `PersistPartition` path remains in use for other state transitions and still performs whole-partition materialization/diffing; it is a separate optimization gate.
+
+## 9. Deterministic receive crash matrix
+
+The separate-provider receive sequence is:
+
+1. **Before PendingApply commit:** no metadata acceptance is durable; sender must not receive ACK.
+2. **After PendingApply commit, before provider apply:** recovery discovers the intent and retries the exact token/payload; no ACK.
+3. **During provider apply before its atomic receipt:** provider must expose either no effect or a committed effect with the token; metadata must not guess.
+4. **After provider effect + provider token receipt, before metadata finalize:** recovery queries/retries the same token and finalizes metadata exactly once logically; no ACK until finalize.
+5. **After metadata finalize, before transport ACK:** replay resolves to the compact inbox/completed receipt; provider effect and relay append are not repeated.
+6. **After ACK:** exact replay remains a duplicate; conflicting receipt-key or ChangeId reuse is rejected.
+7. **During subsequent compaction/reopen:** inbox receipt, ChangeId identity, receive cursor, digest chain and relay retention must remain mutually consistent.
+
+Current durable tests cover PendingApply persistence/replay, provider-token idempotency, finalize/reopen, completed-token duplicate behavior, cursor/digest rejection, ChangeId equivocation and relay page persistence. The new delta-finalize regression verifies that pre-existing relay state survives a second batch finalization and reopen. The remaining gap is deterministic fault injection at every provider and physical-Storage commit boundary, including torn commit/recovery, and end-to-end assertions that ACK is impossible at each pre-finalize cut. A passing ordinary integration test is not a substitute for those crash cuts.
+
+## 10. Retention and garbage-collection horizons
+
+No time-based TTL, HLC age, last-seen timestamp or local Outbox ACK is sufficient proof to delete protocol identity. Retention domains remain independent:
+
+| State | Earliest safe deletion condition | Current policy |
+|---|---|---|
+| PendingApply payload | Provider effect is durably acknowledged by token and metadata finalization commits | Delete in the same transaction as completed receipt |
+| Completed apply token | Provider and metadata agree on a durable dedup horizon, and the token can never be retried/reused within that horizon | Retain; no GC API until provider token-retention contract exists |
+| Inbox batch receipt | Sender epoch is fenced/retired and the protocol retry/replay horizon proves no valid duplicate can arrive; replacement state retains the exact duplicate/equivocation decision | Retain; no TTL |
+| ChangeId fingerprint ledger | Every route/peer capable of replay is fenced beyond a proven dedup horizon, and a durable compact checkpoint preserves equivocation detection | Retain; no GC |
+| Relay payload | All interested downstream peers have a completed baseline and ACK the contiguous per-author prefix | Existing per-author ACK/compaction rules |
+| Local frozen Outbox payload | Every interested peer ACKs the contiguous author prefix, including a completed snapshot/feed offset proof where applicable | Existing minimum-peer-ACK compaction rules |
+| Peer stream reservations | Matching ACK commits, or the peer incarnation is explicitly retired with fencing proof | One immutable in-flight reservation per stream |
+| Retired peer epoch | A stronger durable namespace/replica epoch checkpoint subsumes the fence | Retain; no TTL |
+| Tombstones / ghosts | Normative safe namespace frontier plus stale-peer fencing and mandatory authoritative full-resync proof | GC remains disabled under E-25 |
+
+A future GC implementation must be horizon-based and monotonic. It must persist the proof/checkpoint that authorizes deletion in the same transaction as deletion, be idempotent across restart, and fail closed when any interested peer or provider receipt is missing. Receipt GC and ChangeId GC must not be coupled to relay payload compaction.
+
+## 11. Authority cutover gates (do not mark complete prematurely)
+
+The migration is complete only when all of the following are true:
+
+- Node's inbox receipt lookup, receive cursor and digest-chain checkpoint are caches/rebuildable projections, not independent acceptance authorities.
+- Metadata Store validates and commits the incoming batch identity/cursor/chain and dedup decision before the provider effect becomes publishable.
+- Node applies user-visible state from the provider or a rebuildable projection; Node's local Outbox/peer dictionaries do not allocate or own durable protocol sequence state in Storage-backed mode.
+- The transport reads immutable outbound/relay reservations and ACKs only through Metadata Store. The legacy Node-backed transport path is either explicitly volatile-only or removed from the Storage-backed API surface.
+- Recovery reconstructs the runtime from provider + Metadata Store without relying on stale NodePersistence inbox/Outbox state.
+- Shared-transaction and separate-store profiles have distinct conformance tests and documented ACK guarantees.
+- A two-/three-node test proves restart, lost ACK, alternate-route dedup, equivocation, peer retirement and compaction using only durable Metadata Store authority.
+
+Until these gates pass, the durable outbound capability is a useful first slice, not a completed source-of-truth migration.
