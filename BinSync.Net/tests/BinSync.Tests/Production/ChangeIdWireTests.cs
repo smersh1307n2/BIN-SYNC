@@ -159,7 +159,7 @@ public class ChangeIdWireTests
         Assert.True(c.GlobalChangeLedger.ContainsKey((1, changeId)));
 
         // The same operation arrives directly from A after B already relayed it.
-        // Full-author encoding makes this independent of each session's alias table.
+        // The two A sessions resolve A's own compact alias consistently.
         Transport.MakeSession(a, c);
         var replay = c.ApplyBatchPayload(originalPayload, a.NodeId);
         Assert.Equal(0, replay.Applied);
@@ -180,7 +180,6 @@ public class ChangeIdWireTests
         Assert.True(a.WriteField(1, Fix.Rid(0x72), 0x100, new byte[] { 0x11 }));
         var original = a.CreateDeltaBatch(b.NodeId, 1)!;
         a.SignBatchFor(original, b.NodeId);
-        ForceFullAuthor(original, a.NodeId);
         var payload = a.EncodeBatchPayload(original);
         var accepted = b.ApplyBatchPayload(payload, a.NodeId);
         a.AdvanceStream(b.NodeId, 1, original);
