@@ -88,7 +88,7 @@ public class Production : IDisposable
             if (!y.LastBatchDigest.TryGetValue(k, out var od) || dig != od) return false;
         if (x.LastStreamDigest.Count != y.LastStreamDigest.Count) return false;
         if (x.DurableAuthors.Count != y.DurableAuthors.Count) return false;
-        if (x.SeenChanges.Count != y.SeenChanges.Count) return false;
+        if (!x.SeenChanges.SetEquals(y.SeenChanges)) return false;
         if (x.KnownEpochs.Count != y.KnownEpochs.Count) return false;
         foreach (var (k, ep) in x.KnownEpochs)
             if (!y.KnownEpochs.TryGetValue(k, out var oe) || ep != oe) return false;
