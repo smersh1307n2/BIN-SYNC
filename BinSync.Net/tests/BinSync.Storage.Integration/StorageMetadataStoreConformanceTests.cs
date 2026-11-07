@@ -1,5 +1,9 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using BinSync;
 using BinSync.MetadataStore.Conformance;
+using Fld1.Storage.Engine;
 using Xunit;
 
 namespace BinSync.Storage.Integration;
@@ -10,6 +14,85 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
     protected override IMetadataStoreConformanceAdapter CreateStore()
         => new StorageMetadataStoreConformanceAdapter(Path.Combine(_root, Guid.NewGuid().ToString("N")));
+
+    [Fact]
+    public void Legacy_outbound_origin_marker_migrates_into_compact_change_ledger_value()
+    {
+        string directory = Path.Combine(_root, "legacy-ledger");
+        Directory.CreateDirectory(directory);
+        const string scope = "legacy-ledger-scope";
+        NodeId local = Node(1);
+        MetadataFrozenOperation frozen = FrozenOperation(61, 71);
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+
+        byte[] Suffix(byte kind, ReadOnlySpan<byte> suffix)
+        {
+            byte[] key = new byte[root.Length + 1 + suffix.Length];
+            root.CopyTo(key, 0);
+            key[root.Length] = kind;
+            suffix.CopyTo(key.AsSpan(root.Length + 1));
+            return key;
+        }
+
+        byte[] ledgerSuffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, 7);
+        frozen.ChangeId.WriteTo(ledgerSuffix.AsSpan(2));
+        byte[] streamSuffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(streamSuffix, 7);
+        local.WriteTo(streamSuffix.AsSpan(2));
+        byte[] outboundSuffix = new byte[26];
+        streamSuffix.CopyTo(outboundSuffix, 0);
+        BinaryPrimitives.WriteUInt64BigEndian(outboundSuffix.AsSpan(18), 1);
+        byte[] outboundValue = new byte[20 + frozen.Payload.Length];
+        frozen.ChangeId.WriteTo(outboundValue);
+        BinaryPrimitives.WriteInt32LittleEndian(outboundValue.AsSpan(16), frozen.Payload.Length);
+        frozen.Payload.CopyTo(outboundValue, 20);
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 411);
+            using (var batch = storage.BeginWriteBatch())
+            {
+                batch.Put(Suffix(0, ReadOnlySpan<byte>.Empty), scopeBytes);
+                batch.Put(Suffix(3, ledgerSuffix), frozen.Fingerprint.ToArray());
+                batch.Put(Suffix(7, outboundSuffix), outboundValue);
+                batch.Put(Suffix(8, streamSuffix), EncodeUInt64(1));
+                batch.Put(Suffix(11, ledgerSuffix), Array.Empty<byte>());
+                batch.Commit();
+            }
+
+            using (var metadata = new StorageMetadataStore(storage))
+            {
+                var retry = Assert.Single(metadata.FreezeOutbound(scope, local, 7, local, new[] { frozen }));
+                Assert.Equal(1UL, retry.Sequence);
+                metadata.AcquireOutboundLease(scope, local, 7, local,
+                    Guid.Parse("61000000-0000-0000-0000-000000000001"));
+            }
+
+            byte[] compactLedgerKey = Suffix(3, ledgerSuffix);
+            using var snapshot = storage.OpenSnapshot();
+            var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
+            Assert.DoesNotContain(rows, row => row.Key.Length > root.Length && row.Key[root.Length] == 11);
+            var compactLedger = Assert.Single(rows.Where(row => row.Key.AsSpan().SequenceEqual(compactLedgerKey)));
+            Assert.Equal(17, compactLedger.Value.Length);
+            Assert.Equal(1, compactLedger.Value[16]);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static byte[] EncodeUInt64(ulong value)
+    {
+        byte[] bytes = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        return bytes;
+    }
 
     [Fact]
     public void Receipts_relay_outbound_leases_and_pending_apply_survive_restart_and_compaction()
