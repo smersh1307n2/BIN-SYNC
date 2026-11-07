@@ -394,6 +394,23 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
     }
 
+    [Fact]
+    public void Pending_apply_intent_owns_input_payload_and_repeated_begin_is_idempotent()
+    {
+        using var store = CreateStore();
+        var batch = CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50));
+        var token = Guid.Parse("00000000-0000-0000-0000-000000000125");
+
+        store.BeginPendingApply(batch, token);
+        batch.Operations[0].Payload[0] = 99;
+        store.BeginPendingApply(batch, token);
+
+        var intent = Assert.Single(store.ReadPendingApplyIntents("scope-a", Node(1)));
+        Assert.Equal(50, intent.Batch.Operations[0].Payload[0]);
+        Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
+    }
+
     protected static MetadataIncomingBatch CreateBatch(
         string scope,
         byte replica,
