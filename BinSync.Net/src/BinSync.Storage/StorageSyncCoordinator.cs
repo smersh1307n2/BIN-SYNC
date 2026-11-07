@@ -424,13 +424,85 @@ public sealed class StorageSyncCoordinator
         }
 
         var result = await session.AutoReconcileAsync(
-            _node, _namespaceId, initiate, maxPrefixes, ct).ConfigureAwait(false);
+            _node, _namespaceId, initiate, maxPrefixes, ct,
+            afterSnapshotApplied: (chunks, _) =>
+            {
+                persistNode(_node);
+                ApplyRemoteSnapshotToProvider(session.PeerNodeId, peerEpoch, chunks);
+            }).ConfigureAwait(false);
         if (!_node.HasInitialSyncComplete(peer, _namespaceId))
             throw new SyncException("SNAPSHOT_REQUIRED");
         persistNode(_node);
         peerStore.CompletePeerInitialSync(
             _scopeId!, _node.NodeId, peer, peerEpoch, _namespaceId, baselines);
         return result;
+    }
+
+    private void ApplyRemoteSnapshotToProvider(
+        Node senderPeer, uint senderEpoch, IReadOnlyList<SnapshotChunkMessage> chunks)
+    {
+        var mutations = new List<ProviderMutation>();
+        foreach (var chunk in chunks)
+        {
+            foreach (var record in chunk.Records)
+            {
+                if (record.HasLifecycle && record.LifecycleValue == Model.Tombstone)
+                {
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = record.RecordId,
+                        FieldId = Model.LifecycleFieldId,
+                        IsRecordTombstone = true,
+                        HlcWall = record.LifecycleWall,
+                        HlcLogical = record.LifecycleLogical,
+                        AuthorNodeId = record.LifecycleAuthor,
+                        KeyEpoch = 0,
+                        Value = Array.Empty<byte>()
+                    });
+                }
+
+                foreach (var field in record.Fields)
+                {
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = record.RecordId,
+                        FieldId = field.FieldId,
+                        IsTombstone = field.IsTombstone,
+                        HlcWall = field.Wall,
+                        HlcLogical = field.Logical,
+                        AuthorNodeId = field.AuthorNodeId,
+                        KeyEpoch = field.KeyEpoch,
+                        Value = field.Value.ToArray()
+                    });
+                }
+            }
+        }
+        if (mutations.Count == 0) return;
+
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        hash.AppendData(System.Text.Encoding.UTF8.GetBytes(_scopeId!));
+        hash.AppendData(senderPeer.ToArray());
+        Span<byte> fixedPart = stackalloc byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(fixedPart, senderEpoch);
+        BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(4), checked((uint)_namespaceId));
+        hash.AppendData(fixedPart);
+        foreach (var chunk in chunks)
+        {
+            byte[] encoded = Reconcile.EncodeSnapshotChunk(chunk);
+            Span<byte> length = stackalloc byte[4];
+            BinaryPrimitives.WriteInt32LittleEndian(length, encoded.Length);
+            hash.AppendData(length);
+            hash.AppendData(encoded);
+        }
+        byte[] digest = hash.GetHashAndReset();
+        Guid applyToken = new(digest.AsSpan(0, 16));
+        if (applyToken == Guid.Empty)
+        {
+            digest[0] = 1;
+            applyToken = new Guid(digest.AsSpan(0, 16));
+        }
+        _provider.ApplyRemoteBatch(applyToken, mutations);
     }
 
     /// <summary>
