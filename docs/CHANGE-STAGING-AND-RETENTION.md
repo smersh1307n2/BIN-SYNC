@@ -384,7 +384,7 @@ The receipt does not retain the full Fields payload. A repeated idempotency key 
 
 The normative Inbox GC condition remains: expiresAt has elapsed AND both sides have confirmed the relevant log segment. Relay ACK, WAL truncation, ChangeId-ledger retention and tombstone GC are not substitutes for this condition.
 
-Current NodePersistence v5 serializes Inbox keys/authors and related checkpoints but not the complete InboxEntry tuple as one receipt. Migration must preserve or safely derive the original range/expiry facts; never invent an expiry or delete old receipts merely because they are old. If the original digest/range/expiry cannot be recovered from durable history, retain a LegacyUnverifiable receipt until a fenced namespace/scope rebootstrap; preserve the old duplicate-retry behavior for that legacy key, but do not claim the new conflicting-payload validation guarantee for it. New receipts must always carry the full validation tuple. The current Node.ApplyBatch duplicate path must be aligned with FLD's stricter range/digest validation.
+Current NodePersistence v7 stores one issuer/namespace/epoch/BatchId -> durable-author map entry; the previous v3-v6 layout stored the same receipt key in both Inbox and InboxAuthors. v7 removes that duplicate key representation and legacy migration validates exact key parity before collapsing it. This is a key-storage optimization only: the current receipt still does not contain the complete cursor/digest/expiry/WAL-generation tuple above. The duplicate fast path continues the legacy BatchId idempotency behavior and does not yet compare a conflicting payload against a full prior receipt. No receipt expiry/GC is implemented. Do not invent missing range/expiry facts or delete legacy receipts until the full tuple and fenced expiry contract are implemented.
 
 ### 9.3. Per-peer batch replay cache has a finite ACK-based lifetime
 
@@ -538,7 +538,7 @@ The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value b
 
 1. Global cross-peer ChangeId dedup correctness — implemented; retain exact ledger until a safe GC horizon exists.
 2. Prune acknowledged PeerState.Ids — implemented.
-3. Consolidate Inbox + InboxAuthors into one issuer-specific receipt map, preserving duplicate ACK author resolution.
+3. Inbox + InboxAuthors key consolidation — implemented in NodePersistence v7; full receipt tuple/expiry remains open.
 4. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
 5. Pack per-author peer progress and compact batch receipts.
 5. Version and benchmark FLD Outbox encoding.
