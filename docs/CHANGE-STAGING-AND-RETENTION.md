@@ -526,7 +526,7 @@ The current BIN-SYNC Outbox stores each logical operation once. Per-peer PeerSta
 
 Current implementation gaps found during the audit:
 
-- ProcessAckInternal does not prune PeerState.Ids after a validated ACK covers its author/cursor range. The map is serialized and can grow with historical batches. Prune acknowledged ranges atomically with ACK persistence, retaining the current digest-chain checkpoint.
+- The initial audit identified that ProcessAckInternal did not prune PeerState.Ids after a validated ACK. This was implemented later: acknowledged mappings are pruned atomically when the validated per-author ACK covers cursorEnd, while LastStreamDigest is retained. See §9.4 item 2 and the cited implementation/test commits.
 - StreamAcked, StreamPushed and StreamOffsets are serialized as three maps and repeat author IDs. A per-author tuple with presence flags can reduce metadata without changing semantics.
 - SeenChanges is currently keyed by immediate sender peer, not globally by ChangeId. The live Outbox queue suppresses an already queued ChangeId, but that is not durable after Outbox compaction. Implement the exact global ChangeId+fingerprint ledger described in the metadata architecture; keep local WAL replay markers separate.
 - Inbox, InboxAuthors and ReceivedStreams contain overlapping batch receipt/cursor facts. Consolidation is a candidate only after all duplicate replay and ACK paths are mapped.
