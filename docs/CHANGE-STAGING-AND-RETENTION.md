@@ -333,7 +333,7 @@ No generic DeleteOldMetadata operation is sufficient. Each category needs its ow
 
 ### 9.1. ChangeId deduplication GC is currently an unresolved protocol requirement
 
-The current wire specification defines first-seen ChangeId as the relay-eligibility gate (E-8), and E-13 defines the durable self-echo check plus a provenance-scoped SeenChanges key of (senderPeer, namespaceId, changeId). Current NodePersistence v5 serializes this SeenChanges set, but the inspected normative specification does not define a safe GC rule, expiry, or watermark for these entries.
+The current wire specification defines first-seen ChangeId as the relay-eligibility gate (E-8), and E-13 defines the durable self-echo check plus a provenance-scoped SeenChanges key of (senderPeer, namespaceId, changeId). The current local-write path also inserts (local NodeId, namespaceId, ChangeId) into SeenChanges when it appends a local Outbox entry; remote receive inserts the direct sender/namespace/ChangeId key. Current NodePersistence v5 serializes this SeenChanges set, but the inspected normative specification does not define a safe GC rule, expiry, or watermark for these entries.
 
 The specification does define Inbox expiry/GC (expiresAt < now and both sides have confirmed the relevant log segment) and separate tombstone GC rules. Those rules do not automatically apply to SeenChanges. The current persisted SeenChanges key also contains no per-entry timestamp, originating author-stream cursor, or expiry value from which a safe horizon could be derived.
 
@@ -342,7 +342,7 @@ Consequences:
 - Do not apply an arbitrary TTL to SeenChanges. An old ChangeId may return through a different mesh route after the TTL and be treated as first-seen again, re-enqueued, and potentially create a relay/echo growth loop.
 - Do not replace the exact set with a Bloom filter as the only source of truth. False positives can suppress a legitimate first-seen operation and violate relay eligibility.
 - Do not assume Inbox GC makes SeenChanges redundant. Inbox deduplicates a batch identity; SeenChanges deduplicates operation provenance across different batches/routes.
-- Until a protocol-safe compaction rule is specified, the conservative behavior is to retain exact SeenChanges entries. This is correct but potentially unbounded.
+- Until a protocol-safe compaction rule is specified, the conservative behavior is to retain exact SeenChanges entries. This is correct but potentially unbounded. The pending-staging design can at least avoid allocating a protocol ChangeId and local SeenChanges entry for every superseded unpublished LWW write: create the ChangeId and add its durable local provenance entry only when the final staged operation is frozen. This reduces write amplification but does not solve retention for published/received operations.
 
 A future protocol/storage design must choose and prove one of these approaches before production metadata retention is considered complete:
 
