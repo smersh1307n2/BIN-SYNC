@@ -213,7 +213,7 @@ public static class NodePersistence
                 byte receiptFlags = (byte)((author.HasCursorEnd ? 1 : 0) |
                                            (author.HasFingerprint ? 2 : 0));
                 w.U8(receiptFlags);
-                if (author.HasCursorEnd) w.U64((ulong)author.CursorEnd);
+                if (author.HasCursorEnd) w.Varint((ulong)author.CursorEnd);
                 if (author.HasFingerprint) w.B128(author.Fingerprint);
                 w.Varint(author.AppliedAt);
                 w.Varint(author.ExpiresAt);
@@ -407,7 +407,7 @@ public static class NodePersistence
                     if (receiptFlags > 3 || ((receiptFlags & 2) != 0 && (receiptFlags & 1) == 0))
                         throw new InvalidDataException("Invalid persisted receipt flags.");
                     bool hasCursorEnd = (receiptFlags & 1) != 0;
-                    long cursorEnd = hasCursorEnd ? (long)r.U64() : 0;
+                    long cursorEnd = hasCursorEnd ? (long)r.Varint() : 0;
                     bool hasFingerprint = (receiptFlags & 2) != 0;
                     var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
                     var appliedAt = r.Varint();
