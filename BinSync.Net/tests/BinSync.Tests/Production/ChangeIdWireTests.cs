@@ -409,6 +409,44 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void ChangeLedgerValue_reserves_zero_fingerprint_for_unknown_and_reader_rejects_known_zero()
+    {
+        var unknown = new ChangeLedgerValue(default, isKnown: false);
+        Assert.False(unknown.IsKnown);
+        Assert.True(unknown.Fingerprint.IsZero);
+        var known = new ChangeLedgerValue(Digest16.From(Id(0xF1)), isKnown: true);
+        Assert.True(known.IsKnown);
+        Assert.Throws<ArgumentException>(() => new ChangeLedgerValue(default, isKnown: true));
+
+        using var node = Fix.MakeNode(130);
+        var changeId = BatchId.From(Id(0xF2));
+        node.GlobalChangeLedger[(7, changeId)] = known;
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-zero-ledger-{Guid.NewGuid():N}.bin");
+        try
+        {
+            NodePersistence.Save(node, path);
+            var image = File.ReadAllBytes(path);
+            var body = image.AsSpan(46).ToArray();
+            // Empty state sections precede the single namespace-grouped ledger entry.
+            const int fingerprintOffset = 60;
+            body.AsSpan(fingerprintOffset, 16).Clear();
+            var malformed = new byte[46 + body.Length];
+            image.AsSpan(0, 14).CopyTo(malformed);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(
+                malformed.AsSpan(6, 8), (ulong)body.Length);
+            var digest = Blake3Core.TaggedHash(NodePersistence.StateTag, body);
+            digest.CopyTo(malformed.AsSpan(14, 32));
+            body.CopyTo(malformed.AsSpan(46));
+
+            Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(malformed));
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Persistence_v11_flat_grouped_receipts_and_compact_local_markers_remain_readable()
     {
         var nodeId = NodeId.From(Id(0xE0));
