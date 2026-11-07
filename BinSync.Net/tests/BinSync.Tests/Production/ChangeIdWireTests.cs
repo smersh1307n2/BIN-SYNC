@@ -13,6 +13,58 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Provider_snapshot_restore_clears_pending_remote_ledger_but_preserves_local_identity()
+    {
+        using var local = Fix.MakeNode(201);
+        using var remote = Fix.MakeNode(202);
+        const int ns = 7;
+        RecordId localRecord = RecordId.From(Fix.Rid(0x71));
+        RecordId remoteRecord = RecordId.From(Fix.Rid(0x72));
+        byte[] localValue = { 0x10, 0x20 };
+        byte[] remoteValue = { 0x30, 0x40 };
+
+        Assert.True(local.WriteField(ns, localRecord, 0x110, localValue, new Hlc(7100, 0)));
+        BatchId localChangeId = Assert.Single(local.Outbox[ns]).ChangeId;
+        Assert.True(remote.WriteField(ns, remoteRecord, 0x120, remoteValue, new Hlc(7200, 0)));
+        BatchId remoteChangeId = Assert.Single(remote.Outbox[ns]).ChangeId;
+
+        Transport.MakeSession(remote, local);
+        Assert.NotNull(Transport.DeliverBatch(remote, local, ns));
+        Assert.True(local.GlobalChangeLedger.ContainsKey((ns, localChangeId)));
+        Assert.True(local.SeenChanges.Contains((ns, localChangeId)));
+        Assert.True(local.GlobalChangeLedger.ContainsKey((ns, remoteChangeId)));
+        Assert.False(local.SeenChanges.Contains((ns, remoteChangeId)));
+
+        int restoredRecords = local.RestoreProviderSnapshot(ns, new[]
+        {
+            new ProviderMutation
+            {
+                RecordId = localRecord,
+                FieldId = 0x110,
+                HlcWall = 7100,
+                AuthorNodeId = local.NodeId,
+                Value = localValue
+            },
+            new ProviderMutation
+            {
+                RecordId = remoteRecord,
+                FieldId = 0x120,
+                HlcWall = 7200,
+                AuthorNodeId = remote.NodeId,
+                Value = remoteValue
+            }
+        }, new[] { localChangeId, remoteChangeId });
+
+        Assert.Equal(2, restoredRecords);
+        Assert.True(local.GlobalChangeLedger.ContainsKey((ns, localChangeId)));
+        Assert.False(local.GlobalChangeLedger.ContainsKey((ns, remoteChangeId)));
+        Assert.True(local.TryGetField(ns, localRecord, 0x110, out var restoredLocal));
+        Assert.Equal(localValue, restoredLocal!.Value);
+        Assert.True(local.TryGetField(ns, remoteRecord, 0x120, out var restoredRemote));
+        Assert.Equal(remoteValue, restoredRemote!.Value);
+    }
+
+    [Fact]
     public void Batch_payload_roundtrip_preserves_change_id_and_binds_it_to_records_root()
     {
         var node = new Node(Id(1));
