@@ -588,6 +588,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (limit < 0) throw new ArgumentOutOfRangeException(nameof(limit));
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), 0);
+            ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
+            ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
             var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
                 ? saved : EmptyPeerStreamValue();
@@ -662,6 +664,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, localReplica);
             var partitionKey = new PartitionKey(scopeId, localReplica);
             var current = GetOrCreatePartition(partitionKey);
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
             if (current.InterestedPeers.Contains(rosterKey)) return;
 
@@ -692,6 +695,50 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
     }
 
+    public void RetireInterestedPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint retiredPeerEpoch, uint replacementPeerEpoch, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, localReplica);
+            if (replacementPeerEpoch <= retiredPeerEpoch)
+                throw new ArgumentOutOfRangeException(nameof(replacementPeerEpoch),
+                    "Replacement peer epoch must be newer than the retired incarnation.");
+
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out var current))
+                throw new InvalidOperationException("The replacement peer epoch has not been registered.");
+
+            var replacement = new InterestedPeerKey(namespaceId, peer, replacementPeerEpoch);
+            if (!current.InterestedPeers.Contains(replacement))
+                throw new InvalidOperationException("The replacement peer epoch must be durably registered before retirement.");
+            uint latestActiveEpoch = current.InterestedPeers
+                .Where(key => key.NamespaceId == namespaceId && key.Peer == peer)
+                .Select(key => key.PeerEpoch).DefaultIfEmpty(0).Max();
+            if (latestActiveEpoch != replacementPeerEpoch)
+                throw new InvalidOperationException("Only the newest registered peer epoch can retire an older incarnation.");
+
+            var retiredKey = (NamespaceId: namespaceId, Peer: peer);
+            if (current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint retiredThrough) &&
+                retiredThrough >= retiredPeerEpoch)
+                return;
+
+            var next = current.Clone();
+            next.InterestedPeers.Remove(new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch));
+            foreach (var stream in next.PeerStreams.Keys
+                .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
+                    key.PeerEpoch == retiredPeerEpoch).ToArray())
+                next.PeerStreams.Remove(stream);
+            next.RequiredPeerStreams.RemoveWhere(key =>
+                key.NamespaceId == namespaceId && key.Peer == peer && key.PeerEpoch == retiredPeerEpoch);
+            next.RetiredPeerEpochs[retiredKey] = Math.Max(
+                next.RetiredPeerEpochs.TryGetValue(retiredKey, out uint prior) ? prior : 0,
+                retiredPeerEpoch);
+            PersistPartition(partitionKey, current, next);
+        }
+    }
+
     public void RegisterInterestedPeerStream(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         ulong baselineAckedCursor, ulong streamOffset, uint issuerEpoch, byte[] lastBatchDigest)
@@ -705,6 +752,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ValidateDigest(lastBatchDigest, nameof(lastBatchDigest));
             var partitionKey = new PartitionKey(scopeId, localReplica);
             var current = GetOrCreatePartition(partitionKey);
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             bool hasExisting = current.PeerStreams.TryGetValue(key, out var existing);
             if (hasExisting && IsPristinePeerStream(existing!))
@@ -778,6 +826,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ValidateReservation(reservation);
             var partitionKey = new PartitionKey(scopeId, localReplica);
             var current = GetOrCreatePartition(partitionKey);
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (current.PeerStreams.TryGetValue(key, out var existing) && existing.PendingBatch is not null)
                 return CloneReservation(existing.PendingBatch);
@@ -829,6 +878,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out var current))
                 throw new InvalidOperationException("No durable outbound reservation exists.");
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (!current.PeerStreams.TryGetValue(key, out var prior) ||
                 prior.PendingBatch is null || prior.PendingBatch.BatchId != batchId)
@@ -851,6 +901,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out var current))
                 throw new InvalidOperationException("No durable outbound reservation exists.");
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (!current.PeerStreams.TryGetValue(key, out var prior) || prior.PendingBatch is null)
                 throw new InvalidOperationException("ACK has no matching durable outbound reservation.");
@@ -891,6 +942,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             safe = Math.Min(safe, progress.AckedCursor);
         }
         return safe == ulong.MaxValue ? 0 : safe;
+    }
+
+    private static void ValidatePeerEpochForAccess(
+        PartitionState state, int namespaceId, NodeId peer, uint peerEpoch)
+    {
+        if (state.RetiredPeerEpochs.TryGetValue((namespaceId, peer), out uint retiredThrough) &&
+            peerEpoch <= retiredThrough)
+            throw new InvalidDataException("Peer session epoch has been durably retired.");
+
+        uint latestActiveEpoch = state.InterestedPeers
+            .Where(key => key.NamespaceId == namespaceId && key.Peer == peer)
+            .Select(key => key.PeerEpoch).DefaultIfEmpty(0).Max();
+        if (peerEpoch < latestActiveEpoch)
+            throw new InvalidDataException("Peer session epoch is stale relative to the durable namespace roster.");
     }
 
     private static void EnsurePeerStream(PartitionState state, PeerStreamKey key, uint issuerEpoch)
@@ -1465,6 +1530,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             Add(StorageKey(root, 17, suffix), Array.Empty<byte>());
         }
 
+        foreach (var pair in state.RetiredPeerEpochs)
+        {
+            byte[] suffix = new byte[18];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
+            pair.Key.Peer.WriteTo(suffix.AsSpan(2));
+            byte[] value = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(value, pair.Value);
+            Add(StorageKey(root, 18, suffix), value);
+        }
+
         foreach (var pair in state.PeerStreams)
         {
             byte[] suffix = new byte[38];
@@ -1654,6 +1729,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     if (!state.ChangeLedger.TryGetValue(ledgerKey, out var ledger))
                         throw new InvalidDataException("Legacy outbound-origin marker has no ChangeId ledger entry.");
                     state.ChangeLedger[ledgerKey] = ledger with { IsLocalOutbound = true };
+                    break;
+                }
+                case 18:
+                {
+                    RequireLength(key, 18);
+                    RequireLength(row.Value, 4);
+                    state.RetiredPeerEpochs.Add(
+                        (BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16))),
+                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value));
                     break;
                 }
                 case 17:
@@ -2133,6 +2217,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         public Dictionary<PeerStreamKey, PeerStreamStateValue> PeerStreams { get; } = new();
         public HashSet<PeerStreamKey> RequiredPeerStreams { get; } = new();
         public HashSet<InterestedPeerKey> InterestedPeers { get; } = new();
+        public Dictionary<(int NamespaceId, NodeId Peer), uint> RetiredPeerEpochs { get; } = new();
 
         public ulong StorageCommitSeq { get; set; }
         public bool IsPersisted { get; set; }
@@ -2165,6 +2250,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             foreach (var pair in PeerStreams) clone.PeerStreams.Add(pair.Key, pair.Value);
             foreach (var peer in RequiredPeerStreams) clone.RequiredPeerStreams.Add(peer);
             foreach (var peer in InterestedPeers) clone.InterestedPeers.Add(peer);
+            foreach (var pair in RetiredPeerEpochs) clone.RetiredPeerEpochs.Add(pair.Key, pair.Value);
             return clone;
         }
     }
