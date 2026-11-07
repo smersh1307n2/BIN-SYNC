@@ -487,10 +487,10 @@ public sealed class StorageSyncCoordinator
         BinaryPrimitives.WriteUInt32LittleEndian(fixedPart, senderEpoch);
         BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(4), checked((uint)_namespaceId));
         hash.AppendData(fixedPart);
+        Span<byte> length = stackalloc byte[4];
         foreach (var chunk in chunks)
         {
             byte[] encoded = Reconcile.EncodeSnapshotChunk(chunk);
-            Span<byte> length = stackalloc byte[4];
             BinaryPrimitives.WriteInt32LittleEndian(length, encoded.Length);
             hash.AppendData(length);
             hash.AppendData(encoded);
