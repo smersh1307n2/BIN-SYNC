@@ -184,11 +184,15 @@ and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time
 causal dependencies). There is no field-only WAL record or v1 writer/reader.
 
 Accepted incoming DELTA_BATCH frames are also recorded as `RemoteBatch` entries
-before the receiver publishes their effects or sends the ACK. Each entry preserves
+before the receiver publishes new record effects or sends the ACK. Each entry preserves
 the exact batch payload together with the sending peer identity, session epoch and
-alias map needed to resolve operation authors during replay. An idempotent duplicate
-batch does not create another WAL entry. This closes the crash window in which a
-sender could receive an ACK for data that the receiver had not yet made recoverable.
+alias map needed to resolve operation authors during replay. A replay whose ChangeIds
+are already present in the atomically checkpointed Node `GlobalChangeLedger` does not
+create another WAL entry. If a Metadata Store receipt is replayed into a newly created
+Node whose local ledger is empty, the batch is still written to WAL so that the Node
+record cache can be rebuilt; Metadata Store and Data Provider remain the protocol
+and durable-value authorities. This closes the crash window in which a sender could
+receive an ACK for data that the receiver had not yet made recoverable.
 
 Snapshot transfers remain atomic in memory but are not WAL records: they have no
 acceptance ACK, do not advance the sender's Outbox acknowledgement cursor, and can
