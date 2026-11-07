@@ -31,6 +31,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             {
                 recordId = provider.ResolveRecordId(itemKey);
                 fieldId = provider.ResolveFieldId(fieldKey);
+                Assert.True(fieldId >= 0x0100);
                 provider.AppendLocalChange(new ProviderMutation
                 {
                     RecordId = recordId,
