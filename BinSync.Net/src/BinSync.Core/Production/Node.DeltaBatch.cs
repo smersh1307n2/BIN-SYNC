@@ -516,6 +516,56 @@ public sealed partial class Node
     /// log (sneakernet / not-yet-exported).
     /// </summary>
     /// <summary>
+    /// Read owned copies of local Outbox entries for a durable metadata adapter.
+    /// Sequence numbers are the existing per-(namespace, author) Outbox sequence;
+    /// callers must preserve gaps and must not renumber entries.
+    /// </summary>
+    public IReadOnlyList<OutboxEntry> ReadOutboxEntries(
+        int namespaceId, NodeId authorNodeId, long afterSequence, int limit = 1024)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (authorNodeId.IsZero)
+            throw new ArgumentException("Author identity must be non-zero.", nameof(authorNodeId));
+        if (afterSequence < 0)
+            throw new ArgumentOutOfRangeException(nameof(afterSequence));
+        if (limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            if (!Outbox.TryGetValue(namespaceId, out var entries) || entries.Count == 0)
+                return Array.Empty<OutboxEntry>();
+
+            var selected = new List<OutboxEntry>();
+            foreach (var entry in entries)
+                if (entry.AuthorNodeId == authorNodeId && entry.Seq > afterSequence)
+                    selected.Add(entry);
+            selected.Sort(static (left, right) => left.Seq.CompareTo(right.Seq));
+            if (selected.Count > limit)
+                selected.RemoveRange(limit, selected.Count - limit);
+
+            var owned = new List<OutboxEntry>(selected.Count);
+            foreach (var entry in selected)
+            {
+                owned.Add(new OutboxEntry
+                {
+                    NamespaceId = entry.NamespaceId,
+                    Seq = entry.Seq,
+                    ChangeId = entry.ChangeId,
+                    RecordId = entry.RecordId,
+                    OpKind = entry.OpKind,
+                    Payload = entry.Payload.ToArray(),
+                    AuthorNodeId = entry.AuthorNodeId,
+                    CreatedAt = entry.CreatedAt,
+                    CausalDeps = entry.CausalDeps.ToList()
+                });
+            }
+            return owned;
+        }
+    }
+
+    /// <summary>
     /// Return the minimum local OutboxSeq acknowledged by every interested peer for
     /// this author stream. Zero means reclamation is not currently safe (no peers,
     /// or a known peer has no durable PeerState for this namespace).
