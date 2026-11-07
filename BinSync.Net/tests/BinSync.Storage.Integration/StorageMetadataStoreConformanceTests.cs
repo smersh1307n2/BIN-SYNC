@@ -112,6 +112,15 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         return bytes;
     }
 
+    private static void CompleteBaseline(StorageMetadataStore store, string scope,
+        NodeId local, NodeId peer, uint peerEpoch, int namespaceId,
+        NodeId author, ulong streamOffset = 0, uint issuerEpoch = 1)
+    {
+        store.RegisterInterestedPeer(scope, local, peer, peerEpoch, namespaceId);
+        store.CompletePeerInitialSync(scope, local, peer, peerEpoch, namespaceId,
+            new[] { new MetadataPeerStreamBaseline(author, streamOffset, issuerEpoch) });
+    }
+
     [Fact]
     public void Peer_batch_reservation_is_immutable_durable_and_acknowledged_atomically()
     {
