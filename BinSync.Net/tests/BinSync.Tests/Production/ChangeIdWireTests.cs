@@ -246,6 +246,35 @@ public class ChangeIdWireTests
             second, author, new[] { depA, depB }));
         Assert.NotEqual(fingerprint, ChangeIdentity.Fingerprint(5, recordId, OpsConst.TagFieldWrite,
             second, author, new[] { depA }));
+
+        var fieldTomb = new OpFieldTomb
+        {
+            FieldId = 0x1234, KeyEpoch = 7, Wall = 123456, Logical = 9, Origin = 1
+        };
+        var fieldTombFingerprint = ChangeIdentity.Fingerprint(5, recordId,
+            OpsConst.TagFieldTomb, fieldTomb, author);
+        Assert.Equal(fieldTombFingerprint, ChangeIdentity.Fingerprint(5, recordId,
+            OpsConst.TagFieldTomb, new OpFieldTomb
+            {
+                FieldId = 0x1234, KeyEpoch = 7, Wall = 123456, Logical = 9, Origin = 99
+            }, author));
+        Assert.NotEqual(fieldTombFingerprint, ChangeIdentity.Fingerprint(5, recordId,
+            OpsConst.TagFieldTomb, new OpFieldTomb
+            {
+                FieldId = 0x1234, KeyEpoch = 8, Wall = 123456, Logical = 9, Origin = 99
+            }, author));
+
+        var recordTomb = new OpRecordTombstone
+        {
+            RecordId = recordId, Wall = 123456, Logical = 9, Origin = 1
+        };
+        var recordTombFingerprint = ChangeIdentity.Fingerprint(5, recordId,
+            OpsConst.TagRecordTomb, recordTomb, author);
+        Assert.NotEqual(recordTombFingerprint, ChangeIdentity.Fingerprint(5, recordId,
+            OpsConst.TagRecordTomb, new OpRecordTombstone
+            {
+                RecordId = Fix.Rid(133), Wall = 123456, Logical = 9, Origin = 99
+            }, author));
     }
 
     [Fact]
