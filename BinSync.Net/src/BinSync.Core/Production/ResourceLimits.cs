@@ -11,6 +11,7 @@ public sealed class ResourceLimits
     private int _maxOutboxEntriesPerNamespace = 100_000;
     private int _maxSeenChanges = 1_000_000;
     private int _maxGlobalChangeLedgerEntries = 1_000_000;
+    private int _maxInboxReceipts = 1_000_000;
     private int _maxRecords;
 
     /// <summary>Default resource-limit configuration.</summary>
@@ -52,6 +53,17 @@ public sealed class ResourceLimits
         {
             if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxGlobalChangeLedgerEntries));
             _maxGlobalChangeLedgerEntries = value;
+        }
+    }
+
+    /// <summary>Max durable accepted-batch receipts retained in Inbox (0 = unlimited).</summary>
+    public int MaxInboxReceipts
+    {
+        get => _maxInboxReceipts;
+        init
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(MaxInboxReceipts));
+            _maxInboxReceipts = value;
         }
     }
 
@@ -107,6 +119,12 @@ public sealed class ResourceLimits
 
         if (MaxGlobalChangeLedgerEntries > 0 &&
             (long)node.GlobalChangeLedger.Count + newGlobalChanges > MaxGlobalChangeLedgerEntries)
+            throw new SyncException("INTERNAL");
+
+        // Every newly accepted batch creates one durable idempotency receipt.
+        // There is deliberately no TTL-based eviction until the protocol proves
+        // a safe duplicate-replay horizon.
+        if (MaxInboxReceipts > 0 && node.InboxAuthors.Count >= MaxInboxReceipts)
             throw new SyncException("INTERNAL");
 
         if (MaxRecords > 0)
