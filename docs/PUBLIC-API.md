@@ -116,6 +116,7 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 |------|--------|
 | `OutboxEntry` | `RecordId`, `BatchId ChangeId`, `NodeId AuthorNodeId`, `ReadOnlyMemory<byte> Payload`, … |
 | `Batch` | Typed issuer/id/digests; `Entries`; `MaterializeEntries()` for owned payloads |
+| `MetadataBatchReceipt` | Durable accepted cursor/digest/relay result; `DurableAuthor` is restored from the stored receipt and is authoritative for duplicate ACK handling |
 | `Record` / `FieldState` | In-memory record model; `Record` is constructed with `RecordId` (reached via engine apply paths; maps are internal on `Node`) |
 
 ### Wire & codecs (§6, §12)
