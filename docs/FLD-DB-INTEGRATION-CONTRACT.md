@@ -49,7 +49,8 @@ BIN-SYNC не должен держать вторую копию durable field 
 | Операция | Контракт |
 |---|---|
 | `OpenReadSnapshot(namespaceId)` | Возвращает стабильный read-only snapshot поколения базы; чтение не удерживает writer lock на всё время отправки |
-| `ReadLocalOutboxBatch(afterSeq, limit, lease)` | Читает только локальные изменения FLD author; возвращает стабильные OutboxSeq/ChangeId и полные HLC/op/value |
+| `FreezePendingLocalChanges(limit, lease)` | Атомарно переводит выбранные durable pending local changes в immutable Outbox, назначает постоянные OutboxSeq/ChangeId и фиксирует payload/reference до возможности отправки |
+| `ReadLocalOutboxBatch(afterSeq, limit, lease)` | Читает только frozen локальные изменения FLD author; возвращает стабильные OutboxSeq/ChangeId и полные HLC/op/value |
 | `AcknowledgeLocalOutbox(safeThroughSeq, lease)` | Подтверждает только непрерывный безопасный prefix, вычисленный BIN-SYNC по всем interested peers |
 | `ApplyRemoteBatch(commit)` | Одна атомарная durable транзакция: field state + dedup/inbox/cursor + relay journal/protocol extension |
 | `ReadRelayBatch(author, afterSeq, limit, lease)` | Возвращает сохранённые relay-eligible mutations, включая операции, проигравшие LWW |
@@ -87,8 +88,21 @@ Remote mutation не создаёт запись в **локальном** FLD O
 
 ## 4. Локальный Outbox и ACK
 
-- FLD local Put/Delete/record lifecycle operations создают локальные Outbox entries с устойчивыми `OutboxSeq` и `ChangeId`.
-- BIN-SYNC преобразует эти записи в author stream локального Node. `OutboxSeq` используется как cursor; `CommitSeq` не используется в DELTA_BATCH cursor.
+### 4.1 Текущее поведение
+
+Текущая реализация FLD создаёт Outbox entries при каждом durable `Commit()` для dirty field mutations. Несколько Put одного поля до одного Commit уже схлопываются через `_dirty`; отдельные Commit того же поля создают отдельные immutable Outbox entries. Это безопасно, но хранит промежуточные локальные версии, которые могли ещё не быть доступны ни одному peer.
+
+### 4.2 Целевое поведение: pending staging → frozen Outbox
+
+Детальная политика определена в [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md). В целевой модели local Put/Delete атомарно обновляет current field state и durable pending staging. Для LWW_FIELD pending операции одного и того же `(namespace, recordId, fieldId)` могут заменять друг друга, пока они не были frozen/exposed to any peer. Pending payload должен оставаться доступным даже если remote APPLY позже заменит visible field winner.
+
+Перед тем как BIN-SYNC сможет отправить pending operation, FLD атомарно freeze-ит её в append-only Outbox, назначая неизменяемые OutboxSeq и ChangeId. После freeze запрещено переписывать или коалесцировать запись, даже если ни один ACK ещё не получен. Текущий append-only Outbox API сохраняет этот контракт; оптимизация относится к staging до Outbox, а не к переписыванию Outbox tail.
+
+Freeze и перенос pending→Outbox должны быть одной durable transaction/WAL recovery boundary. Сетевой send не может начаться до успешного durable freeze.
+
+### 4.3 Cursor and ACK rules
+
+- BIN-SYNC преобразует frozen entries в author stream локального Node. `OutboxSeq` используется как cursor; `CommitSeq` не используется в DELTA_BATCH cursor.
 - `AcknowledgeLocalOutbox` получает не ACK отдельного peer, а вычисленный BIN-SYNC `SafeOutboxSeq`: минимальный непрерывный cursor, подтверждённый всеми interested peers.
 - Peer без PeerState/ACK не разрешает удалять соответствующий prefix. Это сохраняет relay/reconnect safety.
 - Compaction сохраняет исходные OutboxSeq и следующий sequence; никакой renumbering после restart/compaction.
@@ -118,7 +132,7 @@ FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest1
 
 ## 7. Текущее состояние API и блокирующие расхождения
 
-Проверено по FLD-DB `fix/crash-consistency-outbox` на commit `6d83b509` и BIN-SYNC PR #16:
+Проверено по FLD-DB `fix/crash-consistency-outbox` на branch HEAD `331206106f7d7d645dabe849957278a3a5a8b008` и BIN-SYNC `feature/fld-external-storage` HEAD `f31e043cddaf269df313e5201fc45f75b06c9ec8`:
 
 | Текущее API / состояние (проверено на FLD fix/crash-consistency-outbox) | Статус / оставшийся разрыв |
 |---|---|
