@@ -210,3 +210,10 @@ The physical engine must be independently reusable. `Fld1.Storage` exposes byte-
 ## 9. Решение по текущему этапу
 
 Следующий этап — согласовать общую Metadata Store архитектуру, определить нейтральные semantic operations и conformance tests, затем спроектировать Storage-only роль FLD и вынести durable state BIN-SYNC за storage boundary. Уже реализованные FLD primitives (ApplyRemoteBatch, apply journal, Outbox lease) следует переиспользовать и довести, а не переписывать. До появления единой транзакционной границы не подключать FLD к Node набором точечных callback-ов.
+
+
+## 10. History-storage audit reference
+
+The cross-layer code audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md). It confirms that BIN-SYNC already shares one Outbox operation across peers and owns per-peer/per-author progress; FLD must not duplicate this progress model. It also identifies the current FLD APPLY payload amplification (Fields plus RelayFields, and WAL plus ApplyJournal), the unbounded ApplyJournal index/paging path, and the required separation of batch receipt, global ChangeId dedup, relay payload and peer replay-cache lifetimes.
+
+This audit is an internal storage design follow-up. It does not alter the wire contract or the atomic acceptance requirements in this document. The next implementation work must preserve the atomic transition and ACK-after-durable-acceptance guarantee while removing redundant payload copies.
