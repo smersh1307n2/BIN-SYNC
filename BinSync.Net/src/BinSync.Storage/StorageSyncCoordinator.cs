@@ -328,6 +328,43 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Registers a session peer as interested in this namespace. Existing Node-only
+    /// progress is migrated first; an unacknowledged legacy send without a durable
+    /// reservation fails closed instead of being silently skipped.
+    /// </summary>
+    public void RegisterInterestedPeer(SyncSession session, int namespaceId)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (_metadataStore is not IMetadataPeerStateStore peerStore)
+            throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
+        if ((uint)namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+
+        lock (_gate)
+        {
+            NodeId peer = session.PeerNodeId;
+            uint peerEpoch = checked((uint)session.PeerEpoch);
+            var known = peerStore.ReadPeerStreamStates(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId)
+                .Select(stream => stream.AuthorStream).ToHashSet();
+            var authors = peerStore.ReadOutboundAuthors(_scopeId!, _node.NodeId, namespaceId)
+                .Concat(peerStore.ReadRelayAuthors(_scopeId!, _node.NodeId, namespaceId))
+                .Distinct()
+                .ToArray();
+            foreach (NodeId author in authors)
+            {
+                if (known.Contains(author)) continue;
+                var legacy = _node.ReadPeerStreamProgress(peer, namespaceId, author);
+                if (legacy.PushedCursor > legacy.AckedCursor)
+                    throw new InvalidDataException("Legacy Node peer state has an unacknowledged batch without a durable replay reservation.");
+                peerStore.RegisterInterestedPeerStream(_scopeId!, _node.NodeId, peer,
+                    peerEpoch, namespaceId, author, legacy.AckedCursor,
+                    legacy.StreamOffset, legacy.IssuerEpoch, legacy.LastBatchDigest);
+            }
+            peerStore.RegisterInterestedPeer(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId);
+        }
+    }
+
+    /// <summary>
     /// Receive through SyncSession with a durable PendingApply intent committed before
     /// Node mutation. The ACK is emitted only after Node checkpoint, provider apply and
     /// metadata receipt finalization all succeed.
@@ -337,6 +374,7 @@ public sealed class StorageSyncCoordinator
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(persistNode);
+        RegisterInterestedPeer(session, _namespaceId);
         StorageRemoteApplyPlan? plan = null;
         return session.ReceiveBatchAsync(_node,
             beforeApply: (batch, payload, senderPeer) =>
