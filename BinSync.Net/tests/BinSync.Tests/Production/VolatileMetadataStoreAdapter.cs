@@ -40,6 +40,11 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var current = _partitions.TryGetValue(partitionKey, out var stored)
             ? stored
             : new PartitionState();
+        var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, batch.BatchId);
+        bool isDuplicate = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
+        if (isDuplicate && !priorReceipt!.Matches(batch))
+            throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
 
         if (current.CompletedPendingApplies.TryGetValue(applyToken, out var completed))
         {
@@ -52,13 +57,13 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         {
             if (!SamePendingBatch(pending.Batch, batch))
                 throw new InvalidDataException("Pending apply token was reused for different input.");
-            return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch));
+            return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch)) { IsDuplicate = isDuplicate };
         }
 
         var next = current.Clone();
         next.PendingApplies.Add(applyToken, new PendingApplyValue(CloneBatch(batch)));
         _partitions[partitionKey] = next;
-        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch));
+        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch)) { IsDuplicate = isDuplicate };
     }
 
     public IReadOnlyList<MetadataPendingApplyIntent> ReadPendingApplyIntents(
@@ -221,7 +226,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             && left.BatchId == right.BatchId
             && left.CursorStart == right.CursorStart
             && left.CursorEnd == right.CursorEnd
-            && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest);
+            && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest)
+            && left.WirePayload.AsSpan().SequenceEqual(right.WirePayload)
+            && left.ReceiveStateOwnedByMetadataStore == right.ReceiveStateOwnedByMetadataStore;
 
     private static MetadataIncomingBatch CloneBatch(MetadataIncomingBatch batch)
         => new()
@@ -237,6 +244,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             CursorEnd = batch.CursorEnd,
             PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
+            WirePayload = batch.WirePayload.ToArray(),
+            ReceiveStateOwnedByMetadataStore = batch.ReceiveStateOwnedByMetadataStore,
             Operations = batch.Operations.Select(operation => new MetadataOperation
             {
                 AuthorNodeId = operation.AuthorNodeId,
