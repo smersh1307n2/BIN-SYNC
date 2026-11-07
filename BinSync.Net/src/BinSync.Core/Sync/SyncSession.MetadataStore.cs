@@ -48,13 +48,11 @@ public partial class SyncSession
 
             MetadataOutboundBatchReservation reservation;
             NodeId authorStream;
-            Node.OutboundBatchPayload batch;
             var pending = streams.FirstOrDefault(stream => stream.State.PendingBatch is not null);
             if (pending is not null)
             {
                 authorStream = pending.AuthorStream;
                 reservation = pending.State.PendingBatch!;
-                batch = Materialize(reservation, authorStream, namespaceId);
             }
             else
             {
@@ -66,7 +64,6 @@ public partial class SyncSession
                 bool found = false;
                 reservation = null!;
                 authorStream = default;
-                batch = default;
 
                 foreach (NodeId candidateAuthor in authors)
                 {
@@ -113,22 +110,21 @@ public partial class SyncSession
                         PeerNodeId, namespaceId, candidateAuthor, pageItems,
                         schemaVersion: schemaVersion);
                     if (created is null) continue;
-                    batch = created.Value;
+                    var createdBatch = created.Value;
                     authorStream = candidateAuthor;
                     var candidate = new MetadataOutboundBatchReservation
                     {
-                        BatchId = batch.BatchId,
-                        IssuerEpoch = checked((uint)batch.IssuerEpoch),
-                        StreamOffset = batch.StreamOffset,
-                        CursorStart = checked((ulong)batch.CursorStart),
-                        CursorEnd = checked((ulong)batch.CursorEnd),
-                        PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
-                        BatchDigest = batch.BatchDigest.ToArray(),
-                        Payload = batch.Payload
+                        BatchId = createdBatch.BatchId,
+                        IssuerEpoch = checked((uint)createdBatch.IssuerEpoch),
+                        StreamOffset = createdBatch.StreamOffset,
+                        CursorStart = checked((ulong)createdBatch.CursorStart),
+                        CursorEnd = checked((ulong)createdBatch.CursorEnd),
+                        PreviousBatchDigest = createdBatch.PreviousBatchDigest.ToArray(),
+                        BatchDigest = createdBatch.BatchDigest.ToArray(),
+                        Payload = createdBatch.Payload
                     };
                     reservation = peerStateStore.ReserveOutboundBatch(
                         scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, authorStream, candidate);
-                    batch = Materialize(reservation, authorStream, namespaceId);
                     found = true;
                     break;
                 }
@@ -167,10 +163,4 @@ public partial class SyncSession
         }
     }
 
-    private static Node.OutboundBatchPayload Materialize(
-        MetadataOutboundBatchReservation reservation, NodeId authorStream, int namespaceId)
-        => new Node.OutboundBatchPayload(reservation.Payload.ToArray(), reservation.BatchId, authorStream, authorStream,
-            namespaceId, checked((int)reservation.IssuerEpoch),
-            checked((long)reservation.CursorStart), checked((long)reservation.CursorEnd),
-            reservation.StreamOffset, Digest16.From(reservation.PreviousBatchDigest), Digest16.From(reservation.BatchDigest));
 }
