@@ -671,10 +671,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                  !baseline.LastBatchDigest.AsSpan().SequenceEqual(lastBatchDigest)))
                 throw new InvalidDataException("Interested peer registration conflicts with existing stream progress.");
 
-            var next = current.Clone();
-            next.PeerStreams[key] = baseline;
-            next.RequiredPeerStreams.Add(key);
-            PersistPartition(partitionKey, current, next);
+            PersistPeerStreamState(partitionKey, current, key, baseline, ensureRequired: true);
         }
     }
 
@@ -764,15 +761,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (!reservation.PreviousBatchDigest.AsSpan().SequenceEqual(expectedPreviousDigest))
                 throw new InvalidDataException("Outbound batch reservation does not extend the durable peer digest chain.");
 
-            var next = current.Clone();
-            next.RequiredPeerStreams.Add(key);
-            next.PeerStreams[key] = prior with
+            PersistPeerStreamState(partitionKey, current, key, prior with
             {
                 IssuerEpoch = reservation.IssuerEpoch,
                 LastBatchDigest = expectedPreviousDigest.ToArray(),
                 PendingBatch = CloneReservation(reservation)
-            };
-            PersistPartition(partitionKey, current, next);
+            }, ensureRequired: true);
             return CloneReservation(reservation);
         }
     }
@@ -792,9 +786,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 prior.PendingBatch is null || prior.PendingBatch.BatchId != batchId)
                 throw new InvalidOperationException("Outbound batch is not the active durable reservation.");
             if (prior.PushedCursor >= prior.PendingBatch.CursorEnd) return;
-            var next = current.Clone();
-            next.PeerStreams[key] = prior with { PushedCursor = prior.PendingBatch.CursorEnd };
-            PersistPartition(partitionKey, current, next);
+            PersistPeerStreamState(partitionKey, current, key,
+                prior with { PushedCursor = prior.PendingBatch.CursorEnd }, ensureRequired: true);
         }
     }
 
@@ -818,14 +811,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 !pending.BatchDigest.AsSpan().SequenceEqual(batchDigest) || prior.PushedCursor < cursorEnd)
                 throw new InvalidDataException("ACK does not match the pushed durable outbound reservation.");
 
-            var next = current.Clone();
-            next.PeerStreams[key] = prior with
+            PersistPeerStreamState(partitionKey, current, key, prior with
             {
                 AckedCursor = cursorEnd,
                 LastBatchDigest = batchDigest.ToArray(),
                 PendingBatch = null
-            };
-            PersistPartition(partitionKey, current, next);
+            }, ensureRequired: true);
         }
     }
 
@@ -1155,6 +1146,51 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         next.IsPersisted = true;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
+    }
+
+    private void PersistPeerStreamState(
+        PartitionKey partitionKey, PartitionState current, PeerStreamKey key,
+        PeerStreamStateValue value, bool ensureRequired)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] streamSuffix = new byte[38];
+        key.Peer.WriteTo(streamSuffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(streamSuffix.AsSpan(16), key.PeerEpoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(streamSuffix.AsSpan(20), checked((ushort)key.NamespaceId));
+        key.AuthorStream.WriteTo(streamSuffix.AsSpan(22));
+        byte[] streamKey = StorageKey(root, 15, streamSuffix);
+        byte[] streamValue = EncodePeerStreamState(value);
+
+        bool addRequired = ensureRequired && !current.RequiredPeerStreams.Contains(key);
+        byte[]? requiredKey = null;
+        if (addRequired)
+        {
+            byte[] requiredSuffix = new byte[38];
+            BinaryPrimitives.WriteUInt16LittleEndian(requiredSuffix, checked((ushort)key.NamespaceId));
+            key.AuthorStream.WriteTo(requiredSuffix.AsSpan(2));
+            key.Peer.WriteTo(requiredSuffix.AsSpan(18));
+            BinaryPrimitives.WriteUInt32LittleEndian(requiredSuffix.AsSpan(34), key.PeerEpoch);
+            requiredKey = StorageKey(root, 16, requiredSuffix);
+        }
+
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        batch.Put(streamKey, streamValue);
+        if (requiredKey is not null)
+            batch.Put(requiredKey, Array.Empty<byte>());
+        batch.Commit();
+
+        current.PeerStreams[key] = value;
+        if (addRequired) current.RequiredPeerStreams.Add(key);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        current.PersistedEntries[Convert.ToHexString(streamKey)] = (streamKey, streamValue);
+        if (requiredKey is not null)
+            current.PersistedEntries[Convert.ToHexString(requiredKey)] = (requiredKey, Array.Empty<byte>());
     }
 
     private static readonly Dictionary<string, (byte[] Key, byte[] Value)> EmptyEntries = new(StringComparer.Ordinal);
