@@ -139,6 +139,30 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(1UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
     }
 
+    [Fact]
+    public void Relay_ack_does_not_collect_receipts_or_change_id_dedup_facts()
+    {
+        using var store = CreateStore();
+        var operation = Operation(20, 30, 40, 50);
+        var original = CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10, operation);
+        store.AcceptIncomingBatch(original);
+        store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 1);
+
+        Assert.Empty(store.ReadRelay("scope-a", Node(1), 7, Node(20), 0, 10).Items);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 0));
+
+        var duplicateReceipt = store.AcceptIncomingBatch(original);
+        Assert.True(duplicateReceipt.IsDuplicate);
+
+        var alternateRoute = store.AcceptIncomingBatch(
+            CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 1, 0, 11, operation));
+        Assert.False(alternateRoute.IsDuplicate);
+        Assert.Equal(1UL, store.GetReceiveCursor("scope-a", Node(1), Node(3), 1, 7));
+        Assert.Empty(store.ReadRelay("scope-a", Node(1), 7, Node(20), 0, 10).Items);
+        Assert.Equal(1UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
+    }
+
     protected static MetadataIncomingBatch CreateBatch(
         string scope,
         byte replica,
