@@ -361,6 +361,60 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void New_peer_epoch_fences_and_retires_old_progress_before_releasing_payload_retention()
+    {
+        string directory = Path.Combine(_root, "peer-epoch-retirement");
+        NodeId local = Node(1), peer = Node(2);
+        const string scope = "peer-epoch-retirement";
+        try
+        {
+            using (var store = new StorageMetadataStore(directory, 438, deleteOnDispose: false))
+            {
+                store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+                store.FreezeOutbound(scope, local, 7, local, new[] { FrozenOperation(150, 151) });
+                Assert.Throws<InvalidOperationException>(() =>
+                    store.RetireInterestedPeer(scope, local, peer, 1, 2, 7));
+
+                store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+                var reservation = new MetadataOutboundBatchReservation
+                {
+                    BatchId = Batch(152), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)153, 16).ToArray(),
+                    Payload = new byte[] { 154 }
+                };
+                store.ReserveOutboundBatch(scope, local, peer, 2, 7, local, reservation);
+                store.MarkOutboundBatchPushed(scope, local, peer, 2, 7, local, reservation.BatchId);
+                store.AcknowledgeOutboundBatch(scope, local, peer, 2, 7, local,
+                    reservation.BatchId, 1, reservation.BatchDigest);
+
+                Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
+                Assert.Throws<InvalidDataException>(() =>
+                    store.ReadOutboundForPeer(scope, local, peer, 1, 7, local, 10));
+
+                store.RetireInterestedPeer(scope, local, peer, 1, 2, 7);
+                Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
+                Assert.Equal(2U, Assert.Single(store.ReadInterestedPeers(scope, local, 7)).PeerEpoch);
+                Assert.Empty(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
+                Assert.Throws<InvalidDataException>(() => store.RegisterInterestedPeer(scope, local, peer, 1, 7));
+
+                store.CompactOutboundThrough(scope, local, 7, local, 1);
+                Assert.Empty(store.ReadOutboundForPeer(scope, local, peer, 2, 7, local, 10).Items);
+            }
+
+            using var reopened = new StorageMetadataStore(directory, 438, deleteOnDispose: false);
+            Assert.Equal(1UL, reopened.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
+            Assert.Throws<InvalidDataException>(() =>
+                reopened.ReadOutboundForPeer(scope, local, peer, 1, 7, local, 10));
+            Assert.Equal(2U, Assert.Single(reopened.ReadInterestedPeers(scope, local, 7)).PeerEpoch);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Relay_compaction_waits_for_all_namespace_interested_peers()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-safe-relay-compaction"), 429);
