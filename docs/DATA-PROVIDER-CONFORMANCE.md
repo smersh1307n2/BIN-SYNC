@@ -1,6 +1,6 @@
 # BIN-SYNC Data Provider Semantic Contract and Conformance Plan
 
-**Status:** semantic contract plus initial volatile conformance suite (six semantic tests and one durability-profile assertion); no durable provider implementation exists yet. Public C# signatures are intentionally not frozen.  
+**Status:** semantic contract plus executable conformance. Six provider-independent semantic tests run against a volatile reference adapter and the durable `StorageDataProvider` implementation. The Storage provider passes restart, feed paging/ACK fencing, snapshot/feed barrier, remote apply idempotency and origin-separation integration tests. Public C# signatures remain intentionally small.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Related metadata contract:** [Metadata Store Semantic Contract and Conformance Plan](METADATA-STORE-CONFORMANCE.md).  
 **Change lifecycle:** [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).  
@@ -161,4 +161,13 @@ The test-only contract and inherited suite are implemented in `BinSync.Net/tests
 
 GitHub Actions run `42359566433` passed the full BIN-SYNC Release build/tests, public samples and fuzz/lab hardening at commit `b9adbd3749e689b2019f48f8b500881293d5cc2c`: 637 tests passed, line coverage 72.5%. The follow-up feed-gap/input-ownership assertion is in the subsequent commit and is being revalidated separately.
 
-**Still open:** a durable provider adapter and reopen/fault-injection tests; end-to-end proof that feed ACK follows durable staging; a real MVCC snapshot/feed barrier under concurrent writes; shared-transaction and separate-store integration with actual providers. The volatile reference provider is not evidence of any disk durability or process-restart guarantee.
+**Still open:** cross-page durable PendingLocal staging/coalescing, end-to-end proof that source-feed ACK follows durable canonical staging rather than the transitional Node checkpoint + Metadata mirror, and a broader crash matrix around source feed → Node/Metadata publication. The durable StorageDataProvider does provide actual reopen, feed paging/ACK, snapshot/feed barrier and idempotent remote-apply evidence; the volatile reference provider itself still makes no restart-durability claim.
+
+
+## 12. Durable Storage provider status (2026-11-07)
+
+The durable `StorageDataProvider` implementation is now part of the BIN-SYNC + Storage integration and passes the inherited provider conformance suite against real `Fld1.Storage`, including process-reopen tests for stable mappings, local feed state, remote apply receipts and current array state.
+
+`StorageSyncCoordinator.PublishLocalChanges` now coalesces repeated unpublished LWW field mutations within the bounded provider-feed page before creating Node Outbox entries. It selects the canonical `(HlcWall, HlcLogical, AuthorNodeId)` winner per `(RecordId, FieldId)`; record lifecycle tombstones are coalesced separately. All source-page entries are validated before coalescing, and only the final selected operations enter the Node Outbox. Once frozen/published, operations remain immutable.
+
+This is deliberately **page-local coalescing**, not the final durable PendingLocal staging design. The source feed remains the provider's durable history until ACK. Cross-page coalescing and the complete Storage-backed Metadata Store publication boundary remain open; do not claim that all unpublished local edits are globally coalesced yet.
