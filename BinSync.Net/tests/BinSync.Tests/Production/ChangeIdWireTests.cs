@@ -376,7 +376,8 @@ public class ChangeIdWireTests
 
         using var restored = NodePersistence.LoadFromBytes(BuildV6Image(includeAuthor: true));
         Assert.Single(restored.Inbox);
-        Assert.Equal(author, restored.InboxAuthors[(issuer, 9, 2, batchId)]);
+        Assert.Equal(author, restored.InboxAuthors[(issuer, 9, 2, batchId)].DurableAuthor);
+        Assert.False(restored.InboxAuthors[(issuer, 9, 2, batchId)].HasFingerprint);
         Assert.Throws<InvalidDataException>(() =>
             NodePersistence.LoadFromBytes(BuildV6Image(includeAuthor: false)));
     }
