@@ -1177,13 +1177,43 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
             if (current.InterestedPeers.Contains(rosterKey)) return;
 
-            var next = current.Clone();
-            next.InterestedPeers.Add(rosterKey);
-            foreach (var outbound in next.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
-                EnsurePeerStream(next, new PeerStreamKey(peer, peerEpoch, namespaceId, outbound.Author), 0);
-            foreach (var relay in next.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
-                EnsurePeerStream(next, new PeerStreamKey(peer, peerEpoch, namespaceId, relay.Author), 0);
-            PersistPartition(partitionKey, current, next);
+            if (current.HasLegacyEncoding)
+            {
+                var migrated = current.Clone();
+                migrated.InterestedPeers.Add(rosterKey);
+                foreach (var outbound in migrated.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
+                    EnsurePeerStream(migrated, new PeerStreamKey(peer, peerEpoch, namespaceId, outbound.Author), 0);
+                foreach (var relay in migrated.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
+                    EnsurePeerStream(migrated, new PeerStreamKey(peer, peerEpoch, namespaceId, relay.Author), 0);
+                PersistPartition(partitionKey, current, migrated);
+                return;
+            }
+
+            var streamKeys = current.OutboundHighWatermarks.Keys
+                .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
+                .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author))
+                .Concat(current.RelayHighWatermarks.Keys
+                    .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
+                    .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author)))
+                .Distinct()
+                .Where(key => !current.PeerStreams.ContainsKey(key))
+                .ToArray();
+            var requiredKeys = streamKeys.Where(key => !current.RequiredPeerStreams.Contains(key)).ToArray();
+            var writes = new List<(byte[] Key, byte[] Value)>(1 + streamKeys.Length + requiredKeys.Length);
+            writes.Add((EncodeInterestedPeerKey(partitionKey, rosterKey), Array.Empty<byte>()));
+            foreach (var key in streamKeys)
+                writes.Add((EncodePeerStreamKey(partitionKey, key), EncodePeerStreamState(EmptyPeerStreamValue())));
+            foreach (var key in requiredKeys)
+                writes.Add((EncodeRequiredPeerStreamKey(partitionKey, key), Array.Empty<byte>()));
+
+            CommitPeerMetadataDelta(partitionKey, current, writes, Array.Empty<byte[]>(), () =>
+            {
+                current.InterestedPeers.Add(rosterKey);
+                foreach (var key in streamKeys)
+                    current.PeerStreams.Add(key, EmptyPeerStreamValue());
+                foreach (var key in requiredKeys)
+                    current.RequiredPeerStreams.Add(key);
+            });
         }
     }
 
@@ -1277,19 +1307,52 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 return;
             }
 
-            var next = current.Clone();
+            if (current.HasLegacyEncoding)
+            {
+                var migrated = current.Clone();
+                foreach (var baseline in streamBaselines)
+                {
+                    var key = new PeerStreamKey(peer, peerEpoch, namespaceId, baseline.AuthorStream);
+                    if (migrated.PeerStreams.TryGetValue(key, out var saved) &&
+                        (saved.AckedCursor != 0 || saved.PushedCursor != 0 || saved.PendingBatch is not null))
+                        throw new InvalidOperationException("Initial snapshot baseline cannot reset an active peer author stream.");
+                    migrated.PeerStreams[key] = new PeerStreamStateValue(
+                        0, 0, baseline.StreamOffset, baseline.IssuerEpoch, new byte[16], null);
+                    migrated.RequiredPeerStreams.Add(key);
+                }
+                migrated.CompletedPeerBaselines.Add(rosterKey);
+                PersistPartition(partitionKey, current, migrated);
+                return;
+            }
+
+            var baselineWrites = new List<(byte[] Key, byte[] Value)>(streamBaselines.Count * 2 + 1);
+            var baselineStates = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>(streamBaselines.Count);
+            var newRequired = new List<PeerStreamKey>(streamBaselines.Count);
             foreach (var baseline in streamBaselines)
             {
                 var key = new PeerStreamKey(peer, peerEpoch, namespaceId, baseline.AuthorStream);
-                if (next.PeerStreams.TryGetValue(key, out var saved) &&
+                if (current.PeerStreams.TryGetValue(key, out var saved) &&
                     (saved.AckedCursor != 0 || saved.PushedCursor != 0 || saved.PendingBatch is not null))
                     throw new InvalidOperationException("Initial snapshot baseline cannot reset an active peer author stream.");
-                next.PeerStreams[key] = new PeerStreamStateValue(
+                var value = new PeerStreamStateValue(
                     0, 0, baseline.StreamOffset, baseline.IssuerEpoch, new byte[16], null);
-                next.RequiredPeerStreams.Add(key);
+                baselineStates.Add((key, value));
+                baselineWrites.Add((EncodePeerStreamKey(partitionKey, key), EncodePeerStreamState(value)));
+                if (!current.RequiredPeerStreams.Contains(key))
+                {
+                    newRequired.Add(key);
+                    baselineWrites.Add((EncodeRequiredPeerStreamKey(partitionKey, key), Array.Empty<byte>()));
+                }
             }
-            next.CompletedPeerBaselines.Add(rosterKey);
-            PersistPartition(partitionKey, current, next);
+            baselineWrites.Add((EncodeCompletedPeerBaselineKey(partitionKey, rosterKey), Array.Empty<byte>()));
+            CommitPeerMetadataDelta(partitionKey, current, baselineWrites, Array.Empty<byte[]>(), () =>
+            {
+                foreach (var item in baselineStates)
+                    current.PeerStreams[item.Key] = item.Value;
+                foreach (var key in newRequired)
+                    current.RequiredPeerStreams.Add(key);
+                current.CompletedPeerBaselines.Add(rosterKey);
+            });
         }
     }
 
@@ -1343,19 +1406,56 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (alreadyRetired && !hasOldRows)
                 return;
 
-            var next = current.Clone();
-            next.InterestedPeers.Remove(oldRosterKey);
-            next.CompletedPeerBaselines.Remove(oldRosterKey);
-            foreach (var stream in next.PeerStreams.Keys
+            if (current.HasLegacyEncoding)
+            {
+                var migrated = current.Clone();
+                migrated.InterestedPeers.Remove(oldRosterKey);
+                migrated.CompletedPeerBaselines.Remove(oldRosterKey);
+                foreach (var stream in migrated.PeerStreams.Keys
+                    .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
+                        key.PeerEpoch == retiredPeerEpoch).ToArray())
+                    migrated.PeerStreams.Remove(stream);
+                migrated.RequiredPeerStreams.RemoveWhere(key =>
+                    key.NamespaceId == namespaceId && key.Peer == peer && key.PeerEpoch == retiredPeerEpoch);
+                migrated.RetiredPeerEpochs[retiredKey] = Math.Max(
+                    migrated.RetiredPeerEpochs.TryGetValue(retiredKey, out uint prior) ? prior : 0,
+                    retiredPeerEpoch);
+                PersistPartition(partitionKey, current, migrated);
+                return;
+            }
+
+            var oldStreams = current.PeerStreams.Keys
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
-                    key.PeerEpoch == retiredPeerEpoch).ToArray())
-                next.PeerStreams.Remove(stream);
-            next.RequiredPeerStreams.RemoveWhere(key =>
-                key.NamespaceId == namespaceId && key.Peer == peer && key.PeerEpoch == retiredPeerEpoch);
-            next.RetiredPeerEpochs[retiredKey] = Math.Max(
-                next.RetiredPeerEpochs.TryGetValue(retiredKey, out uint prior) ? prior : 0,
+                    key.PeerEpoch == retiredPeerEpoch).ToArray();
+            var oldRequired = current.RequiredPeerStreams
+                .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
+                    key.PeerEpoch == retiredPeerEpoch).ToArray();
+            var deletes = new List<byte[]>(oldStreams.Length + oldRequired.Length + 2)
+            {
+                EncodeInterestedPeerKey(partitionKey, oldRosterKey),
+                EncodeCompletedPeerBaselineKey(partitionKey, oldRosterKey)
+            };
+            deletes.AddRange(oldStreams.Select(key => EncodePeerStreamKey(partitionKey, key)));
+            deletes.AddRange(oldRequired.Select(key => EncodeRequiredPeerStreamKey(partitionKey, key)));
+            uint nextRetiredThrough = Math.Max(
+                current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint priorEpoch) ? priorEpoch : 0,
                 retiredPeerEpoch);
-            PersistPartition(partitionKey, current, next);
+            byte[] retiredValue = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(retiredValue, nextRetiredThrough);
+            var writes = new[]
+            {
+                (EncodeRetiredPeerEpochKey(partitionKey, namespaceId, peer), retiredValue)
+            };
+            CommitPeerMetadataDelta(partitionKey, current, writes, deletes, () =>
+            {
+                current.InterestedPeers.Remove(oldRosterKey);
+                current.CompletedPeerBaselines.Remove(oldRosterKey);
+                foreach (var key in oldStreams)
+                    current.PeerStreams.Remove(key);
+                foreach (var key in oldRequired)
+                    current.RequiredPeerStreams.Remove(key);
+                current.RetiredPeerEpochs[retiredKey] = nextRetiredThrough;
+            });
         }
     }
 
@@ -2247,6 +2347,93 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         current.PersistedEntries[Convert.ToHexString(key)] = (key, encoded);
         if (identityKey is not null)
             current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
+    }
+
+    private void CommitPeerMetadataDelta(
+        PartitionKey partitionKey,
+        PartitionState current,
+        IReadOnlyList<(byte[] Key, byte[] Value)> writes,
+        IReadOnlyList<byte[]> deletes,
+        Action publish)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[]? identityKey = current.IsPersisted
+            ? null
+            : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+        byte[]? identityValue = identityKey is null
+            ? null
+            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        if (identityKey is not null)
+            batch.Put(identityKey, identityValue!);
+        foreach (var key in deletes)
+            batch.Delete(key);
+        foreach (var write in writes)
+            batch.Put(write.Key, write.Value);
+        batch.Commit();
+
+        publish();
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        if (identityKey is not null)
+            current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
+        foreach (var key in deletes)
+            current.PersistedEntries.Remove(Convert.ToHexString(key));
+        foreach (var write in writes)
+            current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+        current.HasLegacyEncoding = false;
+    }
+
+    private static byte[] EncodeInterestedPeerKey(PartitionKey partitionKey, InterestedPeerKey peer)
+    {
+        byte[] suffix = new byte[22];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
+        peer.Peer.WriteTo(suffix.AsSpan(2));
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), peer.PeerEpoch);
+        return StorageKey(PartitionRoot(partitionKey), 17, suffix);
+    }
+
+    private static byte[] EncodeCompletedPeerBaselineKey(PartitionKey partitionKey, InterestedPeerKey peer)
+    {
+        byte[] suffix = new byte[22];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
+        peer.Peer.WriteTo(suffix.AsSpan(2));
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), peer.PeerEpoch);
+        return StorageKey(PartitionRoot(partitionKey), 19, suffix);
+    }
+
+    private static byte[] EncodePeerStreamKey(PartitionKey partitionKey, PeerStreamKey peer)
+    {
+        byte[] suffix = new byte[38];
+        peer.Peer.WriteTo(suffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), peer.PeerEpoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)peer.NamespaceId));
+        peer.AuthorStream.WriteTo(suffix.AsSpan(22));
+        return StorageKey(PartitionRoot(partitionKey), 15, suffix);
+    }
+
+    private static byte[] EncodeRequiredPeerStreamKey(PartitionKey partitionKey, PeerStreamKey peer)
+    {
+        byte[] suffix = new byte[38];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
+        peer.AuthorStream.WriteTo(suffix.AsSpan(2));
+        peer.Peer.WriteTo(suffix.AsSpan(18));
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(34), peer.PeerEpoch);
+        return StorageKey(PartitionRoot(partitionKey), 16, suffix);
+    }
+
+    private static byte[] EncodeRetiredPeerEpochKey(PartitionKey partitionKey, int namespaceId, NodeId peer)
+    {
+        byte[] suffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+        peer.WriteTo(suffix.AsSpan(2));
+        return StorageKey(PartitionRoot(partitionKey), 18, suffix);
     }
 
     private void PersistPeerStreamState(
