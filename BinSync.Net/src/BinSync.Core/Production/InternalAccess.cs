@@ -99,6 +99,20 @@ public sealed partial class Node
         lock (_lockMeta)
             return PeerStates.TryGetValue((peer, namespaceId), out var state) && state.InitialSyncComplete;
     }
+
+    /// <summary>True when this Node has no materialized data or durable protocol cache to preserve.</summary>
+    public bool IsPristine
+    {
+        get
+        {
+            lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            {
+                ThrowIfDisposed();
+                return _storage.Count == 0 && Outbox.Count == 0 &&
+                    PeerStates.Count == 0 && GlobalChangeLedger.Count == 0;
+            }
+        }
+    }
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
