@@ -6,7 +6,7 @@ Runtime adapters that connect BIN-SYNC's public `IDataProvider` and `IMetadataSt
 
 - `StorageDataProvider`: stable source identity mapping, durable current-field state, local change feed, contiguous scan watermark, source snapshot/feed barrier, ACK cleanup, idempotent remote apply receipts and restart recovery. Local append is idempotent for an identical HLC/author mutation, preserves every distinct source event in the feed, keeps current state at the LWW winner and rejects same-version equivocation.
 - `StorageMetadataStore`: durable receive cursors and batch receipts, global ChangeId fingerprints across inbound and outbound paths, relay/outbound payload streams, leases, ACK/high-watermarks, compaction and Pending Apply intents/completions. Each logical metadata entry is a separate Storage key; each operation writes only the changed key diff in one Storage batch.
-- `StorageSyncCoordinator`: replays local provider changes into a Node with their original HLC/author, invokes a caller-supplied durable Node checkpoint, and only then acknowledges the provider feed. For received field batches it applies the exact immutable operations (not reconstructed current winners), optionally wraps the provider commit in `IMetadataStore` PendingApply/Finalize transactions, and can recover pending provider commits after restart.
+- `StorageSyncCoordinator`: replays local provider changes into a Node with their original HLC/author, invokes a caller-supplied durable Node checkpoint, freezes newly appended local Outbox entries into Metadata Store using their original per-author sequence numbers, and only then acknowledges the provider feed. For received field batches it applies the exact immutable operations (not reconstructed current winners), optionally wraps the provider commit in `IMetadataStore` PendingApply/Finalize transactions, and can recover pending provider commits after restart.
 - `StorageDataProvider(StorageDatabase)` and `StorageMetadataStore(StorageDatabase)`: allow both adapters to share one caller-owned Storage database/partition without either adapter disposing it.
 
 ## Required publication ordering
@@ -15,6 +15,7 @@ Runtime adapters that connect BIN-SYNC's public `IDataProvider` and `IMetadataSt
 provider local feed
     -> Node.WriteField / Node.TombField (original HLC and author)
     -> caller persists Node state + Outbox
+    -> MetadataStore.FreezeOutbound (exact ChangeId/fingerprint/payload, original OutboxSeq)
     -> provider ACK
 ```
 
