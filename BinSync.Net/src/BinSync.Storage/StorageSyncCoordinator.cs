@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 namespace BinSync.Storage;
 
 public sealed record StorageRemoteApplyPlan(
-    Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata);
+    Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata, bool IsDuplicate = false);
 
 /// <summary>
 /// Coordinates a BIN-SYNC Node with an application-owned durable Data Provider.
@@ -635,6 +635,8 @@ public sealed class StorageSyncCoordinator
             {
                 var accepted = plan ?? throw new InvalidOperationException("Receive intent was not durably staged.");
                 ApplyRemoteBatchAfterNodeApply(batch, accepted, persistNode);
+                if (accepted.IsDuplicate)
+                    _.Duplicate = true;
             },
             ct: ct,
             receiveStateOwnedByMetadataStore: true);
@@ -662,9 +664,11 @@ public sealed class StorageSyncCoordinator
             MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload, senderPeer);
             Guid token = CreateBatchApplyToken(batch);
             bool finalizeMetadata = true;
+            bool isDuplicate;
             try
             {
-                _metadataStore.BeginPendingApply(metadataBatch, token);
+                var intent = _metadataStore.BeginPendingApply(metadataBatch, token);
+                isDuplicate = intent.IsDuplicate;
             }
             catch (MetadataPendingApplyAlreadyFinalizedException)
             {
@@ -672,8 +676,9 @@ public sealed class StorageSyncCoordinator
                 if (!prior.IsDuplicate)
                     throw;
                 finalizeMetadata = false;
+                isDuplicate = true;
             }
-            return new StorageRemoteApplyPlan(token, metadataBatch, finalizeMetadata);
+            return new StorageRemoteApplyPlan(token, metadataBatch, finalizeMetadata, isDuplicate);
         }
     }
 
