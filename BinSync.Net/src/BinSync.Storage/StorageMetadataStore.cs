@@ -219,7 +219,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         {
             foreach (var pendingOperation in otherPending.Batch.Operations)
             {
-                var pendingKey = new LedgerKey(batch.NamespaceId, pendingOperation.ChangeId);
+                var pendingKey = new LedgerKey(otherPending.Batch.NamespaceId, pendingOperation.ChangeId);
                 if (pendingIdentities.TryGetValue(pendingKey, out var knownFingerprint) &&
                     !knownFingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint))
                     throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
