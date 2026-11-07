@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Store Semantic Contract and Conformance Plan
 
-**Status:** semantic contract plus executable conformance. Twenty provider-independent semantic tests run against both a volatile reference adapter and the durable `StorageMetadataStore` adapter. The Storage adapter passes restart, compaction, snapshot, equivocation and pending-apply recovery integration. This does not yet make Metadata Store authoritative for Node/Transport Outbox, per-peer progress or batch replay state.  
+**Status:** semantic contract plus executable conformance. Twenty provider-independent semantic tests run against both a volatile reference adapter and the durable `StorageMetadataStore` adapter. The Storage adapter passes restart, compaction, snapshot, equivocation and pending-apply recovery integration. The optional durable peer capability now owns per-peer/per-author send cursors, immutable batch replay reservations, interested-peer roster and ACK-based payload retention for the opt-in transport path. Full Node/Transport authority cutover is still incomplete: receive validation and the Node inbox/digest cache remain transitional authorities, and the legacy transport path remains Node-backed.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Related provider contract:** [Data Provider Semantic Contract and Conformance Plan](DATA-PROVIDER-CONFORMANCE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL; this document does not change wire format.  
