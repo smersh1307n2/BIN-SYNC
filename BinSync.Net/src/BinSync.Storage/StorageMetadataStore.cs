@@ -730,7 +730,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
     }
 
-    public ulong GetSafeOutboundCompactionCursor(
+    public ulong GetSafePeerStreamCompactionCursor(
         string scopeId, NodeId localReplica, int namespaceId, NodeId authorStream)
     {
         lock (_gate)
