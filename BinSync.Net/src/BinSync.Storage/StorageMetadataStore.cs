@@ -287,14 +287,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
             incoming.BatchId.WriteTo(receiptSuffix.AsSpan(22));
-            byte[] receiptValue = new byte[84];
+            byte[] receiptValue = incoming.HeaderFingerprint.Length == 16 ? new byte[84] : new byte[68];
             BinaryPrimitives.WriteUInt64LittleEndian(receiptValue, incoming.CursorStart);
             BinaryPrimitives.WriteUInt64LittleEndian(receiptValue.AsSpan(8), incoming.CursorEnd);
             incoming.PreviousBatchDigest.CopyTo(receiptValue, 16);
             incoming.BatchDigest.CopyTo(receiptValue, 32);
             BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), receipt.NewRelayOperationCount);
             receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
-            incoming.HeaderFingerprint.CopyTo(receiptValue, 68);
+            if (incoming.HeaderFingerprint.Length == 16)
+                incoming.HeaderFingerprint.CopyTo(receiptValue, 68);
             writes.Add((StorageKey(root, 1, receiptSuffix), receiptValue));
 
             byte[] receiveSuffix = new byte[38];
@@ -580,14 +581,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), batch.SenderEpoch);
         BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
         batch.BatchId.WriteTo(receiptSuffix.AsSpan(22));
-        byte[] receiptValue = new byte[84];
+        byte[] receiptValue = batch.HeaderFingerprint.Length == 16 ? new byte[84] : new byte[68];
         BinaryPrimitives.WriteUInt64LittleEndian(receiptValue, batch.CursorStart);
         BinaryPrimitives.WriteUInt64LittleEndian(receiptValue.AsSpan(8), batch.CursorEnd);
         batch.PreviousBatchDigest.CopyTo(receiptValue, 16);
         batch.BatchDigest.CopyTo(receiptValue, 32);
         BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), relayAdded);
         receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
-        batch.HeaderFingerprint.CopyTo(receiptValue, 68);
+        if (batch.HeaderFingerprint.Length == 16)
+            batch.HeaderFingerprint.CopyTo(receiptValue, 68);
 
         byte[] receiveSuffix = new byte[38];
         batch.SenderPeer.WriteTo(receiveSuffix);
@@ -2574,14 +2576,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
             pair.Key.BatchId.WriteTo(suffix.AsSpan(22));
-            byte[] value = new byte[84];
+            byte[] value = pair.Value.HeaderFingerprint.Length == 16 ? new byte[84] : new byte[68];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorStart);
             BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), pair.Value.CursorEnd);
             pair.Value.PreviousBatchDigest.CopyTo(value, 16);
             pair.Value.BatchDigest.CopyTo(value, 32);
             BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(48), pair.Value.NewRelayOperationCount);
             pair.Value.DurableAuthor.WriteTo(value.AsSpan(52));
-            pair.Value.HeaderFingerprint.CopyTo(value, 68);
+            if (pair.Value.HeaderFingerprint.Length == 16)
+                pair.Value.HeaderFingerprint.CopyTo(value, 68);
             Add(StorageKey(root, 1, suffix), value);
         }
 
@@ -3085,7 +3088,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
     private static byte[] EncodeCompleted(CompletedPendingApplyValue completed)
     {
-        byte[] bytes = new byte[85];
+        byte[] bytes = completed.Receipt.HeaderFingerprint.Length == 16 ? new byte[85] : new byte[69];
         completed.BatchDigest.CopyTo(bytes, 0);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(16), completed.Receipt.CursorStart);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(24), completed.Receipt.CursorEnd);
@@ -3093,7 +3096,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(48), completed.Receipt.NewRelayOperationCount);
         bytes[52] = completed.Receipt.IsDuplicate ? (byte)1 : (byte)0;
         completed.Receipt.DurableAuthor.WriteTo(bytes.AsSpan(53));
-        completed.Receipt.HeaderFingerprint.CopyTo(bytes, 69);
+        if (completed.Receipt.HeaderFingerprint.Length == 16)
+            completed.Receipt.HeaderFingerprint.CopyTo(bytes, 69);
         return bytes;
     }
 
@@ -3143,7 +3147,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             writer.Write(operation.Payload);
         }
         writer.Write(batch.ReceiveStateOwnedByMetadataStore);
-        writer.Write(batch.HeaderFingerprint);
+        writer.Write(batch.HeaderFingerprint.Length == 16);
+        if (batch.HeaderFingerprint.Length == 16)
+            writer.Write(batch.HeaderFingerprint);
         writer.Flush();
         return stream.ToArray();
     }
@@ -3190,8 +3196,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             };
         }
         bool receiveStateOwnedByMetadataStore = hasReceiveStateAuthority && reader.ReadBoolean();
-        byte[] headerFingerprint = hasHeaderFingerprint ? reader.ReadBytes(16) : Array.Empty<byte>();
-        if (hasHeaderFingerprint && headerFingerprint.Length != 16)
+        bool headerFingerprintPresent = hasHeaderFingerprint && reader.ReadBoolean();
+        byte[] headerFingerprint = headerFingerprintPresent ? reader.ReadBytes(16) : Array.Empty<byte>();
+        if (headerFingerprintPresent && headerFingerprint.Length != 16)
             throw new InvalidDataException("Pending batch header fingerprint is truncated.");
         // v4 authority intents predate durable header fingerprints. Recover them
         // through Node's legacy receipt validator rather than trusting an incomplete receipt.
@@ -3240,6 +3247,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             throw new ArgumentOutOfRangeException(nameof(batch.CursorStart));
         ValidateDigest(batch.PreviousBatchDigest, nameof(batch.PreviousBatchDigest));
         ValidateDigest(batch.BatchDigest, nameof(batch.BatchDigest));
+        if (batch.HeaderFingerprint.Length is not (0 or 16))
+            throw new ArgumentException("Header fingerprint must be empty or 16 bytes.", nameof(batch));
         if (batch.HeaderFingerprint.Length != 0)
             ValidateDigest(batch.HeaderFingerprint, nameof(batch.HeaderFingerprint));
         if (batch.ReceiveStateOwnedByMetadataStore && batch.HeaderFingerprint.Length != 16)
