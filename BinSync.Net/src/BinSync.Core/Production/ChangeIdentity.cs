@@ -55,7 +55,7 @@ internal static class ChangeIdentity
 
     internal static Digest16 Fingerprint(OutboxEntry entry)
     {
-        var operation = Ops.DecodeOp(entry.Payload, fullAuthor: false).Op;
+        var operation = Ops.DecodeOp(entry.Payload).Op;
         return Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind, operation, entry.AuthorNodeId);
     }
 }
