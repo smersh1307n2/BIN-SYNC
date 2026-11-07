@@ -261,6 +261,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         {
             if (operation.ChangeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(operations));
+            ValidateDigest(operation.Fingerprint, nameof(operation.Fingerprint));
             ArgumentNullException.ThrowIfNull(operation.Payload);
             if (!seen.Add(operation.ChangeId))
                 throw new ArgumentException("Outbound ChangeId values must be unique within a freeze operation.", nameof(operations));
@@ -279,9 +280,21 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         foreach (var operation in operations)
         {
             var changeKey = new OutboundChangeKey(namespaceId, operation.ChangeId);
-            if (!current.OutboundChangeIds.Contains(changeKey))
-                continue;
+            var ledgerKey = new LedgerKey(namespaceId, operation.ChangeId);
+            bool alreadyFrozen = current.OutboundChangeIds.Contains(changeKey);
+            if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorFingerprint))
+            {
+                if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                    throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId ledger.");
+                if (!alreadyFrozen)
+                    throw new InvalidDataException("ChangeId is already known from an incoming route and cannot be published as a new local operation.");
+            }
+            else if (alreadyFrozen)
+            {
+                throw new InvalidDataException("Frozen outbound ChangeId is missing its global fingerprint.");
+            }
 
+            if (!alreadyFrozen) continue;
             if (!current.Outbound.TryGetValue(key, out var priorEntries))
                 throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
 
@@ -317,6 +330,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             entries.Add(item);
             frozen.Add(CloneOutboundItem(item));
             next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
+            next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId), operation.Fingerprint.ToArray());
             next.OutboundHighWatermarks[key] = sequence;
         }
 
