@@ -501,14 +501,14 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 2. Whether the runtime exposes a unified transaction object, semantic atomic commands, or both.
 3. Exact scope/replica identifier representation and how it is supplied at construction.
 4. Which protocol state is mandatory in the first implementation versus capability-gated.
-5. Whether a built-in in-memory store ships in the core package or only in test utilities.
+5. **Decided:** no built-in in-memory Metadata Store in the first stable package. A volatile implementation belongs in test utilities; if later exposed publicly, it must advertise that restart recovery/durable ACK guarantees are unavailable.
 6. **Decided:** FLD Storage-only opens the domain-neutral `Fld1.Storage` engine directly; it does not instantiate `FldDatabase`. One DLL initially, extractable namespace/API/source boundary.
 7. **Decided:** storage-native ordering/version uses Storage Core CommitSeq and byte-key ordering; it is never fabricated as HLC/author. Split generic page/run mechanics from any field-specific codec that prevents opaque metadata storage.
 8. **Decided:** each local replica uses an owning `(SyncScopeId, LocalReplicaNodeId)` partition; protocol NamespaceId is a key/prefix dimension inside that partition, not a physical FLD namespace. Storage Core exposes opaque logical partition IDs and can host multiple partitions. The current field-specific namespace/run codec must be separated from the generic partition catalog.
 9. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
 10. How current NodePersistence/WAL state migrates to the new provider/store boundary.
-11. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
-12. Which guarantees are required for the first stable public contract and which weaker modes, if any, may be explicitly supported.
+11. **Decided:** the first stable contract supports both strong modes: shared atomic provider+metadata transaction, or separate-store pending-apply with a durable provider idempotency receipt. A provider that supports neither may use an explicitly weaker best-effort mode only; BIN-SYNC must not emit an ACK that claims durable exactly-once acceptance.
+12. **Decided:** durable Metadata Store, crash recovery, idempotent retry and atomic metadata transitions are required for the strong profile. Volatile/best-effort profiles are opt-in and must explicitly weaken restart/delivery guarantees; they are never silently selected.
 13. **Conservative rule decided:** current snapshot completion never advances stream offsets or Outbox/relay/ChangeId GC. A future snapshot-baseline protocol still needs a per-author cut vector and explicit completion/fencing semantics.
 14. **Conservative rule decided:** one exact global `(scope, localReplicaId, namespace, ChangeId)` ledger with canonical operation fingerprint; retain for namespace/scope epoch. No safe finite GC exists in the current protocol. Local WAL replay markers are separate and reclaimable only after their WAL replay horizon closes.
 15. **Decided:** compact Inbox receipt retains cursor range, resolved author, BatchDigest, RecordsRoot, PreviousBatchDigest, ACK result, appliedAt/expiresAt and storage commit identity; duplicate keys must match all identity/chain fields.
