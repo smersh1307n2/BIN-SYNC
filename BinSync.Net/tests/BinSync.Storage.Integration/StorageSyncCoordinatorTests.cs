@@ -291,7 +291,7 @@ public sealed class StorageSyncCoordinatorTests
                 NamespaceId = 1,
                 BatchId = BatchId.From(Guid.Parse("c4000000-0000-0000-0000-00000000000c").ToByteArray()),
                 CursorStart = 1,
-                CursorEnd = 1,
+                CursorEnd = 2,
                 PreviousBatchDigest = new byte[16],
                 BatchDigest = batchDigest,
                 Operations = new[]
@@ -334,7 +334,7 @@ public sealed class StorageSyncCoordinatorTests
             {
                 provider.ReleaseSnapshot(snapshot.Token);
             }
-            Assert.Equal(1UL, metadata.GetReceiveCursor("pending-recovery", local.NodeId,
+            Assert.Equal(2UL, metadata.GetReceiveCursor("pending-recovery", local.NodeId,
                 sender.NodeId, checked((uint)sender.Epoch), 1, sender.NodeId));
             Assert.Empty(metadata.ReadPendingApplyIntents("pending-recovery", local.NodeId));
         }
