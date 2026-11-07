@@ -9,7 +9,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-provider-" + Guid.NewGuid().ToString("N"));
 
     protected override IDataProviderConformanceAdapter CreateProvider()
-        => new StorageDataProviderAdapter(
+        => new StorageDataProviderConformanceAdapter(
             Path.Combine(_root, Guid.NewGuid().ToString("N")),
             partitionId: 77);
 
@@ -27,7 +27,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
         try
         {
-            using (var provider = new StorageDataProviderAdapter(directory, partitionId: 78, deleteOnDispose: false))
+            using (var provider = new StorageDataProviderConformanceAdapter(directory, partitionId: 78, deleteOnDispose: false))
             {
                 recordId = provider.ResolveRecordId(itemKey);
                 fieldId = provider.ResolveFieldId(fieldKey);
@@ -44,7 +44,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 provider.ApplyRemoteBatch(token, new[] { remote });
             }
 
-            using var reopened = new StorageDataProviderAdapter(directory, partitionId: 78, deleteOnDispose: false);
+            using var reopened = new StorageDataProviderConformanceAdapter(directory, partitionId: 78, deleteOnDispose: false);
             Assert.Equal(recordId, reopened.ResolveRecordId(itemKey));
             Assert.Equal(fieldId, reopened.ResolveFieldId(fieldKey));
             Assert.Single(reopened.ReadLocalChanges(0, 10).Changes);
@@ -66,7 +66,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Directory.CreateDirectory(directory);
         try
         {
-            using var provider = new StorageDataProviderAdapter(directory, partitionId: 79, deleteOnDispose: false);
+            using var provider = new StorageDataProviderConformanceAdapter(directory, partitionId: 79, deleteOnDispose: false);
             var mutation = Mutation(8, 4, 55, 1);
             provider.AppendLocalChange(mutation);
             _ = provider.ReadLocalChanges(0, 10);
