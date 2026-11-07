@@ -337,6 +337,7 @@ public static class NodePersistence
             {
                 w.B128(peer); w.Varint((ulong)ns);
                 WriteNonNegativeVarint(w, ps.LastPushedSeq, "peer pushed sequence");
+                WriteNonNegativeVarint(w, ps.LastReceivedSeq, "peer received sequence");
                 w.U8(ps.InitialSyncComplete ? (byte)1 : (byte)0);
                 w.Varint((ulong)ps.MembershipEpoch); WriteNonNegativeVarint(w, ps.LastSeen, "peer last-seen time");
                 w.Varint((ulong)ps.ReceivedStreams.Count);
@@ -693,18 +694,22 @@ public static class NodePersistence
             n.DurableAuthors[(NodeId)nid] = ep;
         }
 
-        int psCount = ReadCount(r, version >= 15 ? 24 : 50, "peer state");
+        int psCount = ReadCount(r, version >= 15 ? 25 : 50, "peer state");
         for (int i = 0; i < psCount; i++)
         {
             var peer = r.B128(); var ns = ReadNamespaceId(r);
-            long lastPushedSeq;
+            long lastPushedSeq, lastReceivedSeq, lastAckedSeq;
             if (version >= 15)
+            {
                 lastPushedSeq = ReadInt64Varint(r, "peer pushed sequence");
+                lastReceivedSeq = ReadInt64Varint(r, "peer received sequence");
+                lastAckedSeq = 0; // v15 derives this compatibility mirror from per-author progress
+            }
             else
             {
                 lastPushedSeq = (long)r.U64();
-                _ = r.U64(); // v3-v14 LastReceivedSeq compatibility mirror
-                _ = r.U64(); // v3-v14 LastAckedSeq compatibility mirror
+                lastReceivedSeq = (long)r.U64();
+                lastAckedSeq = (long)r.U64();
             }
             bool initialSyncComplete = r.U8() != 0;
             int membershipEpoch = ReadInt32Varint(r);
@@ -714,6 +719,8 @@ public static class NodePersistence
             var ps = new PeerState(peer, ns)
             {
                 LastPushedSeq = lastPushedSeq,
+                LastReceivedSeq = lastReceivedSeq,
+                LastAckedSeq = lastAckedSeq,
                 InitialSyncComplete = initialSyncComplete,
                 MembershipEpoch = membershipEpoch,
                 LastSeen = lastSeen,
@@ -766,6 +773,8 @@ public static class NodePersistence
                         !ps.AuthorProgress.TryAdd(author, progress))
                         throw new InvalidDataException("Invalid or duplicate persisted peer author progress.");
                 }
+                if (version >= 15 && ps.StreamAckedCount > 0)
+                    ps.LastAckedSeq = ps.MinStreamAcked;
             }
             else
             {

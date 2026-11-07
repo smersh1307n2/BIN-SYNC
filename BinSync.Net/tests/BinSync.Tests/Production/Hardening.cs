@@ -113,7 +113,8 @@ public class Production : IDisposable
         foreach (var (k, ps) in x.PeerStates)
         {
             if (!y.PeerStates.TryGetValue(k, out var ops)) return false;
-            if (ps.LastPushedSeq != ops.LastPushedSeq || ps.InitialSyncComplete != ops.InitialSyncComplete) return false;
+            if (ps.LastPushedSeq != ops.LastPushedSeq || ps.LastReceivedSeq != ops.LastReceivedSeq ||
+                ps.LastAckedSeq != ops.LastAckedSeq || ps.InitialSyncComplete != ops.InitialSyncComplete) return false;
             if (ps.ReceivedStreams.Count != ops.ReceivedStreams.Count) return false;
             foreach (var (streamKey, seq) in ps.ReceivedStreams)
                 if (!ops.ReceivedStreams.TryGetValue(streamKey, out var otherSeq) || otherSeq != seq) return false;

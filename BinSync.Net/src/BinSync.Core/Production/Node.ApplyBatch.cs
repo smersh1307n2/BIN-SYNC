@@ -479,6 +479,7 @@ public sealed partial class Node
         InboxAuthors[key] = new InboxReceipt(streamAuthor, batch.CursorEnd, hasCursorEnd: true,
             receiptFingerprint, hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
+        ps.LastReceivedSeq = batch.CursorEnd;   // compatibility/diagnostic mirror
         LastBatchDigest[chain] = batch.BatchDigest;
         // SPEC CORRECTION (errata E-2): track epochs PER SESSION (sender_peer, ns).
         int knownS = KnownEpochs.TryGetValue(sesKey, out var ks) ? ks : 0;
@@ -654,6 +655,8 @@ public sealed partial class Node
         // outstanding. Once a validated contiguous ACK covers the complete range,
         // the cached BatchId/previous-digest mapping is no longer needed. Keep
         // LastStreamDigest untouched: it is the chain checkpoint for later batches.
+        if (ps.StreamAckedCount > 0)
+            ps.LastAckedSeq = ps.MinStreamAcked;
         PruneAcknowledgedBatchIds(ps);
         CompactOutbox(namespaceId);
     }

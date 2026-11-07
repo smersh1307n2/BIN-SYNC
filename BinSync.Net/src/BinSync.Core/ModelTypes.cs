@@ -248,6 +248,8 @@ internal sealed partial class PeerState
     public NodeId PeerNodeId { get; set; }
     public int NamespaceId { get; set; }
     public long LastPushedSeq { get; set; }
+    public long LastReceivedSeq { get; set; }
+    public long LastAckedSeq { get; set; }
 
     /// <summary>Receive cursors keyed by sender/epoch/author; namespace is the owning PeerState key.</summary>
     public Dictionary<(NodeId Peer, int Epoch, NodeId Author), long> ReceivedStreams { get; } = new();
