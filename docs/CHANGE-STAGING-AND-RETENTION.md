@@ -323,6 +323,7 @@ The following lifetimes are independent:
 - **Pending staging:** retained until frozen or safely superseded by another local operation under the coalescing rules.
 - **Frozen local Outbox:** retained until BIN-SYNC proves the safe contiguous prefix across all interested peers and any additional protocol retention conditions are satisfied.
 - **Relay journal:** retained until all relevant downstream peers have safely advanced; local-origin ACK does not imply relay ACK.
+- **Per-peer batch replay cache:** retain the cached BatchId/previous-digest tuple for an author-stream cursor range while it may need deterministic retry; once that peer's per-author StreamAcked reaches/passes the range end, the cache entry is no longer needed for retry and can be pruned transactionally with ACK state.
 - **Inbox receipts:** retained for the protocol's duplicate-batch/replay horizon.
 - **Seen ChangeId/provenance:** retained for the protocol's deduplication and relay/GC horizon.
 - **Current field tombstones/ghosts:** retained according to the protocol's causal/GC watermark; not deleted merely because their payload is empty or a newer local operation exists.
@@ -356,6 +357,12 @@ The first option is the most compatible direction if the runtime can reliably as
 Inbox batch receipts have a separate lifecycle. The wire specification defines an idempotency key (issuerNodeId, namespaceId, issuerEpoch, batchId) and an expiry condition requiring both elapsed expiry and confirmation of the relevant log segment. Preserve the receipt/author information needed to replay the original ACK until that condition is met.
 
 The current NodePersistence v5 image serializes the Inbox key set and InboxAuthors mapping, plus related digest and received-stream checkpoints; it does not serialize the complete InboxEntry tuple (cursorStart, cursorEnd, appliedAt, expiresAt) as one row. The Metadata Store design must either reconstruct the equivalent safe-retention facts from its other durable checkpoints or add the missing semantic expiry/range data. It must not invent an expiry at migration time or discard receipts merely because the batch is old.
+
+### 9.3. Per-peer batch replay cache has a finite ACK-based lifetime
+
+The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorStream, cursorStart, cursorEnd), with the stable BatchId and previous digest needed to reproduce the exact same wire batch after a lost ACK. This cache is necessary while the batch may be retried. The inspected ProcessAckInternal path advances the per-author StreamAcked watermark and compacts Outbox, but does not remove acknowledged PeerState.Ids entries. Because NodePersistence serializes this dictionary, it can grow with every historical batch even after the corresponding Outbox entries are compacted.
+
+Unlike SeenChanges, this cache has a direct safe deletion condition: after a valid ACK advances the same peer/namespace/author stream through cursorEnd, the cached BatchId/previous-digest tuple for that fully acknowledged range is no longer needed for retry. Prune only entries whose cursorEnd is at or below that stream's acknowledged wire cursor, in the same durable metadata transaction as ACK progress. Do not prune on StreamPushed alone, and do not prune a range partially covered by ACK. Keep LastStreamDigest as the current chain checkpoint; it is not a reason to retain every prior batch tuple.
 
 ## 10. Storage cost example
 
@@ -394,6 +401,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 21. SeenChanges entries are not pruned by arbitrary TTL; any future GC test proves a protocol-defined sender/channel/author-stream horizon before exact dedup entries are removed.
 22. Inbox receipt expiry/GC requires the protocol's elapsed-expiry plus confirmed-log-segment condition and survives restart.
 23. E-13 self-echo suppression sees the correct durable local winner across pending staging and frozen/unconfirmed Outbox without treating staged entries as published stream records.
+24. Per-peer PeerState.Ids replay-cache entries survive lost ACK/restart and are pruned only after a valid ACK covers their author-stream cursorEnd.
 
 ## 12. Implementation sequence
 
