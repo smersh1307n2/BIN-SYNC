@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.6 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store conformance baseline and Data Provider semantic/conformance plan are recorded.  
+**Status:** Architecture contract v0.7 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store/Data Provider semantic conformance and PendingLocal/source-feed handoff ownership are recorded. Durable external adapters remain unimplemented.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
 **Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v12, adaptive receipt indexing, compact 16-byte ledger values, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.

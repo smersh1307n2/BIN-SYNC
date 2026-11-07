@@ -4,6 +4,7 @@
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Metadata contract:** [Metadata Store Semantic Contract and Conformance Plan](METADATA-STORE-CONFORMANCE.md).  
 **Provider contract:** [Data Provider Semantic Contract and Conformance Plan](DATA-PROVIDER-CONFORMANCE.md).  
+**PendingLocal ownership/handoff:** [Metadata Storage Architecture §3.3](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL; route-independent ChangeId identity/equivocation is normative in E-24 and fail-closed tombstone retention is normative in E-25. Independent conformance vectors remain a release gate. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
 

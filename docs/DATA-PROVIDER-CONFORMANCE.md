@@ -150,7 +150,7 @@ The volatile reference provider is for semantic testing only. A durable provider
 1. Freeze the observable provider guarantees in this document; keep public API names open.
 2. Add a provider-independent test-only adapter and volatile reference provider.
 3. Cover mapping, durable-feed semantics, snapshot/feed barrier, remote apply idempotency and origin separation.
-4. Define how PendingLocal coalescing is owned: provider-native staging, Metadata Store staging, or a shared transactional capability. Do not force all providers into a single storage layout.
+4. **Default ownership is now recorded in Metadata Storage Architecture §3.3:** a separate generic Data Provider owns its durable source feed and the Metadata Store/runtime owns canonical PendingLocal staging; FLD Database, acting as both provider and metadata owner, owns PendingLocal inside its Database transaction; a shared transaction domain may co-commit the stage; Storage-only mode has no user-data PendingLocal. Keep public API names open until staging/feed-handoff conformance tests pass.
 5. Only then finalize neutral Data Provider interfaces and refactor BIN-SYNC Runtime/Node persistence.
 6. Validate shared-transaction and separate-store adapters independently. Keep the FLD synchronized-database provenance adapter as a separate integration gate.
 
