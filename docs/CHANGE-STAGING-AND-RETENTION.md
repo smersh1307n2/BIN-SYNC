@@ -381,7 +381,7 @@ For a remote batch with N incoming operations and R relay-eligible operations (R
 The logical lifetimes must be separated:
 
 1. **WAL apply transaction:** retain the complete incoming operation set exactly once for crash recovery/application. Store relay selection as compact indexes/bitset over that operation array, not a second copy of each selected payload. This is an internal WAL format change/version, not a wire-format change.
-2. **Durable inbox receipt:** retain only the metadata required to recognize a duplicate batch and reproduce the same ACK/result: sender/issuer identity and epochs, namespace, BatchId, cursor range, previous/current digest, RecordsRoot, CommitSeq, AppliedCount, protocol-state delta or a durable reference to it, plus the protocol-defined expiry/confirmation state.
+2. **Durable inbox receipt:** retain only the metadata required to recognize a duplicate batch and reproduce the same ACK/result: sender/issuer identity and epochs, namespace, BatchId, cursor range, previous/current digest, RecordsRoot, CommitSeq, AppliedCount, and the protocol-defined expiry/confirmation state. ProtocolStateDelta (up to the current 4 MiB limit) is a separate recovery payload: retain it only until BIN-SYNC has durably materialized/checkpointed the corresponding protocol metadata state, or retain a stable reference to that materialized state. If the delta remains the only recovery source, it must remain until that state is checkpointed. Do not keep a full raw delta for the entire Inbox duplicate-retry lifetime after its effects are already durable and queryable.
 3. **Relay journal:** retain only the exact relay-eligible operations, with original ChangeId, author, HLC, key epoch, canonical key, operation payload and the batch/provenance metadata needed to reconstruct the outbound relay. Do not retain non-relay operations here.
 4. **Current field state:** retain only the current LWW winner per field key in runs/overlay; this is not a substitute for relay payloads.
 5. **BIN-SYNC SeenChanges and peer state:** remain protocol-owned metadata and are not silently folded into FLD's relay payload log.
@@ -405,7 +405,7 @@ There are two viable physical strategies for relay payload lifetime:
 
 The preferred default is a dedicated compact RelayJournal unless measurements show that WAL segment pinning is materially cheaper for the target workload. Never keep both a full ApplyJournal copy and a separate full RelayJournal copy.
 
-A receipt should not retain the full incoming field array merely to answer a duplicate batch. A compact receipt record is sufficient once the original apply effects are committed and the relay subset has its own durable owner.
+A receipt should not retain the full incoming field array merely to answer a duplicate batch. A compact receipt record is sufficient once the original apply effects are committed and the relay subset has its own durable owner. The same principle applies to ProtocolStateDelta: its lifetime is tied to recovery/materialization of BIN-SYNC metadata, not automatically to the lifetime of the batch receipt or relay payload. The current API returns ProtocolStateDelta on duplicate; whether that remains necessary after the runtime has a durable Metadata Store and can query committed protocol state is an explicit API decision.
 
 ## 10. Storage cost example
 
