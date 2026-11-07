@@ -128,6 +128,8 @@ Snapshot API должен давать один согласованный view 
 
 Snapshot lifetime защищает необходимые run generations от reclamation. BIN-SYNC строит digest/IBLT/snapshot payload из этого read view без удержания FLD writer lock на время сетевой отправки.
 
+Snapshot — это current-state baseline, а не автоматическое подтверждение каждой записи локального Outbox или relay journal. Snapshot не должен продвигать Outbox/relay ACK, разрешать GC или удалять pending/frozen operations, пока BIN-SYNC явно не определит, какие операции покрыты snapshot baseline. В частности, LWW-loser операции могут отсутствовать среди текущих field winners, но оставаться relay-eligible. Текущий SnapshotChunkMessage/BuildSnapshotChunks runtime path не несёт per-field ChangeId или Outbox cursor; нормативный SnapshotTail/outbox checkpoint из wire specification требует отдельного согласования с runtime до проектирования соответствующей storage-транзакции.
+
 FLD Run `rootDigest` (BLAKE3-256) не подменяет BIN-SYNC wire `Digest16` (BLAKE3 truncated): это разные digest domains.
 
 ## 7. Текущее состояние API и блокирующие расхождения
