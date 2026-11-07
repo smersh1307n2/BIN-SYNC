@@ -233,6 +233,7 @@ public sealed class StorageSyncCoordinator
             LocalReplica = _node.NodeId,
             SenderPeer = batch.IssuerNodeId,
             SenderEpoch = checked((uint)batch.IssuerEpoch),
+            AuthorStreamNodeId = batch.DurableAuthor,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
             CursorStart = checked((ulong)batch.CursorStart),
