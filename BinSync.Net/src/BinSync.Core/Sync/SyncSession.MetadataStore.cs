@@ -57,6 +57,7 @@ public partial class SyncSession
                 {
                     BatchId = batch.BatchId,
                     IssuerEpoch = checked((uint)batch.IssuerEpoch),
+                    StreamOffset = batch.StreamOffset,
                     CursorStart = checked((ulong)batch.CursorStart),
                     CursorEnd = checked((ulong)batch.CursorEnd),
                     PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
@@ -103,5 +104,5 @@ public partial class SyncSession
         => new(reservation.Payload.ToArray(), reservation.BatchId, authorStream, authorStream,
             namespaceId, checked((int)reservation.IssuerEpoch),
             checked((long)reservation.CursorStart), checked((long)reservation.CursorEnd),
-            Digest16.From(reservation.PreviousBatchDigest), Digest16.From(reservation.BatchDigest));
+            reservation.StreamOffset, Digest16.From(reservation.PreviousBatchDigest), Digest16.From(reservation.BatchDigest));
 }
