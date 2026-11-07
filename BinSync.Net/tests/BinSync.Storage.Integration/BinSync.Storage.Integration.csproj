@@ -18,6 +18,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/BinSync.Core/BinSync.Core.csproj" />
+    <ProjectReference Include="../../src/BinSync.Storage/BinSync.Storage.csproj" />
     <ProjectReference Include="../BinSync.MetadataStore.Conformance/BinSync.MetadataStore.Conformance.csproj" />
     <ProjectReference Include="../../../external/Fld1.Storage/Fld1.Storage.csproj" />
   </ItemGroup>
