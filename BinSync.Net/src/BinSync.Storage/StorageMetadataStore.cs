@@ -1210,9 +1210,7 @@ public class StorageMetadataStore : IMetadataStore
     }
 
     private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
-        => !batch.AuthorStreamNodeId.IsZero
-            ? batch.AuthorStreamNodeId
-            : batch.Operations.Count > 0 ? batch.Operations[0].AuthorNodeId : batch.SenderPeer;
+        => batch.AuthorStreamNodeId;
 
     private static void ValidateBatch(MetadataIncomingBatch batch)
     {
@@ -1227,8 +1225,8 @@ public class StorageMetadataStore : IMetadataStore
         ValidateDigest(batch.PreviousBatchDigest, nameof(batch.PreviousBatchDigest));
         ValidateDigest(batch.BatchDigest, nameof(batch.BatchDigest));
         ArgumentNullException.ThrowIfNull(batch.Operations);
-        if (!ResolveAuthorStream(batch).IsZero &&
-            batch.Operations.Any(operation => operation.AuthorNodeId != ResolveAuthorStream(batch)))
+        if (!batch.AuthorStreamNodeId.IsZero &&
+            batch.Operations.Any(operation => operation.AuthorNodeId != batch.AuthorStreamNodeId))
             throw new ArgumentException("Incoming batch operations must belong to one author stream.", nameof(batch));
 
         var seen = new HashSet<BatchId>();
