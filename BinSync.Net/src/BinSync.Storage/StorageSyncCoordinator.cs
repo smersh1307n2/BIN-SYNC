@@ -312,7 +312,7 @@ public sealed class StorageSyncCoordinator
                 // A finalized token is resolved through the durable receive receipt.
                 // If it is not an exact duplicate, fail closed.
                 var prior = _metadataStore.AcceptIncomingBatch(metadataBatch);
-                if (!prior.IsDuplicate || prior.DurableAuthor != batch.DurableAuthor)
+                if (!prior.IsDuplicate || (!prior.DurableAuthor.IsZero && prior.DurableAuthor != batch.DurableAuthor))
                     throw new InvalidDataException("Completed metadata receipt does not match the replayed batch author.");
                 finalizeMetadata = false;
             }
@@ -760,7 +760,10 @@ public sealed class StorageSyncCoordinator
                 _provider.ApplyRemoteBatch(intent.ApplyToken, mutations);
                 var metadataReceipt = _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
                     new MetadataProviderApplyReceipt(intent.ApplyToken, intent.Batch.BatchDigest.ToArray()));
-                if (metadataReceipt.DurableAuthor != intent.Batch.AuthorStreamNodeId)
+                NodeId expectedAuthor = !intent.Batch.AuthorStreamNodeId.IsZero
+                    ? intent.Batch.AuthorStreamNodeId
+                    : intent.Batch.Operations.Count == 0 ? default : intent.Batch.Operations[0].AuthorNodeId;
+                if (!metadataReceipt.DurableAuthor.IsZero && metadataReceipt.DurableAuthor != expectedAuthor)
                     throw new InvalidDataException("Recovered metadata receipt author does not match its PendingApply intent.");
                 recovered++;
             }
