@@ -109,7 +109,7 @@ public sealed class StorageSyncCoordinatorTests
         metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 1, 1);
         var oldEpochBatch = new MetadataOutboundBatchReservation
         {
-            BatchId = Batch(162),
+            BatchId = BatchId.From(Guid.Parse("a2000000-0000-0000-0000-0000000000a2").ToByteArray()),
             IssuerEpoch = 1,
             CursorStart = 1,
             CursorEnd = 1,
