@@ -82,7 +82,7 @@ The current LWW field state does **not** need a full history of every prior Chan
 
 A durable staging area for local operations that have not been exposed to any peer.
 
-For LWW_FIELD, it holds at most one pending local operation per canonical field key. A later local write to the same key replaces the earlier staged operation. It must retain enough information to reproduce that latest local operation even if a later remote APPLY overwrites the visible current field state.
+For LWW_FIELD, it holds at most one pending local operation per canonical field key. A later local write to the same key replaces the earlier staged operation only if it is the winner under the canonical BIN-SYNC LWW comparator. Do not use callback arrival order, thread scheduling, dictionary insertion order or last lock acquisition as a substitute for the protocol comparison. It must retain enough information to reproduce that latest local operation even if a later remote APPLY overwrites the visible current field state.
 
 That last condition is important: a pending local write must not be represented only by a pointer to the current visible field value. A remote operation can win LWW after the local write but before publication; the local operation may still need to be delivered/relayed to other peers. The staged payload or a durable immutable provider reference must survive independently of the visible winner.
 
@@ -347,6 +347,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 16. Provider feed replay after crash does not duplicate staged operations or advance its cursor prematurely.
 17. Storage-only FLD writes create no synthetic protocol author/HLC/ChangeId/Outbox entries.
 18. Checkpoint/compaction cannot reclaim payload bytes still referenced by pending or frozen operations.
+19. Concurrent same-key local writes that reach the staging lock out of HLC order retain the canonical LWW winner, not merely the last callback to acquire the lock.
 
 ## 12. Implementation sequence
 
