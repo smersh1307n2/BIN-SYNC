@@ -1,3 +1,9 @@
+## Unreleased
+
+- Made the Metadata Store reference adapter's outbound freeze operation idempotent for exact full-batch retries: a retry returns the original sequence assignments without appending duplicate entries.
+- Conflicting payload/author reuse and partially overlapping retries fail closed without advancing the outbound high watermark.
+- Added conformance coverage for exact retry, stable sequence reuse, and partial-overlap rejection. This is a semantic reference-model improvement; durable adapter and PendingLocal/source-feed atomic handoff remain separate implementation gates.
+
 # Changelog — BinSync.Core
 
 ## Unreleased — 2026-11-07
