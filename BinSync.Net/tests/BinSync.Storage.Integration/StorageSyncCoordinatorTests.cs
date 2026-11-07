@@ -107,8 +107,25 @@ public sealed class StorageSyncCoordinatorTests
         coordinator.PublishLocalChanges(_ => { });
 
         metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 1, 1);
-        local.RestorePeerStreamProgress(peer.NodeId, 1, local.NodeId, 1,
-            1, 1, 0, Digest16.From(Enumerable.Repeat((byte)161, 16).ToArray()));
+        var oldEpochBatch = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(162),
+            IssuerEpoch = 1,
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)161, 16).ToArray(),
+            Payload = new byte[] { 162 },
+            StreamOffset = 0
+        };
+        metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 1, 1,
+            local.NodeId, oldEpochBatch);
+        metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 1, 1,
+            local.NodeId, oldEpochBatch.BatchId);
+        metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 1, 1,
+            local.NodeId, oldEpochBatch.BatchId, 1, oldEpochBatch.BatchDigest);
+        Assert.Equal(1UL, metadata.GetPeerStreamState(scope, local.NodeId,
+            peer.NodeId, 1, 1, local.NodeId).AckedCursor);
 
         var (toLocal, toPeer) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(peer, toPeer);
