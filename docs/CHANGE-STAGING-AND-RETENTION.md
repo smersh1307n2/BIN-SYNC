@@ -43,6 +43,7 @@ The following observations were checked against FLD-DB branch fix/crash-consiste
 5. The Outbox is append-only. Its fixed record portion is 88 bytes, followed by the value bytes and a 4-byte record CRC. There is also a 16-byte file header, plus index/ACK/state/lease overhead.
 6. RunBuilder stores one LWW winner per (RecordId, FieldId) in a state run. The run is a current-state representation, not a complete local edit history. WAL and Outbox preserve the committed operations needed for recovery and delivery.
 7. The remote APPLY path has a separate durable apply/relay journal. Relay-eligible remote operations are retained independently of whether they win the local LWW comparison.
+8. The current BIN-SYNC SnapshotChunkMessage/BuildSnapshotChunks path copies current LWW field and lifecycle state, but the inspected DTO does not carry ChangeId or an Outbox cursor. Snapshot transfer tests explicitly assert that peer-relative StreamOffset/StreamAcked/StreamPushed are not advanced or rewritten by the snapshot transfer. The normative specification separately describes SnapshotTail/outbox checkpoint data, so the exact spec/runtime baseline and snapshot-to-tail contract require reconciliation before storage code may infer Outbox coverage from a snapshot.
 
 ### 3.1. Concrete answer to the repeated-write example
 
@@ -179,7 +180,7 @@ The implementation must make the transition from pending to frozen durable befor
 
 If a process crashes after freeze but before the first byte is sent, the operation remains frozen and will be sent on retry. This may retain one extra superseded operation, but it cannot cause divergence.
 
-For a snapshot-plus-tail transfer, the snapshot baseline and frozen Outbox cursor must share one barrier. Freeze all pending operations included in the snapshot boundary, then capture the stable source snapshot and its corresponding frozen high watermark (or use an equivalent atomic provider snapshot/feed token). Changes committed after that barrier remain pending and are frozen into the tail. Never take an arbitrary current-state snapshot and independently sample an unrelated Outbox cursor; that can omit a change or send it on both sides of the baseline.
+For a future snapshot-plus-tail transfer, the source snapshot and change-feed watermark must share one barrier, but that alone does not prove that every frozen operation is covered by the snapshot. The current snapshot payload is a current-state LWW slice, while Outbox/relay journals may contain operations (including LWW losers) that are not represented as current field winners. The implementation must explicitly define, per target peer, which frozen operations are semantically subsumed by the snapshot baseline and which provenance/relay operations still require delivery. Until that rule is specified and tested, a snapshot MUST NOT implicitly advance Outbox ACK/GC, discard pending staging, or suppress relay entries. Never take an arbitrary current-state snapshot and independently sample an unrelated feed cursor; that can omit a change or send it on both sides of the baseline.
 
 ## 6. Metadata minimization: what is stored where
 
@@ -345,11 +346,12 @@ This policy reduces redundant outbound history; it does not promise that every p
 12. COUNTER_PN, SET_OR, SEQ_FRACTIONAL, BLOB_REF and MANUAL do not accidentally use LWW coalescing.
 13. Relay LWW losers remain retained and relayable with original ChangeId/provenance.
 14. Local echo suppression continues to obey BIN-SYNC E-13; staging must not create a new echo loop.
-15. Snapshot baseline and tail are bound to one stable state/frozen cursor boundary.
+15. Snapshot baseline and tail are bound to one stable source state/feed watermark, and the protocol explicitly proves which frozen operations are covered by the snapshot versus still requiring tail/relay delivery.
 16. Provider feed replay after crash does not duplicate staged operations or advance its cursor prematurely.
 17. Storage-only FLD writes create no synthetic protocol author/HLC/ChangeId/Outbox entries.
 18. Checkpoint/compaction cannot reclaim payload bytes still referenced by pending or frozen operations.
 19. Concurrent same-key local writes that reach the staging lock out of HLC order retain the canonical LWW winner, not merely the last callback to acquire the lock.
+20. A snapshot transfer does not silently ACK, GC or discard frozen/relay operations whose provenance is not represented by the snapshot payload.
 
 ## 12. Implementation sequence
 
