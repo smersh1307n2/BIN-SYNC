@@ -263,7 +263,7 @@ public sealed partial class Node
 
             ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
             return new OutboundBatchPayload(payload, batchId, stream, stream, namespaceId,
-                issuerEpoch, cursorStart, cursorEnd, batchDigest);
+                issuerEpoch, cursorStart, cursorEnd, previousDigest, batchDigest);
             }
             finally
             {
@@ -753,6 +753,30 @@ public sealed partial class Node
         AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId(), batch.IssuerEpoch,
             batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
 
+    internal void RestorePeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author,
+        uint issuerEpoch, ulong ackedCursor, ulong pushedCursor, ulong streamOffset, Digest16 lastBatchDigest)
+    {
+        if (targetPeer.IsZero || author.IsZero)
+            throw new ArgumentException("Peer and author identities must be non-zero.");
+        ValidateNamespaceId(namespaceId);
+        if (ackedCursor > long.MaxValue || pushedCursor > long.MaxValue || streamOffset > long.MaxValue ||
+            pushedCursor < ackedCursor)
+            throw new InvalidDataException("Durable peer progress exceeds the Node cursor range or is inconsistent.");
+
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var key = (targetPeer, namespaceId);
+            if (!PeerStates.TryGetValue(key, out var state))
+                PeerStates[key] = state = new PeerState(targetPeer, namespaceId);
+            state.SetStreamAcked(author, checked((long)ackedCursor));
+            state.SetStreamPushed(author, checked((long)pushedCursor));
+            state.SetStreamOffset(author, checked((long)streamOffset));
+            if (streamOffset > 0) state.InitialSyncComplete = true;
+            LastStreamDigest[((author, namespaceId, checked((int)issuerEpoch)), targetPeer)] = lastBatchDigest;
+        }
+    }
+
     internal void AdvanceStreamForTransport(NodeId targetPeer, int namespaceId, OutboundBatchPayload batch)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
@@ -791,11 +815,12 @@ internal readonly struct OutboundBatchPayload
     public int IssuerEpoch { get; }
     public long CursorStart { get; }
     public long CursorEnd { get; }
+    public Digest16 PreviousBatchDigest { get; }
     public Digest16 BatchDigest { get; }
 
     public OutboundBatchPayload(byte[] payload, BatchId batchId, NodeId authorStreamId,
         NodeId durableAuthor, int namespaceId, int issuerEpoch, long cursorStart,
-        long cursorEnd, Digest16 batchDigest)
+        long cursorEnd, Digest16 previousBatchDigest, Digest16 batchDigest)
     {
         Payload = payload;
         BatchId = batchId;
@@ -805,6 +830,7 @@ internal readonly struct OutboundBatchPayload
         IssuerEpoch = issuerEpoch;
         CursorStart = cursorStart;
         CursorEnd = cursorEnd;
+        PreviousBatchDigest = previousBatchDigest;
         BatchDigest = batchDigest;
     }
 }
