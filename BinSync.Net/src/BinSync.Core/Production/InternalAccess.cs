@@ -91,6 +91,12 @@ public sealed partial class Node
             state.InitialSyncComplete = true;
         }
     }
+
+    internal bool HasInitialSyncComplete(NodeId peer, int namespaceId)
+    {
+        lock (_lockMeta)
+            return PeerStates.TryGetValue((peer, namespaceId), out var state) && state.InitialSyncComplete;
+    }
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
