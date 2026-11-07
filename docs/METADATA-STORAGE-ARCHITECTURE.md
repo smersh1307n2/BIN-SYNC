@@ -558,6 +558,12 @@ NodePersistence v3-v8 remains readable. The v3-v8 reader validates the legacy Re
 
 The byte reduction depends on how many of the three watermarks exist per author and on dictionary implementation overhead. The structural reduction is deterministic (one author key and one dictionary value instead of up to three repeated author keys/entries); measured disk/RAM results should be published separately rather than claiming a fixed percentage.
 
+### 8.4. Inbox receipt growth is bounded by admission control
+
+Because receipt expiry/GC has no proven protocol horizon, accepted-batch receipts are never evicted by age or by unrelated ACK progress. To prevent unbounded growth from becoming an uncontrolled memory/disk failure, `ResourceLimits.MaxInboxReceipts` now provides an explicit admission cap (default 1,000,000; zero means unlimited). The cap is checked during whole-batch preflight before WAL append or state publication. When full, the new batch is rejected atomically, including a new BatchId that contains a globally deduplicated ChangeId: the batch still requires its own durable receipt and cursor transition.
+
+This is backpressure, not reclamation. It does not make receipt GC safe, and it does not reduce already persisted receipt bytes. Hosts must monitor the cap and provision/recover capacity deliberately. A future safe-GC design must retain the independent duplicate-replay horizon and log-segment confirmation condition.
+
 ### 8.3. Tombstone GC is not yet safe to enable
 
 The current GC path does not satisfy the protocol's tombstone-retention invariant and must not be treated as a completed tombstone-GC implementation:
