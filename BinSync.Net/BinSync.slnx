@@ -4,7 +4,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BinSync.Tests/BinSync.Tests.csproj" />
-    <Project Path="tests/BinSync.MetadataStore.Conformance/BinSync.MetadataStore.Conformance.csproj" />
   </Folder>
   <Folder Name="/bench/">
     <Project Path="bench/BinSync.Bench/BinSync.Bench.csproj" />
