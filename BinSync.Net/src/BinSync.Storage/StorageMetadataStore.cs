@@ -236,6 +236,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             entries.Add(new MetadataRelayItem(
                 sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray()));
             next.RelayHighWatermarks[relayKey] = sequence;
+            EnsureRegisteredPeerStreams(next, batch.NamespaceId, operation.AuthorNodeId, batch.SenderEpoch);
             relayAdded++;
         }
 
@@ -382,6 +383,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
             next.OutboundHighWatermarks[key] = sequence;
         }
+        EnsureRegisteredPeerStreams(next, namespaceId, localAuthor, issuerEpoch: 0);
 
         PersistPartition(partitionKey, current, next);
         return frozen;
@@ -511,8 +513,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         var key = new OutboundKey(namespaceId, localAuthor);
         ulong acknowledged = current.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
         ulong peerSafe = GetSafePeerCursor(current, namespaceId, localAuthor);
-        bool hasPeerRequirements = current.RequiredPeerStreams.Any(peer =>
-            peer.NamespaceId == namespaceId && peer.AuthorStream == localAuthor);
+        bool hasPeerRequirements = current.InterestedPeers.Any(peer => peer.NamespaceId == namespaceId) ||
+            current.RequiredPeerStreams.Any(peer => peer.NamespaceId == namespaceId && peer.AuthorStream == localAuthor);
         if (safeThroughSequence > acknowledged ||
             (hasPeerRequirements && safeThroughSequence > peerSafe))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
@@ -645,6 +647,45 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         ulong scanned = count == 0 ? cursor : expected - 1;
         if (count < limit && scanned < highWatermark)
             throw new InvalidDataException($"Peer {streamName} payload is missing below its durable high-watermark.");
+    }
+
+    public void RegisterInterestedPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint peerEpoch, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, localReplica);
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            var current = GetOrCreatePartition(partitionKey);
+            var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
+            if (current.InterestedPeers.Contains(rosterKey)) return;
+
+            var next = current.Clone();
+            next.InterestedPeers.Add(rosterKey);
+            foreach (var outbound in next.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId))
+                EnsurePeerStream(next, new PeerStreamKey(peer, peerEpoch, namespaceId, outbound.Author), 0);
+            foreach (var relay in next.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId))
+                EnsurePeerStream(next, new PeerStreamKey(peer, peerEpoch, namespaceId, relay.Author), 0);
+            PersistPartition(partitionKey, current, next);
+        }
+    }
+
+    public IReadOnlyList<MetadataInterestedPeer> ReadInterestedPeers(
+        string scopeId, NodeId localReplica, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return Array.Empty<MetadataInterestedPeer>();
+            return state.InterestedPeers.Where(key => key.NamespaceId == namespaceId)
+                .Select(key => new MetadataInterestedPeer(key.Peer, key.PeerEpoch, key.NamespaceId))
+                .OrderBy(peer => Convert.ToHexString(peer.Peer.ToArray()), StringComparer.Ordinal)
+                .ThenBy(peer => peer.PeerEpoch)
+                .ToArray();
+        }
     }
 
     public void RegisterInterestedPeerStream(string scopeId, NodeId localReplica,
@@ -825,17 +866,37 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
     private static ulong GetSafePeerCursor(PartitionState state, int namespaceId, NodeId authorStream)
     {
-        var required = state.RequiredPeerStreams
-            .Where(key => key.NamespaceId == namespaceId && key.AuthorStream == authorStream)
+        var peers = state.InterestedPeers.Where(key => key.NamespaceId == namespaceId)
+            .Select(key => (key.Peer, key.PeerEpoch))
+            .Concat(state.RequiredPeerStreams
+                .Where(key => key.NamespaceId == namespaceId && key.AuthorStream == authorStream)
+                .Select(key => (key.Peer, key.PeerEpoch)))
+            .Distinct()
             .ToArray();
-        if (required.Length == 0) return 0;
+        if (peers.Length == 0) return 0;
         ulong safe = ulong.MaxValue;
-        foreach (var key in required)
+        foreach (var peer in peers)
         {
+            var key = new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream);
             if (!state.PeerStreams.TryGetValue(key, out var progress)) return 0;
             safe = Math.Min(safe, progress.AckedCursor);
         }
         return safe == ulong.MaxValue ? 0 : safe;
+    }
+
+    private static void EnsurePeerStream(PartitionState state, PeerStreamKey key, uint issuerEpoch)
+    {
+        if (!state.PeerStreams.ContainsKey(key))
+            state.PeerStreams.Add(key, new PeerStreamStateValue(0, 0, 0, issuerEpoch, new byte[16], null));
+        state.RequiredPeerStreams.Add(key);
+    }
+
+    private static void EnsureRegisteredPeerStreams(
+        PartitionState state, int namespaceId, NodeId authorStream, uint issuerEpoch)
+    {
+        foreach (var peer in state.InterestedPeers.Where(key => key.NamespaceId == namespaceId))
+            EnsurePeerStream(state,
+                new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream), issuerEpoch);
     }
 
     private static void ValidatePeerStreamArguments(string scopeId, NodeId localReplica,
@@ -1165,7 +1226,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         byte[] streamValue = EncodePeerStreamState(value);
 
         bool addRequired = ensureRequired && !current.RequiredPeerStreams.Contains(key);
+        var rosterKey = new InterestedPeerKey(key.NamespaceId, key.Peer, key.PeerEpoch);
+        bool addRoster = ensureRequired && !current.InterestedPeers.Contains(rosterKey);
         byte[]? requiredKey = null;
+        byte[]? rosterRowKey = null;
         if (addRequired)
         {
             byte[] requiredSuffix = new byte[38];
@@ -1174,6 +1238,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             key.Peer.WriteTo(requiredSuffix.AsSpan(18));
             BinaryPrimitives.WriteUInt32LittleEndian(requiredSuffix.AsSpan(34), key.PeerEpoch);
             requiredKey = StorageKey(root, 16, requiredSuffix);
+        }
+        if (addRoster)
+        {
+            byte[] rosterSuffix = new byte[22];
+            BinaryPrimitives.WriteUInt16LittleEndian(rosterSuffix, checked((ushort)key.NamespaceId));
+            key.Peer.WriteTo(rosterSuffix.AsSpan(2));
+            BinaryPrimitives.WriteUInt32LittleEndian(rosterSuffix.AsSpan(18), key.PeerEpoch);
+            rosterRowKey = StorageKey(root, 17, rosterSuffix);
         }
 
         bool addPartitionIdentity = !current.IsPersisted;
@@ -1193,10 +1265,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         batch.Put(streamKey, streamValue);
         if (requiredKey is not null)
             batch.Put(requiredKey, Array.Empty<byte>());
+        if (rosterRowKey is not null)
+            batch.Put(rosterRowKey, Array.Empty<byte>());
         batch.Commit();
 
         current.PeerStreams[key] = value;
         if (addRequired) current.RequiredPeerStreams.Add(key);
+        if (addRoster) current.InterestedPeers.Add(rosterKey);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
@@ -1206,6 +1281,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         current.PersistedEntries[Convert.ToHexString(streamKey)] = (streamKey, streamValue);
         if (requiredKey is not null)
             current.PersistedEntries[Convert.ToHexString(requiredKey)] = (requiredKey, Array.Empty<byte>());
+        if (rosterRowKey is not null)
+            current.PersistedEntries[Convert.ToHexString(rosterRowKey)] = (rosterRowKey, Array.Empty<byte>());
     }
 
     private static readonly Dictionary<string, (byte[] Key, byte[] Value)> EmptyEntries = new(StringComparer.Ordinal);
@@ -1353,6 +1430,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             peer.Peer.WriteTo(suffix.AsSpan(18));
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(34), peer.PeerEpoch);
             Add(StorageKey(root, 16, suffix), Array.Empty<byte>());
+        }
+
+        foreach (var peer in state.InterestedPeers)
+        {
+            byte[] suffix = new byte[22];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
+            peer.Peer.WriteTo(suffix.AsSpan(2));
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), peer.PeerEpoch);
+            Add(StorageKey(root, 17, suffix), Array.Empty<byte>());
         }
 
         foreach (var pair in state.PeerStreams)
@@ -1544,6 +1630,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     if (!state.ChangeLedger.TryGetValue(ledgerKey, out var ledger))
                         throw new InvalidDataException("Legacy outbound-origin marker has no ChangeId ledger entry.");
                     state.ChangeLedger[ledgerKey] = ledger with { IsLocalOutbound = true };
+                    break;
+                }
+                case 17:
+                {
+                    RequireLength(key, 22);
+                    RequireLength(row.Value, 0);
+                    state.InterestedPeers.Add(new InterestedPeerKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)),
+                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18))));
                     break;
                 }
                 case 16:
@@ -1964,6 +2060,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
     private readonly record struct LeaseState(ulong Generation, Guid ConsumerId);
     private readonly record struct PeerStreamKey(NodeId Peer, uint PeerEpoch, int NamespaceId, NodeId AuthorStream);
+    private readonly record struct InterestedPeerKey(int NamespaceId, NodeId Peer, uint PeerEpoch);
     private sealed record PeerStreamStateValue(ulong AckedCursor, ulong PushedCursor, ulong StreamOffset,
         uint IssuerEpoch, byte[] LastBatchDigest, MetadataOutboundBatchReservation? PendingBatch);
     private readonly record struct ReceiveState(ulong CursorEnd);
@@ -2011,6 +2108,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
         public Dictionary<PeerStreamKey, PeerStreamStateValue> PeerStreams { get; } = new();
         public HashSet<PeerStreamKey> RequiredPeerStreams { get; } = new();
+        public HashSet<InterestedPeerKey> InterestedPeers { get; } = new();
 
         public ulong StorageCommitSeq { get; set; }
         public bool IsPersisted { get; set; }
@@ -2042,6 +2140,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             foreach (var pair in CompletedPendingApplies) clone.CompletedPendingApplies.Add(pair.Key, pair.Value);
             foreach (var pair in PeerStreams) clone.PeerStreams.Add(pair.Key, pair.Value);
             foreach (var peer in RequiredPeerStreams) clone.RequiredPeerStreams.Add(peer);
+            foreach (var peer in InterestedPeers) clone.InterestedPeers.Add(peer);
             return clone;
         }
     }
