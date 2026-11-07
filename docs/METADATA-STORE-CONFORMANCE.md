@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Store Semantic Contract and Conformance Plan
 
-**Status:** semantic contract plus initial executable conformance harness. Twenty provider-independent semantic tests plus one reference-adapter durability-profile assertion are implemented; the volatile reference adapter makes no restart-durability claim, and no durable Metadata Store implementation exists yet.  
+**Status:** semantic contract plus executable conformance. Twenty provider-independent semantic tests run against both a volatile reference adapter and the durable `StorageMetadataStore` adapter. The Storage adapter passes restart, compaction, snapshot, equivocation and pending-apply recovery integration. This does not yet make Metadata Store authoritative for Node/Transport Outbox, per-peer progress or batch replay state.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Related provider contract:** [Data Provider Semantic Contract and Conformance Plan](DATA-PROVIDER-CONFORMANCE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL; this document does not change wire format.  
@@ -202,11 +202,11 @@ The current suite already provides valuable protocol/runtime evidence:
 These tests provide substantial coverage of the current NodePersistence/WAL implementation and should not be repeated unless a refactor changes their execution path. The new abstraction-level status is:
 
 1. **Metadata Store semantic contract and reusable fixture: implemented.** Twenty provider-independent semantic tests run against a volatile reference model; the fixture explicitly does not claim restart durability.
-2. **Physical durable Metadata Store implementation: open.** Current NodePersistence remains a serialized Node object graph.
+2. **Physical durable Metadata Store implementation: implemented for the current `IMetadataStore` contract.** `StorageMetadataStore` persists receipts, ChangeId ledger, relay/outbound payloads, leases and PendingApply state through `Fld1.Storage`; the Storage integration suite exercises close/reopen and compaction. NodePersistence still independently owns Node/Transport peer state, Outbox, replay mappings and the runtime's active receive state.
 3. **Shared-transaction/separate-store apply: semantic retry behavior covered; real provider/store crash/reopen integration remains open.**
 4. **Scope/replica isolation: covered by volatile semantic tests; one durable physical store/reopen proof remains open.**
 5. **Snapshot lifetime: logical view stability across append/ACK/compaction and disposal are covered by the volatile model; physical generation pinning and concurrent durable checkpoint/compaction remain open.**
-6. **Generic Storage-only semantics and end-to-end FLD Storage-only adapter: open.**
+6. **Generic Storage-backed Metadata Store semantics: implemented for the current contract and covered by durable adapter conformance.** Full Node/Transport authority migration and end-to-end FLD Storage-only packaging remain separate gates.
 7. **FLD ApplyJournal JournalSeq → BIN-SYNC ChangeId/OutboxSeq provenance transaction and publication gate: open.**
 8. **PendingLocal/source-feed staging and coalescing: open.** The current Metadata Store suite tests frozen Outbox operations directly; it does not yet test idempotent provider-page staging, HLC winner coalescing, remote-update preservation of pending local payload or freeze-retry cleanup.
 
@@ -270,3 +270,20 @@ The first executable slice is present in the BIN-SYNC branch:
 GitHub Actions run `42360397431` passed the Release solution build, all 637 tests, public samples, coverage threshold and fuzz/lab hardening at commit `504a09092302f137d222421f6929533b95188318`. Line coverage was 72.5%; this combined run includes the Metadata Store and Data Provider conformance suites. An earlier solution layout briefly launched the helper class library as a standalone test target; it was removed from `BinSync.slnx` and remains a project reference of `BinSync.Tests`, where the inherited suite is discovered and runs in the normal test host. The corrected build/test/fuzz/lab run is green.
 
 **Now covered semantically by the volatile reference model:** frozen local Outbox operations, consumer lease fencing, validated outbound safe-prefix ACK, stable metadata snapshot view under logical append/ACK/compaction, pending-apply token/receipt behavior and idempotent provider retry. These tests do not prove physical snapshot-generation pinning, process restart, torn-write recovery or disk durability. **Still open:** deterministic crash/reopen tests against a durable Metadata Store; PendingLocal/source-page staging and LWW coalescing conformance; durable Data Provider feed/reopen tests; end-to-end proof that provider feed ACK follows durable staging; shared-transaction and separate-store integration against real providers; generic FLD Storage-only semantics and end-to-end FLD adapters. The volatile model makes no restart-durability claim.
+
+
+## 11. Durable Storage adapter status (supersedes earlier volatile-only status)
+
+As of BIN-SYNC branch `feature/fld-external-storage`, commit `a714dca0014beac19063753ed13a8da0f6cd7fbb`, the current semantic suite is exercised by the real `StorageMetadataStore` implementation backed by `Fld1.Storage`. The FLD Storage Integration workflow includes the inherited Metadata Store conformance suite and additional restart/compaction coverage. The volatile adapter remains useful as a fast reference model; it is no longer the only implementation tested.
+
+The durable adapter currently persists:
+- incoming batch receipts and per-sender/per-author receive cursors/digest-chain checkpoints;
+- one global `(NamespaceId, ChangeId) → fingerprint + origin` ledger, independent of delivery route;
+- relay and local outbound payloads with independent author sequence domains;
+- outbound lease generations, ACK/high-water marks;
+- PendingApply intents and compact completed-apply receipts;
+- consistent logical snapshots across adapter operations.
+
+**Important remaining authority gap:** Node/Transport still owns and uses its own Outbox, `PeerStates`, pushed/ACKed/offset watermarks, `LastStreamDigest` and batch replay identity mappings. The Storage adapter's outbound stream is currently populated from Node's Outbox by `StorageSyncCoordinator`; it is a durable mirror, not yet the transport's source of truth. The next migration gate is to add peer/author progress and immutable per-peer outbound batch reservations to the Metadata Store contract, then move the transport read/ACK path onto those durable records.
+
+The current Storage integration test run at this commit is being used to validate legacy ChangeId-origin-marker migration into the compact ledger representation; do not mark that gate complete until its CI result is green.
