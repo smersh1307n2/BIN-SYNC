@@ -313,6 +313,39 @@ public class Production : IDisposable
     }
 
     [Fact]
+    public void CompactOutbox_UsesMinimumPeerAckAndFailsClosedForMissingPeerState()
+    {
+        var donor = Fix.MakeNode(870);
+        var peerA = Fix.MakeNode(871);
+        var peerB = Fix.MakeNode(872);
+        donor.WriteField(NS, Fix.Rid(870), 0x100, Val("one"));
+        donor.WriteField(NS, Fix.Rid(871), 0x100, Val("two"));
+        Transport.MakeSession(donor, peerA);
+        Transport.MakeSession(donor, peerB);
+
+        var batchA = donor.CreateDeltaBatch(peerA.NodeId, NS)!;
+        donor.AdvanceStream(peerA.NodeId, NS, batchA);
+        var batchB = donor.CreateDeltaBatch(peerB.NodeId, NS)!;
+        donor.AdvanceStream(peerB.NodeId, NS, batchB);
+
+        donor.ProcessAck(peerA.NodeId, NS, batchA.CursorEnd, batchA.DurableAuthor);
+        Assert.Equal(2, donor.Outbox[NS].Count); // peer B is still behind
+        donor.ProcessAck(peerB.NodeId, NS, batchB.CursorEnd, batchB.DurableAuthor);
+        Assert.Empty(donor.Outbox[NS]);
+
+        var missingState = Fix.MakeNode(873);
+        missingState.WriteField(NS, Fix.Rid(873), 0x100, Val("blocked"));
+        missingState.AliasToNode[Fix.Nid(874)] = new Dictionary<int, (NodeId Id, int Epoch)>();
+        missingState.CompactOutbox(NS);
+        Assert.Single(missingState.Outbox[NS]); // known peer without PeerState blocks GC
+
+        var noPeers = Fix.MakeNode(875);
+        noPeers.WriteField(NS, Fix.Rid(875), 0x100, Val("offline"));
+        noPeers.CompactOutbox(NS);
+        Assert.Single(noPeers.Outbox[NS]); // no interested peers means retain history
+    }
+
+    [Fact]
     public void Persistence_UnifiedInboxReceiptMapDoesNotDuplicateKeysAndRejectsZeroAuthor()
     {
         var (a, _) = BuildHistory();
