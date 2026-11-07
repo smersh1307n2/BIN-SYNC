@@ -392,7 +392,7 @@ The pruning condition is author-specific and uses the validated StreamAcked wate
 
 ### 9.5. Tombstone GC safety is an open protocol gate
 
-The current `GcNotice.Apply` does not persist or enforce the received `TombstoneCutoffWall`. `WatermarkGate` exists but is not wired into DELTA_BATCH, reconcile or snapshot acceptance. The current `PurgeBelowCutoff` removes ordinary `Record.State` values by age without checking tombstone/ghost semantics, and does not reclaim `FieldTombs` or record lifecycle tombstones. Its existing test codifies that unsafe behavior.
+The current `GcNotice.Apply` does not persist or enforce the received `TombstoneCutoffWall`. `WatermarkGate` exists but is not wired into DELTA_BATCH, reconcile or snapshot acceptance. The former `PurgeBelowCutoff` implementation removed ordinary `Record.State` values by age without checking tombstone/ghost semantics, and did not reclaim `FieldTombs` or record lifecycle tombstones. That destructive behavior has now been disabled: the method returns zero until a safe watermark/resync gate is implemented, and tests assert preservation of live values and tombstones.
 
 Do not rely on this path for tombstone reclamation. Before enabling it, implement a durable monotonic cutoff per namespace, force peers behind the cutoff through full resync/snapshot, and reclaim only tombstone/ghost state proven safe. Never delete a live field solely because its HLC is old. Inbox receipt expiry, global ChangeId ledger retention and relay payload ACK remain independent lifetimes. The normative requirements are summarized in Metadata Storage Architecture §8.3 and FLD-DB roadmap §7.8.
 
