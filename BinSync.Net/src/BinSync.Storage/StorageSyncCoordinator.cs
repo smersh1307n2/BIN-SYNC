@@ -267,8 +267,11 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(persistNode);
         if (batch.NamespaceId != _namespaceId)
             throw new ArgumentException("Batch namespace does not match this coordinator.", nameof(batch));
-        persistNode(_node);
-        return ApplyRemoteBatch(batch);
+        lock (_gate)
+        {
+            persistNode(_node);
+            return ApplyRemoteBatch(batch);
+        }
     }
 
     /// <summary>Recover pending provider commits after restart before accepting new sync work.</summary>
