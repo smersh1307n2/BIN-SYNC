@@ -346,6 +346,16 @@ public sealed class StorageSyncCoordinator
         {
             NodeId peer = session.PeerNodeId;
             uint peerEpoch = checked((uint)session.PeerEpoch);
+            var priorPeerEpochs = peerStore.ReadInterestedPeers(_scopeId!, _node.NodeId, namespaceId)
+                .Where(item => item.Peer == peer && item.PeerEpoch < peerEpoch)
+                .Select(item => item.PeerEpoch).Distinct().ToArray();
+            bool hasPriorIncarnation = priorPeerEpochs.Length != 0 ||
+                peerStore.GetRetiredPeerEpoch(_scopeId!, _node.NodeId, peer, namespaceId) is not null;
+            peerStore.RegisterInterestedPeer(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId);
+            foreach (uint oldEpoch in priorPeerEpochs)
+                peerStore.RetireInterestedPeer(_scopeId!, _node.NodeId, peer,
+                    oldEpoch, peerEpoch, namespaceId);
+
             var known = peerStore.ReadPeerStreamStates(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId)
                 .ToDictionary(stream => stream.AuthorStream, stream => stream.State);
             var authors = peerStore.ReadOutboundAuthors(_scopeId!, _node.NodeId, namespaceId)
@@ -361,7 +371,7 @@ public sealed class StorageSyncCoordinator
                 bool pristine = saved.AckedCursor == 0 && saved.PushedCursor == 0 &&
                     saved.StreamOffset == 0 && saved.IssuerEpoch == 0 &&
                     saved.PendingBatch is null && saved.LastBatchDigest.All(value => value == 0);
-                if (!pristine) continue;
+                if (!pristine || hasPriorIncarnation) continue;
                 var legacy = _node.ReadPeerStreamProgress(peer, namespaceId, author);
                 if (legacy.PushedCursor > legacy.AckedCursor)
                     throw new InvalidDataException("Legacy Node peer state has an unacknowledged batch without a durable replay reservation.");
@@ -369,7 +379,6 @@ public sealed class StorageSyncCoordinator
                     peerEpoch, namespaceId, author, legacy.AckedCursor,
                     legacy.StreamOffset, legacy.IssuerEpoch, legacy.LastBatchDigest);
             }
-            peerStore.RegisterInterestedPeer(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId);
         }
     }
 
