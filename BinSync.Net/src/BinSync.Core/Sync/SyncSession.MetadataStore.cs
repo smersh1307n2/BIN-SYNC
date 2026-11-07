@@ -38,14 +38,6 @@ public partial class SyncSession
             var streams = peerStateStore.ReadPeerStreamStates(
                 scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId);
 
-            foreach (var stream in streams.Where(stream => stream.State.PendingBatch is not null))
-            {
-                uint issuerEpoch = stream.State.PendingBatch!.IssuerEpoch;
-                sender.RestorePeerStreamProgress(PeerNodeId, namespaceId, stream.AuthorStream,
-                    issuerEpoch, stream.State.AckedCursor, stream.State.PushedCursor,
-                    stream.State.StreamOffset, Digest16.From(stream.State.LastBatchDigest));
-            }
-
             MetadataOutboundBatchReservation reservation;
             NodeId authorStream;
             var pending = streams.FirstOrDefault(stream => stream.State.PendingBatch is not null);
@@ -86,11 +78,6 @@ public partial class SyncSession
                     }
                     if (saved.PendingBatch is null && saved.PushedCursor > saved.AckedCursor)
                         throw new InvalidDataException("Durable peer pushed cursor has no immutable replay reservation.");
-                    uint savedIssuerEpoch = saved.PendingBatch?.IssuerEpoch ?? saved.IssuerEpoch;
-                    sender.RestorePeerStreamProgress(PeerNodeId, namespaceId, candidateAuthor,
-                        savedIssuerEpoch, saved.AckedCursor, saved.PushedCursor,
-                        saved.StreamOffset, Digest16.From(saved.LastBatchDigest));
-
                     IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> pageItems;
                     if (candidateAuthor == sender.NodeId)
                     {
@@ -107,7 +94,7 @@ public partial class SyncSession
 
                     if (pageItems.Count == 0) continue;
                     var created = sender.CreateDeltaBatchPayloadFromMetadata(
-                        PeerNodeId, namespaceId, candidateAuthor, pageItems,
+                        PeerNodeId, namespaceId, candidateAuthor, pageItems, saved,
                         schemaVersion: schemaVersion);
                     if (created is null) continue;
                     var createdBatch = created.Value;
