@@ -63,23 +63,14 @@ public sealed partial class Node
             return false;
         if (acceptedReceipt.DurableAuthor.IsZero)
             throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
-        // Preserve the public-copy path's structural null checks without allocating
-        // entry objects, payload arrays, or deferred causal-dependency lists for a replay.
-        for (int i = 0; i < batch.Entries.Count; i++)
-        {
-            var entry = batch.Entries[i];
-            ArgumentNullException.ThrowIfNull(entry);
-            if (!entry.HasCausalDepsStorage)
-                throw new ArgumentNullException(nameof(entry.CausalDeps));
-        }
-
-        var replayFingerprint = InboxReceiptIdentity.ValidateAndCompute(batch);
+        var replayFingerprint = InboxReceiptIdentity.Compute(batch);
         if (acceptedReceipt.HasFingerprint && acceptedReceipt.Fingerprint != replayFingerprint)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
 
         AcksOut.Add(batch.BatchId);
         result.Duplicate = true;
         result.Acked = true;
+        result.CursorEnd = acceptedReceipt.HasCursorEnd ? acceptedReceipt.CursorEnd : batch.CursorEnd;
         result.DurableAuthor = acceptedReceipt.DurableAuthor;
         return true;
     }
@@ -119,14 +110,15 @@ public sealed partial class Node
         {
             if (acceptedReceipt.DurableAuthor.IsZero)
                 throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
-            var replayFingerprint = InboxReceiptIdentity.ValidateAndCompute(batch);
+            var replayFingerprint = InboxReceiptIdentity.Compute(batch);
             if (acceptedReceipt.HasFingerprint && acceptedReceipt.Fingerprint != replayFingerprint)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             AcksOut.Add(batch.BatchId);   // duplicate → no-op but ACK mandatory [П4]
             result.Duplicate = true;
             result.Acked = true;
-            // The receipt map stores the exact author stream and committed batch
-            // header for this BatchId; never infer either from LastStreamAuthor.
+            // The receipt stores the original cursor end and durable author; never
+            // trust replay-supplied cursor values or infer the author from LastStreamAuthor.
+            if (acceptedReceipt.HasCursorEnd) result.CursorEnd = acceptedReceipt.CursorEnd;
             result.DurableAuthor = acceptedReceipt.DurableAuthor;
             return result;
         }
@@ -484,8 +476,8 @@ public sealed partial class Node
         if (ps is null)
             PeerStates[pkey] = ps = peerStateToPublish;
         LastStreamAuthor[(senderPeer, batch.NamespaceId)] = streamAuthor;   // E-11
-        InboxAuthors[key] = new InboxReceipt(streamAuthor, receiptFingerprint,
-            hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
+        InboxAuthors[key] = new InboxReceipt(streamAuthor, batch.CursorEnd, hasCursorEnd: true,
+            receiptFingerprint, hasFingerprint: true, appliedAt: (ulong)nowWall, expiresAt: 0);
         ps.LastReceivedSeq = batch.CursorEnd;   // [П3]/[Т2] atomic cursor jump (compat copy)
         ps.ReceivedStreams[streamKey] = batch.CursorEnd;   // errata E-3 per-session cursor
         LastBatchDigest[chain] = batch.BatchDigest;
