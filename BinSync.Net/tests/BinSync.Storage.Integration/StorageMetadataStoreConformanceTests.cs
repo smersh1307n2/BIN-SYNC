@@ -56,7 +56,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             reopened.CompactOutboundThrough("durable-scope", Node(1), 7, Node(1), 1);
             Assert.Empty(reopened.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
             Assert.Empty(reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 1, 0, 10).Items);
-        }
 
         using (var afterCompaction = new StorageMetadataStoreAdapter(directory, 302, deleteOnDispose: false))
         {
@@ -67,6 +66,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Throws<InvalidDataException>(() => afterCompaction.FreezeOutbound(
                 "durable-scope", Node(1), 7, Node(1), new[] { FrozenOperation(60, 70) }));
             Assert.True(afterCompaction.AcceptIncomingBatch(first).IsDuplicate);
+        }
         }
         finally
         {
