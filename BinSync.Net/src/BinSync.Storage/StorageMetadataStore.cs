@@ -589,7 +589,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), 0);
             ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
-            ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
             var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
                 ? saved : EmptyPeerStreamValue();
@@ -620,6 +619,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if (limit < 0) throw new ArgumentOutOfRangeException(nameof(limit));
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), 0);
+            ValidatePeerEpochForAccess(state, namespaceId, peer, peerEpoch);
             var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             var progress = state.PeerStreams.TryGetValue(streamKey, out var saved)
                 ? saved : EmptyPeerStreamValue();
