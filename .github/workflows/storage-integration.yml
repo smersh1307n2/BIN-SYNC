@@ -13,8 +13,8 @@ on:
       - "BinSync.Net/src/BinSync.Core/**"
   pull_request:
     paths:
-      - ".gitmodules"
-      - "external/FLD-DB"
+      - ".github/workflows/storage-integration.yml"
+      - "external/Fld1.Storage/**"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
@@ -30,7 +30,6 @@ jobs:
     steps:
       - name: Checkout BIN-SYNC and pinned FLD-DB Storage source
         uses: actions/checkout@v4
-        with:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
