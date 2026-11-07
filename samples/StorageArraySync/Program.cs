@@ -44,7 +44,7 @@ try
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
 
         Transport.MakeSession(nodeA, nodeB);
-        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _) =>
+        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _, _) =>
         {
             // Persist the Node's accepted receipt/state first, then materialize the
             // external provider. Transport sends ACK only after this callback returns.
