@@ -570,12 +570,12 @@ The current GC path does not satisfy the protocol's tombstone-retention invarian
 
 - `GcNotice.Apply` merges quarantine/author-epoch state but does not persist or enforce the received `TombstoneCutoffWall`.
 - `WatermarkGate` exists as a helper, but the inspected DELTA_BATCH apply/reconcile/snapshot paths do not call it. The required stale-peer `OUTDATED_WATERMARK` / full-resync gate is therefore not connected to receipt of GC_NOTICE.
-- `GcNotice.PurgeBelowCutoff` currently removes entries from `Record.State` solely because their field HLC wall is below the cutoff. It does not check whether the field is a tombstone, whether it is dominated by a record lifecycle tombstone, or whether a safe peer watermark has been established. It does not reclaim `Record.FieldTombs` or lifecycle tombstone metadata.
-- The existing test `PurgeBelowCutoff_removes_old_fields` codifies removal of ordinary old field values. That behavior is not evidence of safe tombstone GC and must be revisited before relying on this API.
+- The former `GcNotice.PurgeBelowCutoff` implementation removed entries from `Record.State` solely because their field HLC wall was below the cutoff. It did not check whether the field was a tombstone, whether it was dominated by a record lifecycle tombstone, or whether a safe peer watermark had been established. It did not reclaim `Record.FieldTombs` or lifecycle tombstone metadata.
+- This age-only deletion has now been disabled: `PurgeBelowCutoff` returns zero until a safe cutoff/resync gate exists. Its test now asserts that old live values, field tombstones and record lifecycle tombstones all remain intact.
 
 Required design before enabling deletion: persist a monotonic safe tombstone cutoff per namespace; bind it to a protocol-visible peer watermark or a mandatory full-snapshot/resync transition; reject incremental synchronization from peers behind that cutoff; preserve ordinary live field values; reclaim only tombstone/ghost state whose deletion is proven safe. Field tombstones, record lifecycle tombstones, relay payload retention, Inbox receipts and global ChangeId dedup have separate lifetimes. A tombstone's age alone is never sufficient.
 
-Until those conditions and crash/restart tests exist, `TombstoneCutoffWall=0` / no-GC behavior is the safe operational choice. Do not add TTL-based Inbox receipt or ChangeId-ledger cleanup as a substitute.
+Until those conditions and crash/restart tests exist, the implementation fails closed: `PurgeBelowCutoff` is a no-op and `TombstoneCutoffWall` is not treated as authorization to delete state. Do not add TTL-based Inbox receipt or ChangeId-ledger cleanup as a substitute.
 
 ### 8.3. Global ChangeId ledger — implemented
 
