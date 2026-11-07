@@ -695,6 +695,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
     }
 
+    public uint? GetRetiredPeerEpoch(string scopeId, NodeId localReplica, NodeId peer, int namespaceId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePeerStreamArguments(scopeId, localReplica, peer, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+                return null;
+            return state.RetiredPeerEpochs.TryGetValue((namespaceId, peer), out uint retiredThrough)
+                ? retiredThrough : null;
+        }
+    }
+
     public void RetireInterestedPeer(string scopeId, NodeId localReplica,
         NodeId peer, uint retiredPeerEpoch, uint replacementPeerEpoch, int namespaceId)
     {
