@@ -348,7 +348,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Duplicate_batch_id_rejects_changed_payload_or_unbound_header_fields()
+    public void Duplicate_batch_id_uses_receipt_header_without_redecoding_payload()
     {
         using var sender = Fix.MakeNode(121);
         using var receiver = Fix.MakeNode(122);
@@ -369,31 +369,37 @@ public class ChangeIdWireTests
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = e.ChangeId,
-                RecordId = e.RecordId,
+                RecordId = e.RecordId.ToArray(),
                 OpKind = e.OpKind,
                 Payload = e.Payload.ToArray(),
-                AuthorNodeId = e.AuthorNodeId,
+                AuthorNodeId = e.AuthorNodeId.ToArray(),
                 CreatedAt = e.CreatedAt
             }).ToList());
 
-        // Keep the old root/digest while changing the payload: the duplicate
-        // fast path must recompute RecordsRoot before it sends another ACK.
-        var payloadConflict = CopyBatch(original);
-        var changedOp = Ops.DecodeOp(payloadConflict.Entries[0].Payload).Op;
+        // A duplicate BatchId is acknowledged from its durable receipt. The
+        // replay payload is deliberately not trusted or re-decoded.
+        var payloadReplay = CopyBatch(original);
+        var changedOp = Ops.DecodeOp(payloadReplay.Entries[0].Payload).Op;
         ((OpFieldWrite)changedOp).Value = new byte[] { 0x52 };
-        payloadConflict.Entries[0].Payload = Ops.EncodeOp(changedOp);
-        var payloadError = Assert.Throws<SyncException>(() =>
-            receiver.ApplyBatch(payloadConflict, sender.NodeId));
-        Assert.Equal("BATCH_TRANSACTION_FAILED", payloadError.CodeName);
-        Assert.Empty(receiver.AcksOut);
+        payloadReplay.Entries[0].Payload = Ops.EncodeOp(changedOp);
+        var duplicate = receiver.ApplyBatch(payloadReplay, sender.NodeId);
+        Assert.True(duplicate.Duplicate);
+        Assert.Equal(original.CursorEnd, duplicate.CursorEnd);
+        Assert.Single(receiver.AcksOut);
 
-        // BatchDigest intentionally does not bind schema/mode header fields;
-        // the durable receipt fingerprint does.
+        receiver.AcksOut.Clear();
         var headerConflict = CopyBatch(original);
         headerConflict.SchemaId++;
         var headerError = Assert.Throws<SyncException>(() =>
             receiver.ApplyBatch(headerConflict, sender.NodeId));
         Assert.Equal("BATCH_TRANSACTION_FAILED", headerError.CodeName);
+        Assert.Empty(receiver.AcksOut);
+
+        var cursorConflict = CopyBatch(original);
+        cursorConflict.CursorEnd++;
+        var cursorError = Assert.Throws<SyncException>(() =>
+            receiver.ApplyBatch(cursorConflict, sender.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", cursorError.CodeName);
         Assert.Empty(receiver.AcksOut);
 
         Assert.True(receiver.TryGetField(1, Fix.Rid(0x75), 0x100, out var current));
