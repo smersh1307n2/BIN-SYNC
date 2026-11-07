@@ -176,7 +176,7 @@ Sequence numbers are assigned only during freeze and then never changed. Peer-re
 
 ### 5.4. The publication boundary
 
-The implementation must make the transition from pending to frozen durable before a transport can send the operation. It is acceptable to freeze conservatively before the first send attempt. It is not acceptable to send first and record the freeze afterward.
+The implementation must make the transition from pending to frozen durable before a transport can send the operation. It is acceptable to freeze conservatively before the first send attempt. It is not acceptable to send first and record the freeze afterward. The durable self-echo check required by BIN-SYNC E-13 must remain correct across both storage stages: it must not become blind to a locally authored winner merely because that operation is still in pending staging rather than the frozen Outbox. The implementation should expose one semantic query over the local pending winner plus frozen/unconfirmed Outbox state, without merging their retention lifetimes.
 
 If a process crashes after freeze but before the first byte is sent, the operation remains frozen and will be sent on retry. This may retain one extra superseded operation, but it cannot cause divergence.
 
@@ -381,6 +381,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 20. A snapshot transfer does not silently ACK, GC or discard frozen/relay operations whose provenance is not represented by the snapshot payload.
 21. SeenChanges entries are not pruned by arbitrary TTL; any future GC test proves a protocol-defined sender/channel/author-stream horizon before exact dedup entries are removed.
 22. Inbox receipt expiry/GC requires the protocol's elapsed-expiry plus confirmed-log-segment condition and survives restart.
+23. E-13 self-echo suppression sees the correct durable local winner across pending staging and frozen/unconfirmed Outbox without treating staged entries as published stream records.
 
 ## 12. Implementation sequence
 
