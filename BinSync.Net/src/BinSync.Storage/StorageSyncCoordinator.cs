@@ -133,39 +133,7 @@ public sealed class StorageSyncCoordinator
             winners[key] = change;
     }
 
-    /// <summary>Coalesces only unpublished LWW state by canonical record/field identity.</summary>
-    private static IReadOnlyList<ProviderChange> CoalescePendingLocalChanges(
-        IReadOnlyList<ProviderChange> changes)
-    {
-        var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
-        foreach (var change in changes)
-        {
-            ProviderMutation mutation = change.Mutation;
-            var key = (mutation.RecordId, mutation.FieldId, mutation.IsRecordTombstone);
-            if (!winners.TryGetValue(key, out var prior))
-            {
-                winners.Add(key, change);
-                continue;
-            }
-
-            ProviderMutation previous = prior.Mutation;
-            int comparison = HlcOps.CompareHlc(
-                new Hlc(mutation.HlcWall, mutation.HlcLogical), mutation.AuthorNodeId,
-                new Hlc(previous.HlcWall, previous.HlcLogical), previous.AuthorNodeId);
-            if (comparison == 0)
-            {
-                if (!SameMutation(mutation, previous))
-                    throw new InvalidDataException("Pending local feed contains conflicting mutations at the same HLC and author.");
-                continue;
-            }
-
-            if (comparison > 0)
-                winners[key] = change;
-        }
-
-        return winners.Values.OrderBy(change => change.Sequence).ToArray();
-    }
-
+    /// <summary>Compares complete local mutations when equal HLC/author keys are encountered.</summary>
     private static bool SameMutation(ProviderMutation left, ProviderMutation right)
         => left.RecordId == right.RecordId
             && left.FieldId == right.FieldId
