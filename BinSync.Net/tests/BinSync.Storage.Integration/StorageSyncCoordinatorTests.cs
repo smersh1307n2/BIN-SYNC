@@ -58,6 +58,53 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
     }
 
+
+    [Fact]
+    public void Provider_commit_before_ack_survives_receiver_restart_and_duplicate_batch_retry()
+    {
+        string nodePath = Path.Combine(_root, "receiver.node");
+        using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 403, deleteOnDispose: true);
+        Node sender = NewNode(6);
+        Node receiver = NewNode(7);
+        RecordId recordId = RecordId.From(Guid.Parse("60000000-0000-0000-0000-000000000006").ToByteArray());
+        const ushort fieldId = 0x0101;
+        sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("committed"), new Hlc(3000, 1));
+        var fields = new[] { (recordId, fieldId) };
+
+        Transport.MakeSession(sender, receiver);
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1);
+
+        Assert.Throws<IOException>(() => Transport.DeliverBatch(sender, receiver, 1,
+            beforeAck: (target, _) =>
+            {
+                // Receiver protocol receipt is durable before external provider apply.
+                NodePersistence.Save(target, nodePath);
+                coordinator.ApplyRemoteFields(fields);
+                // Simulate process loss after provider commit but before sender ACK.
+                throw new IOException("simulated crash before ACK");
+            }));
+
+        Assert.True(provider.TryReadCurrent(recordId, fieldId, out var committed));
+        Assert.Equal("committed", Encoding.UTF8.GetString(committed!.Value));
+
+        receiver = NodePersistence.Load(nodePath);
+        Transport.MakeSession(sender, receiver);
+        coordinator = new StorageSyncCoordinator(receiver, provider, 1);
+        var retry = Transport.DeliverBatch(sender, receiver, 1,
+            beforeAck: (target, result) =>
+            {
+                Assert.True(result.Duplicate);
+                var receipt = coordinator.ApplyRemoteFields(fields);
+                Assert.True(receipt!.IsDuplicate);
+                NodePersistence.Save(target, nodePath);
+            });
+
+        Assert.NotNull(retry);
+        Assert.True(retry!.Duplicate);
+        Assert.Null(Transport.DeliverBatch(sender, receiver, 1));
+        Assert.Equal(0UL, provider.LocalChangeHighWatermark);
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
