@@ -30,7 +30,7 @@ public sealed partial class Node
     internal bool ReplayRemoteBatch(NodeId senderPeer, int senderEpoch,
         IReadOnlyList<AliasMapEntry> aliases, byte[] payload)
     {
-        var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)payload);
+        var batch = DecodeBatchPayloadCausal(payload);
         var inboxKey = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
 
         // Recreate the peer placeholder even when the alias/session map is supplied
