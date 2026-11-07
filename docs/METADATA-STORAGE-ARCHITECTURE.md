@@ -894,3 +894,12 @@ Current unsupported case: \`OpRecordTombstone\` is explicitly rejected by the pr
 - **Full operation coverage:** record lifecycle and field tombstones are supported; define durable semantics for non-LWW/event operations and explicit undelete workflows.
 - **Metadata mutation complexity:** the adapter persists changed logical keys, but still clones collection structures and derives a key diff from partition state on each mutation. Replace this with explicit dirty-key deltas/copy-on-write before claiming bounded per-operation CPU/allocation cost.
 - **Concurrency and retention:** multi-process fencing/automatic retry are not implemented; preserve receipts, global ChangeId fingerprints and source JournalSeq→ChangeId→OutboxSeq provenance until a proven GC horizon exists.
+
+
+## 7.26 Record lifecycle persistence and array deletion (2026-11-07)
+
+\`StorageDataProvider\` now persists \`ProviderMutation.IsRecordTombstone\` under a separate record-level Storage key. It does not fan a record delete out into field tombstones. \`TryReadCurrent\` compares the field's HLC/author with the record lifecycle HLC/author and applies the same ghost visibility rule as \`Model.IsGhost\`: fields at or before the dead lifecycle are hidden; newer ghost fields remain visible. Snapshot pages include the record tombstone and all retained field states so a consumer can reconstruct the lifecycle and ghost state.
+
+The local feed path maps record tombstones to \`Node.DeleteRecord\`; the received-batch and PendingApply recovery paths decode \`OpRecordTombstone\` and preserve its HLC and durable author. The array sample now deletes one array item on replica B, synchronizes the lifecycle tombstone through BIN-SYNC, and verifies that the item is hidden on both Storage replicas.
+
+**Verified CI at commit \`58cc41d8e8d1\`:** Storage integration 44/44 and array sample PASS (including record deletion); BIN-SYNC core 642/642; fuzz/lab workflow success.
