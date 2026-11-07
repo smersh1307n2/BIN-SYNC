@@ -94,7 +94,7 @@ public sealed partial class Node
         _storage.EnsureCapacity(staged._storage.Count);
         Outbox.EnsureCapacity(staged.Outbox.Count);
         _outboxSeq.EnsureCapacity(staged._outboxSeq.Count);
-        InboxAuthors.EnsureCapacity(staged.InboxAuthors.Count);
+        var restoredInboxAuthors = staged.InboxAuthors.Clone();
         LastBatchDigest.EnsureCapacity(staged.LastBatchDigest.Count);
         LastStreamDigest.EnsureCapacity(staged.LastStreamDigest.Count);
         AliasToNode.EnsureCapacity(staged.AliasToNode.Count);
@@ -115,7 +115,7 @@ public sealed partial class Node
         ReplaceContents(_storage, staged._storage);
         ReplaceContents(Outbox, staged.Outbox);
         ReplaceContents(_outboxSeq, staged._outboxSeq);
-        ReplaceContents(InboxAuthors, staged.InboxAuthors);
+        InboxAuthors.ReplaceWith(restoredInboxAuthors);
         ReplaceContents(LastBatchDigest, staged.LastBatchDigest);
         ReplaceContents(LastStreamDigest, staged.LastStreamDigest);
         ReplaceContents(AliasToNode, staged.AliasToNode);
