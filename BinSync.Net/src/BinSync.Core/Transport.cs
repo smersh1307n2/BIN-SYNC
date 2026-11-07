@@ -143,7 +143,8 @@ public static partial class Transport
     /// learn about the delivery, so a later CreateDeltaBatch replays the same batchId.
     /// <summary>Create, encode, apply one batch and ACK (optional dropAck).</summary>
     public static BatchResult? DeliverBatch(Node sender, Node receiver, int namespaceId,
-        NodeId? filterAuthor = null, int schemaVersion = 1, bool dropAck = false)
+        NodeId? filterAuthor = null, int schemaVersion = 1, bool dropAck = false,
+        Action<Node, BatchResult>? beforeAck = null)
     {
         var batch = sender.CreateDeltaBatch(receiver.NodeId, namespaceId,
                                            filterAuthorNodeId: filterAuthor,
@@ -153,6 +154,9 @@ public static partial class Transport
         // In-process path: skip BuildFrame/ParseFrame (CRC is for the wire).
         var payload = sender.EncodeBatchPayload(batch);
         var result = receiver.ApplyBatchPayload(payload, sender.NodeId);
+        // External durable data effects must commit before the sender can advance.
+        // If the callback fails, the sender retains the same batch for idempotent retry.
+        beforeAck?.Invoke(receiver, result);
         sender.AdvanceStream(receiver.NodeId, namespaceId, batch);
         // ACK payload only (no frame) — same semantics as wire ACK without CRC tax.
         var ackPayload = EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
@@ -166,13 +170,14 @@ public static partial class Transport
 
     /// Full pairwise delta exchange A→B then B→A. Returns count of delivered batches.
     /// <summary>Exchange pending batches A→B then B→A until drained.</summary>
-    public static int SyncRound(Node a, Node b, int namespaceId, int schemaVersion = 1)
+    public static int SyncRound(Node a, Node b, int namespaceId, int schemaVersion = 1,
+        Action<Node, BatchResult>? beforeAck = null)
     {
         int n = 0;
         foreach (var (src, dst) in new[] { (a, b), (b, a) })
             while (true)
             {
-                var r = DeliverBatch(src, dst, namespaceId, schemaVersion: schemaVersion);
+                var r = DeliverBatch(src, dst, namespaceId, schemaVersion: schemaVersion, beforeAck: beforeAck);
                 if (r is null) break;
                 n++;
             }
