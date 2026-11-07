@@ -458,8 +458,13 @@ public abstract class MetadataStoreConformanceSuite
             Operations = operations
         };
 
-    protected static MetadataFrozenOperation FrozenOperation(byte change, byte payload)
-        => new() { ChangeId = Batch(change), Payload = new[] { payload } };
+    protected static MetadataFrozenOperation FrozenOperation(byte change, byte payload, byte? fingerprint = null)
+        => new()
+        {
+            ChangeId = Batch(change),
+            Fingerprint = Bytes(fingerprint ?? payload),
+            Payload = new[] { payload }
+        };
 
     protected static MetadataOperation Operation(byte author, byte change, byte fingerprint, byte payload)
         => new()
