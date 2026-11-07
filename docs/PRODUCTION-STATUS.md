@@ -3,7 +3,7 @@
 **Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
 **Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged)  
 **CI:** run #1276 successful — 588/588 tests, fuzz/lab 31/31, all three public samples pass, line coverage 70.7%.  
-**Audit status:** stream/fragment binding audited; FLD-DB storage boundary reached and documented. Full normative §§4–18 audit remains in progress; no percentage-based spec-parity claim is made.
+**Audit status:** stream/fragment binding audited; general Metadata Store / external Data Provider architecture documented as a design draft. The specialized FLD synchronized-database contract is aligned with the new architecture and current FLD branch APIs. External-store runtime boundary and FLD Storage-only role are not implemented. Full normative §§4–18 audit remains in progress; no percentage-based spec-parity claim is made.
 
 Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
@@ -48,7 +48,10 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 ## Release gates still open
 
 - Complete normative audit of remaining §§4–18 and cross-check every normative scenario against executable tests.
-- Implement the proposed FLD-DB boundary in `docs/FLD-DB-INTEGRATION-CONTRACT.md`: durable atomic remote batch apply, inbox/SeenChanges, relay journal, fenced Outbox lease and consistent read snapshots. Current `FldDatabase.ApplyRemote(...); Commit()` is explicitly not a safe integration path.
+- Complete the generic Metadata Store and Data Provider contracts from `docs/METADATA-STORAGE-ARCHITECTURE.md`, including conformance tests and the external-provider recovery protocol.
+- Integrate BIN-SYNC runtime persistence behind the new boundary. Current Node dictionaries and Node WAL remain authoritative in the existing implementation; the architecture document is not yet implemented.
+- Complete the FLD synchronized-database boundary: FLD `ApplyRemoteBatch`, durable apply journal, and fenced Outbox lease/high-watermark primitives now exist on the FLD branch, but BIN-SYNC integration, relay safe-ACK/retention, and consistent snapshot contract still require verification and completion. The legacy `FldDatabase.ApplyRemote(...); Commit()` path remains explicitly unsafe.
+- Design and implement FLD Storage-only mode without protocol HLC/author/ChangeId/Outbox semantics; current FLD1 run format constraints must be resolved before choosing its physical representation.
 - Confirm final documentation/specification parity on the complete branch diff.
 - Review PR #16 diff and CI once more; only then request explicit approval to merge into main.
 
