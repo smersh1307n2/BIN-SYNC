@@ -242,7 +242,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 store.FreezeOutbound(scope, local, 7, author, new[] { FrozenOperation(90, 91) });
                 store.AcquireOutboundLease(scope, local, 7, author,
                     Guid.Parse("91000000-0000-0000-0000-000000000001"));
-                store.AcknowledgeOutbound(scope, local, 7, author, 1);
+                store.AcknowledgeOutbound(scope, local, 7, author, 1, 1);
 
                 store.RegisterInterestedPeerStream(scope, local, peerA, 1, 7, author,
                     0, 0, 1, new byte[16]);
