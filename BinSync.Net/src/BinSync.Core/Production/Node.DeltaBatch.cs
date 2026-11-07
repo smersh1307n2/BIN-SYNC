@@ -53,7 +53,8 @@ public sealed partial class Node
     // Batch, OutboxEntry, or per-entry CausalDeps objects.
     internal OutboundBatchPayload? CreateDeltaBatchPayloadForTransport(
         NodeId targetPeer, int namespaceId, NodeId? filterAuthorNodeId = null,
-        int schemaId = 0, int schemaVersion = 1)
+        int schemaId = 0, int schemaVersion = 1,
+        IReadOnlyList<OutboxEntry>? sourceEntries = null)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
@@ -68,7 +69,8 @@ public sealed partial class Node
 
             long wm;
             NodeId stream;
-            List<OutboxEntry>? all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : null;
+            IReadOnlyList<OutboxEntry>? all = sourceEntries ??
+                (Outbox.TryGetValue(namespaceId, out var ob) ? ob : null);
             if (filterAuthorNodeId is not null)
             {
                 stream = filterAuthorNodeId.Value;
@@ -818,18 +820,9 @@ public sealed partial class Node
                 previousSequence = item.Sequence;
             }
 
-            bool hadOriginal = Outbox.TryGetValue(namespaceId, out var original);
-            Outbox[namespaceId] = temporary;
-            try
-            {
-                return CreateDeltaBatchPayloadForTransport(
-                    targetPeer, namespaceId, authorStream, schemaId, schemaVersion);
-            }
-            finally
-            {
-                if (hadOriginal) Outbox[namespaceId] = original!;
-                else Outbox.Remove(namespaceId);
-            }
+            return CreateDeltaBatchPayloadForTransport(
+                targetPeer, namespaceId, authorStream, schemaId, schemaVersion,
+                sourceEntries: temporary);
         }
     }
 
