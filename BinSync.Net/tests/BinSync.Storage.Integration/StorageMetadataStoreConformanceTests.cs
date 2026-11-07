@@ -330,6 +330,27 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Namespace_peer_roster_enrolls_future_outbound_author_streams()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-roster-future-stream"), 428);
+        NodeId local = Node(1), peerA = Node(2), peerB = Node(4);
+        const string scope = "peer-roster-future-stream";
+        store.RegisterInterestedPeer(scope, local, peerA, 1, 7);
+        store.RegisterInterestedPeer(scope, local, peerB, 2, 7);
+
+        store.FreezeOutbound(scope, local, 7, local, new[] { FrozenOperation(120, 121) });
+
+        var a = Assert.Single(store.ReadPeerStreamStates(scope, local, peerA, 1, 7));
+        var b = Assert.Single(store.ReadPeerStreamStates(scope, local, peerB, 2, 7));
+        Assert.Equal(local, a.AuthorStream);
+        Assert.Equal(local, b.AuthorStream);
+        Assert.Equal(0UL, a.State.AckedCursor);
+        Assert.Equal(0UL, b.State.AckedCursor);
+        Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, local));
+        Assert.Equal(2, store.ReadInterestedPeers(scope, local, 7).Count);
+    }
+
+    [Fact]
     public void Outbound_compaction_waits_for_every_registered_peer_acknowledgement()
     {
         string directory = Path.Combine(_root, "peer-safe-compaction");
