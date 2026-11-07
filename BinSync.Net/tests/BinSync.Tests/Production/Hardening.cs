@@ -350,6 +350,32 @@ public class Production : IDisposable
     }
 
     [Fact]
+    public void OutboxChangeIdentity_ResolvesRetainedSequencesAndFailsClosedWhenMissing()
+    {
+        var node = Fix.MakeNode(880);
+        node.WriteField(NS, Fix.Rid(880), 0x100, Val("first"));
+        node.WriteField(NS, Fix.Rid(881), 0x100, Val("second"));
+        var entries = node.Outbox[NS];
+        var requested = new[]
+        {
+            new OutboxChangeIdentity(entries[1].AuthorNodeId, entries[1].ChangeId),
+            new OutboxChangeIdentity(entries[0].AuthorNodeId, entries[0].ChangeId),
+        };
+        var sequences = new long[requested.Length];
+
+        Assert.True(node.TryResolveOutboxSequences(NS, requested, sequences));
+        Assert.Equal(new long[] { 2, 1 }, sequences);
+
+        var missing = new[]
+        {
+            new OutboxChangeIdentity(Fix.Nid(882), BatchId.From(Id(0xF8))),
+        };
+        var missingSequences = new long[] { 123 };
+        Assert.False(node.TryResolveOutboxSequences(NS, missing, missingSequences));
+        Assert.Equal(0L, missingSequences[0]);
+    }
+
+    [Fact]
     public void Persistence_UnifiedInboxReceiptMapDoesNotDuplicateKeysAndRejectsZeroAuthor()
     {
         var (a, _) = BuildHistory();
