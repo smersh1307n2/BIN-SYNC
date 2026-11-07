@@ -86,6 +86,50 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Durable_push_requires_snapshot_when_first_retained_outbound_sequence_is_not_one()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-push-snapshot-barrier"), 432);
+        using var metadata = new StorageMetadataStore(storage);
+        using var provider = new StorageDataProvider(storage);
+        using var sender = NewNode(32);
+        using var receiver = NewNode(33);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        const string scope = "durable-push-snapshot-barrier";
+        var coordinator = new StorageSyncCoordinator(sender, provider, 1, metadata, scope);
+
+        RecordId first = RecordId.From(Guid.Parse("32000000-0000-0000-0000-000000000032").ToByteArray());
+        RecordId second = RecordId.From(Guid.Parse("33000000-0000-0000-0000-000000000033").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = first, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            HlcWall = 3200, Value = "first"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = second, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            HlcWall = 3300, Value = "second"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
+        ulong lease = metadata.AcquireOutboundLease(scope, sender.NodeId, 1, sender.NodeId,
+            Guid.Parse("32000000-0000-0000-0000-000000000001"));
+        Assert.Equal(2, metadata.ReadOutbound(scope, sender.NodeId, 1, sender.NodeId, lease, 0, 10).Items.Count);
+        metadata.AcknowledgeOutbound(scope, sender.NodeId, 1, sender.NodeId, lease, 1);
+        metadata.CompactOutboundThrough(scope, sender.NodeId, 1, sender.NodeId, 1);
+
+        coordinator.RegisterInterestedPeer(initiator, 1);
+        var error = await Assert.ThrowsAsync<SyncException>(
+            () => initiator.PushBatchAsync(sender, 1, metadata, scope));
+        Assert.Equal("SNAPSHOT_REQUIRED", error.Code);
+        Assert.Null(metadata.GetPendingOutboundBatch(scope, sender.NodeId,
+            receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId));
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, sender.NodeId, 1, sender.NodeId));
+    }
+
+    [Fact]
     public async Task Sync_session_uses_durable_peer_reservations_for_sequential_batches()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-peer-session"), 420);
