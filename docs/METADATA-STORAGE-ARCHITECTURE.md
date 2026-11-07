@@ -590,3 +590,10 @@ Do not add a per-change/per-peer delivery table or ACK bitmap. Do not merge rece
 The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint for now; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
 
 Order: baseline; global dedup/replay pruning/receipt audit; APPLY payload dedup and relay/receipt split; durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
+
+
+## 18. Replay-cache pruning implementation status (2026-11-07)
+
+Implemented: `Node.ProcessAckInternal` prunes `PeerState.Ids` entries only when the validated contiguous ACK for that author covers `cursorEnd`. `LastStreamDigest` remains intact as the independent digest-chain checkpoint. Restart and duplicate-ACK coverage was added in `ChangeIdWireTests`. Implementation commit `dc9a1304de00e75bacb0d2bdd864e0f48e687361`; test commit `402b801e4b2d2781e048f3785766c0abf0425016`; GitHub Actions run 42342495367 passed.
+
+This does not implement global ChangeId dedup or receipt consolidation; those remain separate work items.
