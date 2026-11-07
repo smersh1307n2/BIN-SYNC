@@ -190,17 +190,17 @@ public class LabEdgeTests
     }
 
     [Fact]
-    public void S13_PurgeBelowCutoff_removes_stale_fields()
+    public void S13_PurgeBelowCutoff_preserves_live_fields_until_safe_watermark_gate()
     {
         var n = Fix.MakeNode(831);
         var rid = Fix.Rid(50);
-        // Write with known low wall via ApplyRemoteField
+        // Old live values are still current state; age alone cannot authorize deletion.
         n.ApplyRemoteField(NS, rid, 0x100, Val("old"), new Hlc(100, 0), n.NodeId);
         n.ApplyRemoteField(NS, rid, 0x200, Val("new"), new Hlc(5_000_000, 0), n.NodeId);
 
         int removed = GcNotice.PurgeBelowCutoff(n, NS, cutoffWall: 1_000);
-        Assert.True(removed >= 1);
-        Assert.False(n.Storage[NS][rid].State.ContainsKey(0x100));
+        Assert.Equal(0, removed);
+        Assert.True(n.Storage[NS][rid].State.ContainsKey(0x100));
         Assert.True(n.Storage[NS][rid].State.ContainsKey(0x200));
     }
 
