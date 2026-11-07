@@ -54,20 +54,7 @@ public static class NodePersistence
         if (node is null) throw new ArgumentNullException(nameof(node));
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
 
-        var body = SerializeBody(node);
-        var digest = Blake3Core.TaggedHash(StateTag, body);
-
-        using var ms = new MemoryStream();
-        using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
-        {
-            WriteBE(w, Magic);
-            WriteBE(w, Version);
-            WriteBE(w, (ulong)body.Length);
-            w.Write(digest);
-            w.Write(body);
-            w.Flush();
-        }
-        var image = ms.ToArray();
+        var image = SerializeToBytes(node);
 
         var dir = Path.GetDirectoryName(Path.GetFullPath(path))!;
         Directory.CreateDirectory(dir);
@@ -86,6 +73,30 @@ public static class NodePersistence
         {
             if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best effort */ } }
         }
+    }
+
+    /// <summary>
+    /// Serialize the complete Node checkpoint into an owned, integrity-protected image.
+    /// This is the same v15 image written by Save and can be stored atomically in a
+    /// caller-owned StorageDatabase or another durable byte store.
+    /// </summary>
+    public static byte[] SerializeToBytes(Node node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        var body = SerializeBody(node);
+        var digest = Blake3Core.TaggedHash(StateTag, body);
+
+        using var ms = new MemoryStream();
+        using (var writer = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
+        {
+            WriteBE(writer, Magic);
+            WriteBE(writer, Version);
+            WriteBE(writer, (ulong)body.Length);
+            writer.Write(digest);
+            writer.Write(body);
+            writer.Flush();
+        }
+        return ms.ToArray();
     }
 
     // ---------------------------------------------------------------- Load
