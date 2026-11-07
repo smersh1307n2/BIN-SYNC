@@ -114,6 +114,7 @@ public partial class SyncSession
                     break;
                 }
 
+                peerStateStore.RegisterInterestedPeer(scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId);
                 if (!found) return false;
             }
 
