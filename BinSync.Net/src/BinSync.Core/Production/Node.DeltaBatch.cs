@@ -753,6 +753,59 @@ public sealed partial class Node
         AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId(), batch.IssuerEpoch,
             batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
 
+    internal OutboundBatchPayload? CreateDeltaBatchPayloadFromMetadata(
+        NodeId targetPeer, int namespaceId, NodeId authorStream,
+        IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> metadataEntries,
+        int schemaId = 0, int schemaVersion = 1)
+    {
+        ArgumentNullException.ThrowIfNull(metadataEntries);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            ValidateNamespaceId(namespaceId);
+            if (authorStream.IsZero) throw new ArgumentException("Author stream must be non-zero.", nameof(authorStream));
+            var temporary = new List<OutboxEntry>(metadataEntries.Count);
+            ulong previousSequence = 0;
+            foreach (var item in metadataEntries)
+            {
+                if (item.Sequence == 0 || item.Sequence > long.MaxValue ||
+                    (previousSequence != 0 && item.Sequence != checked(previousSequence + 1)))
+                    throw new InvalidDataException("Metadata outbound page is not a contiguous positive author sequence.");
+                if (item.Payload is null || item.Payload.Length <= 16)
+                    throw new InvalidDataException("Metadata outbound payload is missing its RecordId envelope.");
+                RecordId recordId = RecordId.From(item.Payload.AsSpan(0, 16));
+                ReadOnlyMemory<byte> operationPayload = item.Payload.AsMemory(16);
+                var decoded = Ops.DecodeOp(operationPayload);
+                if (decoded.Pos != operationPayload.Length)
+                    throw new InvalidDataException("Metadata outbound operation has trailing bytes.");
+                temporary.Add(new OutboxEntry(deferCausalDeps: true)
+                {
+                    NamespaceId = namespaceId,
+                    Seq = checked((long)item.Sequence),
+                    ChangeId = item.ChangeId,
+                    RecordId = recordId,
+                    OpKind = TagOf(decoded.Op),
+                    Payload = operationPayload,
+                    AuthorNodeId = authorStream
+                });
+                previousSequence = item.Sequence;
+            }
+
+            bool hadOriginal = Outbox.TryGetValue(namespaceId, out var original);
+            Outbox[namespaceId] = temporary;
+            try
+            {
+                return CreateDeltaBatchPayloadForTransport(
+                    targetPeer, namespaceId, authorStream, schemaId, schemaVersion);
+            }
+            finally
+            {
+                if (hadOriginal) Outbox[namespaceId] = original!;
+                else Outbox.Remove(namespaceId);
+            }
+        }
+    }
+
     internal void RestorePeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author,
         uint issuerEpoch, ulong ackedCursor, ulong pushedCursor, ulong streamOffset, Digest16 lastBatchDigest)
     {
