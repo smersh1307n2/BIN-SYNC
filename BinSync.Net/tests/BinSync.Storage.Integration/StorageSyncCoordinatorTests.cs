@@ -345,7 +345,7 @@ public sealed class StorageSyncCoordinatorTests
         await using var secondInitiator = await secondConnectTask;
         var secondReceive = secondAcceptor.ReceiveBatchAsync(receiver);
         Assert.True(await secondInitiator.PushBatchAsync(restartedSender, 1, reopenedMetadata, scope));
-        Assert.Equal(1, (await secondReceive).Applied);
+        Assert.Equal(0, (await secondReceive).Applied); // receiver already applied the first delivery before its ACK was lost
 
         var finalState = reopenedMetadata.GetPeerStreamState(scope, restartedSender.NodeId,
             receiver.NodeId, checked((uint)receiver.Epoch), 1, restartedSender.NodeId);
