@@ -7,4 +7,11 @@ public sealed class VolatileMetadataStoreConformanceTests : MetadataStoreConform
 {
     protected override IMetadataStoreConformanceAdapter CreateStore()
         => new VolatileMetadataStoreAdapter();
+
+    [Fact]
+    public void Reference_adapter_explicitly_does_not_claim_restart_durability()
+    {
+        using var store = CreateStore();
+        Assert.False(store.SupportsRestartDurability);
+    }
 }
