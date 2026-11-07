@@ -230,6 +230,63 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Outbound_compaction_waits_for_every_registered_peer_acknowledgement()
+    {
+        string directory = Path.Combine(_root, "peer-safe-compaction");
+        NodeId local = Node(1), peerA = Node(2), peerB = Node(4), author = Node(1);
+        const string scope = "peer-safe-compaction";
+        try
+        {
+            using (var store = new StorageMetadataStore(directory, 421, deleteOnDispose: false))
+            {
+                store.FreezeOutbound(scope, local, 7, author, new[] { FrozenOperation(90, 91) });
+                store.AcquireOutboundLease(scope, local, 7, author,
+                    Guid.Parse("91000000-0000-0000-0000-000000000001"));
+                store.AcknowledgeOutbound(scope, local, 7, author, 1);
+
+                store.RegisterInterestedPeerStream(scope, local, peerA, 1, 7, author,
+                    0, 0, 1, new byte[16]);
+                store.RegisterInterestedPeerStream(scope, local, peerB, 1, 7, author,
+                    0, 0, 1, new byte[16]);
+
+                MetadataOutboundBatchReservation Make(byte batch) => new()
+                {
+                    BatchId = Batch(batch), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat(batch, 16).ToArray(),
+                    Payload = new[] { batch }
+                };
+
+                store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(92));
+                store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(92));
+                store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
+                    Batch(92), 1, Enumerable.Repeat((byte)92, 16).ToArray());
+
+                Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+                Assert.Throws<ArgumentOutOfRangeException>(() =>
+                    store.CompactOutboundThrough(scope, local, 7, author, 1));
+                Assert.Single(store.ReadOutbound(scope, local, 7, author, 1, 0, 10).Items);
+
+                store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(93));
+                store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(93));
+                store.AcknowledgeOutboundBatch(scope, local, peerB, 1, 7, author,
+                    Batch(93), 1, Enumerable.Repeat((byte)93, 16).ToArray());
+                Assert.Equal(1UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+                store.CompactOutboundThrough(scope, local, 7, author, 1);
+                Assert.Empty(store.ReadOutbound(scope, local, 7, author, 1, 0, 10).Items);
+            }
+
+            using var reopened = new StorageMetadataStore(directory, 421, deleteOnDispose: false);
+            Assert.Equal(1UL, reopened.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+            Assert.Empty(reopened.ReadOutbound(scope, local, 7, author, 1, 0, 10).Items);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Peer_progress_and_pending_reservations_are_isolated_per_remote_peer()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-progress-isolation"), 419);
