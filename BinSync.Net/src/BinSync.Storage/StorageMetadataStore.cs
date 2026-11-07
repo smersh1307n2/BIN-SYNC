@@ -730,18 +730,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             if ((uint)namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return 0;
-            var required = state.RequiredPeerStreams
-                .Where(key => key.NamespaceId == namespaceId && key.AuthorStream == authorStream)
-                .ToArray();
-            if (required.Length == 0) return 0;
-            ulong safe = ulong.MaxValue;
-            foreach (var key in required)
-            {
-                if (!state.PeerStreams.TryGetValue(key, out var progress))
-                    return 0;
-                safe = Math.Min(safe, progress.AckedCursor);
-            }
-            return safe == ulong.MaxValue ? 0 : safe;
+            return GetSafePeerCursor(state, namespaceId, authorStream);
         }
     }
 
