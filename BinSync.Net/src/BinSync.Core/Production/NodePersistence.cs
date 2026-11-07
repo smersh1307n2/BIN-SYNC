@@ -805,9 +805,7 @@ public static class NodePersistence
                     byte known = r.U8();
                     if (known > 1 || changeId.IsZero)
                         throw new InvalidDataException("Invalid persisted global ChangeId ledger entry.");
-                    var value = known == 1
-                        ? new ChangeLedgerValue(Digest16.From(r.B128()), isKnown: true)
-                        : new ChangeLedgerValue(default, isKnown: false);
+                    var value = ReadChangeLedgerValue(r, known);
                     if (!n.GlobalChangeLedger.TryAdd((ns, changeId), value))
                         throw new InvalidDataException("Duplicate persisted global ChangeId ledger key.");
                 }
@@ -823,9 +821,7 @@ public static class NodePersistence
                 byte known = r.U8();
                 if (known > 1 || changeId.IsZero || (uint)ns > ushort.MaxValue)
                     throw new InvalidDataException("Invalid persisted global ChangeId ledger entry.");
-                var value = known == 1
-                    ? new ChangeLedgerValue(Digest16.From(r.B128()), isKnown: true)
-                    : new ChangeLedgerValue(default, isKnown: false);
+                var value = ReadChangeLedgerValue(r, known);
                 if (!n.GlobalChangeLedger.TryAdd((ns, changeId), value))
                     throw new InvalidDataException("Duplicate persisted global ChangeId ledger key.");
             }
@@ -982,6 +978,15 @@ public static class NodePersistence
         }
 
         return n;
+    }
+
+    private static ChangeLedgerValue ReadChangeLedgerValue(Reader reader, byte known)
+    {
+        if (known == 0) return new ChangeLedgerValue(default, isKnown: false);
+        var fingerprint = Digest16.From(reader.B128());
+        if (fingerprint.IsZero)
+            throw new InvalidDataException("Known ChangeId fingerprint cannot be zero.");
+        return new ChangeLedgerValue(fingerprint, isKnown: true);
     }
 
     private static InboxReceipt ReadReceiptValue(Reader reader, NodeId author, BatchId batchId)
