@@ -558,6 +558,19 @@ NodePersistence v3-v8 remains readable. The v3-v8 reader validates the legacy Re
 
 The byte reduction depends on how many of the three watermarks exist per author and on dictionary implementation overhead. The structural reduction is deterministic (one author key and one dictionary value instead of up to three repeated author keys/entries); measured disk/RAM results should be published separately rather than claiming a fixed percentage.
 
+### 8.3. Tombstone GC is not yet safe to enable
+
+The current GC path does not satisfy the protocol's tombstone-retention invariant and must not be treated as a completed tombstone-GC implementation:
+
+- `GcNotice.Apply` merges quarantine/author-epoch state but does not persist or enforce the received `TombstoneCutoffWall`.
+- `WatermarkGate` exists as a helper, but the inspected DELTA_BATCH apply/reconcile/snapshot paths do not call it. The required stale-peer `OUTDATED_WATERMARK` / full-resync gate is therefore not connected to receipt of GC_NOTICE.
+- `GcNotice.PurgeBelowCutoff` currently removes entries from `Record.State` solely because their field HLC wall is below the cutoff. It does not check whether the field is a tombstone, whether it is dominated by a record lifecycle tombstone, or whether a safe peer watermark has been established. It does not reclaim `Record.FieldTombs` or lifecycle tombstone metadata.
+- The existing test `PurgeBelowCutoff_removes_old_fields` codifies removal of ordinary old field values. That behavior is not evidence of safe tombstone GC and must be revisited before relying on this API.
+
+Required design before enabling deletion: persist a monotonic safe tombstone cutoff per namespace; bind it to a protocol-visible peer watermark or a mandatory full-snapshot/resync transition; reject incremental synchronization from peers behind that cutoff; preserve ordinary live field values; reclaim only tombstone/ghost state whose deletion is proven safe. Field tombstones, record lifecycle tombstones, relay payload retention, Inbox receipts and global ChangeId dedup have separate lifetimes. A tombstone's age alone is never sufficient.
+
+Until those conditions and crash/restart tests exist, `TombstoneCutoffWall=0` / no-GC behavior is the safe operational choice. Do not add TTL-based Inbox receipt or ChangeId-ledger cleanup as a substitute.
+
 ### 8.3. Global ChangeId ledger — implemented
 
 The runtime now has a route-independent ledger keyed by (namespace, ChangeId), local to the receiving replica. Each value is a BLAKE3-128 fingerprint over a domain-separated canonical semantic operation: namespace, envelope RecordId, OpKind, FULL_AUTHOR_ID operation encoding (resolved author, HLC, field/key epoch, value or tombstone semantics), plus the normalized sorted set of causal dependencies. Compact aliases, issuer route and relay-local Seq are excluded.
