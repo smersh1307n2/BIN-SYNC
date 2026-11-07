@@ -1,6 +1,6 @@
 # Metadata Store authority migration
 
-**Status:** in progress, verified against BIN-SYNC `feature/fld-external-storage` through `2977da0b35f6` (2026-11-07). The optional `IMetadataPeerStateStore` persists the namespace peer roster, per-peer/per-author cursors, exact immutable batch reservations, ACK/digest progress and retired peer-epoch watermarks. The opt-in transport reads Outbound/Relay pages from Metadata Store; per-peer ACKs fence shared-payload compaction, including offline peers. Lost-ACK replay has now been exercised across Metadata Store reopen and sender Node recreation; durable ACK mirroring no longer requires the Node Outbox payload to remain present. Receive now validates sender cursor/digest continuity and ChangeId equivocation in Metadata Store before Node mutation, persists the exact PendingApply intent, then commits provider state plus receipt before ACK. Node still repeats receive validation and remains a transitional runtime cache. Cross-page PendingLocal coalescing and stale-epoch fencing/retirement are implemented. Snapshot/feed baseline authorization, complete receive authority cutover, bounded cost for finalization and other non-peer metadata mutations, dedup/receipt GC horizons and complete authority cutover remain open. This document does not change the wire protocol.
+**Status:** in progress, verified against BIN-SYNC `feature/fld-external-storage` through `5f3987723847` (2026-11-07). The optional `IMetadataPeerStateStore` persists the namespace peer roster, per-peer/per-author cursors, immutable batch reservations, ACK/digest progress, retired epoch watermarks and explicit initial snapshot/feed-baseline completion. New peers cannot read or reserve DELTA_BATCH before the baseline is durably completed. `StorageSyncCoordinator.AutoReconcileWithMetadataAsync` captures outbound feed watermarks before reconciliation, applies received snapshots to the provider before the reconciliation terminator, and commits peer baseline offsets only after both reconciliation rounds complete; relay streams retain offset zero. Confirmed outbound baseline offsets contribute to the safe local-sequence compaction horizon, while relay history still requires explicit ACK. Lost-ACK replay is tested across Metadata Store reopen and sender Node recreation; durable ACK mirroring no longer requires retained Node Outbox payloads. Receive validates sender cursor/digest continuity and ChangeId equivocation in Metadata Store before Node mutation, persists PendingApply, then commits provider state and receipt before ACK. Cross-page PendingLocal coalescing and stale-epoch fencing/retirement are implemented. Remaining gates: complete Node/Transport authority cutover, provider rehydration/restart model, full receive crash matrix, bounded finalization/general metadata mutation cost, receipt/dedup GC horizons, and complete normative audit. This document does not change the wire protocol.
 
 ## 1. Current boundary (verified in code)
 
@@ -11,12 +11,24 @@ The current path is:
 1. `StorageDataProvider` exposes a durable local change feed.
 2. `StorageSyncCoordinator.PublishLocalChanges` imports feed entries into `Node.WriteField/WriteTombField/WriteRecordTombstone`.
 3. `Node` allocates ChangeId/author sequence and owns the actual Outbox entries.
-4. `FreezeLocalOutboxToMetadata` copies those entries to `IMetadataStore.FreezeOutbound`; it validates sequence continuity but does not make the metadata copy the source used by transport.
+4. `FreezeLocalOutboxToMetadata` copies those entries to `IMetadataStore.FreezeOutbound`; it validates sequence continuity. The Node Outbox remains the local mutation/sequence staging source, but the durable transport overload now reads the immutable frozen payload from Metadata Store.
 5. The legacy `SyncSession.PushBatchAsync` still reads Node's Outbox and peer state. The overload accepting `IMetadataPeerStateStore` restores per-peer progress from Metadata Store, reads local Outbound and Relay pages at the peer's durable cursor, materializes a temporary encoder view from those rows without replacing or mutating the live Node Outbox, resumes any immutable reserved payload, persists a new reservation before send, marks it pushed after transport handoff, and commits the matching ACK/digest durably. Node remains responsible for alias translation and wire encoding; its peer state is only a runtime mirror in this path.
 6. On receive, `SyncSession.ReceiveBatchAsync` decodes and validates the packet through Node's side-effect-free preparation step, invokes the coordinator's `beforeApply` callback to persist the exact wire payload as a PendingApply intent, then applies the batch to Node. Before ACK, the coordinator checkpoints Node, applies immutable provider mutations idempotently, and finalizes Metadata Store receipt/dedup/relay state in one metadata transaction. Recovery replays an unfinished PendingApply wire payload into Node and provider. The ordering is durable, but Node still supplies the first receive cursor/digest validation and its inbox remains a transitional duplicate authority.
 
 The TCP array sample proves this sequence across independent Storage databases, close/reopen, a subsequent update and a record tombstone. It does not change the ownership described above.
 
+## 2.1 Initial snapshot/feed baseline
+
+A new peer incarnation must not begin incremental delivery merely because the first retained author sequence happens to be one. The Storage path now persists a peer/epoch/namespace baseline-completion marker. `ReadOutboundForPeer`, `ReadRelayForPeer` and new batch reservations fail with `SNAPSHOT_REQUIRED` until that marker exists.
+
+`StorageSyncCoordinator.AutoReconcileWithMetadataAsync` is the durable entry point:
+
+1. Recover pending provider applies and publish the local provider feed.
+2. Capture local outbound author high-watermarks before anti-entropy. These become outbound `StreamOffset` values; relay author streams always use offset zero.
+3. Run both anti-entropy rounds. Every received snapshot is applied to Node, checkpointed, then applied idempotently to the Data Provider before the peer can send the reconciliation terminator.
+4. Only after both rounds report completion, persist the peer baseline marker and per-author offsets.
+
+The outbound safe-compaction coordinate is local author sequence: `AckedCursor + StreamOffset` after the baseline marker is complete. A snapshot is therefore not an ACK by itself; only the completed snapshot/feed barrier authorizes the captured outbound prefix. Relay history is never skipped by this baseline and still requires per-peer ACK. If a relay page starts after sequence one, the new peer remains fail-closed with `SNAPSHOT_REQUIRED`.
 ## 2. State ownership gap
 
 | State | Current authoritative owner | Required owner in Storage-backed mode |
@@ -24,7 +36,7 @@ The TCP array sample proves this sequence across independent Storage databases, 
 | User field values and lifecycle | Provider plus Node's in-memory copy | Data Provider; Node view is reconstructible/cache |
 | Local source feed | StorageDataProvider | Data Provider |
 | PendingLocal before freeze | Provider feed / coordinator | Provider or Metadata Store, one explicit owner |
-| Frozen outbound payload and sequence | Node Outbox; Metadata Store mirror | Metadata Store |
+| Frozen outbound payload and sequence | Node allocates/stages locally; Metadata Store owns the immutable transport/replay copy after freeze | Metadata Store |
 | Global ChangeId fingerprint ledger | Node and Metadata Store copies | Metadata Store |
 | Per-peer, per-author ACK/pushed/offset | Metadata Store in durable transport mode; Node is a runtime mirror | Metadata Store |
 | Outbound BatchId/digest replay mapping | Metadata Store reservation; Node retains a runtime mirror | Metadata Store |
