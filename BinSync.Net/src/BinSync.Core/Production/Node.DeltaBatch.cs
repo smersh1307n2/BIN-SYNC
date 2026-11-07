@@ -54,7 +54,8 @@ public sealed partial class Node
     internal OutboundBatchPayload? CreateDeltaBatchPayloadForTransport(
         NodeId targetPeer, int namespaceId, NodeId? filterAuthorNodeId = null,
         int schemaId = 0, int schemaVersion = 1,
-        IReadOnlyList<OutboxEntry>? sourceEntries = null)
+        IReadOnlyList<OutboxEntry>? sourceEntries = null,
+        MetadataPeerStreamState? durableProgress = null)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
@@ -63,9 +64,17 @@ public sealed partial class Node
             if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
             if ((uint)schemaVersion > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
 
-            var pkey = (targetPeer, namespaceId);
-            if (!PeerStates.TryGetValue(pkey, out var ps))
-                PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
+            PeerState? ps = null;
+            if (durableProgress is null)
+            {
+                var pkey = (targetPeer, namespaceId);
+                if (!PeerStates.TryGetValue(pkey, out ps))
+                    PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
+            }
+            else if (filterAuthorNodeId is null)
+            {
+                throw new ArgumentException("Durable peer progress requires an explicit author stream.", nameof(filterAuthorNodeId));
+            }
 
             long wm;
             NodeId stream;
@@ -74,7 +83,9 @@ public sealed partial class Node
             if (filterAuthorNodeId is not null)
             {
                 stream = filterAuthorNodeId.Value;
-                wm = ps.AckedFor(stream);
+                wm = durableProgress is null
+                    ? ps!.AckedFor(stream)
+                    : checked((long)durableProgress.AckedCursor);
             }
             else
             {
@@ -105,7 +116,13 @@ public sealed partial class Node
             }
 
             long streamOffset;
-            if (ps.TryGetStreamOffset(stream, out var savedStreamOffset))
+            if (durableProgress is not null)
+            {
+                if (durableProgress.StreamOffset > long.MaxValue)
+                    throw new InvalidDataException("Durable stream offset exceeds the Node cursor range.");
+                streamOffset = checked((long)durableProgress.StreamOffset);
+            }
+            else if (ps!.TryGetStreamOffset(stream, out var savedStreamOffset))
             {
                 if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
                     throw new SyncException("SNAPSHOT_REQUIRED");
@@ -114,7 +131,7 @@ public sealed partial class Node
             else
             {
                 streamOffset = 0;
-                if (!ps.HasStreamAcked(stream))
+                if (!ps!.HasStreamAcked(stream))
                 {
                     long firstLocal = long.MaxValue;
                     if (all is not null)
@@ -122,11 +139,11 @@ public sealed partial class Node
                         foreach (var e in all)
                             if (e.AuthorNodeId == stream && e.Seq < firstLocal) firstLocal = e.Seq;
                     }
-                    if (firstLocal > 1 && !ps.InitialSyncComplete)
+                    if (firstLocal > 1 && !ps!.InitialSyncComplete)
                         throw new SyncException("SNAPSHOT_REQUIRED");
                     if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
                 }
-                ps.SetStreamOffset(stream, streamOffset);
+                ps!.SetStreamOffset(stream, streamOffset);
             }
 
             long localWm = checked(wm + streamOffset);
@@ -231,17 +248,32 @@ public sealed partial class Node
             var recordsRoot = ComputeTransportRecordsRoot(entries, selectedCount);
             var chainKey = (NodeId, namespaceId, issuerEpoch);
             var streamKey = (chainKey, targetPeer);
-            var idKey = (stream, cursorStart, cursorEnd);
-            if (!ps.Ids.TryGetValue(idKey, out var cached))
+            BatchId batchId;
+            Digest16 previousDigest;
+            if (durableProgress is not null)
             {
+                // The durable reservation is the replay identity authority. Before the
+                // first reservation exists, a fresh id is safe because no payload was sent.
                 Span<byte> gbuf = stackalloc byte[16];
                 Guid.NewGuid().TryWriteBytes(gbuf);
-                cached = (BatchId.From(gbuf),
-                    LastStreamDigest.TryGetValue(streamKey, out var previous) ? previous : default);
-                ps.Ids[idKey] = cached;
+                batchId = BatchId.From(gbuf);
+                previousDigest = durableProgress.IssuerEpoch == checked((uint)issuerEpoch)
+                    ? Digest16.From(durableProgress.LastBatchDigest)
+                    : default;
             }
-
-            var (batchId, previousDigest) = cached;
+            else
+            {
+                var idKey = (stream, cursorStart, cursorEnd);
+                if (!ps!.Ids.TryGetValue(idKey, out var cached))
+                {
+                    Span<byte> gbuf = stackalloc byte[16];
+                    Guid.NewGuid().TryWriteBytes(gbuf);
+                    cached = (BatchId.From(gbuf),
+                        LastStreamDigest.TryGetValue(streamKey, out var previous) ? previous : default);
+                    ps.Ids[idKey] = cached;
+                }
+                (batchId, previousDigest) = cached;
+            }
             var batchDigest = ComputeBatchDigest(batchId, namespaceId, NodeId, issuerEpoch,
                 cursorStart, cursorEnd, recordsRoot, previousDigest);
 
@@ -263,7 +295,8 @@ public sealed partial class Node
             if (writer.Length != payload.Length)
                 throw new InvalidOperationException("Transport batch size estimate mismatch");
 
-            ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
+            if (ps is not null)
+                ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
             return new OutboundBatchPayload(payload, batchId, stream, stream, namespaceId,
                 issuerEpoch, cursorStart, cursorEnd, (ulong)streamOffset, previousDigest, batchDigest);
             }
@@ -785,7 +818,7 @@ public sealed partial class Node
     internal OutboundBatchPayload? CreateDeltaBatchPayloadFromMetadata(
         NodeId targetPeer, int namespaceId, NodeId authorStream,
         IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> metadataEntries,
-        int schemaId = 0, int schemaVersion = 1)
+        MetadataPeerStreamState durableProgress, int schemaId = 0, int schemaVersion = 1)
     {
         ArgumentNullException.ThrowIfNull(metadataEntries);
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
@@ -820,9 +853,10 @@ public sealed partial class Node
                 previousSequence = item.Sequence;
             }
 
+            ArgumentNullException.ThrowIfNull(durableProgress);
             return CreateDeltaBatchPayloadForTransport(
                 targetPeer, namespaceId, authorStream, schemaId, schemaVersion,
-                sourceEntries: temporary);
+                sourceEntries: temporary, durableProgress: durableProgress);
         }
     }
 
