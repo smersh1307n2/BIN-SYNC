@@ -157,7 +157,7 @@ public partial class SyncSession
                 PeerNodeId, peerEpoch, namespaceId, authorStream,
                 reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest);
             sender.AdvanceStreamForTransport(PeerNodeId, namespaceId, batch);
-            sender.ProcessAck(PeerNodeId, namespaceId, seq, authorStream: authorStream);
+            sender.MirrorDurableAck(PeerNodeId, namespaceId, seq, authorStream);
             return true;
         }
         finally
