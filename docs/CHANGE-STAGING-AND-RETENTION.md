@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.3; staging/Outbox lifecycle is defined, while cross-peer dedup representation and Storage physical format remain optimization gates.  
+**Status:** Architecture decision draft v0.4; staging/Outbox lifecycle and runtime cross-peer ChangeId dedup are defined, while receipt consolidation and Storage physical format remain optimization gates.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
@@ -348,9 +348,11 @@ No generic DeleteOldMetadata operation is sufficient. Each category needs its ow
 
 ### 9.1. Cross-peer deduplication and local WAL replay markers
 
-The receiver must recognize the same original operation when it arrives through different direct peers or relay paths. Immediate sender identity is not part of the operation identity. Local WAL replay markers are a separate mechanism and must never be merged into remote-operation dedup state.
+The receiver recognizes the same original operation across direct peers and relay paths. Immediate sender identity is not part of operation identity. The runtime implementation uses a per-replica dictionary keyed by `(namespaceId, ChangeId)`; the replica identity is implicit in the owning Node.
 
-**Safe fallback — exact ChangeId ledger:** key by `(scope, localReplicaId, namespaceId, ChangeId)` and retain a canonical operation fingerprint. A 16-byte ChangeId plus a 16-byte fingerprint is 32 logical bytes per operation before page/index overhead. This is not a physical-size guarantee and is not yet the selected final representation. Same ID/same fingerprint is a duplicate; same ID/different fingerprint is a conflict. Never store the full payload or duplicate original author in the ledger.
+**Implemented exact ChangeId ledger:** each key retains a 16-byte BLAKE3 fingerprint (32 logical bytes per operation including the 16-byte ChangeId, before dictionary/page overhead). The fingerprint covers namespace, RecordId, OpKind, canonical FULL_AUTHOR_ID operation bytes (resolved permanent author, HLC, field/key epoch, value or tombstone), and a sorted unique causal-dependency set. Same ID/same fingerprint is suppressed across routes and after origin Outbox compaction; same ID/different known fingerprint rejects the complete batch before WAL/state publication. The ledger stores no operation payload and no duplicate author field.
+
+Local WAL replay markers remain separately represented by legacy `SeenChanges` entries in this implementation. The global ledger also records local ChangeIds atomically with local Outbox/WAL publication, so a later dedicated pass can evaluate safely shrinking the peer-scoped SeenChanges set without conflating local replay and remote provenance.
 
 **Candidate optimization — content-derived ChangeId:** ChangeId could be defined as BLAKE3-128 over a canonical semantic operation (namespace, record, op kind, permanent original author, HLC/key epoch and canonical value/tombstone bytes). The receiver would recompute it before apply. This would make conflicting payload reuse fail ID validation and reduce the exact dedup index from 32 logical bytes (ID + fingerprint) to a key-only 16-byte set. It still requires exact retention to suppress old relay loops; it does not by itself create a safe GC horizon. Audit provider-supplied IDs, API compatibility, E2EE/canonicalization, alias resolution, causal metadata and legacy wire compatibility before selecting it.
 
@@ -364,7 +366,7 @@ The receiver must recognize the same original operation when it arrives through 
 
 **Current retention rule:** until the origin-sequence and checkpoint contract is proven, exact ChangeId fingerprints remain the safe fallback and have no TTL/ACK-only GC rule in the current protocol. Do not reclaim dedup facts using a peer cursor, local relay ACK, Inbox expiry, tombstone GC or arbitrary TTL. A Bloom filter may accelerate lookup but cannot be the only source of truth.
 
-**Legacy migration:** NodePersistence v5 SeenChanges entries do not contain a canonical payload fingerprint. Keep entries whose peer key equals the persisted local NodeId as local WAL replay markers. Collapse remote peer-scoped entries into legacy global markers only if the old representation proves they refer to the same ChangeId; mark the fingerprint unknown and preserve conservative duplicate suppression. If the local NodeId is unavailable, retain the old representation until identity is resolved. Do not infer a fingerprint from the current field winner.
+**Legacy migration (implemented in NodePersistence v6):** v3-v5 SeenChanges entries do not contain a canonical payload fingerprint. Preserve each distinct `(namespaceId, ChangeId)` as an explicit unknown global marker; do not use a zero digest as a sentinel. For retained Outbox payloads, reconstruct the fingerprint only when the complete operation value is present and validate that repeated legacy payloads for one ChangeId agree. If a legacy FieldWrite payload has a deferred/truncated value, keep its marker unknown rather than guessing from the current field winner. The first matching new arrival upgrades an unknown marker while suppressing relay; historical equivocation cannot be checked until that fingerprint is known.
 
 ### 9.2. Inbox receipt compaction
 
@@ -534,10 +536,11 @@ The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value b
 
 ### 9.4. Priority
 
-1. Global cross-peer ChangeId dedup correctness.
-2. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
-3. Prune acknowledged PeerState.Ids.
-4. Pack per-author peer progress and compact batch receipts.
+1. Global cross-peer ChangeId dedup correctness — implemented; retain exact ledger until a safe GC horizon exists.
+2. Prune acknowledged PeerState.Ids — implemented.
+3. Consolidate Inbox + InboxAuthors into one issuer-specific receipt map, preserving duplicate ACK author resolution.
+4. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
+5. Pack per-author peer progress and compact batch receipts.
 5. Version and benchmark FLD Outbox encoding.
 6. Implement PendingLocal coalescing only before publication.
 7. Only then evaluate content-derived ChangeId, OriginSeq, batch-level alias and WAL-backed Outbox references.
