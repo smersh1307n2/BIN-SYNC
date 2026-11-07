@@ -361,6 +361,60 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Relay_compaction_waits_for_all_namespace_interested_peers()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-safe-relay-compaction"), 429);
+        NodeId local = Node(1), upstream = Node(2), author = Node(3), peerA = Node(4), peerB = Node(5);
+        const string scope = "peer-safe-relay-compaction";
+        store.RegisterInterestedPeer(scope, local, peerA, 1, 7);
+        store.RegisterInterestedPeer(scope, local, peerB, 1, 7);
+        byte[] envelope = new byte[17];
+        Node(9).WriteTo(envelope);
+        envelope[16] = 7;
+        store.AcceptIncomingBatch(new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = upstream, SenderEpoch = 1,
+            AuthorStreamNodeId = author, NamespaceId = 7, BatchId = Batch(130),
+            CursorStart = 1, CursorEnd = 1, PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)131, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author, ChangeId = Batch(132),
+                    Fingerprint = Enumerable.Repeat((byte)133, 16).ToArray(),
+                    Payload = envelope, RelayEligible = true
+                }
+            }
+        });
+        store.AcknowledgeRelay(scope, local, 7, author, 1);
+
+        MetadataOutboundBatchReservation Make(byte id, byte digest) => new()
+        {
+            BatchId = Batch(id), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat(digest, 16).ToArray(),
+            Payload = new[] { id }
+        };
+        store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(134, 135));
+        store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(134));
+        store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
+            Batch(134), 1, Enumerable.Repeat((byte)135, 16).ToArray());
+
+        Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+        Assert.Throws<ArgumentOutOfRangeException>(() => store.CompactRelayThrough(scope, local, 7, author, 1));
+        Assert.Single(store.ReadRelayForPeer(scope, local, peerB, 1, 7, author, 10).Items);
+
+        store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(136, 137));
+        store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(136));
+        store.AcknowledgeOutboundBatch(scope, local, peerB, 1, 7, author,
+            Batch(136), 1, Enumerable.Repeat((byte)137, 16).ToArray());
+        Assert.Equal(1UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
+        store.CompactRelayThrough(scope, local, 7, author, 1);
+        Assert.Empty(store.ReadRelayForPeer(scope, local, peerB, 1, 7, author, 10).Items);
+    }
+
+    [Fact]
     public void Outbound_compaction_waits_for_every_registered_peer_acknowledgement()
     {
         string directory = Path.Combine(_root, "peer-safe-compaction");
