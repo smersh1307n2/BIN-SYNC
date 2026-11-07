@@ -126,30 +126,27 @@ Global ChangeId ledger — отдельное состояние BIN-SYNC, не 
 
 ### 5.1. Текущая стоимость APPLY journal и целевое разделение
 
-Проверка FLD ApplyCommitCodec v2 и ApplyJournal выявила дополнительное дублирование payload:
+Реализация FLD-DB уже устранила основное дублирование:
+- ApplyCommitCodec v3 кодирует входящий `Fields` один раз и представляет `RelayFields` canonical varint-индексами. Декодер читает прежний v2 и проверяет relay subset.
+- FldDatabase.ApplyRemoteBatch сначала flush-ит полный APPLY_COMMIT в WAL, затем ApplyJournal сохраняет receipt metadata и только relay-selected operations. Non-relay payload больше не копируется в sidecar.
+- ApplyJournal materialization выполняется до возврата ApplyRemoteBatch и flush-ится до последующего checkpoint/WAL truncation. LWW losers, выбранные для relay, сохраняются.
+- Journal promotion идемпотентен по batch identity; WAL recovery восстанавливает компактный relay-only journal из v2 и v3 WAL records.
+- ReadBatches теперь использует lower-bound binary search по JournalSeq: O(log N + page size), без повторного сканирования уже прочитанного префикса.
 
-- RemoteBatchCommit требует, чтобы RelayWrites был точным подмножеством Writes по ChangeId и содержимому.
-- ApplyCommitCodec v2 кодирует полный Fields и затем отдельно полный RelayFields. Значит, relay-eligible payload повторяется внутри одного APPLY_COMMIT.
-- FldDatabase.ApplyRemoteBatch записывает один и тот же полный encoded APPLY_COMMIT сначала в WAL, затем в ApplyJournal.
-- ApplyJournal хранит полный входящий batch для TryFindBatch и позднее ReadRelayBatches читает полный payload и извлекает из него relay subset.
-- В проверенном ApplyJournal есть AppendIfMissing/TryFindBatch/ReadBatches/Flush, но нет ACK/compaction/truncation API. Receipt и relay payload имеют один append-only lifetime. ApplyJournal держит все IndexEntry одновременно в List и BatchKey Dictionary (unbounded RAM), а ReadBatches(afterJournalSeq, limit) сканирует список с начала при каждом paging запросе (растущая стоимость чтения).
-
-Следовательно, relay subset дублируется уже внутри WAL record, а затем весь WAL payload дублируется в sidecar journal. Это нужно исправлять не удалением данных, а разделением их семантических сроков хранения.
+Оставшиеся ограничения:
+- Receipt metadata и relay payload всё ещё co-located в одном append-only ApplyJournal файле; физические retention lifetimes пока не независимы.
+- Нет публичного ACK/compaction/truncation API для relay payload.
+- List и BatchKey Dictionary по-прежнему растут с полной историей; bounded/rebuildable indexes ещё не реализованы.
+- Receipt GC требует отдельного Inbox retry horizon; relay payload GC — минимального safe ACK всех interested downstream peers по каждому author stream. Эти watermark должен вычислять BIN-SYNC, а не FLD.
 
 Целевая модель:
 
-1. WAL APPLY_COMMIT хранит все входящие операции один раз и компактную relay-selection bitmap/index list, а не вторую копию RelayFields.
-2. Durable batch receipt хранит только identity, cursor range, BatchDigest/RecordsRoot/PreviousBatchDigest (для проверки повторного BatchId), author-bound ACK/result и protocol-defined expiry/confirmation metadata; полный Fields payload для duplicate ACK не нужен. ProtocolStateDelta имеет отдельный recovery lifetime.
-3. Отдельный RelayJournal хранит только выбранные relay operations с исходным ChangeId/author/HLC/key epoch/payload.
-4. WAL остаётся authoritative commit point. Receipt и RelayJournal материализуются идемпотентно по CommitSeq; WAL prefix нельзя truncate до durable materialization sidecars.
-5. Inbox receipt GC и relay payload GC независимы: receipt удаляется только по Inbox GC rule, relay payload — только по safe downstream ACK.
-6. Duplicate BatchId после WAL truncation должен возвращать прежний receipt без хранения полного исходного Fields массива.
-
-Предпочтительный физический вариант — отдельный компактный RelayJournal с одной копией выбранных payload. Ссылка на WAL bytes возможна, но тогда WAL segment должен оставаться pinned до ACK всех relay consumers; это может удерживать unrelated commits и осложнить checkpoint. Не хранить одновременно полный ApplyJournal payload и отдельную полную копию RelayJournal.
-
-ProtocolStateDelta — recovery payload, принадлежащий BIN-SYNC. Его retention заканчивается, когда соответствующее protocol metadata state durably materialized/checkpointed и может быть восстановлено/прочитано из Metadata Store; он не должен автоматически жить столько же, сколько Inbox receipt или relay payload. Если delta остаётся единственным recovery source, удерживать её до checkpoint. Возвращать полный delta при duplicate receipt нужно только пока это требуется выбранным replay contract.
-
-До появления отдельных receipt/relay retention операций ApplyJournal нельзя считать завершённым production storage contract.
+1. WAL APPLY_COMMIT хранит все входящие операции один раз и компактную relay-selection index list.
+2. Durable batch receipt хранит только identity, cursor range, BatchDigest/RecordsRoot/PreviousBatchDigest, author-bound ACK/result metadata и opaque ProtocolStateDelta.
+3. Relay journal хранит только relay-selected operations, включая LWW losers; его cursor — локальный JournalSeq, не peer/author cursor.
+4. Receipt lifetime и relay payload lifetime независимы. Receipt GC определяется Inbox retry horizon; relay payload GC — минимальным safe ACK всех downstream peers по каждому author stream.
+5. WAL truncation допускается только после durable promotion relay payload и metadata receipt.
+6. Индексы должны быть bounded/rebuildable, а paging — seekable по JournalSeq.
 
 ## 6. Read snapshot
 
@@ -177,7 +174,7 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 | FldDatabase.ApplyRemoteBatch(RemoteBatchCommit) | Реализован durable receive boundary: проверяет duplicate batch, формирует WAL APPLY commit, сохраняет protocol delta и relay subset, flush-ит WAL/apply journal, затем публикует LWW winners; remote writes не попадают в local Outbox |
 | RemoteBatchCommit.ProtocolStateDelta | Передаётся и сохраняется opaque; FLD не интерпретирует его. BIN-SYNC ещё должен обеспечить корректное формирование, применение/recovery и атомарное согласование этого delta со своим runtime state |
 | ApplyJournal / ReadRelayBatches | Durable append-only apply journal и чтение relay-eligible операций реализованы; отдельный safe relay ACK/retention/compaction boundary в публичном API ещё не подтверждён |
-| ApplyCommitCodec v2 / ApplyJournal payload | Fields и RelayFields кодируются отдельно, хотя RelayFields — точное подмножество Fields; тот же полный APPLY_COMMIT payload дублируется в ApplyJournal. Нужны relay-selection indexes и отдельные receipt/relay lifetimes |
+| ApplyCommitCodec v3 / ApplyJournal payload | Fields кодируется один раз, RelayFields задаётся varint-индексами; ApplyJournal хранит receipt metadata и только relay-selected payload. v2 остаётся читаемым. Независимые receipt/relay GC и bounded indexes ещё открыты |
 | AcquireOutboxLease / ReleaseOutboxLease / VisitOutboxBatch / AcknowledgeOutbox(..., lease) | Durable fenced lease, borrowed-span enumeration и fenced ACK реализованы |
 | GetOutboxHighWatermark | Отдельный high watermark реализован; WAL CommitSeq и OutboxSeq остаются разными шкалами |
 | FLD Storage-only Metadata Store | Не реализован; target is direct use of the domain-neutral `Fld1.Storage` API, without constructing `FldDatabase` or LocalAuthor/HLC/Outbox |
@@ -185,9 +182,16 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 
 **Запрет до появления целевого API:** не использовать последовательность `FldDatabase.ApplyRemote(...); FldDatabase.Commit();` как реализацию BIN-SYNC receive. Она не обеспечивает atomic batch/idempotency/relay semantics и может добавить remote author entries в локальный Outbox.
 
-## 7.1. Storage Core boundary
+## 7.1. Two-DLL Storage Core boundary
 
-The physical engine must be independently reusable. `Fld1.Storage` exposes byte-oriented atomic batches, WAL/recovery, snapshots, ordered scans and storage-native commit IDs. It has no dependency on `FldDatabase`, RecordId/FieldId, HLC, NodeId, ChangeId, BinSync.Core or wire DTOs. `Fld1.Database` is a consumer of this API. Both namespaces may ship in one DLL initially; source boundaries, public API and dependency tests must allow extraction into a separate Storage package without rewriting the engine. Storage-only mode opens the engine directly and creates no synthetic synchronized field state. See the FLD-DB Storage Core architecture document.
+The runtime architecture is exactly two independently buildable DLLs:
+
+1. `Fld1.Storage.dll` — universal byte-oriented physical engine: atomic byte batches, WAL/recovery, pages/runs, manifest, snapshots, checkpoint, ordered scans and storage-native reclamation. It does not reference FLD types, HLC, NodeId, ChangeId, BIN-SYNC or wire DTOs.
+2. `Fld1.Database.dll` — FLD domain layer: FldDatabase, records/fields, field and record lifecycle tombstones, HLC/LWW, field codecs, indexes/projections, FLD Outbox/APPLY and the BIN-SYNC integration boundary.
+
+Dependency is strictly one-way: `Fld1.Database.dll → Fld1.Storage.dll`. No third Common/Shared runtime DLL is introduced.
+
+Tombstone responsibility is split deliberately. Storage must durably store the opaque bytes representing FLD field/record tombstones and may use its own generic deletion markers for physical keys, but it must not interpret FLD tombstone semantics or decide when they are safe to remove. Fld1.Database owns lifecycle/HLC/author semantics and protocol-safe tombstone retention/GC. An old HLC timestamp alone never authorizes physical deletion. Storage-only mode opens Fld1.Storage directly and creates no synthetic synchronized field state. See the FLD-DB Storage Core architecture document.
 
 ## 8. Приёмочные тесты контракта
 
@@ -214,7 +218,7 @@ The physical engine must be independently reusable. `Fld1.Storage` exposes byte-
 
 ## 10. History-storage audit reference
 
-The cross-layer code audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md). It confirms that BIN-SYNC already shares one Outbox operation across peers and owns per-peer/per-author progress; FLD must not duplicate this progress model. It also identifies the current FLD APPLY payload amplification (Fields plus RelayFields, and WAL plus ApplyJournal), the unbounded ApplyJournal index/paging path, and the required separation of batch receipt, global ChangeId dedup, relay payload and peer replay-cache lifetimes.
+The cross-layer code audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md). It confirms that BIN-SYNC already shares one Outbox operation across peers and owns per-peer/per-author progress; FLD must not duplicate this progress model. The FLD APPLY payload duplication has been reduced with ApplyCommitCodec v3 and relay-only ApplyJournal materialization; remaining work is independent receipt/relay retention and bounded indexes.
 
 This audit is an internal storage design follow-up. It does not alter the wire contract or the atomic acceptance requirements in this document. The next implementation work must preserve the atomic transition and ACK-after-durable-acceptance guarantee while removing redundant payload copies.
 
@@ -224,8 +228,8 @@ The cross-repository phase plan is in [Sync Storage Compaction Roadmap](https://
 
 - APPLY WAL is authoritative until receipt and relay payload are durably materialized.
 - Each incoming operation is encoded once; relay selection references operation indexes rather than repeating RelayFields payload.
-- The durable batch receipt is metadata-only and sufficient to validate duplicate retry and reproduce its ACK result.
-- Relay payload contains only relay-selected immutable operations, including eligible LWW losers. Promote idempotently before WAL truncation; reclaim only after a validated downstream safe watermark.
+- The durable batch receipt is metadata-only with respect to non-relay operation payload; it remains co-located with relay payload in ApplyJournal until independent GC is implemented.
+- Relay payload contains only relay-selected immutable operations, including eligible LWW losers. Promotion is idempotent and durable before WAL truncation; reclaim only after a validated downstream safe watermark.
 - Global ChangeId dedup is route-independent BIN-SYNC metadata; issuer-specific receipts are not a substitute.
 - Local pending coalescing happens before the FLD Outbox freeze boundary. The Outbox itself remains immutable.
 - Per-peer progress and ACK aggregation remain BIN-SYNC responsibilities; FLD receives only the safe aggregate local Outbox watermark.
