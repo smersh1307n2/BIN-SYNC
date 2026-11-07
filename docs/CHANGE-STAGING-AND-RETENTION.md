@@ -341,7 +341,7 @@ The current Node implementation stores remote SeenChanges under (senderPeer, nam
 - original author identity;
 - compact flags for local-origin/legacy-migration state where required.
 
-The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes.
+The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes. Its exact lookup must be disk/page-backed with a bounded hot cache; a Bloom filter is allowed only as a negative prefilter, never as the authoritative answer. Do not keep one in-memory object per historical ChangeId.
 
 **Receive rule:** on the first valid occurrence, atomically insert the fingerprint, apply the operation if appropriate, and append its relay payload if it is relay-eligible. On a later occurrence from any peer:
 - same ChangeId and same fingerprint: do not reapply or enqueue another relay entry; still commit the new sender's Inbox receipt and receive-stream cursor so its author stream can progress;
