@@ -65,6 +65,42 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Empty(store.ReadRelay("scope-a", Node(1), 7, Node(20), 1, 10).Items);
     }
 
+
+    [Fact]
+    public void Locally_frozen_change_is_in_global_ledger_and_not_relayed_again_on_another_route()
+    {
+        using var store = CreateStore();
+        var frozen = FrozenOperation(30, 50, fingerprint: 40);
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { frozen });
+
+        var alternateRoute = store.AcceptIncomingBatch(
+            CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 1, 0, 11,
+                Operation(20, 30, 40, 51)));
+
+        Assert.False(alternateRoute.IsDuplicate);
+        Assert.Equal(1UL, store.GetReceiveCursor("scope-a", Node(1), Node(3), 1, 7));
+        Assert.Equal(0UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
+        Assert.Empty(store.ReadRelay("scope-a", Node(1), 7, Node(20), 0, 10).Items);
+
+        var equivocation = CreateBatch("scope-a", 1, 4, 1, 7, 12, 1, 1, 0, 12,
+            Operation(20, 30, 41, 52));
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(equivocation));
+        Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(4), 1, 7));
+    }
+
+    [Fact]
+    public void Incoming_change_id_cannot_be_republished_as_a_new_local_outbound_change()
+    {
+        using var store = CreateStore();
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50)));
+
+        Assert.Throws<InvalidDataException>(() =>
+            store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+                new[] { FrozenOperation(30, 51, fingerprint: 40) }));
+        Assert.Equal(0UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+    }
+
     [Fact]
     public void Relay_ack_is_per_author_and_cannot_exceed_that_author_high_watermark()
     {
