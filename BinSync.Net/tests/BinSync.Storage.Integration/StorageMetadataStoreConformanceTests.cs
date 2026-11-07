@@ -230,6 +230,36 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Peer_progress_and_pending_reservations_are_isolated_per_remote_peer()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-progress-isolation"), 419);
+        NodeId local = Node(1), peerA = Node(2), peerB = Node(4), author = Node(3);
+        const string scope = "peer-progress-isolation";
+        MetadataOutboundBatchReservation Make(byte batch, byte digest) => new()
+        {
+            BatchId = Batch(batch), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat(digest, 16).ToArray(),
+            Payload = new[] { batch }
+        };
+
+        store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(80, 81));
+        store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(82, 83));
+        store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(80));
+        store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
+            Batch(80), 1, Enumerable.Repeat((byte)81, 16).ToArray());
+
+        var a = store.GetPeerStreamState(scope, local, peerA, 1, 7, author);
+        var b = store.GetPeerStreamState(scope, local, peerB, 1, 7, author);
+        Assert.Equal(1UL, a.AckedCursor);
+        Assert.Null(a.PendingBatch);
+        Assert.Equal(0UL, b.AckedCursor);
+        Assert.Equal(Batch(82), Assert.IsType<MetadataOutboundBatchReservation>(b.PendingBatch).BatchId);
+        Assert.Equal(2, store.ReadPeerStreamStates(scope, local, peerA, 1, 7).Count +
+            store.ReadPeerStreamStates(scope, local, peerB, 1, 7).Count);
+    }
+
+    [Fact]
     public void Author_epoch_change_starts_a_new_digest_chain_without_resetting_peer_cursor()
     {
         string directory = Path.Combine(_root, "peer-reservation-epoch");
