@@ -230,6 +230,58 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Relay_page_is_read_from_metadata_at_each_downstream_peers_own_cursor()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-relay-page"), 422);
+        NodeId local = Node(1), upstream = Node(2), downstream = Node(4), author = Node(3);
+        const string scope = "peer-relay-page";
+        byte[] envelope = new byte[21];
+        Node(9).WriteTo(envelope);
+        envelope[16] = 1;
+        envelope[17] = 2;
+        envelope[18] = 3;
+        envelope[19] = 4;
+        envelope[20] = 5;
+        var incoming = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = upstream,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(100),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)101, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch(102),
+                    Fingerprint = Enumerable.Repeat((byte)103, 16).ToArray(),
+                    Payload = envelope,
+                    RelayEligible = true
+                }
+            }
+        };
+
+        var receipt = store.AcceptIncomingBatch(incoming);
+        Assert.False(receipt.IsDuplicate);
+        Assert.Equal(new[] { author }, store.ReadRelayAuthors(scope, local, 7));
+        store.RegisterInterestedPeerStream(scope, local, downstream, 2, 7, author,
+            0, 0, 1, new byte[16]);
+        var page = store.ReadRelayForPeer(scope, local, downstream, 2, 7, author, 10);
+        var item = Assert.Single(page.Items);
+        Assert.Equal(1UL, item.Sequence);
+        Assert.Equal(author, item.OriginalAuthor);
+        Assert.Equal(Batch(102), item.ChangeId);
+        Assert.Equal(envelope, item.Payload);
+    }
+
+    [Fact]
     public void Outbound_compaction_waits_for_every_registered_peer_acknowledgement()
     {
         string directory = Path.Combine(_root, "peer-safe-compaction");
