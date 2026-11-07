@@ -387,8 +387,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 }
             }
         });
-        store.AcknowledgeRelay(scope, local, 7, author, 1);
-
         MetadataOutboundBatchReservation Make(byte id, byte digest) => new()
         {
             BatchId = Batch(id), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
@@ -470,6 +468,32 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         {
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public void Outbound_peer_ack_horizon_can_compact_without_legacy_local_consumer_lease()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "peer-only-outbound-compaction"), 431);
+        NodeId local = Node(1), peer = Node(2);
+        const string scope = "peer-only-outbound-compaction";
+        store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+        store.FreezeOutbound(scope, local, 7, local, new[] { FrozenOperation(140, 141) });
+
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(142), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)143, 16).ToArray(),
+            Payload = new byte[] { 144 }
+        };
+        store.ReserveOutboundBatch(scope, local, peer, 1, 7, local, reservation);
+        store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, local, reservation.BatchId);
+        store.AcknowledgeOutboundBatch(scope, local, peer, 1, 7, local,
+            reservation.BatchId, 1, reservation.BatchDigest);
+
+        Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
+        store.CompactOutboundThrough(scope, local, 7, local, 1);
+        Assert.Empty(store.ReadOutboundForPeer(scope, local, peer, 1, 7, local, 10).Items);
     }
 
     [Fact]
