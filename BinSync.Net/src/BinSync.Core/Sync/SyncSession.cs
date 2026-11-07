@@ -221,26 +221,40 @@ public partial class SyncSession : IAsyncDisposable
     }
 
     /// <summary>Receive one DELTA_BATCH, apply it and return the ACK.</summary>
-    public async Task<BatchResult> ReceiveBatchAsync(Node receiver, CancellationToken ct = default,
+    public Task<BatchResult> ReceiveBatchAsync(Node receiver, CancellationToken ct = default,
         Action<Batch, BatchResult>? beforeAck = null)
+        => ReceiveBatchAsync(receiver, beforeApply: null, beforeAck, ct);
+
+    /// <summary>
+    /// Receive one batch with an optional durable intent callback before Node mutation
+    /// and a durability callback after Node mutation but before ACK.
+    /// </summary>
+    public async Task<BatchResult> ReceiveBatchAsync(Node receiver,
+        Action<Batch, ReadOnlyMemory<byte>>? beforeApply,
+        Action<Batch, BatchResult>? beforeAck,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(receiver);
         await _batchReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-        var raw = await ReceivePacketAsync(0x09, ct).ConfigureAwait(false);
-        var frame = ParseExpectedSessionFrame(raw, 0x09);
-        if (frame.Payload.Length < sizeof(ushort))
-            throw new FrameException("FRAME_REJECTED");
-        int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(frame.Payload);
-        ValidateNamespaceStream(frame, namespaceId);
-        var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
-        // A host can durably apply the accepted batch to its external Data Provider
-        // before this session acknowledges it to the sender. A callback failure leaves
-        // the sender unacknowledged; a retry is delivered as a duplicate and is safe.
-        beforeAck?.Invoke(batch, result);
-        var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
-        await SendFrameAsync(0x0B, 0x0001_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
-        return result;
+            var raw = await ReceivePacketAsync(0x09, ct).ConfigureAwait(false);
+            var frame = ParseExpectedSessionFrame(raw, 0x09);
+            if (frame.Payload.Length < sizeof(ushort))
+                throw new FrameException("FRAME_REJECTED");
+            int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(frame.Payload);
+            ValidateNamespaceStream(frame, namespaceId);
+
+            // Decode without mutation so a host can persist the exact wire payload as
+            // a PendingApply intent before Node's receive cursor or records advance.
+            var decoded = receiver.DecodeBatchPayloadForTransport(frame.Payload);
+            beforeApply?.Invoke(decoded, frame.Payload);
+
+            var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
+            beforeAck?.Invoke(batch, result);
+            var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
+            await SendFrameAsync(0x0B, 0x0001_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
+            return result;
         }
         finally { _batchReceiveGate.Release(); }
     }
