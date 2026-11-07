@@ -143,7 +143,7 @@ Global ChangeId ledger — отдельное состояние BIN-SYNC, не 
 - FldDatabase.ApplyRemoteBatch сначала flush-ит полный APPLY_COMMIT в WAL, затем ApplyJournal сохраняет receipt metadata и только relay-selected operations. Non-relay payload больше не копируется в sidecar.
 - ApplyJournal materialization выполняется до возврата ApplyRemoteBatch и flush-ится до последующего checkpoint/WAL truncation. LWW losers, выбранные для relay, сохраняются.
 - Journal promotion идемпотентен по batch identity; WAL recovery восстанавливает компактный relay-only journal из v2 и v3 WAL records.
-- ReadBatches теперь использует lower-bound binary search по JournalSeq: O(log N + page size), без повторного сканирования уже прочитанного префикса.
+- ReadRelayBatchPage теперь использует lower-bound binary search по JournalSeq: O(log N + page size), без повторного сканирования уже прочитанного префикса; legacy ReadRelayBatches остаётся wrapper.
 
 Оставшиеся ограничения:
 - Receipt metadata и relay payload всё ещё co-located в одном append-only ApplyJournal файле; физические retention lifetimes пока не независимы.
@@ -185,7 +185,7 @@ Code/API baseline revalidated: FLD-DB `fix/crash-consistency-outbox` commit `978
 | RemoteFieldWrite.ChangeId | Теперь обязательный 16-byte nonzero идентификатор; конструктор валидирует длину и ненулевое значение |
 | FldDatabase.ApplyRemoteBatch(RemoteBatchCommit) | Реализован durable receive boundary: проверяет duplicate batch, формирует WAL APPLY commit, сохраняет protocol delta и relay subset, flush-ит WAL/apply journal, затем публикует LWW winners; remote writes не попадают в local Outbox |
 | RemoteBatchCommit.ProtocolStateDelta | Передаётся и сохраняется opaque; FLD не интерпретирует его. BIN-SYNC ещё должен обеспечить корректное формирование, применение/recovery и атомарное согласование этого delta со своим runtime state |
-| ApplyJournal / ReadRelayBatches | Durable append-only apply journal и чтение relay-eligible операций реализованы; отдельный safe relay ACK/retention/compaction boundary в публичном API ещё не подтверждён |
+| ApplyJournal / ReadRelayBatchPage / AcknowledgeRelayBatches | Durable append-only journal, seekable per-author pages and durable per-author safe-ACK/retention boundary are implemented in FLD; the BIN-SYNC adapter still needs the durable source-to-Outbox provenance map before it can call the ACK API |
 | ApplyCommitCodec v3 / ApplyJournal payload | Fields кодируется один раз, RelayFields задаётся varint-индексами; ApplyJournal хранит receipt metadata и только relay-selected payload. v2 остаётся читаемым. Независимые receipt/relay GC и bounded indexes ещё открыты |
 | AcquireOutboxLease / ReleaseOutboxLease / VisitOutboxBatch / AcknowledgeOutbox(..., lease) | Durable fenced lease, borrowed-span enumeration и fenced ACK реализованы |
 | GetOutboxHighWatermark | Отдельный high watermark реализован; WAL CommitSeq и OutboxSeq остаются разными шкалами |
