@@ -77,7 +77,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             using var snapshot = storage.OpenSnapshot();
             var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
             Assert.DoesNotContain(rows, row => row.Key.Length > root.Length && row.Key[root.Length] == 11);
-            var compactLedger = Assert.Single(rows.Where(row => row.Key.AsSpan().SequenceEqual(compactLedgerKey)));
+            var compactLedger = Assert.Single(rows, row => row.Key.AsSpan().SequenceEqual(compactLedgerKey));
             Assert.Equal(17, compactLedger.Value.Length);
             Assert.Equal(1, compactLedger.Value[16]);
         }
