@@ -260,6 +260,55 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Inbox_receipt_identity_is_independent_of_resolved_author_stream()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-author-independent"), 440);
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+        const string scope = "receipt-author-independent";
+        var first = new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
+            AuthorStreamNodeId = authorA, NamespaceId = 9, BatchId = Batch(140),
+            CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)141, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = authorA, ChangeId = Batch(142),
+                    Fingerprint = Enumerable.Repeat((byte)143, 16).ToArray(),
+                    Payload = new byte[] { 1, 4, 2 }, RelayEligible = true
+                }
+            }
+        };
+        var secondView = new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
+            AuthorStreamNodeId = authorB, NamespaceId = 9, BatchId = first.BatchId,
+            CursorStart = first.CursorStart, CursorEnd = first.CursorEnd,
+            PreviousBatchDigest = first.PreviousBatchDigest.ToArray(),
+            BatchDigest = first.BatchDigest.ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = authorB, ChangeId = Batch(144),
+                    Fingerprint = Enumerable.Repeat((byte)145, 16).ToArray(),
+                    Payload = new byte[] { 9, 9, 9 }, RelayEligible = true
+                }
+            }
+        };
+
+        Assert.False(store.AcceptIncomingBatch(first).IsDuplicate);
+        Assert.True(store.AcceptIncomingBatch(secondView).IsDuplicate);
+        Assert.Equal(1UL, store.GetReceiveCursor(scope, local, sender, 5, 9, authorA));
+        Assert.Equal(0UL, store.GetReceiveCursor(scope, local, sender, 5, 9, authorB));
+        Assert.Equal(1UL, store.GetRelayHighWatermark(scope, local, 9, authorA));
+        Assert.Equal(0UL, store.GetRelayHighWatermark(scope, local, 9, authorB));
+    }
+
+    [Fact]
     public void Completed_pending_apply_uses_a_distinct_retry_exception()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "completed-pending-token"), 438);
