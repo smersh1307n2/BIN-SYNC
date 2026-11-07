@@ -93,7 +93,7 @@ static void PublishLocalChanges(StorageArray array, Node node, string durableNod
 {
     var page = array.ReadLocalChanges(afterSequence: 0, limit: 10_000);
     foreach (var change in page.Changes)
-        node.WriteField(Ns, change.RecordId, change.FieldId, change.Value);
+        node.WriteField(Ns, change.RecordId, change.FieldId, change.Payload);
     NodePersistence.Save(node, durableNodePath);
     if (page.ScannedThroughSequence > 0)
         array.AcknowledgeLocalChanges(page.ScannedThroughSequence);
@@ -159,9 +159,11 @@ sealed class StorageArray : IDisposable
         ulong acked = ReadUInt64(_db, [Ack]);
         using var snapshot = _db.OpenSnapshot();
         var rows = snapshot.ScanPrefix([Feed], FeedKey(Math.Max(afterSequence, acked)), limit);
-        return rows.Select(row => new ArrayChange(
+        var changes = rows.Select(row => new ArrayChange(
             BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1)),
             Decode(row.Value))).ToArray();
+        ulong scanned = changes.Length == limit ? changes[^1].Sequence : ReadUInt64(_db, [High]);
+        return new ArrayChangePage(changes, scanned);
     }
 
     public void AcknowledgeLocalChanges(ulong safeThroughSequence)
@@ -235,11 +237,13 @@ sealed class StorageArray : IDisposable
     public void Dispose() => _db.Dispose();
 }
 
-sealed record ArrayChange(ulong Sequence, ArrayChangeValue Value)
+sealed record ArrayChangePage(IReadOnlyList<ArrayChange> Changes, ulong ScannedThroughSequence);
+
+sealed record ArrayChange(ulong Sequence, ArrayChangeValue Mutation)
 {
-    public RecordId RecordId => Value.RecordId;
-    public ushort FieldId => Value.FieldId;
-    public byte[] Value => Value.Value;
+    public RecordId RecordId => Mutation.RecordId;
+    public ushort FieldId => Mutation.FieldId;
+    public byte[] Payload => Mutation.Value;
 }
 
 sealed record ArrayChangeValue(RecordId RecordId, ushort FieldId, byte[] Value);
