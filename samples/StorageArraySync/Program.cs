@@ -44,19 +44,19 @@ try
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
 
         Transport.MakeSession(nodeA, nodeB);
-        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _, _) =>
+        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
         {
             // Persist the Node's accepted receipt/state first, then materialize the
             // external provider. Transport sends ACK only after this callback returns.
             if (ReferenceEquals(receiver, nodeA))
             {
                 NodePersistence.Save(receiver, nodeAPath);
-                coordinatorA.ApplyRemoteFields(Fields(recordA, recordB, nameA, quantityA));
+                coordinatorA.ApplyRemoteBatch(batch);
             }
             else
             {
                 NodePersistence.Save(receiver, nodeBPath);
-                coordinatorB.ApplyRemoteFields(Fields(recordA, recordB, nameA, quantityA));
+                coordinatorB.ApplyRemoteBatch(batch);
             }
         });
         NodePersistence.Save(nodeA, nodeAPath);
@@ -83,17 +83,17 @@ try
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
 
         Transport.MakeSession(nodeA, nodeB);
-        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _, _) =>
+        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
         {
             if (ReferenceEquals(receiver, nodeA))
             {
                 NodePersistence.Save(receiver, nodeAPath);
-                coordinatorA.ApplyRemoteFields(Fields(recordA, recordB, name, quantity));
+                coordinatorA.ApplyRemoteBatch(batch);
             }
             else
             {
                 NodePersistence.Save(receiver, nodeBPath);
-                coordinatorB.ApplyRemoteFields(Fields(recordA, recordB, name, quantity));
+                coordinatorB.ApplyRemoteBatch(batch);
             }
         });
         NodePersistence.Save(nodeA, nodeAPath);
@@ -142,10 +142,6 @@ static ProviderMutation Mutation(RecordId recordId, ushort fieldId, NodeId autho
         KeyEpoch = 0,
         Value = value.ToArray()
     };
-
-static IReadOnlyList<(RecordId RecordId, ushort FieldId)> Fields(
-    RecordId recordA, RecordId recordB, ushort name, ushort quantity)
-    => new[] { (recordA, name), (recordA, quantity), (recordB, name), (recordB, quantity) };
 
 static string Read(IDataProvider provider, RecordId recordId, ushort fieldId)
     => provider.TryReadCurrent(recordId, fieldId, out var value) && value is not null
