@@ -32,7 +32,7 @@ public sealed class SharedStorageDatabaseTests
 
             BatchId changeId = BatchId.From(Identity(4));
             var frozen = metadata.FreezeOutbound("array-demo", replica, 1, author,
-                new[] { new MetadataFrozenOperation { ChangeId = changeId, Payload = "op-1"u8.ToArray() } });
+                new[] { new MetadataFrozenOperation { ChangeId = changeId, Fingerprint = Enumerable.Repeat((byte)9, 16).ToArray(), Payload = "op-1"u8.ToArray() } });
             Assert.Single(frozen);
 
             provider.AppendLocalChange(new ProviderMutation
