@@ -49,6 +49,16 @@ public sealed class StorageSyncCoordinator
             if (page.Changes.Count == 0)
                 return 0;
 
+            // Validate the complete source page before coalescing: an unsupported
+            // superseded operation must never be silently hidden by a later winner.
+            foreach (var change in page.Changes)
+            {
+                if (change.Mutation.AuthorNodeId != _node.NodeId)
+                    throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
+                if (change.Mutation.KeyEpoch != 0)
+                    throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
+            }
+
             // Source feeds may contain several local LWW edits for the same canonical
             // field before synchronization. Collapse only this unpublished page to its
             // deterministic HLC winner; once written to Node/Outbox, operations are immutable.
@@ -57,11 +67,6 @@ public sealed class StorageSyncCoordinator
             foreach (var change in pending)
             {
                 ProviderMutation mutation = change.Mutation;
-                if (mutation.AuthorNodeId != _node.NodeId)
-                    throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
-                if (mutation.KeyEpoch != 0)
-                    throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
-
                 var hlc = new Hlc(mutation.HlcWall, mutation.HlcLogical);
                 if (mutation.IsRecordTombstone)
                     _node.DeleteRecord(_namespaceId, mutation.RecordId, hlc);
@@ -81,11 +86,7 @@ public sealed class StorageSyncCoordinator
         }
     }
 
-    /// <summary>
-    /// Freezes newly appended local Node Outbox entries into the attached durable
-    /// Metadata Store. Node sequence numbers are preserved exactly; a gap between the
-    /// metadata high-watermark and the first retained Node entry fails closed.
-    /// </summary>
+    /// <summary>Coalesces only unpublished LWW state by canonical record/field identity.</summary>
     private static IReadOnlyList<ProviderChange> CoalescePendingLocalChanges(
         IReadOnlyList<ProviderChange> changes)
     {
@@ -129,6 +130,11 @@ public sealed class StorageSyncCoordinator
             && left.KeyEpoch == right.KeyEpoch
             && left.Value.AsSpan().SequenceEqual(right.Value);
 
+    /// <summary>
+    /// Freezes newly appended local Node Outbox entries into the attached durable
+    /// Metadata Store. Node sequence numbers are preserved exactly; a gap between the
+    /// metadata high-watermark and the first retained Node entry fails closed.
+    /// </summary>
     private void FreezeLocalOutboxToMetadata()
     {
         if (_metadataStore is null)
