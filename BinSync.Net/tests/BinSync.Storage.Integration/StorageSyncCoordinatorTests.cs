@@ -282,6 +282,81 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Durable_batch_reservation_replays_identically_after_sender_restart_and_lost_ack()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-replay-after-restart"), 434);
+        using var provider = new StorageDataProvider(storage);
+        using var originalSender = NewNode(36);
+        using var receiver = NewNode(37);
+        var metadata = new StorageMetadataStore(storage);
+        const string scope = "durable-replay-after-restart";
+        var coordinator = new StorageSyncCoordinator(originalSender, provider, 1, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("36000000-0000-0000-0000-000000000036").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0103, AuthorNodeId = originalSender.NodeId,
+            HlcWall = 3600, Value = "replay-exactly"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
+
+        MetadataOutboundBatchReservation firstReservation;
+        var (firstToSender, firstToReceiver) = PipeTransport.CreatePair();
+        var firstAcceptTask = SyncSession.AcceptAsync(receiver, firstToReceiver);
+        var firstConnectTask = SyncSession.ConnectAsync(originalSender, firstToSender);
+        await using (var firstAcceptor = await firstAcceptTask)
+        await using (var firstInitiator = await firstConnectTask)
+        {
+            using var cts = new CancellationTokenSource();
+            var receive = firstAcceptor.ReceiveBatchAsync(receiver,
+                beforeAck: (_, _) => throw new IOException("simulated ACK loss"));
+            var push = firstInitiator.PushBatchAsync(originalSender, 1, metadata, scope, ct: cts.Token);
+            await Assert.ThrowsAsync<IOException>(async () => await receive);
+            cts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await push);
+            firstReservation = Assert.IsType<MetadataOutboundBatchReservation>(
+                metadata.GetPendingOutboundBatch(scope, originalSender.NodeId,
+                    receiver.NodeId, checked((uint)receiver.Epoch), 1, originalSender.NodeId));
+            Assert.Equal(1UL, metadata.GetPeerStreamState(scope, originalSender.NodeId,
+                receiver.NodeId, checked((uint)receiver.Epoch), 1, originalSender.NodeId).PushedCursor);
+            Assert.Equal(0UL, metadata.GetPeerStreamState(scope, originalSender.NodeId,
+                receiver.NodeId, checked((uint)receiver.Epoch), 1, originalSender.NodeId).AckedCursor);
+        }
+
+        metadata.Dispose();
+        using var reopenedMetadata = new StorageMetadataStore(storage);
+        var replayReservation = Assert.IsType<MetadataOutboundBatchReservation>(
+            reopenedMetadata.GetPendingOutboundBatch(scope, originalSender.NodeId,
+                receiver.NodeId, checked((uint)receiver.Epoch), 1, originalSender.NodeId));
+        Assert.Equal(firstReservation.BatchId, replayReservation.BatchId);
+        Assert.Equal(firstReservation.CursorStart, replayReservation.CursorStart);
+        Assert.Equal(firstReservation.CursorEnd, replayReservation.CursorEnd);
+        Assert.Equal(firstReservation.PreviousBatchDigest, replayReservation.PreviousBatchDigest);
+        Assert.Equal(firstReservation.BatchDigest, replayReservation.BatchDigest);
+        Assert.Equal(firstReservation.Payload, replayReservation.Payload);
+
+        using var restartedSender = new NodeBuilder()
+            .WithNodeId(originalSender.NodeId.ToArray())
+            .WithEpoch(originalSender.Epoch)
+            .Build();
+        var (secondToSender, secondToReceiver) = PipeTransport.CreatePair();
+        var secondAcceptTask = SyncSession.AcceptAsync(receiver, secondToReceiver);
+        var secondConnectTask = SyncSession.ConnectAsync(restartedSender, secondToSender);
+        await using var secondAcceptor = await secondAcceptTask;
+        await using var secondInitiator = await secondConnectTask;
+        var secondReceive = secondAcceptor.ReceiveBatchAsync(receiver);
+        Assert.True(await secondInitiator.PushBatchAsync(restartedSender, 1, reopenedMetadata, scope));
+        Assert.Equal(1, (await secondReceive).Applied);
+
+        var finalState = reopenedMetadata.GetPeerStreamState(scope, restartedSender.NodeId,
+            receiver.NodeId, checked((uint)receiver.Epoch), 1, restartedSender.NodeId);
+        Assert.Equal(1UL, finalState.AckedCursor);
+        Assert.Equal(1UL, finalState.PushedCursor);
+        Assert.Null(finalState.PendingBatch);
+        Assert.True(receiver.TryGetField(1, record, 0x0103, out var value));
+        Assert.Equal("replay-exactly", Encoding.UTF8.GetString(value!.Value));
+    }
+
+    [Fact]
     public async Task Durable_push_requires_snapshot_when_first_retained_outbound_sequence_is_not_one()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-push-snapshot-barrier"), 432);
