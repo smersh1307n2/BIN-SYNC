@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.1; proposed storage policy for review before API freeze.  
+**Status:** Architecture decision draft v0.2; retention and Storage Core decisions resolved for API design.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. No wire-format change is proposed.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
@@ -331,51 +331,56 @@ The following lifetimes are independent:
 
 No generic DeleteOldMetadata operation is sufficient. Each category needs its own safe-retention condition.
 
-### 9.1. Separate remote provenance dedup from local WAL replay markers
+### 9.1. Global ChangeId ledger and local WAL replay markers
 
-The current Node implementation stores both roles in one SeenChanges set keyed by (peer, namespaceId, ChangeId), but their retention rules are different.
+The current Node implementation stores remote SeenChanges under (senderPeer, namespaceId, ChangeId), while the target model uses one exact ledger entry per (scope, namespaceId, ChangeId). ChangeId is stable across relay hops and unique within a namespace; direct sender is not part of the operation identity.
 
-**Remote provenance markers** are inserted by ApplyBatch using (senderPeer, namespaceId, ChangeId). The current wire specification defines first-seen ChangeId as the relay-eligibility gate (E-8), and E-13 requires durable provenance-scoped duplicate/self-echo handling. The inspected normative specification does not define a safe GC rule, expiry, or watermark for these remote entries. Inbox GC and tombstone GC are separate and cannot be reused as an assumed rule.
+**Target ChangeId ledger entry:**
+- key: (scopeId, namespaceId, ChangeId);
+- compact fingerprint: BLAKE3-128 over the canonical operation identity and payload (original author, RecordId, operation kind, field/key epoch, HLC, value/tombstone bytes and any canonical causal dependency data);
+- original author identity;
+- compact flags for local-origin/legacy-migration state where required.
 
-Consequences for remote provenance:
+The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes.
 
-- Do not apply an arbitrary TTL. An old ChangeId may return through a different mesh route after the TTL and be treated as first-seen again, re-enqueued, and potentially create a relay/echo growth loop.
-- Do not replace the exact set with a Bloom filter as the only source of truth. False positives can suppress a legitimate first-seen operation and violate relay eligibility.
-- Do not assume Inbox GC makes SeenChanges redundant. Inbox deduplicates a batch identity; SeenChanges deduplicates operation provenance across different batches/routes.
-- Until a protocol-safe compaction rule is specified, retain exact remote provenance entries. This is correct but potentially unbounded.
+**Receive rule:** on the first valid occurrence, atomically insert the fingerprint, apply the operation if appropriate, and append its relay payload if it is relay-eligible. On a later occurrence from any peer:
+- same ChangeId and same fingerprint: do not reapply or enqueue another relay entry; still commit the new sender's Inbox receipt and receive-stream cursor so its author stream can progress;
+- same ChangeId but different fingerprint: reject the incoming batch as a protocol conflict before publishing any mutation or cursor advancement;
+- local-origin ChangeId: treat a returning echo as already known and do not relay it again, even after the local Outbox payload has been compacted.
 
-A future protocol/storage design must choose and prove one of these approaches before production metadata retention is complete:
+This replaces the current peer-scoped remote SeenChanges as the target semantic index. It is smaller than retaining one copy per (peer, ChangeId), prevents a three-or-more-peer relay loop after Outbox compaction, and gives the receiver a way to detect conflicting ChangeId reuse. Per-peer batch retry remains the responsibility of Inbox and PeerState; it is not a reason to multiply the ChangeId ledger by peer count.
 
-1. **Cursor-bound provenance retention:** persist enough association between each seen ChangeId and the relevant direct-sender/author-stream cursor, then prune only after a protocol-defined sender/channel watermark proves that the sender can no longer legally replay or reintroduce that operation. The mapping must respect per-author streams and channel-scoped provenance; a peer-wide scalar watermark is not enough.
-2. **Stable origin sequence identity:** define a protocol-level derivation or binding between ChangeId and an immutable origin author/namespace/sequence so exact dedup history can be represented by compact ranges plus exceptions. This changes identity semantics and requires a wire/spec compatibility decision; it is not an implementation-only optimization.
-3. **Explicit bounded replay contract:** define a protocol maximum replay horizon and a corresponding durable expiry/epoch mechanism, including behavior for offline peers and independent delivery channels. A TTL without this protocol guarantee is invalid.
+**Retention decision for the current protocol revision:** retain exact ChangeId ledger entries for the lifetime of the namespace/scope epoch. The current protocol has neither a proven snapshot-baseline completion barrier nor an immutable origin sequence carried independently of peer-relative stream cursors. Therefore no finite TTL, relay ACK, Inbox expiry, tombstone GC or one peer's ACK proves that an old ChangeId cannot return through another route. A namespace reset may clear the ledger only after all old members are fenced from sending deltas and must rebootstrap from a new baseline. This is safe but unbounded.
 
-The first option is the most compatible direction if the runtime can reliably associate each record's ChangeId with its origin stream sequence. That association is not assumed by this draft; it must be verified against DELTA_BATCH batching, relay author streams, cursor translation and E-13 before adoption.
+A future protocol revision may add an immutable origin sequence distinct from peer-relative transport cursors, or a scope-wide snapshot-baseline epoch with explicit completion/fencing. Only then may exact IDs be compacted into author/namespace sequence ranges. Do not treat the current DELTA_BATCH cursorStart/cursorEnd as an origin sequence without proving that it remains invariant across relay hops and peer-relative offset translation. A Bloom filter is not an acceptable sole source of truth.
 
-**Local replay markers are different.** The current local-write path inserts (local NodeId, namespaceId, ChangeId) into SeenChanges, and Node.Wal.ReplayLocalMutation checks that key to avoid replaying a local WAL mutation twice. These entries are not the same as remote provenance history. Their safe lifetime is tied to the local WAL replay horizon: they may be removed only after the corresponding WAL record is irreversibly truncated or a durable checkpoint/watermark guarantees that recovery will never replay it. If WAL records remain physically replayable (for example, truncation is disabled), the marker must remain or be replaced by an equivalent durable replay watermark.
+**Migration from NodePersistence v5:** old SeenChanges entries do not contain a canonical payload fingerprint. Import them as exact legacy ChangeId markers with an unknown-fingerprint flag, collapsing duplicate peer keys to the global namespace/ChangeId key. For these legacy IDs, preserve old duplicate-suppression behavior and do not infer a fingerprint from the current field winner. New IDs use full fingerprint validation. Remove legacy markers only at a future namespace/scope epoch reset; do not invent a migration expiry.
 
-The target staging design should not use protocol ChangeId as the only local WAL/staging replay identity. If ChangeId allocation is deferred until freeze, local commit/staging recovery needs its own storage-native commit sequence or staging generation. Keep local replay markers and remote provenance dedup logically separate even if an implementation temporarily stores them in one physical index.
+**Local WAL replay markers are separate.** The current local-write path also inserts a local NodeId/namespace/ChangeId marker, and Node.Wal.ReplayLocalMutation uses it to prevent replaying a local WAL mutation twice. The target must use a storage-native commit/staging generation for WAL replay idempotency, especially if protocol ChangeId allocation is deferred until freeze. Such markers can be reclaimed only after the WAL record is irreversibly truncated or a durable replay watermark proves it cannot be replayed.
 
-The current SeenChanges set can therefore be split into:
-- exact remote provenance entries, with a future protocol-defined GC horizon still unresolved;
-- local WAL replay markers, reclaimable at the proven WAL replay/truncation boundary.
-
-A related cross-peer question must be resolved: Node.ApplyBatch builds queuedChangeIds from the currently retained Outbox and uses it to avoid enqueuing the same ChangeId twice while it is still queued. After Outbox compaction, the inspected path has no separate global ChangeId-only relay-history index; SeenChanges remains keyed by direct sender peer. Therefore the implementation visibly guarantees at-most-once enqueue while the operation is present in Outbox and at-most-once receipt per direct sender, but it does not by itself prove lifetime-wide at-most-once relay across all peers. Decide whether a completed snapshot/membership baseline makes old relay IDs safely forgettable, or whether a separate exact RelayedChangeIds index and its own safe GC horizon are required. Do not infer the answer from the per-peer SeenChanges set.
-
-Pending coalescing can avoid allocating protocol ChangeIds for superseded unpublished local LWW writes, but it must not remove the separate idempotency marker required to replay local staging commits safely.
 ### 9.2. Inbox receipt compaction
 
 Inbox batch receipts have a separate lifecycle. The wire specification defines an idempotency key (issuerNodeId, namespaceId, issuerEpoch, batchId) and an expiry condition requiring both elapsed expiry and confirmation of the relevant log segment. Preserve the receipt/author information needed to replay the original ACK until that condition is met.
 
-The current NodePersistence v5 image serializes the Inbox key set and InboxAuthors mapping, plus related digest and received-stream checkpoints; it does not serialize the complete InboxEntry tuple (cursorStart, cursorEnd, appliedAt, expiresAt) as one row. The Metadata Store design must either reconstruct the equivalent safe-retention facts from its other durable checkpoints or add the missing semantic expiry/range data. It must not invent an expiry at migration time or discard receipts merely because the batch is old.
+The Inbox idempotency key remains (issuerNodeId, namespaceId, issuerEpoch, batchId). The compact durable receipt must retain:
+- cursorStart and cursorEnd;
+- resolved authorNodeId used for the original ACK/author-stream result;
+- BatchDigest, RecordsRoot and PreviousBatchDigest;
+- appliedCount/result needed to reproduce the original ACK;
+- appliedAt and expiresAt;
+- the storage-native commit identity/reference needed to prove that the corresponding apply and ProtocolStateDelta were durably committed.
 
-There is also a duplicate-identity validation difference to resolve: the FLD ApplyJournal duplicate path compares the stored cursor range, BatchDigest, RecordsRoot and PreviousBatchDigest before returning the prior receipt. The inspected BIN-SYNC Node.ApplyBatch duplicate path checks the Inbox idempotency key and returns the stored author/ACK without comparing those original digest/range values. The normative InboxEntry layout does not currently list BatchDigest/RecordsRoot/PreviousBatchDigest. The target compact receipt should retain at least the canonical batch digest and cursor range (and the chain fields required by the selected protocol rule) so a reused BatchId with conflicting content cannot be silently treated as the original batch. Resolve this against the normative spec and tests; it does not require retaining the full Fields payload.
+The receipt does not retain the full Fields payload. A repeated idempotency key is accepted as a duplicate only if cursor range, author stream and all stored digest/chain fields match exactly. A conflicting reuse is rejected before ACK; it must not return the old receipt as though the new payload had been accepted. A same ChangeId arriving in a different BatchId is handled by the global ChangeId ledger, not by Inbox.
+
+The normative Inbox GC condition remains: expiresAt has elapsed AND both sides have confirmed the relevant log segment. Relay ACK, WAL truncation, ChangeId-ledger retention and tombstone GC are not substitutes for this condition.
+
+Current NodePersistence v5 serializes Inbox keys/authors and related checkpoints but not the complete InboxEntry tuple as one receipt. Migration must preserve or safely derive the original range/expiry facts; never invent an expiry or delete old receipts merely because they are old. The current Node.ApplyBatch duplicate path must be aligned with FLD's stricter range/digest validation.
 
 ### 9.3. Per-peer batch replay cache has a finite ACK-based lifetime
 
 The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorStream, cursorStart, cursorEnd), with the stable BatchId and previous digest needed to reproduce the exact same wire batch after a lost ACK. This cache is necessary while the batch may be retried. The inspected ProcessAckInternal path advances the per-author StreamAcked watermark and compacts Outbox, but does not remove acknowledged PeerState.Ids entries. Because NodePersistence serializes this dictionary, it can grow with every historical batch even after the corresponding Outbox entries are compacted.
 
-Unlike SeenChanges, this cache has a direct safe deletion condition: after a valid ACK advances the same peer/namespace/author stream through cursorEnd, the cached BatchId/previous-digest tuple for that fully acknowledged range is no longer needed for retry. Prune only entries whose cursorEnd is at or below that stream's acknowledged wire cursor, in the same durable metadata transaction as ACK progress. Do not prune on StreamPushed alone, and do not prune a range partially covered by ACK. Keep LastStreamDigest as the current chain checkpoint; it is not a reason to retain every prior batch tuple.
+Unlike the global ChangeId ledger, this cache has a direct safe deletion condition: after a valid ACK advances the same peer/namespace/author stream through cursorEnd, the cached BatchId/previous-digest tuple for that fully acknowledged range is no longer needed for retry. Prune only entries whose cursorEnd is at or below that stream's acknowledged wire cursor, in the same durable metadata transaction as ACK progress. Do not prune on StreamPushed alone, and do not prune a range partially covered by ACK. Keep LastStreamDigest as the current chain checkpoint; it is not a reason to retain every prior batch tuple.
 
 ### 9.4. FLD remote APPLY currently duplicates payloads across WAL and ApplyJournal
 
@@ -464,10 +469,12 @@ This policy reduces redundant outbound history; it does not promise that every p
 28. Relay payload survives WAL truncation and is reclaimed only after safe downstream ACK; receipt expiry and relay ACK are tested independently.
 29. Crash after WAL flush but before receipt/relay sidecar materialization reconstructs both sidecars exactly once from the WAL commit.
 30. Relay journal paging starts at the requested retained sequence without scanning all previously acknowledged history; compaction releases both disk bytes and in-memory indexes.
-31. Local WAL replay markers are retained while their WAL records can replay and are reclaimed only after durable truncation/checkpoint; remote provenance entries follow a separate protocol retention rule.
+31. Local WAL replay markers are retained while their WAL records can replay and are reclaimed only after durable truncation/checkpoint; the global ChangeId ledger follows the namespace/scope epoch lifetime described in §9.1.
 32. Deferring ChangeId allocation until freeze does not weaken local staging/WAL replay idempotency; a storage-native commit/staging generation handles that boundary.
 33. Reuse of an Inbox idempotency key with conflicting cursor/digest metadata is rejected using a compact receipt, without retaining the full incoming field payload.
-34. A ChangeId received from a second peer after its prior Outbox relay was compacted follows an explicitly tested lifetime relay-dedup/snapshot-baseline rule; it is not left to incidental Outbox contents.
+34. A ChangeId received from a second peer after its prior Outbox/RelayJournal payload was compacted is suppressed by the global exact ChangeId ledger; a conflicting payload fingerprint is rejected.
+35. A same BatchId with changed cursorStart/cursorEnd, author, BatchDigest, RecordsRoot or PreviousBatchDigest is rejected using the compact Inbox receipt.
+36. PeerState.Ids entries are pruned atomically only when a valid ACK covers their complete per-author cursorEnd; partial ACK and lost-ACK restart preserve the entries.
 
 ## 12. Implementation sequence
 
@@ -481,4 +488,4 @@ This policy reduces redundant outbound history; it does not promise that every p
 8. Measure bytes per pending/frozen field, WAL amplification, allocation, commit latency and freeze throughput before choosing physical record layout.
 9. Only after conformance tests pass, consider changing defaults or freezing the public API.
 
-**Core rule:** coalesce only operations that have never been externally observable; preserve every operation once it may have been observed. Current state, unpublished staging, frozen outbound history and relay history must have separate ownership and retention rules.
+**Core rule:** coalesce only operations that have never been externally observable; preserve every operation once it may have been observed. Current state, unpublished staging, frozen outbound history, relay payloads, Inbox receipts and the global ChangeId ledger have separate ownership and retention rules.
