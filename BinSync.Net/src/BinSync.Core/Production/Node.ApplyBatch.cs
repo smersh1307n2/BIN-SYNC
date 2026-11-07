@@ -682,6 +682,41 @@ public sealed partial class Node
         RaiseAckProcessed(peerNode, namespaceId, ackedSeq, authorStream);
     }
 
+    /// <summary>
+    /// Mirrors an ACK already committed by the durable Metadata Store. Unlike the
+    /// legacy ACK path, this does not require the corresponding payload to remain in
+    /// the Node Outbox: Metadata Store owns the immutable replay payload and cursor.
+    /// </summary>
+    internal void MirrorDurableAck(NodeId peerNode, int namespaceId, long ackedSeq, NodeId authorStream)
+    {
+        if (peerNode.IsZero || authorStream.IsZero || ackedSeq < 0)
+            throw new SyncException("ACK_OUT_OF_RANGE");
+
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (!PeerStates.TryGetValue((peerNode, namespaceId), out var ps))
+                PeerStates[(peerNode, namespaceId)] = ps = new PeerState(peerNode, namespaceId);
+
+            long current = ps.AckedFor(authorStream);
+            if (ackedSeq < current)
+                throw new SyncException("ACK_OUT_OF_RANGE");
+            if (ackedSeq > current)
+            {
+                if (!ps.TryGetStreamPushed(authorStream, out var pushed) || ackedSeq > pushed)
+                    throw new SyncException("ACK_OUT_OF_RANGE");
+                ps.SetStreamAcked(authorStream, ackedSeq);
+            }
+
+            if (ps.StreamAckedCount > 0)
+                ps.LastAckedSeq = ps.MinStreamAcked;
+            PruneAcknowledgedBatchIds(ps);
+            CompactOutbox(namespaceId);
+        }
+
+        RaiseAckProcessed(peerNode, namespaceId, ackedSeq, authorStream);
+    }
+
     internal void ProcessAckInternal(NodeId peerNode, int namespaceId, long ackedSeq, NodeId? authorStream = null)
     {
         ThrowIfDisposed();
