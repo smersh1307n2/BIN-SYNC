@@ -273,7 +273,8 @@ public sealed class ResourceLimitsAtomicityTests
         var result = receiver.ApplyBatch(second, sender.NodeId);
         Assert.Equal(0, result.Applied);
         Assert.Equal(1, receiver.GetRecordCount(3));
-        Assert.Equal(0, receiver.GetOutboxCount(3));
+        Assert.Equal(1, receiver.GetOutboxCount(3)); // first arrival was relayed exactly once
+        Assert.Single(receiver.Outbox[3]);
         Assert.Single(receiver.GlobalChangeLedger);
         Assert.Empty(receiver.SeenChanges);
     }
