@@ -86,6 +86,87 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Provider_failure_after_node_apply_keeps_pending_intent_for_recovery()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-failure-after-node"), 441);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(42);
+        using var receiver = NewNode(43);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        const string scope = "provider-failure-after-node";
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+        RecordId record = RecordId.From(Guid.Parse("42000000-0000-0000-0000-000000000042").ToByteArray());
+        sender.WriteField(1, record, 0x0813, "node-applied-provider-pending"u8.ToArray(), new Hlc(5200, 0));
+
+        using var sendCts = new CancellationTokenSource();
+        using var receiveCts = new CancellationTokenSource();
+        var receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => provider.Dispose(), receiveCts.Token);
+        var send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await receive);
+        sendCts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
+
+        Assert.Single(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        Assert.True(receiver.TryGetField(1, record, 0x0813, out var nodeValue));
+        Assert.Equal("node-applied-provider-pending", Encoding.UTF8.GetString(nodeValue!.Value));
+
+        using var recoveredProvider = new StorageDataProvider(storage);
+        var recoveredCoordinator = new StorageSyncCoordinator(receiver, recoveredProvider, 1, metadata, scope);
+        Assert.Equal(1, recoveredCoordinator.RecoverPendingApplies(_ => { }));
+        Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        Assert.True(recoveredProvider.TryReadCurrent(record, 0x0813, out var providerValue));
+        Assert.Equal("node-applied-provider-pending", Encoding.UTF8.GetString(providerValue!.Value));
+    }
+
+    [Fact]
+    public async Task Provider_commit_before_metadata_finalize_is_recovered_idempotently()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-commit-before-metadata"), 442);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(44);
+        using var receiver = NewNode(45);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        const string scope = "provider-commit-before-metadata";
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+        RecordId record = RecordId.From(Guid.Parse("44000000-0000-0000-0000-000000000044").ToByteArray());
+        sender.WriteField(1, record, 0x0814, "provider-committed-metadata-pending"u8.ToArray(), new Hlc(5400, 0));
+
+        using var sendCts = new CancellationTokenSource();
+        using var receiveCts = new CancellationTokenSource();
+        var receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => metadata.Dispose(), receiveCts.Token);
+        var send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await receive);
+        sendCts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
+
+        Assert.True(provider.TryReadCurrent(record, 0x0814, out var committedValue));
+        Assert.Equal("provider-committed-metadata-pending", Encoding.UTF8.GetString(committedValue!.Value));
+
+        using var recoveredMetadata = new StorageMetadataStore(storage);
+        using var recoveredProvider = new StorageDataProvider(storage);
+        Assert.Single(recoveredMetadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        var recoveredCoordinator = new StorageSyncCoordinator(receiver, recoveredProvider, 1, recoveredMetadata, scope);
+        Assert.Equal(1, recoveredCoordinator.RecoverPendingApplies(_ => { }));
+        Assert.Empty(recoveredMetadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        Assert.True(recoveredProvider.TryReadCurrent(record, 0x0814, out var providerValue));
+        Assert.Equal("provider-committed-metadata-pending", Encoding.UTF8.GetString(providerValue!.Value));
+    }
+
+    [Fact]
     public async Task New_peer_incarnation_retires_old_epoch_without_inheriting_its_ack_cursor()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "peer-new-incarnation"), 439);
