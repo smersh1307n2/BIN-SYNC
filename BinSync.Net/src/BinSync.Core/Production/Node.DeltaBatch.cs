@@ -557,7 +557,7 @@ public sealed partial class Node
             long localAck = checked(peerState.AckedFor(authorNodeId) + offset);
             if (localAck < minimum) minimum = localAck;
         }
-        return minimum == long.MaxValue ? 0 : minimum;
+        return minimum;
     }
 
     internal void CompactOutbox(int namespaceId)
