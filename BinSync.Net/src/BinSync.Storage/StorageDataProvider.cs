@@ -133,9 +133,24 @@ public class StorageDataProvider : IDataProvider
             ulong sequence = checked(current + 1);
             byte[] owned = EncodeMutation(mutation);
             byte[] currentKey = CurrentKey(mutation.RecordId, mutation.FieldId);
-            if (!batch.TryGet(currentKey, out var currentFieldBytes) ||
-                Compare(mutation, DecodeMutation(currentFieldBytes!)) > 0)
+            if (batch.TryGet(currentKey, out var currentFieldBytes))
+            {
+                ProviderMutation existing = DecodeMutation(currentFieldBytes!);
+                int comparison = Compare(mutation, existing);
+                if (comparison == 0)
+                {
+                    if (!SameMutation(mutation, existing))
+                        throw new InvalidDataException("Local source feed equivocated at the same HLC and author.");
+                    return;
+                }
+
+                if (comparison > 0) batch.Put(currentKey, owned);
+            }
+            else
+            {
                 batch.Put(currentKey, owned);
+            }
+
             batch.Put(ChangeKey(sequence), owned);
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
             batch.Commit();
@@ -289,7 +304,14 @@ public class StorageDataProvider : IDataProvider
                 if (batch.TryGet(key, out var priorValue))
                 {
                     ProviderMutation existing = DecodeMutation(priorValue!);
-                    if (Compare(mutation, existing) <= 0) continue;
+                    int comparison = Compare(mutation, existing);
+                    if (comparison < 0) continue;
+                    if (comparison == 0)
+                    {
+                        if (!SameMutation(mutation, existing))
+                            throw new InvalidDataException("Remote provider apply equivocated at the same HLC and author.");
+                        continue;
+                    }
                 }
 
                 batch.Put(key, EncodeMutation(mutation));
@@ -348,6 +370,16 @@ public class StorageDataProvider : IDataProvider
         => HlcOps.CompareHlc(
             new Hlc(left.HlcWall, left.HlcLogical), left.AuthorNodeId,
             new Hlc(right.HlcWall, right.HlcLogical), right.AuthorNodeId);
+
+    private static bool SameMutation(ProviderMutation left, ProviderMutation right)
+        => left.RecordId == right.RecordId
+            && left.FieldId == right.FieldId
+            && left.IsTombstone == right.IsTombstone
+            && left.HlcWall == right.HlcWall
+            && left.HlcLogical == right.HlcLogical
+            && left.AuthorNodeId == right.AuthorNodeId
+            && left.KeyEpoch == right.KeyEpoch
+            && left.Value.AsSpan().SequenceEqual(right.Value);
 
     private static byte[] Fingerprint(IReadOnlyList<ProviderMutation> mutations)
     {
