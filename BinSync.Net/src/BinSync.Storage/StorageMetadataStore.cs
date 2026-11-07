@@ -789,7 +789,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             && left.CursorEnd == right.CursorEnd
             && left.PreviousBatchDigest.AsSpan().SequenceEqual(right.PreviousBatchDigest)
             && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest)
-            && left.WirePayload.AsSpan().SequenceEqual(right.WirePayload);
+            && left.WirePayload.AsSpan().SequenceEqual(right.WirePayload)
+            && left.ReceiveStateOwnedByMetadataStore == right.ReceiveStateOwnedByMetadataStore;
 
     private static MetadataIncomingBatch CloneBatch(MetadataIncomingBatch batch)
         => new()
@@ -806,6 +807,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
             WirePayload = batch.WirePayload.ToArray(),
+            ReceiveStateOwnedByMetadataStore = batch.ReceiveStateOwnedByMetadataStore,
             Operations = batch.Operations.Select(operation => new MetadataOperation
             {
                 AuthorNodeId = operation.AuthorNodeId,
@@ -3091,7 +3093,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         byte[] scope = Encoding.UTF8.GetBytes(batch.ScopeId);
-        writer.Write(-3); // version 3: preserve raw DELTA_BATCH for Node recovery
+        writer.Write(-4); // version 4: persist receive-state authority mode
         writer.Write(scope.Length); writer.Write(scope);
         writer.Write(batch.LocalReplica.ToArray());
         writer.Write(batch.SenderPeer.ToArray());
@@ -3112,6 +3114,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             writer.Write(operation.Payload.Length);
             writer.Write(operation.Payload);
         }
+        writer.Write(batch.ReceiveStateOwnedByMetadataStore);
         writer.Flush();
         return stream.ToArray();
     }
@@ -3121,8 +3124,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
         int versionOrScopeLength = reader.ReadInt32();
-        bool hasAuthorStream = versionOrScopeLength == -2 || versionOrScopeLength == -3;
-        bool hasWirePayload = versionOrScopeLength == -3;
+        bool hasAuthorStream = versionOrScopeLength is -2 or -3 or -4;
+        bool hasWirePayload = versionOrScopeLength is -3 or -4;
+        bool hasReceiveStateAuthority = versionOrScopeLength == -4;
         int scopeLength = hasAuthorStream ? reader.ReadInt32() : versionOrScopeLength;
         string scope = Encoding.UTF8.GetString(ReadExactly(reader, scopeLength));
         NodeId local = NodeId.From(ReadExactly(reader, 16));
@@ -3155,6 +3159,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 Payload = ReadExactly(reader, payloadLength)
             };
         }
+        bool receiveStateOwnedByMetadataStore = hasReceiveStateAuthority && reader.ReadBoolean();
         if (stream.Position != stream.Length) throw new InvalidDataException("Pending batch has trailing bytes.");
         return new MetadataIncomingBatch
         {
@@ -3170,6 +3175,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             PreviousBatchDigest = previous,
             BatchDigest = digest,
             WirePayload = wirePayload,
+            ReceiveStateOwnedByMetadataStore = receiveStateOwnedByMetadataStore,
             Operations = operations
         };
     }
