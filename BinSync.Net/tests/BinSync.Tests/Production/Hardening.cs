@@ -373,6 +373,16 @@ public class Production : IDisposable
         var missingSequences = new long[] { 123 };
         Assert.False(node.TryResolveOutboxSequences(NS, missing, missingSequences));
         Assert.Equal(0L, missingSequences[0]);
+        Assert.True(node.TryResolveOutboxSequences(NS,
+            ReadOnlySpan<OutboxChangeIdentity>.Empty, Span<long>.Empty));
+
+        var duplicateChangeId = new[]
+        {
+            requested[0],
+            new OutboxChangeIdentity(Fix.Nid(883), requested[0].ChangeId),
+        };
+        Assert.Throws<ArgumentException>(() => node.TryResolveOutboxSequences(
+            NS, duplicateChangeId, new long[2]));
     }
 
     [Fact]
