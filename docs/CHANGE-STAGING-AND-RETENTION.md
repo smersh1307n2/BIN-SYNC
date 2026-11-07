@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.6; global ChangeId dedup, remote SeenChanges removal, unified receipts and v8 header-bound duplicate ACKs are implemented; receipt expiry/GC, APPLY payload compaction and Storage physical format remain optimization gates.  
+**Status:** Architecture decision draft v0.7; global ChangeId dedup, remote SeenChanges removal, unified receipts, v8 header-bound duplicate ACKs and v9 compact peer progress are implemented; receipt expiry/GC, tombstone GC safety, APPLY payload compaction and Storage physical format remain optimization gates.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
@@ -389,6 +389,12 @@ The normative Inbox GC condition remains: `expiresAt` has elapsed AND both sides
 The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorStream, cursorStart, cursorEnd), with the stable BatchId and previous digest needed to reproduce the exact same wire batch after a lost ACK. This cache is necessary while a peer may retry an unacknowledged range. After a validated contiguous ACK covers the same peer/namespace/author range end, ProcessAckInternal now prunes that mapping before Outbox compaction. It deliberately preserves LastStreamDigest, which is the current digest-chain checkpoint and is not a historical replay mapping.
 
 The pruning condition is author-specific and uses the validated StreamAcked watermark. StreamPushed alone, a partial ACK, another author's ACK or another peer's ACK cannot release the mapping. The regression test verifies removal after ACK, preservation of LastStreamDigest, persistence/restart behavior and idempotent repeated ACK. This bounded replay-cache reclamation is implemented.
+
+### 9.5. Tombstone GC safety is an open protocol gate
+
+The current `GcNotice.Apply` does not persist or enforce the received `TombstoneCutoffWall`. `WatermarkGate` exists but is not wired into DELTA_BATCH, reconcile or snapshot acceptance. The current `PurgeBelowCutoff` removes ordinary `Record.State` values by age without checking tombstone/ghost semantics, and does not reclaim `FieldTombs` or record lifecycle tombstones. Its existing test codifies that unsafe behavior.
+
+Do not rely on this path for tombstone reclamation. Before enabling it, implement a durable monotonic cutoff per namespace, force peers behind the cutoff through full resync/snapshot, and reclaim only tombstone/ghost state proven safe. Never delete a live field solely because its HLC is old. Inbox receipt expiry, global ChangeId ledger retention and relay payload ACK remain independent lifetimes. The normative requirements are summarized in Metadata Storage Architecture §8.3 and FLD-DB roadmap §7.8.
 
 ### 9.4. FLD remote APPLY currently duplicates payloads across WAL and ApplyJournal
 
