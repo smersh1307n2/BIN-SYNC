@@ -368,7 +368,7 @@ public class Production : IDisposable
 
         var missing = new[]
         {
-            new OutboxChangeIdentity(Fix.Nid(882), BatchId.From(Id(0xF8))),
+            new OutboxChangeIdentity(Fix.Nid(882), BatchId.From(Fix.Rid(0xF8).ToArray())),
         };
         var missingSequences = new long[] { 123 };
         Assert.False(node.TryResolveOutboxSequences(NS, missing, missingSequences));
