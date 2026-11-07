@@ -1070,7 +1070,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(1UL, reopened.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
                 Assert.Single(reopened.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
                 Assert.Equal(1UL, reopened.GetOutboundHighWatermark("durable-scope", Node(1), 7, Node(1)));
-                var outbound = reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 1, 0, 10);
+                var outbound = reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 2, 0, 10);
                 Assert.Single(outbound.Items);
                 var intent = Assert.Single(reopened.ReadPendingApplyIntents("durable-scope", Node(1)));
                 Assert.Equal(token, intent.ApplyToken);
@@ -1084,7 +1084,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 reopened.AcknowledgeRelay("durable-scope", Node(1), 7, Node(20), 1);
                 reopened.CompactRelayThrough("durable-scope", Node(1), 7, Node(20), 1);
-                reopened.AcknowledgeOutbound("durable-scope", Node(1), 7, Node(1), 1, 1);
+                reopened.AcknowledgeOutbound("durable-scope", Node(1), 7, Node(1), 2, 1);
                 reopened.CompactOutboundThrough("durable-scope", Node(1), 7, Node(1), 1);
                 Assert.Empty(reopened.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
                 Assert.Empty(reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 1, 0, 10).Items);
