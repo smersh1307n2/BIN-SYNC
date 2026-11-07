@@ -825,3 +825,14 @@ The first cross-repository integration slice is now executable.
 - `samples/StorageArraySync` demonstrates two BIN-SYNC nodes exchanging a structured array backed by independent Storage partitions, including node and Storage reopen followed by a second update.
 
 This is deliberately a **Data Provider integration milestone**, not completion of the Metadata Store implementation or a claim that the public Data Provider API has shipped. The current adapter implements the test-only conformance contract. The remaining integration gate is a durable Storage-backed Metadata Store adapter covering receipt/ChangeId ledgers, relay and outbound streams, lease fencing, ACK/compaction, snapshots and Pending Apply recovery. Its implementation must preserve the one-payload/many-peers model and persist only changed logical metadata entries; a whole-partition rewrite per operation is not an acceptable final design.
+
+
+### Durable Metadata Store conformance slice
+
+A second adapter now maps the test-only Metadata Store contract onto `Fld1.Storage`. It stores receipts, receive cursors, global ChangeId fingerprints, relay entries, outbound entries, ACK/high-watermarks, lease generations, pending-apply intents and completed-apply receipts as separate logical Storage keys.
+
+The adapter computes a logical-entry diff and commits only changed keys in one Storage batch; it does not serialize and rewrite the entire partition for every operation. Payload ownership follows the contract: relay/outbound payload entries are separate from compact receipt and ChangeId facts; ACK/compaction removes eligible payload entries without erasing deduplication facts.
+
+The cross-repository integration suite now runs **30 tests successfully**: the full Data Provider conformance suite, the full Metadata Store conformance suite, and restart/compaction assertions. The restart test reopens the store with receive receipts, relay/outbound state, a live lease and Pending Apply intent; it finalizes the provider receipt exactly once, compacts acknowledged payloads, reopens again, and verifies that high-watermarks and ChangeId/receipt dedup facts remain.
+
+This remains an integration/conformance adapter rather than a shipped production Metadata Store API. The next gate is to promote the contracts into production APIs, define the Node integration boundary, and add crash/fault-injection tests around every storage/metadata transaction boundary.
