@@ -883,7 +883,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
     private static void EnsureRegisteredPeerStreams(
         PartitionState state, int namespaceId, NodeId authorStream, uint issuerEpoch)
     {
-        foreach (var peer in state.InterestedPeers.Where(key => key.NamespaceId == namespaceId && key.Peer != authorStream))
+        var peers = state.InterestedPeers.Where(key => key.NamespaceId == namespaceId)
+            .Select(key => (key.Peer, key.PeerEpoch))
+            .Concat(state.RequiredPeerStreams.Where(key => key.NamespaceId == namespaceId)
+                .Select(key => (key.Peer, key.PeerEpoch)))
+            .Distinct();
+        foreach (var peer in peers.Where(peer => peer.Peer != authorStream))
             EnsurePeerStream(state,
                 new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream), issuerEpoch);
     }
