@@ -230,7 +230,7 @@ public partial class SyncSession : IAsyncDisposable
     /// and a durability callback after Node mutation but before ACK.
     /// </summary>
     public async Task<BatchResult> ReceiveBatchAsync(Node receiver,
-        Action<Batch, ReadOnlyMemory<byte>, NodeId, uint>? beforeApply,
+        Action<Batch, ReadOnlyMemory<byte>, NodeId>? beforeApply,
         Action<Batch, BatchResult>? beforeAck,
         CancellationToken ct = default)
     {
@@ -248,7 +248,7 @@ public partial class SyncSession : IAsyncDisposable
             // Decode without mutation so a host can persist the exact wire payload as
             // a PendingApply intent before Node's receive cursor or records advance.
             var decoded = receiver.PrepareBatchPayloadForMetadata(frame.Payload, PeerNodeId);
-            beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId, checked((uint)PeerEpoch));
+            beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId);
 
             var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
             beforeAck?.Invoke(batch, result);
