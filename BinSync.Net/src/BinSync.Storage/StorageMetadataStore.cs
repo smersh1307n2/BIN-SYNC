@@ -601,6 +601,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             next.PeerStreams[key] = prior with
             {
                 IssuerEpoch = reservation.IssuerEpoch,
+                LastBatchDigest = expectedPreviousDigest.ToArray(),
                 PendingBatch = CloneReservation(reservation)
             };
             PersistPartition(partitionKey, current, next);
