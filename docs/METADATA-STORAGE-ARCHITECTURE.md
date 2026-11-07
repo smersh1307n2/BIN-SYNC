@@ -1,9 +1,9 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract draft v0.4 — includes the two-assembly FLD Storage boundary; ChangeId retention representation is under renewed size/correctness review.  
+**Status:** Architecture contract v0.5 — two-assembly FLD Storage boundary and compact BIN-SYNC metadata implementation are recorded.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
-**Wire format:** unchanged. This draft defines target durable metadata and cross-peer dedup semantics; the latter must be promoted into a normative protocol erratum and conformance tests before release.  
-**Implementation status:** proposed architecture; the current Node API is not yet an implementation of this contract.
+**Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, but still requires promotion into a normative protocol erratum and independent conformance vectors before release.  
+**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v12, adaptive receipt indexing, compact 16-byte ledger values, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
 
 ## 1. Purpose
 
@@ -618,7 +618,7 @@ Do not add a per-change/per-peer delivery table or ACK bitmap. Do not merge rece
 
 The global ChangeId ledger detects same-ID/same-content duplicates across routes and same-ID/different-content conflicts. Keep 128-bit ChangeId and canonical fingerprint for now; content-derived identity is not approved. Until a protocol-safe dedup GC horizon is defined, retain conservatively.
 
-Order: baseline; global dedup, ACK-covered replay pruning, Inbox/InboxAuthors key consolidation and remote SeenChanges removal (implemented); compact header-bound InboxReceipt v8 (implemented; expiry/GC still open); APPLY single-encoding, relay-only materialization and FLD per-author relay ACK/compaction (implemented; BIN-SYNC source-provenance/min-ACK adapter wiring and independent receipt GC remain open); durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
+Order: baseline; global dedup, ACK-covered replay pruning, Inbox/InboxAuthors key consolidation and remote SeenChanges removal (implemented); compact header-bound InboxReceipt v8 (implemented; expiry/GC still open); APPLY single-encoding, relay-only materialization and FLD per-author relay ACK/compaction (implemented; BIN-SYNC now exposes the safe per-author ACK query and retained ChangeId→OutboxSeq resolver; durable source JournalSeq provenance and atomic adapter scan/ACK integration remain open); durable pre-publication local coalescing; versioned compact encodings; safe GC/snapshot semantics; optional WAL-backed Outbox. No wire-format change is implied.
 
 
 ## 18. Replay-cache pruning implementation status (2026-11-07)
