@@ -593,7 +593,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException("Outbound high-watermark has no recoverable payload rows.");
             var page = entries.Where(item => item.Sequence > cursor)
                 .Take(limit).Select(CloneOutboundItem).ToArray();
-            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, "outbound");
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, progress.AckedCursor == 0 && progress.StreamOffset == 0, "outbound");
             return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
     }
@@ -620,20 +620,24 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException("Relay high-watermark has no recoverable payload rows.");
             var page = entries.Where(item => item.Sequence > cursor)
                 .Take(limit).Select(CloneRelayItem).ToArray();
-            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, "relay");
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, progress.AckedCursor == 0 && progress.StreamOffset == 0, "relay");
             return new MetadataRelayPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
     }
 
     private static void ValidatePeerPageContinuity(IEnumerable<ulong> sequences,
-        ulong cursor, ulong highWatermark, int count, int limit, string streamName)
+        ulong cursor, ulong highWatermark, int count, int limit, bool allowInitialGap, string streamName)
     {
         ulong expected = checked(cursor + 1);
+        bool first = true;
         foreach (ulong sequence in sequences)
         {
+            if (first && allowInitialGap && sequence >= expected)
+                expected = sequence;
             if (sequence != expected)
                 throw new InvalidDataException($"Peer {streamName} page contains a gap after its durable cursor.");
             expected = checked(expected + 1);
+            first = false;
         }
         ulong scanned = count == 0 ? cursor : expected - 1;
         if (count < limit && scanned < highWatermark)
