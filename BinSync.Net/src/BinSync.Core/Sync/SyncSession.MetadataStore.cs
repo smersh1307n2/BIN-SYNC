@@ -39,7 +39,7 @@ public partial class SyncSession
             MetadataOutboundBatchReservation reservation;
             NodeId authorStream;
             var pending = streams.FirstOrDefault(stream => stream.State.PendingBatch is not null);
-            OutboundBatchPayload batch;
+            Node.OutboundBatchPayload batch;
             if (pending is not null)
             {
                 authorStream = pending.AuthorStream;
@@ -99,9 +99,9 @@ public partial class SyncSession
         }
     }
 
-    private static OutboundBatchPayload Materialize(
+    private static Node.OutboundBatchPayload Materialize(
         MetadataOutboundBatchReservation reservation, NodeId authorStream, int namespaceId)
-        => new(reservation.Payload.ToArray(), reservation.BatchId, authorStream, authorStream,
+        => new Node.OutboundBatchPayload(reservation.Payload.ToArray(), reservation.BatchId, authorStream, authorStream,
             namespaceId, checked((int)reservation.IssuerEpoch),
             checked((long)reservation.CursorStart), checked((long)reservation.CursorEnd),
             reservation.StreamOffset, Digest16.From(reservation.PreviousBatchDigest), Digest16.From(reservation.BatchDigest));
