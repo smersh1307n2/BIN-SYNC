@@ -441,7 +441,7 @@ public class ChangeIdWireTests
             Assert.Equal(0UL, bodyReader.Varint()); // Outbox
             Assert.Equal(0UL, bodyReader.Varint()); // Outbox sequence map
             Assert.Equal(2UL, bodyReader.Varint()); // receipt session groups
-            bodyReader.B128(); bodyReader.Varint(); if ((flags & 4) != 0) bodyReader.Varint();
+            bodyReader.B128(); bodyReader.Varint(); bodyReader.Varint();
             Assert.Equal((byte)1, bodyReader.U8()); // author-grouped layout
             int authorGroups = (int)bodyReader.Varint();
             for (int ai = 0; ai < authorGroups; ai++)
@@ -454,7 +454,7 @@ public class ChangeIdWireTests
                     byte flags = bodyReader.U8();
                     if ((flags & 1) != 0) bodyReader.Varint();
                     if ((flags & 2) != 0) bodyReader.B128();
-                    bodyReader.Varint(); bodyReader.Varint();
+                    bodyReader.Varint(); if ((flags & 4) != 0) bodyReader.Varint();
                 }
             }
             bodyReader.B128(); bodyReader.Varint(); bodyReader.Varint();
