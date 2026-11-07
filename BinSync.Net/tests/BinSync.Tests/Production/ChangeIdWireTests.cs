@@ -280,11 +280,12 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v11_groups_receipts_and_change_ledger_and_roundtrips_all_entries()
+    public void Persistence_v12_groups_receipts_by_author_and_roundtrips_all_entries()
     {
         using var node = Fix.MakeNode(123);
         var issuer = Fix.Nid(124);
         var author = Fix.Nid(125);
+        var author2 = Fix.Nid(126);
         var fingerprint = Digest16.From(Id(0xA5));
         var batch1 = BatchId.From(Id(0xA1));
         var batch2 = BatchId.From(Id(0xA2));
@@ -292,6 +293,9 @@ public class ChangeIdWireTests
             new InboxReceipt(author, 11, true, fingerprint, true, 100, 0);
         node.InboxAuthors[(issuer, 7, 3, batch2)] =
             new InboxReceipt(author, 12, true, fingerprint, true, 101, 0);
+        var batchOtherAuthor = BatchId.From(Id(0xA6));
+        node.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)] =
+            new InboxReceipt(author2, 1, true, fingerprint, true, 101, 0);
         node.InboxAuthors[(issuer, 8, 3, BatchId.From(Id(0xA3)))] =
             new InboxReceipt(author, 1, true, fingerprint, true, 102, 0);
         var legacyBatch = BatchId.From(Id(0xA4));
@@ -305,17 +309,18 @@ public class ChangeIdWireTests
         node.GlobalChangeLedger[(7, change2)] = new ChangeLedgerValue(default, false);
         node.GlobalChangeLedger[(8, change3)] = new ChangeLedgerValue(fingerprint, true);
 
-        var path = Path.Combine(Path.GetTempPath(), $"binsync-v10-{Guid.NewGuid():N}.bin");
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v12-{Guid.NewGuid():N}.bin");
         try
         {
             NodePersistence.Save(node, path);
             var bytes = File.ReadAllBytes(path);
-            Assert.Equal((ushort)11, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+            Assert.Equal((ushort)12, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
             using var restored = NodePersistence.Load(path);
 
-            Assert.Equal(4, restored.InboxAuthors.Count);
+            Assert.Equal(5, restored.InboxAuthors.Count);
             Assert.Equal(11, restored.InboxAuthors[(issuer, 7, 3, batch1)].CursorEnd);
             Assert.Equal(12, restored.InboxAuthors[(issuer, 7, 3, batch2)].CursorEnd);
+            Assert.Equal(author2, restored.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)].DurableAuthor);
             Assert.Equal(fingerprint, restored.InboxAuthors[(issuer, 7, 3, batch1)].Fingerprint);
             var legacyReceipt = restored.InboxAuthors[(issuer, 8, 3, legacyBatch)];
             Assert.False(legacyReceipt.HasCursorEnd);
@@ -331,6 +336,41 @@ public class ChangeIdWireTests
         {
             if (File.Exists(path)) File.Delete(path);
         }
+    }
+
+    [Fact]
+    public void Persistence_v11_flat_grouped_receipts_and_compact_local_markers_remain_readable()
+    {
+        var nodeId = NodeId.From(Id(0xE0));
+        var issuer = NodeId.From(Id(0xE1));
+        var author = NodeId.From(Id(0xE2));
+        var batchId = BatchId.From(Id(0xE3));
+        var fingerprint = Digest16.From(Id(0xE4));
+        var changeId = BatchId.From(Id(0xE5));
+        var writer = new Writer();
+        writer.B128(nodeId).Varint(0).U64(0).U32(0);
+        for (int i = 0; i < 3; i++) writer.Varint(0); // Storage, Outbox, sequence map
+        writer.Varint(1).B128(issuer).Varint(7).Varint(2).Varint(1)
+            .B128(batchId).B128(author).U8(3).Varint(9).B128(fingerprint).Varint(100).Varint(0);
+        for (int i = 0; i < 6; i++) writer.Varint(0); // digests, aliases, authors, peer states
+        writer.Varint(1).Varint(7).B128(changeId); // v11 compact local WAL marker
+        writer.Varint(0); // grouped global ledger
+        for (int i = 0; i < 7; i++) writer.Varint(0); // remaining metadata sections
+        var body = writer.Value();
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v11", body);
+        var image = new byte[46 + body.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 11);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
+        digest.CopyTo(image.AsSpan(14, 32));
+        body.CopyTo(image.AsSpan(46));
+
+        using var restored = NodePersistence.LoadFromBytes(image);
+        var receipt = restored.InboxAuthors[(issuer, 7, 2, batchId)];
+        Assert.Equal(author, receipt.DurableAuthor);
+        Assert.Equal(9, receipt.CursorEnd);
+        Assert.Equal(fingerprint, receipt.Fingerprint);
+        Assert.Contains((7, changeId), restored.SeenChanges);
     }
 
     [Fact]
