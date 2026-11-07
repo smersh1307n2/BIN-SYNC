@@ -337,6 +337,49 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Persistence_v6_duplicate_inbox_key_and_author_maps_migrate_to_one_v7_receipt()
+    {
+        var issuer = NodeId.From(Id(0x91));
+        var batchId = BatchId.From(Id(0x92));
+        var author = NodeId.From(Id(0x93));
+
+        byte[] BuildV6Image(bool includeAuthor)
+        {
+            var writer = new Writer();
+            writer.B128(NodeId.From(Id(0x90))).Varint(0).U64(0).U32(0);
+            // Storage, Outbox and per-author sequence map.
+            for (int i = 0; i < 3; i++) writer.Varint(0);
+            // Legacy v6 inbox key set.
+            writer.Varint(1).B128(issuer).Varint(9).Varint(2).B128(batchId);
+            // Legacy v6 key -> author map.
+            writer.Varint(includeAuthor ? 1UL : 0UL);
+            if (includeAuthor)
+                writer.B128(issuer).Varint(9).Varint(2).B128(batchId).B128(author);
+            // LastBatchDigest, LastStreamDigest, AliasToNode, NodeToAlias,
+            // DurableAuthors, PeerStates, SeenChanges, GlobalChangeLedger,
+            // LastStreamAuthor, KnownEpochs, PeerSessionEpochs, Quarantined,
+            // ForbiddenNamespaces, SchemaVersions and peer registry.
+            for (int i = 0; i < 15; i++) writer.Varint(0);
+
+            var body = writer.Value();
+            var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v6", body);
+            var image = new byte[46 + body.Length];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 6);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
+            digest.CopyTo(image.AsSpan(14, 32));
+            body.CopyTo(image.AsSpan(46));
+            return image;
+        }
+
+        using var restored = NodePersistence.LoadFromBytes(BuildV6Image(includeAuthor: true));
+        Assert.Single(restored.Inbox);
+        Assert.Equal(author, restored.InboxAuthors[(issuer, 9, 2, batchId)]);
+        Assert.Throws<InvalidDataException>(() =>
+            NodePersistence.LoadFromBytes(BuildV6Image(includeAuthor: false)));
+    }
+
+    [Fact]
     public void Snapshot_apply_rejects_zero_or_duplicate_change_ids_before_mutating_storage()
     {
         var source = Fix.MakeNode(51);
