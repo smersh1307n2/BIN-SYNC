@@ -328,6 +328,28 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Receive through SyncSession with a durable PendingApply intent committed before
+    /// Node mutation. The ACK is emitted only after Node checkpoint, provider apply and
+    /// metadata receipt finalization all succeed.
+    /// </summary>
+    public Task<BatchResult> ReceiveBatchBeforeAckAsync(
+        SyncSession session, Action<Node> persistNode, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        StorageRemoteApplyPlan? plan = null;
+        return session.ReceiveBatchAsync(_node,
+            beforeApply: (batch, payload, senderPeer, senderEpoch) =>
+                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer, senderEpoch),
+            beforeAck: (batch, _) =>
+            {
+                var accepted = plan ?? throw new InvalidOperationException("Receive intent was not durably staged.");
+                ApplyRemoteBatchAfterNodeApply(batch, accepted, persistNode);
+            },
+            ct: ct);
+    }
+
+    /// <summary>
     /// Persist the exact incoming batch as a recoverable intent before mutating Node.
     /// If the process stops at any point after this call, recovery can replay the same
     /// wire payload into Node and the provider before the sender is acknowledged.
