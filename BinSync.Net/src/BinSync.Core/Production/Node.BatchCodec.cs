@@ -184,16 +184,25 @@ public sealed partial class Node
     /// The batch never escapes; safe even if <paramref name="data"/> is pooled and returned after the call.
     /// </summary>
     public BatchResult ApplyBatchPayload(byte[] data, NodeId senderPeer)
+        => ApplyBatchPayloadWithBatch(data, senderPeer).Result;
+
+    /// <summary>
+    /// Decode and apply a batch, returning the resolved batch alongside its result.
+    /// The returned entries are detached from caller-owned data only for the lifetime
+    /// of the supplied payload; callers retaining metadata must copy the payload slices.
+    /// </summary>
+    internal (Batch Batch, BatchResult Result) ApplyBatchPayloadWithBatch(byte[] data, NodeId senderPeer)
     {
+        Batch batch;
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
-            var batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+            batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
             result = ApplyBatchInternal(batch, senderPeer, durablePayload: data);
         }
         if (!result.Duplicate || result.Applied > 0)
             RaiseBatchApplied(result, senderPeer);
-        return result;
+        return (batch, result);
     }
 
     internal Batch DecodeBatchPayloadInternal(byte[] data)
