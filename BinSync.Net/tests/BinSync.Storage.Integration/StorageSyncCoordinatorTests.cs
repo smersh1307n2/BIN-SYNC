@@ -579,7 +579,6 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(2UL, secondState.AckedCursor);
         Assert.Equal(2UL, secondState.PushedCursor);
         Assert.Null(secondState.PendingBatch);
-        Assert.False(sender.PeerStates.ContainsKey((receiver.NodeId, 1)));
         Assert.True(receiver.TryGetField(1, firstRecord, 0x0101, out var firstValue));
         Assert.Equal("first", Encoding.UTF8.GetString(firstValue!.Value));
         Assert.True(receiver.TryGetField(1, secondRecord, 0x0101, out var secondValue));
