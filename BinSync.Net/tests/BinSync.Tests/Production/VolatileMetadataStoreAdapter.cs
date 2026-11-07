@@ -196,12 +196,20 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
 
         var key = new OutboundKey(namespaceId, localAuthor);
         ValidateOutboundLease(state, key, leaseGeneration);
-        if (limit <= 0)
-            return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), afterSequence);
-
         ulong acknowledged = state.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
-        ulong cursor = Math.Max(afterSequence, acknowledged);
         if (!state.Outbound.TryGetValue(key, out var entries))
+        {
+            if (afterSequence != 0)
+                throw new ArgumentOutOfRangeException(nameof(afterSequence));
+            return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), acknowledged);
+        }
+
+        ulong highWatermark = entries.Count == 0 ? 0 : entries[^1].Sequence;
+        if (afterSequence > highWatermark)
+            throw new ArgumentOutOfRangeException(nameof(afterSequence));
+
+        ulong cursor = Math.Max(afterSequence, acknowledged);
+        if (limit <= 0)
             return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), cursor);
 
         var page = entries
@@ -264,18 +272,30 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         int limit)
     {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
-        if (limit <= 0)
-            return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), afterSequence);
-
         if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
-            return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), afterSequence);
+        {
+            if (afterSequence != 0)
+                throw new ArgumentOutOfRangeException(nameof(afterSequence));
+            return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), 0);
+        }
 
         var key = new RelayKey(namespaceId, originalAuthor);
-        if (!state.Relay.TryGetValue(key, out var entries))
-            return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), afterSequence);
-
         ulong acknowledged = state.RelayAck.TryGetValue(key, out var ack) ? ack : 0;
+        if (!state.Relay.TryGetValue(key, out var entries))
+        {
+            if (afterSequence != 0)
+                throw new ArgumentOutOfRangeException(nameof(afterSequence));
+            return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), acknowledged);
+        }
+
+        ulong highWatermark = entries.Count == 0 ? 0 : entries[^1].Sequence;
+        if (afterSequence > highWatermark)
+            throw new ArgumentOutOfRangeException(nameof(afterSequence));
+
         ulong cursor = Math.Max(afterSequence, acknowledged);
+        if (limit <= 0)
+            return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), cursor);
+
         var page = entries
             .Where(entry => entry.Sequence > cursor)
             .Take(limit)
