@@ -808,6 +808,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     throw new InvalidDataException("Snapshot baseline cannot skip relay history or exceed the outbound feed watermark.");
             }
 
+            if (!current.CompletedPeerBaselines.Contains(rosterKey))
+            {
+                var requiredAuthors = current.PeerStreams.Keys
+                    .Where(key => key.Peer == peer && key.PeerEpoch == peerEpoch && key.NamespaceId == namespaceId)
+                    .Select(key => key.AuthorStream)
+                    .Concat(current.RequiredPeerStreams
+                        .Where(key => key.Peer == peer && key.PeerEpoch == peerEpoch && key.NamespaceId == namespaceId)
+                        .Select(key => key.AuthorStream))
+                    .Distinct();
+                if (requiredAuthors.Any(author => !seen.Contains(author)))
+                    throw new InvalidDataException("Initial-sync baseline must cover every currently registered peer author stream.");
+            }
+
             if (current.CompletedPeerBaselines.Contains(rosterKey))
             {
                 foreach (var baseline in streamBaselines)
