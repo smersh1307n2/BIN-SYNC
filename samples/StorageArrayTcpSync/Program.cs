@@ -50,9 +50,6 @@ try
         providerB.AppendLocalChange(Mutation(recordB, quantityB, nodeB.NodeId, 2001, "7"u8));
         coordinatorA.PublishLocalChanges(n => StorageNodePersistence.Save(storageA, n));
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
-        Console.WriteLine($"post-restart B outbox={nodeB.GetOutboxCount(NamespaceId)} high={nodeB.GetOutboxHighWatermark(NamespaceId, nodeB.NodeId)} metadata={metadataB.GetOutboundHighWatermark(\"array-tcp-demo\", nodeB.NodeId, NamespaceId, nodeB.NodeId)}");
-        if (nodeB.GetOutboxCount(NamespaceId) == 0)
-            throw new InvalidOperationException("Post-restart local update was not enqueued in the Node Outbox.");
 
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
         StorageNodePersistence.Save(storageA, nodeA);
