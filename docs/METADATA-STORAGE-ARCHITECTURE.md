@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.9 — public IDataProvider/IMetadataStore contracts, durable Fld1.Storage adapters, shared-database coordination, batch-specific provider apply, durable Metadata PendingApply recovery and pre-ACK commit ordering are implemented with CI coverage. NodePersistence v15 remains the Node checkpoint format. Full Node/Transport authority migration to IMetadataStore, record-level tombstones and bounded metadata mutation cost remain open gates.  
+**Status:** Architecture contract v0.9 — public IDataProvider/IMetadataStore contracts, durable Fld1.Storage adapters, atomic Node checkpoint storage, shared-database coordination, batch-specific provider apply, durable Metadata PendingApply recovery and pre-ACK commit ordering are implemented with CI coverage. NodePersistence v15 remains the Node checkpoint format. Full Node/Transport authority migration to IMetadataStore, record-level tombstones and bounded metadata mutation cost remain open gates.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
 **Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v15, including adaptive receipt indexing, compact 16-byte ledger values, single-direction alias persistence, shared Outbox author tables, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. Public Storage adapters now pass provider/metadata conformance, shared-database, restart, compaction, equivocation and pre-ACK apply/replay tests. FLD relay provenance transaction, receipt/dedup GC horizons, bounded metadata mutation cost and authoritative Node/Transport IMetadataStore integration remain open.
@@ -903,3 +903,18 @@ Current unsupported case: \`OpRecordTombstone\` is explicitly rejected by the pr
 The local feed path maps record tombstones to \`Node.DeleteRecord\`; the received-batch and PendingApply recovery paths decode \`OpRecordTombstone\` and preserve its HLC and durable author. The array sample now deletes one array item on replica B, synchronizes the lifecycle tombstone through BIN-SYNC, and verifies that the item is hidden on both Storage replicas.
 
 **Verified CI at commit \`58cc41d8e8d1\`:** Storage integration 44/44 and array sample PASS (including record deletion); BIN-SYNC core 642/642; fuzz/lab workflow success.
+
+
+## 7.27 Complete Node checkpoint stored in the same Storage database (2026-11-07)
+
+\`NodePersistence.SerializeToBytes(Node)\` now exposes the exact integrity-protected v15 image previously written only through the atomic file API. \`StorageNodePersistence\` stores that image under a stable NodeId key using one Storage write batch and restores it through \`NodePersistence.LoadFromBytes\`, retaining all existing version/digest validation. It does not own the database.
+
+The array sample now uses exactly one StorageDatabase per replica for:
+- the complete Node checkpoint (identity, HLC, records, Outbox, receipts, receive streams, aliases, peer progress and ChangeId ledger);
+- StorageDataProvider state and local source feed;
+- StorageMetadataStore outbound frozen payloads, inbound relay/receipts and PendingApply state.
+
+Thus the Node checkpoint, provider data and metadata survive a single database close/reopen. The second update and record deletion happen after reopening these same databases; no separate Node state files are used by the sample. Each component still commits its own atomic Storage batch, so the coordinator's recovery order remains Node checkpoint → metadata PendingApply → provider receipt → metadata finalization → network ACK.
+
+The latest integration tests also verify that a conflicting global ChangeId fingerprint makes outbound metadata freeze fail closed and leaves the source provider feed unacknowledged.
+
