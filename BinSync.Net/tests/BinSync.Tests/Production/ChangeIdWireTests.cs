@@ -248,6 +248,33 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Persistence_v5_seen_changes_migrate_to_explicit_unknown_global_fingerprints()
+    {
+        var peer = NodeId.From(Id(0x81));
+        var changeId = BatchId.From(Id(0x82));
+        var writer = new Writer();
+        writer.B128(NodeId.From(Id(0x80))).Varint(0).U64(0).U32(0);
+        // v5 body fields before SeenChanges.
+        for (int i = 0; i < 11; i++) writer.Varint(0);
+        writer.Varint(1).B128(peer).Varint(9).B128(changeId);
+        // LastStreamAuthor, KnownEpochs, PeerSessionEpochs, quarantine,
+        // forbidden namespaces, schema versions and peer registry.
+        for (int i = 0; i < 7; i++) writer.Varint(0);
+        var body = writer.Value();
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v5", body);
+        var image = new byte[14 + 32 + body.Length];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 5);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
+        digest.CopyTo(image.AsSpan(14, 32));
+        body.CopyTo(image.AsSpan(46));
+
+        using var restored = NodePersistence.LoadFromBytes(image);
+        Assert.Contains((peer, 9, changeId), restored.SeenChanges);
+        Assert.False(restored.GlobalChangeLedger[(9, changeId)].IsKnown);
+    }
+
+    [Fact]
     public void Snapshot_apply_rejects_zero_or_duplicate_change_ids_before_mutating_storage()
     {
         var source = Fix.MakeNode(51);
