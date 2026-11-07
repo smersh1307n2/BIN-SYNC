@@ -295,13 +295,19 @@ public class ChangeIdWireTests
 
         Assert.True(node.InboxAuthors.TryAdd(key1, receipt1));
         Assert.Single(node.InboxAuthors.Keys);
+        Assert.Equal(1, node.InboxAuthors.SingletonStreamCount);
+        Assert.Equal(0, node.InboxAuthors.GroupedStreamCount);
         Assert.True(node.InboxAuthors.TryAdd(key2, receipt2));
         Assert.Equal(2, node.InboxAuthors.Count);
+        Assert.Equal(0, node.InboxAuthors.SingletonStreamCount);
+        Assert.Equal(1, node.InboxAuthors.GroupedStreamCount);
         Assert.Equal(receipt1.CursorEnd, node.InboxAuthors[key1].CursorEnd);
         Assert.Equal(receipt2.CursorEnd, node.InboxAuthors[key2].CursorEnd);
 
         Assert.True(node.InboxAuthors.Remove(key2));
         Assert.Single(node.InboxAuthors.Keys);
+        Assert.Equal(1, node.InboxAuthors.SingletonStreamCount);
+        Assert.Equal(0, node.InboxAuthors.GroupedStreamCount);
         Assert.True(node.InboxAuthors.TryGetValue(key1, out var remaining));
         Assert.Equal(receipt1.CursorEnd, remaining.CursorEnd);
         Assert.False(node.InboxAuthors.ContainsKey(key2));
@@ -309,6 +315,8 @@ public class ChangeIdWireTests
         Assert.True(node.InboxAuthors.Remove(key1));
         Assert.Empty(node.InboxAuthors.Keys);
         Assert.Equal(0, node.InboxAuthors.Count);
+        Assert.Equal(0, node.InboxAuthors.SingletonStreamCount);
+        Assert.Equal(0, node.InboxAuthors.GroupedStreamCount);
     }
 
     [Fact]
