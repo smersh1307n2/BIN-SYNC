@@ -658,7 +658,8 @@ public class ChangeIdWireTests
         {
             NodePersistence.Save(a, path);
             var restored = NodePersistence.Load(path);
-            Assert.Equal(batch.CursorEnd, restored.PeerStates[(b.NodeId, 1)].StreamPushed[batch.DurableAuthor]);
+            Assert.True(restored.PeerStates[(b.NodeId, 1)].TryGetStreamPushed(batch.DurableAuthor, out var pushed));
+            Assert.Equal(batch.CursorEnd, pushed);
             Assert.Equal(batch.CursorEnd, restored.PeerStates[(b.NodeId, 1)].AckedFor(batch.DurableAuthor));
             Assert.Empty(restored.PeerStates[(b.NodeId, 1)].Ids);
             restored.ProcessAck(b.NodeId, 1, batch.CursorEnd, batch.DurableAuthor);
