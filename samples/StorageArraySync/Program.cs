@@ -47,6 +47,9 @@ try
 
         coordinatorA.PublishLocalChanges(n => NodePersistence.Save(n, nodeAPath));
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
+        if (metadataA.GetOutboundHighWatermark("array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId) != 2 ||
+            metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 2)
+            throw new InvalidOperationException("Local Node Outbox was not frozen into durable Storage metadata.");
 
         Transport.MakeSession(nodeA, nodeB);
         int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
