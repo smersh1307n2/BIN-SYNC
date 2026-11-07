@@ -2,7 +2,7 @@
 
 **Status:** Architecture decision draft v0.2; retention and Storage Core decisions resolved for API design.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
-**Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. No wire-format change is proposed.  
+**Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. No wire-layout change is required for the storage decisions; the global ChangeId dedup behavior must be promoted into a normative protocol erratum before release.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
 
 ## 1. Executive decision
