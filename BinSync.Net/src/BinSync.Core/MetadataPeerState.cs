@@ -54,6 +54,7 @@ public sealed class MetadataOutboundBatchReservation
 {
     public required BatchId BatchId { get; init; }
     public required uint IssuerEpoch { get; init; }
+    public ulong StreamOffset { get; init; }
     public required ulong CursorStart { get; init; }
     public required ulong CursorEnd { get; init; }
     public required byte[] PreviousBatchDigest { get; init; }
