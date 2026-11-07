@@ -379,7 +379,7 @@ public sealed class Wal : IDisposable
                     if (remote.Aliases.Count > 0 &&
                         !remote.Aliases.Any(x => x.NodeId == remote.SenderPeer && x.Epoch == remote.SenderEpoch))
                         throw new InvalidDataException("WAL remote-batch session map does not identify its sender.");
-                    _ = Node.DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)remote.BatchPayload);
+                    CausalWire.ValidatePayload(remote.BatchPayload);
                     break;
                 }
             case WalRecordType.LocalMutation:
