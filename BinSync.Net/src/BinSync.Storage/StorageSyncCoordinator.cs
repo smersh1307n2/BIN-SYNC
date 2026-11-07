@@ -312,8 +312,8 @@ public sealed class StorageSyncCoordinator
                 // A finalized token is resolved through the durable receive receipt.
                 // If it is not an exact duplicate, fail closed.
                 var prior = _metadataStore.AcceptIncomingBatch(metadataBatch);
-                if (!prior.IsDuplicate)
-                    throw;
+                if (!prior.IsDuplicate || prior.DurableAuthor != batch.DurableAuthor)
+                    throw new InvalidDataException("Completed metadata receipt does not match the replayed batch author.");
                 finalizeMetadata = false;
             }
 
@@ -702,8 +702,10 @@ public sealed class StorageSyncCoordinator
             var receipt = _provider.ApplyRemoteBatch(plan.ApplyToken, mutations);
             if (plan.FinalizeMetadata)
             {
-                _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
+                var metadataReceipt = _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
                     new MetadataProviderApplyReceipt(plan.ApplyToken, plan.Batch.BatchDigest.ToArray()));
+                if (metadataReceipt.DurableAuthor != batch.DurableAuthor)
+                    throw new InvalidDataException("Finalized metadata receipt author does not match the applied Node batch.");
             }
             return receipt;
         }
@@ -756,8 +758,10 @@ public sealed class StorageSyncCoordinator
                     throw new InvalidDataException("Pending apply intent contains no provider mutations.");
 
                 _provider.ApplyRemoteBatch(intent.ApplyToken, mutations);
-                _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
+                var metadataReceipt = _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
                     new MetadataProviderApplyReceipt(intent.ApplyToken, intent.Batch.BatchDigest.ToArray()));
+                if (metadataReceipt.DurableAuthor != intent.Batch.AuthorStreamNodeId)
+                    throw new InvalidDataException("Recovered metadata receipt author does not match its PendingApply intent.");
                 recovered++;
             }
 
