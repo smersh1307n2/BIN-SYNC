@@ -70,6 +70,8 @@ public sealed class MetadataIncomingBatch
     public required byte[] PreviousBatchDigest { get; init; }
     public required byte[] BatchDigest { get; init; }
     public required IReadOnlyList<MetadataOperation> Operations { get; init; }
+    /// <summary>Exact accepted DELTA_BATCH payload, retained for Node replay during PendingApply recovery.</summary>
+    public byte[] WirePayload { get; init; } = Array.Empty<byte>();
 }
 
 public sealed record MetadataBatchReceipt(ulong CursorStart, ulong CursorEnd, byte[] BatchDigest,
