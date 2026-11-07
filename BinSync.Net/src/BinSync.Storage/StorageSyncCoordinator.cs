@@ -621,25 +621,26 @@ public sealed class StorageSyncCoordinator
     /// Node mutation. The ACK is emitted only after Node checkpoint, provider apply and
     /// metadata receipt finalization all succeed.
     /// </summary>
-    public Task<BatchResult> ReceiveBatchBeforeAckAsync(
+    public async Task<BatchResult> ReceiveBatchBeforeAckAsync(
         SyncSession session, Action<Node> persistNode, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(persistNode);
         RegisterInterestedPeer(session, _namespaceId);
         StorageRemoteApplyPlan? plan = null;
-        return session.ReceiveBatchAsync(_node,
+        BatchResult result = await session.ReceiveBatchAsync(_node,
             beforeApply: (batch, payload, senderPeer) =>
                 plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer),
             beforeAck: (batch, _) =>
             {
                 var accepted = plan ?? throw new InvalidOperationException("Receive intent was not durably staged.");
                 ApplyRemoteBatchAfterNodeApply(batch, accepted, persistNode);
-                if (accepted.IsDuplicate)
-                    _.Duplicate = true;
             },
             ct: ct,
-            receiveStateOwnedByMetadataStore: true);
+            receiveStateOwnedByMetadataStore: true).ConfigureAwait(false);
+        if (plan?.IsDuplicate == true)
+            result.Duplicate = true;
+        return result;
     }
 
     /// <summary>
