@@ -370,22 +370,20 @@ Local WAL replay markers remain separately represented by `SeenChanges`, but thi
 
 ### 9.2. Inbox receipt compaction
 
-Inbox batch receipts have a separate lifecycle. The wire specification defines an idempotency key (issuerNodeId, namespaceId, issuerEpoch, batchId) and an expiry condition requiring both elapsed expiry and confirmation of the relevant log segment. Preserve the receipt/author information needed to replay the original ACK until that condition is met.
+Inbox receipts have a separate lifecycle. The idempotency key is `(issuerNodeId, namespaceId, issuerEpoch, batchId)`. The current compact v8 receipt stores:
+- the resolved durable author stream used for the original ACK;
+- the original `cursorEnd` used to construct duplicate ACKs (the replay-supplied cursor is not trusted);
+- a 16-byte header fingerprint;
+- `appliedAt` (HLC wall, Unix microseconds);
+- `expiresAt` (zero means no expiry is scheduled).
 
-The Inbox idempotency key remains (issuerNodeId, namespaceId, issuerEpoch, batchId). The compact durable receipt must retain:
-- cursorStart and cursorEnd;
-- resolved authorNodeId used for the original ACK/author-stream result;
-- BatchDigest, RecordsRoot and PreviousBatchDigest;
-- appliedCount/result needed to reproduce the original ACK;
-- appliedAt and expiresAt;
-- the storage-native commit identity/reference while WAL-to-sidecar materialization/recovery requires it; after materialization, the receipt's own durable generation is sufficient and the temporary WAL reference may be dropped.
+The fingerprint commits to namespace, issuer, epoch, BatchId, cursorStart/cursorEnd, previous batch digest, records root, batch digest, schema id/version, merge policy and flags (excluding the transport-only causal-trailer-present bit). Thus cursorStart and the digest/chain fields are committed without storing each separately. The receipt does not retain the full Fields payload, individual ChangeIds or causal dependencies.
 
-The receipt does not retain the full Fields payload. A repeated idempotency key is accepted as a duplicate only if cursor range, author stream and all stored digest/chain fields match exactly. A conflicting reuse is rejected before ACK; it must not return the old receipt as though the new payload had been accepted. A same ChangeId arriving in a different BatchId is handled by the global ChangeId ledger, not by Inbox.
+**Duplicate semantics are intentionally header/idempotency based, not payload revalidation.** If the BatchId key exists and the known header fingerprint matches, the receiver ACKs using the stored cursorEnd and author without decoding or applying replay-supplied entries/ChangeIds/CausalDeps; this must bypass the causal gate. A payload altered while keeping the same BatchId and committed header is ignored as a duplicate, not applied. A changed committed header (for example cursor range, schema/mode fields or BatchDigest) is rejected before ACK. This preserves the existing hardening contract tested by `Duplicate_batch_bypasses_causal_gate_and_does_not_trust_replay_change_ids`.
 
-The normative Inbox GC condition remains: expiresAt has elapsed AND both sides have confirmed the relevant log segment. Relay ACK, WAL truncation, ChangeId-ledger retention and tombstone GC are not substitutes for this condition.
+NodePersistence v8 stores the unified receipt map. v3-v7 migration validates the old set/map parity where applicable and creates explicit legacy-unknown receipts without cursorEnd/fingerprint; those receipts retain the old duplicate-ACK behavior until their original data can no longer be recovered. No speculative upgrade from a replay payload is allowed because it cannot prove the original receipt.
 
-Current NodePersistence v7 stores one issuer/namespace/epoch/BatchId -> durable-author map entry; the previous v3-v6 layout stored the same receipt key in both Inbox and InboxAuthors. v7 removes that duplicate key representation and legacy migration validates exact key parity before collapsing it. This is a key-storage optimization only: the current receipt still does not contain the complete cursor/digest/expiry/WAL-generation tuple above. The duplicate fast path continues the legacy BatchId idempotency behavior and does not yet compare a conflicting payload against a full prior receipt. No receipt expiry/GC is implemented. Do not invent missing range/expiry facts or delete legacy receipts until the full tuple and fenced expiry contract are implemented.
-
+The normative Inbox GC condition remains: `expiresAt` has elapsed AND both sides have confirmed the relevant log segment. New receipts currently set `expiresAt=0`; no receipt expiry/GC is implemented. Relay ACK, WAL truncation, ChangeId-ledger retention and tombstone GC are not substitutes for this condition. The receipt does not yet carry a separate WAL-generation reference or materialization state; WAL/receipt recovery remains covered by the accepted-batch WAL frame and node-state snapshot.
 ### 9.3. Per-peer batch replay cache has a finite ACK-based lifetime
 
 The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorStream, cursorStart, cursorEnd), with the stable BatchId and previous digest needed to reproduce the exact same wire batch after a lost ACK. This cache is necessary while the batch may be retried. The inspected ProcessAckInternal path advances the per-author StreamAcked watermark and compacts Outbox, but does not remove acknowledged PeerState.Ids entries. Because NodePersistence serializes this dictionary, it can grow with every historical batch even after the corresponding Outbox entries are compacted.
