@@ -479,7 +479,7 @@ The architecture and eventual contract implementation must be validated against 
 
 If a specialized contract conflicts with this document, the conflict must be resolved explicitly. A FLD-specific optimization must not weaken a general durability or isolation guarantee.
 
-## 15. Decisions intentionally left open
+## 15. Decisions and remaining implementation questions
 
 The following are not decided by v0.2 and must be resolved before freezing public API:
 
@@ -489,7 +489,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 4. Which protocol state is mandatory in the first implementation versus capability-gated.
 5. Whether a built-in in-memory store ships in the core package or only in test utilities.
 6. **Decided:** FLD Storage-only opens the domain-neutral `Fld1.Storage` engine directly; it does not instantiate `FldDatabase`. One DLL initially, extractable namespace/API/source boundary.
-7. How to represent storage-native ordering/version information without fabricating protocol HLC/author fields required by the current FLD1 run format.
+7. **Decided:** storage-native ordering/version uses Storage Core CommitSeq and byte-key ordering; it is never fabricated as HLC/author. Split generic page/run mechanics from any field-specific codec that prevents opaque metadata storage.
 8. How a multi-scope/multi-namespace Metadata Store maps onto FLD's currently namespace-scoped physical runs and database options.
 9. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
 10. How current NodePersistence/WAL state migrates to the new provider/store boundary.
@@ -501,7 +501,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 16. **Decided:** prune PeerState.Ids only in the same durable ACK transaction when the matching peer/namespace/author StreamAcked covers the entire cursorEnd; implementation remains pending.
 17. Define the lifecycle of ProtocolStateDelta: whether it is an opaque replay log or is materialized into queryable current protocol metadata, when its recovery payload can be checkpointed/removed, and whether duplicate-batch receipts still need to return the full delta after that point.
 18. Implement and test the decided Inbox duplicate validation consistently in BIN-SYNC and FLD; conflicting reuse must fail closed without retaining the full original payload.
-19. Define whether relay ChangeId dedup is at-most-once for the lifetime of the namespace or only while the Outbox entry is retained; after Outbox compaction, decide whether snapshot/membership state safely subsumes old IDs or a separate exact relay-history index is required.
+19. **Decided:** lifetime-wide at-most-once relay suppression is provided by the exact global ChangeId ledger, retained until a fenced namespace/scope epoch reset. Relay payload may be compacted independently after safe downstream ACK.
 
 These open points must not be resolved by adding speculative flags or prematurely publishing an unstable API. They require a focused design pass against the current Node, FLD-DB engine and representative external providers.
 
