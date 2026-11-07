@@ -291,7 +291,7 @@ public sealed partial class Node
             if (ledgerAdded)
                 GlobalChangeLedger.Remove(ledgerKey);
             if (seenAdded)
-                SeenChanges.Remove((NodeId, entry.NamespaceId, entry.ChangeId));
+                SeenChanges.Remove((entry.NamespaceId, entry.ChangeId));
 
             if (sequenceChanged)
             {
