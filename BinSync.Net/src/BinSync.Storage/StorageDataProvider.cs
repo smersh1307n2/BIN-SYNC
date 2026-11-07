@@ -6,8 +6,7 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Durable conformance provider backed only by the neutral Fld1.Storage byte API.
-/// This is a test adapter, not a public BIN-SYNC provider API.
+/// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
 public class StorageDataProvider : IDataProvider
 {
@@ -421,9 +420,9 @@ public class StorageDataProvider : IDataProvider
         return BinaryPrimitives.ReadUInt64LittleEndian(bytes);
     }
 
-    private static void ThrowIfDisposed(StorageDataProviderAdapter adapter)
+    private static void ThrowIfDisposed(StorageDataProvider adapter)
     {
-        if (adapter._disposed) throw new ObjectDisposedException(nameof(StorageDataProviderAdapter));
+        if (adapter._disposed) throw new ObjectDisposedException(nameof(StorageDataProvider));
     }
 
     private void ThrowIfDisposed() => ThrowIfDisposed(this);
