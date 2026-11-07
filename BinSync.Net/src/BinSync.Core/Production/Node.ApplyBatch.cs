@@ -75,6 +75,92 @@ public sealed partial class Node
         return true;
     }
 
+    internal Batch PrepareBatchPayloadForMetadata(byte[] data, NodeId senderPeer)
+    {
+        ArgumentNullException.ThrowIfNull(data);
+        if (senderPeer.IsZero) throw new ArgumentException("Sender peer must be non-zero.", nameof(senderPeer));
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            Batch batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
+            ValidateBatchForWire(batch);
+            if (batch.MergePolicy != 0 && batch.MergePolicy != 0x02)
+                throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
+            if (ForbiddenNamespaces.Contains(batch.NamespaceId))
+                throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
+            int supported = SchemaVersions.TryGetValue(batch.NamespaceId, out var version) ? version : 1;
+            if (batch.SchemaVersion > supported)
+                throw new SyncException("SCHEMA_PENDING", batch.BatchId);
+            var currentEpoch = SessionEpoch(senderPeer, batch.NamespaceId);
+            if (currentEpoch is not null && batch.IssuerEpoch < currentEpoch.Value)
+                throw new SyncException("EPOCH_REGRESSION", batch.BatchId);
+
+            var receiptKey = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch, batch.BatchId);
+            if (InboxAuthors.TryGetValue(receiptKey, out var accepted))
+            {
+                if (accepted.DurableAuthor.IsZero)
+                    throw new InvalidDataException("Accepted batch receipt has a zero durable author.");
+                batch.AuthorStreamNodeId = accepted.DurableAuthor;
+                var replayFingerprint = InboxReceiptIdentity.Compute(batch);
+                if (accepted.HasFingerprint && accepted.Fingerprint != replayFingerprint)
+                    throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+                return batch;
+            }
+
+            var decoded = new object[batch.Entries.Count];
+            NodeId streamAuthor = default;
+            for (int i = 0; i < batch.Entries.Count; i++)
+            {
+                var entry = batch.Entries[i];
+                object operation = Ops.DecodeOp(entry.Payload).Op;
+                ValidateEntryOperation(entry, operation, batch.BatchId);
+                NodeId author = ResolveOperationAuthor(operation, senderPeer);
+                if (i == 0) streamAuthor = author;
+                else if (author != streamAuthor)
+                    throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+                decoded[i] = operation;
+            }
+            if (streamAuthor.IsZero)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            batch.AuthorStreamNodeId = streamAuthor;
+
+            PeerState? peerState = PeerStates.TryGetValue((senderPeer, batch.NamespaceId), out var foundState)
+                ? foundState : null;
+            var receiveKey = (senderPeer, batch.IssuerEpoch, streamAuthor);
+            long received = peerState is not null && peerState.ReceivedStreams.TryGetValue(receiveKey, out var cursor)
+                ? cursor : 0;
+            if (batch.CursorStart != checked(received + 1))
+                throw new SyncException("SEQ_GAP", batch.BatchId);
+
+            var chainKey = (batch.IssuerNodeId, batch.NamespaceId, batch.IssuerEpoch);
+            Digest16 previous = LastBatchDigest.TryGetValue(chainKey, out var savedDigest) ? savedDigest : default;
+            if (batch.PrevBatchDigest != previous)
+                throw new SyncException("BATCH_CHAIN_BROKEN", batch.BatchId);
+            if (ComputeRecordsRoot(batch.Entries) != batch.RecordsRoot)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            if (ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,
+                batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+                batch.RecordsRoot, batch.PrevBatchDigest) != batch.BatchDigest)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            return batch;
+        }
+    }
+
+    private NodeId ResolveOperationAuthor(object operation, NodeId senderPeer)
+    {
+        bool full = operation switch
+        {
+            OpFieldWrite write => write.FullAuthorMode,
+            OpFieldTomb tomb => tomb.FullAuthorMode,
+            OpRecordTombstone recordTombstone => recordTombstone.FullAuthorMode,
+            _ => false
+        };
+        NodeId? embedded = GetAuthor(operation);
+        if (full && embedded.HasValue) return embedded.Value;
+        try { return ResolveAliasInternal(senderPeer, GetOrigin(operation)); }
+        catch (SyncException) when (full && embedded.HasValue) { return embedded.Value; }
+    }
+
     internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null)
     {
         ThrowIfDisposed();
@@ -132,14 +218,7 @@ public sealed partial class Node
         // embed the TRUE author in full-author mode (§13.6). Author resolution helper:
         // full-author ops resolve via their embedded nodeId; otherwise fall back to the
         // session alias map, fail-closed on UNKNOWN_ALIAS [А2]/[А3].
-        NodeId ResolveAuthor(object op)
-        {
-            bool full = op switch { OpFieldWrite x => x.FullAuthorMode, OpFieldTomb x => x.FullAuthorMode, OpRecordTombstone x => x.FullAuthorMode, _ => false };
-            var emb = GetAuthor(op);
-            if (full && emb.HasValue) return emb.Value;
-            try { return ResolveAliasInternal(senderPeer, GetOrigin(op)); }
-            catch (SyncException) when (full && emb.HasValue) { return emb.Value; }
-        }
+        NodeId ResolveAuthor(object op) => ResolveOperationAuthor(op, senderPeer);
         // Decode ops once — reused for stream author, apply loop, and relay (no batch.Ops()).
         int nEntEarly = batch.Entries.Count;
         var decodedOps = nEntEarly > 0 ? new object[nEntEarly] : Array.Empty<object>();
