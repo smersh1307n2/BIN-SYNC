@@ -217,3 +217,17 @@ The physical engine must be independently reusable. `Fld1.Storage` exposes byte-
 The cross-layer code audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md). It confirms that BIN-SYNC already shares one Outbox operation across peers and owns per-peer/per-author progress; FLD must not duplicate this progress model. It also identifies the current FLD APPLY payload amplification (Fields plus RelayFields, and WAL plus ApplyJournal), the unbounded ApplyJournal index/paging path, and the required separation of batch receipt, global ChangeId dedup, relay payload and peer replay-cache lifetimes.
 
 This audit is an internal storage design follow-up. It does not alter the wire contract or the atomic acceptance requirements in this document. The next implementation work must preserve the atomic transition and ACK-after-durable-acceptance guarantee while removing redundant payload copies.
+
+## 11. Storage compaction alignment (2026-11-07)
+
+The cross-repository phase plan is in [Sync Storage Compaction Roadmap](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-STORAGE-COMPACTION-ROADMAP.md); code-backed findings are in [Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md).
+
+- APPLY WAL is authoritative until receipt and relay payload are durably materialized.
+- Each incoming operation is encoded once; relay selection references operation indexes rather than repeating RelayFields payload.
+- The durable batch receipt is metadata-only and sufficient to validate duplicate retry and reproduce its ACK result.
+- Relay payload contains only relay-selected immutable operations, including eligible LWW losers. Promote idempotently before WAL truncation; reclaim only after a validated downstream safe watermark.
+- Global ChangeId dedup is route-independent BIN-SYNC metadata; issuer-specific receipts are not a substitute.
+- Local pending coalescing happens before the FLD Outbox freeze boundary. The Outbox itself remains immutable.
+- Per-peer progress and ACK aggregation remain BIN-SYNC responsibilities; FLD receives only the safe aggregate local Outbox watermark.
+
+These decisions do not weaken atomic APPLY or ACK-after-durable-acceptance. If FLD and BIN-SYNC metadata cannot share one atomic transaction, the recoverable apply protocol and idempotent sidecar promotion must be explicit and crash-tested. See roadmap Phases 1–3.
