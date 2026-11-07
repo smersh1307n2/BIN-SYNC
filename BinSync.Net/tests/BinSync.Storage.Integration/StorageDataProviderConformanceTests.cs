@@ -69,6 +69,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             using var provider = new StorageDataProviderAdapter(directory, partitionId: 79, deleteOnDispose: false);
             var mutation = Mutation(8, 4, 55, 1);
             provider.AppendLocalChange(mutation);
+            _ = provider.ReadLocalChanges(0, 10);
             provider.AcknowledgeLocalChanges(1);
             Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
             Assert.True(provider.TryReadCurrent(mutation.RecordId, mutation.FieldId, out var current));
