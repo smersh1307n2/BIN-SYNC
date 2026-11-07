@@ -139,18 +139,20 @@ Do not persist transient transport objects, sockets, session handles, callbacks,
 
 ### 5.2. Local change tracking and outbound journal
 
-For each locally authored change that may still need delivery, retain enough information to reproduce the exact canonical operation after restart:
+For each locally authored change that has crossed the publication boundary and become a frozen Outbox entry, retain enough information to reproduce the exact canonical operation after restart:
 
-- stable ChangeId;
+- stable nonzero ChangeId;
 - original author identity;
 - canonical source identity (RecordId/FieldId after provider mapping);
 - operation kind and immutable value/tombstone payload, or a durable provider reference whose lifetime is guaranteed;
 - HLC and key epoch where applicable;
-- author-stream sequence/cursor or the information required to reproduce its assignment;
+- immutable author-stream sequence/cursor;
 - causal/dependency metadata when enabled;
 - source/provider version or receipt needed to avoid losing or duplicating a source change.
 
-A cursor without a recoverable payload is not a durable outbound journal. If the provider supplies a native durable change feed, the runtime may consume it under a lease and need not duplicate the full payload in the Metadata Store. The provider must retain each change until it is safely transferred into a durable BIN-SYNC journal or acknowledged according to the provider contract.
+Before publication, a separate pending-staging representation retains the latest eligible local operation per coalescible key. It has no stream sequence yet and may not need a protocol ChangeId until freeze. Its payload/reference must remain recoverable independently of the visible current-state winner. See [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).
+
+A cursor without a recoverable payload is not a durable outbound journal. If the provider supplies a native durable change feed, the runtime may consume it under a lease and need not duplicate the full payload in the Metadata Store, provided the feed payload/reference remains valid until the pending operation is durably staged or frozen.
 
 The implementation must choose one authoritative outbound journal for each change stream. It must not maintain two independently advancing journals with ambiguous ownership.
 
