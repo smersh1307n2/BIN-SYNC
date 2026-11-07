@@ -154,7 +154,7 @@ sealed class StorageArray : IDisposable
             ? Encoding.UTF8.GetString(Decode(bytes!).Value)
             : string.Empty;
 
-    public IReadOnlyList<ArrayChange> ReadLocalChanges(ulong afterSequence, int limit)
+    public ArrayChangePage ReadLocalChanges(ulong afterSequence, int limit)
     {
         ulong acked = ReadUInt64(_db, [Ack]);
         using var snapshot = _db.OpenSnapshot();
