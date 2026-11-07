@@ -542,19 +542,19 @@ FLD local Commit currently flushes the WAL group commit and then appends the fie
 
 The current FLD Outbox fixed record is 88 bytes plus a 4-byte CRC before value bytes. The local AuthorNodeId is constant for the database and is repeated in every namespace Outbox row; this can be removed from each row in a versioned format. OutboxSeq can potentially be derived from a segment base plus ordinal, and CommitSeq can be group-encoded/delta-encoded. Keep ChangeId until its identity contract is deliberately changed. A rough fixed-record target is 60–65 bytes before group framing/CRC overhead; this is not a benchmark.
 
-### 9.4. Priority
+### 9.4. Priority and current implementation status
 
-1. Global cross-peer ChangeId dedup correctness — implemented; retain exact ledger until a safe GC horizon exists.
-2. Prune acknowledged PeerState.Ids — implemented.
-3. Inbox + InboxAuthors key consolidation — implemented in NodePersistence v7; full receipt tuple/expiry remains open.
-4. Remove redundant remote SeenChanges rows — implemented; local WAL markers remain separate.
-5. Remove APPLY payload duplication and split batch receipts from relay-only payload retention.
-6. Pack per-author peer progress and compact batch receipts.
-5. Version and benchmark FLD Outbox encoding.
-6. Implement PendingLocal coalescing only before publication.
-7. Only then evaluate content-derived ChangeId, OriginSeq, batch-level alias and WAL-backed Outbox references.
+1. Global cross-peer ChangeId dedup, including same-ID equivocation rejection — implemented; retain the exact ledger until a safe GC horizon exists.
+2. Prune acknowledged `PeerState.Ids` mappings — implemented; preserve the independent stream digest checkpoint.
+3. Consolidate Inbox/InboxAuthors into one header-bound receipt map — implemented; receipt expiry/GC remains open.
+4. Remove redundant remote `SeenChanges` rows and compact the remaining local WAL marker key — implemented; NodePersistence v11 migration is covered.
+5. APPLY single-encoding, relay-only materialization, sparse journal paging and FLD per-author relay ACK/physical payload compaction — implemented in FLD-DB.
+6. BIN-SYNC source `JournalSeq → ChangeId → OutboxSeq` provenance, durable scan cursor and per-author minimum downstream ACK aggregation — still open; this is the next integration implementation gate.
+7. Inbox receipt expiry/GC, bounded/rebuildable receipt indexing, and Storage physical format — still open; no unsafe time-only deletion is authorized.
+8. PendingLocal cross-commit coalescing — design contract and baseline tests exist; implementation belongs to FLD-DB and is not yet available.
+9. Only after the above, evaluate compact Outbox encoding, content-derived ChangeId, OriginSeq and WAL-backed Outbox references.
 
-No wire-format or ChangeId change is authorized by this addendum.
+No wire-format or ChangeId generation change is authorized by this addendum.
 
 ## 8. Compact history decisions and implementation gates (2026-11-07)
 
@@ -568,7 +568,7 @@ The target lifecycle decisions are:
 5. One payload serves all peers. Peer progress is stored separately per peer/namespace/author stream.
 6. Batch receipts, global ChangeId dedup facts, relay payload and outgoing replay mappings are separate logical records with independent lifetimes. Physical co-location is allowed only if atomicity and reclamation remain independent.
 
-First implementation priority is route-independent ChangeId dedup, ACK-covered replay-cache pruning and receipt-path audit. The largest payload optimization is APPLY WAL single-encoding plus compact relay-selection indexes and a relay-only payload log. Durable PendingLocal coalescing follows; physical compact encodings come only after logical transitions are tested.
+The first implementation priorities are now complete: route-independent ChangeId dedup, ACK-covered replay-cache pruning, compact receipts, APPLY single-encoding/relay-only materialization and FLD per-author relay payload reclamation. The remaining integration gap is the durable BIN-SYNC source-provenance mapping and per-author minimum downstream ACK calculation. Inbox receipt GC and bounded/rebuildable receipt indexing remain separate gates. Durable PendingLocal coalescing follows in FLD-DB; physical compact encodings come only after logical transitions are tested.
 
 No ChangeId generation change, OriginSeq extension, wire-format change or destructive GC policy is approved here. Detailed exit criteria and crash tests are in the roadmap.
 
@@ -589,3 +589,9 @@ The implementation will add `CommitPending()` and `FreezePending()` without sile
 The durable protocol requires distinct WAL records for pending mutation, pending freeze and pending-snapshot commit. The pending snapshot is immutable and generation-specific. Checkpoint writes and fsyncs the snapshot, rotates to a fresh WAL segment, appends a durable marker containing snapshot generation/hash/through-sequence, then truncates only the older sealed prefix. The marker segment remains retained. Recovery requires the referenced snapshot, loads it as the pending base, and replays later pending commits/freezes; a missing/mismatched snapshot fails closed. This avoids both an unbounded pinned WAL prefix and a window in which checkpoint can silently discard pending local payload.
 
 The full crash matrix and required tests are in FLD-DB roadmap §7.15. This is a design contract only; no PendingLocal WAL kind, snapshot or API is implemented yet. Do not report cross-commit coalescing as available until the crash/reopen tests pass. The compatibility baseline is now tested: four ordinary `Commit()` calls produce four immutable Outbox operations, while four Put calls inside one `Commit()` already produce one final operation. GitHub Actions run [42350334573](https://github.com/smersh1307n2/FLD-DB/actions/runs/42350334573) passed the baseline tests. The target remains that four `CommitPending()` calls to one key followed by one freeze produce exactly one final operation.
+
+### 9.9. NodePersistence count and length hardening
+
+The v11 snapshot reader now validates collection counts against both `Int32` range and the minimum encoded bytes available in the remaining body before allocating collections or entering loops. This is applied to namespaces/records, Outbox, peer state and author progress, receipts, aliases, digests, replay mappings, local WAL markers, global ChangeId ledger, record fields/tombstones and causal dependencies. Outbox payload lengths are similarly checked against the remaining body before allocation/copy. Grouped v10 receipt/ledger counts use the same bounded-count validation and still reject empty/duplicate groups.
+
+A malformed authenticated snapshot whose namespace count is `UInt64.MaxValue` is covered by a hardening test; its digest is recomputed so the test exercises structural count validation rather than the outer integrity check. This is a local persistence robustness change; no wire format or state version change. GitHub Actions run [42351742873](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42351742873) passed .NET 10 build/tests, public samples, coverage and fuzz/lab hardening at commit `ab9c361d2365c9e2d3f1b476afaaad40d564b393`.
