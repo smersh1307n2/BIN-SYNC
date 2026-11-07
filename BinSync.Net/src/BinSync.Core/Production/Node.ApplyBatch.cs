@@ -236,7 +236,7 @@ public sealed partial class Node
             // encoding, so compact aliases and transport routes cannot affect identity.
             var ledgerKey = (batch.NamespaceId, e.ChangeId);
             var fingerprint = ChangeIdentity.Fingerprint(batch.NamespaceId, e.RecordId,
-                e.OpKind, op, opAuthor);
+                e.OpKind, op, opAuthor, e.CausalDepsOrNull);
             if (GlobalChangeLedger.TryGetValue(ledgerKey, out var knownIdentity))
             {
                 if (knownIdentity.IsKnown && knownIdentity.Fingerprint != fingerprint)
