@@ -43,7 +43,7 @@ jobs:
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net
         run: |
-          if grep -R -E '\\|[[:space:]]*NA[[:space:]]*\\|' BenchmarkDotNet.Artifacts/results/*.md; then
+          if grep -R -E '\|[[:space:]]*NA[[:space:]]*\|' BenchmarkDotNet.Artifacts/results/*.md; then
             echo "One or more metadata benchmark cases failed."
             exit 1
           fi
