@@ -20,6 +20,13 @@ public interface IMetadataPeerStateStore
     IReadOnlyList<MetadataInterestedPeer> ReadInterestedPeers(
         string scopeId, NodeId localReplica, int namespaceId);
 
+    /// <summary>
+    /// Retires an older peer incarnation after a newer epoch has completed session
+    /// establishment. The retired epoch is fenced against future reads and writes.
+    /// </summary>
+    void RetireInterestedPeer(string scopeId, NodeId localReplica,
+        NodeId peer, uint retiredPeerEpoch, uint replacementPeerEpoch, int namespaceId);
+
     void RegisterInterestedPeerStream(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         ulong baselineAckedCursor, ulong streamOffset, uint issuerEpoch, byte[] lastBatchDigest);
