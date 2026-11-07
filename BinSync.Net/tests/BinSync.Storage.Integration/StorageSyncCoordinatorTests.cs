@@ -139,6 +139,59 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Lost_ack_after_metadata_finalize_replays_as_durable_duplicate()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-lost-ack"), 452);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(52);
+        using var receiver = NewNode(53);
+        const string scope = "metadata-lost-ack";
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+        RecordId record = RecordId.From(Guid.Parse("52000000-0000-0000-0000-000000000052").ToByteArray());
+        sender.WriteField(1, record, 0x0816, "committed-before-lost-ack"u8.ToArray(), new Hlc(5800, 0));
+
+        StorageRemoteApplyPlan? firstPlan = null;
+        using var sendCts = new CancellationTokenSource();
+        using var receiveCts = new CancellationTokenSource();
+        Task<BatchResult> firstReceive = acceptor.ReceiveBatchAsync(receiver,
+            beforeApply: (batch, payload, peer) =>
+                firstPlan = coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer),
+            beforeAck: (batch, _) =>
+            {
+                var plan = firstPlan ?? throw new InvalidOperationException("Pending intent was not staged.");
+                coordinator.ApplyRemoteBatchAfterNodeApply(batch, plan, _ => { });
+                throw new InvalidOperationException("simulated ACK loss after durable metadata finalization");
+            },
+            ct: receiveCts.Token,
+            receiveStateOwnedByMetadataStore: true);
+        Task<bool> firstSend = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await firstReceive);
+        sendCts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await firstSend);
+        Assert.Equal(1UL, metadata.GetReceiveCursor(scope, receiver.NodeId, sender.NodeId, 1, 1, sender.NodeId));
+        Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+
+        Task<BatchResult> replayReceive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+        Assert.True(await initiator.PushBatchAsync(sender, 1));
+        BatchResult replayResult = await replayReceive;
+
+        Assert.True(replayResult.Duplicate);
+        Assert.Equal(0, replayResult.Applied);
+        Assert.Equal(1UL, metadata.GetReceiveCursor(scope, receiver.NodeId, sender.NodeId, 1, 1, sender.NodeId));
+        Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        Assert.True(provider.TryReadCurrent(record, 0x0816, out var value));
+        Assert.Equal("committed-before-lost-ack", Encoding.UTF8.GetString(value!.Value));
+    }
+
+    [Fact]
     public async Task Provider_failure_after_node_apply_keeps_pending_intent_for_recovery()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-failure-after-node"), 441);
