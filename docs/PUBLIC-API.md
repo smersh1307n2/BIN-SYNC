@@ -157,7 +157,7 @@ MergePolicyRegistry is a standalone helper registry; it is not connected to Node
 | `PipeTransport` | In-memory paired transport for tests and embedded scenarios; `CreatePair()` returns peer-aware endpoints |
 | `StreamSyncTransport` | Complete-packet adapter over a caller-supplied `Stream`; `ownsStream` controls whether disposal closes that stream; peer identity is bound after HELLO |
 | `SessionWire` | HELLO / HELLO_ACK / ALIAS_MAP / ERROR; `HelloPayload` / `AliasMapEntry` use **`NodeId`**; includes low-level `HandshakeAsync` for role-specific setup |
-| `SyncSession` | Transport-independent protocol session; `ConnectAsync` / `AcceptAsync` use role-specific handshakes, while `EstablishAsync` lets both endpoints start symmetrically and selects the initiator by `NodeId`; `ownsTransport` controls transport disposal |
+| `SyncSession` | Transport-independent protocol session; `ConnectAsync` / `AcceptAsync` use role-specific handshakes, while `EstablishAsync` lets both endpoints start symmetrically and selects the initiator by `NodeId`; `ownsTransport` controls transport disposal | `ReceiveBatchAsync` has an opt-in `receiveStateOwnedByMetadataStore` mode that requires a durable `beforeApply` callback; Storage hosts should use `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync` rather than setting this flag without a matching Metadata Store.
 | Fragment receive | `ReceiveReassembledAsync` returns a complete `Frame` (type, stream, sequence, flags, payload); fragments sharing a message id must retain the same type/stream/base sequence/flags |
 | IBLT receive | `ReceiveIbltAsync(namespaceId)` requires the expected namespace so the response stream is validated before decoding |
 | `TcpSync` / `TcpSyncListener` | TCP/TLS host adapter; listener defaults to loopback unless an address is supplied; TLS is enabled by supplying server/client authentication options; both create generic `SyncSession` instances |
@@ -167,7 +167,16 @@ MergePolicyRegistry is a standalone helper registry; it is not connected to Node
 
 ### Persistence
 
-The current `NodePersistence` / `Wal` surface is Node-owned persistence, not the future neutral Metadata Store or Data Provider API. The external provider/store architecture and semantic conformance contracts are documented separately and currently have test-only volatile reference adapters; no durable external Metadata Store or Data Provider implementation is part of the 3.0.0 public API.
+The `NodePersistence` / `Wal` surface remains Node-owned persistence. The optional durable external metadata/provider implementation is shipped in the separate `BinSync.Storage` assembly: `StorageMetadataStore`, `StorageDataProvider` and `StorageSyncCoordinator` provide row-level durable metadata transitions, provider receipts and the Storage-backed transport path. The Core package remains usable without this assembly. The volatile reference adapter is test-only; durable storage behavior is exercised by the Storage Integration suite. See `METADATA-STORE-AUTHORITY-MIGRATION.md` and `METADATA-STORE-BENCHMARKS.md` for ownership, migration and measured scaling details.
+
+### Metadata Store / durable Storage integration (opt-in)
+
+- `StorageMetadataStore` is the durable `IMetadataStore` / `IMetadataPeerStateStore` implementation. Current-format metadata mutations use row-level transactions; legacy physical row formats remain readable and migrate through the one-time fallback.
+- `StorageDataProvider` stores provider values and idempotent apply receipts. `StorageSyncCoordinator` orders PendingApply staging, Node checkpoint, provider apply, metadata finalization and ACK.
+- `MetadataIncomingBatch.ReceiveStateOwnedByMetadataStore` marks a PendingApply intent whose receive cursor/digest/inbox authority belongs to the Metadata Store. StorageSyncCoordinator sets it; callers must not set it without a durable Metadata Store acceptance callback.
+- `MetadataIncomingBatch.HeaderFingerprint` carries the 16-byte canonical full-wire-header fingerprint. New metadata-authoritative intents require it; the durable receipt and completed PendingApply retain it with `MetadataBatchReceipt.DurableAuthor`. A duplicate BatchId with a different full header is rejected, even if BatchDigest alone would not distinguish the header fields.
+- `MetadataPendingApplyIntent.IsDuplicate` reports whether the batch identity already has a matching durable receipt. `MetadataBatchReceipt.HeaderFingerprint` returns the committed fingerprint.
+- PendingApply v5 persists authority mode and optional header fingerprint. v4 intents from the pre-fingerprint transition recover through the legacy Node validator; v2/v3 formats remain readable. Old receipt rows without a full fingerprint remain readable but cannot prove full-header identity for a new metadata-authoritative duplicate replay, which fails closed.
 
 `NodePersistence` stores the complete Node snapshot. `Wal` is a v2-only append log. Hosts use `Checkpoint(Node, snapshotPath)` for the atomic snapshot-and-reset transition; raw truncate and checkpoint-marker append are internal. The sequence is read-only and synchronized:
 each local mutation is one integrity-protected frame containing both the operation
