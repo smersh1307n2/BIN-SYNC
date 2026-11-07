@@ -301,6 +301,72 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Finalize_pending_apply_preserves_prior_partition_state_across_reopen()
+    {
+        string directory = Path.Combine(_root, "pending-finalize-delta-reopen");
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        const string scope = "pending-finalize-delta-reopen";
+        byte[] firstDigest = Enumerable.Repeat((byte)131, 16).ToArray();
+        byte[] secondDigest = Enumerable.Repeat((byte)132, 16).ToArray();
+        var first = new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 1,
+            AuthorStreamNodeId = author, NamespaceId = 7, BatchId = Batch(130),
+            CursorStart = 1, CursorEnd = 1, PreviousBatchDigest = new byte[16],
+            BatchDigest = firstDigest,
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author, ChangeId = Batch(133),
+                    Fingerprint = Enumerable.Repeat((byte)134, 16).ToArray(),
+                    Payload = new byte[] { 1, 3, 3 }, RelayEligible = true
+                }
+            }
+        };
+        var second = new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 1,
+            AuthorStreamNodeId = author, NamespaceId = 7, BatchId = Batch(135),
+            CursorStart = 2, CursorEnd = 2, PreviousBatchDigest = firstDigest,
+            BatchDigest = secondDigest,
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author, ChangeId = Batch(136),
+                    Fingerprint = Enumerable.Repeat((byte)137, 16).ToArray(),
+                    Payload = new byte[] { 2, 4, 6 }, RelayEligible = true
+                }
+            }
+        };
+        Guid token = Guid.Parse("00000000-0000-0000-0000-000000000439");
+
+        using (var store = new StorageMetadataStore(directory, 439, deleteOnDispose: false))
+        {
+            store.AcceptIncomingBatch(first);
+            store.BeginPendingApply(second, token);
+            var finalized = store.FinalizePendingApply(scope, local,
+                new MetadataProviderApplyReceipt(token, secondDigest));
+            Assert.False(finalized.IsDuplicate);
+            Assert.Equal(1, finalized.NewRelayOperationCount);
+        }
+
+        using var reopened = new StorageMetadataStore(directory, 439, deleteOnDispose: false);
+        Assert.Empty(reopened.ReadPendingApplyIntents(scope, local));
+        Assert.Equal(2UL, reopened.GetReceiveCursor(scope, local, sender, 1, 7, author));
+        Assert.Equal(2UL, reopened.GetRelayHighWatermark(scope, local, 7, author));
+        var relay = reopened.ReadRelay(scope, local, 7, author, 0, 10);
+        Assert.Equal(2, relay.Items.Count);
+        Assert.Equal(Batch(133), relay.Items[0].ChangeId);
+        Assert.Equal(Batch(136), relay.Items[1].ChangeId);
+        var retry = reopened.FinalizePendingApply(scope, local,
+            new MetadataProviderApplyReceipt(token, secondDigest));
+        Assert.True(retry.IsDuplicate);
+        Assert.Equal(2UL, retry.CursorEnd);
+    }
+
+    [Fact]
     public void Pending_apply_wire_payload_survives_restart_for_node_replay()
     {
         string directory = Path.Combine(_root, "pending-wire-replay");
