@@ -436,7 +436,7 @@ public sealed partial class Node
                 nsStore.EnsureCapacity(nsStore.Count + newRecordCount);
         }
 
-        InboxAuthors.EnsureCapacity(InboxAuthors.Count + 1);
+        InboxAuthors.EnsureCapacityFor(key);
         if (ps is null)
             PeerStates.EnsureCapacity(PeerStates.Count + 1);
         var peerStateToPublish = ps ?? new PeerState(batch.IssuerNodeId, batch.NamespaceId);
