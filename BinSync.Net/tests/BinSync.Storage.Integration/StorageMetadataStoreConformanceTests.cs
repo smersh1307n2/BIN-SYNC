@@ -1087,7 +1087,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 reopened.AcknowledgeOutbound("durable-scope", Node(1), 7, Node(1), 2, 1);
                 reopened.CompactOutboundThrough("durable-scope", Node(1), 7, Node(1), 1);
                 Assert.Empty(reopened.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
-                Assert.Empty(reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 1, 0, 10).Items);
+                Assert.Empty(reopened.ReadOutbound("durable-scope", Node(1), 7, Node(1), 2, 0, 10).Items);
             }
 
             using (var afterCompaction = new StorageMetadataStoreConformanceAdapter(directory, 302, deleteOnDispose: false))
