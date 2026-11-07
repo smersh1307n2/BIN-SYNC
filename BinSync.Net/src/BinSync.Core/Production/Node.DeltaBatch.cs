@@ -515,52 +515,65 @@ public sealed partial class Node
     /// entries stay (relay to a peer not yet contacted). No peers at all: keep the
     /// log (sneakernet / not-yet-exported).
     /// </summary>
-    internal void CompactOutbox(int namespaceId)
+    /// <summary>
+    /// Return the minimum local OutboxSeq acknowledged by every interested peer for
+    /// this author stream. Zero means reclamation is not currently safe (no peers,
+    /// or a known peer has no durable PeerState for this namespace).
+    /// </summary>
+    public long GetSafeOutboxAckedThrough(int namespaceId, NodeId authorNodeId)
     {
-        if (!Outbox.TryGetValue(namespaceId, out var list) || list.Count == 0) return;
+        ValidateNamespaceId(namespaceId);
+        if (authorNodeId.IsZero) throw new ArgumentException("Author must be non-zero.", nameof(authorNodeId));
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            return ComputeSafeOutboxAckedThrough(namespaceId, authorNodeId,
+                CollectInterestedPeers(namespaceId));
+        }
+    }
 
-        // A peer remains interested if it is connected, has an alias/session map,
-        // or has persisted progress for this namespace. A known peer without a
-        // PeerState deliberately blocks reclamation, as does the absence of all peers.
+    private HashSet<NodeId> CollectInterestedPeers(int namespaceId)
+    {
         var interested = new HashSet<NodeId>();
         if (PeersByNid is not null)
             foreach (var id in PeersByNid.Keys) interested.Add(id);
         foreach (var id in AliasToNode.Keys) interested.Add(id);
         foreach (var kv in PeerStates)
             if (kv.Key.Item2 == namespaceId) interested.Add(kv.Key.Item1);
+        return interested;
+    }
+
+    private long ComputeSafeOutboxAckedThrough(int namespaceId, NodeId authorNodeId,
+        HashSet<NodeId> interestedPeers)
+    {
+        if (interestedPeers.Count == 0) return 0;
+        long minimum = long.MaxValue;
+        foreach (var peer in interestedPeers)
+        {
+            if (!PeerStates.TryGetValue((peer, namespaceId), out var peerState))
+                return 0;
+            long offset = peerState.TryGetStreamOffset(authorNodeId, out var savedOffset)
+                ? savedOffset : 0;
+            long localAck = checked(peerState.AckedFor(authorNodeId) + offset);
+            if (localAck < minimum) minimum = localAck;
+        }
+        return minimum == long.MaxValue ? 0 : minimum;
+    }
+
+    internal void CompactOutbox(int namespaceId)
+    {
+        if (!Outbox.TryGetValue(namespaceId, out var list) || list.Count == 0) return;
+        var interested = CollectInterestedPeers(namespaceId);
         if (interested.Count == 0) return;
 
         // Compute the minimum safe local OutboxSeq once per author, not once per
         // Outbox entry. This changes the scan from O(entries × peers) to
         // O(entries + authors × peers) while preserving peer-relative offsets.
-        var authors = new List<NodeId>();
         var safeAckByAuthor = new Dictionary<NodeId, long>();
         foreach (var entry in list)
-        {
-            if (safeAckByAuthor.ContainsKey(entry.AuthorNodeId)) continue;
-            authors.Add(entry.AuthorNodeId);
-            safeAckByAuthor.Add(entry.AuthorNodeId, long.MaxValue);
-        }
-
-        foreach (var peer in interested)
-        {
-            if (!PeerStates.TryGetValue((peer, namespaceId), out var peerState))
-            {
-                // One interested peer with no state blocks every author stream.
-                foreach (var author in authors)
-                    safeAckByAuthor[author] = 0;
-                break;
-            }
-
-            foreach (var author in authors)
-            {
-                long offset = peerState.TryGetStreamOffset(author, out var savedOffset)
-                    ? savedOffset : 0;
-                long localAck = checked(peerState.AckedFor(author) + offset);
-                if (localAck < safeAckByAuthor[author])
-                    safeAckByAuthor[author] = localAck;
-            }
-        }
+            if (!safeAckByAuthor.ContainsKey(entry.AuthorNodeId))
+                safeAckByAuthor.Add(entry.AuthorNodeId,
+                    ComputeSafeOutboxAckedThrough(namespaceId, entry.AuthorNodeId, interested));
 
         int w = 0;
         for (int i = 0; i < list.Count; i++)
