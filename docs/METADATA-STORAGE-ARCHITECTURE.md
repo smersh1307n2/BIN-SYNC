@@ -836,3 +836,19 @@ The adapter computes a logical-entry diff and commits only changed keys in one S
 The cross-repository integration suite now runs **30 tests successfully**: the full Data Provider conformance suite, the full Metadata Store conformance suite, and restart/compaction assertions. The restart test reopens the store with receive receipts, relay/outbound state, a live lease and Pending Apply intent; it finalizes the provider receipt exactly once, compacts acknowledged payloads, reopens again, and verifies that high-watermarks and ChangeId/receipt dedup facts remain.
 
 This remains an integration/conformance adapter rather than a shipped production Metadata Store API. The next gate is to promote the contracts into production APIs, define the Node integration boundary, and add crash/fault-injection tests around every storage/metadata transaction boundary.
+
+
+## Public runtime API promotion (2026-11-07)
+
+The conformance contracts have now been promoted into `BinSync.Core` as public `IDataProvider` and `IMetadataStore` interfaces with their shared value models. The implementations live in the optional `BinSync.Storage.dll` assembly, which depends on BIN-SYNC Core and the neutral `Fld1.Storage.dll`, not the reverse.
+
+Public runtime components:
+- `StorageDataProvider` — durable source mapping, field state, local feed, snapshot barrier, ACK and idempotent remote apply;
+- `StorageMetadataStore` — per-key durable metadata records and diff-based atomic updates;
+- `StorageSyncCoordinator` — explicit host-side bridge from provider feed to Node writes and from Node winners/tombstones back to the provider.
+
+The coordinator's local publication order is provider feed → Node mutation with original HLC/author → caller-provided durable Node checkpoint → provider ACK. A failed checkpoint leaves the feed unacknowledged; replaying the same HLC/author is idempotent. Remote materialization uses a deterministic apply token and does not create local feed entries.
+
+The public array sample now uses these runtime APIs. On the integration workflow, 32/32 tests passed, including durable provider and Metadata Store conformance, restart/compaction, coordinator replay without duplicate Outbox writes, remote feed isolation, and the two-replica array sample.
+
+**Remaining runtime integration gate:** `StorageMetadataStore` is implemented and publicly exposed, but the existing `Node`/Transport path still uses its legacy in-memory/WAL metadata state. Wiring `IMetadataStore` into batch freeze, receive/relay, ACK/lease and Pending Apply must be done as a separate compatibility-preserving migration. The current coordinator is explicit; automatic NodeBuilder/Transport injection is not yet claimed.
