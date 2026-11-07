@@ -83,7 +83,7 @@ try
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
 
         Transport.MakeSession(nodeA, nodeB);
-        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _) =>
+        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _, _) =>
         {
             if (ReferenceEquals(receiver, nodeA))
             {
