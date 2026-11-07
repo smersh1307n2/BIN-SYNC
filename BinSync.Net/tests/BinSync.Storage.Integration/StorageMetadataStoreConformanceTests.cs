@@ -302,6 +302,16 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         Assert.False(store.AcceptIncomingBatch(first).IsDuplicate);
         Assert.True(store.AcceptIncomingBatch(secondView).IsDuplicate);
+        var equivocation = new MetadataIncomingBatch
+        {
+            ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
+            AuthorStreamNodeId = default, NamespaceId = 9, BatchId = first.BatchId,
+            CursorStart = first.CursorStart, CursorEnd = first.CursorEnd,
+            PreviousBatchDigest = first.PreviousBatchDigest.ToArray(),
+            BatchDigest = Enumerable.Repeat((byte)146, 16).ToArray(),
+            Operations = first.Operations
+        };
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(equivocation));
         Assert.Equal(1UL, store.GetReceiveCursor(scope, local, sender, 5, 9, authorA));
         Assert.Equal(1UL, store.GetRelayHighWatermark(scope, local, 9, authorA));
     }
