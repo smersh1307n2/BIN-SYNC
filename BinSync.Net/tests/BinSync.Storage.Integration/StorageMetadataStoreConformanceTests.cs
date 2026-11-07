@@ -260,6 +260,47 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Completed_pending_apply_uses_a_distinct_retry_exception()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "completed-pending-token"), 438);
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        const string scope = "completed-pending-token";
+        var incoming = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(120),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)121, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch(122),
+                    Fingerprint = Enumerable.Repeat((byte)123, 16).ToArray(),
+                    Payload = new byte[] { 1, 2, 3 },
+                    RelayEligible = true
+                }
+            }
+        };
+        Guid token = Guid.Parse("00000000-0000-0000-0000-000000000438");
+
+        store.BeginPendingApply(incoming, token);
+        store.FinalizePendingApply(scope, local,
+            new MetadataProviderApplyReceipt(token, incoming.BatchDigest.ToArray()));
+
+        Assert.Throws<MetadataPendingApplyAlreadyFinalizedException>(
+            () => store.BeginPendingApply(incoming, token));
+    }
+
+    [Fact]
     public void Pending_apply_wire_payload_survives_restart_for_node_replay()
     {
         string directory = Path.Combine(_root, "pending-wire-replay");
