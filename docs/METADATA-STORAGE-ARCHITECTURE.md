@@ -1,9 +1,9 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.7 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store/Data Provider semantic conformance and PendingLocal/source-feed handoff ownership are recorded. Durable external adapters remain unimplemented.  
+**Status:** Architecture contract v0.8 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1, Metadata Store/Data Provider semantic conformance and PendingLocal/source-feed handoff ownership are recorded. NodePersistence v13/v14 compact the alias and Outbox encodings. Durable external adapters remain unimplemented.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
-**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v12, adaptive receipt indexing, compact 16-byte ledger values, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
+**Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v14, including adaptive receipt indexing, compact 16-byte ledger values, single-direction alias persistence, shared Outbox author tables, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
 
 ## 1. Purpose
 
@@ -750,3 +750,47 @@ The note compares Microsoft Sync Framework ForgottenKnowledge, WinFS P2P knowled
 - Until all receive, reconcile and snapshot paths enforce these conditions, destructive tombstone GC remains disabled.
 
 This is a research-backed design proposal, not an implementation or wire-format change. No OriginSeq extension or ChangeId-generation change is approved by this note.
+
+
+## 34. NodePersistence v13: persist one alias direction
+
+The in-memory alias maps remain bidirectional for constant-time lookup:
+- `AliasToNode`: `alias → (NodeId, epoch)`;
+- `NodeToAlias`: `(NodeId, epoch) → alias`.
+
+They are reverse indexes over the same session bindings, not independent protocol facts. NodePersistence v13 now writes only `AliasToNode`; the reader rebuilds `NodeToAlias` and rejects zero peers, invalid aliases/epochs, or duplicate reverse bindings. The v3-v12 readers retain their original two-map layout, so existing snapshots remain readable. The in-memory representation and alias negotiation/session behavior are unchanged.
+
+The raw saving per binding is one removed copy of `NodeId(16) + varint(epoch) + varint(alias)`, plus the repeated peer-group header and count for the removed reverse map. The exact total depends on aliases per peer. This is a persistence-only change; no wire bytes or protocol identity changed.
+
+## 35. NodePersistence v14: shared Outbox metadata
+
+The old Outbox snapshot encoding repeated `NamespaceId`, `AuthorNodeId` and `OpKind` for every entry, and stored `Seq` as a fixed 64-bit integer. v14 keeps each namespace's Outbox list in its original order, but writes:
+- the namespace once in the outer group;
+- a per-namespace author table, with each entry referring to an author by varint index (so interleaved authors do not reorder the Outbox);
+- `Seq` as a non-negative varint;
+- `OpKind` derived from the first canonical payload byte, with the writer verifying that it matches the in-memory field;
+- `RecordId` only for field operations. A record-tombstone payload already contains its RecordId, so v14 reconstructs it from the payload and verifies equality before writing.
+
+ChangeId, payload bytes, CreatedAt and causal dependencies retain their values. CreatedAt remains fixed-width in v14; its later compression is a separate candidate. The v3-v13 readers retain the legacy per-entry layout. No Outbox ordering, per-author sequence, relay identity, operation payload or network wire encoding changes.
+
+For N entries and K distinct authors in one namespace, the author table costs approximately `16K + varint(K)` bytes. Per entry, v14 removes the repeated namespace varint and OpKind byte, replaces the 16-byte author with a varint index, and replaces the fixed 8-byte sequence with a varint. Record-tombstone entries also omit the duplicate 16-byte RecordId. The approximate raw saving is therefore:
+
+`Σ[namespaceVarint + (8 − sequenceVarint) + 1 + (16 − authorIndexVarint) + (16 if RecordTombstone)] − (16K + varint(K))`.
+
+For the focused three-entry test (two authors, small sequence values, one record tombstone), the format-derived saving is 55 bytes before outer-file effects. This is a byte-layout calculation, not a benchmark. The new test covers mixed/interleaved authors, sequence values, payload/OpKind reconstruction and RecordId reconstruction. CI run [42363786112](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42363786112) passed 638 tests, public samples, coverage and fuzz/lab hardening at commit `e9657d29124c20582c5de24bbd909b75acccf75a`.
+
+## 36. Remaining metadata compaction candidates
+
+The following are audit findings, not approved changes:
+
+1. **PeerState fixed-width counters.** v14 still stores `LastPushedSeq`, `LastReceivedSeq`, `LastAckedSeq`, `LastSeen`, per-stream receive cursors, per-author ACK/pushed/offset values, and replay-range start/end values as U64. `OutboxSeqRef` values are also U64. Non-negative sequence values can be evaluated for varint encoding in a future state version. Timestamp values such as `LastSeen` and Outbox `CreatedAt` are likely to save about one byte at current Unix-microsecond magnitudes. Measure representative states before changing the encoding.
+
+2. **Compatibility mirrors in PeerState.** Production code writes `LastReceivedSeq` when a receive-stream cursor is written, but the inspected production paths do not read it. `LastAckedSeq` is assigned from `MinStreamAcked` and is likewise not read by the inspected production paths. They may be removable or reconstructible, but verify every source/test/API consumer and the exact restart semantics before dropping them. Do not remove `LastPushedSeq` on the same assumption: legacy aggregate ACK validation reads it, and the transport path can advance it before per-author stream progress is published.
+
+3. **Inbox expiry encoding.** New receipts currently use `ExpiresAt = 0`; v14 still emits its zero varint. A presence bit in the existing receipt flags could omit that byte for receipts without a scheduled expiry. Keep the expiry field and its independent lifecycle semantics; this is only an encoding optimization, not permission to introduce TTL-based receipt GC.
+
+4. **Global ChangeId ledger.** The logical key and 16-byte fingerprint remain necessary for E-24 equivocation detection. A content-derived ChangeId could potentially make the fingerprint redundant, but this changes identity semantics and remains unapproved. Do not replace exact deduplication with a Bloom filter or reclaim entries using TTL/ordinary ACK.
+
+5. **Do not merge distinct protocol facts.** `LastBatchDigest` and `LastStreamDigest` have different chain scopes. `ReceivedStreams` includes the original stream issuer, which may differ from the direct relay peer owning the PeerState. `PeerState.Ids` stores replay mappings for outstanding ranges; its ACK-pruning behavior is already implemented. These are not duplicate fields merely because they contain related identifiers or digests.
+
+The next low-risk measurement target is a representative Node snapshot with many Outbox entries and several peers/authors. Record exact serialized byte counts by section before deciding whether PeerState varints and mirror removal justify another format version. Receipt/ledger GC and E-24/E-25 semantics remain separate correctness problems, not size optimizations.
