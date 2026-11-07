@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v8";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v9";
+    private const string Version8StateTag = "BIN-SYNC/NODESTATE/v8";
     private const string Version7StateTag = "BIN-SYNC/NODESTATE/v7";
     private const string Version6StateTag = "BIN-SYNC/NODESTATE/v6";
     private const string Version5StateTag = "BIN-SYNC/NODESTATE/v5";
@@ -36,7 +37,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 8;
+    private const ushort Version = 9;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -101,8 +102,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -117,6 +118,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 8)
+        {
+            var v8 = Blake3Core.TaggedHash(Version8StateTag, body);
+            validDigest = v8.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 7)
         {
