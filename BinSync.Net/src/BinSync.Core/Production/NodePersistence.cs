@@ -456,7 +456,7 @@ public static class NodePersistence
                 for (int ai = 0; ai < authorGroupCount; ai++)
                 {
                     var author = NodeId.From(r.B128());
-                    int receiptCount = ReadCount(r, 35, "batch receipt");
+                    int receiptCount = ReadCount(r, 19, "batch receipt");
                     if (author.IsZero || receiptCount == 0 || !receiptAuthors.Add(author))
                         throw new InvalidDataException("Invalid or duplicate persisted receipt author group.");
                     for (int i = 0; i < receiptCount; i++)
