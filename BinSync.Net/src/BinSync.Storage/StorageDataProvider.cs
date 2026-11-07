@@ -69,7 +69,8 @@ public class StorageDataProvider : IDataProvider
                 throw new ArgumentException("Source item key is required.", nameof(sourceItemKey));
 
             byte[] lookupKey = Prefixed(ItemMap, sourceItemKey.Span);
-            if (_storage.TryGet(lookupKey, out var mapped))
+            using var batch = _storage.BeginWriteBatch();
+            if (batch.TryGet(lookupKey, out var mapped))
                 return RecordId.From(mapped!);
 
             byte[] digest = SHA256.HashData(sourceItemKey.Span);
@@ -78,11 +79,10 @@ public class StorageDataProvider : IDataProvider
                 identityBytes[15] = 1;
             RecordId candidate = RecordId.From(identityBytes);
             byte[] reverseKey = Prefixed(ItemReverse, identityBytes);
-            if (_storage.TryGet(reverseKey, out var prior) &&
+            if (batch.TryGet(reverseKey, out var prior) &&
                 !prior!.AsSpan().SequenceEqual(sourceItemKey.Span))
                 throw new InvalidDataException("Stable source item identity collision.");
 
-            using var batch = _storage.BeginWriteBatch();
             batch.Put(lookupKey, identityBytes);
             batch.Put(reverseKey, sourceItemKey.Span);
             batch.Commit();
@@ -99,7 +99,8 @@ public class StorageDataProvider : IDataProvider
                 throw new ArgumentException("Source field key is required.", nameof(sourceFieldKey));
 
             byte[] lookupKey = Prefixed(FieldMap, sourceFieldKey.Span);
-            if (_storage.TryGet(lookupKey, out var mapped))
+            using var batch = _storage.BeginWriteBatch();
+            if (batch.TryGet(lookupKey, out var mapped))
                 return BinaryPrimitives.ReadUInt16LittleEndian(mapped!);
 
             byte[] digest = SHA256.HashData(sourceFieldKey.Span);
@@ -108,11 +109,10 @@ public class StorageDataProvider : IDataProvider
             Span<byte> idBytes = stackalloc byte[2];
             BinaryPrimitives.WriteUInt16LittleEndian(idBytes, candidate);
             byte[] reverseKey = Prefixed(FieldReverse, idBytes);
-            if (_storage.TryGet(reverseKey, out var prior) &&
+            if (batch.TryGet(reverseKey, out var prior) &&
                 !prior!.AsSpan().SequenceEqual(sourceFieldKey.Span))
                 throw new InvalidDataException("Stable source field identity collision.");
 
-            using var batch = _storage.BeginWriteBatch();
             batch.Put(lookupKey, idBytes);
             batch.Put(reverseKey, sourceFieldKey.Span);
             batch.Commit();
@@ -126,11 +126,12 @@ public class StorageDataProvider : IDataProvider
         {
             ThrowIfDisposed();
             ValidateMutation(mutation);
-            ulong current = ReadUInt64(_storage, [LocalHighWatermark]);
+            using var batch = _storage.BeginWriteBatch();
+            ulong current = batch.TryGet([LocalHighWatermark], out var currentBytes)
+                ? ReadUInt64(currentBytes!)
+                : 0;
             ulong sequence = checked(current + 1);
             byte[] owned = EncodeMutation(mutation);
-
-            using var batch = _storage.BeginWriteBatch();
             batch.Put(CurrentKey(mutation.RecordId, mutation.FieldId), owned);
             batch.Put(ChangeKey(sequence), owned);
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
@@ -144,16 +145,16 @@ public class StorageDataProvider : IDataProvider
         {
             ThrowIfDisposed();
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
-            ulong high = ReadUInt64(_storage, [LocalHighWatermark]);
-            ulong acked = ReadUInt64(_storage, [LocalAckWatermark]);
-            ulong highestRead = ReadUInt64(_storage, [LocalReadWatermark]);
-            bool snapshotBarrier = _snapshots.Values.Any(snapshot =>
-                ReadUInt64(snapshot, [LocalHighWatermark]) == afterSequence);
+            using var snapshot = _storage.OpenSnapshot();
+            ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
+            ulong acked = ReadUInt64(snapshot, [LocalAckWatermark]);
+            ulong highestRead = ReadUInt64(snapshot, [LocalReadWatermark]);
+            bool snapshotBarrier = _snapshots.Values.Any(sourceSnapshot =>
+                ReadUInt64(sourceSnapshot, [LocalHighWatermark]) == afterSequence);
             if (afterSequence > highestRead && !snapshotBarrier)
                 throw new InvalidDataException("Requested local change cursor skips changes that have not been scanned or covered by a source snapshot.");
 
             ulong start = Math.Max(afterSequence, acked);
-            using var snapshot = _storage.OpenSnapshot();
             var rows = snapshot.ScanPrefix([LocalChange], ChangeKey(start), limit);
             var changes = new List<ProviderChange>(rows.Count);
             foreach (var row in rows)
@@ -166,6 +167,9 @@ public class StorageDataProvider : IDataProvider
             if (scanned > highestRead)
             {
                 using var cursorBatch = _storage.BeginWriteBatch();
+                ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+                if (actualBaseCommitSeq != snapshot.CommitSeq)
+                    throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
                 cursorBatch.Put([LocalReadWatermark], EncodeUInt64(scanned));
                 cursorBatch.Commit();
             }
@@ -179,16 +183,19 @@ public class StorageDataProvider : IDataProvider
         lock (_gate)
         {
             ThrowIfDisposed();
-            ulong high = ReadUInt64(_storage, [LocalHighWatermark]);
-            ulong acked = ReadUInt64(_storage, [LocalAckWatermark]);
-            ulong highestRead = ReadUInt64(_storage, [LocalReadWatermark]);
+            using var snapshot = _storage.OpenSnapshot();
+            ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
+            ulong acked = ReadUInt64(snapshot, [LocalAckWatermark]);
+            ulong highestRead = ReadUInt64(snapshot, [LocalReadWatermark]);
             if (safeThroughSequence > high || safeThroughSequence > highestRead)
                 throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
             if (safeThroughSequence <= acked) return;
 
-            using var snapshot = _storage.OpenSnapshot();
             var rows = snapshot.ScanPrefix([LocalChange], ChangeKey(acked), int.MaxValue);
             using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
             foreach (var row in rows)
             {
                 ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
@@ -265,14 +272,14 @@ public class StorageDataProvider : IDataProvider
 
             byte[] fingerprint = Fingerprint(mutations);
             byte[] receiptKey = Prefixed(ApplyReceipt, applyToken.ToByteArray());
-            if (_storage.TryGet(receiptKey, out var prior))
+            using var batch = _storage.BeginWriteBatch();
+            if (batch.TryGet(receiptKey, out var prior))
             {
                 if (!prior!.AsSpan().SequenceEqual(fingerprint))
                     throw new InvalidDataException("Apply token was reused with different canonical input.");
                 return new ProviderApplyReceipt(applyToken, prior!.ToArray(), IsDuplicate: true);
             }
 
-            using var batch = _storage.BeginWriteBatch();
             foreach (var mutation in mutations)
             {
                 byte[] key = CurrentKey(mutation.RecordId, mutation.FieldId);
