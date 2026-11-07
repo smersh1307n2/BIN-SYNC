@@ -468,6 +468,40 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void New_peer_requires_confirmed_snapshot_baseline_even_when_first_outbound_sequence_is_retained()
+    {
+        string directory = Path.Combine(_root, "peer-snapshot-baseline");
+        NodeId local = Node(1), peer = Node(2);
+        const string scope = "peer-snapshot-baseline";
+        try
+        {
+            using (var store = new StorageMetadataStore(directory, 440, deleteOnDispose: false))
+            {
+                store.FreezeOutbound(scope, local, 7, local, new[] { FrozenOperation(155, 156) });
+                store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+                Assert.False(store.IsPeerInitialSyncComplete(scope, local, peer, 1, 7));
+                Assert.Throws<SyncException>(() =>
+                    store.ReadOutboundForPeer(scope, local, peer, 1, 7, local, 10));
+
+                store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+                    new[] { new MetadataPeerStreamBaseline(local, 1, 1) });
+                Assert.True(store.IsPeerInitialSyncComplete(scope, local, peer, 1, 7));
+                Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
+                Assert.Empty(store.ReadOutboundForPeer(scope, local, peer, 1, 7, local, 10).Items);
+                store.CompactOutboundThrough(scope, local, 7, local, 1);
+            }
+
+            using var reopened = new StorageMetadataStore(directory, 440, deleteOnDispose: false);
+            Assert.True(reopened.IsPeerInitialSyncComplete(scope, local, peer, 1, 7));
+            Assert.Equal(1UL, reopened.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void New_peer_epoch_fences_and_retires_old_progress_before_releasing_payload_retention()
     {
         string directory = Path.Combine(_root, "peer-epoch-retirement");
