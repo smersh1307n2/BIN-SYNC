@@ -240,9 +240,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             using (var store = new StorageMetadataStore(directory, 421, deleteOnDispose: false))
             {
                 store.FreezeOutbound(scope, local, 7, author, new[] { FrozenOperation(90, 91) });
-                store.AcquireOutboundLease(scope, local, 7, author,
+                ulong lease = store.AcquireOutboundLease(scope, local, 7, author,
                     Guid.Parse("91000000-0000-0000-0000-000000000001"));
-                store.AcknowledgeOutbound(scope, local, 7, author, 1, 1);
+                Assert.Single(store.ReadOutbound(scope, local, 7, author, lease, 0, 10).Items);
+                store.AcknowledgeOutbound(scope, local, 7, author, lease, 1);
 
                 store.RegisterInterestedPeerStream(scope, local, peerA, 1, 7, author,
                     0, 0, 1, new byte[16]);
@@ -265,7 +266,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, author));
                 Assert.Throws<ArgumentOutOfRangeException>(() =>
                     store.CompactOutboundThrough(scope, local, 7, author, 1));
-                Assert.Single(store.ReadOutbound(scope, local, 7, author, 1, 0, 10).Items);
+                Assert.Equal(1UL, store.GetOutboundHighWatermark(scope, local, 7, author));
 
                 store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(93));
                 store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(93));
