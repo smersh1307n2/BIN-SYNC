@@ -45,26 +45,47 @@ public sealed class StorageSyncCoordinator
         if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
         lock (_gate)
         {
-            var page = _provider.ReadLocalChanges(afterSequence: 0, limit);
-            if (page.Changes.Count == 0)
-                return 0;
+            var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+            ulong afterSequence = 0;
+            ulong scannedThroughSequence = 0;
+            int totalChanges = 0;
 
-            // Validate the complete source page before coalescing: an unsupported
-            // superseded operation must never be silently hidden by a later winner.
-            foreach (var change in page.Changes)
+            // Drain the complete currently-pending provider feed, not just one page.
+            // The winner map is bounded by distinct record/field identities rather than
+            // the number of historical edits, so repeated pre-sync writes across page
+            // boundaries collapse without creating intermediate Outbox records.
+            while (true)
             {
-                if (change.Mutation.AuthorNodeId != _node.NodeId)
-                    throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
-                if (change.Mutation.KeyEpoch != 0)
-                    throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
+                var page = _provider.ReadLocalChanges(afterSequence, limit);
+                if (page.Changes.Count == 0)
+                {
+                    scannedThroughSequence = Math.Max(scannedThroughSequence, page.ScannedThroughSequence);
+                    break;
+                }
+                if (page.ScannedThroughSequence <= afterSequence)
+                    throw new InvalidDataException("Provider local feed cursor did not advance.");
+
+                foreach (var change in page.Changes)
+                {
+                    if (change.Mutation.AuthorNodeId != _node.NodeId)
+                        throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
+                    if (change.Mutation.KeyEpoch != 0)
+                        throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
+                    AddCoalescedPendingLocalChange(winners, change);
+                }
+
+                totalChanges = checked(totalChanges + page.Changes.Count);
+                scannedThroughSequence = page.ScannedThroughSequence;
+                afterSequence = page.ScannedThroughSequence;
+                if (page.Changes.Count < limit)
+                    break;
             }
 
-            // Source feeds may contain several local LWW edits for the same canonical
-            // field before synchronization. Collapse only this unpublished page to its
-            // deterministic HLC winner; once written to Node/Outbox, operations are immutable.
-            // Record lifecycle tombstones are coalesced independently from field state.
-            var pending = CoalescePendingLocalChanges(page.Changes);
-            foreach (var change in pending)
+            if (totalChanges == 0)
+                return 0;
+
+            // Publish only final winners after every source page has been validated.
+            foreach (var change in winners.Values.OrderBy(change => change.Sequence))
             {
                 ProviderMutation mutation = change.Mutation;
                 var hlc = new Hlc(mutation.HlcWall, mutation.HlcLogical);
@@ -76,14 +97,40 @@ public sealed class StorageSyncCoordinator
                     _node.WriteField(_namespaceId, mutation.RecordId, mutation.FieldId, mutation.Value, hlc);
             }
 
-            // Do not ACK if persistence fails. A restart can replay the same HLCs
-            // into the restored Node without creating a second logical operation.
+            // Do not ACK if persistence or metadata freeze fails. The provider feed
+            // remains the durable PendingLocal journal and is replayed/coalesced on restart.
             persistNode(_node);
             FreezeLocalOutboxToMetadata();
-            if (page.ScannedThroughSequence > 0)
-                _provider.AcknowledgeLocalChanges(page.ScannedThroughSequence);
-            return page.Changes.Count;
+            if (scannedThroughSequence > 0)
+                _provider.AcknowledgeLocalChanges(scannedThroughSequence);
+            return totalChanges;
         }
+    }
+
+    private static void AddCoalescedPendingLocalChange(
+        Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> winners,
+        ProviderChange change)
+    {
+        ProviderMutation mutation = change.Mutation;
+        var key = (mutation.RecordId, mutation.FieldId, mutation.IsRecordTombstone);
+        if (!winners.TryGetValue(key, out var prior))
+        {
+            winners.Add(key, change);
+            return;
+        }
+
+        ProviderMutation previous = prior.Mutation;
+        int comparison = HlcOps.CompareHlc(
+            new Hlc(mutation.HlcWall, mutation.HlcLogical), mutation.AuthorNodeId,
+            new Hlc(previous.HlcWall, previous.HlcLogical), previous.AuthorNodeId);
+        if (comparison == 0)
+        {
+            if (!SameMutation(mutation, previous))
+                throw new InvalidDataException("Pending local feed contains conflicting mutations at the same HLC and author.");
+            return;
+        }
+        if (comparison > 0)
+            winners[key] = change;
     }
 
     /// <summary>Coalesces only unpublished LWW state by canonical record/field identity.</summary>
