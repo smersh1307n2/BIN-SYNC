@@ -329,19 +329,23 @@ public class Production : IDisposable
         donor.AdvanceStream(peerB.NodeId, NS, batchB);
 
         donor.ProcessAck(peerA.NodeId, NS, batchA.CursorEnd, batchA.DurableAuthor);
+        Assert.Equal(0L, donor.GetSafeOutboxAckedThrough(NS, donor.NodeId));
         Assert.Equal(2, donor.Outbox[NS].Count); // peer B is still behind
         donor.ProcessAck(peerB.NodeId, NS, batchB.CursorEnd, batchB.DurableAuthor);
+        Assert.Equal(2L, donor.GetSafeOutboxAckedThrough(NS, donor.NodeId));
         Assert.Empty(donor.Outbox[NS]);
 
         var missingState = Fix.MakeNode(873);
         missingState.WriteField(NS, Fix.Rid(873), 0x100, Val("blocked"));
         missingState.AliasToNode[Fix.Nid(874)] = new Dictionary<int, (NodeId Id, int Epoch)>();
         missingState.CompactOutbox(NS);
+        Assert.Equal(0L, missingState.GetSafeOutboxAckedThrough(NS, missingState.NodeId));
         Assert.Single(missingState.Outbox[NS]); // known peer without PeerState blocks GC
 
         var noPeers = Fix.MakeNode(875);
         noPeers.WriteField(NS, Fix.Rid(875), 0x100, Val("offline"));
         noPeers.CompactOutbox(NS);
+        Assert.Equal(0L, noPeers.GetSafeOutboxAckedThrough(NS, noPeers.NodeId));
         Assert.Single(noPeers.Outbox[NS]); // no interested peers means retain history
     }
 
