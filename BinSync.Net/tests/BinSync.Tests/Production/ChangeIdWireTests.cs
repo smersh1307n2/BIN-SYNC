@@ -134,23 +134,6 @@ public class ChangeIdWireTests
         Assert.True(c.Storage[1].ContainsKey(Fix.Rid(0x41)));
     }
 
-    private static void ForceFullAuthor(Batch batch, NodeId author)
-    {
-        foreach (var entry in batch.Entries)
-        {
-            var op = Ops.DecodeOp(entry.Payload).Op;
-            switch (op)
-            {
-                case OpFieldWrite x: x.AuthorNodeId = author; x.FullAuthorMode = true; break;
-                case OpFieldTomb x: x.AuthorNodeId = author; x.FullAuthorMode = true; break;
-                case OpRecordTombstone x: x.AuthorNodeId = author; x.FullAuthorMode = true; break;
-            }
-            entry.Payload = Ops.EncodeOp(op, fullAuthor: true);
-            entry.AuthorNodeId = author;
-        }
-        Rehash(batch);
-    }
-
     [Fact]
     public void Global_ChangeId_dedup_survives_origin_outbox_compaction_and_second_route()
     {
@@ -161,7 +144,6 @@ public class ChangeIdWireTests
         Transport.MakeSession(a, b);
         Assert.True(a.WriteField(1, Fix.Rid(0x71), 0x100, new byte[] { 0xCA, 0xFE }));
         var original = a.CreateDeltaBatch(b.NodeId, 1)!;
-        ForceFullAuthor(original, a.NodeId);
         a.SignBatchFor(original, b.NodeId);
         var originalPayload = a.EncodeBatchPayload(original);
 
@@ -230,7 +212,7 @@ public class ChangeIdWireTests
             }).ToList());
         var changedOp = Ops.DecodeOp(conflict.Entries[0].Payload).Op;
         ((OpFieldWrite)changedOp).Value = new byte[] { 0x22 };
-        conflict.Entries[0].Payload = Ops.EncodeOp(changedOp, fullAuthor: true);
+        conflict.Entries[0].Payload = Ops.EncodeOp(changedOp);
         Rehash(conflict);
 
         var error = Assert.Throws<SyncException>(() => c.ApplyBatch(conflict, a.NodeId));
