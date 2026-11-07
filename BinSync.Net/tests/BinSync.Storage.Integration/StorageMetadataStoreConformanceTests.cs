@@ -306,6 +306,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var duplicate = store.AcceptIncomingBatch(secondView);
         Assert.True(duplicate.IsDuplicate);
         Assert.Equal(authorA, duplicate.DurableAuthor);
+        var duplicatePending = store.BeginPendingApply(secondView,
+            Guid.Parse("00000000-0000-0000-0000-000000000440"));
+        Assert.True(duplicatePending.IsDuplicate);
         var equivocation = new MetadataIncomingBatch
         {
             ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
