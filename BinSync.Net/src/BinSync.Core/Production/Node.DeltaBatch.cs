@@ -532,6 +532,53 @@ public sealed partial class Node
         }
     }
 
+    /// <summary>
+    /// Resolve relay-selected operation identities to their current local OutboxSeq.
+    /// The caller must durably persist this mapping before allowing downstream send/ACK.
+    /// Returns false (and clears the output) if any requested entry is no longer retained.
+    /// </summary>
+    public bool TryResolveOutboxSequences(int namespaceId,
+        ReadOnlySpan<OutboxChangeIdentity> changes, Span<long> outboxSequences)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (outboxSequences.Length != changes.Length)
+            throw new ArgumentException("Output length must match the requested identity count.", nameof(outboxSequences));
+        outboxSequences.Clear();
+        if (changes.Length == 0) return true;
+
+        var slots = new Dictionary<(NodeId Author, BatchId ChangeId), int>(changes.Length);
+        for (int i = 0; i < changes.Length; i++)
+        {
+            var identity = changes[i];
+            if (identity.AuthorNodeId.IsZero || identity.ChangeId.IsZero)
+                throw new ArgumentException("Outbox change identities must be non-zero.", nameof(changes));
+            if (!slots.TryAdd((identity.AuthorNodeId, identity.ChangeId), i))
+                throw new ArgumentException("Outbox change identities must be unique.", nameof(changes));
+        }
+
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            if (!Outbox.TryGetValue(namespaceId, out var entries))
+                return false;
+
+            int found = 0;
+            foreach (var entry in entries)
+            {
+                if (!slots.TryGetValue((entry.AuthorNodeId, entry.ChangeId), out int slot))
+                    continue;
+                if (outboxSequences[slot] != 0 || entry.Seq <= 0)
+                    throw new InvalidDataException("Outbox contains a duplicate or invalid change identity.");
+                outboxSequences[slot] = entry.Seq;
+                found++;
+            }
+
+            if (found == changes.Length) return true;
+            outboxSequences.Clear();
+            return false;
+        }
+    }
+
     private HashSet<NodeId> CollectInterestedPeers(int namespaceId)
     {
         var interested = new HashSet<NodeId>();
