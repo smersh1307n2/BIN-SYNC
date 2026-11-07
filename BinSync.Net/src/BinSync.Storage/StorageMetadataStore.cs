@@ -7,7 +7,7 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Durable Storage-backed adapter for the test-only Metadata Store conformance contract.
+/// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
 public class StorageMetadataStore : IMetadataStore
@@ -17,7 +17,7 @@ public class StorageMetadataStore : IMetadataStore
     private readonly string _directory;
     private readonly bool _deleteOnDispose;
 
-    public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = true)
+    public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = false)
     {
         _directory = directory;
         _deleteOnDispose = deleteOnDispose;
