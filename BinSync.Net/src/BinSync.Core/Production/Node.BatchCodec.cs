@@ -205,6 +205,25 @@ public sealed partial class Node
         return (batch, result);
     }
 
+    /// <summary>
+    /// Apply a batch whose receive cursor, digest chain and inbox receipt were
+    /// accepted by the durable Metadata Store before this method is called.
+    /// Node still validates the payload and applies record state, but does not
+    /// publish a second receive-state authority or relay mirror.
+    /// </summary>
+    internal (Batch Batch, BatchResult Result) ApplyBatchPayloadWithMetadataAuthority(
+        byte[] data, NodeId senderPeer)
+    {
+        Batch batch = DecodeBatchPayloadForMetadataAuthority(data, senderPeer);
+        BatchResult result;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            result = ApplyBatchInternal(batch, senderPeer, durablePayload: data,
+                receiveStateOwnedByMetadataStore: true);
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
+        return (batch, result);
+    }
+
     internal Batch DecodeBatchPayloadInternal(byte[] data)
         => DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
 
