@@ -1059,12 +1059,13 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 store.AcceptIncomingBatch(first);
                 store.FreezeOutbound("durable-scope", Node(1), 7, Node(1),
                     new[] { FrozenOperation(60, 70) });
-                store.AcquireOutboundLease("durable-scope", Node(1), 7, Node(1), consumer);
+                Assert.Equal(1UL, store.AcquireOutboundLease("durable-scope", Node(1), 7, Node(1), consumer));
                 store.BeginPendingApply(pending, token);
             }
 
             using (var reopened = new StorageMetadataStoreConformanceAdapter(directory, 302, deleteOnDispose: false))
             {
+                Assert.Equal(2UL, reopened.AcquireOutboundLease("durable-scope", Node(1), 7, Node(1), consumer));
                 Assert.Equal(1UL, reopened.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
                 Assert.Equal(1UL, reopened.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
                 Assert.Single(reopened.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
