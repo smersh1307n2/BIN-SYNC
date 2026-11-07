@@ -88,13 +88,14 @@ public sealed class StorageSyncCoordinator
                     tombstone = true;
                 else
                     continue;
+                if (field is null) continue;
 
                 mutations.Add(new ProviderMutation
                 {
                     RecordId = item.RecordId,
                     FieldId = item.FieldId,
                     IsTombstone = tombstone,
-                    HlcWall = field!.Timestamp.Wall,
+                    HlcWall = field.Timestamp.Wall,
                     HlcLogical = field.Timestamp.Logical,
                     AuthorNodeId = field.AuthorNodeId,
                     KeyEpoch = 0,
