@@ -7,6 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../BinSync.Net/src/BinSync.Core/BinSync.Core.csproj" />
-    <ProjectReference Include="../../external/Fld1.Storage/Fld1.Storage.csproj" />
+    <ProjectReference Include="../../BinSync.Net/src/BinSync.Storage/BinSync.Storage.csproj" />
   </ItemGroup>
 </Project>
