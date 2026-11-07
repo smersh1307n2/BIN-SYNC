@@ -663,29 +663,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             return existing;
         }
 
-        var next = current.Clone();
-        if (!next.Outbound.TryGetValue(key, out var entries))
-        {
-            entries = new List<MetadataOutboundItem>();
-            next.Outbound.Add(key, entries);
-        }
-
+        ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var priorHighWatermark)
+            ? priorHighWatermark
+            : 0;
         var frozen = new List<MetadataOutboundItem>(operations.Count);
         foreach (var operation in operations)
         {
-            ulong previousHighWatermark = next.OutboundHighWatermarks.TryGetValue(key, out var outboundHighWatermark) ? outboundHighWatermark : 0;
-            ulong sequence = checked(previousHighWatermark + 1);
-            var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
-            entries.Add(item);
-            frozen.Add(CloneOutboundItem(item));
-            next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
-                new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
-            next.OutboundHighWatermarks[key] = sequence;
+            ulong sequence = checked(++highWatermark);
+            frozen.Add(new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray()));
         }
-        EnsureRegisteredPeerStreams(next, namespaceId, localAuthor, issuerEpoch: 0);
 
-        PersistPartition(partitionKey, current, next);
-        return frozen;
+        PersistFrozenOutboundDelta(partitionKey, current, key, namespaceId, localAuthor,
+            operations, frozen, highWatermark);
+        return frozen.Select(CloneOutboundItem).ToArray();
     
         }
     }
@@ -1801,6 +1791,145 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         next.IsPersisted = true;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
+    }
+
+    private void PersistFrozenOutboundDelta(
+        PartitionKey partitionKey,
+        PartitionState current,
+        OutboundKey outboundKey,
+        int namespaceId,
+        NodeId localAuthor,
+        IReadOnlyList<MetadataFrozenOperation> operations,
+        IReadOnlyList<MetadataOutboundItem> frozen,
+        ulong highWatermark)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        bool requiresLegacyRewrite = current.PersistedEntries.Values.Any(entry =>
+        {
+            if (entry.Key.Length <= root.Length) return false;
+            byte kind = entry.Key[root.Length];
+            return kind is 6 or 9 or 11 ||
+                (kind == 3 && entry.Value.Length == 16) ||
+                ((kind is 5 or 8) && entry.Value.Length == 8);
+        });
+        if (requiresLegacyRewrite)
+        {
+            var migrated = current.Clone();
+            if (!migrated.Outbound.TryGetValue(outboundKey, out var migratedEntries))
+            {
+                migratedEntries = new List<MetadataOutboundItem>();
+                migrated.Outbound.Add(outboundKey, migratedEntries);
+            }
+            migratedEntries.AddRange(frozen);
+            foreach (var operation in operations)
+                migrated.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
+                    new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
+            migrated.OutboundHighWatermarks[outboundKey] = highWatermark;
+            EnsureRegisteredPeerStreams(migrated, namespaceId, localAuthor, issuerEpoch: 0);
+            PersistPartition(partitionKey, current, migrated);
+            return;
+        }
+
+        var newPeerStreams = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>();
+        var newRequiredStreams = new List<PeerStreamKey>();
+        var peers = current.InterestedPeers.Where(peer => peer.NamespaceId == namespaceId)
+            .Select(peer => (peer.Peer, peer.PeerEpoch))
+            .Concat(current.RequiredPeerStreams.Where(peer => peer.NamespaceId == namespaceId)
+                .Select(peer => (peer.Peer, peer.PeerEpoch)))
+            .Distinct();
+        foreach (var peer in peers.Where(peer => peer.Peer != localAuthor))
+        {
+            var streamKey = new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, localAuthor);
+            if (!current.PeerStreams.ContainsKey(streamKey))
+                newPeerStreams.Add((streamKey, EmptyPeerStreamValue() with { IssuerEpoch = 0 }));
+            if (!current.RequiredPeerStreams.Contains(streamKey))
+                newRequiredStreams.Add(streamKey);
+        }
+
+        var writes = new List<(byte[] Key, byte[] Value)>(operations.Count * 2 + newPeerStreams.Count + newRequiredStreams.Count + 2);
+        for (int i = 0; i < operations.Count; i++)
+        {
+            var operation = operations[i];
+            var item = frozen[i];
+            byte[] outboundSuffix = new byte[26];
+            BinaryPrimitives.WriteUInt16LittleEndian(outboundSuffix, checked((ushort)namespaceId));
+            localAuthor.WriteTo(outboundSuffix.AsSpan(2));
+            BinaryPrimitives.WriteUInt64BigEndian(outboundSuffix.AsSpan(18), item.Sequence);
+            writes.Add((StorageKey(root, 7, outboundSuffix), EncodePayloadItem(item.ChangeId, item.Payload)));
+
+            byte[] ledgerSuffix = new byte[18];
+            BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, checked((ushort)namespaceId));
+            operation.ChangeId.WriteTo(ledgerSuffix.AsSpan(2));
+            byte[] ledgerValue = new byte[17];
+            operation.Fingerprint.CopyTo(ledgerValue, 0);
+            ledgerValue[16] = 1;
+            writes.Add((StorageKey(root, 3, ledgerSuffix), ledgerValue));
+        }
+
+        byte[] watermarkValue = new byte[16];
+        if (current.OutboundAck.TryGetValue(outboundKey, out ulong acknowledged))
+            BinaryPrimitives.WriteUInt64LittleEndian(watermarkValue, acknowledged);
+        BinaryPrimitives.WriteUInt64LittleEndian(watermarkValue.AsSpan(8), highWatermark);
+        writes.Add((StorageKey(root, 8, KeyNamespaceAuthor(namespaceId, localAuthor)), watermarkValue));
+
+        foreach (var peerStream in newPeerStreams)
+        {
+            byte[] suffix = new byte[38];
+            peerStream.Key.Peer.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), peerStream.Key.PeerEpoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)namespaceId));
+            localAuthor.WriteTo(suffix.AsSpan(22));
+            writes.Add((StorageKey(root, 15, suffix), EncodePeerStreamState(peerStream.Value)));
+        }
+        foreach (var required in newRequiredStreams)
+        {
+            byte[] suffix = new byte[38];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+            localAuthor.WriteTo(suffix.AsSpan(2));
+            required.Peer.WriteTo(suffix.AsSpan(18));
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(34), required.PeerEpoch);
+            writes.Add((StorageKey(root, 16, suffix), Array.Empty<byte>()));
+        }
+
+        byte[]? identityKey = current.IsPersisted
+            ? null
+            : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+        byte[]? identityValue = identityKey is null
+            ? null
+            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        if (identityKey is not null)
+            batch.Put(identityKey, identityValue!);
+        foreach (var write in writes)
+            batch.Put(write.Key, write.Value);
+        batch.Commit();
+
+        if (!current.Outbound.TryGetValue(outboundKey, out var entries))
+        {
+            entries = new List<MetadataOutboundItem>();
+            current.Outbound.Add(outboundKey, entries);
+        }
+        entries.AddRange(frozen);
+        foreach (var operation in operations)
+            current.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
+                new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
+        current.OutboundHighWatermarks[outboundKey] = highWatermark;
+        foreach (var peerStream in newPeerStreams)
+            current.PeerStreams.Add(peerStream.Key, peerStream.Value);
+        foreach (var required in newRequiredStreams)
+            current.RequiredPeerStreams.Add(required);
+
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        if (identityKey is not null)
+            current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
+        foreach (var write in writes)
+            current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
     }
 
     private void PersistOutboundLease(
