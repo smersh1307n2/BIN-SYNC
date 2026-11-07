@@ -379,6 +379,8 @@ This policy reduces redundant outbound history; it does not promise that every p
 18. Checkpoint/compaction cannot reclaim payload bytes still referenced by pending or frozen operations.
 19. Concurrent same-key local writes that reach the staging lock out of HLC order retain the canonical LWW winner, not merely the last callback to acquire the lock.
 20. A snapshot transfer does not silently ACK, GC or discard frozen/relay operations whose provenance is not represented by the snapshot payload.
+21. SeenChanges entries are not pruned by arbitrary TTL; any future GC test proves a protocol-defined sender/channel/author-stream horizon before exact dedup entries are removed.
+22. Inbox receipt expiry/GC requires the protocol's elapsed-expiry plus confirmed-log-segment condition and survives restart.
 
 ## 12. Implementation sequence
 
