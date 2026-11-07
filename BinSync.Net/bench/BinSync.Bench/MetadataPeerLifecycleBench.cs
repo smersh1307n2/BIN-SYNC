@@ -14,6 +14,7 @@ public abstract class MetadataPeerLifecycleBenchBase
 {
     protected const string Scope = "metadata-peer-lifecycle-bench";
     protected const int NamespaceId = 1;
+    protected const int OperationsPerInvocation = 256;
     protected static readonly NodeId Local = NodeId.From(IdBytes(1));
     protected static readonly NodeId Author = NodeId.From(IdBytes(2));
     protected StorageMetadataStore Store = null!;
@@ -62,11 +63,12 @@ public class MetadataPeerRegistrationBench : MetadataPeerLifecycleBenchBase
     [IterationCleanup]
     public void Cleanup() => DisposeStore();
 
-    [Benchmark(Description = "Register peer / unrelated outbound payload scale")]
+    [Benchmark(OperationsPerInvoke = OperationsPerInvocation, Description = "Register peer / unrelated outbound payload scale")]
     public int RegisterPeer()
     {
-        Store.RegisterInterestedPeer(Scope, Local, Peer(3), 1, NamespaceId);
-        return 1;
+        for (int i = 0; i < OperationsPerInvocation; i++)
+            Store.RegisterInterestedPeer(Scope, Local, Peer(1_000 + i), 1, NamespaceId);
+        return OperationsPerInvocation;
     }
 }
 
@@ -78,18 +80,20 @@ public class MetadataPeerBaselineBench : MetadataPeerLifecycleBenchBase
     public void Setup()
     {
         CreateStore();
-        Store.RegisterInterestedPeer(Scope, Local, Peer(3), 1, NamespaceId);
+        for (int i = 0; i < OperationsPerInvocation; i++)
+            Store.RegisterInterestedPeer(Scope, Local, Peer(1_000 + i), 1, NamespaceId);
     }
 
     [IterationCleanup]
     public void Cleanup() => DisposeStore();
 
-    [Benchmark(Description = "Complete peer baseline / unrelated outbound payload scale")]
+    [Benchmark(OperationsPerInvoke = OperationsPerInvocation, Description = "Complete peer baseline / unrelated outbound payload scale")]
     public int CompleteBaseline()
     {
-        Store.CompletePeerInitialSync(Scope, Local, Peer(3), 1, NamespaceId,
-            new[] { new MetadataPeerStreamBaseline(Author, (ulong)UnrelatedOutboundItems, 1) });
-        return 1;
+        for (int i = 0; i < OperationsPerInvocation; i++)
+            Store.CompletePeerInitialSync(Scope, Local, Peer(1_000 + i), 1, NamespaceId,
+                new[] { new MetadataPeerStreamBaseline(Author, (ulong)UnrelatedOutboundItems, 1) });
+        return OperationsPerInvocation;
     }
 }
 
@@ -101,21 +105,26 @@ public class MetadataPeerRetirementBench : MetadataPeerLifecycleBenchBase
     public void Setup()
     {
         CreateStore();
-        Store.RegisterInterestedPeer(Scope, Local, Peer(3), 1, NamespaceId);
-        Store.CompletePeerInitialSync(Scope, Local, Peer(3), 1, NamespaceId,
-            new[] { new MetadataPeerStreamBaseline(Author, (ulong)UnrelatedOutboundItems, 1) });
-        Store.RegisterInterestedPeer(Scope, Local, Peer(4), 2, NamespaceId);
-        Store.CompletePeerInitialSync(Scope, Local, Peer(4), 2, NamespaceId,
-            new[] { new MetadataPeerStreamBaseline(Author, (ulong)UnrelatedOutboundItems, 1) });
+        for (int i = 0; i < OperationsPerInvocation; i++)
+        {
+            NodeId peer = Peer(1_000 + i);
+            Store.RegisterInterestedPeer(Scope, Local, peer, 1, NamespaceId);
+            Store.CompletePeerInitialSync(Scope, Local, peer, 1, NamespaceId,
+                new[] { new MetadataPeerStreamBaseline(Author, (ulong)UnrelatedOutboundItems, 1) });
+            Store.RegisterInterestedPeer(Scope, Local, peer, 2, NamespaceId);
+            Store.CompletePeerInitialSync(Scope, Local, peer, 2, NamespaceId,
+                new[] { new MetadataPeerStreamBaseline(Author, (ulong)UnrelatedOutboundItems, 1) });
+        }
     }
 
     [IterationCleanup]
     public void Cleanup() => DisposeStore();
 
-    [Benchmark(Description = "Retire old peer epoch / unrelated outbound payload scale")]
+    [Benchmark(OperationsPerInvoke = OperationsPerInvocation, Description = "Retire old peer epoch / unrelated outbound payload scale")]
     public int RetireOldEpoch()
     {
-        Store.RetireInterestedPeer(Scope, Local, Peer(3), 1, 2, NamespaceId);
-        return 1;
+        for (int i = 0; i < OperationsPerInvocation; i++)
+            Store.RetireInterestedPeer(Scope, Local, Peer(1_000 + i), 1, 2, NamespaceId);
+        return OperationsPerInvocation;
     }
 }
