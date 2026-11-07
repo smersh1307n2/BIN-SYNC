@@ -318,6 +318,33 @@ The following lifetimes are independent:
 
 No generic DeleteOldMetadata operation is sufficient. Each category needs its own safe-retention condition.
 
+### 9.1. ChangeId deduplication GC is currently an unresolved protocol requirement
+
+The current wire specification defines first-seen ChangeId as the relay-eligibility gate (E-8), and E-13 defines the durable self-echo check plus a provenance-scoped SeenChanges key of (senderPeer, namespaceId, changeId). Current NodePersistence v5 serializes this SeenChanges set, but the inspected normative specification does not define a safe GC rule, expiry, or watermark for these entries.
+
+The specification does define Inbox expiry/GC (expiresAt < now and both sides have confirmed the relevant log segment) and separate tombstone GC rules. Those rules do not automatically apply to SeenChanges. The current persisted SeenChanges key also contains no per-entry timestamp, originating author-stream cursor, or expiry value from which a safe horizon could be derived.
+
+Consequences:
+
+- Do not apply an arbitrary TTL to SeenChanges. An old ChangeId may return through a different mesh route after the TTL and be treated as first-seen again, re-enqueued, and potentially create a relay/echo growth loop.
+- Do not replace the exact set with a Bloom filter as the only source of truth. False positives can suppress a legitimate first-seen operation and violate relay eligibility.
+- Do not assume Inbox GC makes SeenChanges redundant. Inbox deduplicates a batch identity; SeenChanges deduplicates operation provenance across different batches/routes.
+- Until a protocol-safe compaction rule is specified, the conservative behavior is to retain exact SeenChanges entries. This is correct but potentially unbounded.
+
+A future protocol/storage design must choose and prove one of these approaches before production metadata retention is considered complete:
+
+1. **Cursor-bound provenance retention:** persist enough association between each seen ChangeId and the relevant direct-sender/author-stream cursor, then prune only after a protocol-defined sender/channel watermark proves that the sender can no longer legally replay or reintroduce that operation. The mapping must respect per-author streams and channel-scoped provenance; a peer-wide scalar watermark is not enough.
+2. **Stable origin sequence identity:** define a protocol-level derivation or binding between ChangeId and an immutable origin author/namespace/sequence so exact dedup history can be represented by compact ranges plus exceptions. This changes identity semantics and requires a wire/spec compatibility decision; it is not an implementation-only optimization.
+3. **Explicit bounded replay contract:** define a protocol maximum replay horizon and a corresponding durable expiry/epoch mechanism, including behavior for offline peers and independent delivery channels. A TTL without this protocol guarantee is invalid.
+
+The first option is the most compatible direction if the runtime can reliably associate each record's ChangeId with its origin stream sequence. That association is not assumed by this draft; it must be verified against DELTA_BATCH batching, relay author streams, cursor translation and E-13 before adoption.
+
+### 9.2. Inbox receipt compaction
+
+Inbox batch receipts have a separate lifecycle. The wire specification defines an idempotency key (issuerNodeId, namespaceId, issuerEpoch, batchId) and an expiry condition requiring both elapsed expiry and confirmation of the relevant log segment. Preserve the receipt/author information needed to replay the original ACK until that condition is met.
+
+The current NodePersistence v5 image serializes the Inbox key set and InboxAuthors mapping, plus related digest and received-stream checkpoints; it does not serialize the complete InboxEntry tuple (cursorStart, cursorEnd, appliedAt, expiresAt) as one row. The Metadata Store design must either reconstruct the equivalent safe-retention facts from its other durable checkpoints or add the missing semantic expiry/range data. It must not invent an expiry at migration time or discard receipts merely because the batch is old.
+
 ## 10. Storage cost example
 
 Let one field value have payload size V. Ignore filesystem allocation, index growth and checkpoint overhead for a simple comparison.
