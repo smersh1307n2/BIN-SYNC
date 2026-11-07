@@ -193,7 +193,8 @@ public partial class SyncSession
         finally { _snapshotGate.Release(); }
     }
 
-    private async Task<int> ReceiveSnapshotCoreAsync(Node local, CancellationToken ct)
+    private async Task<int> ReceiveSnapshotCoreAsync(Node local, CancellationToken ct,
+        Action<IReadOnlyList<SnapshotChunkMessage>, int>? afterSnapshotApplied = null)
     {
         await _snapshotReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -220,7 +221,9 @@ public partial class SyncSession
             }
 
             // Do not publish any part of the baseline until every chunk has arrived and validated.
-            return Reconcile.ApplySnapshotChunksOwned(local, chunks);
+            int applied = Reconcile.ApplySnapshotChunksOwned(local, chunks);
+            afterSnapshotApplied?.Invoke(chunks, applied);
+            return applied;
         }
         finally { _snapshotReceiveGate.Release(); }
     }
@@ -240,7 +243,8 @@ public partial class SyncSession
     /// after both directions completed and each sent snapshot set was confirmed applied.
     /// </summary>
     public async Task<(int Prefixes, int FieldsApplied)> AutoReconcileAsync(
-        Node local, int namespaceId, bool initiate, int maxPrefixes = 16, CancellationToken ct = default)
+        Node local, int namespaceId, bool initiate, int maxPrefixes = 16, CancellationToken ct = default,
+        Action<IReadOnlyList<SnapshotChunkMessage>, int>? afterSnapshotApplied = null)
     {
         if (maxPrefixes <= 0) throw new ArgumentOutOfRangeException(nameof(maxPrefixes));
 
@@ -259,9 +263,9 @@ public partial class SyncSession
                     await _snapshotGate.WaitAsync(ct).ConfigureAwait(false);
                     try
                     {
-                        var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct)
+                        var first = await AutoReconcileRoundAsync(local, namespaceId, initiate, maxPrefixes, ct, afterSnapshotApplied)
                             .ConfigureAwait(false);
-                        var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct)
+                        var second = await AutoReconcileRoundAsync(local, namespaceId, !initiate, maxPrefixes, ct, afterSnapshotApplied)
                             .ConfigureAwait(false);
 
                         if (first.Complete && second.Complete)
@@ -279,7 +283,8 @@ public partial class SyncSession
     }
 
     private async Task<(int Prefixes, int FieldsApplied, bool Complete)> AutoReconcileRoundAsync(
-        Node local, int namespaceId, bool initiate, int maxPrefixes, CancellationToken ct)
+        Node local, int namespaceId, bool initiate, int maxPrefixes, CancellationToken ct,
+        Action<IReadOnlyList<SnapshotChunkMessage>, int>? afterSnapshotApplied)
     {
         var (_, _, diverged) = await ExchangeStateDigestCoreAsync(local, namespaceId, initiate, ct)
             .ConfigureAwait(false);
@@ -291,7 +296,7 @@ public partial class SyncSession
             for (int i = 0; i < n; i++)
             {
                 await SendNeedRangeCoreAsync(namespaceId, diverged[i], ct).ConfigureAwait(false);
-                fields += await ReceiveSnapshotCoreAsync(local, ct).ConfigureAwait(false);
+                fields += await ReceiveSnapshotCoreAsync(local, ct, afterSnapshotApplied).ConfigureAwait(false);
             }
             await SendNeedRangeCoreAsync(namespaceId, Array.Empty<byte>(), ct).ConfigureAwait(false);
             return (n, fields, diverged.Count <= maxPrefixes);
