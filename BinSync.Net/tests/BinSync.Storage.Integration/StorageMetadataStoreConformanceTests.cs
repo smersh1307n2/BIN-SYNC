@@ -278,6 +278,98 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Pending_apply_validates_sender_cursor_and_digest_chain_before_Node_mutation()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "pending-receive-validation"), 435);
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+        const string scope = "pending-receive-validation";
+        byte[] digest = Enumerable.Repeat((byte)151, 16).ToArray();
+
+        MetadataIncomingBatch Create(NodeId author, byte batchSeed, ulong start,
+            byte[] previous, byte[] nextDigest) => new()
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(batchSeed),
+            CursorStart = start,
+            CursorEnd = start,
+            PreviousBatchDigest = previous.ToArray(),
+            BatchDigest = nextDigest.ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch((byte)(batchSeed + 20)),
+                    Fingerprint = Enumerable.Repeat(batchSeed, 16).ToArray(),
+                    Payload = new byte[] { batchSeed, 1 },
+                    RelayEligible = true
+                }
+            }
+        };
+
+        var gap = Create(authorA, 10, 2, new byte[16], digest);
+        Assert.Throws<InvalidDataException>(() =>
+            store.BeginPendingApply(gap, Guid.Parse("00000000-0000-0000-0000-000000000435")));
+        Assert.Empty(store.ReadPendingApplyIntents(scope, local));
+
+        var first = Create(authorA, 11, 1, new byte[16], digest);
+        store.BeginPendingApply(first, Guid.Parse("00000000-0000-0000-0000-000000000436"));
+        var secondAuthorSameSession = Create(authorB, 12, 2, digest,
+            Enumerable.Repeat((byte)152, 16).ToArray());
+        Assert.Throws<InvalidOperationException>(() =>
+            store.BeginPendingApply(secondAuthorSameSession,
+                Guid.Parse("00000000-0000-0000-0000-000000000437")));
+        Assert.Single(store.ReadPendingApplyIntents(scope, local));
+    }
+
+    [Fact]
+    public void Pending_apply_rejects_global_ChangeId_equivocation_before_Node_mutation()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "pending-changeid-equivocation"), 436);
+        NodeId local = Node(1), senderA = Node(2), senderB = Node(4), author = Node(3);
+        const string scope = "pending-changeid-equivocation";
+        BatchId sharedChangeId = Batch(153);
+
+        MetadataIncomingBatch Create(NodeId sender, byte batchSeed, byte fingerprint) => new()
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(batchSeed),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat(batchSeed, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = sharedChangeId,
+                    Fingerprint = Enumerable.Repeat(fingerprint, 16).ToArray(),
+                    Payload = new byte[] { batchSeed, 2 },
+                    RelayEligible = true
+                }
+            }
+        };
+
+        var first = Create(senderA, 20, 21);
+        store.BeginPendingApply(first, Guid.Parse("00000000-0000-0000-0000-000000000438"));
+        var equivocation = Create(senderB, 22, 23);
+        Assert.Throws<InvalidDataException>(() =>
+            store.BeginPendingApply(equivocation, Guid.Parse("00000000-0000-0000-0000-000000000439")));
+        Assert.Single(store.ReadPendingApplyIntents(scope, local));
+    }
+
+    [Fact]
     public void Relay_page_is_read_from_metadata_at_each_downstream_peers_own_cursor()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-relay-page"), 422);
