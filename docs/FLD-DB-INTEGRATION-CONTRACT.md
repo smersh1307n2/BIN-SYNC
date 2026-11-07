@@ -134,7 +134,7 @@ SeenChanges provenance dedup — отдельное состояние BIN-SYNC,
 Целевая модель:
 
 1. WAL APPLY_COMMIT хранит все входящие операции один раз и компактную relay-selection bitmap/index list, а не вторую копию RelayFields.
-2. Durable batch receipt хранит только identity/cursor/digest/result/ProtocolStateDelta и данные для корректного duplicate ACK.
+2. Durable batch receipt хранит только identity, cursor range, BatchDigest/RecordsRoot/PreviousBatchDigest (для проверки повторного BatchId), author-bound ACK/result и protocol-defined expiry/confirmation metadata; полный Fields payload для duplicate ACK не нужен. ProtocolStateDelta имеет отдельный recovery lifetime.
 3. Отдельный RelayJournal хранит только выбранные relay operations с исходным ChangeId/author/HLC/key epoch/payload.
 4. WAL остаётся authoritative commit point. Receipt и RelayJournal материализуются идемпотентно по CommitSeq; WAL prefix нельзя truncate до durable materialization sidecars.
 5. Inbox receipt GC и relay payload GC независимы: receipt удаляется только по Inbox GC rule, relay payload — только по safe downstream ACK.
@@ -196,6 +196,7 @@ Code/API baseline reviewed: FLD-DB `fix/crash-consistency-outbox` commit `331206
 12. ApplyJournal receipt survives WAL checkpoint/truncation without retaining non-relay field payloads.
 13. RelayJournal contains only relay-selected operations and is retained independently of Inbox receipt expiry.
 14. Crash between WAL flush and receipt/relay sidecar flush rebuilds both sidecars exactly once from CommitSeq.
+15. Reuse of the same Inbox key with conflicting cursor/digest metadata is rejected by the compact receipt without retaining the full original Fields payload.
 
 ## 9. Решение по текущему этапу
 
