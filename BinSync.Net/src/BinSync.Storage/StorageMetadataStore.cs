@@ -70,6 +70,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
+        var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, batch.BatchId);
+        bool hasPriorReceipt = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
+        if (hasPriorReceipt && !priorReceipt!.Matches(batch))
+            throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
 
         if (current.CompletedPendingApplies.TryGetValue(applyToken, out var completed))
         {
@@ -82,7 +87,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         {
             if (!SamePendingBatch(pending.Batch, batch))
                 throw new InvalidDataException("Pending apply token was reused for different input.");
-            return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch));
+            return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch))
+            { IsDuplicate = hasPriorReceipt };
         }
 
         bool isDuplicate = ValidateIncomingBatchForStaging(current, batch, applyToken);
