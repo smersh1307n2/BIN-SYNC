@@ -93,7 +93,7 @@ A low-level embedded engine and the BIN-SYNC Metadata Store are separate layers.
 
 ### 3.2.1. FLD Storage Core extraction boundary
 
-FLD-DB's reusable Storage Core is a domain-neutral byte engine, not the FldDatabase facade and not a BIN-SYNC-specific store. It may initially ship in the same DLL as FLD Database, but its public API and source dependency graph must be independently extractable.
+FLD-DB's reusable Storage Core is a domain-neutral byte engine, not the FldDatabase facade and not a BIN-SYNC-specific store. It ships as the independent `Fld1.Storage.dll`; FLD field semantics ship as `Fld1.Database.dll`, which references Storage. Storage has no reverse dependency. A third Common assembly is not part of the current design.
 
 - Storage Core owns WAL, recovery, atomic batches, immutable runs/pages, manifest/checkpoint publication, snapshots, ordered scans, storage-native commit IDs, checksums and safe generation reclamation.
 - FLD Database owns RecordId/FieldId, HLC, LWW/lifecycle, local pending staging, frozen Outbox, remote APPLY and field APIs.
@@ -504,7 +504,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 3. Exact scope/replica identifier representation and how it is supplied at construction.
 4. Which protocol state is mandatory in the first implementation versus capability-gated.
 5. **Decided:** no built-in in-memory Metadata Store in the first stable package. A volatile implementation belongs in test utilities; if later exposed publicly, it must advertise that restart recovery/durable ACK guarantees are unavailable.
-6. **Decided:** FLD Storage-only opens the domain-neutral `Fld1.Storage` engine directly; it does not instantiate `FldDatabase`. One DLL initially, extractable namespace/API/source boundary.
+6. **Decided:** FLD uses two independently buildable assemblies: `Fld1.Storage.dll` and `Fld1.Database.dll`; Database references Storage only. Storage-only consumers do not load Database. No third Common assembly.
 7. **Decided:** storage-native ordering/version uses Storage Core CommitSeq and byte-key ordering; it is never fabricated as HLC/author. Split generic page/run mechanics from any field-specific codec that prevents opaque metadata storage.
 8. **Decided:** each local replica uses an owning `(SyncScopeId, LocalReplicaNodeId)` partition; protocol NamespaceId is a key/prefix dimension inside that partition, not a physical FLD namespace. Storage Core exposes opaque logical partition IDs and can host multiple partitions. The current field-specific namespace/run codec must be separated from the generic partition catalog.
 9. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
