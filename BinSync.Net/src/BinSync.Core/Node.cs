@@ -8,6 +8,26 @@ namespace BinSync;
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node : IDisposable
 {
+    internal static void ValidateNamespaceId(int namespaceId)
+    {
+        if ((uint)namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId), "Namespace id must fit the 16-bit wire field.");
+    }
+
+    internal static void ValidateFieldId(int fieldId)
+    {
+        if ((uint)fieldId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(fieldId), "Field id must fit the 16-bit wire field.");
+    }
+
+    internal static void ValidateWritableFieldId(int fieldId)
+    {
+        ValidateFieldId(fieldId);
+        if (fieldId < Model.UserFieldMin && fieldId != Model.FieldResolveId)
+            throw new ArgumentOutOfRangeException(nameof(fieldId), "Field ids below 0x0100 are reserved for system use, except FieldResolve.");
+    }
+
+
     /// <summary>16 zero bytes used as a sentinel identity or empty digest prefix.</summary>
     private static readonly byte[] Zero128Storage = new byte[16];
     /// <summary>16 zero bytes. Returns a fresh copy so callers cannot corrupt a shared buffer.</summary>
@@ -32,13 +52,40 @@ public sealed partial class Node : IDisposable
     /// <summary>
     /// Acquire all domain locks (Storage → Outbox → Meta) for a point-in-time snapshot.
     /// </summary>
-    public AllGateScope EnterAllGates() => new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
+    public AllGateScope EnterAllGates()
+    {
+        var scope = new AllGateScope(_lockStorage, _lockOutbox, _lockMeta);
+        try
+        {
+            ThrowIfDisposed();
+            return scope;
+        }
+        catch
+        {
+            scope.Dispose();
+            throw;
+        }
+    }
+
+    internal void ThrowIfDisposed()
+    {
+        if (System.Threading.Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(Node));
+    }
 
     /// <summary>Raised after a batch is applied or accepted as a duplicate (outside engine locks).</summary>
     public event Action<BatchResult, NodeId>? BatchApplied;
 
     /// <summary>Raised after a successful local field write (outside engine locks).</summary>
     public event Action<int, RecordId, int>? FieldWritten;
+    /// <summary>Raised after a local field tombstone is committed (outside engine locks).</summary>
+    public event Action<int, RecordId, int>? FieldTombstoned;
+    /// <summary>Raised after a local record deletion is committed (outside engine locks).</summary>
+    public event Action<int, RecordId>? RecordDeleted;
+    /// <summary>Raised after an explicit local record revive is committed (outside engine locks).</summary>
+    public event Action<int, RecordId>? RecordUndeleted;
+    /// <summary>Raised after the typed low-level PushOutbox API commits an entry (outside node locks).</summary>
+    public event Action<OutboxEntry>? OutboxEntryPushed;
 
     /// <summary>Raised after an ACK advances peer watermarks (outside engine locks).</summary>
     public event Action<NodeId, int, long, NodeId?>? AckProcessed;
@@ -48,6 +95,19 @@ public sealed partial class Node : IDisposable
 
     /// <summary>Raised after a KEY_ROTATION notice is accepted.</summary>
     public event Action<KeyRotationNotice>? KeyRotationApplied;
+    
+    /// <summary>Raised when a local schema is registered (outside node locks; control plane only).</summary>
+    public event Action<int, int, int>? SchemaRegistered;
+    /// <summary>Raised when a SCHEMA_MAP teaches at least one new schema version (outside node locks).</summary>
+    public event Action<int>? SchemaMapLearned;
+    /// <summary>Raised after a GC_NOTICE is merged (outside engine locks).</summary>
+    public event Action<GcNoticeMessage, int>? GcNoticeApplied;
+    /// <summary>Raised after tombstones are purged (outside engine locks).</summary>
+    public event Action<int, int, ulong>? GarbageCollected;
+    /// <summary>Raised after a peer trust pin is added or revoked (outside node locks; control plane only).</summary>
+    public event Action<NodeId, bool>? TrustChanged;
+    /// <summary>Raised after a complete snapshot is applied (outside engine locks).</summary>
+    public event Action<int, int>? SnapshotApplied;
 
     private int _disposed;
 
@@ -56,22 +116,33 @@ public sealed partial class Node : IDisposable
     /// <summary>Session/epoch counter; mutated on load and epoch bump.</summary>
     public int Epoch { get; internal set; }
     /// <summary>HLC clock (starts cold §5.2). Replace is not allowed; mutate LastWall via load.</summary>
-    public HlcClock Clock { get; }
+    internal HlcClock Clock { get; }
+    /// <summary>Consistent read-only snapshot of the node's hybrid logical clock.</summary>
+    public HlcClockSnapshot ClockState => Clock.Snapshot();
 
     /// <summary>
     /// Optional resource caps (outbox/storage/seen-set). When set, enqueue and apply
     /// paths enforce them; null means unlimited (tests / unconstrained hosts).
     /// </summary>
-    public ResourceLimits? Limits { get; set; }
+    private ResourceLimits? _limits;
+
+    /// <summary>Optional resource caps; configuration access is serialized with Node metadata operations.</summary>
+    public ResourceLimits? Limits
+    {
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _limits; } }
+        set { lock (_lockMeta) { ThrowIfDisposed(); System.Threading.Volatile.Write(ref _limits, value); } }
+    }
 
     /// <summary>Look up a record in the live store.</summary>
     public bool TryGetRecord(int namespaceId, RecordId recordId, out Record? record)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage)
         {
+            ThrowIfDisposed();
             if (_storage.TryGetValue(namespaceId, out var map) && map.TryGetValue(recordId, out var rec))
             {
-                record = rec;
+                record = CloneForPublicRead(rec);
                 return true;
             }
             record = null;
@@ -82,13 +153,16 @@ public sealed partial class Node : IDisposable
     /// <summary>Look up one field state inside a record.</summary>
     public bool TryGetField(int namespaceId, RecordId recordId, int fieldId, out FieldState? field)
     {
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
         lock (_lockStorage)
         {
+            ThrowIfDisposed();
             if (_storage.TryGetValue(namespaceId, out var map)
                 && map.TryGetValue(recordId, out var rec)
                 && rec.State.TryGetValue((ushort)fieldId, out var fs))
             {
-                field = fs;
+                field = CloneFieldForPublicRead(fs);
                 return true;
             }
             field = null;
@@ -99,8 +173,12 @@ public sealed partial class Node : IDisposable
     /// <summary>Number of records currently stored in a namespace.</summary>
     public int GetRecordCount(int namespaceId)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage)
+        {
+            ThrowIfDisposed();
             return _storage.TryGetValue(namespaceId, out var map) ? map.Count : 0;
+        }
     }
 
     /// <summary>Number of pending outbox entries for a namespace.</summary>
@@ -112,6 +190,7 @@ public sealed partial class Node : IDisposable
         ArgumentNullException.ThrowIfNull(peer);
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             PeersByNid ??= new Dictionary<NodeId, Node>();
             PeersByNid[peer.NodeId] = peer;
         }
@@ -128,8 +207,10 @@ public sealed partial class Node : IDisposable
     internal Dictionary<int, List<OutboxEntry>> Outbox { get; } = new();
     internal readonly Dictionary<(NodeId, int), long> _outboxSeq = new();   // (author, ns) -> seq
     // inbox: (issuerNodeId, ns, epoch, batchId) — epoch in key for [Э2] isolation
-    /// <summary>Set of applied batch keys for idempotent replay detection.</summary>
-    internal HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox { get; } = new();
+    /// <summary>Accepted batch receipt and exact durable author stream for duplicate ACKs.</summary>
+    internal InboxReceiptStore InboxAuthors { get; } = new();
+    /// <summary>Read-only receipt-key view retained for diagnostics and tests; no duplicate key set is stored.</summary>
+    internal IReadOnlyCollection<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Inbox => InboxAuthors.Keys;
     // batch digest chain checkpoints: (issuerNodeId, ns, epoch) -> last batchDigest
     /// <summary>Per-(issuer, ns, epoch) chain checkpoint of the last accepted batch digest.</summary>
     internal Dictionary<(NodeId Issuer, int Ns, int Epoch), Digest16> LastBatchDigest { get; } = new();
@@ -147,14 +228,19 @@ public sealed partial class Node : IDisposable
     internal Dictionary<NodeId, int> DurableAuthors { get; } = new();
     /// <summary>Per-peer session cursors and ACK watermarks keyed by (peer, namespace).</summary>
     internal Dictionary<(NodeId, int), PeerState> PeerStates { get; } = new();
-    // Errata E-10 (scenario 23): provenance seen-set — (senderPeer, ns, changeId)
-    /// <summary>Provenance seen-set of (sender, ns, changeId) for relay (Errata E-10).</summary>
-    internal HashSet<(NodeId Peer, int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
+    // Local WAL replay markers only. NodeId is implicit in this Node instance.
+    /// <summary>Local WAL replay markers keyed by (namespace, ChangeId).</summary>
+    internal HashSet<(int Ns, BatchId ChangeId)> SeenChanges { get; } = new();
+    // Route-independent operation identity. Key is (namespace, ChangeId); values
+    // retain only a compact semantic fingerprint, never the operation payload.
+    internal Dictionary<(int Ns, BatchId ChangeId), ChangeLedgerValue> GlobalChangeLedger { get; } = new();
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
     internal Dictionary<(NodeId, int), NodeId> LastStreamAuthor { get; } = new();
     /// <summary>Highest known epoch per (author, namespace).</summary>
     internal Dictionary<(NodeId, int), int> KnownEpochs { get; } = new();
+    /// <summary>Highest HELLO incarnation epoch observed per direct peer.</summary>
+    internal Dictionary<NodeId, int> PeerSessionEpochs { get; } = new();
     /// <summary>Peers currently quarantined from sync.</summary>
     internal HashSet<NodeId> Quarantined { get; } = new();
     /// <summary>Collected error code names from the last operations (diagnostic).</summary>
@@ -171,12 +257,17 @@ public sealed partial class Node : IDisposable
 
     /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
     /// <summary>Create a node with optional identity, epoch, clock and resource limits.</summary>
-    public Node(byte[]? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
+    public Node(NodeId? nodeId = null, int epoch = 1, Func<long>? nowFn = null,
                 long maxSkewUs = 60_000_000, ResourceLimits? limits = null)
     {
-        var raw = nodeId ?? Guid.NewGuid().ToByteArray();
-        if (raw.Length != 16) throw new ArgumentException("nodeId must be 16 bytes", nameof(nodeId));
-        NodeId = NodeId.From(raw);
+        if (nodeId.HasValue && nodeId.Value.IsZero)
+            throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
+        if (epoch < 0)
+            throw new ArgumentOutOfRangeException(nameof(epoch));
+        if (maxSkewUs < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxSkewUs));
+
+        NodeId = nodeId ?? NodeId.From(Guid.NewGuid().ToByteArray());
         Epoch = epoch;
         Clock = new HlcClock(nowFn, maxSkewUs);
         Limits = limits;
@@ -188,39 +279,131 @@ public sealed partial class Node : IDisposable
     {
     }
 
-    /// <summary>Raise <see cref="BatchApplied"/> if handlers are attached (call outside locks).</summary>
-    internal void RaiseBatchApplied(BatchResult result, NodeId senderPeer)
+    private static void LogObserverFailure(string eventName, Exception exception) =>
+        System.Diagnostics.Trace.TraceError("BIN-SYNC observer for {0} failed: {1}", eventName, exception);
+
+    private static void InvokeSafely<T1>(Action<T1>? handlers, string eventName, T1 arg1)
     {
-        BatchApplied?.Invoke(result, senderPeer);
+        if (handlers is null) return;
+        foreach (Action<T1> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
     }
 
-    /// <summary>Raise <see cref="FieldWritten"/> if handlers are attached (call outside locks).</summary>
-    internal void RaiseFieldWritten(int namespaceId, RecordId recordId, int fieldId)
+    private static void InvokeSafely<T1, T2>(Action<T1, T2>? handlers, string eventName, T1 arg1, T2 arg2)
     {
-        FieldWritten?.Invoke(namespaceId, recordId, fieldId);
+        if (handlers is null) return;
+        foreach (Action<T1, T2> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1, arg2); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
     }
 
-    internal void RaiseAckProcessed(NodeId peer, int namespaceId, long ackedSeq, NodeId? authorStream)
+    private static void InvokeSafely<T1, T2, T3>(
+        Action<T1, T2, T3>? handlers, string eventName, T1 arg1, T2 arg2, T3 arg3)
     {
-        AckProcessed?.Invoke(peer, namespaceId, ackedSeq, authorStream);
+        if (handlers is null) return;
+        foreach (Action<T1, T2, T3> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1, arg2, arg3); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
     }
+
+    private static void InvokeSafely<T1, T2, T3, T4>(
+        Action<T1, T2, T3, T4>? handlers, string eventName, T1 arg1, T2 arg2, T3 arg3, T4 arg4)
+    {
+        if (handlers is null) return;
+        foreach (Action<T1, T2, T3, T4> handler in handlers.GetInvocationList())
+        {
+            try { handler(arg1, arg2, arg3, arg4); }
+            catch (Exception ex) { LogObserverFailure(eventName, ex); }
+        }
+    }
+
+    /// <summary>Raise <see cref="BatchApplied"/> after commit and outside node gates.</summary>
+    internal void RaiseBatchApplied(BatchResult result, NodeId senderPeer) =>
+        InvokeSafely(BatchApplied, nameof(BatchApplied), result, senderPeer);
+
+    /// <summary>Raise <see cref="FieldWritten"/> after commit and outside node gates.</summary>
+    internal void RaiseFieldWritten(int namespaceId, RecordId recordId, int fieldId) =>
+        InvokeSafely(FieldWritten, nameof(FieldWritten), namespaceId, recordId, fieldId);
+
+    internal void RaiseFieldTombstoned(int namespaceId, RecordId recordId, int fieldId) =>
+        InvokeSafely(FieldTombstoned, nameof(FieldTombstoned), namespaceId, recordId, fieldId);
+
+    internal void RaiseRecordDeleted(int namespaceId, RecordId recordId) =>
+        InvokeSafely(RecordDeleted, nameof(RecordDeleted), namespaceId, recordId);
+
+    internal void RaiseRecordUndeleted(int namespaceId, RecordId recordId) =>
+        InvokeSafely(RecordUndeleted, nameof(RecordUndeleted), namespaceId, recordId);
+
+    internal void RaiseOutboxEntryPushed(OutboxEntry entry)
+    {
+        var handlers = OutboxEntryPushed;
+        if (handlers is null) return;
+        foreach (Action<OutboxEntry> handler in handlers.GetInvocationList())
+        {
+            try { handler(CloneOutboxEntryForPublicRead(entry)); }
+            catch (Exception ex) { LogObserverFailure(nameof(OutboxEntryPushed), ex); }
+        }
+    }
+
+    internal void RaiseAckProcessed(NodeId peer, int namespaceId, long ackedSeq, NodeId? authorStream) =>
+        InvokeSafely(AckProcessed, nameof(AckProcessed), peer, namespaceId, ackedSeq, authorStream);
 
     internal void RaiseMembershipApplied(MembershipMessage msg, int learned) =>
-        MembershipApplied?.Invoke(msg, learned);
+        InvokeSafely(MembershipApplied, nameof(MembershipApplied), msg, learned);
 
     internal void RaiseKeyRotationApplied(KeyRotationNotice notice) =>
-        KeyRotationApplied?.Invoke(notice);
+        InvokeSafely(KeyRotationApplied, nameof(KeyRotationApplied), notice);
+
+    internal void RaiseSchemaRegistered(int namespaceId, int schemaId, int version) =>
+        InvokeSafely(SchemaRegistered, nameof(SchemaRegistered), namespaceId, schemaId, version);
+
+    internal void RaiseSchemaMapLearned(int learned) =>
+        InvokeSafely(SchemaMapLearned, nameof(SchemaMapLearned), learned);
+
+    internal void RaiseGcNoticeApplied(GcNoticeMessage notice, int added) =>
+        InvokeSafely(GcNoticeApplied, nameof(GcNoticeApplied), notice, added);
+
+    internal void RaiseGarbageCollected(int namespaceId, int removed, ulong cutoffWall) =>
+        InvokeSafely(GarbageCollected, nameof(GarbageCollected), namespaceId, removed, cutoffWall);
+
+    internal void RaiseTrustChanged(NodeId nodeId, bool trusted) =>
+        InvokeSafely(TrustChanged, nameof(TrustChanged), nodeId, trusted);
+
+    internal void RaiseSnapshotApplied(int namespaceId, int applied) =>
+        InvokeSafely(SnapshotApplied, nameof(SnapshotApplied), namespaceId, applied);
 
     /// <summary>Apply a verified KEY_ROTATION notice via <paramref name="store"/> and raise <see cref="KeyRotationApplied"/>.</summary>
     public bool ApplyKeyRotation(KeyRotationNotice notice, KeyEpochStore store)
     {
+        ArgumentNullException.ThrowIfNull(notice);
         ArgumentNullException.ThrowIfNull(store);
-        if (!store.TryApply(notice)) return false;
-        RaiseKeyRotationApplied(notice);
+        var ownedNotice = new KeyRotationNotice
+        {
+            NamespaceId = notice.NamespaceId,
+            OldKeyEpoch = notice.OldKeyEpoch,
+            NewKeyEpoch = notice.NewKeyEpoch,
+            NodeId = notice.NodeId,
+            Proof = notice.Proof?.ToArray() ?? Array.Empty<byte>(),
+        };
+        bool applied;
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            applied = store.TryApply(ownedNotice);
+        }
+        if (!applied) return false;
+        RaiseKeyRotationApplied(ownedNotice);
         return true;
     }
 
-    /// <summary>Release large engine maps; safe to call multiple times.</summary>
+    /// <summary>Release engine state and detach caller-owned services; safe to call multiple times. Stateful API calls after disposal throw <see cref="ObjectDisposedException"/>.</summary>
     public void Dispose()
     {
         if (System.Threading.Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -228,23 +411,46 @@ public sealed partial class Node : IDisposable
         {
             _storage.Clear();
             Outbox.Clear();
-            Inbox.Clear();
+            InboxAuthors.Clear();
             PeerStates.Clear();
             AliasToNode.Clear();
             NodeToAlias.Clear();
             SeenChanges.Clear();
+            GlobalChangeLedger.Clear();
             LastBatchDigest.Clear();
             LastStreamDigest.Clear();
             DurableAuthors.Clear();
             KnownEpochs.Clear();
+            PeerSessionEpochs.Clear();
+            LastStreamAuthor.Clear();
+            Quarantined.Clear();
+            SchemaVersions.Clear();
+            ForbiddenNamespaces.Clear();
+            _outboxSeq.Clear();
             AcksOut.Clear();
             ErrorsOut.Clear();
+            _schemas = null;
+            _causal = null;
+            _e2eeKeys = null;
+            _trust = null;
+            _wal = null;
+            System.Threading.Volatile.Write(ref _limits, null);
             PeersByNid = null;
             BatchApplied = null;
             FieldWritten = null;
+            FieldTombstoned = null;
+            RecordDeleted = null;
+            RecordUndeleted = null;
+            OutboxEntryPushed = null;
             AckProcessed = null;
             MembershipApplied = null;
             KeyRotationApplied = null;
+            SchemaRegistered = null;
+            SchemaMapLearned = null;
+            GcNoticeApplied = null;
+            GarbageCollected = null;
+            TrustChanged = null;
+            SnapshotApplied = null;
         }
         GC.SuppressFinalize(this);
     }

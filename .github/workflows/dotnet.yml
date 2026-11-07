@@ -57,9 +57,18 @@ jobs:
           --verbosity minimal
           --collect:"XPlat Code Coverage"
           --results-directory "${{ runner.temp }}/test-results"
+          --logger "console;verbosity=detailed"
           --logger "trx;LogFileName=test-results.trx"
+          --blame-hang-timeout 3m
+          --blame-hang-dump-type mini
           --
           DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      - name: Build and run public samples
+        run: |
+          dotnet run --project samples/TwoNodeLoopback -c Release
+          dotnet run --project samples/TwoNodeTcp -c Release
+          dotnet run --project samples/ScenarioHarness -c Release
 
       - name: Upload test results
         if: always()

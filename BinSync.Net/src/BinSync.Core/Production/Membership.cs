@@ -16,7 +16,7 @@ public sealed class MembershipEntry
     /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; } = 1;
     /// <summary>bit0 = active, bit1 = quarantined.</summary>
-    public byte Flags;
+    public byte Flags { get; set; }
     /// <summary>True when membership flags include the active bit.</summary>
     public bool IsActive => (Flags & 0x01) != 0;
     /// <summary>True when membership flags include the quarantined bit.</summary>
@@ -27,11 +27,11 @@ public sealed class MembershipEntry
 public sealed class MembershipMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
-    public int NamespaceId;
+    public int NamespaceId { get; set; }
     /// <summary>Membership list epoch for this roster.</summary>
-    public uint MembershipEpoch;
+    public uint MembershipEpoch { get; set; }
     /// <summary>Membership entries describing peers and their flags.</summary>
-    public List<MembershipEntry> Members = new();
+    public List<MembershipEntry> Members { get; set; } = new();
 }
 
 /// <summary>Membership list messages and peer flag helpers.</summary>
@@ -47,6 +47,9 @@ public static class Membership
     /// </summary>
     public static MembershipMessage Build(Node node, int namespaceId, uint membershipEpoch = 0)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        Node.ValidateNamespaceId(namespaceId);
+        using var gates = node.EnterAllGates();
         var msg = new MembershipMessage
         {
             NamespaceId = namespaceId,
@@ -83,14 +86,19 @@ public static class Membership
     /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(MembershipMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        Node.ValidateNamespaceId(m.NamespaceId);
+        ArgumentNullException.ThrowIfNull(m.Members);
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U32(m.MembershipEpoch);
         w.Varint((ulong)m.Members.Count);
         foreach (var e in m.Members)
         {
+            if (e.Epoch < 0 || e.NodeId.IsZero)
+                throw new ArgumentException("Membership entries require a non-zero node id and non-negative epoch.", nameof(m));
             w.B128(e.NodeId);
-            w.U32(unchecked((uint)e.Epoch));
+            w.U32((uint)e.Epoch);
             w.U8(e.Flags);
         }
         return w.Value();
@@ -99,22 +107,31 @@ public static class Membership
     /// <summary>Decode  from canonical wire bytes.</summary>
     public static MembershipMessage Decode(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var m = new MembershipMessage
         {
             NamespaceId = r.U16(),
             MembershipEpoch = r.U32(),
         };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(payload.Length / 21))
+            throw new InvalidDataException("Membership entry count exceeds the available payload.");
+        for (int i = 0; i < (int)count; i++)
         {
+            var nodeId = r.ReadNodeId();
+            uint rawEpoch = r.U32();
+            if (nodeId.IsZero || rawEpoch > int.MaxValue)
+                throw new InvalidDataException("Invalid membership identity or epoch.");
             m.Members.Add(new MembershipEntry
             {
-                NodeId = r.ReadNodeId(),
-                Epoch = unchecked((int)r.U32()),
+                NodeId = nodeId,
+                Epoch = (int)rawEpoch,
                 Flags = r.U8(),
             });
         }
+        if (!r.Eof())
+            throw new InvalidDataException("Membership payload contains trailing bytes.");
         return m;
     }
 
@@ -124,21 +141,42 @@ public static class Membership
     /// </summary>
     public static int Apply(Node node, MembershipMessage remote)
     {
-        int learned = 0;
-        foreach (var e in remote.Members)
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(remote);
+        Node.ValidateNamespaceId(remote.NamespaceId);
+        var entries = remote.Members?.Select(entry => entry is null ? null! : new MembershipEntry
         {
-            if (e.NodeId == node.NodeId) continue;
-            if (e.IsQuarantined)
-                node.Quarantined.Add(e.NodeId);
-            int prev = node.DurableAuthors.TryGetValue(e.NodeId, out var cur) ? cur : 0;
-            if (e.Epoch > prev)
+            NodeId = entry.NodeId,
+            Epoch = entry.Epoch,
+            Flags = entry.Flags,
+        }).ToArray() ?? throw new FormatException("Membership entries are missing");
+        if (entries.Any(entry => entry is null || entry.NodeId.IsZero || entry.Epoch < 0))
+            throw new FormatException("Membership contains an invalid entry");
+
+        var ownedMessage = new MembershipMessage
+        {
+            NamespaceId = remote.NamespaceId,
+            MembershipEpoch = remote.MembershipEpoch,
+            Members = entries.ToList(),
+        };
+        int learned = 0;
+        using (node.EnterAllGates())
+        {
+            foreach (var e in entries)
             {
-                node.DurableAuthors[e.NodeId] = e.Epoch;
-                node.LearnAuthorEpoch(e.NodeId, e.Epoch);
-                if (prev == 0) learned++;
+                if (e.NodeId == node.NodeId) continue;
+                if (e.IsQuarantined)
+                    node.Quarantined.Add(e.NodeId);
+                int prev = node.DurableAuthors.TryGetValue(e.NodeId, out var cur) ? cur : 0;
+                if (e.Epoch > prev)
+                {
+                    node.DurableAuthors[e.NodeId] = e.Epoch;
+                    node.LearnAuthorEpoch(e.NodeId, e.Epoch);
+                    if (prev == 0) learned++;
+                }
             }
         }
-        node.RaiseMembershipApplied(remote, learned);
+        node.RaiseMembershipApplied(ownedMessage, learned);
         return learned;
     }
 }

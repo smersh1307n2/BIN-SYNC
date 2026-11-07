@@ -15,6 +15,29 @@ public class InvariantsAndAdvanced
 
     // ------------------------------------------------------------ ported extras
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(254)]
+    public void Public_field_mutations_reject_reserved_system_field_ids(int fieldId)
+    {
+        using var node = Fix.MakeNode(979);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.WriteField(NS, Rid(979), fieldId, new byte[] { 1 }));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            node.TombField(NS, Rid(979), fieldId));
+    }
+
+    [Fact]
+    public void Public_field_mutations_allow_explicit_FieldResolve_marker()
+    {
+        using var node = Fix.MakeNode(978);
+        var recordId = Rid(978);
+
+        Assert.True(node.WriteField(NS, recordId, Model.FieldResolveId, new byte[] { 1 }));
+        Assert.True(node.TombField(NS, recordId, Model.FieldResolveId));
+    }
+
     [Fact]
     public void HlcTotalOrderTiebreakByDurableAuthor()
     {
@@ -38,6 +61,87 @@ public class InvariantsAndAdvanced
         static int Cmp((ulong W, uint L) a, (ulong W, uint L) b) => a.W != b.W ? a.W.CompareTo(b.W) : a.L.CompareTo(b.L);
         Assert.True(Cmp((h2.Wall, h2.Logical), (h1.Wall, h1.Logical)) > 0);
         Assert.True(Cmp((h3.Wall, h3.Logical), (h2.Wall, h2.Logical)) > 0);
+    }
+
+    [Fact]
+    public void HlcClockSendTick_remains_monotonic_above_signed_wall_range()
+    {
+        var clock = new HlcClock(() => long.MaxValue);
+        ulong restoredWall = (ulong)long.MaxValue + 100;
+        clock.Observe(new Hlc(restoredWall, 7));
+
+        var next = clock.SendTick();
+
+        Assert.Equal(restoredWall, next.Wall);
+        Assert.Equal(8u, next.Logical);
+    }
+
+    [Theory]
+    [InlineData(2, 0)]
+    [InlineData(0, 2)]
+    public void MergeLifecycle_rejects_noncanonical_lifecycle_values(byte localValue, byte remoteValue)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Merge.MergeLifecycle(null, null, localValue, new Hlc(1, 0), Fix.Nid(1), remoteValue));
+    }
+
+    [Fact]
+    public void HlcClockMaxAllowedRemoteWall_uses_unsigned_arithmetic()
+    {
+        var clock = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
+        Assert.Equal(ulong.MaxValue - 1, clock.MaxAllowedRemoteWall((ulong)long.MaxValue));
+    }
+
+    [Fact]
+    public void HlcClockReceiveSkewLimit_handles_wall_above_signed_range()
+    {
+        var clock = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
+
+        var received = clock.ReceiveTick(new Hlc(ulong.MaxValue - 1, 0));
+
+        Assert.Equal(ulong.MaxValue - 1, received.Wall);
+        Assert.Equal(1u, received.Logical);
+        var beyondLimit = new HlcClock(() => long.MaxValue, maxSkewUs: long.MaxValue);
+        Assert.Throws<ClockDriftException>(() =>
+            beyondLimit.ReceiveTick(new Hlc(ulong.MaxValue, 0)));
+    }
+
+    [Fact]
+    public void HlcClock_rejects_negative_wall_clock_source()
+    {
+        var clock = new HlcClock(() => -1);
+
+        Assert.Throws<InvalidOperationException>(() => clock.SendTick());
+        Assert.Throws<InvalidOperationException>(() => clock.ReceiveTick(new Hlc(1, 0)));
+    }
+
+    [Fact]
+    public void HlcClockRejectsSendLogicalOverflowWithoutWrapping()
+    {
+        var clock = new HlcClock(() => 100);
+        clock.Observe(new Hlc(100, uint.MaxValue));
+
+        Assert.Throws<InvalidOperationException>(() => clock.SendTick());
+        Assert.Equal(uint.MaxValue, clock.Snapshot().LastLogical);
+    }
+
+    [Fact]
+    public void HlcClockRejectsReceiveLogicalOverflowWithoutWrapping()
+    {
+        var clock = new HlcClock(() => 100);
+        clock.Observe(new Hlc(100, uint.MaxValue));
+
+        Assert.Throws<InvalidOperationException>(() => clock.ReceiveTick(new Hlc(100, uint.MaxValue)));
+        Assert.Equal(uint.MaxValue, clock.Snapshot().LastLogical);
+    }
+
+    [Fact]
+    public void HlcClockRejectsRemoteLogicalOverflowWithoutWrapping()
+    {
+        var clock = new HlcClock(() => 100);
+
+        Assert.Throws<InvalidOperationException>(() => clock.ReceiveTick(new Hlc(200, uint.MaxValue)));
+        Assert.Equal(0UL, clock.Snapshot().LastWall);
     }
 
     [Fact]
@@ -76,12 +180,14 @@ public class InvariantsAndAdvanced
     [Fact]
     public void AckCodecRoundtrip()
     {
-        var (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(Rid(9), 12345));
-        Assert.Equal(Rid(9), bid); Assert.Equal(12345, seq); Assert.Null(author);
+        var expectedBatch = BatchId.From(Rid(9));
+        var (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(expectedBatch, 12345));
+        Assert.Equal(expectedBatch, bid); Assert.Equal(12345, seq); Assert.Null(author);
         // Errata E-4: optional author-stream trailer
-        var a16 = Rid(77);
-        (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(Rid(9), 12345, a16));
-        Assert.Equal(Rid(9), bid); Assert.Equal(12345, seq); Assert.Equal(a16, author);
+        var expectedAuthor = NodeId.From(Rid(77));
+        (bid, seq, author) = Transport.DecodeAck(Transport.EncodeAck(expectedBatch, 12345, expectedAuthor));
+        Assert.Equal(expectedBatch, bid); Assert.Equal(12345, seq); Assert.Equal(expectedAuthor, author);
+        Assert.Throws<InvalidDataException>(() => Transport.DecodeAck(new byte[25]));
     }
 
     [Fact]
@@ -95,7 +201,8 @@ public class InvariantsAndAdvanced
     {
         Assert.Equal((ushort)0x0001, Frames.ErrorCodes["UNKNOWN_ALIAS"]);
         Assert.Equal((ushort)0x0017, Frames.ErrorCodes["BATCH_CHAIN_BROKEN"]);
-        Assert.Equal(23, Frames.ErrorCodes.Count);
+        Assert.Equal((ushort)0x0018, Frames.ErrorCodes["ACK_OUT_OF_RANGE"]);
+        Assert.Equal(24, Frames.ErrorCodes.Count);
     }
 
     // ------------------------------------------------------------ advanced sync
@@ -374,7 +481,7 @@ public class InvariantsAndAdvanced
         for (long i = 1; i <= 3; i++)
             a.WriteField(NS, Rid(i), 0x0100, Asc($"s{i}"), new Hlc((ulong)(100 + i), 0));
         foreach (var batch in a.BuildSnapshot(NS))
-            b.ApplySnapshot(batch, a.NodeId);
+            b.ApplySnapshot(batch);
         for (long i = 4; i <= 6; i++)
             a.WriteField(NS, Rid(i), 0x0100, Asc($"t{i}"), new Hlc((ulong)(100 + i), 0));
         Transport.SyncRound(a, b, NS);
@@ -553,7 +660,7 @@ public class InvariantsAndAdvanced
         var fresh = Fix.MakeNode(9);
         Transport.MakeSession(a, fresh);
         foreach (var batch in a.BuildSnapshot(NS))
-            fresh.ApplySnapshot(batch, a.NodeId);
+            fresh.ApplySnapshot(batch);
         Assert.True(fresh.Storage[NS][Rid(1)].IsDead);
         Assert.False(fresh.Storage[NS][Rid(2)].IsDead);
         Assert.Equal(Digests.RecordDigest(a.Storage[NS][Rid(1)]), Digests.RecordDigest(fresh.Storage[NS][Rid(1)]));
@@ -636,6 +743,11 @@ public class InvariantsAndAdvanced
         Transport.SyncRound(e1, b, NS);
         var e2 = new Node(nodeId, epoch: 2, nowFn: () => 2_000_000);
         Transport.MakeSession(e2, b);                       // reconnect with bumped epoch
+        // The restarted incarnation must receive the existing peer baseline before
+        // the peer can resume compacted author streams.
+        var baseline = Reconcile.BuildSnapshot(b, NS);
+        Reconcile.ApplySnapshot(e2, baseline);
+        b.MarkInitialSyncComplete(e2.NodeId, NS);
         e2.WriteField(NS, Rid(2), 0x0100, Asc("gen-2"), new Hlc(20, 0));
         Transport.SyncRound(e2, b, NS);
         Assert.Contains(Rid(1), b.Storage[NS]);

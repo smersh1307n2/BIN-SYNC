@@ -1,76 +1,80 @@
 # BIN-SYNC / BinSync.Net
 
-Compact binary sync protocol (**BIN-SYNC CORE**) and a **.NET 10** reference implementation.
+Compact binary sync protocol (BIN-SYNC CORE) and a .NET 10 reference implementation.
 
 | Artifact | Path |
 |---|---|
-| Spec (v2.3.6) | [`BIN-SYNC-SPECIFICATION.txt`](BIN-SYNC-SPECIFICATION.txt) |
-| Addendum (v2.3.7) | [`BIN-SYNC-v2.3.7-ADDENDUM.txt`](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
-| Production status | [`docs/PRODUCTION-STATUS.md`](docs/PRODUCTION-STATUS.md) |
-| Public API surface (2.2) | [`docs/PUBLIC-API.md`](docs/PUBLIC-API.md) |
-| Changelog | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
-| License | [`LICENSE.md`](LICENSE.md) |
-| Crypto notice | [`docs/CRYPTO-NOTICE.md`](docs/CRYPTO-NOTICE.md) |
-| Third-party | [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) |
-| Naming | [`docs/NAME.md`](docs/NAME.md) |
-| .NET engine | [`BinSync.Net/`](BinSync.Net/) |
-| Two-node sample | [`samples/TwoNodeLoopback/`](samples/TwoNodeLoopback/) |
+| Spec (v2.4.19 FINAL) | [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt) |
+| Historical addendum (v2.3.7) | [BIN-SYNC-v2.3.7-ADDENDUM.txt](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
+| Production status | [docs/PRODUCTION-STATUS.md](docs/PRODUCTION-STATUS.md) |
+| Metadata storage / external provider architecture | [docs/METADATA-STORAGE-ARCHITECTURE.md](docs/METADATA-STORAGE-ARCHITECTURE.md) |
+| Metadata Store semantic contract / conformance | [docs/METADATA-STORE-CONFORMANCE.md](docs/METADATA-STORE-CONFORMANCE.md) |
+| Data Provider semantic contract / conformance | [docs/DATA-PROVIDER-CONFORMANCE.md](docs/DATA-PROVIDER-CONFORMANCE.md) |
+| FLD Storage Core extraction boundary | [FLD Storage Core architecture](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-STORAGE-CORE-ARCHITECTURE.md) |
+| Change staging / coalescing / retention policy | [docs/CHANGE-STAGING-AND-RETENTION.md](docs/CHANGE-STAGING-AND-RETENTION.md) |
+| FLD-DB synchronized-database contract | [docs/FLD-DB-INTEGRATION-CONTRACT.md](docs/FLD-DB-INTEGRATION-CONTRACT.md) |
+| Public API surface (3.0.0) | [docs/PUBLIC-API.md](docs/PUBLIC-API.md) |
+| Changelog | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
+| License | [LICENSE.md](LICENSE.md) |
+| Crypto notice | [docs/CRYPTO-NOTICE.md](docs/CRYPTO-NOTICE.md) |
+| Third-party | [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) |
+| Naming | [docs/NAME.md](docs/NAME.md) |
+| .NET engine | [BinSync.Net/](BinSync.Net/) |
 
-**Package:** `BinSync.Core` **`2.6.5`** · **Target:** `net10.0`  
-**Branch:** `main` · **Tests:** 276 (CI)  
-**Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — **no** `BouncyCastle.Cryptography` NuGet.
+**Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
+**Branch:** feature/fld-external-storage (PR #16, Draft)  
+**CI:** unit tests + fuzz/lab + build/run of all three public samples  
+**Crypto:** vendored RFC 8032 Ed25519 (MIT subset) — no BouncyCastle.Cryptography NuGet.
 
 ---
 
-## What works
+## Runtime support profile
 
-Production-hardened reference engine (~95%+ of the normative spec):
+The current Node apply path supports **LWW_FIELD** only (wire code 0x02; legacy code 0 maps to LWW). Unsupported merge policy codes are rejected with SCHEMA_MISMATCH instead of silently being treated as LWW.
 
-| Area | Status |
-|------|--------|
-| LWW + HLC + durable author | done |
-| Outbox/inbox, DELTA_BATCH, ACK | done |
-| Frame codec, CRC32C, FLAG_FRAGMENT | done |
-| STATE_DIGEST / NEED_* / IBLT ladder | done |
-| Membership / GC_NOTICE / quarantine | done |
-| Merge §8 (COUNTER, SET_OR, SEQ, BLOB, MANUAL, Max/Min) | done |
-| Schema §18 (opt-in) | done |
-| E2EE ChaCha20-Poly1305 (opt-in) | done |
-| Ed25519 batch signatures + KEY_ROTATION | done |
-| Causal deps (opt-in) | done |
-| TrustStore TOFU / PreShared / revoke (§15.6) | done |
-| Lab / adversarial fuzz in CI | done |
-| Hot-path encode/decode/apply optimisations | done (on `main`) |
+The CRDT and MAX/MIN merge classes are available as standalone payload/helper APIs. MergePolicyRegistry is not wired into Node.ApplyBatch; schema policy metadata validates compatibility but does not dispatch a merge algorithm. See §8 of the specification and the public API contract.
+
+| Area | Current status |
+|---|---|
+| Generic record model, HLC/LWW_FIELD, lifecycle and field tombstones | implemented |
+| Outbox/inbox, DELTA_BATCH, ACK, relay | implemented |
+| Frame codec, CRC32C, fragmentation, generic SyncSession | implemented |
+| STATE_DIGEST / NEED_* / IBLT reconciliation | implemented |
+| Membership / GC_NOTICE / quarantine | implemented |
+| CRDT payload codecs and merge helpers | helper APIs; not active in Node apply path |
+| Schema evolution | opt-in metadata gate; not merge-policy dispatch |
+| E2EE ChaCha20-Poly1305 | opt-in |
+| Ed25519 batch signatures + KEY_ROTATION | implemented |
+| Causal dependencies | opt-in |
+| TrustStore TOFU / PreShared / revoke | implemented; not full X.509 PKI |
+| Lab / adversarial fuzz | in CI |
+| Hot-path encode/decode/apply optimisations | audited on this branch |
 
 ---
 
 ## Quick start
 
 ```bash
-# restore + test
 cd BinSync.Net
 dotnet test BinSync.slnx -c Release
-# or: dotnet test tests/BinSync.Tests -c Release
-
-# pack
 dotnet pack src/BinSync.Core -c Release
 ```
 
-Embedder contract and SemVer rules: **[docs/PUBLIC-API.md](docs/PUBLIC-API.md)**.
+Embedder contract and SemVer rules: [docs/PUBLIC-API.md](docs/PUBLIC-API.md).
 
----
+## Samples
 
-### Samples
+Run from repository root:
 
 ```bash
-dotnet run --project samples/TwoNodeLoopback -c Release   # in-process SyncRound + events
-dotnet run --project samples/TwoNodeTcp -c Release        # TCP push/receive
-dotnet run --project samples/ScenarioHarness -c Release   # 9 scenarios (+ optional --soak)
+dotnet run --project samples/TwoNodeLoopback -c Release
+dotnet run --project samples/TwoNodeTcp -c Release
+dotnet run --project samples/ScenarioHarness -c Release
+dotnet run --project samples/ScenarioHarness -c Release -- --soak 10
 ```
 
-See [samples/README.md](samples/README.md).
-
+All three projects are built and executed by CI. See [samples/README.md](samples/README.md) for the scenario matrix.
 
 ## License
 
-Dual: **AGPL-3.0-or-later** + commercial (see `LICENSE.md`). Vendored Ed25519 remains MIT.
+Dual: **AGPL-3.0-or-later** + commercial (see LICENSE.md). Vendored Ed25519 remains MIT.

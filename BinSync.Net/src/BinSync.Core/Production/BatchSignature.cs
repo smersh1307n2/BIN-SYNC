@@ -30,30 +30,33 @@ public static class BatchSignature
         return (seed, pub);
     }
 
-    /// <summary>Build sign payload from current state.</summary>
+    /// <summary>Build the canonical sign payload from typed batch identity values.</summary>
     public static byte[] BuildSignPayload(
         int namespaceId,
         int issuerEpoch,
-        ReadOnlySpan<byte> issuerNodeId,
-        ReadOnlySpan<byte> batchId,
-        ReadOnlySpan<byte> batchDigest)
+        NodeId issuerNodeId,
+        BatchId batchId,
+        Digest16 batchDigest)
     {
         var domain = Encoding.UTF8.GetBytes(SignDomain);
-        int len = domain.Length + 4 + 4 + issuerNodeId.Length + batchId.Length + batchDigest.Length;
-        var buf = new byte[len];
+        var buf = new byte[domain.Length + 8 + 16 + 16 + 16];
         int o = 0;
         domain.CopyTo(buf.AsSpan(o)); o += domain.Length;
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(o), namespaceId); o += 4;
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(o), issuerEpoch); o += 4;
-        issuerNodeId.CopyTo(buf.AsSpan(o)); o += issuerNodeId.Length;
-        batchId.CopyTo(buf.AsSpan(o)); o += batchId.Length;
-        batchDigest.CopyTo(buf.AsSpan(o));
+        issuerNodeId.WriteTo(buf.AsSpan(o, 16)); o += 16;
+        batchId.WriteTo(buf.AsSpan(o, 16)); o += 16;
+        batchDigest.WriteTo(buf.AsSpan(o, 16));
         return buf;
     }
 
-    /// <summary>Build sign payload from current state.</summary>
-    public static byte[] BuildSignPayload(Batch batch) =>
-        BuildSignPayload(batch.NamespaceId, batch.IssuerEpoch, batch.IssuerNodeId, batch.BatchId, batch.BatchDigest);
+    /// <summary>Build sign payload from a batch's typed identity values.</summary>
+    public static byte[] BuildSignPayload(Batch batch)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        return BuildSignPayload(batch.NamespaceId, batch.IssuerEpoch,
+            batch.IssuerNodeId, batch.BatchId, batch.BatchDigest);
+    }
 
     /// <summary>Sign a message with an Ed25519 private seed.</summary>
     public static byte[] Sign(ReadOnlySpan<byte> privateSeed, ReadOnlySpan<byte> message)

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <RootNamespace>BinSync.Storage</RootNamespace>
+    <AssemblyName>BinSync.Storage</AssemblyName>
+    <Version>0.1.0-alpha</Version>
+    <Description>Durable BIN-SYNC adapters for Fld1.Storage.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../BinSync.Core/BinSync.Core.csproj" />
+    <ProjectReference Include="../../../external/Fld1.Storage/Fld1.Storage.csproj" />
+  </ItemGroup>
+</Project>

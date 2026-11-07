@@ -72,12 +72,217 @@ public class CausalApplyTests
     }
 
     [Fact]
+    public void ApplyBatchCausal_raises_event_after_releasing_all_node_gates()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(1), 0x0100, new byte[] { 0x11 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        receiver.Causal = new CausalTracker();
+
+        int events = 0;
+        receiver.BatchApplied += (_, _) =>
+        {
+            var write = Task.Run(() => receiver.WriteField(1, Rid(2), 0x0101, new byte[] { 0x22 }));
+            Assert.True(write.Wait(TimeSpan.FromSeconds(3)), "BatchApplied ran while node gates were held.");
+            Assert.True(write.Result);
+            Interlocked.Increment(ref events);
+        };
+
+        var result = receiver.ApplyBatchCausal(batch, sender.NodeId);
+
+        Assert.False(result.Duplicate);
+        Assert.Equal(1, events);
+        Assert.True(receiver.TryGetField(1, Rid(1), 0x0100, out _));
+    }
+
+    [Fact]
+    public void Causal_gate_rejects_zero_change_id_before_quarantining()
+    {
+        var tracker = new CausalTracker();
+        var node = new Node(Id(1), epoch: 1) { Causal = tracker };
+        var entry = new OutboxEntry
+        {
+            NamespaceId = 1,
+            ChangeId = default,
+            RecordId = Rid(1),
+            Payload = Array.Empty<byte>(),
+            CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) },
+        };
+        var batch = new Batch(
+            1, 0, 1, 0x02, 0, node.NodeId, node.Epoch, 1, 1,
+            Id(0xBB), Node.Zero128, Node.Zero128, Node.Zero128,
+            new List<OutboxEntry> { entry });
+
+        var error = Assert.Throws<SyncException>(() => node.ApplyBatchCausal(batch, Id(2)));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
+    public void Causal_gate_rejects_duplicate_change_ids_before_quarantining()
+    {
+        var tracker = new CausalTracker();
+        var node = new Node(Id(1), epoch: 1) { Causal = tracker };
+        var changeId = BatchId.From(Id(0x45));
+        var entries = new List<OutboxEntry>
+        {
+            new() { NamespaceId = 1, ChangeId = changeId, RecordId = Rid(1),
+                Payload = Array.Empty<byte>(), CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) } },
+            new() { NamespaceId = 1, ChangeId = changeId, RecordId = Rid(2),
+                Payload = Array.Empty<byte>(), CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) } },
+        };
+        var batch = new Batch(
+            1, 0, 1, 0x02, 0, node.NodeId, node.Epoch, 1, 2,
+            Id(0xBC), Node.Zero128, Node.Zero128, Node.Zero128, entries);
+
+        var error = Assert.Throws<SyncException>(() => node.ApplyBatchCausal(batch, Id(2)));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
+    public void Duplicate_batch_bypasses_causal_gate_and_does_not_trust_replay_change_ids()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(4), 0x0100, new byte[] { 0x44 });
+        var accepted = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+
+        var first = receiver.ApplyBatch(accepted, sender.NodeId);
+        Assert.False(first.Duplicate);
+
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+        var replay = new Batch(
+            accepted.NamespaceId, accepted.SchemaId, accepted.SchemaVersion, accepted.MergePolicy,
+            accepted.Flags, accepted.IssuerNodeId, accepted.IssuerEpoch, accepted.CursorStart,
+            accepted.CursorEnd, accepted.BatchId, accepted.PrevBatchDigest, accepted.RecordsRoot,
+            accepted.BatchDigest, accepted.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = BatchId.From(Id(0xE1)),
+                RecordId = e.RecordId.ToArray(),
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId.ToArray(),
+                CausalDeps = new List<BatchId> { BatchId.From(Id(0xE1)) },
+            }).ToList());
+
+        var duplicate = receiver.ApplyBatchCausal(replay, sender.NodeId);
+
+        Assert.True(duplicate.Duplicate);
+        Assert.Equal(0, tracker.PendingCount);
+        Assert.False(tracker.IsKnown(BatchId.From(Id(0xE1))));
+        Assert.Equal(CausalOutcome.Pending,
+            tracker.Evaluate(BatchId.From(Id(0xE2)), new[] { BatchId.From(Id(0xE1)) }, out _));
+    }
+
+    [Fact]
+    public void Duplicate_causal_batch_preserves_existing_tracker_state_without_rechecking_dependencies()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(5), 0x0100, new byte[] { 0x55 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+
+        var first = receiver.ApplyBatchCausal(batch, sender.NodeId);
+        Assert.False(first.Duplicate);
+        Assert.All(batch.Entries, entry => Assert.True(tracker.IsKnown(entry.ChangeId)));
+
+        var replay = new Batch(
+            batch.NamespaceId, batch.SchemaId, batch.SchemaVersion, batch.MergePolicy,
+            batch.Flags, batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart,
+            batch.CursorEnd, batch.BatchId, batch.PrevBatchDigest, batch.RecordsRoot,
+            batch.BatchDigest, batch.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                RecordId = e.RecordId.ToArray(),
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId.ToArray(),
+                CausalDeps = new List<BatchId> { e.ChangeId },
+            }).ToList());
+        var duplicate = receiver.ApplyBatchCausal(replay, sender.NodeId);
+
+        Assert.True(duplicate.Duplicate);
+        Assert.All(batch.Entries, entry => Assert.True(tracker.IsKnown(entry.ChangeId)));
+        Assert.Equal(0, tracker.PendingCount);
+    }
+
+    [Fact]
+    public void DrainAndRetryCausal_reapplies_with_normal_node_gate_order()
+    {
+        var sender = new Node(Id(0xA1), epoch: 1);
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        Transport.MakeSession(sender, receiver);
+        sender.WriteField(1, Rid(3), 0x0100, new byte[] { 0x33 });
+        var batch = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var parent = BatchId.From(Id(0x44));
+        batch.Entries[0].CausalDeps.Add(parent);
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+
+        var blocked = Assert.Throws<SyncException>(() => receiver.ApplyBatchCausal(batch, sender.NodeId));
+        Assert.Equal("CAUSAL_DEP_MISSING", blocked.CodeName);
+
+        tracker.NoteApplied(parent);
+        Assert.Equal(1, receiver.DrainAndRetryCausal());
+        Assert.True(receiver.TryGetField(1, Rid(3), 0x0100, out var field));
+        Assert.Equal(new byte[] { 0x33 }, field!.Value);
+    }
+
+    [Fact]
+    public void DrainAndRetryCausal_drains_newly_unblocked_batches_in_the_same_call()
+    {
+        var receiver = new Node(Id(0xB2), epoch: 1);
+        var firstSender = new Node(Id(0xA1), epoch: 1);
+        var secondSender = new Node(Id(0xA2), epoch: 1);
+        Transport.MakeSession(firstSender, receiver);
+        Transport.MakeSession(secondSender, receiver);
+
+        firstSender.WriteField(1, Rid(0x31), 0x0100, new byte[] { 0x31 });
+        var firstBatch = firstSender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        var parent = BatchId.From(Id(0x40));
+        firstBatch.Entries[0].CausalDeps.Add(parent);
+
+        secondSender.WriteField(1, Rid(0x32), 0x0100, new byte[] { 0x32 });
+        var secondBatch = secondSender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        secondBatch.Entries[0].CausalDeps.Add(firstBatch.Entries[0].ChangeId);
+
+        var tracker = new CausalTracker();
+        receiver.Causal = tracker;
+        Assert.Equal("CAUSAL_DEP_MISSING",
+            Assert.Throws<SyncException>(() => receiver.ApplyBatchCausal(firstBatch, firstSender.NodeId)).CodeName);
+        Assert.Equal("CAUSAL_DEP_MISSING",
+            Assert.Throws<SyncException>(() => receiver.ApplyBatchCausal(secondBatch, secondSender.NodeId)).CodeName);
+        Assert.Equal(2, tracker.PendingCount);
+
+        tracker.NoteApplied(parent);
+        Assert.Equal(2, receiver.DrainAndRetryCausal());
+        Assert.Equal(0, tracker.PendingCount);
+        Assert.True(receiver.TryGetField(1, Rid(0x31), 0x0100, out var first));
+        Assert.True(receiver.TryGetField(1, Rid(0x32), 0x0100, out var second));
+        Assert.Equal(new byte[] { 0x31 }, first!.Value);
+        Assert.Equal(new byte[] { 0x32 }, second!.Value);
+    }
+
+    [Fact]
     public void Missing_dep_throws_CAUSAL_DEP_MISSING_and_quarantines_KZ4()
     {
         var tracker = new CausalTracker();
         var n = new Node(Id(1), epoch: 1) { Causal = tracker };
         var changeId = Id(0x20);
         var parent = Id(0x10);
+        var originalPayload = new byte[] { 0x10, 0x20 };
         var entry = new OutboxEntry
         {
             NamespaceId = 1,
@@ -85,7 +290,7 @@ public class CausalApplyTests
             ChangeId = changeId,
             RecordId = Rid(1),
             OpKind = 0x01,
-            Payload = Array.Empty<byte>(),
+            Payload = originalPayload,
             AuthorNodeId = n.NodeId.ToArray(),
             CausalDeps = new List<BatchId> { parent },
         };
@@ -99,10 +304,22 @@ public class CausalApplyTests
         Assert.Equal(0x0012, ex.Code);
         Assert.Equal(1, tracker.PendingCount);
         Assert.False(tracker.IsKnown(changeId));
+
+        entry.CausalDeps.Clear();
+        entry.ChangeId = BatchId.From(Id(0x21));
+        originalPayload[0] = 0xFF;
+
+        tracker.NoteApplied(parent);
+        var released = n.DrainCausal();
+        Assert.Single(released);
+        var held = Assert.IsType<HeldCausalBatch>(released[0].Op.Payload);
+        Assert.Equal(BatchId.From(changeId), held.Batch.Entries[0].ChangeId);
+        Assert.Equal(BatchId.From(parent), Assert.Single(held.Batch.Entries[0].CausalDeps));
+        Assert.Equal(new byte[] { 0x10, 0x20 }, held.Batch.Entries[0].Payload.ToArray());
     }
 
     [Fact]
-    public void Cycle_throws_without_quarantine()
+    public void Cycle_throws_and_marks_change_lost_for_descendants()
     {
         var tracker = new CausalTracker();
         var n = new Node(Id(1), epoch: 1) { Causal = tracker };
@@ -124,6 +341,8 @@ public class CausalApplyTests
         var ex = Assert.Throws<SyncException>(() => n.ApplyBatchCausal(batch, senderPeer: Id(2)));
         Assert.Equal("CAUSAL_DEP_MISSING", ex.CodeName);
         Assert.Equal(0, tracker.PendingCount);
+        Assert.Equal(CausalOutcome.LostDep,
+            tracker.Evaluate(BatchId.From(Id(0x30)), new[] { BatchId.From(changeId) }, out _));
     }
 
     [Fact]
@@ -172,7 +391,9 @@ public class CausalApplyTests
         var n = new Node(Id(1), epoch: 1) { Causal = tracker };
         var child = Id(0x20);
         var parent = Id(0x10);
-        tracker.EnqueuePending(child, new[] { parent }, payload: "held");
+        var dependencies = new[] { BatchId.From(parent) };
+        tracker.EnqueuePending(BatchId.From(child), dependencies, payload: "held");
+        dependencies[0] = BatchId.From(Id(0x11));
         Assert.Empty(n.DrainCausal());
 
         tracker.NoteApplied(parent);

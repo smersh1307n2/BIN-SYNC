@@ -12,19 +12,27 @@ public sealed partial class Node
     /// </summary>
     public int RepublishUnderPrefix(int namespaceId, byte[] prefix)
     {
+        ValidateNamespaceId(namespaceId);
+        ArgumentNullException.ThrowIfNull(prefix);
+        if (prefix.Length > 32)
+            throw new ArgumentOutOfRangeException(nameof(prefix), "A BLAKE3 record digest is 32 bytes.");
+        ThrowIfDisposed();
+        var ownedPrefix = prefix.ToArray();
+
         lock (_lockStorage) lock (_lockOutbox)
         {
+            ThrowIfDisposed();
             int n = 0;
             if (!_storage.TryGetValue(namespaceId, out var map)) return 0;
             foreach (var (rid, rec) in map.ToList())
             {
                 var key = BucketAccumulator.BucketKey(rid);
-                if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
+                if (ownedPrefix.Length > key.Length || !key.AsSpan(0, ownedPrefix.Length).SequenceEqual(ownedPrefix))
                     continue;
                 if (rec.IsDead) continue;
                 foreach (var (fid, fs) in rec.State)
                 {
-                    WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);
+                    WriteFieldInternal(namespaceId, rid, fid, fs.Value);
                     n++;
                 }
             }
@@ -33,18 +41,26 @@ public sealed partial class Node
     }
 
     /// <summary>Re-publish specific recordIds (NEED_KEYS path).</summary>
-    public int RepublishRecords(int namespaceId, IEnumerable<byte[]> recordIds)
+    public int RepublishRecords(int namespaceId, IEnumerable<RecordId> recordIds)
     {
+        ValidateNamespaceId(namespaceId);
+        ArgumentNullException.ThrowIfNull(recordIds);
+        ThrowIfDisposed();
+        // Enumerate caller code before taking engine locks; the snapshot also prevents
+        // a mutable caller collection from changing the selected set mid-operation.
+        var ownedRecordIds = recordIds.ToArray();
+
         lock (_lockStorage) lock (_lockOutbox)
         {
+            ThrowIfDisposed();
             int n = 0;
             if (!_storage.TryGetValue(namespaceId, out var map)) return 0;
-            foreach (var rid in recordIds)
+            foreach (var rid in ownedRecordIds)
             {
                 if (!map.TryGetValue(rid, out var rec) || rec.IsDead) continue;
                 foreach (var (fid, fs) in rec.State)
                 {
-                    WriteFieldInternal(namespaceId, rid.ToArray(), fid, fs.Value);
+                    WriteFieldInternal(namespaceId, rid, fid, fs.Value);
                     n++;
                 }
             }

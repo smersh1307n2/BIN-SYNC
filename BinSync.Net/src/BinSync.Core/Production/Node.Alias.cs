@@ -7,21 +7,45 @@ namespace BinSync;
 public sealed partial class Node
 {
     // ------------------------------------------------------------------ aliases
-    /// §4.4 HELLO carries the sender's incarnation epoch; the receiver stores it as the
-    /// per-session watermark used by STEP 0.5 (errata E-2/E-3). A NEW session resets the
-    /// peer's watermark first (§4.3: reconnect = fresh exchange), then raises it.
+    /// <summary>Take a stable copy of the durable author registry under the metadata gate.</summary>
+    internal KeyValuePair<NodeId, int>[] DurableAuthorsSnapshot()
+    {
+        lock (_lockMeta) { ThrowIfDisposed(); return DurableAuthors.ToArray(); }
+    }
+
+    /// HELLO carries the sender's incarnation epoch. Keep this peer-wide baseline
+    /// separate from per-namespace batch watermarks so namespace 0 remains an ordinary
+    /// namespace key (errata E-2/E-3). Reconnects may refresh aliases, never roll back epoch.
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterSessionEpoch(NodeId peer, int epoch)
     {
-        lock (_lockMeta) RegisterSessionEpochInternal(peer, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); RegisterSessionEpochInternal(peer, epoch); }
+    }
+
+    internal void ValidateSessionEpoch(NodeId peer, int epoch)
+    {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (PeerSessionEpochs.TryGetValue(peer, out int knownEpoch) && epoch < knownEpoch)
+                throw new SyncException("EPOCH_REGRESSION");
+        }
     }
 
     internal void RegisterSessionEpochInternal(NodeId peer, int epoch)
     {
-        foreach (var k in KnownEpochs.Keys.Where(k => k.Item1 == peer).ToList())
-            KnownEpochs.Remove(k);
-        KnownEpochs[(peer, 0)] = epoch;
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+        int knownSessionEpoch = PeerSessionEpochs.TryGetValue(peer, out var current)
+            ? current
+            : 0;
+
+        // Preserve namespace-specific receive watermarks independently. A fresh
+        // alias map does not authorize rollback of the peer's incarnation.
+        PeerSessionEpochs[peer] = Math.Max(knownSessionEpoch, epoch);
     }
 
     /// Durable observation of an author's incarnation epoch (§4.4). Used only as fallback
@@ -30,27 +54,40 @@ public sealed partial class Node
     /// and delegates to <c>LearnAuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void LearnAuthorEpoch(NodeId author, int epoch)
     {
-        lock (_lockMeta) LearnAuthorEpochInternal(author, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); LearnAuthorEpochInternal(author, epoch); }
     }
 
     internal void LearnAuthorEpochInternal(NodeId author, int epoch)
     {
         if (author.IsZero) return;
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
         if (!KnownEpochs.TryGetValue((author, -1), out var cur) || epoch > cur)
             KnownEpochs[(author, -1)] = epoch;
     }
 
     /// <summary>Return the highest known epoch for an author, if any.</summary>
-    public int? KnownAuthorEpoch(NodeId author) =>
-        KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
+    public int? KnownAuthorEpoch(NodeId author)
+    {
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            return KnownEpochs.TryGetValue((author, -1), out var v) ? v : null;
+        }
+    }
 
     /// <summary>Return the session epoch for a peer in a namespace, if any.</summary>
     public int? SessionEpoch(NodeId peer, int ns)
     {
-        int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;
-        int? d = KnownEpochs.TryGetValue((peer, 0), out var v0) ? v0 : null;
-        if (e is null && d is null) return null;
-        return Math.Max(e ?? 0, d ?? 0);
+        ValidateNamespaceId(ns);
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            int? e = KnownEpochs.TryGetValue((peer, ns), out var v1) ? v1 : null;
+            int? d = PeerSessionEpochs.TryGetValue(peer, out var v0) ? v0 : null;
+            if (e is null && d is null) return null;
+            return Math.Max(e ?? 0, d ?? 0);
+        }
     }
 
     /// §4.3: ALIAS_MAP belongs to a SESSION — every new connection performs a fresh
@@ -66,13 +103,38 @@ public sealed partial class Node
     /// and delegates to <c>ResetSessionInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void ResetSession(NodeId peer)
     {
-        lock (_lockMeta) ResetSessionInternal(peer);
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        lock (_lockMeta) { ThrowIfDisposed(); ResetSessionInternal(peer, resetReceiveState: true); }
     }
 
-    internal void ResetSessionInternal(NodeId peer)
+    /// <summary>
+    /// Start a fresh alias session while retaining peer replication cursors when the
+    /// peer incarnation is unchanged. A changed HELLO epoch invalidates receive-side
+    /// cursors and chain checkpoints from the previous incarnation.
+    /// </summary>
+    public void ResetSession(NodeId peer, int newEpoch)
+    {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (newEpoch < 0) throw new ArgumentOutOfRangeException(nameof(newEpoch));
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            bool incarnationChanged =
+                PeerSessionEpochs.TryGetValue(peer, out int previousEpoch) &&
+                previousEpoch != newEpoch;
+            ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
+        }
+    }
+
+    internal void ResetSessionInternal(NodeId peer) =>
+        ResetSessionInternal(peer, resetReceiveState: true);
+
+    internal void ResetSessionInternal(NodeId peer, bool resetReceiveState)
     {
         AliasToNode.Remove(peer);
         NodeToAlias.Remove(peer);
+        if (!resetReceiveState) return;
+
         foreach (var k in PeerStates.Keys.Where(k => k.Item1 == peer).ToList())
             PeerStates.Remove(k);
         foreach (var k in LastBatchDigest.Keys.Where(k => k.Issuer == peer).ToList())
@@ -83,6 +145,45 @@ public sealed partial class Node
             LastStreamAuthor.Remove(k);
     }
 
+    /// <summary>
+    /// Atomically publish a completed peer session. Validation happens before any
+    /// prior session state is changed; reset, epoch registration and alias publication
+    /// then run under one metadata gate so readers cannot observe a half-committed session.
+    /// </summary>
+    internal void CommitSession(NodeId peer, int peerEpoch, IReadOnlyList<AliasMapEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var aliases = new HashSet<int>();
+            var authors = new HashSet<NodeId>();
+            bool hasLocal = false;
+            bool hasPeer = false;
+
+            foreach (var entry in entries)
+            {
+                if (entry.Alias <= 0 || entry.NodeId.IsZero || entry.Epoch < 0 ||
+                    !aliases.Add(entry.Alias) || !authors.Add(entry.NodeId))
+                    throw new FrameException("FRAME_REJECTED");
+
+                if (entry.NodeId == NodeId && entry.Epoch == Epoch) hasLocal = true;
+                if (entry.NodeId == peer && entry.Epoch == peerEpoch) hasPeer = true;
+            }
+
+            if (!hasLocal || !hasPeer)
+                throw new FrameException("FRAME_REJECTED");
+
+            bool hasPreviousSessionEpoch =
+                PeerSessionEpochs.TryGetValue(peer, out int previousEpoch);
+            bool incarnationChanged = hasPreviousSessionEpoch && previousEpoch != peerEpoch;
+            ResetSessionInternal(peer, resetReceiveState: incarnationChanged);
+            RegisterSessionEpochInternal(peer, peerEpoch);
+            foreach (var entry in entries)
+                RegisterAliasInternal(peer, entry.Alias, entry.NodeId, entry.Epoch);
+        }
+    }
+
     /// Errata E-10 (scenario 23 relay): modelled incremental ALIAS_MAP update (§4.3/§12.7):
     /// register one entry in BOTH peers' copies of the session map under the SAME alias
     /// when possible. Returns the alias valid on both ends, or None when no collision-free
@@ -91,7 +192,29 @@ public sealed partial class Node
     /// and delegates to <c>EnsureAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int? EnsureAlias(Node peer, NodeId nodeId, int epoch)
     {
-        lock (_lockMeta) return EnsureAliasInternal(peer, nodeId, epoch);
+        ArgumentNullException.ThrowIfNull(peer);
+        if (nodeId.IsZero) throw new ArgumentException("Author identity must be non-zero.", nameof(nodeId));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+
+        // Never block while acquiring another node's metadata gate: two nodes may
+        // negotiate aliases in opposite directions while each holds its own gate.
+        // A transient conflict is fail-closed (caller may retry on the next exchange).
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (!Monitor.TryEnter(peer._lockMeta))
+                return null;
+
+            try
+            {
+                peer.ThrowIfDisposed();
+                return EnsureAliasInternal(peer, nodeId, epoch);
+            }
+            finally
+            {
+                Monitor.Exit(peer._lockMeta);
+            }
+        }
     }
 
     internal int? EnsureAliasInternal(Node peer, NodeId nodeId, int epoch)
@@ -170,20 +293,93 @@ public sealed partial class Node
                 if (!freeA || !freeB) continue;   // occupied by another author — [А3] skip
                 try
                 {
-                    RegisterAlias(peer.NodeId, cand, nodeId, epoch);
-                    peer.RegisterAlias(NodeId, cand, nodeId, epoch);
-                    return cand;
+                    if (TryRegisterAliasPairInternal(peer, cand, nodeId, epoch))
+                        return cand;
+                    // The candidate was not safe on both sides; try a fresh collision-free alias.
                 }
                 catch (SyncException) { /* reverse-map conflict — fall through to fresh allocation */ }
             }
         }
+        if (!TryRegisterAliasPairInternal(peer, nxt, nodeId, epoch))
+            return null;
+        return nxt;
+    }
+
+    /// <summary>
+    /// Register a negotiated alias on both ends. If the peer rejects its half,
+    /// roll back the local half so the session cannot retain a one-sided binding.
+    /// Caller holds this node's metadata gate; RegisterAlias acquires the peer gate.
+    /// </summary>
+    private bool TryRegisterAliasPairInternal(Node peer, int alias, NodeId nodeId, int epoch)
+    {
+        bool hadDurable = DurableAuthors.TryGetValue(nodeId, out int priorDurable);
         try
         {
-            RegisterAlias(peer.NodeId, nxt, nodeId, epoch);
-            peer.RegisterAlias(NodeId, nxt, nodeId, epoch);
+            RegisterAliasInternal(peer.NodeId, alias, nodeId, epoch);
         }
-        catch (SyncException) { return null; }
-        return nxt;
+        catch (SyncException)
+        {
+            RemoveEmptyAliasMapsInternal(peer.NodeId);
+            return false;
+        }
+
+        try
+        {
+            peer.RegisterAlias(NodeId, alias, nodeId, epoch);
+            return true;
+        }
+        catch (SyncException)
+        {
+            // The first registration succeeded, the second did not. Undo only the
+            // exact binding inserted above; preserve any pre-existing durable epoch.
+            if (AliasToNode.TryGetValue(peer.NodeId, out var fwd) &&
+                fwd.TryGetValue(alias, out var binding) &&
+                binding.Id == nodeId && binding.Epoch == epoch)
+                fwd.Remove(alias);
+
+            if (NodeToAlias.TryGetValue(peer.NodeId, out var rev) &&
+                rev.TryGetValue((nodeId, epoch), out var reverseAlias) &&
+                reverseAlias == alias)
+                rev.Remove((nodeId, epoch));
+
+            if (hadDurable) DurableAuthors[nodeId] = priorDurable;
+            else DurableAuthors.Remove(nodeId);
+            RemoveEmptyAliasMapsInternal(peer.NodeId);
+
+            // RegisterAliasInternal on the peer creates maps before validating
+            // conflicts. Remove only those now-empty containers, under its own gate.
+            lock (peer._lockMeta)
+                peer.RemoveEmptyAliasMapsInternal(NodeId);
+            return false;
+        }
+        catch
+        {
+            // Unexpected failures must also leave no one-sided alias binding.
+            if (AliasToNode.TryGetValue(peer.NodeId, out var fwd) &&
+                fwd.TryGetValue(alias, out var binding) &&
+                binding.Id == nodeId && binding.Epoch == epoch)
+                fwd.Remove(alias);
+
+            if (NodeToAlias.TryGetValue(peer.NodeId, out var rev) &&
+                rev.TryGetValue((nodeId, epoch), out var reverseAlias) &&
+                reverseAlias == alias)
+                rev.Remove((nodeId, epoch));
+
+            if (hadDurable) DurableAuthors[nodeId] = priorDurable;
+            else DurableAuthors.Remove(nodeId);
+            RemoveEmptyAliasMapsInternal(peer.NodeId);
+            lock (peer._lockMeta)
+                peer.RemoveEmptyAliasMapsInternal(NodeId);
+            throw;
+        }
+    }
+
+    private void RemoveEmptyAliasMapsInternal(NodeId peer)
+    {
+        if (AliasToNode.TryGetValue(peer, out var fwd) && fwd.Count == 0)
+            AliasToNode.Remove(peer);
+        if (NodeToAlias.TryGetValue(peer, out var rev) && rev.Count == 0)
+            NodeToAlias.Remove(peer);
     }
 
     private static IEnumerable<int> EnumerateCandidateAliases(
@@ -204,11 +400,15 @@ public sealed partial class Node
     /// and delegates to <c>RegisterAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterAlias(NodeId peer, int alias, NodeId nodeId, int epoch)
     {
-        lock (_lockMeta) RegisterAliasInternal(peer, alias, nodeId, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); RegisterAliasInternal(peer, alias, nodeId, epoch); }
     }
 
     internal void RegisterAliasInternal(NodeId peer, int alias, NodeId nodeId, int epoch)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (alias <= 0) throw new ArgumentOutOfRangeException(nameof(alias));
+        if (nodeId.IsZero) throw new ArgumentException("Author identity must be non-zero.", nameof(nodeId));
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
         var m = AliasToNode.TryGetValue(peer, out var mm) ? mm : (AliasToNode[peer] = new());
         // BUGFIX (port): inner reverse map MUST use the BytesIntEq content comparer — the default
         // tuple comparer falls back to byte[] REFERENCE equality for nodeId, so re-creating
@@ -228,6 +428,48 @@ public sealed partial class Node
             DurableAuthors[nodeId] = epoch;
     }
 
+
+    /// <summary>
+    /// Apply a complete session alias map atomically. Validate every forward and reverse
+    /// binding before mutating either map or the durable-author registry.
+    /// </summary>
+    internal void ApplyAliasMapAtomic(NodeId peer, IReadOnlyList<AliasMapEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var aliases = new HashSet<int>();
+            var authors = new HashSet<NodeId>();
+            var fwd = AliasToNode.TryGetValue(peer, out var currentFwd)
+                ? currentFwd : null;
+            var rev = NodeToAlias.TryGetValue(peer, out var currentRev)
+                ? currentRev : null;
+
+            foreach (var entry in entries)
+            {
+                int alias = entry.Alias;
+                var durable = (entry.NodeId, entry.Epoch);
+                if (alias <= 0 || entry.NodeId.IsZero || entry.Epoch < 0 ||
+                    !aliases.Add(alias) || !authors.Add(entry.NodeId))
+                    throw new FrameException("FRAME_REJECTED");
+
+                if (fwd is not null && fwd.TryGetValue(alias, out var owner) &&
+                    (owner.Id != entry.NodeId || owner.Epoch != entry.Epoch))
+                    throw new SyncException("UNKNOWN_ALIAS");
+
+                if (rev is not null && rev.TryGetValue(durable, out int existingAlias) &&
+                    existingAlias != alias)
+                    throw new SyncException("UNKNOWN_ALIAS");
+            }
+
+            // No operation below can encounter a binding conflict: the complete set
+            // was checked against both maps while holding the same metadata gate.
+            foreach (var entry in entries)
+                RegisterAliasInternal(peer, entry.Alias, entry.NodeId, entry.Epoch);
+        }
+    }
+
     /// Resolve a wire alias to the DURABLE author identity.
     /// SPEC CORRECTION (errata E-1): the durable author is the bare b128 nodeId (§4.6/§5.4).
     /// Errata E-12: on a miss, consult the peer's copy of THIS session and adopt its
@@ -236,7 +478,9 @@ public sealed partial class Node
     /// and delegates to <c>ResolveAliasInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public NodeId ResolveAlias(NodeId peer, int alias)
     {
-        lock (_lockMeta) return ResolveAliasInternal(peer, alias);
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if (alias <= 0) throw new ArgumentOutOfRangeException(nameof(alias));
+        lock (_lockMeta) { ThrowIfDisposed(); return ResolveAliasInternal(peer, alias); }
     }
 
     internal NodeId ResolveAliasInternal(NodeId peer, int alias)
@@ -254,26 +498,35 @@ public sealed partial class Node
             }
             if (other is not null)
             {
-                var theirFwd = other.AliasToNode.TryGetValue(NodeId, out var tf) ? tf : new Dictionary<int, (NodeId Id, int Epoch)>();
-                if (theirFwd.TryGetValue(alias, out var durThere))
+                // The peer's alias table is independently mutable. Never read it without
+                // its metadata gate; TryEnter avoids reversing the Node lock order while
+                // this node's metadata gate is already held. Contention fails closed so
+                // the caller can retry after the peer finishes its session update.
+                (NodeId Id, int Epoch)? peerBinding = null;
+                if (Monitor.TryEnter(other._lockMeta))
                 {
-                    try { RegisterAlias(peer, alias, durThere.Id, durThere.Epoch); return durThere.Id; } // E-1: bare nodeId
-                    catch (SyncException) { throw new SyncException("UNKNOWN_ALIAS"); } // genuine conflict — never guess
-                }
-                // BUGFIX (persistence resume, symmetric E-12): the wire alias is missing from
-                // OUR copy of the session map (a resumed node can lose per-peer maps while
-                // already-signed outbox batches still carry those aliases). The sender just
-                // resolved the SAME alias successfully in ITS own copy — consult the sender's
-                // forward map for this session and adopt its binding iff collision-free.
-                // §4.3 makes both copies of a session table identical, so this is knowledge
-                // exchange, not guessing [А3]; an alias unknown on BOTH ends still fails closed.
-                if (attached)
-                {
-                    var theirMapForUs = other.AliasToNode.TryGetValue(NodeId, out var tm) ? tm : null;
-                    if (theirMapForUs is not null && theirMapForUs.TryGetValue(alias, out var durTheir))
+                    try
                     {
-                        try { RegisterAlias(peer, alias, durTheir.Id, durTheir.Epoch); return durTheir.Id; }
-                        catch (SyncException) { /* real conflict — fail closed below */ }
+                        if (other.AliasToNode.TryGetValue(NodeId, out var theirForward) &&
+                            theirForward.TryGetValue(alias, out var known))
+                            peerBinding = known;
+                    }
+                    finally
+                    {
+                        Monitor.Exit(other._lockMeta);
+                    }
+                }
+
+                if (peerBinding is { } binding)
+                {
+                    try
+                    {
+                        RegisterAlias(peer, alias, binding.Id, binding.Epoch);
+                        return binding.Id;
+                    }
+                    catch (SyncException)
+                    {
+                        throw new SyncException("UNKNOWN_ALIAS"); // genuine conflict — never guess
                     }
                 }
             }
@@ -287,7 +540,7 @@ public sealed partial class Node
     /// and delegates to <c>DurableIdInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public byte[] DurableId(NodeId? nodeId = null, int? epoch = null)
     {
-        lock (_lockMeta) return DurableIdInternal(nodeId, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); return DurableIdInternal(nodeId, epoch); }
     }
 
     /// <summary>Write the 20-byte durable identity (nodeId || epoch u32 LE) into <paramref name="dest"/>.</summary>
@@ -296,10 +549,13 @@ public sealed partial class Node
         if (dest.Length < 20) throw new ArgumentException("need 20 bytes", nameof(dest));
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var n = nodeId ?? NodeId;
             var e = epoch ?? Epoch;
+            if (n.IsZero) throw new ArgumentException("Node identity must be non-zero.", nameof(nodeId));
+            if (e < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
             n.WriteTo(dest[..16]);
-            BitConverter.TryWriteBytes(dest[16..], (uint)e);
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(dest[16..], (uint)e);
         }
     }
 
@@ -316,7 +572,7 @@ public sealed partial class Node
     /// and delegates to <c>AliasOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int? AliasOf(NodeId peer, NodeId nodeId, int? epoch = null)
     {
-        lock (_lockMeta) return AliasOfInternal(peer, nodeId, epoch);
+        lock (_lockMeta) { ThrowIfDisposed(); return AliasOfInternal(peer, nodeId, epoch); }
     }
 
     internal int? AliasOfInternal(NodeId peer, NodeId nodeId, int? epoch = null)

@@ -17,7 +17,7 @@ public readonly partial struct NodeId : IEquatable<NodeId>
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public NodeId(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
-    /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from a 16-byte identity or b128 wire bytes; non-16-byte inputs are canonicalized to 16 bytes.</summary>
     public static NodeId From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length == 16)
@@ -30,13 +30,13 @@ public readonly partial struct NodeId : IEquatable<NodeId>
             BinaryPrimitives.ReadUInt64LittleEndian(can.AsSpan(8)));
     }
 
-    /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from b128 wire bytes; null or empty denotes the zero identity.</summary>
     public static NodeId From(byte[]? bytes) =>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public static implicit operator NodeId(byte[]? bytes) => From(bytes);
-    /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from a b128 wire representation or a 16-byte identity.</summary>
     public static NodeId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
     public static implicit operator NodeId(ReadOnlyMemory<byte> bytes) => From(bytes);
@@ -102,7 +102,7 @@ public readonly partial struct RecordId : IEquatable<RecordId>
     /// <summary>128-bit record identity with value equality.</summary>
     public RecordId(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
-    /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from a 16-byte identity or b128 wire bytes; non-16-byte inputs are canonicalized to 16 bytes.</summary>
     public static RecordId From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length == 16)
@@ -115,13 +115,13 @@ public readonly partial struct RecordId : IEquatable<RecordId>
             BinaryPrimitives.ReadUInt64LittleEndian(can.AsSpan(8)));
     }
 
-    /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from b128 wire bytes; null or empty denotes the zero identity.</summary>
     public static RecordId From(byte[]? bytes) =>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
     /// <summary>128-bit record identity with value equality.</summary>
     public static implicit operator RecordId(byte[]? bytes) => From(bytes);
-    /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from a b128 wire representation or a 16-byte identity.</summary>
     public static RecordId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
     /// <summary>128-bit record identity with value equality.</summary>
     public static implicit operator RecordId(ReadOnlyMemory<byte> bytes) => From(bytes);
@@ -189,6 +189,7 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     public BatchId(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
     /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from a 16-byte identity or b128 wire bytes; non-16-byte inputs are canonicalized to 16 bytes.</summary>
     public static BatchId From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length == 16)
@@ -202,11 +203,13 @@ public readonly partial struct BatchId : IEquatable<BatchId>
     }
 
     /// <summary>Create an id from a 16-byte sequence.</summary>
+    /// <summary>Create from b128 wire bytes; null or empty denotes the zero identity.</summary>
     public static BatchId From(byte[]? bytes) =>
         bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
 
     /// <summary>128-bit batch identity with value equality.</summary>
     public static implicit operator BatchId(byte[]? bytes) => From(bytes);
+    /// <summary>Create from a b128 wire representation or a 16-byte identity.</summary>
     public static BatchId From(ReadOnlyMemory<byte> bytes) => From(bytes.Span);
     public static implicit operator BatchId(ReadOnlyMemory<byte> bytes) => From(bytes);
 
@@ -271,25 +274,33 @@ public readonly partial struct Digest16 : IEquatable<Digest16>
 
     public Digest16(ulong lo, ulong hi) { Lo = lo; Hi = hi; }
 
+    /// <summary>Create a digest from exactly 16 bytes; malformed lengths are rejected.</summary>
     public static Digest16 From(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length != 16)
-        {
-            if (bytes.Length == 0) return default;
-            // take first 16 or pad
-            Span<byte> tmp = stackalloc byte[16];
-            bytes[..Math.Min(16, bytes.Length)].CopyTo(tmp);
-            return From(tmp);
-        }
+            throw new ArgumentException("Digest16 requires exactly 16 bytes.", nameof(bytes));
         return new Digest16(
             System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes),
             System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8)));
     }
 
-    public static Digest16 From(byte[]? bytes) =>
-        bytes is null || bytes.Length == 0 ? default : From(bytes.AsSpan());
+    /// <summary>Create a digest from an exactly 16-byte array.</summary>
+    public static Digest16 From(byte[] bytes)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        return From(bytes.AsSpan());
+    }
 
-    public static implicit operator Digest16(byte[]? bytes) => From(bytes);
+    /// <summary>Explicitly take the leading 16 bytes of a digest buffer.</summary>
+    public static Digest16 Truncate(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 16)
+            throw new ArgumentException("At least 16 bytes are required to truncate a digest.", nameof(bytes));
+        return From(bytes[..16]);
+    }
+
+    public static implicit operator Digest16(byte[]? bytes) =>
+        bytes is null ? throw new ArgumentNullException(nameof(bytes)) : From(bytes);
     public static implicit operator byte[](Digest16 d) => d.ToArray();
 
     public void WriteTo(Span<byte> dest)

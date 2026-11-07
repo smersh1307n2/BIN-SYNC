@@ -30,7 +30,7 @@ public class OpFieldWrite
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
-    public byte[]? AuthorNodeId;
+    public NodeId? AuthorNodeId;
     /// <summary>Return a copy of the written buffer as a new byte array.</summary>
     public byte[] Value = Array.Empty<byte>();
     /// <summary>Wire op-kind tag for this operation type.</summary>
@@ -57,7 +57,7 @@ public class OpFieldTomb
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
-    public byte[]? AuthorNodeId;
+    public NodeId? AuthorNodeId;
     /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagFieldTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
@@ -71,13 +71,13 @@ public class OpFieldTomb
 public class OpRecordTombstone
 {
     /// <summary>128-bit record identity with value equality.</summary>
-    public byte[] RecordId = Array.Empty<byte>();
+    public RecordId RecordId;
     /// <summary>HLC wall-clock component in microseconds.</summary>
     public ulong Wall; public uint Logical;
     /// <summary>Compact origin alias (or full-author mode flag path).</summary>
     public ushort Origin;
     /// <summary>Durable author node id when full-author mode is used.</summary>
-    public byte[]? AuthorNodeId;
+    public NodeId? AuthorNodeId;
     /// <summary>Wire op-kind tag for this operation type.</summary>
     public byte Tag => OpsConst.TagRecordTomb;
     /// <summary>True when this op was decoded from / is encoded in FULL_AUTHOR_ID mode (§12.24.4).</summary>
@@ -161,7 +161,7 @@ public static partial class Ops
             w.U8(OpsConst.TagFieldWrite).U16(fw.FieldId).U16(fw.KeyEpoch).U64(fw.Wall).U32(fw.Logical);
             if (w.Length != OpsConst.OriginOffset)
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
-            if (full) w.B128(fw.AuthorNodeId!);
+            if (full) w.B128(fw.AuthorNodeId ?? throw new InvalidOperationException("Full-author field write requires an author NodeId."));
             else w.U16(fw.Origin);
             int vlen = fw.Value.Length;
             if (valueLenOverride is null && fw.ValueLenPos >= 0)
@@ -195,7 +195,7 @@ public static partial class Ops
             w.U8(OpsConst.TagFieldTomb).U16(ft.FieldId).U16(ft.KeyEpoch).U64(ft.Wall).U32(ft.Logical);
             if (w.Length != OpsConst.OriginOffset)
                 throw new InvalidOperationException("[C11] prefix must be exactly 17 bytes");
-            if (full) w.B128(ft.AuthorNodeId!);
+            if (full) w.B128(ft.AuthorNodeId ?? throw new InvalidOperationException("Full-author field tomb requires an author NodeId."));
             else w.U16(ft.Origin);
             return;
         }
@@ -205,7 +205,7 @@ public static partial class Ops
             w.U8(OpsConst.TagRecordTomb).B128(rt.RecordId).U64(rt.Wall).U32(rt.Logical);
             if (w.Length != OpsConst.OriginOffsetRecordTomb)
                 throw new InvalidOperationException("origin at offset 29");
-            if (full) w.B128(rt.AuthorNodeId!);
+            if (full) w.B128(rt.AuthorNodeId ?? throw new InvalidOperationException("Full-author record tombstone requires an author NodeId."));
             else w.U16(rt.Origin);
             return;
         }
@@ -213,23 +213,35 @@ public static partial class Ops
     }
 
     /// <summary>
-    /// Compact ops store <c>origin</c> at a fixed offset ([C11]). Clone and patch those
-    /// two bytes without decoding the value. Returns null when the payload is full-author,
-    /// truncated, or ambiguous — caller must fall back to decode/encode.
-    /// When origin already matches and <paramref name="payload"/> is a full <c>byte[]</c>,
-    /// returns that same instance (no copy).
+    /// Clone compact payload bytes and patch the fixed-offset <c>origin</c> ([C11]).
+    /// Returns an owned array, including when the origin already matches. Returns null
+    /// when the payload is full-author, truncated, or ambiguous.
     /// </summary>
     public static byte[]? TryCloneWithOrigin(ReadOnlyMemory<byte> payload, ushort origin)
     {
-        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out ArraySegment<byte> seg)
-            && seg.Array is not null && seg.Offset == 0 && seg.Count == seg.Array.Length)
-            return TryCloneWithOrigin(seg.Array, origin);
-        if (payload.Length < 19) return null;
-        return TryCloneWithOrigin(payload.ToArray(), origin);
+        var result = TryCloneWithOriginShared(payload, origin);
+        return result?.ToArray();
     }
 
-    /// <summary>Clone an outbox entry with a new origin byte when needed; may share payload.</summary>
+    /// <summary>Clone compact payload bytes with a new origin; never aliases the caller's array.</summary>
     public static byte[]? TryCloneWithOrigin(byte[] payload, ushort origin)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var result = TryCloneWithOriginShared(payload, origin);
+        return result?.ToArray();
+    }
+
+    // Internal zero-copy fast path for engine-owned immutable Outbox buffers.
+    internal static byte[]? TryCloneWithOriginShared(ReadOnlyMemory<byte> payload, ushort origin)
+    {
+        if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(payload, out ArraySegment<byte> seg)
+            && seg.Array is not null && seg.Offset == 0 && seg.Count == seg.Array.Length)
+            return TryCloneWithOriginShared(seg.Array, origin);
+        if (payload.Length < 19) return null;
+        return TryCloneWithOriginShared(payload.ToArray(), origin);
+    }
+
+    internal static byte[]? TryCloneWithOriginShared(byte[] payload, ushort origin)
     {
         if (payload.Length < 19) return null;
         int off;
@@ -275,8 +287,8 @@ public static partial class Ops
             ushort fid = r.U16(), ke = r.U16();
             ulong wall = r.U64(); uint logical = r.U32();
             bool full = fullAuthor ?? DetectFieldWriteFullAuthor(data, r.Pos);
-            byte[]? author; ushort origin = 0;
-            if (full) { author = r.B128(); }
+            NodeId? author; ushort origin = 0;
+            if (full) { author = r.ReadNodeId(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffset + (full ? 16 : 2))
                 throw new InvalidOperationException("[C11] author slot at fixed offset");
@@ -301,8 +313,8 @@ public static partial class Ops
             ushort fid = r.U16(), ke = r.U16();
             ulong wall = r.U64(); uint logical = r.U32();
             bool full = fullAuthor ?? (r.Remaining == 16);
-            byte[]? author; ushort origin = 0;
-            if (full) { author = r.B128(); }
+            NodeId? author; ushort origin = 0;
+            if (full) { author = r.ReadNodeId(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffset + (full ? 16 : 2))
                 throw new InvalidOperationException("malformed op payload");
@@ -310,11 +322,11 @@ public static partial class Ops
         }
         if (tag == OpsConst.TagRecordTomb)
         {
-            var rid = r.B128();
+            var rid = r.ReadRecordId();
             ulong wall = r.U64(); uint logical = r.U32();
             bool full = fullAuthor ?? (r.Remaining == 16);
-            byte[]? author; ushort origin = 0;
-            if (full) { author = r.B128(); }
+            NodeId? author; ushort origin = 0;
+            if (full) { author = r.ReadNodeId(); }
             else { origin = r.U16(); author = null; }
             if (r.Pos != OpsConst.OriginOffsetRecordTomb + (full ? 16 : 2))
                 throw new InvalidOperationException("malformed op payload");
@@ -352,7 +364,7 @@ public static partial class Ops
             if (full)
             {
                 if (r.Remaining < 16) return false;
-                r.B128();
+                r.RawSpan(16); // Skip the fixed-width author id without allocating a byte array.
             }
             else
             {

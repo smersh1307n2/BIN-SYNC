@@ -8,26 +8,28 @@ public sealed partial class Node
     // ---------------------------------------------------------------------- helpers
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RecordDigestOfInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public byte[]? RecordDigestOf(int namespaceId, byte[] recordId)
+    public byte[]? RecordDigestOf(int namespaceId, RecordId recordId)
     {
-        lock (_lockStorage) return RecordDigestOfInternal(namespaceId, recordId);
+        ValidateNamespaceId(namespaceId);
+        lock (_lockStorage) { ThrowIfDisposed(); return RecordDigestOfInternal(namespaceId, recordId); }
     }
 
-    internal byte[]? RecordDigestOfInternal(int namespaceId, byte[] recordId)
+    internal byte[]? RecordDigestOfInternal(int namespaceId, RecordId recordId)
     { return Storage.TryGetValue(namespaceId, out var s) && s.TryGetValue(recordId, out var rec) ? Digests.RecordDigest(rec) : null; }
 
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>AllRecordDigestsInternal</c>. See <see cref="EnterAllGates"/>.</summary>
-    public Dictionary<byte[], byte[]> AllRecordDigests(int namespaceId)
+    public Dictionary<RecordId, byte[]> AllRecordDigests(int namespaceId)
     {
-        lock (_lockStorage) return AllRecordDigestsInternal(namespaceId);
+        ValidateNamespaceId(namespaceId);
+        lock (_lockStorage) { ThrowIfDisposed(); return AllRecordDigestsInternal(namespaceId); }
     }
 
-    internal Dictionary<byte[], byte[]> AllRecordDigestsInternal(int namespaceId)
+    internal Dictionary<RecordId, byte[]> AllRecordDigestsInternal(int namespaceId)
     {
-        var d = new Dictionary<byte[], byte[]>(BytesEq.Instance);
+        var d = new Dictionary<RecordId, byte[]>();
         if (Storage.TryGetValue(namespaceId, out var s))
-            foreach (var (rid, rec) in s) d[rid.ToArray()] = Digests.RecordDigest(rec);
+            foreach (var (rid, rec) in s) d[rid] = Digests.RecordDigest(rec);
         return d;
     }
 
@@ -35,11 +37,65 @@ public sealed partial class Node
     /// and delegates to <c>OutboxSizeInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int OutboxSize(int namespaceId)
     {
-        lock (_lockOutbox) return OutboxSizeInternal(namespaceId);
+        ValidateNamespaceId(namespaceId);
+        lock (_lockOutbox) { ThrowIfDisposed(); return OutboxSizeInternal(namespaceId); }
     }
 
     internal int OutboxSizeInternal(int namespaceId)
     { return Outbox.TryGetValue(namespaceId, out var l) ? l.Count : 0; }
+
+    internal static Batch CloneBatchForPublicRead(Batch batch)
+    {
+        var copy = new Batch(
+            batch.NamespaceId,
+            batch.SchemaId,
+            batch.SchemaVersion,
+            batch.MergePolicy,
+            batch.Flags,
+            batch.IssuerNodeId,
+            batch.IssuerEpoch,
+            batch.CursorStart,
+            batch.CursorEnd,
+            batch.BatchId,
+            batch.PrevBatchDigest,
+            batch.RecordsRoot,
+            batch.BatchDigest,
+            batch.Entries.Select(CloneOutboxEntryForPublicRead).ToList())
+        {
+            AuthorStreamNodeId = batch.AuthorStreamNodeId,
+        };
+        return copy;
+    }
+
+    internal static OutboxEntry CloneOutboxEntryForPublicRead(OutboxEntry entry) => new()
+    {
+        NamespaceId = entry.NamespaceId,
+        Seq = entry.Seq,
+        ChangeId = entry.ChangeId,
+        RecordId = entry.RecordId,
+        OpKind = entry.OpKind,
+        Payload = entry.Payload.ToArray(),
+        AuthorNodeId = entry.AuthorNodeId,
+        CreatedAt = entry.CreatedAt,
+        CausalDeps = new List<BatchId>(entry.CausalDeps),
+    };
+
+    // Public read APIs return detached object graphs. Record/FieldState are mutable
+    // DTOs and FieldState.Value is a byte[]; shallow copies would let callers mutate
+    // live storage without the Node gates, WAL, or Outbox.
+    internal static FieldState CloneFieldForPublicRead(FieldState field) =>
+        field with { Value = field.Value.ToArray() };
+
+    internal static Record CloneForPublicRead(Record rec)
+    {
+        var copy = Clone(rec);
+        foreach (var key in copy.State.Keys.ToArray())
+            copy.State[key] = CloneFieldForPublicRead(copy.State[key]);
+        if (copy.HasFieldTombs)
+            foreach (var key in copy.FieldTombs.Keys.ToArray())
+                copy.FieldTombs[key] = CloneFieldForPublicRead(copy.FieldTombs[key]);
+        return copy;
+    }
 
     internal static Record Clone(Record rec)
     {
@@ -57,7 +113,7 @@ public sealed partial class Node
     }
 
     /// Canonical records array: count varint, then per entry:
-    /// recordId b128 | opKind u8 | payloadLen varint | payload.
+    /// recordId b128 | changeId b128 | opKind u8 | payloadLen varint | payload.
     /// <summary>Write canonical records array into an existing Writer (no intermediate buffer).</summary>
     public static void WriteRecordsArray(Writer w, List<OutboxEntry> entries)
     {
@@ -65,7 +121,9 @@ public sealed partial class Node
         for (int i = 0; i < entries.Count; i++)
         {
             var e = entries[i];
-            w.B128(e.RecordId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
+            if (e.ChangeId.IsZero)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
+            w.B128(e.RecordId).B128(e.ChangeId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
         }
     }
 
@@ -74,7 +132,7 @@ public sealed partial class Node
     {
         int est = 8;
         for (int i = 0; i < entries.Count; i++)
-            est += 24 + entries[i].Payload.Length;
+            est += 40 + entries[i].Payload.Length;
         var dest = new byte[Math.Max(est, 16)];
         var w = new Writer(dest);
         WriteRecordsArray(w, entries);
@@ -82,19 +140,27 @@ public sealed partial class Node
         return dest.AsSpan(0, w.Length).ToArray();
     }
 
-    /// <summary>Decode records array from canonical wire bytes.</summary>
-    public static List<(byte[] Rid, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
+    /// <summary>Decode records array from canonical wire bytes into typed, owned identities.</summary>
+    public static List<(RecordId Rid, BatchId ChangeId, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
         var r = new Reader(data);
-        int n = (int)r.Varint();
-        var outp = new List<(byte[], byte, byte[])>();
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(data.Length / 4))
+            throw new InvalidDataException("Records array count exceeds the available payload.");
+        var outp = new List<(RecordId, BatchId, byte, byte[])>((int)count);
+        for (int i = 0; i < (int)count; i++)
         {
-            byte[] rid = r.B128();
+            var rid = r.ReadRecordId();
+            var changeId = r.ReadBatchId();
+            if (changeId.IsZero)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
             byte kind = r.U8();
             byte[] payload = r.Bytes();
-            outp.Add((rid, kind, payload));
+            outp.Add((rid, changeId, kind, payload));
         }
+        if (!r.Eof())
+            throw new InvalidDataException("Records array contains trailing bytes.");
         return outp;
     }
 
@@ -106,7 +172,7 @@ public sealed partial class Node
         try
         {
             var w = new Writer(buf);
-            w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
+            w.Raw(Domains.DomainBatchBytes).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
             w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
             w.B128(recordsRoot).B128(prevBatchDigest);
             return Digests.Blake3Digest16(w.WrittenSpan);
@@ -117,22 +183,17 @@ public sealed partial class Node
         }
     }
 
-    public static Digest16 ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] issuerNode,
-        int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest) =>
-        ComputeBatchDigest(BatchId.From(batchId), namespaceId, NodeId.From(issuerNode),
-            issuerEpoch, cursorStart, cursorEnd, Digest16.From(recordsRoot), Digest16.From(prevBatchDigest));
-
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
     public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries)
     {
-        int est = Domains.DomainRecords.Length + Codec.VarintLength((ulong)entries.Count);
+        int est = Domains.DomainRecordsBytes.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 17 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
+            est += 33 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
         try
         {
             var w = new Writer(buf);
-            w.Raw(Domains.DomainRecords);
+            w.Raw(Domains.DomainRecordsBytes);
             WriteRecordsArray(w, entries);
             return Digests.Blake3Digest16(w.WrittenSpan);
         }

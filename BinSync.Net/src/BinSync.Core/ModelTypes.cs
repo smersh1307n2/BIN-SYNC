@@ -16,53 +16,69 @@ public class SyncException : Exception
         ? (ushort)ErrorCode
         : (Frames.ErrorCodes.TryGetValue(CodeName, out var c) ? c : (ushort)0);
 
-    /// <summary>Optional batch id (wire b128) associated with the error.</summary>
-    public byte[]? BatchId { get; }
+    private readonly BatchId? _batchId;
+
+    /// <summary>Optional typed batch id associated with the error.</summary>
+    public BatchId? BatchId => _batchId;
 
     /// <summary>Create with code name used as the exception message.</summary>
-    public SyncException(string codeName, byte[]? batchId = null)
+    public SyncException(string codeName, BatchId? batchId = null)
         : base(codeName)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        BatchId = batchId;
+        _batchId = batchId;
     }
 
     /// <summary>Create with typed error code (message = symbolic name when known).</summary>
-    public SyncException(SyncErrorCode errorCode, byte[]? batchId = null)
+    public SyncException(SyncErrorCode errorCode, BatchId? batchId = null)
         : base(SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString())
     {
         ErrorCode = errorCode;
         CodeName = SyncErrorCodes.GetName(errorCode) ?? errorCode.ToString();
-        BatchId = batchId;
+        _batchId = batchId;
     }
 
-    /// <summary>Create with code name and typed batch id.</summary>
-    public SyncException(string codeName, BatchId batchId)
-        : this(codeName, batchId.ToArray()) { }
-
     /// <summary>Create with a distinct human-readable message.</summary>
-    public SyncException(string codeName, string message, byte[]? batchId = null)
+    public SyncException(string codeName, string message, BatchId? batchId = null)
         : base(message)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        BatchId = batchId;
+        _batchId = batchId;
     }
 
     /// <summary>Create with message and inner exception.</summary>
-    public SyncException(string codeName, string message, Exception innerException, byte[]? batchId = null)
+    public SyncException(string codeName, string message, Exception innerException, BatchId? batchId = null)
         : base(message, innerException)
     {
         CodeName = codeName ?? throw new ArgumentNullException(nameof(codeName));
         ErrorCode = SyncErrorCodes.Parse(CodeName);
-        BatchId = batchId;
+        _batchId = batchId;
     }
 }
+
+/// <summary>Stable identity used to resolve a relay-selected ChangeId to its local OutboxSeq.</summary>
+public readonly record struct OutboxChangeIdentity(NodeId AuthorNodeId, BatchId ChangeId);
 
 /// <summary>One pending or decoded mutation in the outbox / batch records array.</summary>
 public sealed class OutboxEntry
 {
+    private List<BatchId>? _causalDeps;
+    private bool _causalDepsDeferred;
+
+    /// <summary>Creates an entry with an immediately available dependency list.</summary>
+    public OutboxEntry() => _causalDeps = new List<BatchId>();
+
+    // Delta batches normally carry no causal trailer. Defer the empty list allocation
+    // until a caller actually accesses CausalDeps, while preserving a distinct,
+    // mutable list for every entry.
+    internal OutboxEntry(bool deferCausalDeps)
+    {
+        _causalDepsDeferred = deferCausalDeps;
+        if (!deferCausalDeps) _causalDeps = new List<BatchId>();
+    }
+
     /// <summary>Namespace id for this entry.</summary>
     public int NamespaceId { get; set; }
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
@@ -80,7 +96,32 @@ public sealed class OutboxEntry
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
     /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
-    public List<BatchId> CausalDeps { get; set; } = new();
+    public List<BatchId> CausalDeps
+    {
+        get
+        {
+            if (_causalDepsDeferred)
+            {
+                _causalDeps = new List<BatchId>();
+                _causalDepsDeferred = false;
+            }
+            return _causalDeps!;
+        }
+        set
+        {
+            _causalDeps = value;
+            _causalDepsDeferred = false;
+        }
+    }
+
+    // Avoid materializing deferred empty dependency lists on the fingerprint hot path.
+    internal IReadOnlyList<BatchId>? CausalDepsOrNull =>
+        _causalDepsDeferred || _causalDeps is null || _causalDeps.Count == 0 ? null : _causalDeps;
+    internal bool HasCausalDepsStorage => _causalDepsDeferred || _causalDeps is not null;
+
+    // True only while a public delta batch still references an engine-owned outbox buffer.
+    // Cleared as soon as the payload is detached into caller-owned storage.
+    internal bool PayloadNeedsDetachment;
 }
 
 /// <summary>DELTA_BATCH logical unit: headers, digests, and <see cref="OutboxEntry"/> list.</summary>
@@ -170,8 +211,8 @@ public sealed partial class Batch
     public byte[] DurableAuthorBytes => DurableAuthor.ToArray();
 
     /// <summary>
-    /// Copy all entry buffers to owned arrays so the batch outlives the decode frame.
-    /// Safe to call more than once (already-owned arrays are kept).
+    /// Copy all entry buffers into fresh arrays so the batch is detached from its source.
+    /// Each call creates new arrays, including when the input already spans a full array.
     /// </summary>
     public void MaterializeEntries()
     {
@@ -179,53 +220,124 @@ public sealed partial class Batch
         {
             var e = Entries[i];
             // ChangeId/RecordId/AuthorNodeId are value types — no materialize
-            e.Payload = Mem.ToArray(e.Payload);
+            e.Payload = e.Payload.ToArray();
         }
     }
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
-public sealed partial class PeerState
+internal struct PeerAuthorProgress
 {
-    /// <summary>Remote peer node id this state is tracked for.</summary>
+    internal const byte AckedFlag = 1;
+    internal const byte PushedFlag = 2;
+    internal const byte OffsetFlag = 4;
+
+    internal long Acked;
+    internal long Pushed;
+    internal long Offset;
+    internal byte Flags;
+
+    internal bool HasAcked => (Flags & AckedFlag) != 0;
+    internal bool HasPushed => (Flags & PushedFlag) != 0;
+    internal bool HasOffset => (Flags & OffsetFlag) != 0;
+}
+
+/// <summary>Per-peer session cursors and compact per-author stream progress for one namespace.</summary>
+internal sealed partial class PeerState
+{
     public NodeId PeerNodeId { get; set; }
-    /// <summary>Logical namespace this entity belongs to.</summary>
     public int NamespaceId { get; set; }
-    /// <summary>Highest sequence the local node has pushed to this peer stream.</summary>
     public long LastPushedSeq { get; set; }
-    /// <summary>Gets or sets last received seq.</summary>
     public long LastReceivedSeq { get; set; }
-    /// <summary>Highest sequence the peer has ACKed on this stream.</summary>
     public long LastAckedSeq { get; set; }
-    /// <summary>Per-author receive cursors: last contiguous seq accepted.</summary>
-    public Dictionary<(NodeId Peer, int Epoch, int Ns, NodeId Author), long> ReceivedStreams { get; } = new();
-    /// <summary>Per-author ACK watermarks used when building the next delta.</summary>
-    public Dictionary<NodeId, long> StreamAcked { get; } = new();
-    /// <summary>Gets or sets initial sync complete.</summary>
+
+    /// <summary>Receive cursors keyed by sender/epoch/author; namespace is the owning PeerState key.</summary>
+    public Dictionary<(NodeId Peer, int Epoch, NodeId Author), long> ReceivedStreams { get; } = new();
+    /// <summary>Combined ACK/pushed/offset watermarks; one author key per stream.</summary>
+    internal Dictionary<NodeId, PeerAuthorProgress> AuthorProgress { get; } = new();
+
     public bool InitialSyncComplete { get; set; }
-    /// <summary>Gets or sets membership epoch.</summary>
     public int MembershipEpoch { get; set; }
-    /// <summary>Last time this peer or stream was observed.</summary>
     public long LastSeen { get; set; }
-    /// <summary>Deterministic batch-id cache keyed by author stream + cursor range.</summary>
     internal Dictionary<(NodeId Author, long Start, long End), (BatchId Id, Digest16 Prev)> Ids { get; } = new();
 
-    /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
     public PeerState(NodeId peer, int ns)
     {
         PeerNodeId = peer;
         NamespaceId = ns;
     }
 
-    /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
-    public PeerState(byte[] peer, int ns) : this((NodeId)peer, ns) { }
+    public bool TryGetStreamAcked(NodeId author, out long value)
+    {
+        if (AuthorProgress.TryGetValue(author, out var p) && p.HasAcked)
+        { value = p.Acked; return true; }
+        value = 0; return false;
+    }
 
-    /// <summary>Return the ACK watermark for a given author stream.</summary>
-    public long AckedFor(byte[] author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
-    /// <summary>Return the ACK watermark for a given author stream.</summary>
-    public long AckedFor(ReadOnlyMemory<byte> author) => StreamAcked.TryGetValue((NodeId)author, out var v) ? v : 0;
-    /// <summary>Return the ACK watermark for a given author stream.</summary>
-    public long AckedFor(NodeId author) => StreamAcked.TryGetValue(author, out var v) ? v : 0;
+    public bool TryGetStreamPushed(NodeId author, out long value)
+    {
+        if (AuthorProgress.TryGetValue(author, out var p) && p.HasPushed)
+        { value = p.Pushed; return true; }
+        value = 0; return false;
+    }
+
+    public bool TryGetStreamOffset(NodeId author, out long value)
+    {
+        if (AuthorProgress.TryGetValue(author, out var p) && p.HasOffset)
+        { value = p.Offset; return true; }
+        value = 0; return false;
+    }
+
+    public bool HasStreamAcked(NodeId author) => TryGetStreamAcked(author, out _);
+
+    public void SetStreamAcked(NodeId author, long value)
+    {
+        AuthorProgress.TryGetValue(author, out var p);
+        p.Acked = value;
+        p.Flags |= PeerAuthorProgress.AckedFlag;
+        AuthorProgress[author] = p;
+    }
+
+    public void SetStreamPushed(NodeId author, long value)
+    {
+        AuthorProgress.TryGetValue(author, out var p);
+        p.Pushed = value;
+        p.Flags |= PeerAuthorProgress.PushedFlag;
+        AuthorProgress[author] = p;
+    }
+
+    public void SetStreamOffset(NodeId author, long value)
+    {
+        AuthorProgress.TryGetValue(author, out var p);
+        p.Offset = value;
+        p.Flags |= PeerAuthorProgress.OffsetFlag;
+        AuthorProgress[author] = p;
+    }
+
+    public long AckedFor(NodeId author) =>
+        TryGetStreamAcked(author, out var value) ? value : 0;
+
+    public int StreamAckedCount
+    {
+        get
+        {
+            int count = 0;
+            foreach (var progress in AuthorProgress.Values)
+                if (progress.HasAcked) count++;
+            return count;
+        }
+    }
+
+    public long MinStreamAcked
+    {
+        get
+        {
+            long min = long.MaxValue;
+            foreach (var progress in AuthorProgress.Values)
+                if (progress.HasAcked && progress.Acked < min) min = progress.Acked;
+            return min;
+        }
+    }
 }
 
 /// <summary>
@@ -251,6 +363,4 @@ public struct BatchResult
 
     /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
     public BatchResult(BatchId batchId) => BatchId = batchId;
-    /// <summary>Outcome of ApplyBatch / ApplyBatchPayload including ACK metadata.</summary>
-    public BatchResult(byte[] batchId) => BatchId = BatchId.From(batchId);
 }

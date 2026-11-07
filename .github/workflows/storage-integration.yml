@@ -1,0 +1,57 @@
+name: FLD Storage Integration
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - ".github/workflows/storage-integration.yml"
+      - "external/Fld1.Storage/**"
+      - "BinSync.Net/tests/BinSync.Storage.Integration/**"
+      - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
+      - "BinSync.Net/src/BinSync.Core/**"
+      - "BinSync.Net/src/BinSync.Storage/**"
+      - "samples/StorageArraySync/**"
+      - "samples/StorageArrayTcpSync/**"
+  pull_request:
+    paths:
+      - "external/Fld1.Storage/**"
+      - "BinSync.Net/tests/BinSync.Storage.Integration/**"
+      - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
+      - "BinSync.Net/src/BinSync.Core/**"
+      - "BinSync.Net/src/BinSync.Storage/**"
+      - "samples/StorageArraySync/**"
+      - "samples/StorageArrayTcpSync/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: durable provider integration (.NET 10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Restore
+        run: dotnet restore BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj
+      - name: Build
+        run: dotnet build BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-restore
+      - name: Test
+        run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --logger "console;verbosity=detailed" --logger "trx;LogFileName=storage-integration.trx"
+      - name: Run durable array synchronization sample
+        run: dotnet run --project samples/StorageArraySync/StorageArraySync.csproj --configuration Release
+      - name: Run Storage-backed TCP array synchronization sample
+        run: dotnet run --project samples/StorageArrayTcpSync/StorageArrayTcpSync.csproj --configuration Release
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binsync-fld-storage-integration
+          path: "**/TestResults/*.trx"
+          if-no-files-found: ignore

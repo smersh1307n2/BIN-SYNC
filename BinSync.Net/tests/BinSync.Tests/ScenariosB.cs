@@ -193,7 +193,7 @@ public class ScenariosB
         for (long i = 1; i <= 3; i++)
             a.WriteField(NS, Rid(i), 0x0100, Asc($"s{i}"), new Hlc((ulong)(100 + i), 0));
         foreach (var batch in a.BuildSnapshot(NS))
-            b.ApplySnapshot(batch, a.NodeId);
+            b.ApplySnapshot(batch);
         a.WriteField(NS, Rid(4), 0x0100, Asc("d4"), new Hlc(110, 0));
         a.WriteField(NS, Rid(5), 0x0100, Asc("d5"), new Hlc(111, 0));
         Transport.DeliverBatch(a, b, NS);

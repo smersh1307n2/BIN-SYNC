@@ -1,88 +1,67 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
-**Product name:** **BIN-SYNC** — see [NAME.md](NAME.md).
+**Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
+**Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged)  
+**CI:** GitHub Actions [BinSync.Net](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42379147076) — 642/642 tests, 72.1% line coverage, public samples pass, Fuzz + Lab pass; [FLD Storage Integration](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42379147005) — 49/49 tests and both Storage array samples pass.  
+**Audit status:** stream/fragment binding audited; Metadata Store and Data Provider semantic contracts have both volatile reference fixtures and durable Storage-backed adapters. Storage adapters pass restart, compaction, snapshot, equivocation and PendingApply recovery integration. Page-local unpublished LWW coalescing is implemented in StorageSyncCoordinator. Full Node/Transport authority migration, peer/author durable send progress, outbound batch reservations, cross-page PendingLocal staging, bounded metadata mutation cost and full normative §§4–18 audit remain open; no percentage-based spec-parity claim is made.
 
-**Package:** `BinSync.Core` **`2.6.5`** · **Target:** `net10.0` · **Branch:** `main`  
-**Tag:** `v2.6.5` (see GitHub Releases)  
-**Crypto:** vendored Ed25519 (no BouncyCastle NuGet)  
-**Tests:** 276 green · **CI:** `test` + dedicated `fuzz + lab (§17)` job  
-
-**Spec parity:** **~95%+** — reference engine production-hardened.  
-**Path:** alpha.7 → **1.0.0-rc.1** → **1.0.0-rc.2** → **1.0.0** → **1.0.1** → **2.1.0** (API shape major).
-
-Legend: **done** · **partial** · **missing**
-
----
-
-## Post-1.0 hygiene (main)
-
-- Node engine split into partials (`Node.Alias` / `LocalWrites` / `DeltaBatch` / `ApplyBatch` / …)
-- Test warnings-as-errors; dead Diag harness and duplicate comparers removed
-- ApplyBatch: COW overlays + single DecodeOp pass (no public API change)
-- **CI soak:** `BinSync.Net` workflow green on recent `main` tips (`test` + `fuzz + lab`)
-
+Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
 ## Spec coverage
 
-| Area | Spec | Code |
-|------|------|------|
-| Goals / consistency | §1 | done |
-| Transport | §3 | done |
-| Identity / alias / epoch | §4 | done |
-| HLC | §5 | done (µs wall) |
-| Codec | §6 | **done** (capacity Writer, zero-alloc Reader fixed-width / Varint write) |
-| Data model / lifecycle | §7 | done (lazy FieldTombs) |
-| Merge policies | §8 | **done** (full) |
-| Digests | §9 | done (span Blake3 truncate path) |
-| Outbox / inbox | §10 | done |
-| Membership / GC | §11 | done |
-| Wire frames | §12 | done (+ fragments) |
-| Reconcile ladder | §13 | done |
-| E2EE | §14 | **done** (opt-in) |
-| Security | §15 | **done** (TOFU/PreShared/revoke; CA = node-id allow-list, not full X.509 PKI) |
-| Causal deps | §16.19 | **done** (opt-in) |
-| Lab / fuzz | §17 | **done** (in CI job) |
-| Schema evolution | §18 | **done** (opt-in) |
-| Errata E-1…E-13 | v2.3.7 | done |
+| Area | Spec | Current implementation status |
+|---|---|---|
+| Goals / consistency | §1 | implemented in the core model and apply path |
+| Transport | §3 | generic SyncSession, Pipe/Stream/TCP adapters, negotiated per-stream Flow Control, WINDOW_UPDATE, and typed/raw fragment reassembly implemented |
+| Identity / alias / epoch | §4 | implemented; b128 API normalization and wire width audited |
+| HLC | §5 | implemented in µs; overflow checked before logical increment |
+| Codec | §6 | implemented; b128 writer always emits exactly 16 bytes |
+| Data model / lifecycle | §7 | implemented; field tombstones are ordered against live values |
+| Merge policies | §8 | **partial** — Node apply path supports LWW_FIELD only; other merge helpers are standalone |
+| Digests | §9 | record digest v2 distinguishes live field values from tombstones |
+| Outbox / inbox | §10 | implemented |
+| Membership / GC | §11 | membership and GC_NOTICE frames implemented; destructive tombstone/ghost GC is disabled by E-25 until a safe namespace frontier and stale-peer recovery protocol exist |
+| Wire frames | §12 | implemented, including fragments |
+| Reconciliation ladder | §13 | implemented; CI lab/fuzz coverage |
+| E2EE | §14 | opt-in |
+| Security | §15 | TOFU / PreShared / revoke; CA mode is a node-id allow-list, not full X.509 PKI |
+| Causal dependencies | §16.19 | opt-in |
+| Lab / fuzz | §17 | in CI |
+| Schema evolution | §18 | **partial** — opt-in metadata compatibility gate; not a runtime merge-policy dispatcher |
+| Public examples | samples | all three build and execute in CI |
+| Errata E-1…E-13 | v2.3.7 | incorporated into current specification v2.4.19 FINAL |
+| Errata E-24 / E-25 | v2.4.18 / v2.4.19 | normative route-independent ChangeId identity/equivocation and fail-closed tombstone retention |
 
----
+## Verified correctness fixes in this audit
 
-## Hot-path notes (on main since post-alpha.7)
+- HLC logical overflow is rejected before increment; no uint wrap to zero.
+- A stale field write cannot resurrect a newer field tombstone; a strictly newer write supersedes it.
+- A stale field tombstone cannot replace a newer live value.
+- Digest calculation does not materialize the lazy empty FieldTombs dictionary.
+- Record digest v2 includes a field-kind byte, so an empty live value and a tombstone with identical metadata produce different digests.
+- Long identity input is normalized to exactly 16 bytes before wire encoding.
+- Flow Control is negotiated by capability intersection; payload credits are reserved atomically per stream and replenished only after receive dispatch. Oversized logical frames use bounded fragment reassembly.
+- Unsupported merge policy codes are rejected by ApplyBatch; legacy policy 0 is treated as LWW_FIELD, not as a schema-gate wildcard.
+- Stream binding follows §3.7: control-plane frames use stream 0; namespace frames use `0x0001_0000 | namespaceId`; ACK shares its DELTA_BATCH namespace stream; WINDOW_UPDATE targets the credited stream. Receive paths reject mismatches before applying payloads.
+- IBLT response receive now requires the expected namespace. MEMBERSHIP, GC_NOTICE and SCHEMA_MAP use the control stream.
+- Fragment reassembly preserves frame type/stream/base sequence/flags, supports interleaved logical messages, rejects cross-stream message-id reuse, trailing fragment bytes and conflicting duplicate parts; raw receive returns the reconstructed `Frame`.
 
-- Domain sub-gates (`Storage` → `Outbox` → `Meta`) + `EnterAllGates`; alias maps keyed by `NodeId`
-- EncodeBatchPayload: single-pass records, Writer capacity
-- DecodeBatchPayload: in-place records parse
-- ApplyBatch: decode-once, O(1) changed flags, ComputeRecordsRoot single buffer
-- Reader U8/U16/U32/U64 without per-read heap Take
-- Ops FieldWrite framing probe zero-alloc
+## Release gates still open
 
----
+- Complete the normative audit of remaining §§4–18 and cross-check every normative scenario against executable tests. No spec-parity percentage is claimed.
+- **Snapshot retention:** current snapshot completion is not an Outbox ACK, relay-retention boundary or ChangeId-ledger GC watermark. SnapshotTail/runtime DTO still lacks the per-author cut and completion/fencing proof needed for safe historical retention.
+- **E-24 implemented and normative (v2.4.18):** exact global `(namespaceId, ChangeId)` identity with canonical semantic fingerprint and equivocation rejection is implemented. Origin-sequence/range compression remains an unapproved representation alternative; it must prove mesh replay, snapshot/bootstrap and equivocation safety before replacing the exact ledger.
+- **E-25 normative (v2.4.19):** tombstone/ghost GC remains disabled until durable namespace membership/safe-frontier, stale-peer fencing and mandatory authoritative full-resync semantics are implemented. TTL/HLC age and GC_NOTICE alone never authorize deletion.
+- **Inbox/receipt lifecycle:** NodePersistence v12 adaptive receipt encoding and global 16-byte ChangeId ledger are implemented. Receipt expiry/GC and independent dedup retention horizons remain open; do not couple them to relay payload ACK.
+- **Peer cache pruning implemented:** `ProcessAckInternal` prunes `PeerState.Ids` only after a validated contiguous ACK covers the full author cursorEnd; `LastStreamDigest` remains as the chain checkpoint. Partial ACK and lost-ACK behavior remain covered by regression tests.
+- **ProtocolStateDelta:** the bounded per-batch recovery-envelope lifecycle is specified and pending-apply semantics have volatile conformance tests. Durable separate-store provider receipts, restart recovery and production metadata finalization remain unimplemented.
+- **FLD APPLY/relay:** APPLY_COMMIT v3 single-encoding, relay-only ApplyJournal, per-author JournalSeq ACK sidecar and post-WAL-seal relay payload compaction are implemented on the FLD branch. The cross-system JournalSeq → ChangeId → OutboxSeq provenance map, outbound publication gate and ACK translation remain open; receipt GC and bounded/rebuildable journal indexing also remain open.
+- **Two-DLL FLD boundary:** architecture is decided (`Fld1.Storage.dll` + `Fld1.Database.dll`, one-way Database → Storage); extraction into the final public assemblies and Storage-only physical conformance remain implementation work.
+- **Metadata Store / Data Provider:** semantic contracts and volatile reference fixtures are supplemented by durable `StorageMetadataStore` and `StorageDataProvider` adapters. Storage Integration passes 49/49, including actual reopen, compaction, PendingApply recovery, feed paging/ACK, snapshot/feed barrier and real TCP array sync. The remaining gap is not adapter durability: Node/Transport still owns Outbox, PeerStates and replay identity; the Metadata Store outbound stream is a mirror.
+- **PendingLocal:** `StorageSyncCoordinator` now coalesces unpublished LWW field changes within each bounded provider-feed page by `(RecordId, FieldId)` using HLC/author ordering; record lifecycle tombstones are handled separately. Every source-page mutation is validated before coalescing, and ACK still follows Node checkpoint + metadata freeze. Cross-page durable PendingLocal staging, crash recovery of the stage/freeze handoff and full source-feed ACK decoupled from Node checkpoint remain open. Never rewrite an unacknowledged/published Outbox entry.
+- **Runtime persistence refactor:** Node dictionaries plus NodePersistence/WAL remain authoritative in the current runtime. Moving them behind the neutral Metadata Store boundary is not implemented.
+- **Storage-only role:** the generic `Fld1.Storage` engine is implemented in the BIN-SYNC branch and is used directly by durable Storage adapters without fabricating synchronized field records or synthetic HLC/author/ChangeId/Outbox values. Final standalone packaging and the authoritative Node/Transport migration remain open.
+- Confirm final documentation/specification parity on the complete branch diff.
+- Review PR #16 diff and CI once more; only then request explicit approval to merge into main.
 
-## Trust model (§15.6) vs “X.509”
-
-1. **TOFU** — first seen Ed25519 pubkey for `nodeId` is pinned  
-2. **PreShared** — explicit allow-list of `(nodeId → pubkey)`  
-3. **CertificateAuthority** — lightweight CA allow-list (`TrustStore.AddCaRoot(nodeId)`): **node IDs**, not X.509 DER/chain  
-
-Full X.509 path validation remains **out of scope for 1.0**.
-
----
-
-## Release checklist
-
-- [x] BouncyCastle removed / Ed25519 vendored
-- [x] Merge §8 complete set
-- [x] Lab / fuzz in CI
-- [x] TrustStore §15.6 (TOFU / PreShared / CA-as-nodeId / revoke)
-- [x] License AGPL + commercial (crypto MIT)
-- [x] Branding BIN-SYNC
-- [x] Production comparer / codec / apply-decode hot paths on `main`
-- [x] Public API freeze doc for 1.0 (`PUBLIC-API.md`)
-- [x] Package version `1.0.0` (superseded by 2.1.0 on main)
-- [x] Tag `v1.0.0-rc.1` + GitHub prerelease
-- [x] Tag `v1.0.0-rc.2` + GitHub prerelease (domain gates + NodeId aliases)
-- [x] Soak / embedder feedback on rc.2 (274 tests + CI BinSync.Net green)
-- [x] Tag `v1.0.0` (stable)
-- [x] Package version `2.1.0` + tag `v2.1.0` (patch: hygiene + CI coverage + sample)
-- [ ] nuget.org push (optional)
-- [ ] Full X.509 (post-1.0, optional)
+**Merge status:** PR #16 remains Draft and unmerged. No merge is authorized by this status document.

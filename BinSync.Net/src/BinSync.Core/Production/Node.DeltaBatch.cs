@@ -12,7 +12,7 @@ public sealed partial class Node
     /// and delegates to <c>AuthorEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public int AuthorEpoch(NodeId author)
     {
-        lock (_lockMeta) return AuthorEpochInternal(author);
+        lock (_lockMeta) { ThrowIfDisposed(); return AuthorEpochInternal(author); }
     }
 
     internal int AuthorEpochInternal(NodeId author)
@@ -32,114 +32,359 @@ public sealed partial class Node
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>CreateDeltaBatchInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch? CreateDeltaBatch(NodeId targetPeer, int namespaceId,
-                                   byte[]? filterAuthorNodeId = null,
+                                   NodeId? filterAuthorNodeId = null,
                                    int schemaId = 0, int schemaVersion = 1)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId, schemaId, schemaVersion);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            // The internal builder can detach payload buffers while materializing the
+            // selected stream. This avoids building a second complete public DTO graph.
+            return CreateDeltaBatchInternal(targetPeer, namespaceId, filterAuthorNodeId,
+                schemaId, schemaVersion, detachPublicBuffers: true);
+        }
+    }
+
+    // The session transport only needs the encoded packet and ACK/stream metadata.
+    // Keep payload references to the Outbox while encoding under the node gates; unlike
+    // the public Batch API, this temporary graph never escapes the protected operation.
+    // Build the transport packet directly. Unlike the public Batch API this path
+    // owns only a compact value array for the selected records; it never constructs
+    // Batch, OutboxEntry, or per-entry CausalDeps objects.
+    internal OutboundBatchPayload? CreateDeltaBatchPayloadForTransport(
+        NodeId targetPeer, int namespaceId, NodeId? filterAuthorNodeId = null,
+        int schemaId = 0, int schemaVersion = 1)
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            ValidateNamespaceId(namespaceId);
+            if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
+            if ((uint)schemaVersion > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
+
+            var pkey = (targetPeer, namespaceId);
+            if (!PeerStates.TryGetValue(pkey, out var ps))
+                PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
+
+            long wm;
+            NodeId stream;
+            List<OutboxEntry>? all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : null;
+            if (filterAuthorNodeId is not null)
+            {
+                stream = filterAuthorNodeId.Value;
+                wm = ps.AckedFor(stream);
+            }
+            else
+            {
+                var firstPending = new Dictionary<NodeId, long>();
+                if (all is not null)
+                {
+                    foreach (var e in all)
+                    {
+                        long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                        long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
+                        if (e.Seq > localAck &&
+                            (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
+                            firstPending[e.AuthorNodeId] = e.Seq;
+                    }
+                }
+
+                bool found = false;
+                stream = default;
+                foreach (var kv in firstPending)
+                {
+                    long offset = ps.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
+                    long localAck = checked(ps.AckedFor(kv.Key) + offset);
+                    if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
+                }
+                if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
+                if (!found) return null;
+                wm = ps.AckedFor(stream);
+            }
+
+            long streamOffset;
+            if (ps.TryGetStreamOffset(stream, out var savedStreamOffset))
+            {
+                if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
+                    throw new SyncException("SNAPSHOT_REQUIRED");
+                streamOffset = savedStreamOffset;
+            }
+            else
+            {
+                streamOffset = 0;
+                if (!ps.HasStreamAcked(stream))
+                {
+                    long firstLocal = long.MaxValue;
+                    if (all is not null)
+                    {
+                        foreach (var e in all)
+                            if (e.AuthorNodeId == stream && e.Seq < firstLocal) firstLocal = e.Seq;
+                    }
+                    if (firstLocal > 1 && !ps.InitialSyncComplete)
+                        throw new SyncException("SNAPSHOT_REQUIRED");
+                    if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
+                }
+                ps.SetStreamOffset(stream, streamOffset);
+            }
+
+            long localWm = checked(wm + streamOffset);
+            int selectedCount = 0;
+            long cursorStart = 0, cursorEnd = 0;
+            if (all is not null)
+            {
+                for (int i = 0; i < all.Count; i++)
+                {
+                    var source = all[i];
+                    if (source.AuthorNodeId != stream || source.Seq <= localWm) continue;
+                    long seq = checked(source.Seq - streamOffset);
+                    if (selectedCount == 0) cursorStart = seq;
+                    cursorEnd = seq;
+                    selectedCount++;
+                }
+            }
+            if (selectedCount == 0) return null;
+            if (cursorStart < 0 || cursorEnd < cursorStart)
+                throw new ArgumentOutOfRangeException(nameof(cursorStart),
+                    "Batch cursors must be non-negative and ordered.");
+
+            int? streamAlias = stream == NodeId
+                ? AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1
+                : AliasOfInternal(targetPeer, stream, Epoch);
+            if (streamAlias is null)
+            {
+                var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
+                if (peerNode is not null && stream != NodeId)
+                {
+                    int epTry = KnownAuthorEpoch(stream) ?? Epoch;
+                    streamAlias = EnsureAlias(peerNode, stream, epTry);
+                }
+                else if (peerNode is null && AliasToNode.TryGetValue(targetPeer, out var existingMap))
+                {
+                    foreach (var (alias, (nid, _)) in existingMap)
+                        if (nid == stream) { streamAlias = alias; break; }
+                }
+            }
+            if (streamAlias is null)
+                throw new SyncException("UNKNOWN_ALIAS");
+
+            var entries = System.Buffers.ArrayPool<TransportDeltaEntry>.Shared.Rent(selectedCount);
+            try
+            {
+            ushort origin = (ushort)streamAlias.Value;
+            int entryIndex = 0;
+            if (all is not null)
+            {
+                for (int i = 0; i < all.Count; i++)
+                {
+                    var e = all[i];
+                    if (e.AuthorNodeId != stream || e.Seq <= localWm) continue;
+
+                    ReadOnlyMemory<byte> wirePayload;
+                    var stamped = Ops.TryCloneWithOriginShared(e.Payload, origin);
+                    if (stamped is not null)
+                    {
+                        bool shared = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(e.Payload, out var paySeg)
+                            && object.ReferenceEquals(paySeg.Array, stamped)
+                            && paySeg.Offset == 0 && paySeg.Count == stamped.Length;
+                        wirePayload = shared ? e.Payload : stamped;
+                    }
+                    else
+                    {
+                        var op = Ops.DecodeOp(e.Payload).Op;
+                        SetOrigin(op, origin);
+                        // Persisted field-write payloads may contain only their fixed header;
+                        // restore the current value exactly as the public builder does.
+                        if (op is OpFieldWrite fw && fw.ValueLenPos >= 0 && fw.Value.Length == 0 &&
+                            Ns(e.NamespaceId).TryGetValue(e.RecordId, out var wrec) &&
+                            wrec.State.TryGetValue(fw.FieldId, out var wfld))
+                        {
+                            fw.Value = wfld.Value ?? Array.Empty<byte>();
+                            fw.ValueLenPos = -1;
+                        }
+                        wirePayload = Ops.EncodeOp(op, fullAuthor: false);
+                    }
+
+                    entries[entryIndex++] = new TransportDeltaEntry(
+                        e.RecordId, e.ChangeId, e.OpKind, wirePayload);
+                }
+            }
+
+            int issuerEpoch = Epoch;
+            if (stream != NodeId)
+            {
+                if (AliasToNode.TryGetValue(targetPeer, out var map) &&
+                    map.TryGetValue(streamAlias.Value, out var binding) &&
+                    binding.Id == stream)
+                {
+                    issuerEpoch = binding.Epoch;
+                }
+                else
+                {
+                    foreach (var kv in KnownEpochs)
+                        if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
+                            issuerEpoch = Math.Max(issuerEpoch, kv.Value);
+                }
+            }
+
+            var recordsRoot = ComputeTransportRecordsRoot(entries, selectedCount);
+            var chainKey = (NodeId, namespaceId, issuerEpoch);
+            var streamKey = (chainKey, targetPeer);
+            var idKey = (stream, cursorStart, cursorEnd);
+            if (!ps.Ids.TryGetValue(idKey, out var cached))
+            {
+                Span<byte> gbuf = stackalloc byte[16];
+                Guid.NewGuid().TryWriteBytes(gbuf);
+                cached = (BatchId.From(gbuf),
+                    LastStreamDigest.TryGetValue(streamKey, out var previous) ? previous : default);
+                ps.Ids[idKey] = cached;
+            }
+
+            var (batchId, previousDigest) = cached;
+            var batchDigest = ComputeBatchDigest(batchId, namespaceId, NodeId, issuerEpoch,
+                cursorStart, cursorEnd, recordsRoot, previousDigest);
+
+            int payloadSize = checked(108 + 2 * Codec.VarintLength((ulong)selectedCount));
+            for (int i = 0; i < selectedCount; i++)
+                payloadSize = checked(payloadSize + 33 +
+                    Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
+
+            var payload = new byte[payloadSize];
+            var writer = new Writer(payload);
+            writer.U16((ushort)namespaceId).U16((ushort)schemaId).U16((ushort)schemaVersion);
+            writer.U8(0x02).U8(0);
+            writer.B128(NodeId).U32((uint)issuerEpoch);
+            writer.U64((ulong)cursorStart).U64((ulong)cursorEnd);
+            writer.Varint((ulong)selectedCount);
+            writer.B128(batchId).B128(previousDigest);
+            writer.B128(recordsRoot).B128(batchDigest);
+            WriteTransportRecordsArray(writer, entries, selectedCount);
+            if (writer.Length != payload.Length)
+                throw new InvalidOperationException("Transport batch size estimate mismatch");
+
+            ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
+            return new OutboundBatchPayload(payload, batchId, stream, stream, namespaceId,
+                issuerEpoch, cursorStart, cursorEnd, (ulong)streamOffset, previousDigest, batchDigest);
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<TransportDeltaEntry>.Shared.Return(entries, clearArray: true);
+            }
+        }
     }
 
     internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,
-                                       byte[]? filterAuthorNodeId = null,
-                                       int schemaId = 0, int schemaVersion = 1)
+                                       NodeId? filterAuthorNodeId = null,
+                                       int schemaId = 0, int schemaVersion = 1,
+                                       bool detachPublicBuffers = false)
     {
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
         long wm;
         NodeId stream;
-        List<OutboxEntry> pending;
         var all = Outbox.TryGetValue(namespaceId, out var ob) ? ob : new List<OutboxEntry>();
         if (filterAuthorNodeId is not null)
         {
-            stream = NodeId.From(filterAuthorNodeId);
+            stream = filterAuthorNodeId.Value;
             wm = ps.AckedFor(stream);
-            pending = new List<OutboxEntry>();
-            for (int i = 0; i < all.Count; i++)
-            {
-                var e = all[i];
-                if (e.AuthorNodeId == stream && e.Seq > wm)
-                    pending.Add(e);
-            }
-            // Errata E-4: gap normalisation also applies on the explicit-filter path.
-            if (pending.Count > 0)
-            {
-                long gap = pending[0].Seq - (wm + 1);
-                if (gap > 0) foreach (var e in pending) e.Seq -= gap;
-            }
         }
         else
         {
-            // pick the CONTIGUOUS stream first (first un-acked seq == acked+1), earliest
-            // outbox position; gapped stream as fallback (tail renumbered). BUGFIX/HARDENING
-            // (scenario 42 livelock) — see Python port comment.
             var firstPending = new Dictionary<NodeId, long>();
             foreach (var e in all)
             {
-                long w = ps.AckedFor(e.AuthorNodeId);   // Errata E-4: per-author watermark
-                var authorKey = e.AuthorNodeId;
-                if (e.Seq > w && (!firstPending.TryGetValue(authorKey, out var cur) || e.Seq < cur))
-                    firstPending[authorKey] = e.Seq;
+                long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
+                if (e.Seq > localAck &&
+                    (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
+                    firstPending[e.AuthorNodeId] = e.Seq;
             }
             bool found = false;
             stream = default;
             foreach (var kv in firstPending)
-                if (kv.Value == ps.AckedFor(kv.Key) + 1) { stream = kv.Key; found = true; break; }
+            {
+                long offset = ps.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
+                long localAck = checked(ps.AckedFor(kv.Key) + offset);
+                if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
+            }
             if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
             if (!found) return null;
             wm = ps.AckedFor(stream);
-            pending = new List<OutboxEntry>();
-            for (int i = 0; i < all.Count; i++)
+        }
+
+        long streamOffset;
+        if (ps.TryGetStreamOffset(stream, out var savedStreamOffset))
+        {
+            if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
+                throw new SyncException("SNAPSHOT_REQUIRED");
+            streamOffset = savedStreamOffset;
+        }
+        else
+        {
+            streamOffset = 0;
+            if (!ps.HasStreamAcked(stream))
             {
-                var e = all[i];
-                if (e.Seq > wm && e.AuthorNodeId == stream)
-                    pending.Add(e);
+                long firstLocal = long.MaxValue;
+                foreach (var e in all)
+                    if (e.AuthorNodeId == stream && e.Seq < firstLocal) firstLocal = e.Seq;
+                if (firstLocal > 1 && !ps.InitialSyncComplete)
+                    throw new SyncException("SNAPSHOT_REQUIRED");
+                if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
+            }
+            ps.SetStreamOffset(stream, streamOffset);
+        }
+
+        long localWm = checked(wm + streamOffset);
+
+        // First pass: determine the selected stream span without allocating one
+        // temporary OutboxEntry per outbox item. The source outbox remains untouched.
+        int selectedCount = 0;
+        long start = 0, end = 0;
+        for (int i = 0; i < all.Count; i++)
+        {
+            var source = all[i];
+            if (source.AuthorNodeId != stream || source.Seq <= localWm) continue;
+            long seq = checked(source.Seq - streamOffset);
+            if (selectedCount == 0) start = seq;
+            end = seq;
+            selectedCount++;
+        }
+        if (selectedCount == 0) return null;
+
+        // Every selected entry belongs to the same author stream. Resolve its session
+        // alias once, not once per operation (AliasOfInternal scans the reverse map).
+        int? streamAlias = stream == NodeId
+            ? AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1
+            : AliasOfInternal(targetPeer, stream, Epoch);
+        if (streamAlias is null)
+        {
+            // Errata E-11 (scenario 23): negotiate a missing alias once per stream.
+            // A resumed node has registry keys but no live peer handle; reuse its
+            // persisted forward mapping instead of attempting negotiation.
+            var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
+            if (peerNode is not null && stream != NodeId)
+            {
+                int epTry = KnownAuthorEpoch(stream) ?? Epoch;
+                streamAlias = EnsureAlias(peerNode, stream, epTry);
+            }
+            else if (peerNode is null)
+            {
+                if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
+                    foreach (var (a_, (nid_, _)) in existingMap)
+                        if (nid_ == stream) { streamAlias = a_; break; }
             }
         }
-        if (pending.Count == 0) return null;
-        // BUGFIX: cursorStart = first still-un-ACKed seq of THIS stream, not lastPushedSeq+1.
-        // SPEC HARDENING (§10.5): close gaps deterministically by renumbering the un-acked
-        // tail so it starts exactly at lastAckedSeq+1 ([П2]/[S2]).
+        if (streamAlias is null)
+            throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
+
+        // Build the final DTO graph directly: one OutboxEntry wrapper per selected
+        // operation, rather than pending + translated wrapper lists.
+        var entries = new List<OutboxEntry>(selectedCount);
+        ushort origin = (ushort)streamAlias.Value;
+        for (int i = 0; i < all.Count; i++)
         {
-            long gap = pending[0].Seq - (wm + 1);   // Errata E-4: per-author watermark `wm`
-            if (gap > 0) foreach (var e in pending) e.Seq -= gap;
-        }
-        long start = pending[0].Seq, end = pending[^1].Seq;
-        // Resolve self-alias once (common path: all entries self-authored).
-        int selfAlias = AliasOfInternal(targetPeer, NodeId, Epoch) ?? 1;
-        // Translate origins. When every payload is already stamped (common self-alias=1 path),
-        // reuse `pending` entry objects — no second List of OutboxEntry / no payload clones.
-        List<OutboxEntry>? translated = null;
-        for (int i = 0; i < pending.Count; i++)
-        {
-            var e = pending[i];
-            int? alias = e.AuthorNodeId == NodeId
-                ? selfAlias
-                : AliasOfInternal(targetPeer, e.AuthorNodeId, Epoch);
-            if (alias is null && e.AuthorNodeId == NodeId)
-                alias = 1;   // BUGFIX: self-entry fallback keeps [А1] intact
-            if (alias is null)
-            {
-                // Errata E-11 (scenario 23): try incremental ALIAS_MAP negotiation before failing closed.
-                // NOTE: a resumed node (NodePersistence.Load) has registry KEYS but no live Node
-                // handles; TryGetValue then yields a null value — treat it as "peer not attached".
-                var peerNode = PeersByNid is not null && PeersByNid.TryGetValue(targetPeer, out var pn) ? pn : null;
-                if (peerNode is not null && e.AuthorNodeId != NodeId)
-                {
-                    int epTry = KnownAuthorEpoch(e.AuthorNodeId) ?? Epoch;
-                    alias = EnsureAliasInternal(peerNode, e.AuthorNodeId, epTry);
-                }
-                else if (peerNode is null)
-                {
-                    // Resumed node: the registry already holds an alias for this author in the
-                    // target session (persisted), but there is no live Node handle to negotiate
-                    // ALIAS_MAP with. Reuse the durable mapping instead of failing closed.
-                    if (AliasToNode.TryGetValue(targetPeer, out var existingMap))
-                        foreach (var (a_, (nid_, _)) in existingMap)
-                            if (nid_ == e.AuthorNodeId) { alias = a_; break; }
-                }
-            }
-            if (alias is null)
-                throw new SyncException("UNKNOWN_ALIAS");   // [R4'] + Errata E-11
-            var stamped = Ops.TryCloneWithOrigin(e.Payload, (ushort)alias.Value);
+            var e = all[i];
+            if (e.AuthorNodeId != stream || e.Seq <= localWm) continue;
+            var stamped = Ops.TryCloneWithOriginShared(e.Payload, origin);
             byte[] newPayload;
             if (stamped is not null)
             {
@@ -148,7 +393,7 @@ public sealed partial class Node
             else
             {
                 var op = Ops.DecodeOp(e.Payload).Op;
-                SetOrigin(op, (ushort)alias.Value);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
+                SetOrigin(op, origin);   // ПЕРЕЗАПИСЬ of session alias (§13.6.2)
                 // Persistence byte-stability: an outbox FieldWrite payload may be truncated to its
                 // fixed header (the value bytes live in the record's FieldState after a save/load
                 // round-trip). Restore the current stored value so retransmission carries real data.
@@ -165,30 +410,23 @@ public sealed partial class Node
             bool shared = System.Runtime.InteropServices.MemoryMarshal.TryGetArray(e.Payload, out var paySeg)
                 && object.ReferenceEquals(paySeg.Array, newPayload)
                 && paySeg.Offset == 0 && paySeg.Count == newPayload.Length;
-            if (shared && translated is null)
-                continue; // still fully shared — keep using pending
-
-            // First non-shared payload (or after a prior clone): materialize translated list.
-            if (translated is null)
-            {
-                translated = new List<OutboxEntry>(pending.Count);
-                for (int j = 0; j < i; j++)
-                    translated.Add(pending[j]); // shared payloads so far
-            }
-            translated.Add(new OutboxEntry
+            entries.Add(new OutboxEntry(deferCausalDeps: true)
             {
                 NamespaceId = e.NamespaceId,
-                Seq = e.Seq,
+                Seq = checked(e.Seq - streamOffset),
                 ChangeId = e.ChangeId,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
-                Payload = newPayload,
+                Payload = shared ? e.Payload : newPayload,
                 AuthorNodeId = e.AuthorNodeId,
                 CreatedAt = e.CreatedAt,
+                PayloadNeedsDetachment = detachPublicBuffers && shared,
             });
+            if (e.CausalDepsOrNull is { } causalDeps)
+                entries[^1].CausalDeps.AddRange(causalDeps);
         }
-        var entries = translated ?? pending;
-        if (entries.Count == 0) return null;
+        if (detachPublicBuffers)
+            DetachPublicBatchPayloads(entries);
         var recordsRoot = ComputeRecordsRoot(entries);
         // BUGFIX (scenario 23): stamp with the epoch LEARNED for the author in the target
         // session (ALIAS_MAP entry / per-session watermark), not self.epoch.
@@ -197,14 +435,20 @@ public sealed partial class Node
         NodeId author = stream;
         if (author != NodeId)
         {
-            if (!AliasToNode.TryGetValue(targetPeer, out var m)) m = EmptyAliasMap;
-            bool hit = false;
-            foreach (var (alias_, (nid2, ep2)) in m)
-                if (nid2 == author) { ep = ep2; hit = true; break; }
-            if (!hit)
+            // streamAlias was resolved against the reverse map above. Use that alias
+            // for the forward lookup instead of scanning every session binding again.
+            if (AliasToNode.TryGetValue(targetPeer, out var m) &&
+                m.TryGetValue(streamAlias.Value, out var binding) &&
+                binding.Id == author)
+            {
+                ep = binding.Epoch;
+            }
+            else
+            {
                 foreach (var kv in KnownEpochs)
                     if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
                         ep = Math.Max(ep, kv.Value);
+            }
         }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
                               NodeId, ep, start, end, default, default, recordsRoot, default, entries);
@@ -217,48 +461,238 @@ public sealed partial class Node
 
 
 
+    // Public Batch payloads must not alias mutable engine-owned outbox arrays.
+    // Payloads already rewritten into fresh arrays are caller-owned and need no copy.
+    // Pack only the still-shared payloads into one backing array, avoiding a second
+    // copy of every payload that origin translation has already materialized.
+    private static void DetachPublicBatchPayloads(List<OutboxEntry> entries)
+    {
+        int totalLength = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            if (entry.PayloadNeedsDetachment)
+                totalLength = checked(totalLength + entry.Payload.Length);
+        }
+
+        if (totalLength == 0)
+        {
+            for (int i = 0; i < entries.Count; i++)
+            {
+                if (!entries[i].PayloadNeedsDetachment) continue;
+                entries[i].Payload = ReadOnlyMemory<byte>.Empty;
+                entries[i].PayloadNeedsDetachment = false;
+            }
+            return;
+        }
+
+        var backing = new byte[totalLength];
+        int offset = 0;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            if (!entry.PayloadNeedsDetachment) continue;
+
+            var payload = entry.Payload;
+            int length = payload.Length;
+            if (length != 0)
+            {
+                payload.Span.CopyTo(backing.AsSpan(offset, length));
+                entry.Payload = new ReadOnlyMemory<byte>(backing, offset, length);
+                offset += length;
+            }
+            else
+            {
+                entry.Payload = ReadOnlyMemory<byte>.Empty;
+            }
+            entry.PayloadNeedsDetachment = false;
+        }
+    }
+
     /// <summary>
     /// Drop outbox entries that every known peer of this namespace has acknowledged.
     /// A session peer that has no <see cref="PeerState"/> yet has not acked — those
     /// entries stay (relay to a peer not yet contacted). No peers at all: keep the
     /// log (sneakernet / not-yet-exported).
     /// </summary>
+    /// <summary>
+    /// Read owned copies of local Outbox entries for a durable metadata adapter.
+    /// Sequence numbers are the existing per-(namespace, author) Outbox sequence;
+    /// callers must preserve gaps and must not renumber entries.
+    /// </summary>
+    public IReadOnlyList<OutboxEntry> ReadOutboxEntries(
+        int namespaceId, NodeId authorNodeId, long afterSequence, int limit = 1024)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (authorNodeId.IsZero)
+            throw new ArgumentException("Author identity must be non-zero.", nameof(authorNodeId));
+        if (afterSequence < 0)
+            throw new ArgumentOutOfRangeException(nameof(afterSequence));
+        if (limit <= 0)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            if (!Outbox.TryGetValue(namespaceId, out var entries) || entries.Count == 0)
+                return Array.Empty<OutboxEntry>();
+
+            var selected = new List<OutboxEntry>();
+            foreach (var entry in entries)
+                if (entry.AuthorNodeId == authorNodeId && entry.Seq > afterSequence)
+                    selected.Add(entry);
+            selected.Sort(static (left, right) => left.Seq.CompareTo(right.Seq));
+            if (selected.Count > limit)
+                selected.RemoveRange(limit, selected.Count - limit);
+
+            var owned = new List<OutboxEntry>(selected.Count);
+            foreach (var entry in selected)
+            {
+                owned.Add(new OutboxEntry
+                {
+                    NamespaceId = entry.NamespaceId,
+                    Seq = entry.Seq,
+                    ChangeId = entry.ChangeId,
+                    RecordId = entry.RecordId,
+                    OpKind = entry.OpKind,
+                    Payload = entry.Payload.ToArray(),
+                    AuthorNodeId = entry.AuthorNodeId,
+                    CreatedAt = entry.CreatedAt,
+                    CausalDeps = entry.CausalDeps.ToList()
+                });
+            }
+            return owned;
+        }
+    }
+
+    /// <summary>Return the highest sequence ever allocated for one author stream.</summary>
+    public long GetOutboxHighWatermark(int namespaceId, NodeId authorNodeId)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (authorNodeId.IsZero)
+            throw new ArgumentException("Author identity must be non-zero.", nameof(authorNodeId));
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            return _outboxSeq.TryGetValue((authorNodeId, namespaceId), out long sequence)
+                ? sequence : 0;
+        }
+    }
+
+    /// <summary>
+    /// Return the minimum local OutboxSeq acknowledged by every interested peer for
+    /// this author stream. Zero means reclamation is not currently safe (no peers,
+    /// or a known peer has no durable PeerState for this namespace).
+    /// </summary>
+    public long GetSafeOutboxAckedThrough(int namespaceId, NodeId authorNodeId)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (authorNodeId.IsZero) throw new ArgumentException("Author must be non-zero.", nameof(authorNodeId));
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            return ComputeSafeOutboxAckedThrough(namespaceId, authorNodeId,
+                CollectInterestedPeers(namespaceId));
+        }
+    }
+
+    /// <summary>
+    /// Resolve relay-selected operation identities to their current local OutboxSeq.
+    /// The caller must durably persist this mapping before allowing downstream send/ACK.
+    /// Returns false (and clears the output) if any requested entry is no longer retained.
+    /// </summary>
+    public bool TryResolveOutboxSequences(int namespaceId,
+        ReadOnlySpan<OutboxChangeIdentity> changes, Span<long> outboxSequences)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (outboxSequences.Length != changes.Length)
+            throw new ArgumentException("Output length must match the requested identity count.", nameof(outboxSequences));
+        outboxSequences.Clear();
+
+        var slots = new Dictionary<BatchId, int>(changes.Length);
+        for (int i = 0; i < changes.Length; i++)
+        {
+            var identity = changes[i];
+            if (identity.AuthorNodeId.IsZero || identity.ChangeId.IsZero)
+                throw new ArgumentException("Outbox change identities must be non-zero.", nameof(changes));
+            if (!slots.TryAdd(identity.ChangeId, i))
+                throw new ArgumentException("ChangeIds must be unique within a namespace.", nameof(changes));
+        }
+
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            if (changes.Length == 0) return true;
+            if (!Outbox.TryGetValue(namespaceId, out var entries))
+                return false;
+
+            int found = 0;
+            foreach (var entry in entries)
+            {
+                if (!slots.TryGetValue(entry.ChangeId, out int slot))
+                    continue;
+                if (entry.AuthorNodeId != changes[slot].AuthorNodeId ||
+                    outboxSequences[slot] != 0 || entry.Seq <= 0)
+                    throw new InvalidDataException("Outbox contains a duplicate or conflicting change identity.");
+                outboxSequences[slot] = entry.Seq;
+                found++;
+            }
+
+            if (found == changes.Length) return true;
+            outboxSequences.Clear();
+            return false;
+        }
+    }
+
+    private HashSet<NodeId> CollectInterestedPeers(int namespaceId)
+    {
+        var interested = new HashSet<NodeId>();
+        if (PeersByNid is not null)
+            foreach (var id in PeersByNid.Keys) interested.Add(id);
+        foreach (var id in AliasToNode.Keys) interested.Add(id);
+        foreach (var kv in PeerStates)
+            if (kv.Key.Item2 == namespaceId) interested.Add(kv.Key.Item1);
+        return interested;
+    }
+
+    private long ComputeSafeOutboxAckedThrough(int namespaceId, NodeId authorNodeId,
+        HashSet<NodeId> interestedPeers)
+    {
+        if (interestedPeers.Count == 0) return 0;
+        long minimum = long.MaxValue;
+        foreach (var peer in interestedPeers)
+        {
+            if (!PeerStates.TryGetValue((peer, namespaceId), out var peerState))
+                return 0;
+            long offset = peerState.TryGetStreamOffset(authorNodeId, out var savedOffset)
+                ? savedOffset : 0;
+            long localAck = checked(peerState.AckedFor(authorNodeId) + offset);
+            if (localAck < minimum) minimum = localAck;
+        }
+        return minimum;
+    }
+
     internal void CompactOutbox(int namespaceId)
     {
         if (!Outbox.TryGetValue(namespaceId, out var list) || list.Count == 0) return;
-
-        var interested = new List<NodeId>(4);
-        if (PeersByNid is not null)
-        {
-            foreach (var id in PeersByNid.Keys)
-                interested.Add(id);
-        }
-        foreach (var id in AliasToNode.Keys)
-        {
-            if (!interested.Contains(id)) interested.Add(id);
-        }
-        foreach (var kv in PeerStates)
-        {
-            if (kv.Key.Item2 == namespaceId && !interested.Contains(kv.Key.Item1))
-                interested.Add(kv.Key.Item1);
-        }
+        var interested = CollectInterestedPeers(namespaceId);
         if (interested.Count == 0) return;
+
+        // Compute the minimum safe local OutboxSeq once per author, not once per
+        // Outbox entry. This changes the scan from O(entries × peers) to
+        // O(entries + authors × peers) while preserving peer-relative offsets.
+        var safeAckByAuthor = new Dictionary<NodeId, long>();
+        foreach (var entry in list)
+            if (!safeAckByAuthor.ContainsKey(entry.AuthorNodeId))
+                safeAckByAuthor.Add(entry.AuthorNodeId,
+                    ComputeSafeOutboxAckedThrough(namespaceId, entry.AuthorNodeId, interested));
 
         int w = 0;
         for (int i = 0; i < list.Count; i++)
         {
-            var e = list[i];
-            bool pending = false;
-            for (int p = 0; p < interested.Count; p++)
-            {
-                if (!PeerStates.TryGetValue((interested[p], namespaceId), out var ps)
-                    || ps.AckedFor(e.AuthorNodeId) < e.Seq)
-                {
-                    pending = true;
-                    break;
-                }
-            }
-            if (pending) list[w++] = e;
+            var entry = list[i];
+            if (safeAckByAuthor[entry.AuthorNodeId] < entry.Seq)
+                list[w++] = entry;
         }
         if (w < list.Count)
             list.RemoveRange(w, list.Count - w);
@@ -272,7 +706,7 @@ public sealed partial class Node
     /// and delegates to <c>SignBatchForInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public Batch SignBatchFor(Batch batch, NodeId targetPeer)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) return SignBatchForInternal(batch, targetPeer);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) { ThrowIfDisposed(); return SignBatchForInternal(batch, targetPeer); }
     }
 
     internal Batch SignBatchForInternal(Batch batch, NodeId targetPeer)
@@ -312,13 +746,175 @@ public sealed partial class Node
     /// and delegates to <c>AdvanceStreamInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void AdvanceStream(NodeId targetPeer, int namespaceId, Batch batch)
     {
-        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) AdvanceStreamInternal(targetPeer, namespaceId, batch);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta) { ThrowIfDisposed(); AdvanceStreamInternal(targetPeer, namespaceId, batch); }
     }
 
-    internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch)
+    internal void AdvanceStreamInternal(NodeId targetPeer, int namespaceId, Batch batch) =>
+        AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId(), batch.IssuerEpoch,
+            batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
+
+    internal MetadataPeerStreamState ReadPeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author)
     {
-        LastStreamDigest[((NodeId, namespaceId, batch.IssuerEpoch), targetPeer)] = batch.BatchDigest;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            ValidateNamespaceId(namespaceId);
+            if (targetPeer.IsZero || author.IsZero)
+                throw new ArgumentException("Peer and author identities must be non-zero.");
+            var key = (targetPeer, namespaceId);
+            if (!PeerStates.TryGetValue(key, out var state))
+                return new MetadataPeerStreamState(0, 0, 0,
+                    checked((uint)AuthorEpochInternal(author)), new byte[16], null);
+            ulong acked = checked((ulong)state.AckedFor(author));
+            ulong pushed = state.TryGetStreamPushed(author, out var pushedValue)
+                ? checked((ulong)pushedValue) : acked;
+            ulong offset = state.TryGetStreamOffset(author, out var offsetValue)
+                ? checked((ulong)offsetValue) : 0;
+            int issuerEpoch = AuthorEpochInternal(author);
+            Digest16 digest = LastStreamDigest.TryGetValue(
+                ((author, namespaceId, issuerEpoch), targetPeer), out var savedDigest)
+                ? savedDigest : default;
+            return new MetadataPeerStreamState(acked, pushed, offset,
+                checked((uint)issuerEpoch), digest.ToArray(), null);
+        }
+    }
+
+    internal OutboundBatchPayload? CreateDeltaBatchPayloadFromMetadata(
+        NodeId targetPeer, int namespaceId, NodeId authorStream,
+        IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> metadataEntries,
+        int schemaId = 0, int schemaVersion = 1)
+    {
+        ArgumentNullException.ThrowIfNull(metadataEntries);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            ValidateNamespaceId(namespaceId);
+            if (authorStream.IsZero) throw new ArgumentException("Author stream must be non-zero.", nameof(authorStream));
+            var temporary = new List<OutboxEntry>(metadataEntries.Count);
+            ulong previousSequence = 0;
+            foreach (var item in metadataEntries)
+            {
+                if (item.Sequence == 0 || item.Sequence > long.MaxValue ||
+                    (previousSequence != 0 && item.Sequence != checked(previousSequence + 1)))
+                    throw new InvalidDataException("Metadata outbound page is not a contiguous positive author sequence.");
+                if (item.Payload is null || item.Payload.Length <= 16)
+                    throw new InvalidDataException("Metadata outbound payload is missing its RecordId envelope.");
+                RecordId recordId = RecordId.From(item.Payload.AsSpan(0, 16));
+                ReadOnlyMemory<byte> operationPayload = item.Payload.AsMemory(16);
+                var decoded = Ops.DecodeOp(operationPayload);
+                if (decoded.Pos != operationPayload.Length)
+                    throw new InvalidDataException("Metadata outbound operation has trailing bytes.");
+                temporary.Add(new OutboxEntry(deferCausalDeps: true)
+                {
+                    NamespaceId = namespaceId,
+                    Seq = checked((long)item.Sequence),
+                    ChangeId = item.ChangeId,
+                    RecordId = recordId,
+                    OpKind = TagOf(decoded.Op),
+                    Payload = operationPayload,
+                    AuthorNodeId = authorStream
+                });
+                previousSequence = item.Sequence;
+            }
+
+            bool hadOriginal = Outbox.TryGetValue(namespaceId, out var original);
+            Outbox[namespaceId] = temporary;
+            try
+            {
+                return CreateDeltaBatchPayloadForTransport(
+                    targetPeer, namespaceId, authorStream, schemaId, schemaVersion);
+            }
+            finally
+            {
+                if (hadOriginal) Outbox[namespaceId] = original!;
+                else Outbox.Remove(namespaceId);
+            }
+        }
+    }
+
+    internal void RestorePeerStreamProgress(NodeId targetPeer, int namespaceId, NodeId author,
+        uint issuerEpoch, ulong ackedCursor, ulong pushedCursor, ulong streamOffset, Digest16 lastBatchDigest)
+    {
+        if (targetPeer.IsZero || author.IsZero)
+            throw new ArgumentException("Peer and author identities must be non-zero.");
+        ValidateNamespaceId(namespaceId);
+        if (ackedCursor > long.MaxValue || pushedCursor > long.MaxValue || streamOffset > long.MaxValue ||
+            pushedCursor < ackedCursor)
+            throw new InvalidDataException("Durable peer progress exceeds the Node cursor range or is inconsistent.");
+
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var key = (targetPeer, namespaceId);
+            if (!PeerStates.TryGetValue(key, out var state))
+                PeerStates[key] = state = new PeerState(targetPeer, namespaceId);
+            state.SetStreamAcked(author, checked((long)ackedCursor));
+            state.SetStreamPushed(author, checked((long)pushedCursor));
+            state.SetStreamOffset(author, checked((long)streamOffset));
+            if (streamOffset > 0) state.InitialSyncComplete = true;
+            LastStreamDigest[((author, namespaceId, checked((int)issuerEpoch)), targetPeer)] = lastBatchDigest;
+        }
+    }
+
+    internal void AdvanceStreamForTransport(NodeId targetPeer, int namespaceId, OutboundBatchPayload batch)
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            AdvanceStreamCore(targetPeer, namespaceId, batch.AuthorStreamId, batch.IssuerEpoch,
+                batch.CursorStart, batch.CursorEnd, batch.BatchId, batch.BatchDigest);
+        }
+    }
+
+    private void AdvanceStreamCore(NodeId targetPeer, int namespaceId, NodeId author, int issuerEpoch,
+        long cursorStart, long cursorEnd, BatchId batchId, Digest16 batchDigest)
+    {
+        if (author.IsZero || cursorStart <= 0 || cursorEnd < cursorStart)
+            throw new SyncException("ACK_OUT_OF_RANGE", batchId);
+        LastStreamDigest[((NodeId, namespaceId, issuerEpoch), targetPeer)] = batchDigest;
+        if (!PeerStates.TryGetValue((targetPeer, namespaceId), out var ps))
+            PeerStates[(targetPeer, namespaceId)] = ps = new PeerState(targetPeer, namespaceId);
+        ps.SetStreamPushed(author, Math.Max(ps.TryGetStreamPushed(author, out var pushed) ? pushed : 0,
+                                                cursorEnd));
+        ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
     }
     // EncodeBatchPayload / DecodeBatchPayload → Production/Node.BatchCodec.cs
+
+/// <summary>
+/// Encoded outbound batch plus the immutable metadata needed to validate its ACK.
+/// This type is internal to the transport path; public callers continue receiving Batch.
+/// </summary>
+internal readonly struct OutboundBatchPayload
+{
+    public byte[] Payload { get; }
+    public BatchId BatchId { get; }
+    public NodeId AuthorStreamId { get; }
+    public NodeId DurableAuthor { get; }
+    public int NamespaceId { get; }
+    public int IssuerEpoch { get; }
+    public long CursorStart { get; }
+    public long CursorEnd { get; }
+    public ulong StreamOffset { get; }
+    public Digest16 PreviousBatchDigest { get; }
+    public Digest16 BatchDigest { get; }
+
+    public OutboundBatchPayload(byte[] payload, BatchId batchId, NodeId authorStreamId,
+        NodeId durableAuthor, int namespaceId, int issuerEpoch, long cursorStart,
+        long cursorEnd, ulong streamOffset, Digest16 previousBatchDigest, Digest16 batchDigest)
+    {
+        Payload = payload;
+        BatchId = batchId;
+        AuthorStreamId = authorStreamId;
+        DurableAuthor = durableAuthor;
+        NamespaceId = namespaceId;
+        IssuerEpoch = issuerEpoch;
+        CursorStart = cursorStart;
+        CursorEnd = cursorEnd;
+        StreamOffset = streamOffset;
+        PreviousBatchDigest = previousBatchDigest;
+        BatchDigest = batchDigest;
+    }
+}
+
 
 }
