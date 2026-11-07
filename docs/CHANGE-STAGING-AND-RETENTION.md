@@ -218,6 +218,27 @@ For an external Data Provider, the Metadata Store should not copy user data unne
 
 The contract must define who owns the payload and when the provider may reclaim it. Do not let both provider and Metadata Store believe the other side retains the only copy.
 
+### 6.3. Recommended logical cardinality
+
+The logical layout should scale with the number of current keys and retained protocol operations, not with the total number of local edits ever performed:
+
+| Category | Recommended cardinality | Avoid |
+|---|---|---|
+| Scope/replica configuration | One compact state per scope/replica | Repeating NodeId/configuration in every field row where a scope key already supplies it |
+| Current LWW field metadata | One winner per (scope, namespace, recordId, fieldId) | One metadata row per historical local edit |
+| Pending LWW operation | At most one per exact canonical field key | Duplicating every superseded write in a pending journal |
+| Frozen local Outbox | One immutable entry per published operation | Rewriting a frozen entry or maintaining a second outbound copy |
+| Inbox receipt | One receipt per accepted batch idempotency key | One full batch receipt per field mutation |
+| Seen ChangeId/provenance | One compact dedup/provenance fact per protocol-defined identity and retention scope | Storing full payloads again in the dedup index |
+| Peer progress | One state per (scope, peer, namespace, author stream) | One scalar ACK cursor per peer or namespace |
+| Relay journal | One retained immutable entry per relay-eligible operation | Merging relay operations into local pending staging |
+
+A record does not need a separate metadata row merely because it exists. In the current BIN-SYNC field model, an empty document is not the same as a deleted record; lifecycle state is represented by its reserved field operation. Store record-level metadata only when a real protocol/provider feature requires it.
+
+For a raw logical LWW field-state tuple, RecordId (16), FieldId (2), operation kind (1), KeyEpoch (2), HLC (12) and AuthorNodeId (16) total 49 bytes before scope/namespace keying, indexes, value storage and physical encoding. ChangeId is intentionally excluded from this current-state tuple; it belongs to operation/dedup history. FLD may compress author/HLC representation in its run format. This is a logical accounting aid, not a frozen binary layout.
+
+Small peer-state values or receipts may be packed into compact per-peer/per-stream records to reduce object and index overhead, provided updates remain atomic and their independent retention lifetimes remain explicit. Do not pack all metadata for a scope into one monolithic blob that must be rewritten for every cursor or peer ACK.
+
 ## 7. FLD-specific target and migration
 
 ### 7.1. Current behavior is safe but retains more unpublished history
