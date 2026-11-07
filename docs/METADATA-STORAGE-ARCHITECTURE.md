@@ -891,6 +891,6 @@ Current unsupported case: \`OpRecordTombstone\` is explicitly rejected by the pr
 ### Remaining integration gates
 
 - **Node/Transport authority migration:** route Node outbound freeze/read/lease/ACK and inbound receipt/relay through \`IMetadataStore\` as the single recovery authority. Do not keep two independent sources of truth or dual-write without a crash-safe reconciliation contract.
-- **Full operation coverage:** add durable record tombstones and define how non-LWW/event operations are applied to providers.
+- **Full operation coverage:** record lifecycle and field tombstones are supported; define durable semantics for non-LWW/event operations and explicit undelete workflows.
 - **Metadata mutation complexity:** the adapter persists changed logical keys, but still clones collection structures and derives a key diff from partition state on each mutation. Replace this with explicit dirty-key deltas/copy-on-write before claiming bounded per-operation CPU/allocation cost.
 - **Concurrency and retention:** multi-process fencing/automatic retry are not implemented; preserve receipts, global ChangeId fingerprints and source JournalSeq→ChangeId→OutboxSeq provenance until a proven GC horizon exists.
