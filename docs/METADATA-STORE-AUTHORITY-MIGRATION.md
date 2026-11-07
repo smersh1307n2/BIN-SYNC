@@ -1,6 +1,6 @@
 # Metadata Store authority migration
 
-**Status:** implementation plan based on BIN-SYNC `feature/fld-external-storage` at `aa5c52e2daa85638326f4df94c0fdec5e312b467` (2026-11-07). This document distinguishes implemented adapter behavior from the remaining runtime migration. It does not change the wire protocol.
+**Status:** implementation plan updated against BIN-SYNC `feature/fld-external-storage` at `d264d4a9c58998a6ff3baea9458b5f9fb61ab202` (2026-11-07). Durable Storage adapters and compact metadata rows are implemented; full Node/Transport authority migration remains open. This document does not change the wire protocol.
 
 ## 1. Current boundary (verified in code)
 
@@ -127,3 +127,18 @@ At BIN-SYNC `aa5c52e2`:
 - New StorageArrayTcpSync passes bidirectional multi-field array sync, database reopen, subsequent update and record tombstone propagation over real TCP.
 
 This closes the real-TCP adapter/coordinator validation gap only. Sections 2–6 remain the next architectural work; do not mark full Storage authority migration complete.
+
+
+## 8. Verified implementation update (2026-11-07)
+
+The current Storage-backed adapter baseline has advanced beyond the initial real-TCP sample:
+
+- `StorageMetadataStore` and `StorageDataProvider` pass 49/49 durable Storage Integration tests.
+- The global ChangeId ledger now stores a 16-byte fingerprint plus a one-byte local-origin flag. The previous separate local-outbound marker key is read for compatibility and migrated on the next transaction.
+- Relay and local Outbound ACK/high-watermark pairs are each encoded in one 16-byte per-author row. Legacy separate 8-byte rows are still decoded and are rewritten in the compact form on the next metadata transaction.
+- Unpublished local LWW updates are coalesced within each bounded source-feed page before the Node Outbox is appended. This is not yet cross-page durable PendingLocal staging.
+- BIN-SYNC CI at this baseline passes 642/642 tests, 72.1% line coverage, public samples, Fuzz and Lab; Storage Integration passes 49/49, including legacy-format migration and real TCP samples.
+
+The main authority gap is unchanged: transport reads Node.Outbox and Node.PeerStates; the Storage outbound stream is still populated as a durable mirror. The next implementation gate remains the peer/author progress and outbound batch reservation contract, followed by transport read/ACK migration and receive-side authority migration.
+
+**Scope:** this is the BIN-SYNC + generic Storage stage only. FLD Database and its JournalSeq provenance adapter are deferred.
