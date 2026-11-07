@@ -557,6 +557,12 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal((uint)sender.Epoch, firstState.IssuerEpoch);
         Assert.Null(firstState.PendingBatch);
 
+        // The durable path must not create a second ACK/digest authority in Node.
+        // The following push must rehydrate progress from Metadata Store and continue.
+        var nodeMirror = sender.ReadPeerStreamProgress(receiver.NodeId, 1, sender.NodeId);
+        Assert.Equal(0UL, nodeMirror.AckedCursor);
+        Assert.Equal(0UL, nodeMirror.PushedCursor);
+
         RecordId secondRecord = RecordId.From(Guid.Parse("19000000-0000-0000-0000-000000000019").ToByteArray());
         provider.AppendLocalChange(new ProviderMutation
         {
