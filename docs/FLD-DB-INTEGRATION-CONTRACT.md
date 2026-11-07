@@ -65,7 +65,7 @@ BIN-SYNC не должен держать вторую копию durable field 
 - `BatchId`, `CursorStart`, `CursorEnd`, `DurableAuthor`;
 - `PreviousBatchDigest`, `BatchDigest`, `RecordsRoot` и остальные данные, необходимые для восстановления chain/inbox state;
 - полный набор decoded mutations: `RecordId`, `FieldId`, operation kind, value, HLC, `AuthorNodeId`, `KeyEpoch`, обязательный `ChangeId`;
-- opaque `ProtocolStateDelta`, сформированный BIN-SYNC: inbox cursor/chain update, SeenChanges delta, relay journal delta и необходимые provenance/session данные.
+- opaque `ProtocolStateDelta`, сформированный BIN-SYNC: inbox cursor/chain update, global ChangeId ledger delta, relay journal delta и необходимые provenance/session данные.
 
 FLD хранит opaque protocol extension как часть той же durable transaction, не разбирая wire semantics. BIN-SYNC остаётся владельцем кодирования и интерпретации extension.
 
@@ -77,11 +77,11 @@ FLD хранит opaque protocol extension как часть той же durable
 2. Проверить idempotency по входящему batch и ChangeId согласно ключам BIN-SYNC.
 3. Применить к field state только LWW-победителей, используя канонический comparator.
 4. Сохранить все новые принятые relay-eligible mutations, даже если они проиграли LWW.
-5. Сохранить inbox/cursor/digest-chain/SeenChanges и relay journal delta.
+5. Сохранить inbox/cursor/digest-chain/global ChangeId ledger и relay journal delta.
 6. Записать WAL commit и выполнить требуемый durability flush.
 7. Только после durable commit опубликовать состояние и вернуть receipt.
 
-**Успешный return означает, что можно отправлять ACK.** При ошибке ни field state, ни inbox/cursor, ни SeenChanges, ни relay journal не должны частично публиковаться; ACK не отправляется.
+**Успешный return означает, что можно отправлять ACK.** При ошибке ни field state, ни inbox/cursor, ни global ChangeId ledger, ни relay journal не должны частично публиковаться; ACK не отправляется.
 
 Повтор того же batch после lost ACK возвращает duplicate receipt с тем же `CursorEnd`/author result и не создаёт повторных field mutations или relay entries. Повтор ChangeId через другого peer не должен повторно применять/relay mutation, но входящий peer cursor должен быть корректно обработан.
 
@@ -116,9 +116,9 @@ Freeze и перенос pending→Outbox должны быть одной durab
 
 Relay journal сохраняет исходную mutation identity и содержимое: ChangeId, RecordId, FieldId/op kind, HLC, author, KeyEpoch и value/tombstone. BIN-SYNC назначает и восстанавливает relay sequence по своим правилам author stream. FLD local OutboxSeq не используется для remote author.
 
-Relay retention/compaction рассчитывается по ACK всех interested peers. LWW loser остаётся relay-eligible: локальное значение может быть новее, но операция всё равно нужна другим узлам для детерминированной сходимости и SeenChanges provenance.
+Relay retention/compaction рассчитывается по ACK всех interested peers. LWW loser остаётся relay-eligible: локальное значение может быть новее, но операция всё равно нужна другим узлам для детерминированной сходимости. Global ChangeId ledger отдельно подавляет повторную постановку этой операции после compaction payload.
 
-SeenChanges provenance dedup — отдельное состояние BIN-SYNC, не FLD relay journal. Текущая wire specification задаёт channel-scoped key через senderPeer/namespace/ChangeId, но не задаёт safe GC watermark/expiry для этого набора. До появления нормативного правила BIN-SYNC обязан удерживать exact dedup state; FLD не должен самостоятельно удалять opaque ProtocolStateDelta по TTL или по relay ACK.
+Global ChangeId ledger — отдельное состояние BIN-SYNC, не FLD relay journal. Его ключ — (scope, namespace, ChangeId), fingerprint проверяет неизменность canonical operation across peers. В текущем protocol revision нет safe GC watermark; ledger удерживается до fenced namespace/scope epoch reset. FLD не должен самостоятельно удалять opaque ProtocolStateDelta или ChangeId ledger по TTL либо по relay ACK.
 
 ### 5.1. Текущая стоимость APPLY journal и целевое разделение
 
