@@ -367,6 +367,8 @@ Inbox batch receipts have a separate lifecycle. The wire specification defines a
 
 The current NodePersistence v5 image serializes the Inbox key set and InboxAuthors mapping, plus related digest and received-stream checkpoints; it does not serialize the complete InboxEntry tuple (cursorStart, cursorEnd, appliedAt, expiresAt) as one row. The Metadata Store design must either reconstruct the equivalent safe-retention facts from its other durable checkpoints or add the missing semantic expiry/range data. It must not invent an expiry at migration time or discard receipts merely because the batch is old.
 
+There is also a duplicate-identity validation difference to resolve: the FLD ApplyJournal duplicate path compares the stored cursor range, BatchDigest, RecordsRoot and PreviousBatchDigest before returning the prior receipt. The inspected BIN-SYNC Node.ApplyBatch duplicate path checks the Inbox idempotency key and returns the stored author/ACK without comparing those original digest/range values. The normative InboxEntry layout does not currently list BatchDigest/RecordsRoot/PreviousBatchDigest. The target compact receipt should retain at least the canonical batch digest and cursor range (and the chain fields required by the selected protocol rule) so a reused BatchId with conflicting content cannot be silently treated as the original batch. Resolve this against the normative spec and tests; it does not require retaining the full Fields payload.
+
 ### 9.3. Per-peer batch replay cache has a finite ACK-based lifetime
 
 The current Node.DeltaBatch signing path stores PeerState.Ids keyed by (authorStream, cursorStart, cursorEnd), with the stable BatchId and previous digest needed to reproduce the exact same wire batch after a lost ACK. This cache is necessary while the batch may be retried. The inspected ProcessAckInternal path advances the per-author StreamAcked watermark and compacts Outbox, but does not remove acknowledged PeerState.Ids entries. Because NodePersistence serializes this dictionary, it can grow with every historical batch even after the corresponding Outbox entries are compacted.
@@ -462,6 +464,7 @@ This policy reduces redundant outbound history; it does not promise that every p
 30. Relay journal paging starts at the requested retained sequence without scanning all previously acknowledged history; compaction releases both disk bytes and in-memory indexes.
 31. Local WAL replay markers are retained while their WAL records can replay and are reclaimed only after durable truncation/checkpoint; remote provenance entries follow a separate protocol retention rule.
 32. Deferring ChangeId allocation until freeze does not weaken local staging/WAL replay idempotency; a storage-native commit/staging generation handles that boundary.
+33. Reuse of an Inbox idempotency key with conflicting cursor/digest metadata is rejected using a compact receipt, without retaining the full incoming field payload.
 
 ## 12. Implementation sequence
 
