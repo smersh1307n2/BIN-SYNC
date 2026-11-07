@@ -5,6 +5,7 @@ on:
     branches:
       - "feature/fld-external-storage"
     paths:
+      - ".github/workflows/storage-integration.yml"
       - ".gitmodules"
       - "external/FLD-DB"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
