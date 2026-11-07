@@ -346,6 +346,16 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(local, b.AuthorStream);
         Assert.Equal(0UL, a.State.AckedCursor);
         Assert.Equal(0UL, b.State.AckedCursor);
+
+        byte[] snapshotDigest = Enumerable.Repeat((byte)122, 16).ToArray();
+        store.RegisterInterestedPeerStream(scope, local, peerA, 1, 7, local,
+            0, 1, 1, snapshotDigest);
+        store.RegisterInterestedPeerStream(scope, local, peerA, 1, 7, local,
+            0, 0, 0, new byte[16]);
+        var snapshotted = Assert.Single(store.ReadPeerStreamStates(scope, local, peerA, 1, 7));
+        Assert.Equal(1UL, snapshotted.State.StreamOffset);
+        Assert.Equal(1U, snapshotted.State.IssuerEpoch);
+        Assert.Equal(snapshotDigest, snapshotted.State.LastBatchDigest);
         Assert.Equal(0UL, store.GetSafeOutboundCompactionCursor(scope, local, 7, local));
         Assert.Equal(2, store.ReadInterestedPeers(scope, local, 7).Count);
     }
