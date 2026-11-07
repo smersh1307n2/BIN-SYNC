@@ -1,10 +1,14 @@
-# BIN-SYNC CORE v2.4.18 FINAL
+# BIN-SYNC CORE v2.4.19 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.18 FINAL (route-independent ChangeId deduplication; canonical CRDT payloads; schema-map validation)  
+**Версия:** 2.4.19 FINAL (fail-closed tombstone retention; route-independent ChangeId deduplication; canonical CRDT payloads)  
 **Дата:** 2026-11-07  
-**Изменения v2.4.18 относительно v2.4.17:**
+**Изменения v2.4.19 относительно v2.4.18:**
+- Уточнено, что TOMBSTONE_MIN_TTL — лишь минимальный возраст-кандидат и не является доказательством безопасности GC; scalar HLC cutoff/GC_NOTICE сами по себе не разрешают удаление tombstone.
+- До реализации durable namespace safe-frontier, stale-peer fencing и обязательного full-resync gate tombstone/ghost GC отключён; полученный GC_NOTICE не даёт права удалять состояние.
+
+**Исторические изменения v2.4.18 относительно v2.4.17:**
 - Зафиксирована глобальная в пределах реплики дедупликация (namespaceId, ChangeId) независимо от immediate sender/маршрута, с проверкой canonical semantic fingerprint и отказом при equivocation.
 - Локальные изменения записывают ChangeId identity в durable ledger атомарно с Outbox/WAL; повторное получение известного ChangeId не применяется и не ретранслируется.
 - Legacy identity без fingerprint консервативно считается уже виденной; первый повтор может заполнить fingerprint, но не пере-применяет операцию. Безопасный GC horizon не определён; удаление ledger по TTL запрещено.
@@ -817,15 +821,27 @@ safeOutboxSeq = min(lastAckedSeq активных с initialSyncComplete)
 
 Новый не блокирует GC. Ушедший исключается из min.
 
-## 11.5. Tombstone GC
+## 11.5. Tombstone retention and GC safety
 
-`TOMBSTONE_MIN_TTL` (7 дней дефолт).
+`TOMBSTONE_MIN_TTL` (7 дней по умолчанию) задаёт только минимальный возраст, после которого tombstone может стать кандидатом на reclamation. TTL **не является** доказательством того, что tombstone больше не нужен.
+
+Удаление field tombstone, record lifecycle tombstone или ghost state запрещено, пока одновременно не выполнены все условия:
+
+1. Для namespace существует durable safe frontier, который покрывает tombstone и все более ранние операции всех известных author streams. Frontier должен быть основан на непрерывных per-author stream positions, а не только на wall clock.
+2. Каждый peer текущего membership baseline подтвердил применение согласованного snapshot/delta baseline, включающего этот frontier. Peer без подтверждённого состояния блокирует reclamation.
+3. Peer, исключённый из baseline, quarantined/fenced и не может продолжить incremental DELTA_BATCH со старым состоянием. Перед возобновлением delta он обязан пройти полный snapshot/resync, который восстанавливает tombstones/ghosts и HLC baseline.
+4. Новый peer начинает с полного snapshot; он не может использовать произвольный старый cursor как доказательство актуальности.
+5. Snapshot и feed watermark связаны одной атомарной barrier. Snapshot current-state rows не заменяет relay/event history и не может самостоятельно продвинуть Outbox/relay ACK.
+
+Один scalar HLC wall cutoff недостаточен: он не доказывает, что peer получил конкретный tombstone или что все author streams закрыли диапазон старых операций. Поэтому `GC_NOTICE.TombstoneCutoffWall` является advisory hint и не разрешает локальное удаление. `WatermarkGate` — только сравнивающий primitive; пока durable cutoff не хранится и gate не вызывается до всех incremental apply/snapshot paths, он не считается включённой защитой.
+
+**Текущее безопасное поведение:** tombstone/ghost GC выключен (fail-closed). `PurgeBelowCutoff` не удаляет ни обычные live fields, ни field tombstones, ни record lifecycle tombstones. Возраст, LastSeen и GC_NOTICE не должны обходить это правило.
 
 ## 11.8. Карантин долгих узлов (Tombstone Cutoff Policy)
 
-`lastSeen < minTombstoneHLC.wall` → `QUARANTINE_RESYNC`.
+После введения durable safe frontier peer, чьё подтверждённое namespace baseline ниже frontier, переводится в `QUARANTINE_RESYNC`. Пока полный resync не завершён, его incremental DELTA_BATCH отклоняется с `OUTDATED_WATERMARK`/`SNAPSHOT_REQUIRED`. Само значение `lastSeen < cutoffWall` может инициировать проверку/карантин, но не заменяет проверку durable stream frontier и не является самостоятельным доказательством stale state.
 
-**Инвариант [D6]:** Узел не может применить дельту, если tombstone был GC'нут.
+**Инвариант [D6]:** Узел не может применить операцию, способную воскресить состояние, tombstone которого был безопасно reclaimed. До выполнения safe-frontier и full-resync условий tombstone сохраняется.
 
 ---
 
@@ -959,7 +975,7 @@ batchDigest = BLAKE3-128(domainTag || batchId || namespaceId || ...)
 
 ## 12.20–12.22. GC_NOTICE, WINDOW_UPDATE, PING/PONG
 
-Стандартные LE-раскладки.
+Стандартные LE-раскладки. `GC_NOTICE.TombstoneCutoffWall` — advisory metadata only: при текущей редакции протокола оно не авторизует удаление tombstone/ghost. Получатель может использовать его для оценки stale-peer состояния, но обязан сохранить все tombstones до выполнения §11.5 safe-frontier и full-resync условий.
 
 ## 12.23. ERROR
 
@@ -2469,3 +2485,15 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 **Fingerprint implementation:** текущая реализация использует BLAKE3-128 от canonical semantic representation; all-zero digest зарезервирован для unknown legacy marker. Fingerprint — локальный derived index, он не передаётся в DELTA_BATCH и не меняет RecordsRoot/BatchDigest. Реализации могут использовать иной collision-resistant fingerprint, если сохраняют перечисленную семантическую эквивалентность и fail-closed equivocation behavior.
 
 **Совместимость:** DELTA_BATCH, snapshot и ACK wire layouts не меняются. E-24 уточняет и усиливает E-8/E-13: route-scoped SeenChanges больше не является источником глобальной dedup истины; дополнительная E-13 проверка байт-идентичного собственного состояния остаётся допустимым локальным echo guard. NodePersistence v12 — локальный формат хранения, не wire revision.
+
+# ERRATA v2.4.19
+
+## E-25. §11.5 / §11.8 / §12.20 — fail-closed tombstone retention
+
+**Дефект:** прежняя формулировка `TOMBSTONE_MIN_TTL=7 days` и scalar `TombstoneCutoffWall` могла трактоваться как достаточное основание удалить tombstone. Текущий GC_NOTICE не содержит подтверждённого per-author stable frontier, не фиксирует durable namespace cutoff и не доказывает, что все активные peers применили baseline. WatermarkGate также не подключён ко всем incremental/snapshot acceptance paths. Удаление по возрасту могло привести к resurrection отставшей операции.
+
+**Нормативно:** §11.5 заменён fail-closed retention contract. TTL — только минимальный возраст-кандидат, не safe watermark. Tombstone/ghost reclamation запрещён до durable per-author frontier, подтверждённого всеми peers текущего baseline, fencing stale/quarantined peers и обязательного full resync для них и новых peers. Snapshot/feed watermark обязаны иметь одну atomic barrier. GC_NOTICE cutoff остаётся advisory и сам по себе не разрешает удаление. До полной реализации gate все tombstones сохраняются.
+
+**Текущая реализация:** `GcNotice.PurgeBelowCutoff` возвращает 0 и не удаляет live fields, field tombstones или record lifecycle tombstones. Это намеренный fail-closed behavior, а не завершённый GC.
+
+**Wire format:** без изменений. E-25 ужесточает интерпретацию существующего GC_NOTICE и запрещает небезопасное поведение; будущий durable frontier может потребовать отдельной protocol revision после определения полного handshake/ACK contract.
