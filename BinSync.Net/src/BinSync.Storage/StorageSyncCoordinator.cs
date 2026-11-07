@@ -86,7 +86,7 @@ public sealed class StorageSyncCoordinator
         if (batch.NamespaceId != _namespaceId)
             throw new ArgumentException("Batch namespace does not match this coordinator.", nameof(batch));
 
-        var fields = new List<(RecordId RecordId, ushort FieldId)>(batch.Entries.Count);
+        var mutations = new List<ProviderMutation>(batch.Entries.Count);
         foreach (var entry in batch.Entries)
         {
             if (entry.NamespaceId != _namespaceId || entry.Payload.IsEmpty)
@@ -96,10 +96,29 @@ public sealed class StorageSyncCoordinator
             switch (op)
             {
                 case OpFieldWrite write:
-                    fields.Add((entry.RecordId, write.FieldId));
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = entry.RecordId,
+                        FieldId = write.FieldId,
+                        HlcWall = write.Wall,
+                        HlcLogical = write.Logical,
+                        AuthorNodeId = batch.DurableAuthor,
+                        KeyEpoch = write.KeyEpoch,
+                        Value = write.Value.ToArray()
+                    });
                     break;
                 case OpFieldTomb tomb:
-                    fields.Add((entry.RecordId, tomb.FieldId));
+                    mutations.Add(new ProviderMutation
+                    {
+                        RecordId = entry.RecordId,
+                        FieldId = tomb.FieldId,
+                        IsTombstone = true,
+                        HlcWall = tomb.Wall,
+                        HlcLogical = tomb.Logical,
+                        AuthorNodeId = batch.DurableAuthor,
+                        KeyEpoch = tomb.KeyEpoch,
+                        Value = Array.Empty<byte>()
+                    });
                     break;
                 case OpRecordTombstone:
                     throw new NotSupportedException("StorageDataProvider does not yet persist record-level tombstones.");
@@ -108,7 +127,19 @@ public sealed class StorageSyncCoordinator
             }
         }
 
-        return ApplyRemoteFieldsCore(fields, CreateBatchApplyToken(batch));
+        if (mutations.Count == 0) return null;
+        mutations.Sort(static (a, b) =>
+        {
+            int order = CompareRecordIds(a.RecordId, b.RecordId);
+            return order != 0 ? order : a.FieldId.CompareTo(b.FieldId);
+        });
+
+        // Use the exact immutable batch identity as the receipt key and the exact
+        // batch operations as the fingerprint input. Do not reconstruct payload from
+        // current Node winners: a later batch may already have advanced those winners.
+        Guid token = CreateBatchApplyToken(batch);
+        lock (_gate)
+            return _provider.ApplyRemoteBatch(token, mutations);
     }
 
     private ProviderApplyReceipt? ApplyRemoteFieldsCore(
