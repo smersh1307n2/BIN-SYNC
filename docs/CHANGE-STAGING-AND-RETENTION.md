@@ -108,6 +108,8 @@ A staging entry has **no BIN-SYNC stream sequence yet**. It is not eligible for 
 
 A pending operation becomes a frozen Outbox operation in one durable atomic transition before it can be exposed to any peer.
 
+The freeze transition is also a recovery boundary. A caller retrying the exact same freeze after an uncertain commit must be able to recover the original assigned sequences without appending a second copy. The semantic contract therefore permits an exact full-batch retry when every ChangeId, author stream and payload byte matches the already-frozen batch. A conflicting reuse or a retry that partially overlaps an earlier freeze must fail closed; it must not append the new suffix. The caller must retain stable ChangeIds and payload bytes across the retry. This is idempotent publication, not permission to rewrite a frozen operation.
+
 The freeze transition:
 
 1. selects a stable set of pending operations;
