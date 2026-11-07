@@ -50,6 +50,9 @@ try
         providerB.AppendLocalChange(Mutation(recordB, quantityB, nodeB.NodeId, 2001, "7"u8));
         coordinatorA.PublishLocalChanges(n => StorageNodePersistence.Save(storageA, n));
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
+        Console.WriteLine($"post-restart B outbox={nodeB.GetOutboxCount(NamespaceId)} high={nodeB.GetOutboxHighWatermark(NamespaceId, nodeB.NodeId)} metadata={metadataB.GetOutboundHighWatermark(\"array-tcp-demo\", nodeB.NodeId, NamespaceId, nodeB.NodeId)}");
+        if (nodeB.GetOutboxCount(NamespaceId) == 0)
+            throw new InvalidOperationException("Post-restart local update was not enqueued in the Node Outbox.");
 
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
         StorageNodePersistence.Save(storageA, nodeA);
@@ -129,6 +132,7 @@ static async Task<int> ExchangeOverTcpAsync(
     await using var sessionA = await acceptTask;
 
     int directions = 0;
+    Console.WriteLine($"TCP session outboxes: A={nodeA.GetOutboxCount(NamespaceId)}, B={nodeB.GetOutboxCount(NamespaceId)}");
     if (nodeA.GetOutboxCount(NamespaceId) > 0)
     {
         Task<BatchResult> receive = sessionB.ReceiveBatchAsync(nodeB, beforeAck: (batch, _) =>
@@ -149,6 +153,7 @@ static async Task<int> ExchangeOverTcpAsync(
         directions++;
     }
 
+    Console.WriteLine($"TCP session completed directions={directions}; remaining outboxes A={nodeA.GetOutboxCount(NamespaceId)}, B={nodeB.GetOutboxCount(NamespaceId)}");
     return directions;
 }
 
