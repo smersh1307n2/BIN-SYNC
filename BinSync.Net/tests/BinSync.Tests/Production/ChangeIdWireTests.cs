@@ -312,6 +312,61 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void Duplicate_batch_id_rejects_changed_payload_or_unbound_header_fields()
+    {
+        using var sender = Fix.MakeNode(121);
+        using var receiver = Fix.MakeNode(122);
+        Transport.MakeSession(sender, receiver);
+        Assert.True(sender.WriteField(1, Fix.Rid(0x75), 0x100, new byte[] { 0x51 }));
+
+        var original = sender.CreateDeltaBatch(receiver.NodeId, 1)!;
+        Assert.Equal(1, receiver.ApplyBatch(original, sender.NodeId).Applied);
+        var acceptedValue = new byte[] { 0x51 };
+        receiver.AcksOut.Clear();
+
+        Batch CopyBatch(Batch source) => new(source.NamespaceId, source.SchemaId,
+            source.SchemaVersion, source.MergePolicy, source.Flags, source.IssuerNodeId,
+            source.IssuerEpoch, source.CursorStart, source.CursorEnd, source.BatchId,
+            source.PrevBatchDigest, source.RecordsRoot, source.BatchDigest,
+            source.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                RecordId = e.RecordId,
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId,
+                CreatedAt = e.CreatedAt
+            }).ToList());
+
+        // Keep the old root/digest while changing the payload: the duplicate
+        // fast path must recompute RecordsRoot before it sends another ACK.
+        var payloadConflict = CopyBatch(original);
+        var changedOp = Ops.DecodeOp(payloadConflict.Entries[0].Payload).Op;
+        ((OpFieldWrite)changedOp).Value = new byte[] { 0x52 };
+        payloadConflict.Entries[0].Payload = Ops.EncodeOp(changedOp);
+        var payloadError = Assert.Throws<SyncException>(() =>
+            receiver.ApplyBatch(payloadConflict, sender.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", payloadError.CodeName);
+        Assert.Empty(receiver.AcksOut);
+
+        // BatchDigest intentionally does not bind schema/mode header fields;
+        // the durable receipt fingerprint does.
+        var headerConflict = CopyBatch(original);
+        headerConflict.SchemaId++;
+        var headerError = Assert.Throws<SyncException>(() =>
+            receiver.ApplyBatch(headerConflict, sender.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", headerError.CodeName);
+        Assert.Empty(receiver.AcksOut);
+
+        Assert.True(receiver.TryGetField(1, Fix.Rid(0x75), 0x100, out var current));
+        Assert.Equal(acceptedValue, current!.Value);
+        Assert.Equal(1, receiver.GetOutboxCount(1));
+        Assert.Single(receiver.InboxAuthors);
+    }
+
+    [Fact]
     public void Persistence_v5_seen_changes_migrate_to_explicit_unknown_global_fingerprints()
     {
         var peer = NodeId.From(Id(0x81));
