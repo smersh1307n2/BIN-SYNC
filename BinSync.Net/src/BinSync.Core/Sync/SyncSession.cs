@@ -223,14 +223,14 @@ public partial class SyncSession : IAsyncDisposable
     /// <summary>Receive one DELTA_BATCH, apply it and return the ACK.</summary>
     public Task<BatchResult> ReceiveBatchAsync(Node receiver, CancellationToken ct = default,
         Action<Batch, BatchResult>? beforeAck = null)
-        => ReceiveBatchAsync(receiver, beforeApply: null, beforeAck, ct);
+        => ReceiveBatchAsync(receiver, beforeApply: null, beforeAck: beforeAck, ct: ct);
 
     /// <summary>
     /// Receive one batch with an optional durable intent callback before Node mutation
     /// and a durability callback after Node mutation but before ACK.
     /// </summary>
     public async Task<BatchResult> ReceiveBatchAsync(Node receiver,
-        Action<Batch, ReadOnlyMemory<byte>>? beforeApply,
+        Action<Batch, ReadOnlyMemory<byte>, NodeId, uint>? beforeApply,
         Action<Batch, BatchResult>? beforeAck,
         CancellationToken ct = default)
     {
@@ -248,7 +248,7 @@ public partial class SyncSession : IAsyncDisposable
             // Decode without mutation so a host can persist the exact wire payload as
             // a PendingApply intent before Node's receive cursor or records advance.
             var decoded = receiver.DecodeBatchPayloadForTransport(frame.Payload);
-            beforeApply?.Invoke(decoded, frame.Payload);
+            beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId, checked((uint)PeerEpoch));
 
             var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
             beforeAck?.Invoke(batch, result);
