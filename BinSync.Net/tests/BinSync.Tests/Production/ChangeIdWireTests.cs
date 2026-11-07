@@ -160,8 +160,31 @@ public class ChangeIdWireTests
 
         // C echoes the operation back to its original author after A's Outbox
         // payload was compacted. A's local ledger suppresses a second relay.
-        Transport.MakeSession(c, a);
-        Assert.NotNull(Transport.DeliverBatch(c, a, 1));
+        var echoedOp = Ops.DecodeOp(original.Entries[0].Payload).Op;
+        switch (echoedOp)
+        {
+            case OpFieldWrite x: x.AuthorNodeId = a.NodeId; x.FullAuthorMode = true; break;
+            case OpFieldTomb x: x.AuthorNodeId = a.NodeId; x.FullAuthorMode = true; break;
+            case OpRecordTombstone x: x.AuthorNodeId = a.NodeId; x.FullAuthorMode = true; break;
+        }
+        var echoEntry = new OutboxEntry
+        {
+            NamespaceId = 1,
+            Seq = 1,
+            ChangeId = changeId,
+            RecordId = original.Entries[0].RecordId,
+            OpKind = original.Entries[0].OpKind,
+            Payload = Ops.EncodeOp(echoedOp, fullAuthor: true),
+            AuthorNodeId = a.NodeId
+        };
+        var echoBatchId = BatchId.From(Id(0xD3));
+        var echoRoot = Node.ComputeRecordsRoot(new List<OutboxEntry> { echoEntry });
+        var echoDigest = Node.ComputeBatchDigest(echoBatchId, 1, c.NodeId, c.Epoch,
+            1, 1, echoRoot, default);
+        var echoBatch = new Batch(1, 0, 1, 0x02, 0, c.NodeId, c.Epoch,
+            1, 1, echoBatchId, default, echoRoot, echoDigest, new List<OutboxEntry> { echoEntry });
+        var echoResult = a.ApplyBatch(echoBatch, c.NodeId);
+        Assert.Equal(0, echoResult.Applied);
         Assert.Equal(0, a.OutboxSize(1));
         Assert.Contains((c.NodeId, 1, changeId), a.SeenChanges);
 
