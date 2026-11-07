@@ -262,6 +262,19 @@ public sealed class StorageSyncCoordinatorTests
         BatchId changeId = BatchId.From(Guid.Parse("c2000000-0000-0000-0000-00000000000c").ToByteArray());
         byte[] fingerprint = ChangeIdentity.Fingerprint(1, recordId, OpsConst.TagFieldWrite,
             op, sender.NodeId).ToArray();
+        var recordTombstone = new OpRecordTombstone
+        {
+            RecordId = recordId,
+            Wall = 7000,
+            Logical = 5,
+            AuthorNodeId = sender.NodeId
+        };
+        byte[] tombstonePayload = Ops.EncodeOpFull(recordTombstone);
+        byte[] tombstoneEnvelope = new byte[16 + tombstonePayload.Length];
+        recordId.WriteTo(tombstoneEnvelope);
+        tombstonePayload.CopyTo(tombstoneEnvelope, 16);
+        byte[] tombstoneFingerprint = ChangeIdentity.Fingerprint(1, recordId,
+            OpsConst.TagRecordTomb, recordTombstone, sender.NodeId).ToArray();
         byte[] batchDigest = Enumerable.Repeat((byte)0xC3, 16).ToArray();
         Guid applyToken = Guid.Parse("c3000000-0000-0000-0000-00000000000c");
 
@@ -289,6 +302,13 @@ public sealed class StorageSyncCoordinatorTests
                         ChangeId = changeId,
                         Fingerprint = fingerprint,
                         Payload = envelope
+                    },
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender.NodeId,
+                        ChangeId = BatchId.From(Guid.Parse("c5000000-0000-0000-0000-00000000000c").ToByteArray()),
+                        Fingerprint = tombstoneFingerprint,
+                        Payload = tombstoneEnvelope
                     }
                 }
             }, applyToken);
@@ -301,8 +321,19 @@ public sealed class StorageSyncCoordinatorTests
             var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, "pending-recovery");
             Assert.Equal(1, coordinator.RecoverPendingApplies());
             Assert.Equal(0, coordinator.RecoverPendingApplies());
-            Assert.True(provider.TryReadCurrent(recordId, fieldId, out var current));
-            Assert.Equal("recovered", Encoding.UTF8.GetString(current!.Value));
+            Assert.False(provider.TryReadCurrent(recordId, fieldId, out _));
+            var snapshot = provider.OpenSnapshot();
+            try
+            {
+                var page = provider.ReadSnapshot(snapshot.Token, 0, 10);
+                Assert.Contains(page.Entries, entry => entry.IsRecordTombstone);
+                Assert.Contains(page.Entries, entry =>
+                    !entry.IsRecordTombstone && Encoding.UTF8.GetString(entry.Value) == "recovered");
+            }
+            finally
+            {
+                provider.ReleaseSnapshot(snapshot.Token);
+            }
             Assert.Equal(1UL, metadata.GetReceiveCursor("pending-recovery", local.NodeId,
                 sender.NodeId, checked((uint)sender.Epoch), 1, sender.NodeId));
             Assert.Empty(metadata.ReadPendingApplyIntents("pending-recovery", local.NodeId));
