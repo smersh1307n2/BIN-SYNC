@@ -94,6 +94,8 @@ Before publication, eligible pending LWW operations may be coalesced according t
 
 Reads are bounded and stable. A reader must not hold a global writer lock during network I/O. Multiple consumers require lease or generation fencing. A stale consumer must not ACK after a newer consumer takes ownership.
 
+For a separate Data Provider feed, the Metadata Store/runtime handoff must also persist the canonical pending operations, a replay/equivocation receipt for the source page and the provider's staged-through cursor atomically. The provider feed prefix is acknowledged only after this stage transaction is durable. If the process stops before provider ACK, replay of the same source page must be idempotent. The ownership and ordering rules are detailed in [Metadata Storage Architecture §3.3](METADATA-STORAGE-ARCHITECTURE.md) and [Data Provider Conformance](DATA-PROVIDER-CONFORMANCE.md).
+
 ### 3.4 Acknowledge local outbound changes
 
 Runtime validates peer ACKs and calculates the safe contiguous prefix across every interested peer. Metadata Store receives only that safe prefix plus the relevant lease/generation context.
@@ -168,8 +170,9 @@ A candidate Metadata Store implementation is conformant only if the same semanti
 | ChangeId conflict | Same ID/different fingerprint in one batch | Partial batch publication |
 | LWW loser | Accepted losing mutation remains relay eligible | Losing operation silently disappears |
 | Separate stores | Crash before provider apply, after provider commit, before metadata finalize, after finalize | Duplicate provider effect or ACK before durable completion |
-| Local staging | Several same-field pending LWW writes coalesce before freeze | Unnecessary unpublished history |
-| Freeze | Crash around sequence/ChangeId assignment and durable commit | Sequence reuse or mutable published payload |
+| Source feed handoff | Replay the same provider page after stage commit but before provider ACK; reject source-token equivocation; ACK only after durable stage | Lost or duplicated local source changes |
+| Local staging | Out-of-order same-field LWW writes choose the canonical HLC/author winner; non-LWW operations remain distinct; remote apply does not overwrite pending local payload | Unnecessary unpublished history or loss of local intent |
+| Freeze | Crash around sequence/ChangeId assignment, freeze receipt and pending removal; retry the same freeze token | Sequence reuse, duplicate Outbox entries or mutable published payload |
 | Outbound read | Page limits, resume, concurrent append and restart | Gap, duplicate, unstable payload |
 | Lease | Old reader resumes after a new lease is acquired | Stale reader sends or ACKs |
 | Outbound ACK | Unequal peer ACKs, unknown peer, missing peer state, gap and out-of-range | Unsafe prefix reclamation |
@@ -196,27 +199,29 @@ The current suite already provides valuable protocol/runtime evidence:
 - `SessionStreamBindingTests` covers namespace/stream binding at the transport boundary.
 - E-25 tests preserve fail-closed tombstone retention.
 
-These tests provide substantial coverage of the current NodePersistence/WAL implementation and should not be repeated as new test cases unless a refactor changes their execution path. They do **not** yet prove conformance of an arbitrary Metadata Store or FLD Storage-only implementation. The following remain unimplemented at the abstraction boundary:
+These tests provide substantial coverage of the current NodePersistence/WAL implementation and should not be repeated unless a refactor changes their execution path. The new abstraction-level status is:
 
-1. A provider-independent semantic store contract and reusable conformance fixture.
-2. A store implementation whose durable state is not a serialized Node object graph.
-3. Shared-transaction and separate-store pending-apply conformance across restart.
-4. Scope/replica partition isolation in one physical store.
-5. Stable metadata snapshot lifetime under compaction.
-6. Generic storage-only semantics with no fabricated HLC/author/Outbox.
-7. End-to-end crash tests for the FLD Storage-only adapter.
-8. Durable FLD ApplyJournal JournalSeq → BIN-SYNC ChangeId/OutboxSeq provenance transaction and publication gate.
+1. **Metadata Store semantic contract and reusable fixture: implemented.** Twenty provider-independent semantic tests run against a volatile reference model; the fixture explicitly does not claim restart durability.
+2. **Physical durable Metadata Store implementation: open.** Current NodePersistence remains a serialized Node object graph.
+3. **Shared-transaction/separate-store apply: semantic retry behavior covered; real provider/store crash/reopen integration remains open.**
+4. **Scope/replica isolation: covered by volatile semantic tests; one durable physical store/reopen proof remains open.**
+5. **Snapshot lifetime: logical view stability across append/ACK/compaction and disposal are covered by the volatile model; physical generation pinning and concurrent durable checkpoint/compaction remain open.**
+6. **Generic Storage-only semantics and end-to-end FLD Storage-only adapter: open.**
+7. **FLD ApplyJournal JournalSeq → BIN-SYNC ChangeId/OutboxSeq provenance transaction and publication gate: open.**
+8. **PendingLocal/source-feed staging and coalescing: open.** The current Metadata Store suite tests frozen Outbox operations directly; it does not yet test idempotent provider-page staging, HLC winner coalescing, remote-update preservation of pending local payload or freeze-retry cleanup.
 
-Do not count existing NodePersistence roundtrip tests as proof of items 1–7. They are necessary regression tests during refactoring, not substitutes for the new conformance suite.
+The separate [Data Provider Conformance](DATA-PROVIDER-CONFORMANCE.md) suite now has six semantic tests plus a volatile-profile assertion for stable mapping, feed paging/ACK fencing, snapshot/feed watermark, idempotent remote apply and origin separation. Durable provider reopen/fault-injection and end-to-end feed ACK only after durable Metadata Store staging remain open.
+
+Do not count existing NodePersistence roundtrip tests or volatile reference tests as proof of durable external-store conformance. They are regression/semantic evidence, not substitutes for real adapter crash/reopen tests.
 
 ## 7. Implementation sequence and gates
 
 Follow the architecture sequence:
 
 1. Review and approve this semantic contract; resolve remaining decisions affecting transaction and recovery behavior.
-2. Finalize change staging/coalescing lifecycle and its crash/relay tests.
-3. Implement a provider-independent conformance fixture and a test-only volatile store. The volatile store is for semantic tests only and must advertise no restart durability.
-4. Define the neutral Data Provider contract and its shared-transaction / separate-store idempotent apply modes.
+2. **Open next gate:** finalize PendingLocal/source-feed staging and coalescing semantics plus deterministic crash/relay tests. The 39-case change-staging matrix is design evidence, not an executable provider-independent staging suite yet.
+3. **Initial slice complete:** provider-independent Metadata Store contract and volatile fixture are present (20 semantic tests); durable store/reopen implementation remains open.
+4. **Initial slice complete:** neutral Data Provider semantic contract and volatile fixture are present (six semantic tests); durable provider and end-to-end source-feed-to-metadata staging remain open.
 5. Refactor BIN-SYNC persistence behind the semantic boundary without wire changes; keep existing Node/WAL tests as regression coverage.
 6. Extract and implement FLD's two-assembly physical Storage Core and Storage-only role.
 7. Implement the BIN-SYNC Metadata Store adapter over the neutral Storage API.
@@ -250,7 +255,7 @@ A branch-level source audit identified the concrete places that must be separate
 
 The current global lock order is documented as **Storage → Outbox → Meta**. The external provider/Metadata Store split must not hold provider or Node locks across network waits, and must not perform disk I/O while holding the other engine's internal locks. A shared transaction coordinator may order durable operations, but it does not replace each engine's local lock discipline.
 
-The refactor must preserve existing tests for local writes, remote apply, WAL replay, snapshots/reconcile, digests, author-stream batching and ChangeId dedup. New Data Provider tests must add the missing guarantees: source snapshot/feed continuity, durable local change capture, idempotent remote apply tokens, and no recursive capture of remote writes.
+The refactor must preserve existing tests for local writes, remote apply, WAL replay, snapshots/reconcile, digests, author-stream batching and ChangeId dedup. The initial Data Provider suite now covers semantic source mapping, bounded feed paging, snapshot/feed continuity, idempotent remote apply and no recursive capture of remote writes. Remaining tests must exercise actual durable feed/reopen behavior, concurrent snapshot barriers, provider-side receipt recovery and end-to-end staging/ACK ordering.
 
 
 ## 10. Initial executable harness status
@@ -264,4 +269,4 @@ The first executable slice is present in the BIN-SYNC branch:
 
 GitHub Actions run `42360397431` passed the Release solution build, all 637 tests, public samples, coverage threshold and fuzz/lab hardening at commit `504a09092302f137d222421f6929533b95188318`. Line coverage was 72.5%; this combined run includes the Metadata Store and Data Provider conformance suites. An earlier solution layout briefly launched the helper class library as a standalone test target; it was removed from `BinSync.slnx` and remains a project reference of `BinSync.Tests`, where the inherited suite is discovered and runs in the normal test host. The corrected build/test/fuzz/lab run is green.
 
-**Now covered semantically by the volatile reference model:** frozen local Outbox operations, consumer lease fencing, validated outbound safe-prefix ACK, stable metadata snapshot view under logical append/ACK/compaction, pending-apply token/receipt behavior and idempotent provider retry. These tests do not prove physical snapshot-generation pinning, process restart, torn-write recovery or disk durability. **Still open:** deterministic crash/reopen tests against a durable Metadata Store, full Data Provider/change-feed conformance, shared-transaction and separate-store integration against real providers, generic FLD Storage-only semantics and end-to-end FLD adapters. The volatile model makes no restart-durability claim.
+**Now covered semantically by the volatile reference model:** frozen local Outbox operations, consumer lease fencing, validated outbound safe-prefix ACK, stable metadata snapshot view under logical append/ACK/compaction, pending-apply token/receipt behavior and idempotent provider retry. These tests do not prove physical snapshot-generation pinning, process restart, torn-write recovery or disk durability. **Still open:** deterministic crash/reopen tests against a durable Metadata Store; PendingLocal/source-page staging and LWW coalescing conformance; durable Data Provider feed/reopen tests; end-to-end proof that provider feed ACK follows durable staging; shared-transaction and separate-store integration against real providers; generic FLD Storage-only semantics and end-to-end FLD adapters. The volatile model makes no restart-durability claim.
