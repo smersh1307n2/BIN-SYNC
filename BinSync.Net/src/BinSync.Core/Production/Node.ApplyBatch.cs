@@ -477,8 +477,11 @@ public sealed partial class Node
                     .Select(x => new AliasMapEntry((ushort)x.Key, x.Value.Id, x.Value.Epoch)).ToArray()
                 : Array.Empty<AliasMapEntry>();
             int senderEpoch = PeerSessionEpochs.TryGetValue(senderPeer, out var knownPeerEpoch) ? knownPeerEpoch : 0;
-            _wal.AppendRemoteBatch(senderPeer, senderEpoch, aliases,
-                durablePayload ?? EncodeBatchPayloadInternal(batch));
+            var walPayload = durablePayload ??
+                (CausalWire.HasDeps(batch.Entries)
+                    ? EncodeBatchPayloadCausal(batch)
+                    : EncodeBatchPayloadInternal(batch));
+            _wal.AppendRemoteBatch(senderPeer, senderEpoch, aliases, walPayload);
         }
 
         // Commit: all deterministic validation and resource checks have succeeded.
