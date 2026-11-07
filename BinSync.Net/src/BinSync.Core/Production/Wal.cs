@@ -423,8 +423,8 @@ public sealed class Wal : IDisposable
     // mutation. Structural frame validation alone cannot catch a later sequence gap.
     private static void ValidateReplayLocalMutationIdentities(Node node, IReadOnlyList<byte[]> records)
     {
-        var initialSeen = new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>(node.SeenChanges);
-        var seenInWal = new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>();
+        var initialSeen = new HashSet<(int Ns, BatchId ChangeId)>(node.SeenChanges);
+        var seenInWal = new HashSet<(int Ns, BatchId ChangeId)>();
         foreach (var payload in records)
         {
             var reader = new Reader(payload);
@@ -435,7 +435,7 @@ public sealed class Wal : IDisposable
             if (entry.AuthorNodeId != node.NodeId)
                 throw new InvalidDataException("WAL local mutation belongs to a different node identity.");
 
-            var key = (node.NodeId, entry.NamespaceId, entry.ChangeId);
+            var key = (entry.NamespaceId, entry.ChangeId);
             if (initialSeen.Contains(key)) continue; // already represented by the loaded snapshot
             if (!seenInWal.Add(key))
                 throw new InvalidDataException("WAL contains a duplicate local ChangeId.");
