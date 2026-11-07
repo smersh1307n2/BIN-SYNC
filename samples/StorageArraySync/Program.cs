@@ -50,6 +50,13 @@ try
         if (metadataA.GetOutboundHighWatermark("array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId) != 2 ||
             metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 2)
             throw new InvalidOperationException("Local Node Outbox was not frozen into durable Storage metadata.");
+        ulong outboundLeaseA = metadataA.AcquireOutboundLease(
+            "array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId, Guid.Parse("a1000000-0000-0000-0000-000000000001"));
+        var outboundPageA = metadataA.ReadOutbound(
+            "array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId, outboundLeaseA, 0, 10);
+        if (outboundPageA.Items.Count != 2 ||
+            RecordId.From(outboundPageA.Items[0].Payload.AsSpan(0, 16)) != recordA)
+            throw new InvalidOperationException("Frozen outbound array payload is not readable from Storage metadata.");
 
         Transport.MakeSession(nodeA, nodeB);
         int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
@@ -95,6 +102,8 @@ try
 
         providerB.AppendLocalChange(Mutation(recordB, quantity, nodeB.NodeId, 3000, "9"u8));
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
+        if (metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 3)
+            throw new InvalidOperationException("Post-restart update was not frozen into the existing outbound stream.");
 
         Transport.MakeSession(nodeA, nodeB);
         int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
