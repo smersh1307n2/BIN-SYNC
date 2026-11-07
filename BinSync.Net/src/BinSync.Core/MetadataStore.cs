@@ -83,6 +83,8 @@ public sealed class MetadataIncomingBatch
     public required ulong CursorEnd { get; init; }
     public required byte[] PreviousBatchDigest { get; init; }
     public required byte[] BatchDigest { get; init; }
+    /// <summary>Canonical fingerprint of the full wire header, including fields outside BatchDigest.</summary>
+    public byte[] HeaderFingerprint { get; init; } = Array.Empty<byte>();
     public required IReadOnlyList<MetadataOperation> Operations { get; init; }
     /// <summary>Exact accepted DELTA_BATCH payload, retained for Node replay during PendingApply recovery.</summary>
     public byte[] WirePayload { get; init; } = Array.Empty<byte>();
@@ -99,6 +101,8 @@ public sealed record MetadataBatchReceipt(ulong CursorStart, ulong CursorEnd, by
 {
     /// <summary>Original author resolved from the accepted batch; never trust a replay-supplied value.</summary>
     public NodeId DurableAuthor { get; init; }
+    /// <summary>Canonical full-wire-header fingerprint committed with the receipt.</summary>
+    public byte[] HeaderFingerprint { get; init; } = Array.Empty<byte>();
 }
 public sealed record MetadataRelayItem(ulong Sequence, NodeId OriginalAuthor, BatchId ChangeId, byte[] Payload);
 public sealed record MetadataRelayPage(IReadOnlyList<MetadataRelayItem> Items, ulong ScannedThroughSequence);
