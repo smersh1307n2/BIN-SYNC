@@ -309,6 +309,33 @@ public sealed class StorageSyncCoordinatorTests
         }
     }
 
+
+    [Fact]
+    public void Received_record_tombstone_and_newer_ghost_field_materialize_with_lifecycle_ordering()
+    {
+        using var provider = new StorageDataProvider(Path.Combine(_root, "record-lifecycle"), 408, deleteOnDispose: true);
+        Node sender = NewNode(14);
+        Node receiver = NewNode(15);
+        RecordId recordId = RecordId.From(Guid.Parse("d1000000-0000-0000-0000-000000000001").ToByteArray());
+        const ushort fieldId = 0x0501;
+        sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("before"), new Hlc(1000, 0));
+        Assert.True(sender.DeleteRecord(1, recordId, new Hlc(2000, 0)));
+        Transport.MakeSession(sender, receiver);
+
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1);
+        var deleted = Transport.DeliverBatch(sender, receiver, 1,
+            beforeAck: (_, batch, _) => coordinator.ApplyRemoteBatch(batch));
+        Assert.NotNull(deleted);
+        Assert.False(provider.TryReadCurrent(recordId, fieldId, out _));
+
+        Assert.True(sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("ghost"), new Hlc(3000, 0)));
+        var ghost = Transport.DeliverBatch(sender, receiver, 1,
+            beforeAck: (_, batch, _) => coordinator.ApplyRemoteBatch(batch));
+        Assert.NotNull(ghost);
+        Assert.True(provider.TryReadCurrent(recordId, fieldId, out var current));
+        Assert.Equal("ghost", Encoding.UTF8.GetString(current!.Value));
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
