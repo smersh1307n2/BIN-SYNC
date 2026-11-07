@@ -133,8 +133,8 @@ public class StorageDataProvider : IDataProvider
             ulong sequence = checked(current + 1);
             byte[] owned = EncodeMutation(mutation);
             byte[] currentKey = CurrentKey(mutation.RecordId, mutation.FieldId);
-            if (!batch.TryGet(currentKey, out var currentBytes) ||
-                Compare(mutation, DecodeMutation(currentBytes!)) > 0)
+            if (!batch.TryGet(currentKey, out var currentFieldBytes) ||
+                Compare(mutation, DecodeMutation(currentFieldBytes!)) > 0)
                 batch.Put(currentKey, owned);
             batch.Put(ChangeKey(sequence), owned);
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
