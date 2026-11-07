@@ -565,6 +565,20 @@ public sealed partial class Node
         }
     }
 
+    /// <summary>Return the highest sequence ever allocated for one author stream.</summary>
+    public long GetOutboxHighWatermark(int namespaceId, NodeId authorNodeId)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (authorNodeId.IsZero)
+            throw new ArgumentException("Author identity must be non-zero.", nameof(authorNodeId));
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            return _outboxSeq.TryGetValue((authorNodeId, namespaceId), out long sequence)
+                ? sequence : 0;
+        }
+    }
+
     /// <summary>
     /// Return the minimum local OutboxSeq acknowledged by every interested peer for
     /// this author stream. Zero means reclamation is not currently safe (no peers,
