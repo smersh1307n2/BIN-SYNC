@@ -41,6 +41,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(batch);
         ValidateBatch(batch);
 
@@ -94,6 +95,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         if (string.IsNullOrWhiteSpace(scopeId))
             throw new ArgumentException("ScopeId is required.", nameof(scopeId));
         if (localReplica.IsZero)
@@ -115,6 +117,8 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
+            ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(providerReceipt);
         if (string.IsNullOrWhiteSpace(scopeId))
             throw new ArgumentException("ScopeId is required.", nameof(scopeId));
@@ -158,6 +162,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         if (string.IsNullOrWhiteSpace(scopeId))
             throw new ArgumentException("ScopeId is required.", nameof(scopeId));
         if (localReplica.IsZero)
@@ -372,6 +377,8 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         if (consumerId == Guid.Empty)
             throw new ArgumentException("ConsumerId must be non-empty.", nameof(consumerId));
@@ -401,6 +408,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             throw new InvalidOperationException("Outbound lease is not active.");
@@ -444,6 +452,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -472,6 +481,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -498,6 +508,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
@@ -518,6 +529,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
         {
@@ -564,6 +576,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -595,6 +608,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
@@ -614,6 +628,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
         var partitionKey = new PartitionKey(scopeId, localReplica);
         if (!TryGetPartition(partitionKey, out var current))
@@ -640,6 +655,7 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
+            ThrowIfDisposed();
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
@@ -667,6 +683,8 @@ public class StorageMetadataStore : IMetadataStore
         }
     }
 
+
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
 
     private PartitionState GetOrCreatePartition(PartitionKey key)
     {
