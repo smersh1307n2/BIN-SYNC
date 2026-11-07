@@ -150,6 +150,52 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Pending_local_edits_are_coalesced_across_provider_page_boundaries()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-coalesce-pages"), 423);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(24);
+        RecordId record = RecordId.From(Guid.Parse("24000000-0000-0000-0000-000000000024").ToByteArray());
+        const ushort fieldA = 0x0711;
+        const ushort fieldB = 0x0712;
+
+        void Append(ushort field, ulong wall, string value) => provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = field, AuthorNodeId = node.NodeId,
+            HlcWall = wall, HlcLogical = 0, Value = Encoding.UTF8.GetBytes(value)
+        });
+
+        Append(fieldA, 1000, "a1");
+        Append(fieldB, 1500, "b-final");
+        Append(fieldA, 2000, "a2");
+        Append(fieldA, 3000, "a-final");
+        Append(fieldB, 2500, "b-old");
+
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce-pages");
+        Assert.Equal(5, coordinator.PublishLocalChanges(_ => { }, limit: 2));
+
+        Assert.Equal(2, node.GetOutboxCount(1));
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark("pending-coalesce-pages", node.NodeId, 1, node.NodeId));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.True(provider.TryReadCurrent(record, fieldA, out var valueA));
+        Assert.Equal("a-final", Encoding.UTF8.GetString(valueA!.Value));
+        Assert.True(provider.TryReadCurrent(record, fieldB, out var valueB));
+        Assert.Equal("b-final", Encoding.UTF8.GetString(valueB!.Value));
+
+        var values = node.ReadOutboxEntries(1, node.NodeId, 0, 10)
+            .Select(entry => Ops.DecodeOp(entry.Payload).Op)
+            .OfType<OpFieldWrite>()
+            .Select(operation => Encoding.UTF8.GetString(operation.Value))
+            .ToArray();
+        Assert.Contains("a-final", values);
+        Assert.Contains("b-final", values);
+        Assert.DoesNotContain("a1", values);
+        Assert.DoesNotContain("a2", values);
+        Assert.DoesNotContain("b-old", values);
+    }
+
+    [Fact]
     public void Remote_node_materialization_is_durable_but_does_not_create_local_feed_entries()
     {
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 402, deleteOnDispose: true);
