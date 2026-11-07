@@ -86,6 +86,91 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Three_replica_relay_retains_one_shared_payload_until_every_downstream_peer_acks()
+    {
+        using var storageA = StorageDatabase.Open(Path.Combine(_root, "relay-three-a"), 434);
+        using var storageB = StorageDatabase.Open(Path.Combine(_root, "relay-three-b"), 435);
+        using var storageC = StorageDatabase.Open(Path.Combine(_root, "relay-three-c"), 436);
+        using var storageD = StorageDatabase.Open(Path.Combine(_root, "relay-three-d"), 437);
+        using var providerA = new StorageDataProvider(storageA);
+        using var providerB = new StorageDataProvider(storageB);
+        using var providerC = new StorageDataProvider(storageC);
+        using var providerD = new StorageDataProvider(storageD);
+        using var metadataA = new StorageMetadataStore(storageA);
+        using var metadataB = new StorageMetadataStore(storageB);
+        using var metadataC = new StorageMetadataStore(storageC);
+        using var metadataD = new StorageMetadataStore(storageD);
+        using var nodeA = NewNode(36);
+        using var nodeB = NewNode(37);
+        using var nodeC = NewNode(38);
+        using var nodeD = NewNode(39);
+        const string scopeA = "relay-three-a";
+        const string scopeB = "relay-three-b";
+        const string scopeC = "relay-three-c";
+        const string scopeD = "relay-three-d";
+        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, 1, metadataA, scopeA);
+        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, scopeB);
+        var coordinatorC = new StorageSyncCoordinator(nodeC, providerC, 1, metadataC, scopeC);
+        var coordinatorD = new StorageSyncCoordinator(nodeD, providerD, 1, metadataD, scopeD);
+
+        var (aToB, bFromA) = PipeTransport.CreatePair();
+        var bAcceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
+        var aConnectTask = SyncSession.ConnectAsync(nodeA, aToB);
+        await using var bAccept = await bAcceptTask;
+        await using var aConnect = await aConnectTask;
+
+        RecordId record = RecordId.From(Guid.Parse("36000000-0000-0000-0000-000000000036").ToByteArray());
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0103, AuthorNodeId = nodeA.NodeId,
+            HlcWall = 3600, Value = "shared-relay-payload"u8.ToArray()
+        });
+        coordinatorA.PublishLocalChanges(_ => { });
+        var receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(bAccept, _ => { });
+        Assert.True(await aConnect.PushBatchAsync(nodeA, 1, metadataA, scopeA));
+        Assert.Equal(1, (await receiveAtB).Applied);
+        Assert.Single(metadataB.ReadRelayForPeer(scopeB, nodeB.NodeId, nodeA.NodeId,
+            checked((uint)nodeA.Epoch), 1, nodeA.NodeId, 10).Items);
+
+        // D is durably interested but offline. C's ACK alone must not release the
+        // single shared relay payload needed by D.
+        metadataB.RegisterInterestedPeer(scopeB, nodeB.NodeId, nodeD.NodeId,
+            checked((uint)nodeD.Epoch), 1);
+
+        var (bToC, cFromB) = PipeTransport.CreatePair();
+        var cAcceptTask = SyncSession.AcceptAsync(nodeC, cFromB);
+        var bConnectCTask = SyncSession.ConnectAsync(nodeB, bToC);
+        await using var cAccept = await cAcceptTask;
+        await using var bConnectC = await bConnectCTask;
+        var receiveAtC = coordinatorC.ReceiveBatchBeforeAckAsync(cAccept, _ => { });
+        Assert.True(await bConnectC.PushBatchAsync(nodeB, 1, metadataB, scopeB));
+        Assert.Equal(1, (await receiveAtC).Applied);
+        Assert.True(providerC.TryReadCurrent(record, 0x0103, out var cValue));
+        Assert.Equal("shared-relay-payload", Encoding.UTF8.GetString(cValue!.Value));
+        Assert.Equal(0UL, metadataB.GetSafePeerStreamCompactionCursor(scopeB,
+            nodeB.NodeId, 1, nodeA.NodeId));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            metadataB.CompactRelayThrough(scopeB, nodeB.NodeId, 1, nodeA.NodeId, 1));
+
+        var (bToD, dFromB) = PipeTransport.CreatePair();
+        var dAcceptTask = SyncSession.AcceptAsync(nodeD, dFromB);
+        var bConnectDTask = SyncSession.ConnectAsync(nodeB, bToD);
+        await using var dAccept = await dAcceptTask;
+        await using var bConnectD = await bConnectDTask;
+        var receiveAtD = coordinatorD.ReceiveBatchBeforeAckAsync(dAccept, _ => { });
+        Assert.True(await bConnectD.PushBatchAsync(nodeB, 1, metadataB, scopeB));
+        Assert.Equal(1, (await receiveAtD).Applied);
+        Assert.True(providerD.TryReadCurrent(record, 0x0103, out var dValue));
+        Assert.Equal("shared-relay-payload", Encoding.UTF8.GetString(dValue!.Value));
+
+        Assert.Equal(1UL, metadataB.GetSafePeerStreamCompactionCursor(scopeB,
+            nodeB.NodeId, 1, nodeA.NodeId));
+        metadataB.CompactRelayThrough(scopeB, nodeB.NodeId, 1, nodeA.NodeId, 1);
+        Assert.Empty(metadataB.ReadRelayForPeer(scopeB, nodeB.NodeId, nodeD.NodeId,
+            checked((uint)nodeD.Epoch), 1, nodeA.NodeId, 10).Items);
+    }
+
+    [Fact]
     public async Task Durable_push_materializes_metadata_without_mutating_node_outbox_before_ack()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-materialization-isolated"), 433);
