@@ -75,7 +75,7 @@ public sealed class StorageSyncCoordinatorTests
         var coordinator = new StorageSyncCoordinator(receiver, provider, 1);
 
         Assert.Throws<IOException>(() => Transport.DeliverBatch(sender, receiver, 1,
-            beforeAck: (target, _) =>
+            beforeAck: (target, _, _) =>
             {
                 // Receiver protocol receipt is durable before external provider apply.
                 NodePersistence.Save(target, nodePath);
@@ -91,7 +91,7 @@ public sealed class StorageSyncCoordinatorTests
         Transport.MakeSession(sender, receiver);
         coordinator = new StorageSyncCoordinator(receiver, provider, 1);
         var retry = Transport.DeliverBatch(sender, receiver, 1,
-            beforeAck: (target, result) =>
+            beforeAck: (target, _, result) =>
             {
                 Assert.True(result.Duplicate);
                 var receipt = coordinator.ApplyRemoteFields(fields);
