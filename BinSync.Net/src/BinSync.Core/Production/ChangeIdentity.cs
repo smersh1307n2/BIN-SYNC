@@ -4,13 +4,19 @@ namespace BinSync;
 /// <summary>One durable ChangeId fingerprint; unknown entries are migrated legacy markers.</summary>
 internal readonly struct ChangeLedgerValue
 {
+    /// <summary>
+    /// Zero is reserved as the explicit legacy-unknown marker; every known semantic
+    /// fingerprint must be non-zero. This keeps the value at 16 bytes instead of
+    /// adding a padded Boolean to every global-ledger entry.
+    /// </summary>
     public Digest16 Fingerprint { get; }
-    public bool IsKnown { get; }
+    public bool IsKnown => !Fingerprint.IsZero;
 
     public ChangeLedgerValue(Digest16 fingerprint, bool isKnown)
     {
-        Fingerprint = fingerprint;
-        IsKnown = isKnown;
+        if (isKnown && fingerprint.IsZero)
+            throw new ArgumentException("Zero is reserved for an unknown legacy fingerprint.", nameof(fingerprint));
+        Fingerprint = isKnown ? fingerprint : default;
     }
 }
 
@@ -69,7 +75,10 @@ internal static class ChangeIdentity
             w.Varint((ulong)sorted.Length);
             foreach (var dependency in sorted) w.B128(dependency);
         }
-        return Digests.Blake3Digest16(w.Value());
+        var fingerprint = Digests.Blake3Digest16(w.Value());
+        if (fingerprint.IsZero)
+            throw new CryptographicException("The reserved zero ChangeId fingerprint was produced.");
+        return fingerprint;
     }
 
     internal static Digest16 Fingerprint(OutboxEntry entry)
