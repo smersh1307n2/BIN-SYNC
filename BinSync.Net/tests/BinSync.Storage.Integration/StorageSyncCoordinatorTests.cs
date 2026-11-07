@@ -1,6 +1,7 @@
 using System.Text;
 using BinSync;
 using BinSync.Storage;
+using Fld1.Storage.Engine;
 using Xunit;
 
 namespace BinSync.Storage.Integration;
@@ -146,6 +147,41 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(provider.TryReadCurrent(recordId, fieldId, out var current));
         Assert.Equal("three", Encoding.UTF8.GetString(current!.Value));
         Assert.Equal(0UL, provider.LocalChangeHighWatermark);
+    }
+
+
+    [Fact]
+    public void Metadata_store_pending_apply_and_provider_commit_are_coordinated_before_ack()
+    {
+        string directory = Path.Combine(_root, "shared-metadata-provider");
+        using var storage = StorageDatabase.Open(directory, 405);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        Node sender = NewNode(10);
+        Node receiver = NewNode(11);
+        RecordId recordId = RecordId.From(Guid.Parse("a0000000-0000-0000-0000-00000000000a").ToByteArray());
+        const ushort fieldId = 0x0301;
+        sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("metadata-backed"), new Hlc(5000, 3));
+        Transport.MakeSession(sender, receiver);
+
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "metadata-integration");
+        var delivered = Transport.DeliverBatch(sender, receiver, 1,
+            beforeAck: (target, batch, _) =>
+            {
+                var receipt = coordinator.ApplyRemoteBatch(batch);
+                Assert.NotNull(receipt);
+                NodePersistence.Save(target, Path.Combine(_root, "metadata-receiver.node"));
+            });
+
+        Assert.NotNull(delivered);
+        Assert.True(provider.TryReadCurrent(recordId, fieldId, out var current));
+        Assert.Equal("metadata-backed", Encoding.UTF8.GetString(current!.Value));
+        Assert.Equal(1UL, metadata.GetReceiveCursor("metadata-integration", receiver.NodeId,
+            sender.NodeId, checked((uint)sender.Epoch), 1));
+        Assert.Equal(1UL, metadata.GetRelayHighWatermark("metadata-integration", receiver.NodeId,
+            1, sender.NodeId));
+        Assert.Empty(metadata.ReadPendingApplyIntents("metadata-integration", receiver.NodeId));
+        Assert.Equal(0, coordinator.RecoverPendingApplies());
     }
 
     private static Node NewNode(byte seed)
