@@ -62,6 +62,7 @@ public partial class SyncSession
 
                 foreach (NodeId candidateAuthor in authors)
                 {
+                    if (candidateAuthor == PeerNodeId) continue;
                     if (!streams.Any(stream => stream.AuthorStream == candidateAuthor))
                     {
                         var legacy = sender.ReadPeerStreamProgress(PeerNodeId, namespaceId, candidateAuthor);
