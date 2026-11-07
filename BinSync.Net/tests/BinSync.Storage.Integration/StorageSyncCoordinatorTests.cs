@@ -15,6 +15,7 @@ public sealed class StorageSyncCoordinatorTests
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-peer-session"), 420);
         using var metadata = new StorageMetadataStore(storage);
+        using var provider = new StorageDataProvider(storage);
         using var sender = NewNode(18);
         using var receiver = NewNode(19);
         var (toSender, toReceiver) = PipeTransport.CreatePair();
@@ -22,9 +23,15 @@ public sealed class StorageSyncCoordinatorTests
         var connectTask = SyncSession.ConnectAsync(sender, toSender);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(sender, provider, 1, metadata, "durable-peer-session");
 
         RecordId firstRecord = RecordId.From(Guid.Parse("18000000-0000-0000-0000-000000000018").ToByteArray());
-        sender.WriteField(1, firstRecord, 0x0101, "first"u8.ToArray(), new Hlc(1000, 0));
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = firstRecord, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            HlcWall = 1000, HlcLogical = 0, Value = "first"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
         var firstReceive = acceptor.ReceiveBatchAsync(receiver);
         Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, "durable-peer-session"));
         Assert.Equal(1, (await firstReceive).Applied);
@@ -37,7 +44,12 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Null(firstState.PendingBatch);
 
         RecordId secondRecord = RecordId.From(Guid.Parse("19000000-0000-0000-0000-000000000019").ToByteArray());
-        sender.WriteField(1, secondRecord, 0x0101, "second"u8.ToArray(), new Hlc(2000, 0));
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = secondRecord, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            HlcWall = 2000, HlcLogical = 0, Value = "second"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
         var secondReceive = acceptor.ReceiveBatchAsync(receiver);
         Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, "durable-peer-session"));
         Assert.Equal(1, (await secondReceive).Applied);
