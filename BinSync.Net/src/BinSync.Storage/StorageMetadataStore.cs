@@ -660,7 +660,7 @@ public class StorageMetadataStore : IMetadataStore
         _partitions.Clear();
         if (_deleteOnDispose && _directory is { } directory)
         {
-            try { Directory.Delete(directory, recursive: true);
+            try { Directory.Delete(directory, recursive: true); }
             catch { /* isolated test directory cleanup */ }
         }
     
