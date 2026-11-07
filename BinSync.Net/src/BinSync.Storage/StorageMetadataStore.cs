@@ -15,14 +15,24 @@ public class StorageMetadataStore : IMetadataStore
     private readonly object _gate = new();
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
     private readonly StorageDatabase _storage;
-    private readonly string _directory;
+    private readonly string? _directory;
     private readonly bool _deleteOnDispose;
+    private readonly bool _ownsStorage;
+    private bool _disposed;
 
     public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = false)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         _directory = directory;
         _deleteOnDispose = deleteOnDispose;
+        _ownsStorage = true;
         _storage = StorageDatabase.Open(directory, partitionId);
+    }
+
+    /// <summary>Attach to a caller-owned shared Storage database.</summary>
+    public StorageMetadataStore(StorageDatabase storage)
+    {
+        _storage = storage ?? throw new ArgumentNullException(nameof(storage));
     }
 
     public bool SupportsRestartDurability => true;
@@ -644,11 +654,13 @@ public class StorageMetadataStore : IMetadataStore
     {
         lock (_gate)
         {
-        _storage.Dispose();
+        if (_disposed) return;
+        _disposed = true;
+        if (_ownsStorage) _storage.Dispose();
         _partitions.Clear();
-        if (_deleteOnDispose)
+        if (_deleteOnDispose && _directory is { } directory)
         {
-            try { Directory.Delete(_directory, recursive: true); }
+            try { Directory.Delete(directory, recursive: true);
             catch { /* isolated test directory cleanup */ }
         }
     
@@ -666,18 +678,21 @@ public class StorageMetadataStore : IMetadataStore
 
     private bool TryGetPartition(PartitionKey key, out PartitionState state)
     {
-        if (_partitions.TryGetValue(key, out state!)) return true;
+        ulong currentCommitSeq = _storage.LastCommitSeq;
+        if (_partitions.TryGetValue(key, out state!) && state.StorageCommitSeq == currentCommitSeq)
+            return true;
         byte[] root = PartitionRoot(key);
         using var snapshot = _storage.OpenSnapshot();
         var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, int.MaxValue);
         if (rows.Count == 0)
         {
+            _partitions.Remove(key);
             state = null!;
             return false;
         }
 
         state = DecodePartition(key, root, rows, snapshot.CommitSeq);
-        _partitions.Add(key, state);
+        _partitions[key] = state;
         return true;
     }
 
@@ -714,10 +729,7 @@ public class StorageMetadataStore : IMetadataStore
         }
 
         if (changed) batch.Commit();
-        ulong committedThrough = _storage.LastCommitSeq;
-        foreach (var cached in _partitions.Values)
-            cached.StorageCommitSeq = committedThrough;
-        next.StorageCommitSeq = committedThrough;
+        next.StorageCommitSeq = _storage.LastCommitSeq;
         next.IsPersisted = true;
         _partitions[key] = next;
     }
