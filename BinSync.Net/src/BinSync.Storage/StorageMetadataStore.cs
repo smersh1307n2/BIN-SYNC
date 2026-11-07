@@ -266,7 +266,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             && left.BatchId == right.BatchId
             && left.CursorStart == right.CursorStart
             && left.CursorEnd == right.CursorEnd
-            && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest);
+            && left.PreviousBatchDigest.AsSpan().SequenceEqual(right.PreviousBatchDigest)
+            && left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest)
+            && left.WirePayload.AsSpan().SequenceEqual(right.WirePayload);
 
     private static MetadataIncomingBatch CloneBatch(MetadataIncomingBatch batch)
         => new()
@@ -282,6 +284,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             CursorEnd = batch.CursorEnd,
             PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
             BatchDigest = batch.BatchDigest.ToArray(),
+            WirePayload = batch.WirePayload.ToArray(),
             Operations = batch.Operations.Select(operation => new MetadataOperation
             {
                 AuthorNodeId = operation.AuthorNodeId,
@@ -1719,7 +1722,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         byte[] scope = Encoding.UTF8.GetBytes(batch.ScopeId);
-        writer.Write(-2); // version 2: author-stream-scoped receive cursor
+        writer.Write(-3); // version 3: preserve raw DELTA_BATCH for Node recovery
         writer.Write(scope.Length); writer.Write(scope);
         writer.Write(batch.LocalReplica.ToArray());
         writer.Write(batch.SenderPeer.ToArray());
@@ -1729,6 +1732,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         writer.Write(batch.BatchId.ToArray());
         writer.Write(batch.CursorStart); writer.Write(batch.CursorEnd);
         writer.Write(batch.PreviousBatchDigest); writer.Write(batch.BatchDigest);
+        writer.Write(batch.WirePayload.Length); writer.Write(batch.WirePayload);
         writer.Write(batch.Operations.Count);
         foreach (var operation in batch.Operations)
         {
@@ -1748,7 +1752,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
         int versionOrScopeLength = reader.ReadInt32();
-        bool hasAuthorStream = versionOrScopeLength == -2;
+        bool hasAuthorStream = versionOrScopeLength == -2 || versionOrScopeLength == -3;
+        bool hasWirePayload = versionOrScopeLength == -3;
         int scopeLength = hasAuthorStream ? reader.ReadInt32() : versionOrScopeLength;
         string scope = Encoding.UTF8.GetString(ReadExactly(reader, scopeLength));
         NodeId local = NodeId.From(ReadExactly(reader, 16));
@@ -1761,6 +1766,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         ulong cursorEnd = reader.ReadUInt64();
         byte[] previous = ReadExactly(reader, 16);
         byte[] digest = ReadExactly(reader, 16);
+        byte[] wirePayload = hasWirePayload ? ReadExactly(reader, reader.ReadInt32()) : Array.Empty<byte>();
         int count = reader.ReadInt32();
         if (count < 0 || count > 100_000) throw new InvalidDataException("Pending batch operation count is invalid.");
         var operations = new MetadataOperation[count];
@@ -1794,6 +1800,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             CursorEnd = cursorEnd,
             PreviousBatchDigest = previous,
             BatchDigest = digest,
+            WirePayload = wirePayload,
             Operations = operations
         };
     }
