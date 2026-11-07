@@ -21,11 +21,11 @@ internal readonly struct ChangeLedgerValue
 }
 
 /// <summary>Canonical semantic identity for a mutation, independent of transport aliases.</summary>
-internal static class ChangeIdentity
+public static class ChangeIdentity
 {
     private static readonly byte[] Domain = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-ID/v1");
 
-    internal static Digest16 Fingerprint(int namespaceId, RecordId recordId, byte opKind,
+    public static Digest16 Fingerprint(int namespaceId, RecordId recordId, byte opKind,
         object operation, NodeId resolvedAuthor, IReadOnlyList<BatchId>? causalDeps = null)
     {
         Node.ValidateNamespaceId(namespaceId);
