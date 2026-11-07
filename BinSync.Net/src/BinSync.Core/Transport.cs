@@ -144,7 +144,7 @@ public static partial class Transport
     /// <summary>Create, encode, apply one batch and ACK (optional dropAck).</summary>
     public static BatchResult? DeliverBatch(Node sender, Node receiver, int namespaceId,
         NodeId? filterAuthor = null, int schemaVersion = 1, bool dropAck = false,
-        Action<Node, BatchResult>? beforeAck = null)
+        Action<Node, Batch, BatchResult>? beforeAck = null)
     {
         var batch = sender.CreateDeltaBatch(receiver.NodeId, namespaceId,
                                            filterAuthorNodeId: filterAuthor,
@@ -156,7 +156,7 @@ public static partial class Transport
         var result = receiver.ApplyBatchPayload(payload, sender.NodeId);
         // External durable data effects must commit before the sender can advance.
         // If the callback fails, the sender retains the same batch for idempotent retry.
-        beforeAck?.Invoke(receiver, result);
+        beforeAck?.Invoke(receiver, batch, result);
         sender.AdvanceStream(receiver.NodeId, namespaceId, batch);
         // ACK payload only (no frame) — same semantics as wire ACK without CRC tax.
         var ackPayload = EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
