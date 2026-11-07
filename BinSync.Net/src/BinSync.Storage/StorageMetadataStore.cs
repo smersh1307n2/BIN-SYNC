@@ -917,6 +917,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             var current = GetOrCreatePartition(partitionKey);
             ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
+            var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
             bool hasExisting = current.PeerStreams.TryGetValue(key, out var existing);
             if (hasExisting && IsPristinePeerStream(existing!))
             {
@@ -924,24 +925,38 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     existing.StreamOffset == streamOffset &&
                     existing.IssuerEpoch == issuerEpoch &&
                     existing.LastBatchDigest.AsSpan().SequenceEqual(lastBatchDigest);
-                if (sameBaseline && current.RequiredPeerStreams.Contains(key)) return;
+                if (sameBaseline && current.RequiredPeerStreams.Contains(key))
+                {
+                    if (baselineAckedCursor > 0)
+                        PersistPeerBaselineMarker(partitionKey, current, rosterKey);
+                    return;
+                }
                 PersistPeerStreamState(partitionKey, current, key,
                     new PeerStreamStateValue(baselineAckedCursor, baselineAckedCursor,
                         streamOffset, issuerEpoch, lastBatchDigest.ToArray(), null),
                     ensureRequired: true);
+                if (baselineAckedCursor > 0)
+                    PersistPeerBaselineMarker(partitionKey, current, rosterKey);
                 return;
             }
             if (hasExisting)
             {
                 // A live or already-advanced stream is never reset by a repeated
                 // membership/snapshot registration call.
-                if (current.RequiredPeerStreams.Contains(key)) return;
+                if (current.RequiredPeerStreams.Contains(key))
+                {
+                    if (baselineAckedCursor > 0)
+                        PersistPeerBaselineMarker(partitionKey, current, rosterKey);
+                    return;
+                }
                 throw new InvalidDataException("Interested peer registration conflicts with existing stream progress.");
             }
 
             var baseline = new PeerStreamStateValue(baselineAckedCursor, baselineAckedCursor,
                 streamOffset, issuerEpoch, lastBatchDigest.ToArray(), null);
             PersistPeerStreamState(partitionKey, current, key, baseline, ensureRequired: true);
+            if (baselineAckedCursor > 0)
+                PersistPeerBaselineMarker(partitionKey, current, rosterKey);
         }
     }
 
@@ -1451,6 +1466,31 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         next.IsPersisted = true;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
+    }
+
+    private void PersistPeerBaselineMarker(
+        PartitionKey partitionKey, PartitionState current, InterestedPeerKey peer)
+    {
+        if (current.CompletedPeerBaselines.Contains(peer)) return;
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] suffix = new byte[22];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
+        peer.Peer.WriteTo(suffix.AsSpan(2));
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), peer.PeerEpoch);
+        byte[] key = StorageKey(root, 19, suffix);
+        byte[] value = Array.Empty<byte>();
+
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        batch.Put(key, value);
+        batch.Commit();
+
+        current.CompletedPeerBaselines.Add(peer);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+        current.PersistedEntries[Convert.ToHexString(key)] = (key, value);
     }
 
     private void PersistPendingApply(
