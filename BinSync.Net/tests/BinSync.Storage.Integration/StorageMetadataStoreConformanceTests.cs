@@ -713,7 +713,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Empty(reopened.ReadPeerStreamStates(scope, local, peer, 1, 7));
             Assert.Equal(2UL, reopened.GetPeerStreamState(scope, local, peer, 2, 7, author).StreamOffset);
             Assert.Equal(1U, reopened.GetRetiredPeerEpoch(scope, local, peer, 7));
-            Assert.Throws<InvalidDataException>(() => reopened.GetPeerStreamState(scope, local, peer, 1, 7, author));
+            Assert.Equal(0UL, reopened.GetPeerStreamState(scope, local, peer, 1, 7, author).AckedCursor);
         }
         finally
         {
