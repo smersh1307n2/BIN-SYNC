@@ -86,6 +86,58 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Metadata_store_owns_receive_cursor_and_digest_after_node_recreation()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-receive-authority"), 451);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(50);
+        const string scope = "metadata-receive-authority";
+        RecordId firstRecord = RecordId.From(Guid.Parse("50000000-0000-0000-0000-000000000050").ToByteArray());
+        RecordId secondRecord = RecordId.From(Guid.Parse("51000000-0000-0000-0000-000000000051").ToByteArray());
+
+        sender.WriteField(1, firstRecord, 0x0815, "first-durable-batch"u8.ToArray(), new Hlc(5600, 0));
+        {
+            using var firstReceiver = NewNode(51);
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(firstReceiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+            var coordinator = new StorageSyncCoordinator(firstReceiver, provider, 1, metadata, scope);
+
+            Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+            Assert.True(await initiator.PushBatchAsync(sender, 1));
+            BatchResult result = await receive;
+            Assert.Equal(1, result.Applied);
+        }
+
+        // This receiver has the same stable node identity but none of the previous
+        // Node-local InboxAuthors, PeerStates or LastBatchDigest dictionaries.
+        sender.WriteField(1, secondRecord, 0x0815, "second-durable-batch"u8.ToArray(), new Hlc(5700, 0));
+        using var secondReceiver = NewNode(51);
+        var (nextToSender, nextToReceiver) = PipeTransport.CreatePair();
+        var nextAcceptTask = SyncSession.AcceptAsync(secondReceiver, nextToReceiver);
+        var nextConnectTask = SyncSession.ConnectAsync(sender, nextToSender);
+        await using var nextAcceptor = await nextAcceptTask;
+        await using var nextInitiator = await nextConnectTask;
+        var nextCoordinator = new StorageSyncCoordinator(secondReceiver, provider, 1, metadata, scope);
+
+        Task<BatchResult> nextReceive = nextCoordinator.ReceiveBatchBeforeAckAsync(nextAcceptor, _ => { });
+        Assert.True(await nextInitiator.PushBatchAsync(sender, 1));
+        BatchResult nextResult = await nextReceive;
+
+        Assert.Equal(1, nextResult.Applied);
+        Assert.Equal(2UL, metadata.GetReceiveCursor(sender.NodeId, 1, 1, sender.NodeId));
+        Assert.True(secondReceiver.TryGetField(1, secondRecord, 0x0815, out var nodeValue));
+        Assert.Equal("second-durable-batch", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.True(provider.TryReadCurrent(firstRecord, 0x0815, out var firstValue));
+        Assert.Equal("first-durable-batch", Encoding.UTF8.GetString(firstValue!.Value));
+        Assert.True(provider.TryReadCurrent(secondRecord, 0x0815, out var secondValue));
+        Assert.Equal("second-durable-batch", Encoding.UTF8.GetString(secondValue!.Value));
+    }
+
+    [Fact]
     public async Task Provider_failure_after_node_apply_keeps_pending_intent_for_recovery()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-failure-after-node"), 441);
