@@ -490,7 +490,7 @@ The following are not decided by v0.2 and must be resolved before freezing publi
 5. Whether a built-in in-memory store ships in the core package or only in test utilities.
 6. **Decided:** FLD Storage-only opens the domain-neutral `Fld1.Storage` engine directly; it does not instantiate `FldDatabase`. One DLL initially, extractable namespace/API/source boundary.
 7. **Decided:** storage-native ordering/version uses Storage Core CommitSeq and byte-key ordering; it is never fabricated as HLC/author. Split generic page/run mechanics from any field-specific codec that prevents opaque metadata storage.
-8. How a multi-scope/multi-namespace Metadata Store maps onto FLD's currently namespace-scoped physical runs and database options.
+8. **Decided:** each local replica uses an owning `(SyncScopeId, LocalReplicaNodeId)` partition; protocol NamespaceId is a key/prefix dimension inside that partition, not a physical FLD namespace. Storage Core exposes opaque logical partition IDs and can host multiple partitions. The current field-specific namespace/run codec must be separated from the generic partition catalog.
 9. Exact metadata record layout, key encoding, compaction and retention strategy in FLD.
 10. How current NodePersistence/WAL state migrates to the new provider/store boundary.
 11. Whether external providers use shared transactions or the pending-apply/idempotency protocol in the first release.
