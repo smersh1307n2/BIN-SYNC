@@ -80,7 +80,11 @@ public sealed partial class Node
             {
                 if (changeId.IsZero) continue;
                 var key = (namespaceId, changeId);
-                if (GlobalChangeLedger.TryGetValue(key, out var prior) && !prior.IsLocalOutbound)
+                // Local outbound mutations retain their ChangeId in SeenChanges
+                // (the WAL replay/provenance set). Remote accepted IDs have no such
+                // marker and must be removed so durable PendingApply replay can apply
+                // them against the freshly restored provider snapshot.
+                if (GlobalChangeLedger.ContainsKey(key) && !SeenChanges.Contains(key))
                     GlobalChangeLedger.Remove(key);
             }
 
