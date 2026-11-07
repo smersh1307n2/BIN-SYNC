@@ -1,6 +1,7 @@
 using System.Text;
 using BinSync;
 using BinSync.Storage;
+using Fld1.Storage.Engine;
 
 const int NamespaceId = 1;
 
@@ -18,8 +19,12 @@ try
 {
     Node nodeA;
     Node nodeB;
-    using (var providerA = new StorageDataProvider(providerAPath, 201))
-    using (var providerB = new StorageDataProvider(providerBPath, 202))
+    using (var storageA = StorageDatabase.Open(providerAPath, 201))
+    using (var storageB = StorageDatabase.Open(providerBPath, 202))
+    using (var providerA = new StorageDataProvider(storageA))
+    using (var providerB = new StorageDataProvider(storageB))
+    using (var metadataA = new StorageMetadataStore(storageA))
+    using (var metadataB = new StorageMetadataStore(storageB))
     {
         RecordId recordA = providerA.ResolveRecordId(itemA.ToByteArray());
         RecordId recordB = providerB.ResolveRecordId(itemB.ToByteArray());
@@ -32,8 +37,8 @@ try
 
         nodeA = NewNode(1);
         nodeB = NewNode(2);
-        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId);
-        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId);
+        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId, metadataA, "array-demo");
+        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId, metadataB, "array-demo");
 
         providerA.AppendLocalChange(Mutation(recordA, nameA, nodeA.NodeId, 1000, "pump-A"u8));
         providerA.AppendLocalChange(Mutation(recordA, quantityA, nodeA.NodeId, 1001, "4"u8));
@@ -68,16 +73,22 @@ try
     // Reopen both durable providers and both BIN-SYNC nodes before the next edit.
     nodeA = NodePersistence.Load(nodeAPath);
     nodeB = NodePersistence.Load(nodeBPath);
-    using (var providerA = new StorageDataProvider(providerAPath, 201))
-    using (var providerB = new StorageDataProvider(providerBPath, 202))
+    using (var storageA = StorageDatabase.Open(providerAPath, 201))
+    using (var storageB = StorageDatabase.Open(providerBPath, 202))
+    using (var providerA = new StorageDataProvider(storageA))
+    using (var providerB = new StorageDataProvider(storageB))
+    using (var metadataA = new StorageMetadataStore(storageA))
+    using (var metadataB = new StorageMetadataStore(storageB))
     {
         RecordId recordA = providerA.ResolveRecordId(itemA.ToByteArray());
         RecordId recordB = providerB.ResolveRecordId(itemB.ToByteArray());
         ushort name = providerA.ResolveFieldId("name"u8.ToArray());
         ushort quantity = providerA.ResolveFieldId("quantity"u8.ToArray());
 
-        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId);
-        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId);
+        var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId, metadataA, "array-demo");
+        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId, metadataB, "array-demo");
+        if (coordinatorA.RecoverPendingApplies() != 0 || coordinatorB.RecoverPendingApplies() != 0)
+            throw new InvalidOperationException("Unexpected pending apply in clean restart scenario.");
 
         providerB.AppendLocalChange(Mutation(recordB, quantity, nodeB.NodeId, 3000, "9"u8));
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
