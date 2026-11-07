@@ -44,7 +44,7 @@ public sealed class StorageSyncCoordinatorTests
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 402, deleteOnDispose: true);
         Node remoteNode = NewNode(5);
         RecordId recordId = RecordId.From(Guid.Parse("50000000-0000-0000-0000-000000000005").ToByteArray());
-        const ushort fieldId = 12;
+        const ushort fieldId = 0x010C;
         remoteNode.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("remote"), new Hlc(2000, 1));
 
         var coordinator = new StorageSyncCoordinator(remoteNode, provider, 1);
