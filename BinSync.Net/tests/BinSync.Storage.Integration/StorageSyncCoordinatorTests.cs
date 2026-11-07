@@ -180,6 +180,9 @@ public sealed class StorageSyncCoordinatorTests
             sender.NodeId, checked((uint)sender.Epoch), 1));
         Assert.Equal(1UL, metadata.GetRelayHighWatermark("metadata-integration", receiver.NodeId,
             1, sender.NodeId));
+        var relay = metadata.ReadRelay("metadata-integration", receiver.NodeId, 1, sender.NodeId, 0, 10);
+        Assert.Single(relay.Items);
+        Assert.Equal(recordId, RecordId.From(relay.Items[0].Payload.AsSpan(0, 16)));
         Assert.Empty(metadata.ReadPendingApplyIntents("metadata-integration", receiver.NodeId));
         Assert.Equal(0, coordinator.RecoverPendingApplies());
     }
