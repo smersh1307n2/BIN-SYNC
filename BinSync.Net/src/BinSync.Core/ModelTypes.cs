@@ -58,6 +58,9 @@ public class SyncException : Exception
     }
 }
 
+/// <summary>Stable identity used to resolve a relay-selected ChangeId to its local OutboxSeq.</summary>
+public readonly record struct OutboxChangeIdentity(NodeId AuthorNodeId, BatchId ChangeId);
+
 /// <summary>One pending or decoded mutation in the outbox / batch records array.</summary>
 public sealed class OutboxEntry
 {
