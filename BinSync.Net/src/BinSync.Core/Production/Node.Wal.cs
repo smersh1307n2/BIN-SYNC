@@ -168,7 +168,7 @@ public sealed partial class Node
 
         lock (_lockStorage) lock (_lockOutbox)
         {
-            var seenKey = (NodeId, entry.NamespaceId, entry.ChangeId);
+            var seenKey = (entry.NamespaceId, entry.ChangeId);
             if (SeenChanges.Contains(seenKey)) return false;
 
             if (Outbox.TryGetValue(entry.NamespaceId, out var queued) &&
