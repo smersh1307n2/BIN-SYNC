@@ -83,6 +83,12 @@ public sealed class MetadataIncomingBatch
     public required IReadOnlyList<MetadataOperation> Operations { get; init; }
     /// <summary>Exact accepted DELTA_BATCH payload, retained for Node replay during PendingApply recovery.</summary>
     public byte[] WirePayload { get; init; } = Array.Empty<byte>();
+    /// <summary>
+    /// True when the durable Metadata Store owns receive cursor, digest-chain and
+    /// inbox-receipt decisions for this intent. Legacy intents retain Node-owned
+    /// receive validation during recovery.
+    /// </summary>
+    public bool ReceiveStateOwnedByMetadataStore { get; init; }
 }
 
 public sealed record MetadataBatchReceipt(ulong CursorStart, ulong CursorEnd, byte[] BatchDigest,
