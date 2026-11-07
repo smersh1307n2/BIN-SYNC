@@ -252,9 +252,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             receipt.NewRelayOperationCount, isDuplicate) { DurableAuthor = receipt.DurableAuthor };
 
     private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
-        => !batch.AuthorStreamNodeId.IsZero
-            ? batch.AuthorStreamNodeId
-            : batch.Operations.Count == 0 ? default : batch.Operations[0].AuthorNodeId;
+        => batch.AuthorStreamNodeId;
 
     public IReadOnlyList<MetadataOutboundItem> FreezeOutbound(
         string scopeId,
