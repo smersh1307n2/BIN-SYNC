@@ -78,16 +78,31 @@ internal static class ChangeIdentity
         }
         else
         {
-            var unique = new HashSet<BatchId>();
+            // One compact array + in-place sort/dedup replaces HashSet + LINQ
+            // ordering + ToArray. Dependency sets are usually small, and the
+            // canonical order remains (Lo, Hi), exactly as before.
+            var sorted = new BatchId[causalDeps.Count];
             for (int i = 0; i < causalDeps.Count; i++)
             {
-                if (causalDeps[i].IsZero)
+                var dependency = causalDeps[i];
+                if (dependency.IsZero)
                     throw new InvalidDataException("Causal dependency ID cannot be zero.");
-                unique.Add(causalDeps[i]);
+                sorted[i] = dependency;
             }
-            var sorted = unique.OrderBy(id => id.Lo).ThenBy(id => id.Hi).ToArray();
-            w.Varint((ulong)sorted.Length);
-            foreach (var dependency in sorted) w.B128(dependency);
+            Array.Sort(sorted, static (left, right) =>
+            {
+                int order = left.Lo.CompareTo(right.Lo);
+                return order != 0 ? order : left.Hi.CompareTo(right.Hi);
+            });
+            int uniqueCount = 1;
+            for (int i = 1; i < sorted.Length; i++)
+            {
+                if (sorted[i].Equals(sorted[uniqueCount - 1]))
+                    continue;
+                sorted[uniqueCount++] = sorted[i];
+            }
+            w.Varint((ulong)uniqueCount);
+            for (int i = 0; i < uniqueCount; i++) w.B128(sorted[i]);
         }
         var fingerprint = Digests.Blake3Digest16(w.WrittenSpan);
         if (fingerprint.IsZero)
