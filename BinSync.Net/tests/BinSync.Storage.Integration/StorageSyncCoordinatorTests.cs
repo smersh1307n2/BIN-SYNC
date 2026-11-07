@@ -141,6 +141,53 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Metadata_batch_materialization_does_not_replace_or_mutate_node_outbox()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-materialization-isolated"), 430);
+        using var metadata = new StorageMetadataStore(storage);
+        using var provider = new StorageDataProvider(storage);
+        using var sender = NewNode(30);
+        using var receiver = NewNode(31);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(sender, provider, 1, metadata, "metadata-materialization-isolated");
+
+        RecordId record = RecordId.From(Guid.Parse("30000000-0000-0000-0000-000000000030").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0102, AuthorNodeId = sender.NodeId,
+            HlcWall = 3000, HlcLogical = 0, Value = "metadata-source"u8.ToArray()
+        });
+        coordinator.PublishLocalChanges(_ => { });
+        coordinator.RegisterInterestedPeer(initiator, 1);
+
+        var page = metadata.ReadOutboundForPeer("metadata-materialization-isolated",
+            sender.NodeId, receiver.NodeId, checked((uint)receiver.Epoch), 1, sender.NodeId, 16);
+        Assert.Single(page.Items);
+        var before = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
+            .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray()))
+            .ToArray();
+
+        var built = sender.CreateDeltaBatchPayloadFromMetadata(receiver.NodeId, 1, sender.NodeId,
+            page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray());
+
+        Assert.NotNull(built);
+        var after = sender.ReadOutboxEntries(1, sender.NodeId, 0, 16)
+            .Select(entry => (entry.Seq, entry.ChangeId, Payload: entry.Payload.ToArray()))
+            .ToArray();
+        Assert.Equal(before.Length, after.Length);
+        for (int i = 0; i < before.Length; i++)
+        {
+            Assert.Equal(before[i].Seq, after[i].Seq);
+            Assert.Equal(before[i].ChangeId, after[i].ChangeId);
+            Assert.Equal(before[i].Payload, after[i].Payload);
+        }
+    }
+
+    [Fact]
     public void Failed_node_checkpoint_does_not_ack_feed_and_replay_does_not_duplicate_outbox()
     {
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 401, deleteOnDispose: true);
