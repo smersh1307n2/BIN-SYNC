@@ -128,15 +128,10 @@ public sealed class StorageSyncCoordinator
         }
 
         if (mutations.Count == 0) return null;
-        mutations.Sort(static (a, b) =>
-        {
-            int order = CompareRecordIds(a.RecordId, b.RecordId);
-            return order != 0 ? order : a.FieldId.CompareTo(b.FieldId);
-        });
-
-        // Use the exact immutable batch identity as the receipt key and the exact
-        // batch operations as the fingerprint input. Do not reconstruct payload from
-        // current Node winners: a later batch may already have advanced those winners.
+        // Preserve wire order in the fingerprint. Multiple immutable operations
+        // for the same field can legitimately occur in one batch; Storage applies
+        // their LWW order while retaining the complete batch receipt. Do not sort or
+        // reconstruct payload from current Node winners.
         Guid token = CreateBatchApplyToken(batch);
         lock (_gate)
             return _provider.ApplyRemoteBatch(token, mutations);
