@@ -192,7 +192,7 @@ public class StorageMetadataStore : IMetadataStore
                 IsDuplicate: true);
         }
 
-        var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var receiveKey = new ReceiveKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
         var receive = next.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0, new byte[16]);
@@ -255,6 +255,7 @@ public class StorageMetadataStore : IMetadataStore
             && left.LocalReplica == right.LocalReplica
             && left.SenderPeer == right.SenderPeer
             && left.SenderEpoch == right.SenderEpoch
+            && left.AuthorStreamNodeId == right.AuthorStreamNodeId
             && left.NamespaceId == right.NamespaceId
             && left.BatchId == right.BatchId
             && left.CursorStart == right.CursorStart
@@ -268,6 +269,7 @@ public class StorageMetadataStore : IMetadataStore
             LocalReplica = batch.LocalReplica,
             SenderPeer = batch.SenderPeer,
             SenderEpoch = batch.SenderEpoch,
+            AuthorStreamNodeId = batch.AuthorStreamNodeId,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
             CursorStart = batch.CursorStart,
@@ -820,10 +822,11 @@ public class StorageMetadataStore : IMetadataStore
 
         foreach (var pair in state.Receives)
         {
-            byte[] suffix = new byte[22];
+            byte[] suffix = new byte[38];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
             byte[] value = new byte[24];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorEnd);
             pair.Value.LastBatchDigest.CopyTo(value, 8);
@@ -936,11 +939,13 @@ public class StorageMetadataStore : IMetadataStore
                 }
                 case 2:
                 {
-                    RequireLength(key, 22);
+                    if (key.Length is not (22 or 38))
+                        throw new InvalidDataException("Metadata receive key has an invalid length.");
                     RequireLength(row.Value, 24);
                     var receiveKey = new ReceiveKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
+                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
+                        key.Length == 38 ? NodeId.From(key.Slice(22, 16)) : default);
                     state.Receives.Add(receiveKey, new ReceiveState(
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
                         row.Value.AsSpan(8, 16).ToArray()));
@@ -1099,10 +1104,12 @@ public class StorageMetadataStore : IMetadataStore
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         byte[] scope = Encoding.UTF8.GetBytes(batch.ScopeId);
+        writer.Write(-2); // version 2: author-stream-scoped receive cursor
         writer.Write(scope.Length); writer.Write(scope);
         writer.Write(batch.LocalReplica.ToArray());
         writer.Write(batch.SenderPeer.ToArray());
         writer.Write(batch.SenderEpoch);
+        writer.Write(batch.AuthorStreamNodeId.ToArray());
         writer.Write(checked((ushort)batch.NamespaceId));
         writer.Write(batch.BatchId.ToArray());
         writer.Write(batch.CursorStart); writer.Write(batch.CursorEnd);
@@ -1125,11 +1132,14 @@ public class StorageMetadataStore : IMetadataStore
     {
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
-        int scopeLength = reader.ReadInt32();
+        int versionOrScopeLength = reader.ReadInt32();
+        bool hasAuthorStream = versionOrScopeLength == -2;
+        int scopeLength = hasAuthorStream ? reader.ReadInt32() : versionOrScopeLength;
         string scope = Encoding.UTF8.GetString(ReadExactly(reader, scopeLength));
         NodeId local = NodeId.From(ReadExactly(reader, 16));
         NodeId sender = NodeId.From(ReadExactly(reader, 16));
         uint epoch = reader.ReadUInt32();
+        NodeId authorStream = hasAuthorStream ? NodeId.From(ReadExactly(reader, 16)) : default;
         int ns = reader.ReadUInt16();
         BatchId batchId = BatchId.From(ReadExactly(reader, 16));
         ulong cursorStart = reader.ReadUInt64();
@@ -1162,6 +1172,7 @@ public class StorageMetadataStore : IMetadataStore
             LocalReplica = local,
             SenderPeer = sender,
             SenderEpoch = epoch,
+            AuthorStreamNodeId = authorStream,
             NamespaceId = ns,
             BatchId = batchId,
             CursorStart = cursorStart,
@@ -1180,6 +1191,11 @@ public class StorageMetadataStore : IMetadataStore
         return bytes;
     }
 
+    private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
+        => !batch.AuthorStreamNodeId.IsZero
+            ? batch.AuthorStreamNodeId
+            : batch.Operations.Count > 0 ? batch.Operations[0].AuthorNodeId : batch.SenderPeer;
+
     private static void ValidateBatch(MetadataIncomingBatch batch)
     {
         if (string.IsNullOrWhiteSpace(batch.ScopeId))
@@ -1193,6 +1209,9 @@ public class StorageMetadataStore : IMetadataStore
         ValidateDigest(batch.PreviousBatchDigest, nameof(batch.PreviousBatchDigest));
         ValidateDigest(batch.BatchDigest, nameof(batch.BatchDigest));
         ArgumentNullException.ThrowIfNull(batch.Operations);
+        if (!ResolveAuthorStream(batch).IsZero &&
+            batch.Operations.Any(operation => operation.AuthorNodeId != ResolveAuthorStream(batch)))
+            throw new ArgumentException("Incoming batch operations must belong to one author stream.", nameof(batch));
 
         var seen = new HashSet<BatchId>();
         foreach (var operation in batch.Operations)
@@ -1307,7 +1326,7 @@ public class StorageMetadataStore : IMetadataStore
 
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
     private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
-    private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId);
+    private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
