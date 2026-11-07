@@ -379,7 +379,7 @@ public static class NodePersistence
     {
         var r = new Reader(body);
         var nodeId = r.B128();
-        var epoch = (int)r.Varint();
+        var epoch = ReadInt32Varint(r);
         var n = new Node(new NodeOptions
         {
             NodeId = nodeId,
@@ -396,7 +396,7 @@ public static class NodePersistence
         int nsCount = ReadCount(r, 2, "namespace");
         for (int i = 0; i < nsCount; i++)
         {
-            var ns = (int)r.Varint();
+            var ns = ReadNamespaceId(r);
             int recCount = ReadCount(r, 21, "record");
             var map = new Dictionary<RecordId, Record>();
             for (int j = 0; j < recCount; j++)
@@ -410,7 +410,7 @@ public static class NodePersistence
         int outNsCount = ReadCount(r, 2, "outbox namespace");
         for (int i = 0; i < outNsCount; i++)
         {
-            var ns = (int)r.Varint();
+            var ns = ReadNamespaceId(r);
             int cnt = ReadCount(r, 68, "outbox entry");
             var list = new List<OutboxEntry>(cnt);
             for (int j = 0; j < cnt; j++) list.Add(ReadOutboxEntry(r));
@@ -421,7 +421,7 @@ public static class NodePersistence
         int seqCount = ReadCount(r, 25, "outbox sequence");
         for (int i = 0; i < seqCount; i++)
         {
-            var author = r.B128(); var ns = (int)r.Varint(); var seq = (long)r.U64();
+            var author = r.B128(); var ns = ReadNamespaceId(r); var seq = (long)r.U64();
             seqMap[((NodeId)author, ns)] = seq;
         }
 
@@ -433,8 +433,8 @@ public static class NodePersistence
             for (int gi = 0; gi < groupCount; gi++)
             {
                 var issuer = NodeId.From(r.B128());
-                var ns = (int)r.Varint();
-                var ep = (int)r.Varint();
+                var ns = ReadNamespaceId(r);
+                var ep = ReadInt32Varint(r);
                 int receiptCount = ReadCount(r, 35, "batch receipt");
                 if (receiptCount == 0 || issuer.IsZero || (uint)ns > ushort.MaxValue ||
                     ep < 0 || !receiptGroupKeys.Add((issuer, ns, ep)))
@@ -467,8 +467,8 @@ public static class NodePersistence
             for (int i = 0; i < receiptCount; i++)
             {
                 var issuer = NodeId.From(r.B128());
-                var ns = (int)r.Varint();
-                var ep = (int)r.Varint();
+                var ns = ReadNamespaceId(r);
+                var ep = ReadInt32Varint(r);
                 var batchId = BatchId.From(r.B128());
                 var author = NodeId.From(r.B128());
                 InboxReceipt receipt;
@@ -505,16 +505,16 @@ public static class NodePersistence
             int inboxCount = ReadCount(r, 34, "legacy inbox key");
             for (int i = 0; i < inboxCount; i++)
             {
-                var issuer = NodeId.From(r.B128()); var ns = (int)r.Varint();
-                var ep = (int)r.Varint(); var batchId = BatchId.From(r.B128());
+                var issuer = NodeId.From(r.B128()); var ns = ReadNamespaceId(r);
+                var ep = ReadInt32Varint(r); var batchId = BatchId.From(r.B128());
                 if (!legacyInbox.Add((issuer, ns, ep, batchId)))
                     throw new InvalidDataException("Duplicate legacy inbox receipt key.");
             }
             int inboxAuthorCount = ReadCount(r, 50, "legacy inbox author");
             for (int i = 0; i < inboxAuthorCount; i++)
             {
-                var issuer = NodeId.From(r.B128()); var ns = (int)r.Varint();
-                var ep = (int)r.Varint(); var batchId = BatchId.From(r.B128());
+                var issuer = NodeId.From(r.B128()); var ns = ReadNamespaceId(r);
+                var ep = ReadInt32Varint(r); var batchId = BatchId.From(r.B128());
                 var author = NodeId.From(r.B128());
                 var legacyReceipt = new InboxReceipt(author, cursorEnd: 0, hasCursorEnd: false,
                     fingerprint: default, hasFingerprint: false, appliedAt: 0, expiresAt: 0);
@@ -526,14 +526,14 @@ public static class NodePersistence
         int lbdCount = ReadCount(r, 34, "last batch digest");
         for (int i = 0; i < lbdCount; i++)
         {
-            var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint(); var dig = r.B128();
+            var issuer = r.B128(); var ns = ReadNamespaceId(r); var ep = ReadInt32Varint(r); var dig = r.B128();
             n.LastBatchDigest[((NodeId)issuer, ns, ep)] = Digest16.From(dig);
         }
 
         int lsCount = ReadCount(r, 50, "last stream digest");
         for (int i = 0; i < lsCount; i++)
         {
-            var issuer = r.B128(); var ns = (int)r.Varint(); var ep = (int)r.Varint();
+            var issuer = r.B128(); var ns = ReadNamespaceId(r); var ep = ReadInt32Varint(r);
             var peer = r.B128(); var dig = r.B128();
             n.LastStreamDigest[(((NodeId)issuer, ns, ep), (NodeId)peer)] = Digest16.From(dig);
         }
@@ -546,7 +546,7 @@ public static class NodePersistence
             var map = new Dictionary<int, (NodeId Id, int Epoch)>();
             for (int j = 0; j < cnt; j++)
             {
-                var alias = (int)r.Varint(); var nid = r.B128(); var ep = (int)r.Varint();
+                var alias = ReadInt32Varint(r); var nid = r.B128(); var ep = ReadInt32Varint(r);
                 map[alias] = ((NodeId)nid, ep);
             }
             n.AliasToNode[(NodeId)peer] = map;
@@ -559,7 +559,7 @@ public static class NodePersistence
             var map = new Dictionary<(NodeId Id, int Epoch), int>();
             for (int j = 0; j < cnt; j++)
             {
-                var nid = r.B128(); var ep = (int)r.Varint(); var alias = (int)r.Varint();
+                var nid = r.B128(); var ep = ReadInt32Varint(r); var alias = ReadInt32Varint(r);
                 map[((NodeId)nid, ep)] = alias;
             }
             n.NodeToAlias[(NodeId)peer] = map;
@@ -568,21 +568,21 @@ public static class NodePersistence
         int daCount = ReadCount(r, 17, "durable author");
         for (int i = 0; i < daCount; i++)
         {
-            var nid = r.B128(); var ep = (int)r.Varint();
+            var nid = r.B128(); var ep = ReadInt32Varint(r);
             n.DurableAuthors[(NodeId)nid] = ep;
         }
 
         int psCount = ReadCount(r, 50, "peer state");
         for (int i = 0; i < psCount; i++)
         {
-            var peer = r.B128(); var ns = (int)r.Varint();
+            var peer = r.B128(); var ns = ReadNamespaceId(r);
             var ps = new PeerState(peer, ns)
             {
                 LastPushedSeq = (long)r.U64(),
                 LastReceivedSeq = (long)r.U64(),
                 LastAckedSeq = (long)r.U64(),
                 InitialSyncComplete = r.U8() != 0,
-                MembershipEpoch = (int)r.Varint(),
+                MembershipEpoch = ReadInt32Varint(r),
                 LastSeen = (long)r.U64(),
             };
             int rsCount = ReadCount(r, 41, "received stream");
@@ -595,15 +595,15 @@ public static class NodePersistence
                 if (version >= 9)
                 {
                     streamPeer = NodeId.From(r.B128());
-                    streamEpoch = (int)r.Varint();
+                    streamEpoch = ReadInt32Varint(r);
                     streamAuthor = NodeId.From(r.B128());
                     seq = (long)r.U64();
                 }
                 else
                 {
                     streamPeer = NodeId.From(r.B128());
-                    var rns = (int)r.Varint();
-                    streamEpoch = (int)r.Varint();
+                    var rns = ReadNamespaceId(r);
+                    streamEpoch = ReadInt32Varint(r);
                     streamAuthor = NodeId.From(r.B128());
                     seq = (long)r.U64();
                     if (rns != ns)
@@ -677,7 +677,7 @@ public static class NodePersistence
         {
             for (int i = 0; i < seenCount; i++)
             {
-                int ns = (int)r.Varint();
+                int ns = ReadNamespaceId(r);
                 var changeId = BatchId.From(r.B128());
                 if ((uint)ns > ushort.MaxValue || changeId.IsZero ||
                     !n.SeenChanges.Add((ns, changeId)))
@@ -690,7 +690,7 @@ public static class NodePersistence
             for (int i = 0; i < seenCount; i++)
             {
                 var peer = NodeId.From(r.B128());
-                var ns = (int)r.Varint();
+                var ns = ReadNamespaceId(r);
                 var changeId = BatchId.From(r.B128());
                 persistedLegacySeen.Add((peer, ns, changeId));
             }
@@ -707,7 +707,7 @@ public static class NodePersistence
             var ledgerNamespaces = new HashSet<int>();
             for (int gi = 0; gi < groupCount; gi++)
             {
-                int ns = (int)r.Varint();
+                int ns = ReadNamespaceId(r);
                 int entryCount = ReadCount(r, 17, "ChangeId ledger entry");
                 if ((uint)ns > ushort.MaxValue || entryCount == 0 || !ledgerNamespaces.Add(ns))
                     throw new InvalidDataException("Invalid or duplicate persisted ChangeId namespace group.");
@@ -730,7 +730,7 @@ public static class NodePersistence
             int ledgerCount = ReadCount(r, 18, "global ChangeId ledger entry");
             for (int i = 0; i < ledgerCount; i++)
             {
-                int ns = (int)r.Varint();
+                int ns = ReadNamespaceId(r);
                 var changeId = BatchId.From(r.B128());
                 byte known = r.U8();
                 if (known > 1 || changeId.IsZero || (uint)ns > ushort.MaxValue)
@@ -777,7 +777,7 @@ public static class NodePersistence
         int lsaCount = ReadCount(r, 33, "last stream author");
         for (int i = 0; i < lsaCount; i++)
         {
-            var peer = r.B128(); var ns = (int)r.Varint(); var author = r.B128();
+            var peer = r.B128(); var ns = ReadNamespaceId(r); var author = r.B128();
             n.LastStreamAuthor[((NodeId)peer, ns)] = NodeId.From(author);
         }
 
@@ -786,7 +786,7 @@ public static class NodePersistence
         {
             var key = r.B128();
             var ns = (int)((long)r.Varint() + int.MinValue);   // zig: stored as ns - int.MinValue
-            var ep = (int)r.Varint();
+            var ep = ReadInt32Varint(r);
             n.KnownEpochs[((NodeId)key, ns)] = ep;
         }
 
@@ -796,7 +796,7 @@ public static class NodePersistence
             for (int i = 0; i < peerEpochCount; i++)
             {
                 var peer = NodeId.From(r.B128());
-                var peerEpoch = (int)r.Varint();
+                var peerEpoch = ReadInt32Varint(r);
                 if (peer.IsZero || peerEpoch < 0)
                     throw new InvalidDataException("Invalid persisted peer session epoch.");
                 n.PeerSessionEpochs[peer] = peerEpoch;
@@ -814,11 +814,11 @@ public static class NodePersistence
         int qCount = ReadCount(r, 16, "quarantined peer");
         for (int i = 0; i < qCount; i++) n.Quarantined.Add((NodeId)r.B128());
         int fCount = ReadCount(r, 1, "forbidden namespace");
-        for (int i = 0; i < fCount; i++) n.ForbiddenNamespaces.Add((int)r.Varint());
+        for (int i = 0; i < fCount; i++) n.ForbiddenNamespaces.Add(ReadInt32Varint(r));
         int svCount = ReadCount(r, 2, "schema version");
         for (int i = 0; i < svCount; i++)
         {
-            var svNs = (int)r.Varint(); var sv = (int)r.Varint();
+            var svNs = ReadNamespaceId(r); var sv = ReadInt32Varint(r);
             n.SchemaVersions[svNs] = sv;
         }
 
@@ -894,6 +894,22 @@ public static class NodePersistence
         }
 
         return n;
+    }
+
+    private static int ReadInt32Varint(Reader reader)
+    {
+        ulong raw = reader.Varint();
+        if (raw > int.MaxValue)
+            throw new InvalidDataException("Persisted integer exceeds Int32 range.");
+        return (int)raw;
+    }
+
+    private static int ReadNamespaceId(Reader reader)
+    {
+        ulong raw = reader.Varint();
+        if (raw > ushort.MaxValue)
+            throw new InvalidDataException("Persisted namespace id exceeds UInt16 range.");
+        return (int)raw;
     }
 
     private static int ReadCount(Reader reader, int minimumEntryBytes, string section)
@@ -1001,7 +1017,7 @@ public static class NodePersistence
     {
         var e = new OutboxEntry
         {
-            NamespaceId = (int)r.Varint(),
+            NamespaceId = ReadNamespaceId(r),
             Seq = (long)r.U64(),
             ChangeId = BatchId.From(r.B128()),
             RecordId = RecordId.From(r.B128()),
