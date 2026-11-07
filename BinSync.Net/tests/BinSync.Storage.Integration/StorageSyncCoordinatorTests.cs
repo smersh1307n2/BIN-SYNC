@@ -11,6 +11,50 @@ public sealed class StorageSyncCoordinatorTests
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-coordinator-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public async Task Pending_receive_intent_replays_wire_batch_into_node_and_provider_after_interruption()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-receive-recovery"), 427);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(28);
+        using var receiver = NewNode(29);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "pending-receive-recovery");
+
+        RecordId record = RecordId.From(Guid.Parse("28000000-0000-0000-0000-000000000028").ToByteArray());
+        sender.WriteField(1, record, 0x0812, "replay-after-crash"u8.ToArray(), new Hlc(5000, 0));
+
+        using var sendCts = new CancellationTokenSource();
+        using var receiveCts = new CancellationTokenSource();
+        var receive = acceptor.ReceiveBatchAsync(receiver,
+            beforeApply: (batch, payload, peer) =>
+            {
+                coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
+                throw new InvalidOperationException("simulated interruption after durable intent");
+            },
+            beforeAck: null,
+            ct: receiveCts.Token);
+        var send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await receive);
+        sendCts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
+
+        Assert.Equal(1, metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId).Count);
+        Assert.False(receiver.TryGetField(1, record, 0x0812, out _));
+        Assert.Equal(1, coordinator.RecoverPendingApplies(_ => { }));
+        Assert.Empty(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
+        Assert.True(receiver.TryGetField(1, record, 0x0812, out var nodeValue));
+        Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.True(provider.TryReadCurrent(record, 0x0812, out var providerValue));
+        Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(providerValue!.Value));
+    }
+
+    [Fact]
     public async Task Receive_batch_stages_metadata_intent_before_node_and_provider_apply()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-receive-intent"), 425);
