@@ -44,9 +44,21 @@ try
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
 
         Transport.MakeSession(nodeA, nodeB);
-        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId);
-        coordinatorA.ApplyRemoteFields(Fields(recordA, recordB, nameA, quantityA));
-        coordinatorB.ApplyRemoteFields(Fields(recordA, recordB, nameA, quantityA));
+        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _) =>
+        {
+            // Persist the Node's accepted receipt/state first, then materialize the
+            // external provider. Transport sends ACK only after this callback returns.
+            if (ReferenceEquals(receiver, nodeA))
+            {
+                NodePersistence.Save(receiver, nodeAPath);
+                coordinatorA.ApplyRemoteFields(Fields(recordA, recordB, nameA, quantityA));
+            }
+            else
+            {
+                NodePersistence.Save(receiver, nodeBPath);
+                coordinatorB.ApplyRemoteFields(Fields(recordA, recordB, nameA, quantityA));
+            }
+        });
         NodePersistence.Save(nodeA, nodeAPath);
         NodePersistence.Save(nodeB, nodeBPath);
 
@@ -71,9 +83,19 @@ try
         coordinatorB.PublishLocalChanges(n => NodePersistence.Save(n, nodeBPath));
 
         Transport.MakeSession(nodeA, nodeB);
-        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId);
-        coordinatorA.ApplyRemoteFields(Fields(recordA, recordB, name, quantity));
-        coordinatorB.ApplyRemoteFields(Fields(recordA, recordB, name, quantity));
+        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, _) =>
+        {
+            if (ReferenceEquals(receiver, nodeA))
+            {
+                NodePersistence.Save(receiver, nodeAPath);
+                coordinatorA.ApplyRemoteFields(Fields(recordA, recordB, name, quantity));
+            }
+            else
+            {
+                NodePersistence.Save(receiver, nodeBPath);
+                coordinatorB.ApplyRemoteFields(Fields(recordA, recordB, name, quantity));
+            }
+        });
         NodePersistence.Save(nodeA, nodeAPath);
         NodePersistence.Save(nodeB, nodeBPath);
 
