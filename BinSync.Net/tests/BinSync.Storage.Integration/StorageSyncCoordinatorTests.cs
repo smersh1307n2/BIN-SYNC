@@ -184,6 +184,58 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(0, coordinator.RecoverPendingApplies());
     }
 
+
+    [Fact]
+    public void Metadata_receive_cursors_are_independent_for_two_author_streams_from_one_peer()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "author-stream-cursors"), 406, deleteOnDispose: true);
+        NodeId local = NodeId.From(Guid.Parse("b0000000-0000-0000-0000-00000000000b").ToByteArray());
+        NodeId sender = NodeId.From(Guid.Parse("c0000000-0000-0000-0000-00000000000c").ToByteArray());
+        NodeId authorA = NodeId.From(Guid.Parse("d0000000-0000-0000-0000-00000000000d").ToByteArray());
+        NodeId authorB = NodeId.From(Guid.Parse("e0000000-0000-0000-0000-00000000000e").ToByteArray());
+
+        MetadataIncomingBatch Create(NodeId author, byte batchSeed, ulong cursor, byte[] previous, byte[] digest)
+            => new()
+            {
+                ScopeId = "author-stream-test",
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = 1,
+                AuthorStreamNodeId = author,
+                NamespaceId = 1,
+                BatchId = BatchId.From(Guid.Parse($"00000000-0000-0000-0000-{batchSeed:x12}").ToByteArray()),
+                CursorStart = cursor,
+                CursorEnd = cursor,
+                PreviousBatchDigest = previous,
+                BatchDigest = digest,
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = author,
+                        ChangeId = BatchId.From(Guid.Parse($"10000000-0000-0000-0000-{batchSeed:x12}").ToByteArray()),
+                        Fingerprint = Enumerable.Repeat(batchSeed, 16).ToArray(),
+                        Payload = new[] { batchSeed }
+                    }
+                }
+            };
+
+        byte[] zero = new byte[16];
+        byte[] digestA1 = Enumerable.Repeat((byte)0xA1, 16).ToArray();
+        byte[] digestB1 = Enumerable.Repeat((byte)0xB1, 16).ToArray();
+        store.AcceptIncomingBatch(Create(authorA, 1, 1, zero, digestA1));
+        store.AcceptIncomingBatch(Create(authorB, 2, 1, zero, digestB1));
+
+        byte[] digestA2 = Enumerable.Repeat((byte)0xA2, 16).ToArray();
+        byte[] digestB2 = Enumerable.Repeat((byte)0xB2, 16).ToArray();
+        store.AcceptIncomingBatch(Create(authorA, 3, 2, digestA1, digestA2));
+        store.AcceptIncomingBatch(Create(authorB, 4, 2, digestB1, digestB2));
+
+        Assert.Equal(2UL, store.GetReceiveCursor("author-stream-test", local, sender, 1, 1, authorA));
+        Assert.Equal(2UL, store.GetReceiveCursor("author-stream-test", local, sender, 1, 1, authorB));
+        Assert.Equal(2UL, store.GetReceiveCursor("author-stream-test", local, sender, 1, 1));
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
