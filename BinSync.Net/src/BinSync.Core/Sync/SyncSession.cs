@@ -232,7 +232,8 @@ public partial class SyncSession : IAsyncDisposable
     public async Task<BatchResult> ReceiveBatchAsync(Node receiver,
         Action<Batch, ReadOnlyMemory<byte>, NodeId>? beforeApply,
         Action<Batch, BatchResult>? beforeAck,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool receiveStateOwnedByMetadataStore = false)
     {
         ArgumentNullException.ThrowIfNull(receiver);
         await _batchReceiveGate.WaitAsync(ct).ConfigureAwait(false);
@@ -246,11 +247,18 @@ public partial class SyncSession : IAsyncDisposable
             ValidateNamespaceStream(frame, namespaceId);
 
             // Decode without mutation so a host can persist the exact wire payload as
-            // a PendingApply intent before Node's receive cursor or records advance.
-            var decoded = receiver.PrepareBatchPayloadForMetadata(frame.Payload, PeerNodeId);
+            // a PendingApply intent before Node's record state advances. In the
+            // durable path, the Metadata Store—not Node—validates cursor and digest continuity.
+            if (receiveStateOwnedByMetadataStore && beforeApply is null)
+                throw new InvalidOperationException("Metadata-owned receive state requires a durable before-apply callback.");
+            var decoded = receiveStateOwnedByMetadataStore
+                ? receiver.DecodeBatchPayloadForMetadataAuthority(frame.Payload, PeerNodeId)
+                : receiver.PrepareBatchPayloadForMetadata(frame.Payload, PeerNodeId);
             beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId);
 
-            var (batch, result) = receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
+            var (batch, result) = receiveStateOwnedByMetadataStore
+                ? receiver.ApplyBatchPayloadWithMetadataAuthority(frame.Payload, PeerNodeId)
+                : receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
             beforeAck?.Invoke(batch, result);
             var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
             await SendFrameAsync(0x0B, 0x0001_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
