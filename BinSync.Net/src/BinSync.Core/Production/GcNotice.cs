@@ -166,4 +166,5 @@ public static class GcNotice
         // pre-cutoff state. Keep live values and tombstones until the watermark/resync
         // protocol gate and tombstone-specific reclamation rules are implemented.
         return 0;
-    }}
+    }
+}
