@@ -255,6 +255,20 @@ For a raw logical LWW field-state tuple, RecordId (16), FieldId (2), operation k
 
 Small peer-state values or receipts may be packed into compact per-peer/per-stream records to reduce object and index overhead, provided updates remain atomic and their independent retention lifetimes remain explicit. Do not pack all metadata for a scope into one monolithic blob that must be rewritten for every cursor or peer ACK.
 
+### 6.4. FLD Outbox record encoding — concrete size-reduction candidates
+
+The current FLD `OutboxLog` uses an 88-byte fixed record plus a 4-byte CRC (92 bytes before value bytes). The stored fields include `OutboxSeq`, `CommitSeq`, `ChangeId`, `RecordId`, `FieldId`, `OpKind`, `AuthorNodeId`, HLC, `KeyEpoch` and a 32-bit value length. The current database also persists one stable `LocalAuthor` identity for the whole database, while each Outbox file is already namespace-scoped. These facts create safe compression opportunities, subject to a versioned log-format change:
+
+- **AuthorNodeId:** do not repeat the same 16-byte database author in every local Outbox record. Resolve it from the durable LocalAuthor file or store it once in the Outbox header/segment. Reopen must fail closed if the header identity conflicts with LocalAuthor.
+- **OutboxSeq:** records are appended in monotonic sequence order and the log maintains a sparse offset index. If compaction preserves a `firstSeq` plus record count and records are never removed/reordered except by prefix compaction, sequence can be reconstructed from record ordinal instead of storing 8 bytes per record. Prove this against torn-tail recovery, AppendIfMissing, ACK compaction and crash reopen before adopting.
+- **CommitSeq:** multiple field entries commonly share one WAL CommitSeq. Store a delta/varint from the previous CommitSeq or encode commit groups with one CommitSeq per group. Never infer commit materialization boundaries from OutboxSeq; they are separate clocks.
+- **Value length:** replace the fixed 32-bit length with a bounded varint if benchmarks show a net win and decoding remains allocation-free.
+- **HLC:** consider block-relative wall-time plus logical deltas only if real workloads show a meaningful reduction. Preserve exact HLC ordering and avoid per-entry branches/allocations on the append/read hot path.
+
+At the current fixed 92-byte baseline, removing repeated author (16 B) and explicit sequence (8 B), and delta-encoding CommitSeq (typically 1 byte rather than 8) could reduce fixed metadata by roughly 30 bytes per entry before any HLC/value-length optimization. This is a candidate estimate, not a committed layout. Keep ChangeId until its identity semantics are deliberately changed; do not remove it merely because a local cursor exists. OutboxSeq is currently a local namespace cursor and is not yet a stable wire-level origin sequence.
+
+Any new layout requires dual-version reader or explicit migration, crash-injection coverage at every record boundary, and benchmark comparison of append throughput, scan throughput, recovery time and bytes per operation. No in-place rewrite of a published Outbox entry is permitted.
+
 ## 7. FLD-specific target and migration
 
 ### 7.1. Current behavior is safe but retains more unpublished history
