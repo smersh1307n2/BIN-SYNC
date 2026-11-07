@@ -334,14 +334,14 @@ No generic DeleteOldMetadata operation is sufficient. Each category needs its ow
 
 ### 9.1. Global ChangeId ledger and local WAL replay markers
 
-The current Node implementation stores remote SeenChanges under (senderPeer, namespaceId, ChangeId), while the target model uses one exact ledger entry per (scope, namespaceId, ChangeId). ChangeId is stable across relay hops and unique within a namespace; direct sender is not part of the operation identity.
+The current Node implementation stores remote SeenChanges under (senderPeer, namespaceId, ChangeId), while the target model uses one exact ledger entry per (scope, localReplicaId, namespaceId, ChangeId). ChangeId is stable across relay hops and unique within a namespace; direct sender is not part of the operation identity.
 
 **Target ChangeId ledger entry:**
-- key: (scopeId, namespaceId, ChangeId);
+- key: (namespaceId, ChangeId) within the owning (scopeId, localReplicaId) partition;
 - compact fingerprint: BLAKE3-128 over the canonical operation identity and payload (resolved original author, RecordId, operation kind, field/key epoch, HLC, value/tombstone bytes and any canonical causal dependency data);
 - only the minimal format/legacy marker needed to distinguish imported IDs whose old payload fingerprint is unavailable.
 
-The original author is already included in the fingerprint and must not be stored a second time in this index. Scope and namespace should be encoded by the owning store/partition prefix, not repeated in every value.
+The original author is already included in the fingerprint and must not be stored a second time in this index. Scope and local replica identity define the owning partition; namespace belongs in the key prefix. Do not repeat these values in every ledger record.
 
 The ledger stores no full operation payload. Local Outbox and remote RelayJournal own payloads for their independent delivery lifetimes. Its exact lookup must be disk/page-backed with a bounded hot cache; a Bloom filter is allowed only as a negative prefilter, never as the authoritative answer. Do not keep one in-memory object per historical ChangeId.
 
@@ -477,6 +477,9 @@ This policy reduces redundant outbound history; it does not promise that every p
 34. A ChangeId received from a second peer after its prior Outbox/RelayJournal payload was compacted is suppressed by the global exact ChangeId ledger; a conflicting payload fingerprint is rejected.
 35. A same BatchId with changed cursorStart/cursorEnd, author, BatchDigest, RecordsRoot or PreviousBatchDigest is rejected using the compact Inbox receipt.
 36. PeerState.Ids entries are pruned atomically only when a valid ACK covers their complete per-author cursorEnd; partial ACK and lost-ACK restart preserve the entries.
+37. Freezing a local operation inserts its ChangeId fingerprint atomically with the immutable Outbox entry; crash/reopen cannot leave one without the other.
+38. First remote receipt inserts the global ledger entry and relay payload atomically; a matching duplicate from another peer advances that peer's receipt/cursor without reapply or relay append.
+39. Legacy NodePersistence v5 SeenChanges entries migrate into the partitioned global ledger without fabricated fingerprints or invented expiry.
 
 ## 12. Implementation sequence
 
