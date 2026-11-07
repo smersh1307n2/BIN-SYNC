@@ -218,7 +218,9 @@ public sealed partial class Node
         int nEnt = nEntEarly;
         var changedFlags = nEnt > 0 ? new bool[nEnt] : Array.Empty<bool>();
         var relayFlags = nEnt > 0 ? new bool[nEnt] : Array.Empty<bool>();
+        var globalDuplicateFlags = nEnt > 0 ? new bool[nEnt] : Array.Empty<bool>();
         var resolvedAuthors = nEnt > 0 ? new NodeId[nEnt] : Array.Empty<NodeId>();
+        var stagedGlobalLedger = new Dictionary<(int Ns, BatchId ChangeId), ChangeLedgerValue>();
         // One wall sample for the whole batch (skew window is large vs apply latency).
         long nowWall = Clock.Now();
         if (nowWall < 0)
@@ -230,9 +232,29 @@ public sealed partial class Node
             var op = decodedOps[idx];
             var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
             resolvedAuthors[idx] = opAuthor; // reuse after commit; no post-commit resolution
+            // Fingerprints include the resolved durable author and FULL_AUTHOR_ID
+            // encoding, so compact aliases and transport routes cannot affect identity.
+            var ledgerKey = (batch.NamespaceId, e.ChangeId);
+            var fingerprint = ChangeIdentity.Fingerprint(batch.NamespaceId, e.RecordId,
+                e.OpKind, op, opAuthor);
+            if (GlobalChangeLedger.TryGetValue(ledgerKey, out var knownIdentity))
+            {
+                if (knownIdentity.IsKnown && knownIdentity.Fingerprint != fingerprint)
+                    throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+                globalDuplicateFlags[idx] = true;
+                if (!knownIdentity.IsKnown)
+                    stagedGlobalLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
+            }
+            else
+                stagedGlobalLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
+
             // clock skew clamp on incoming HLC wall (§5.3)
             if (WallOf(op) > maxAllowedWall)
                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
+            // An already accepted ChangeId must not be re-applied: doing so after
+            // tombstone/state reclamation could resurrect stale data.
+            if (globalDuplicateFlags[idx])
+                continue;
             RecordId recId = op is OpRecordTombstone rt ? rt.RecordId : e.RecordId;
             if (!overlays.TryGetValue(recId, out var rec))
             {
@@ -277,6 +299,8 @@ public sealed partial class Node
                     continue; // already accepted provenance consumes no new capacity
                 if (!newSeenKeys!.Add(ck))
                     continue; // duplicate provenance within this batch
+                if (globalDuplicateFlags[idx])
+                    continue; // globally accepted already, regardless of receiving route
                 if (!queuedChangeIds.Add(cid))
                     continue; // this logical change is already queued from another peer
 
@@ -371,7 +395,8 @@ public sealed partial class Node
         foreach (var rid in overlays.Keys)
             if (!nsStore.ContainsKey(rid)) newRecordCount++;
         Limits?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
-            relayIndices.Count, newSeenKeys?.Count ?? 0);
+            relayIndices.Count, newSeenKeys?.Count ?? 0,
+            stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
 
         // Prepare every object and reserve every collection slot before the WAL commit
         // point. After AppendRemoteBatch succeeds, publication is assignment/add-only.
@@ -437,6 +462,9 @@ public sealed partial class Node
         AcksOut.EnsureCapacity(AcksOut.Count + 1);
         if (newSeenKeys is not null && newSeenKeys.Count > 0)
             SeenChanges.EnsureCapacity(SeenChanges.Count + newSeenKeys.Count);
+        if (stagedGlobalLedger.Count > 0)
+            GlobalChangeLedger.EnsureCapacity(GlobalChangeLedger.Count +
+                stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
 
         // The accepted batch must be durable before publishing any effects. ReceiveBatchAsync
         // sends its ACK only after this method returns, so a crash after ACK cannot lose it.
@@ -472,6 +500,11 @@ public sealed partial class Node
         AcksOut.Add(batch.BatchId);
         result.Applied = applied;
         result.Acked = true;
+
+        // Publish the global identity ledger only after the accepted batch WAL frame
+        // is durable. Unknown legacy markers are upgraded to known fingerprints here.
+        foreach (var pair in stagedGlobalLedger)
+            GlobalChangeLedger[pair.Key] = pair.Value;
 
         // Relay only the entries selected and fully materialized during preflight.
         if (batch.IssuerNodeId != NodeId)
