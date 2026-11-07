@@ -773,23 +773,20 @@ public static class NodePersistence
 
         foreach (var ps in n.PeerStates.Values)
         {
-            foreach (var (author, acked) in ps.StreamAcked)
+            foreach (var ((streamPeer, streamEpoch, streamAuthor), seq) in ps.ReceivedStreams)
+                if (streamPeer.IsZero || streamEpoch < 0 || streamAuthor.IsZero || seq < 0)
+                    throw new InvalidDataException("Invalid persisted received-stream cursor.");
+
+            foreach (var (author, progress) in ps.AuthorProgress)
             {
-                if (author.IsZero || acked < 0 ||
-                    !ps.StreamPushed.TryGetValue(author, out var pushed) || pushed < acked)
-                    throw new InvalidDataException("Invalid persisted ACK/pushed watermark.");
-            }
-            foreach (var (author, pushed) in ps.StreamPushed)
-            {
-                if (author.IsZero || pushed < 0)
-                    throw new InvalidDataException("Invalid persisted pushed watermark.");
-            }
-            foreach (var (author, offset) in ps.StreamOffsets)
-            {
-                if (author.IsZero || offset < 0 ||
-                    (ps.StreamAcked.TryGetValue(author, out var acked) && acked > long.MaxValue - offset) ||
-                    (ps.StreamPushed.TryGetValue(author, out var pushed) && pushed > long.MaxValue - offset))
-                    throw new InvalidDataException("Invalid persisted stream offset.");
+                if (author.IsZero || progress.Flags == 0 || (progress.Flags & ~7) != 0 ||
+                    (progress.HasAcked && (!progress.HasPushed || progress.Acked < 0 ||
+                                           progress.Pushed < progress.Acked)) ||
+                    (progress.HasPushed && progress.Pushed < 0) ||
+                    (progress.HasOffset && progress.Offset < 0) ||
+                    (progress.HasOffset && progress.HasAcked && progress.Acked > long.MaxValue - progress.Offset) ||
+                    (progress.HasOffset && progress.HasPushed && progress.Pushed > long.MaxValue - progress.Offset))
+                    throw new InvalidDataException("Invalid persisted peer author progress.");
             }
         }
 
