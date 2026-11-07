@@ -120,14 +120,16 @@ public class ChangeIdWireTests
         Assert.NotNull(Transport.DeliverBatch(a, c, 1));
         Assert.Single(c.Outbox[1]);
         Assert.Equal(originalChangeId, c.Outbox[1][0].ChangeId);
-        Assert.Contains((a.NodeId, 1, originalChangeId), c.SeenChanges);
+        Assert.DoesNotContain((a.NodeId, 1, originalChangeId), c.SeenChanges);
+        Assert.True(c.GlobalChangeLedger.ContainsKey((1, originalChangeId)));
 
         // C -> A closes the mesh loop. A already owns this ChangeId, so it must
         // not create a second outbox item or invent a replacement identity.
         Assert.NotNull(Transport.DeliverBatch(c, a, 1));
         Assert.False(a.Outbox.TryGetValue(1, out var returnedEntries) &&
                      returnedEntries.Any(e => e.ChangeId == originalChangeId));
-        Assert.Contains((c.NodeId, 1, originalChangeId), a.SeenChanges);
+        Assert.DoesNotContain((c.NodeId, 1, originalChangeId), a.SeenChanges);
+        Assert.True(a.GlobalChangeLedger.ContainsKey((1, originalChangeId)));
 
         Assert.True(a.Storage[1].ContainsKey(Fix.Rid(0x41)));
         Assert.True(b.Storage[1].ContainsKey(Fix.Rid(0x41)));
@@ -186,7 +188,7 @@ public class ChangeIdWireTests
         var echoResult = a.ApplyBatch(echoBatch, c.NodeId);
         Assert.Equal(0, echoResult.Applied);
         Assert.Equal(0, a.OutboxSize(1));
-        Assert.Contains((c.NodeId, 1, changeId), a.SeenChanges);
+        Assert.DoesNotContain((c.NodeId, 1, changeId), a.SeenChanges);
 
         // The same operation also arrives directly from A through another route.
         // Re-establish A as alias 1 so the saved compact payload remains valid.
@@ -332,7 +334,7 @@ public class ChangeIdWireTests
         body.CopyTo(image.AsSpan(46));
 
         using var restored = NodePersistence.LoadFromBytes(image);
-        Assert.Contains((peer, 9, changeId), restored.SeenChanges);
+        Assert.Empty(restored.SeenChanges); // remote provenance is folded into the global ledger
         Assert.False(restored.GlobalChangeLedger[(9, changeId)].IsKnown);
     }
 
