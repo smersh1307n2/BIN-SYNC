@@ -1103,7 +1103,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
 
         var key = new RelayKey(namespaceId, originalAuthor);
         ulong acknowledged = current.RelayAck.TryGetValue(key, out var ack) ? ack : 0;
-        if (safeThroughSequence > acknowledged)
+        ulong peerSafe = GetSafePeerCursor(current, namespaceId, originalAuthor);
+        bool hasPeerRequirements = current.InterestedPeers.Any(peer =>
+            peer.NamespaceId == namespaceId && peer.Peer != originalAuthor) ||
+            current.RequiredPeerStreams.Any(peer =>
+                peer.NamespaceId == namespaceId && peer.AuthorStream == originalAuthor && peer.Peer != originalAuthor);
+        if (safeThroughSequence > acknowledged ||
+            (hasPeerRequirements && safeThroughSequence > peerSafe))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
         var next = current.Clone();
