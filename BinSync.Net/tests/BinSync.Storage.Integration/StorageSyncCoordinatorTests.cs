@@ -196,6 +196,32 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Unsupported_superseded_local_change_on_an_earlier_page_is_not_hidden()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-invalid-page"), 424);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(25);
+        RecordId record = RecordId.From(Guid.Parse("25000000-0000-0000-0000-000000000025").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0711, AuthorNodeId = node.NodeId,
+            HlcWall = 1000, HlcLogical = 0, KeyEpoch = 1, Value = "unsupported"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0711, AuthorNodeId = node.NodeId,
+            HlcWall = 2000, HlcLogical = 0, KeyEpoch = 0, Value = "winner"u8.ToArray()
+        });
+
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-invalid-page");
+        Assert.Throws<NotSupportedException>(() => coordinator.PublishLocalChanges(_ => { }, limit: 1));
+        Assert.Equal(0, node.GetOutboxCount(1));
+        Assert.Equal(2, provider.ReadLocalChanges(0, 10).Changes.Count);
+        Assert.Equal(0UL, metadata.GetOutboundHighWatermark("pending-invalid-page", node.NodeId, 1, node.NodeId));
+    }
+
+    [Fact]
     public void Remote_node_materialization_is_durable_but_does_not_create_local_feed_entries()
     {
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 402, deleteOnDispose: true);
