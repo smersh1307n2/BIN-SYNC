@@ -284,6 +284,9 @@ public class ChangeIdWireTests
         using var relay = Fix.MakeNode(119);
         using var receiver = Fix.MakeNode(120);
         Transport.MakeSession(origin, relay);
+        var walPath = Path.Combine(Path.GetTempPath(), $"binsync-causal-ledger-{Guid.NewGuid():N}.wal");
+        using var wal = Wal.Open(walPath);
+        relay.AttachWal(wal);
         Assert.True(origin.WriteField(1, Fix.Rid(0x74), 0x100, new byte[] { 0x44 }));
 
         var batch = origin.CreateDeltaBatch(relay.NodeId, 1)!;
@@ -297,6 +300,13 @@ public class ChangeIdWireTests
         Assert.Equal(new[] { dependency }, Assert.Single(forwarded.Entries).CausalDeps);
         var decoded = receiver.DecodeBatchPayloadCausal(relay.EncodeBatchPayloadCausal(forwarded));
         Assert.Equal(new[] { dependency }, Assert.Single(decoded.Entries).CausalDeps);
+
+        using var recovered = new Node(relay.NodeId, relay.Epoch);
+        Assert.Equal(1, wal.Replay(recovered));
+        Assert.Equal(new[] { dependency }, Assert.Single(recovered.Outbox[1]).CausalDeps);
+        Assert.True(recovered.GlobalChangeLedger.ContainsKey((1, batch.Entries[0].ChangeId)));
+        wal.Dispose();
+        if (File.Exists(walPath)) File.Delete(walPath);
     }
 
     [Fact]
