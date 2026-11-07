@@ -519,44 +519,55 @@ public sealed partial class Node
     {
         if (!Outbox.TryGetValue(namespaceId, out var list) || list.Count == 0) return;
 
-        var interested = new List<NodeId>(4);
+        // A peer remains interested if it is connected, has an alias/session map,
+        // or has persisted progress for this namespace. A known peer without a
+        // PeerState deliberately blocks reclamation, as does the absence of all peers.
+        var interested = new HashSet<NodeId>();
         if (PeersByNid is not null)
-        {
-            foreach (var id in PeersByNid.Keys)
-                interested.Add(id);
-        }
-        foreach (var id in AliasToNode.Keys)
-        {
-            if (!interested.Contains(id)) interested.Add(id);
-        }
+            foreach (var id in PeersByNid.Keys) interested.Add(id);
+        foreach (var id in AliasToNode.Keys) interested.Add(id);
         foreach (var kv in PeerStates)
-        {
-            if (kv.Key.Item2 == namespaceId && !interested.Contains(kv.Key.Item1))
-                interested.Add(kv.Key.Item1);
-        }
+            if (kv.Key.Item2 == namespaceId) interested.Add(kv.Key.Item1);
         if (interested.Count == 0) return;
+
+        // Compute the minimum safe local OutboxSeq once per author, not once per
+        // Outbox entry. This changes the scan from O(entries × peers) to
+        // O(entries + authors × peers) while preserving peer-relative offsets.
+        var authors = new List<NodeId>();
+        var safeAckByAuthor = new Dictionary<NodeId, long>();
+        foreach (var entry in list)
+        {
+            if (safeAckByAuthor.ContainsKey(entry.AuthorNodeId)) continue;
+            authors.Add(entry.AuthorNodeId);
+            safeAckByAuthor.Add(entry.AuthorNodeId, long.MaxValue);
+        }
+
+        foreach (var peer in interested)
+        {
+            if (!PeerStates.TryGetValue((peer, namespaceId), out var peerState))
+            {
+                // One interested peer with no state blocks every author stream.
+                foreach (var author in authors)
+                    safeAckByAuthor[author] = 0;
+                break;
+            }
+
+            foreach (var author in authors)
+            {
+                long offset = peerState.TryGetStreamOffset(author, out var savedOffset)
+                    ? savedOffset : 0;
+                long localAck = checked(peerState.AckedFor(author) + offset);
+                if (localAck < safeAckByAuthor[author])
+                    safeAckByAuthor[author] = localAck;
+            }
+        }
 
         int w = 0;
         for (int i = 0; i < list.Count; i++)
         {
-            var e = list[i];
-            bool pending = false;
-            for (int p = 0; p < interested.Count; p++)
-            {
-                if (!PeerStates.TryGetValue((interested[p], namespaceId), out var ps))
-                {
-                    pending = true;
-                    break;
-                }
-                long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
-                long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
-                if (localAck < e.Seq)
-                {
-                    pending = true;
-                    break;
-                }
-            }
-            if (pending) list[w++] = e;
+            var entry = list[i];
+            if (safeAckByAuthor[entry.AuthorNodeId] < entry.Seq)
+                list[w++] = entry;
         }
         if (w < list.Count)
             list.RemoveRange(w, list.Count - w);
