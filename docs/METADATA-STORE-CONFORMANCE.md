@@ -228,3 +228,25 @@ Follow the architecture sequence:
 ## 8. Change control
 
 Any implementation that changes these observable guarantees must update this document and the matching conformance tests. Physical key/value layout, record grouping, checksums and compaction strategy may evolve without changing the semantic contract, provided all conformance tests continue to pass.
+
+
+## 9. Current Node source refactor surface
+
+A branch-level source audit identified the concrete places that must be separated when Data Provider and Metadata Store become independent. This is an impact inventory, not approval to change these files in one mechanical pass.
+
+| Current source | Current responsibility / coupling | Required direction |
+|---|---|---|
+| `Node.cs` | Owns the `_storage` namespace→record→field graph and exposes record/field reads/counts; owns Outbox and peer metadata alongside it | Keep protocol identity and coordination in Runtime; delegate authoritative user-data reads to Data Provider; do not let Metadata Store become a second data store |
+| `Production/Node.LocalWrites.cs` | Local writes mutate `Storage` and create Outbox operations under Storage→Outbox ordering | Provider captures local changes durably; freeze and metadata Outbox publication must share the provider transaction or a durable feed/intent boundary |
+| `Production/Node.ApplyBatch.cs` | Incoming batch validation, field-state application, ChangeId dedup, peer cursor and relay Outbox updates currently share Node locks/state | Split provider data effects from protocol metadata; preserve atomic shared-transaction or explicit pending-apply recovery semantics |
+| `Production/Snapshot.cs`, `Production/Reconcile.cs` | Snapshot build/apply and reconciliation enumerate or mutate Node.Storage | Read/apply through Data Provider; bind provider snapshot to a source version/feed watermark; current snapshot completion is not retention proof |
+| `Production/Node.Republish.cs` | Re-publishes current Node.Storage fields as fresh Outbox operations | Treat as provider rescan/repair operation with explicit identity semantics; never use it to reconstruct missing historical ChangeId or relay provenance |
+| `Production/Node.Helpers.cs` | Computes record digests and record maps from Node.Storage | Move data enumeration/digest input to provider snapshot; keep digest algorithm/protocol decisions in Runtime |
+| `Production/Node.Causal.cs` | Documents and coordinates callback execution around the Storage→Outbox→Meta lock order | Preserve a documented lock order; no external I/O or callbacks while engine locks are held |
+| `Production/NodePersistence.cs` | Serializes both user field Storage and protocol metadata (Outbox, peer state, receipts, ledgers, etc.) into one Node snapshot | Split provider-owned data persistence from Metadata Store state; NodePersistence cannot remain the Metadata Store implementation for an external provider |
+| `Production/Node.Wal.cs` + `Production/Wal.cs` | WAL replay restores local mutations and accepted remote batches, including data payload effects | Separate provider-owned durable data/change feed from metadata recovery intent; retain idempotent replay and exact ChangeId identity |
+| `Production/Node.DeltaBatch.cs` | Builds per-author outbound batches from retained Outbox and computes safe per-author ACK positions | Remains Runtime/Metadata Store behavior; Outbox must be loaded from the Metadata Store, not reconstructed from current provider winners |
+
+The current global lock order is documented as **Storage → Outbox → Meta**. The external provider/Metadata Store split must not hold provider or Node locks across network waits, and must not perform disk I/O while holding the other engine's internal locks. A shared transaction coordinator may order durable operations, but it does not replace each engine's local lock discipline.
+
+The refactor must preserve existing tests for local writes, remote apply, WAL replay, snapshots/reconcile, digests, author-stream batching and ChangeId dedup. New Data Provider tests must add the missing guarantees: source snapshot/feed continuity, durable local change capture, idempotent remote apply tokens, and no recursive capture of remote writes.
