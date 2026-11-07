@@ -94,7 +94,7 @@ public class StorageDataProvider : IDataProvider
 
             byte[] digest = SHA256.HashData(sourceFieldKey.Span);
             ushort candidate = BinaryPrimitives.ReadUInt16LittleEndian(digest);
-            if (candidate == 0) candidate = 1;
+            if (candidate < 0x0100) candidate = checked((ushort)(candidate + 0x0100));
             Span<byte> idBytes = stackalloc byte[2];
             BinaryPrimitives.WriteUInt16LittleEndian(idBytes, candidate);
             byte[] reverseKey = Prefixed(FieldReverse, idBytes);
