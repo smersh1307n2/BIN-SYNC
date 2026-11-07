@@ -20,7 +20,7 @@ internal static class ChangeIdentity
     private static readonly byte[] Domain = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-ID/v1");
 
     internal static Digest16 Fingerprint(int namespaceId, RecordId recordId, byte opKind,
-        object operation, NodeId resolvedAuthor)
+        object operation, NodeId resolvedAuthor, IReadOnlyList<BatchId>? causalDeps = null)
     {
         Node.ValidateNamespaceId(namespaceId);
         // Never mutate the decoded operation: ApplyBatch still needs to know whether
@@ -50,12 +50,32 @@ internal static class ChangeIdentity
         var w = new Writer(Domain.Length + 2 + 16 + 1 + 5 + canonicalOperation.Length);
         w.Raw(Domain).U16((ushort)namespaceId).B128(recordId).U8(opKind)
             .Varint((ulong)canonicalOperation.Length).Raw(canonicalOperation);
+
+        // Causal dependencies are semantically relevant when ApplyBatchCausal is
+        // enabled. Their order and duplicate repetitions are not, so normalize as
+        // a sorted set while keeping the empty/common path allocation-free.
+        if (causalDeps is null || causalDeps.Count == 0)
+            w.Varint(0);
+        else
+        {
+            var unique = new HashSet<BatchId>();
+            for (int i = 0; i < causalDeps.Count; i++)
+            {
+                if (causalDeps[i].IsZero)
+                    throw new InvalidDataException("Causal dependency ID cannot be zero.");
+                unique.Add(causalDeps[i]);
+            }
+            var sorted = unique.OrderBy(id => id.Lo).ThenBy(id => id.Hi).ToArray();
+            w.Varint((ulong)sorted.Length);
+            foreach (var dependency in sorted) w.B128(dependency);
+        }
         return Digests.Blake3Digest16(w.Value());
     }
 
     internal static Digest16 Fingerprint(OutboxEntry entry)
     {
         var operation = Ops.DecodeOp(entry.Payload).Op;
-        return Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind, operation, entry.AuthorNodeId);
+        return Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind, operation,
+            entry.AuthorNodeId, entry.CausalDepsOrNull);
     }
 }
