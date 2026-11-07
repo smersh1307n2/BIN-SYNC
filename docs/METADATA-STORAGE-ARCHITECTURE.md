@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Storage and External Data Provider Architecture
 
-**Status:** Architecture contract v0.5 — two-assembly FLD Storage boundary and compact BIN-SYNC metadata implementation are recorded.  
+**Status:** Architecture contract v0.5 — two-assembly FLD Storage boundary, compact BIN-SYNC metadata P1 and provider-independent Metadata Store semantic/conformance baseline are recorded.  
 **Scope:** separation of synchronization runtime, external data providers, and durable metadata storage.  
 **Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL (E-24 defines route-independent ChangeId dedup; E-25 defines fail-closed tombstone retention). **Wire format:** unchanged by the metadata work recorded here. The route-independent ChangeId fingerprint/dedup behavior is implemented and tested in the current core branch, and is now specified by BIN-SYNC CORE E-24; independent cross-implementation conformance vectors remain a release gate.  
 **Implementation status:** BIN-SYNC core metadata P1 is implemented through NodePersistence v12, adaptive receipt indexing, compact 16-byte ledger values, safe per-author Outbox ACK aggregation and retained ChangeId→OutboxSeq resolution. FLD relay provenance transaction, receipt/dedup GC horizons and Storage physical format remain open; the current Node API alone does not implement the complete cross-repository adapter contract.
@@ -85,7 +85,7 @@ A provider may expose a native durable change feed. If it does not, the integrat
 
 The Metadata Store is responsible for durable synchronization metadata, not for interpreting user data semantics. It stores the minimum state needed by BIN-SYNC to continue safely after restart.
 
-The store must expose semantic atomic operations or transactions. A generic key/value CRUD interface alone is insufficient because correctness depends on atomic transitions across several metadata categories.
+The store must expose semantic atomic operations or transactions. A generic key/value CRUD interface alone is insufficient because correctness depends on atomic transitions across several metadata categories. The operation semantics and provider-independent acceptance matrix are maintained in [Metadata Store Semantic Contract and Conformance Plan](METADATA-STORE-CONFORMANCE.md); that document deliberately does not freeze public C# type or method names.
 
 A Metadata Store may also retain canonical change payloads when required for durable outbound delivery or relay. It must not be forced to store the entire current user dataset.
 
