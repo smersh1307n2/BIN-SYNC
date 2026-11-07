@@ -2,8 +2,8 @@
 
 **Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
 **Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged)  
-**CI:** run #1276 successful — 588/588 tests, fuzz/lab 31/31, all three public samples pass, line coverage 70.7%.  
-**Audit status:** stream/fragment binding audited; general Metadata Store / external Data Provider architecture documented as a design draft; a separate change-staging/coalescing/retention policy now defines unpublished LWW coalescing versus immutable published/relay history. The specialized FLD synchronized-database contract is aligned with the new architecture and current FLD branch APIs. External-store runtime boundary, durable pending-change staging/freeze, and FLD Storage-only role are not implemented. Full normative §§4–18 audit remains in progress; no percentage-based spec-parity claim is made.
+**CI:** GitHub Actions run [42359682214](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/42359682214) successful — 637/637 tests, public samples pass, fuzz/lab hardening pass, line coverage 72.5%.  
+**Audit status:** stream/fragment binding audited; Metadata Store architecture v0.6, Metadata Store semantic conformance, Data Provider semantic conformance, change-staging/retention policy and the specialized FLD synchronized-database contract are documented. Test-only volatile reference fixtures cover 20 Metadata Store and six Data Provider semantic scenarios. They do not constitute durable providers/stores or restart guarantees. External-store runtime boundary, durable PendingLocal staging/freeze and FLD Storage-only implementation are not implemented. Full normative §§4–18 audit remains in progress; no percentage-based spec-parity claim is made.
 
 Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
@@ -29,7 +29,8 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 | Lab / fuzz | §17 | in CI |
 | Schema evolution | §18 | **partial** — opt-in metadata compatibility gate; not a runtime merge-policy dispatcher |
 | Public examples | samples | all three build and execute in CI |
-| Errata E-1…E-13 | v2.3.7 | incorporated into the current specification |
+| Errata E-1…E-13 | v2.3.7 | incorporated into current specification v2.4.19 FINAL |
+| Errata E-24 / E-25 | v2.4.18 / v2.4.19 | normative route-independent ChangeId identity/equivocation and fail-closed tombstone retention |
 
 ## Verified correctness fixes in this audit
 
@@ -47,23 +48,19 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
 ## Release gates still open
 
-- Complete normative audit of remaining §§4–18 and cross-check every normative scenario against executable tests.
-- **Decision recorded:** snapshot completion is not an Outbox ACK, relay-retention boundary or ChangeId-ledger GC watermark. Current SnapshotTail semantics/runtime DTO are insufficient to establish a safe cursor baseline; do not advance cursors or reclaim history from snapshot alone.
-- Promote the global ChangeId ledger and conflicting-fingerprint rejection rules into a normative protocol erratum; the storage architecture is a target decision, not yet part of v2.4.17 FINAL.
-- **Open optimization gate:** exact global `(scope, localReplicaId, namespace, ChangeId)` plus canonical fingerprint remains the safe fallback, not a final size decision. Evaluate a stable per-operation origin sequence with compact high-watermark/gap retention; it must preserve cross-peer replay suppression, snapshot/bootstrap safety and same-identity/different-payload conflict detection. No implementation until the protocol proof and conformance tests exist.
-- **Decision recorded:** compact Inbox receipts retain cursor range, resolved author, BatchDigest, RecordsRoot, PreviousBatchDigest, original ACK result, appliedAt/expiresAt and durable commit identity. NodePersistence v5 migration must preserve or safely derive these facts; implementation remains pending.
-- **Decision recorded:** duplicate Inbox key is valid only when cursor range, author stream and all stored digest/chain fields match; conflicting BatchId reuse is rejected. Node.ApplyBatch validation is not yet aligned.
-- **Decision recorded:** cross-peer dedup must survive Outbox/RelayJournal payload compaction; payload and dedup lifetimes are separate. The exact ledger is the safe fallback; origin-sequence/range compaction remains under review.
-- **Decision recorded:** prune PeerState.Ids only in the same durable ACK transaction after the matching peer/namespace/author StreamAcked covers the full cursorEnd; current ProcessAckInternal does not yet prune this cache.
-- **Decision recorded:** ProtocolStateDelta is a bounded per-batch recovery envelope, materialized into indexed metadata; retain raw bytes only in a pending-apply intent across separate-store recovery, delete after finalization, and never return the full delta on duplicate ACK.
-- Split FLD remote APPLY receipt from relay payload retention and remove duplicate relay payload encoding (Fields + RelayFields subset + full ApplyJournal copy). Current ApplyJournal is append-only and has no public ACK/compaction boundary. Its current per-batch RAM indexes are unbounded and paging rescans historical entries; fix both disk retention and index/read complexity.
-- Complete the two-assembly FLD boundary (`Fld1.Storage.dll` + `Fld1.Database.dll`) and standalone storage-only conformance tests; Database references Storage, never the reverse.
-- Complete the generic Metadata Store and Data Provider contracts from `docs/METADATA-STORAGE-ARCHITECTURE.md`, including conformance tests and the external-provider recovery protocol.
-- Implement and test the pending-local-change → frozen-Outbox lifecycle from `docs/CHANGE-STAGING-AND-RETENTION.md`. Current FLD coalesces repeated writes only within one uncommitted dirty set; separate commits currently create separate Outbox entries. The proposed pre-publication coalescing is a design decision, not current behavior.
-- Integrate BIN-SYNC runtime persistence behind the new boundary. Current Node dictionaries and Node WAL remain authoritative in the existing implementation; the architecture document is not yet implemented.
-- Complete the FLD synchronized-database boundary: FLD `ApplyRemoteBatch`, durable apply journal, and fenced Outbox lease/high-watermark primitives now exist on the FLD branch, but BIN-SYNC integration, relay safe-ACK/retention, and consistent snapshot contract still require verification and completion. The legacy `FldDatabase.ApplyRemote(...); Commit()` path remains explicitly unsafe.
-- **Architecture recorded:** Storage-only mode uses the domain-neutral `Fld1.Storage.dll` byte engine directly, without loading `Fld1.Database.dll` or creating synthetic HLC/author/ChangeId/Outbox state. See FLD-DB `docs/FLD-STORAGE-CORE-ARCHITECTURE.md`; separate project/build outputs and physical-format conformance remain implementation work.
-- Do not rewrite unacknowledged Outbox entries to coalesce them. Freeze pending operations durably before transport exposure; frozen entries and remote relay operations remain immutable under their separate retention rules.
+- Complete the normative audit of remaining §§4–18 and cross-check every normative scenario against executable tests. No spec-parity percentage is claimed.
+- **Snapshot retention:** current snapshot completion is not an Outbox ACK, relay-retention boundary or ChangeId-ledger GC watermark. SnapshotTail/runtime DTO still lacks the per-author cut and completion/fencing proof needed for safe historical retention.
+- **E-24 implemented and normative (v2.4.18):** exact global `(namespaceId, ChangeId)` identity with canonical semantic fingerprint and equivocation rejection is implemented. Origin-sequence/range compression remains an unapproved representation alternative; it must prove mesh replay, snapshot/bootstrap and equivocation safety before replacing the exact ledger.
+- **E-25 normative (v2.4.19):** tombstone/ghost GC remains disabled until durable namespace membership/safe-frontier, stale-peer fencing and mandatory authoritative full-resync semantics are implemented. TTL/HLC age and GC_NOTICE alone never authorize deletion.
+- **Inbox/receipt lifecycle:** NodePersistence v12 adaptive receipt encoding and global 16-byte ChangeId ledger are implemented. Receipt expiry/GC and independent dedup retention horizons remain open; do not couple them to relay payload ACK.
+- **Peer cache pruning:** prune `PeerState.Ids` only in the same durable ACK transaction after matching peer/namespace/author StreamAcked covers the full cursorEnd; this remains an implementation gate.
+- **ProtocolStateDelta:** the bounded per-batch recovery-envelope lifecycle is specified and pending-apply semantics have volatile conformance tests. Durable separate-store provider receipts, restart recovery and production metadata finalization remain unimplemented.
+- **FLD APPLY/relay:** APPLY_COMMIT v3 single-encoding, relay-only ApplyJournal, per-author JournalSeq ACK sidecar and post-WAL-seal relay payload compaction are implemented on the FLD branch. The cross-system JournalSeq → ChangeId → OutboxSeq provenance map, outbound publication gate and ACK translation remain open; receipt GC and bounded/rebuildable journal indexing also remain open.
+- **Two-DLL FLD boundary:** architecture is decided (`Fld1.Storage.dll` + `Fld1.Database.dll`, one-way Database → Storage); extraction into the final public assemblies and Storage-only physical conformance remain implementation work.
+- **Metadata Store / Data Provider:** semantic contracts and test-only volatile fixtures now exist (20 Metadata Store tests; six Data Provider tests). Durable adapters, actual provider reopen/fault-injection, shared-transaction integration and end-to-end separate-store recovery remain open.
+- **PendingLocal:** pre-publication local LWW coalescing and freeze remain a design contract, not implemented. Separate commits to one field still create separate frozen Outbox operations; never rewrite an unacknowledged/published Outbox entry.
+- **Runtime persistence refactor:** Node dictionaries plus NodePersistence/WAL remain authoritative in the current runtime. Moving them behind the neutral Metadata Store boundary is not implemented.
+- **Storage-only role:** design uses `Fld1.Storage.dll` directly without loading `Fld1.Database.dll` or fabricating HLC/author/ChangeId/Outbox. Physical implementation and conformance remain open.
 - Confirm final documentation/specification parity on the complete branch diff.
 - Review PR #16 diff and CI once more; only then request explicit approval to merge into main.
 

@@ -166,6 +166,8 @@ MergePolicyRegistry is a standalone helper registry; it is not connected to Node
 
 ### Persistence
 
+The current `NodePersistence` / `Wal` surface is Node-owned persistence, not the future neutral Metadata Store or Data Provider API. The external provider/store architecture and semantic conformance contracts are documented separately and currently have test-only volatile reference adapters; no durable external Metadata Store or Data Provider implementation is part of the 3.0.0 public API.
+
 `NodePersistence` stores the complete Node snapshot. `Wal` is a v2-only append log. Hosts use `Checkpoint(Node, snapshotPath)` for the atomic snapshot-and-reset transition; raw truncate and checkpoint-marker append are internal. The sequence is read-only and synchronized:
 each local mutation is one integrity-protected frame containing both the operation
 and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time and

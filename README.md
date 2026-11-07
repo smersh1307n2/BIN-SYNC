@@ -4,10 +4,12 @@ Compact binary sync protocol (BIN-SYNC CORE) and a .NET 10 reference implementat
 
 | Artifact | Path |
 |---|---|
-| Spec (v2.4.17) | [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt) |
+| Spec (v2.4.19 FINAL) | [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt) |
 | Historical addendum (v2.3.7) | [BIN-SYNC-v2.3.7-ADDENDUM.txt](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [docs/PRODUCTION-STATUS.md](docs/PRODUCTION-STATUS.md) |
 | Metadata storage / external provider architecture | [docs/METADATA-STORAGE-ARCHITECTURE.md](docs/METADATA-STORAGE-ARCHITECTURE.md) |
+| Metadata Store semantic contract / conformance | [docs/METADATA-STORE-CONFORMANCE.md](docs/METADATA-STORE-CONFORMANCE.md) |
+| Data Provider semantic contract / conformance | [docs/DATA-PROVIDER-CONFORMANCE.md](docs/DATA-PROVIDER-CONFORMANCE.md) |
 | FLD Storage Core extraction boundary | [FLD Storage Core architecture](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-STORAGE-CORE-ARCHITECTURE.md) |
 | Change staging / coalescing / retention policy | [docs/CHANGE-STAGING-AND-RETENTION.md](docs/CHANGE-STAGING-AND-RETENTION.md) |
 | FLD-DB synchronized-database contract | [docs/FLD-DB-INTEGRATION-CONTRACT.md](docs/FLD-DB-INTEGRATION-CONTRACT.md) |

@@ -1,5 +1,13 @@
 # Changelog — BinSync.Core
 
+## Unreleased — 2026-11-07
+
+- Normative protocol specification advanced to BIN-SYNC CORE v2.4.19 FINAL. E-24 defines route-independent ChangeId identity/equivocation rejection; E-25 keeps tombstone/ghost GC fail-closed until a durable membership/safe-frontier and stale-peer recovery proof exists. No frame layout change is introduced by these errata.
+- Added provider-independent Metadata Store semantic conformance contract and volatile reference fixture (20 semantic tests plus a durability-profile assertion).
+- Added Data Provider semantic contract and volatile reference conformance fixture (six semantic tests plus a durability-profile assertion).
+- Added cross-repository storage documentation map and clarified the two-DLL FLD boundary. This documentation/test-only work does not ship a production Metadata Store/Data Provider API.
+
+
 ## 3.0.0 — 2026-11-06
 
 - Apply causal timeout only while parents remain missing; a batch requeued after a normal stream-gate failure stays retryable once its dependencies are already known.
