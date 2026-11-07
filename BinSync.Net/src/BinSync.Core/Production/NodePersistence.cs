@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v10", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v11", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v10";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v11";
+    private const string Version10StateTag = "BIN-SYNC/NODESTATE/v10";
     private const string Version9StateTag = "BIN-SYNC/NODESTATE/v9";
     private const string Version8StateTag = "BIN-SYNC/NODESTATE/v8";
     private const string Version7StateTag = "BIN-SYNC/NODESTATE/v7";
@@ -38,7 +39,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 10;
+    private const ushort Version = 11;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -103,8 +104,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 9, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -119,6 +120,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 10)
+        {
+            var v10 = Blake3Core.TaggedHash(Version10StateTag, body);
+            validDigest = v10.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 9)
         {
@@ -308,11 +314,11 @@ public static class NodePersistence
                 { w.B128(author); w.U64((ulong)start); w.U64((ulong)end); w.B128(id); w.B128(prev); }
             }
 
-            // --- provenance seen-set (Errata E-10/E-13)
+            // --- local WAL replay markers; NodeId is implicit in this state image.
             w.Varint((ulong)n.SeenChanges.Count);
-            foreach (var (peer, ns, cid) in n.SeenChanges.OrderBy(k => k.Peer.Lo).ThenBy(k => k.Peer.Hi).ThenBy(k => k.Ns)
-                                                         .ThenBy(k => k.ChangeId.Lo).ThenBy(k => k.ChangeId.Hi))
-            { w.B128(peer); w.Varint((ulong)ns); w.B128(cid); }
+            foreach (var (ns, cid) in n.SeenChanges.OrderBy(k => k.Ns)
+                                                   .ThenBy(k => k.ChangeId.Lo).ThenBy(k => k.ChangeId.Hi))
+            { w.Varint((ulong)ns); w.B128(cid); }
 
             // --- route-independent ChangeId fingerprints grouped by namespace.
             // Namespace is repeated once per group, not once per operation.
@@ -671,20 +677,34 @@ public static class NodePersistence
         }
 
         int seenCount = (int)r.Varint();
-        var persistedSeen = new List<(NodeId Peer, int Ns, BatchId ChangeId)>(seenCount);
-        for (int i = 0; i < seenCount; i++)
+        List<(NodeId Peer, int Ns, BatchId ChangeId)>? persistedLegacySeen = null;
+        if (version >= 11)
         {
-            var peer = NodeId.From(r.B128());
-            var ns = (int)r.Varint();
-            var changeId = BatchId.From(r.B128());
-            persistedSeen.Add((peer, ns, changeId));
+            for (int i = 0; i < seenCount; i++)
+            {
+                int ns = (int)r.Varint();
+                var changeId = BatchId.From(r.B128());
+                if ((uint)ns > ushort.MaxValue || changeId.IsZero ||
+                    !n.SeenChanges.Add((ns, changeId)))
+                    throw new InvalidDataException("Invalid or duplicate persisted local WAL replay marker.");
+            }
         }
-        // Only local WAL replay markers remain in SeenChanges. Remote provenance
-        // is now covered by the global ChangeId ledger and need not be duplicated
-        // once per sender peer.
-        foreach (var (peer, ns, changeId) in persistedSeen)
-            if (peer == nodeId)
-                n.SeenChanges.Add((peer, ns, changeId));
+        else
+        {
+            persistedLegacySeen = new List<(NodeId Peer, int Ns, BatchId ChangeId)>(seenCount);
+            for (int i = 0; i < seenCount; i++)
+            {
+                var peer = NodeId.From(r.B128());
+                var ns = (int)r.Varint();
+                var changeId = BatchId.From(r.B128());
+                persistedLegacySeen.Add((peer, ns, changeId));
+            }
+            // Legacy route-scoped rows are folded into global unknown markers below;
+            // only rows belonging to this node remain local WAL replay markers.
+            foreach (var (peer, ns, changeId) in persistedLegacySeen)
+                if (peer == nodeId && (uint)ns <= ushort.MaxValue && !changeId.IsZero)
+                    n.SeenChanges.Add((ns, changeId));
+        }
 
         if (version >= 10)
         {
@@ -737,7 +757,7 @@ public static class NodePersistence
             // v3-v5 only had route-scoped SeenChanges and no semantic fingerprint.
             // Preserve every historical identity conservatively as an explicit
             // unknown marker before dropping redundant remote peer provenance.
-            foreach (var (_, ns, changeId) in persistedSeen)
+            foreach (var (_, ns, changeId) in persistedLegacySeen ?? Enumerable.Empty<(NodeId Peer, int Ns, BatchId ChangeId)>())
                 n.GlobalChangeLedger.TryAdd((ns, changeId),
                     new ChangeLedgerValue(default, isKnown: false));
         }
