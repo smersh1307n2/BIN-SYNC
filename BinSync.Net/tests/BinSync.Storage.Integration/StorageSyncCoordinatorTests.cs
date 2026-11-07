@@ -44,7 +44,7 @@ public sealed class StorageSyncCoordinatorTests
         sendCts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
 
-        Assert.Equal(1, metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId).Count);
+        Assert.Single(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
         Assert.False(receiver.TryGetField(1, record, 0x0812, out _));
         Assert.Equal(1, coordinator.RecoverPendingApplies(_ => { }));
         Assert.Empty(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
