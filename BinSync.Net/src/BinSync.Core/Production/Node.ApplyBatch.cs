@@ -178,7 +178,7 @@ public sealed partial class Node
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         }
         result.DurableAuthor = batch.DurableAuthor;
-        var streamKey = (senderPeer, batch.IssuerEpoch, batch.NamespaceId, streamAuthor);
+        var streamKey = (senderPeer, batch.IssuerEpoch, streamAuthor);
         long expected = (ps is not null && ps.ReceivedStreams.TryGetValue(streamKey, out var ex) ? ex : 0) + 1;
         if (batch.CursorStart != expected)
             throw new SyncException("SEQ_GAP", batch.BatchId);
@@ -619,13 +619,13 @@ public sealed partial class Node
             var current = ps.AckedFor(author);
             if (ackedSeq > current)
             {
-                long offset = ps.StreamOffsets.TryGetValue(author, out var savedOffset) ? savedOffset : 0;
+                long offset = ps.TryGetStreamOffset(author, out var savedOffset) ? savedOffset : 0;
                 long localCurrent = checked(current + offset);
                 long localRequested = checked(ackedSeq + offset);
-                if (!ps.StreamPushed.TryGetValue(author, out var pushed) || ackedSeq > pushed ||
+                if (!ps.TryGetStreamPushed(author, out var pushed) || ackedSeq > pushed ||
                     !HasContiguousOutboxRange(entries, author, localCurrent, localRequested))
                     throw new SyncException("ACK_OUT_OF_RANGE");
-                ps.StreamAcked[author] = ackedSeq;
+                ps.SetStreamAcked(author, ackedSeq);
             }
         }
         else
@@ -635,23 +635,25 @@ public sealed partial class Node
             // a contiguous range still present in the outbox.
             if (ackedSeq > ps.LastPushedSeq)
                 throw new SyncException("ACK_OUT_OF_RANGE");
-            foreach (var (author, pushed) in ps.StreamPushed)
+            foreach (var (author, progress) in ps.AuthorProgress)
             {
+                if (!progress.HasPushed) continue;
+                long pushed = progress.Pushed;
                 var current = ps.AckedFor(author);
                 var target = Math.Min(ackedSeq, pushed);
                 if (target <= current) continue;
-                long offset = ps.StreamOffsets.TryGetValue(author, out var savedOffset) ? savedOffset : 0;
+                long offset = ps.TryGetStreamOffset(author, out var savedOffset) ? savedOffset : 0;
                 long localCurrent = checked(current + offset);
                 long localTarget = checked(target + offset);
                 var contiguous = ContiguousOutboxEnd(entries, author, localCurrent, localTarget);
                 if (contiguous > localCurrent)
-                    ps.StreamAcked[author] = contiguous - offset;
+                    ps.SetStreamAcked(author, contiguous - offset);
             }
         }
 
         // legacy mirror: monotone scalar = min over known streams' watermarks.
-        if (ps.StreamAcked.Count > 0)
-            ps.LastAckedSeq = ps.StreamAcked.Values.Min();
+        if (ps.StreamAckedCount > 0)
+            ps.LastAckedSeq = ps.MinStreamAcked;
 
         // Ids only makes retransmission deterministic while a cursor range is
         // outstanding. Once a validated contiguous ACK covers the complete range,
@@ -666,7 +668,7 @@ public sealed partial class Node
         List<(NodeId Author, long Start, long End)>? acknowledged = null;
         foreach (var key in peerState.Ids.Keys)
         {
-            if (peerState.StreamAcked.TryGetValue(key.Author, out var acked) &&
+            if (peerState.TryGetStreamAcked(key.Author, out var acked) &&
                 key.End <= acked)
             {
                 (acknowledged ??= new List<(NodeId Author, long Start, long End)>()).Add(key);
