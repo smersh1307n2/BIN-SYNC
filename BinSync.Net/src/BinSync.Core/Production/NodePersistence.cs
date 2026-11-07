@@ -422,15 +422,22 @@ public static class NodePersistence
         HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)>? legacyInbox = null;
         if (version >= 10)
         {
-            int groupCount = (int)r.Varint();
+            ulong rawGroupCount = r.Varint();
+            if (rawGroupCount > int.MaxValue)
+                throw new InvalidDataException("Persisted receipt group count is too large.");
+            int groupCount = (int)rawGroupCount;
+            var receiptGroupKeys = new HashSet<(NodeId Issuer, int Ns, int Epoch)>();
             for (int gi = 0; gi < groupCount; gi++)
             {
                 var issuer = NodeId.From(r.B128());
                 var ns = (int)r.Varint();
                 var ep = (int)r.Varint();
-                int receiptCount = (int)r.Varint();
-                if (issuer.IsZero || (uint)ns > ushort.MaxValue || ep < 0 || receiptCount <= 0)
-                    throw new InvalidDataException("Invalid persisted receipt group.");
+                ulong rawReceiptCount = r.Varint();
+                if (rawReceiptCount == 0 || rawReceiptCount > int.MaxValue ||
+                    issuer.IsZero || (uint)ns > ushort.MaxValue || ep < 0 ||
+                    !receiptGroupKeys.Add((issuer, ns, ep)))
+                    throw new InvalidDataException("Invalid or duplicate persisted receipt group.");
+                int receiptCount = (int)rawReceiptCount;
                 for (int i = 0; i < receiptCount; i++)
                 {
                     var batchId = BatchId.From(r.B128());
@@ -681,13 +688,19 @@ public static class NodePersistence
 
         if (version >= 10)
         {
-            int groupCount = (int)r.Varint();
+            ulong rawGroupCount = r.Varint();
+            if (rawGroupCount > int.MaxValue)
+                throw new InvalidDataException("Persisted ChangeId namespace group count is too large.");
+            int groupCount = (int)rawGroupCount;
+            var ledgerNamespaces = new HashSet<int>();
             for (int gi = 0; gi < groupCount; gi++)
             {
                 int ns = (int)r.Varint();
-                int entryCount = (int)r.Varint();
-                if ((uint)ns > ushort.MaxValue || entryCount <= 0)
-                    throw new InvalidDataException("Invalid persisted ChangeId namespace group.");
+                ulong rawEntryCount = r.Varint();
+                if ((uint)ns > ushort.MaxValue || rawEntryCount == 0 ||
+                    rawEntryCount > int.MaxValue || !ledgerNamespaces.Add(ns))
+                    throw new InvalidDataException("Invalid or duplicate persisted ChangeId namespace group.");
+                int entryCount = (int)rawEntryCount;
                 for (int i = 0; i < entryCount; i++)
                 {
                     var changeId = BatchId.From(r.B128());
