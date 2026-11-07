@@ -27,14 +27,16 @@ public interface IMetadataStore : IDisposable
     void AcknowledgeRelay(string scopeId, NodeId localReplica, int namespaceId, NodeId originalAuthor, ulong safeThroughSequence);
     void CompactRelayThrough(string scopeId, NodeId localReplica, int namespaceId, NodeId originalAuthor, ulong safeThroughSequence);
     ulong GetReceiveCursor(string scopeId, NodeId localReplica, NodeId sender, uint senderEpoch, int namespaceId);
-    ulong GetReceiveCursor(string scopeId, NodeId localReplica, NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream);
+    ulong GetReceiveCursor(string scopeId, NodeId localReplica, NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream)
+        => GetReceiveCursor(scopeId, localReplica, sender, senderEpoch, namespaceId);
     ulong GetRelayHighWatermark(string scopeId, NodeId localReplica, int namespaceId, NodeId originalAuthor);
 }
 
 public interface IMetadataStoreSnapshot : IDisposable
 {
     ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId);
-    ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream);
+    ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream)
+        => GetReceiveCursor(sender, senderEpoch, namespaceId);
     ulong GetRelayHighWatermark(int namespaceId, NodeId originalAuthor);
     ulong GetOutboundHighWatermark(int namespaceId, NodeId localAuthor);
     MetadataRelayPage ReadRelay(int namespaceId, NodeId originalAuthor, ulong afterSequence, int limit);
