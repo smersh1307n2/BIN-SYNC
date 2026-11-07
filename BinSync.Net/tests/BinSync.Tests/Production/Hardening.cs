@@ -102,6 +102,13 @@ public class Production : IDisposable
                 if (nid != onidEp.Id || ep != onidEp.Epoch) return false;
             }
         }
+        if (x.NodeToAlias.Count != y.NodeToAlias.Count) return false;
+        foreach (var (peer, map) in x.NodeToAlias)
+        {
+            if (!y.NodeToAlias.TryGetValue(peer, out var om) || map.Count != om.Count) return false;
+            foreach (var (binding, alias) in map)
+                if (!om.TryGetValue(binding, out var otherAlias) || alias != otherAlias) return false;
+        }
         if (x.PeerStates.Count != y.PeerStates.Count) return false;
         foreach (var (k, ps) in x.PeerStates)
         {
@@ -235,19 +242,19 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V12TagAndAuthorProgressRoundTrip()
+    public void Persistence_V13TagAndAuthorProgressAndAliasIndexesRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
         var author = a.NodeId;
         peer.SetStreamOffset(author, 17);
-        var path = Path.Combine(_dir, "tag-v12.state");
+        var path = Path.Combine(_dir, "tag-v13.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)12, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)13, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v12", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v13", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));

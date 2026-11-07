@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v12", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v13", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -14,7 +14,7 @@
 //  identity (NodeId, Epoch), HLC clock (LastWall/LastLogical), Storage (ns -> recordId
 //  -> Record with FieldState/HLC/ghost lifecycle + FieldTombs), Outbox per namespace,
 //  per-(author,ns) outbox seq counters, unified batch receipts (key -> durable author), LastBatchDigest and
-//  LastStreamDigest chain checkpoints, AliasToNode/NodeToAlias, DurableAuthors,
+//  LastStreamDigest chain checkpoints, AliasToNode (reverse NodeToAlias is rebuilt on load), DurableAuthors,
 //  PeerStates (compact per-author progress, ReceivedStreams and replay Ids caches),
 //  local SeenChanges WAL replay markers, GlobalChangeLedger (namespace + ChangeId -> canonical semantic fingerprint), LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
 //
@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v12";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v13";
+    private const string Version12StateTag = "BIN-SYNC/NODESTATE/v12";
     private const string Version11StateTag = "BIN-SYNC/NODESTATE/v11";
     private const string Version10StateTag = "BIN-SYNC/NODESTATE/v10";
     private const string Version9StateTag = "BIN-SYNC/NODESTATE/v9";
@@ -40,7 +41,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 12;
+    private const ushort Version = 13;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -105,8 +106,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 12 && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 12, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -121,6 +122,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 12)
+        {
+            var v12 = Blake3Core.TaggedHash(Version12StateTag, body);
+            validDigest = v12.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 11)
         {
@@ -306,14 +312,8 @@ public static class NodePersistence
                 foreach (var (alias, (nid, ep)) in map.OrderBy(k => k.Key))
                 { w.Varint((ulong)alias); w.B128(nid.ToArray()); w.Varint((ulong)ep); }
             }
-            w.Varint((ulong)n.NodeToAlias.Count);
-            foreach (var (peer, map) in n.NodeToAlias.OrderBy(k => k.Key.ToString()))
-            {
-                w.B128(peer.ToArray());
-                w.Varint((ulong)map.Count);
-                foreach (var ((nid, ep), alias) in map.OrderBy(k => k.Key.Id.ToString()).ThenBy(k => k.Key.Epoch))
-                { w.B128(nid.ToArray()); w.Varint((ulong)ep); w.Varint((ulong)alias); }
-            }
+            // NodeToAlias is a deterministic reverse index of AliasToNode. Keep it in memory
+            // for O(1) reverse lookup, but do not persist the same bindings twice. v13 rebuilds it.
 
             // --- durable authors (Errata E-9)
             w.Varint((ulong)n.DurableAuthors.Count);
@@ -639,18 +639,39 @@ public static class NodePersistence
             }
             n.AliasToNode[(NodeId)peer] = map;
         }
-        int n2aCount = ReadCount(r, 17, "node alias peer");
-        for (int i = 0; i < n2aCount; i++)
+        if (version < 13)
         {
-            var peer = r.B128();
-            int cnt = ReadCount(r, 18, "node alias");
-            var map = new Dictionary<(NodeId Id, int Epoch), int>();
-            for (int j = 0; j < cnt; j++)
+            int n2aCount = ReadCount(r, 17, "node alias peer");
+            for (int i = 0; i < n2aCount; i++)
             {
-                var nid = r.B128(); var ep = ReadInt32Varint(r); var alias = ReadInt32Varint(r);
-                map[((NodeId)nid, ep)] = alias;
+                var peer = r.B128();
+                int cnt = ReadCount(r, 18, "node alias");
+                var map = new Dictionary<(NodeId Id, int Epoch), int>();
+                for (int j = 0; j < cnt; j++)
+                {
+                    var nid = r.B128(); var ep = ReadInt32Varint(r); var alias = ReadInt32Varint(r);
+                    map[((NodeId)nid, ep)] = alias;
+                }
+                n.NodeToAlias[(NodeId)peer] = map;
             }
-            n.NodeToAlias[(NodeId)peer] = map;
+        }
+        else
+        {
+            // The forward map is authoritative in v13. Rebuild and validate the
+            // in-memory reverse index rather than persisting duplicate bindings.
+            foreach (var (peer, forward) in n.AliasToNode)
+            {
+                if (peer.IsZero)
+                    throw new InvalidDataException("Zero peer in persisted alias map.");
+                var reverse = new Dictionary<(NodeId Id, int Epoch), int>(forward.Count);
+                foreach (var (alias, binding) in forward)
+                {
+                    if (alias <= 0 || binding.Id.IsZero || binding.Epoch < 0 ||
+                        !reverse.TryAdd(binding, alias))
+                        throw new InvalidDataException("Invalid or conflicting persisted alias binding.");
+                }
+                n.NodeToAlias.Add(peer, reverse);
+            }
         }
 
         int daCount = ReadCount(r, 17, "durable author");
