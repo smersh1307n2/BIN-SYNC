@@ -269,12 +269,8 @@ public sealed partial class Node
         var relayIndices = batch.IssuerNodeId != NodeId
             ? new List<int>(Math.Min(nEnt, 16))
             : new List<int>(0);
-        var newSeenKeys = batch.IssuerNodeId != NodeId
-            ? new HashSet<(NodeId Peer, int Ns, BatchId ChangeId)>()
-            : null;
-        // The same provenance can arrive through different peers. Keep the
-        // per-peer SeenChanges keys for echo detection, but enqueue a ChangeId
-        // for relay at most once in this namespace.
+        // The global ChangeId ledger is now the sole remote dedup authority.
+        // SeenChanges is reserved for local WAL replay markers only.
         var queuedChangeIds = new HashSet<BatchId>();
         if (Outbox.TryGetValue(batch.NamespaceId, out var queuedEntries))
             for (int qi = 0; qi < queuedEntries.Count; qi++)
@@ -288,11 +284,6 @@ public sealed partial class Node
                 var e = batch.Entries[idx];
                 var cid = e.ChangeId; // mandatory provenance identity; never synthesize on receive
                 relayChangeIds[idx] = cid;
-                var ck = (senderPeer, batch.NamespaceId, cid);
-                if (SeenChanges.Contains(ck))
-                    continue; // already accepted provenance consumes no new capacity
-                if (!newSeenKeys!.Add(ck))
-                    continue; // duplicate provenance within this batch
                 if (globalDuplicateFlags[idx])
                     continue; // globally accepted already, regardless of receiving route
                 if (!queuedChangeIds.Add(cid))
@@ -389,7 +380,7 @@ public sealed partial class Node
         foreach (var rid in overlays.Keys)
             if (!nsStore.ContainsKey(rid)) newRecordCount++;
         Limits?.EnsureCanApplyBatch(this, batch.NamespaceId, newRecordCount,
-            relayIndices.Count, newSeenKeys?.Count ?? 0,
+            relayIndices.Count,
             stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
 
         // Prepare every object and reserve every collection slot before the WAL commit
@@ -455,8 +446,6 @@ public sealed partial class Node
         LastBatchDigest.EnsureCapacity(LastBatchDigest.Count + (LastBatchDigest.ContainsKey(chain) ? 0 : 1));
         KnownEpochs.EnsureCapacity(KnownEpochs.Count + (KnownEpochs.ContainsKey(sesKey) ? 0 : 1));
         AcksOut.EnsureCapacity(AcksOut.Count + 1);
-        if (newSeenKeys is not null && newSeenKeys.Count > 0)
-            SeenChanges.EnsureCapacity(SeenChanges.Count + newSeenKeys.Count);
         if (stagedGlobalLedger.Count > 0)
             GlobalChangeLedger.EnsureCapacity(GlobalChangeLedger.Count +
                 stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
@@ -506,9 +495,6 @@ public sealed partial class Node
         // Relay only the entries selected and fully materialized during preflight.
         if (batch.IssuerNodeId != NodeId)
         {
-            foreach (var ck in newSeenKeys!)
-                SeenChanges.Add(ck);
-
             if (stagedRelayEntries.Length > 0)
             {
                 if (!hasRelayOutbox)
