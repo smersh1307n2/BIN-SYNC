@@ -13,15 +13,24 @@ public sealed class StorageSyncCoordinator
     private readonly Node _node;
     private readonly IDataProvider _provider;
     private readonly int _namespaceId;
+    private readonly IMetadataStore? _metadataStore;
+    private readonly string? _scopeId;
     private readonly object _gate = new();
 
-    public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId)
+    public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId,
+        IMetadataStore? metadataStore = null, string? scopeId = null)
     {
         _node = node ?? throw new ArgumentNullException(nameof(node));
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (metadataStore is not null && string.IsNullOrWhiteSpace(scopeId))
+            throw new ArgumentException("A stable metadata scope is required when a Metadata Store is attached.", nameof(scopeId));
+        if (metadataStore is null && scopeId is not null)
+            throw new ArgumentException("A metadata scope cannot be supplied without a Metadata Store.", nameof(scopeId));
         _namespaceId = namespaceId;
+        _metadataStore = metadataStore;
+        _scopeId = scopeId;
     }
 
     /// <summary>
