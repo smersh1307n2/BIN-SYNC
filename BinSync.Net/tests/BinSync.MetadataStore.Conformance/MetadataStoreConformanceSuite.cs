@@ -74,6 +74,7 @@ public abstract class MetadataStoreConformanceSuite
             Operation(21, 31, 41, 51)));
 
         store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 1);
+        store.CompactRelayThrough("scope-a", Node(1), 7, Node(20), 1);
 
         Assert.Empty(store.ReadRelay("scope-a", Node(1), 7, Node(20), 0, 10).Items);
         Assert.Single(store.ReadRelay("scope-a", Node(1), 7, Node(21), 0, 10).Items);
@@ -270,6 +271,26 @@ public abstract class MetadataStoreConformanceSuite
             "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 2, 0));
+    }
+
+    [Fact]
+    public void Outbound_compaction_preserves_highwater_and_prevents_change_id_reuse()
+    {
+        using var store = CreateStore();
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+            new[] { FrozenOperation(30, 50), FrozenOperation(31, 51) });
+        ulong lease = store.AcquireOutboundLease(
+            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), lease, 2);
+        store.CompactOutboundThrough("scope-a", Node(1), 7, Node(20), 2);
+
+        Assert.Empty(store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 0, 10).Items);
+        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+        Assert.Throws<InvalidDataException>(() =>
+            store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(30, 52) }));
+
+        var next = store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(32, 53) });
+        Assert.Equal(3UL, Assert.Single(next).Sequence);
     }
 
     protected static MetadataIncomingBatch CreateBatch(
