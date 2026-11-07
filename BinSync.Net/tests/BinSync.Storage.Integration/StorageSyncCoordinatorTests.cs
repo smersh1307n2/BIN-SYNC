@@ -137,6 +137,7 @@ public sealed class StorageSyncCoordinatorTests
         sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("two"), new Hlc(2000, 0));
         sender.WriteField(1, recordId, fieldId, Encoding.UTF8.GetBytes("three"), new Hlc(3000, 0));
 
+        Transport.MakeSession(sender, receiver);
         var coordinator = new StorageSyncCoordinator(receiver, provider, 1);
         var delivered = Transport.DeliverBatch(sender, receiver, 1,
             beforeAck: (_, batch, _) => coordinator.ApplyRemoteBatch(batch));
