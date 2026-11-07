@@ -657,6 +657,73 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Durable_receipt_rejects_full_header_equivocation_after_reopen()
+    {
+        string directory = Path.Combine(_root, "header-fingerprint-receipt");
+        Directory.CreateDirectory(directory);
+        const string scope = "header-fingerprint-receipt";
+        NodeId local = Node(81), sender = Node(82), author = Node(83);
+        var batch = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 3,
+            AuthorStreamNodeId = author,
+            NamespaceId = 9,
+            BatchId = BatchId.From(Bytes(84)),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = Bytes(0),
+            BatchDigest = Bytes(85),
+            HeaderFingerprint = Bytes(86),
+            ReceiveStateOwnedByMetadataStore = true,
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = BatchId.From(Bytes(87)),
+                    Fingerprint = Bytes(88),
+                    Payload = Bytes(89),
+                    RelayEligible = false
+                }
+            }
+        };
+        var equivocation = new MetadataIncomingBatch
+        {
+            ScopeId = batch.ScopeId,
+            LocalReplica = batch.LocalReplica,
+            SenderPeer = batch.SenderPeer,
+            SenderEpoch = batch.SenderEpoch,
+            AuthorStreamNodeId = batch.AuthorStreamNodeId,
+            NamespaceId = batch.NamespaceId,
+            BatchId = batch.BatchId,
+            CursorStart = batch.CursorStart,
+            CursorEnd = batch.CursorEnd,
+            PreviousBatchDigest = batch.PreviousBatchDigest.ToArray(),
+            BatchDigest = batch.BatchDigest.ToArray(),
+            HeaderFingerprint = Bytes(90),
+            ReceiveStateOwnedByMetadataStore = true,
+            Operations = batch.Operations
+        };
+
+        using var storage = StorageDatabase.Open(directory, 453);
+        using (var store = new StorageMetadataStore(storage))
+        {
+            MetadataBatchReceipt accepted = store.AcceptIncomingBatch(batch);
+            Assert.Equal(batch.HeaderFingerprint, accepted.HeaderFingerprint);
+            Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(equivocation));
+        }
+
+        using var reopened = new StorageMetadataStore(storage);
+        MetadataBatchReceipt duplicate = reopened.AcceptIncomingBatch(batch);
+        Assert.True(duplicate.IsDuplicate);
+        Assert.Equal(batch.HeaderFingerprint, duplicate.HeaderFingerprint);
+        Assert.Throws<InvalidDataException>(() => reopened.AcceptIncomingBatch(equivocation));
+    }
+
+    [Fact]
     public void Peer_roster_baseline_and_epoch_retirement_commit_as_atomic_deltas()
     {
         string directory = Path.Combine(_root, "peer-lifecycle-deltas");
