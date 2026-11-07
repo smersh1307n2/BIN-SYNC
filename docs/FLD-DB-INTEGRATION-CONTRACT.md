@@ -117,6 +117,8 @@ Relay journal сохраняет исходную mutation identity и соде�
 
 Relay retention/compaction рассчитывается по ACK всех interested peers. LWW loser остаётся relay-eligible: локальное значение может быть новее, но операция всё равно нужна другим узлам для детерминированной сходимости и SeenChanges provenance.
 
+SeenChanges provenance dedup — отдельное состояние BIN-SYNC, не FLD relay journal. Текущая wire specification задаёт channel-scoped key через senderPeer/namespace/ChangeId, но не задаёт safe GC watermark/expiry для этого набора. До появления нормативного правила BIN-SYNC обязан удерживать exact dedup state; FLD не должен самостоятельно удалять opaque ProtocolStateDelta по TTL или по relay ACK.
+
 ## 6. Read snapshot
 
 Snapshot API должен давать один согласованный view поверх overlay и immutable runs:
