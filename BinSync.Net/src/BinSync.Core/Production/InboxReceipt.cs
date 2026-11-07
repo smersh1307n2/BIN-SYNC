@@ -77,6 +77,8 @@ internal sealed class InboxReceiptStore :
     internal InboxReceiptStore() => _keys = new KeyCollection(this);
 
     internal int Count => _count;
+    internal int SingletonStreamCount => _singletons.Count;
+    internal int GroupedStreamCount => _groups.Count;
     internal IReadOnlyCollection<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)> Keys => _keys;
 
     internal InboxReceipt this[(NodeId Issuer, int Ns, int Epoch, BatchId BatchId) key]
