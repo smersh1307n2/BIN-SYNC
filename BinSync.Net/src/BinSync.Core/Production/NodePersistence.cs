@@ -457,14 +457,14 @@ public static class NodePersistence
         for (int i = 0; i < outNsCount; i++)
         {
             var ns = ReadNamespaceId(r);
-            int cnt = ReadCount(r, version >= 14 ? 1 : 68, "outbox entry");
+            int cnt = ReadCount(r, version >= 15 ? 52 : version >= 14 ? 59 : 68, "outbox entry");
             n.Outbox[ns] = version >= 14
                 ? ReadOutboxEntries(r, ns, cnt, version)
                 : ReadLegacyOutboxEntries(r, cnt);
         }
 
         var seqMap = GetField<Dictionary<(NodeId, int), long>>(n, "_outboxSeq");
-        int seqCount = ReadCount(r, 25, "outbox sequence");
+        int seqCount = ReadCount(r, version >= 15 ? 18 : 25, "outbox sequence");
         for (int i = 0; i < seqCount; i++)
         {
             var author = r.B128(); var ns = ReadNamespaceId(r);
@@ -488,7 +488,7 @@ public static class NodePersistence
 
                 if (layout == 0)
                 {
-                    int receiptCount = ReadCount(r, 35, "flat batch receipt");
+                    int receiptCount = ReadCount(r, version >= 15 ? 34 : 35, "flat batch receipt");
                     if (receiptCount == 0)
                         throw new InvalidDataException("Empty persisted receipt group.");
                     for (int i = 0; i < receiptCount; i++)
@@ -509,7 +509,7 @@ public static class NodePersistence
                     for (int ai = 0; ai < authorGroupCount; ai++)
                     {
                         var author = NodeId.From(r.B128());
-                        int receiptCount = ReadCount(r, 19, "batch receipt");
+                        int receiptCount = ReadCount(r, version >= 15 ? 18 : 19, "batch receipt");
                         if (author.IsZero || receiptCount == 0 || !receiptAuthors.Add(author))
                             throw new InvalidDataException("Invalid or duplicate persisted receipt author group.");
                         for (int i = 0; i < receiptCount; i++)
@@ -693,7 +693,7 @@ public static class NodePersistence
             n.DurableAuthors[(NodeId)nid] = ep;
         }
 
-        int psCount = ReadCount(r, 50, "peer state");
+        int psCount = ReadCount(r, version >= 15 ? 24 : 50, "peer state");
         for (int i = 0; i < psCount; i++)
         {
             var peer = r.B128(); var ns = ReadNamespaceId(r);
@@ -718,7 +718,7 @@ public static class NodePersistence
                 MembershipEpoch = membershipEpoch,
                 LastSeen = lastSeen,
             };
-            int rsCount = ReadCount(r, 41, "received stream");
+            int rsCount = ReadCount(r, version >= 15 ? 34 : 41, "received stream");
             for (int j = 0; j < rsCount; j++)
             {
                 NodeId streamPeer;
@@ -794,7 +794,7 @@ public static class NodePersistence
                     }
                 }
             }
-            int idsCount = ReadCount(r, 64, "peer batch replay mapping");
+            int idsCount = ReadCount(r, version >= 15 ? 50 : 64, "peer batch replay mapping");
             for (int j = 0; j < idsCount; j++)
             {
                 var author = r.B128();
