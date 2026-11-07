@@ -106,13 +106,32 @@ public sealed class StorageSyncCoordinator
             if (mutations.Count == 0) return null;
             mutations.Sort(static (a, b) =>
             {
-                int c = a.RecordId.ToArray().AsSpan().SequenceCompareTo(b.RecordId.ToArray());
+                int c = CompareRecordIds(a.RecordId, b.RecordId);
                 return c != 0 ? c : a.FieldId.CompareTo(b.FieldId);
             });
 
             Guid token = CreateApplyToken(_namespaceId, mutations);
             return _provider.ApplyRemoteBatch(token, mutations);
         }
+    }
+
+    private static int CompareRecordIds(RecordId left, RecordId right)
+    {
+        ulong leftLo = left.Lo, rightLo = right.Lo;
+        for (int i = 0; i < sizeof(ulong); i++)
+        {
+            int c = ((byte)(leftLo >> (i * 8))).CompareTo((byte)(rightLo >> (i * 8)));
+            if (c != 0) return c;
+        }
+
+        ulong leftHi = left.Hi, rightHi = right.Hi;
+        for (int i = 0; i < sizeof(ulong); i++)
+        {
+            int c = ((byte)(leftHi >> (i * 8))).CompareTo((byte)(rightHi >> (i * 8)));
+            if (c != 0) return c;
+        }
+
+        return 0;
     }
 
     private static Guid CreateApplyToken(int namespaceId, IReadOnlyList<ProviderMutation> mutations)
