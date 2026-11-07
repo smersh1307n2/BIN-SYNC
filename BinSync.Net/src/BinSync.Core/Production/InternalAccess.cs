@@ -92,8 +92,10 @@ public sealed partial class Node
         }
     }
 
-    internal bool HasInitialSyncComplete(NodeId peer, int namespaceId)
+    public bool IsInitialSyncComplete(NodeId peer, int namespaceId)
     {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if ((uint)namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
         lock (_lockMeta)
             return PeerStates.TryGetValue((peer, namespaceId), out var state) && state.InitialSyncComplete;
     }
