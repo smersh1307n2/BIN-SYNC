@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v9", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v10", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -27,7 +27,8 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v9";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v10";
+    private const string Version9StateTag = "BIN-SYNC/NODESTATE/v9";
     private const string Version8StateTag = "BIN-SYNC/NODESTATE/v8";
     private const string Version7StateTag = "BIN-SYNC/NODESTATE/v7";
     private const string Version6StateTag = "BIN-SYNC/NODESTATE/v6";
@@ -37,7 +38,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 9;
+    private const ushort Version = 10;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -102,8 +103,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
+            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 9, 8, 7, 6, 5, 4 or legacy 3).");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -118,6 +119,11 @@ public static class NodePersistence
         {
             var actual = Blake3Core.TaggedHash(StateTag, body);
             validDigest = actual.AsSpan().SequenceEqual(storedDigest);
+        }
+        else if (ver == 9)
+        {
+            var v9 = Blake3Core.TaggedHash(Version9StateTag, body);
+            validDigest = v9.AsSpan().SequenceEqual(storedDigest);
         }
         else if (ver == 8)
         {
@@ -208,21 +214,32 @@ public static class NodePersistence
             foreach (var ((author, ns), seq) in seqMap.OrderBy(kv => kv.Key.Item1.ToString()).ThenBy(kv => kv.Key.Item2))
             { w.B128(author); w.Varint((ulong)ns); w.U64((ulong)seq); }
 
-            // --- unified accepted-batch receipt: issuer/ns/epoch/batchId -> durable author
-            w.Varint((ulong)n.InboxAuthors.Count);
-            foreach (var (key, author) in n.InboxAuthors.OrderBy(k => k.Key.Issuer.Lo).ThenBy(k => k.Key.Issuer.Hi)
-                                                        .ThenBy(k => k.Key.Ns).ThenBy(k => k.Key.Epoch)
-                                                        .ThenBy(k => k.Key.BatchId.Lo).ThenBy(k => k.Key.BatchId.Hi))
+            // --- accepted-batch receipts grouped by issuer/namespace/epoch.
+            // The session key is written once for every batch in that group.
+            var receiptGroups = n.InboxAuthors
+                .GroupBy(k => (k.Key.Issuer, k.Key.Ns, k.Key.Epoch))
+                .OrderBy(g => g.Key.Issuer.Lo).ThenBy(g => g.Key.Issuer.Hi)
+                .ThenBy(g => g.Key.Ns).ThenBy(g => g.Key.Epoch).ToList();
+            w.Varint((ulong)receiptGroups.Count);
+            foreach (var group in receiptGroups)
             {
-                w.B128(key.Issuer); w.Varint((ulong)key.Ns); w.Varint((ulong)key.Epoch);
-                w.B128(key.BatchId); w.B128(author.DurableAuthor);
-                byte receiptFlags = (byte)((author.HasCursorEnd ? 1 : 0) |
-                                           (author.HasFingerprint ? 2 : 0));
-                w.U8(receiptFlags);
-                if (author.HasCursorEnd) w.Varint((ulong)author.CursorEnd);
-                if (author.HasFingerprint) w.B128(author.Fingerprint);
-                w.Varint(author.AppliedAt);
-                w.Varint(author.ExpiresAt);
+                w.B128(group.Key.Issuer);
+                w.Varint((ulong)group.Key.Ns);
+                w.Varint((ulong)group.Key.Epoch);
+                var receipts = group.OrderBy(k => k.Key.BatchId.Lo)
+                    .ThenBy(k => k.Key.BatchId.Hi).ToArray();
+                w.Varint((ulong)receipts.Length);
+                foreach (var (key, receipt) in receipts)
+                {
+                    w.B128(key.BatchId); w.B128(receipt.DurableAuthor);
+                    byte receiptFlags = (byte)((receipt.HasCursorEnd ? 1 : 0) |
+                                               (receipt.HasFingerprint ? 2 : 0));
+                    w.U8(receiptFlags);
+                    if (receipt.HasCursorEnd) w.Varint((ulong)receipt.CursorEnd);
+                    if (receipt.HasFingerprint) w.B128(receipt.Fingerprint);
+                    w.Varint(receipt.AppliedAt);
+                    w.Varint(receipt.ExpiresAt);
+                }
             }
 
             // --- batch-digest chain checkpoints: (issuer, ns, epoch) -> digest
@@ -297,16 +314,23 @@ public static class NodePersistence
                                                          .ThenBy(k => k.ChangeId.Lo).ThenBy(k => k.ChangeId.Hi))
             { w.B128(peer); w.Varint((ulong)ns); w.B128(cid); }
 
-            // --- route-independent global ChangeId fingerprints
-            w.Varint((ulong)n.GlobalChangeLedger.Count);
-            foreach (var (key, value) in n.GlobalChangeLedger
-                         .OrderBy(k => k.Key.Ns)
-                         .ThenBy(k => k.Key.ChangeId.Lo).ThenBy(k => k.Key.ChangeId.Hi))
+            // --- route-independent ChangeId fingerprints grouped by namespace.
+            // Namespace is repeated once per group, not once per operation.
+            var ledgerGroups = n.GlobalChangeLedger.GroupBy(k => k.Key.Ns)
+                .OrderBy(g => g.Key).ToList();
+            w.Varint((ulong)ledgerGroups.Count);
+            foreach (var group in ledgerGroups)
             {
-                w.Varint((ulong)key.Ns);
-                w.B128(key.ChangeId);
-                w.U8(value.IsKnown ? (byte)1 : (byte)0);
-                if (value.IsKnown) w.B128(value.Fingerprint);
+                w.Varint((ulong)group.Key);
+                var entries = group.OrderBy(k => k.Key.ChangeId.Lo)
+                    .ThenBy(k => k.Key.ChangeId.Hi).ToArray();
+                w.Varint((ulong)entries.Length);
+                foreach (var (key, value) in entries)
+                {
+                    w.B128(key.ChangeId);
+                    w.U8(value.IsKnown ? (byte)1 : (byte)0);
+                    if (value.IsKnown) w.B128(value.Fingerprint);
+                }
             }
 
             // --- last accepted stream author (Errata E-11)
@@ -396,7 +420,40 @@ public static class NodePersistence
         }
 
         HashSet<(NodeId Issuer, int Ns, int Epoch, BatchId BatchId)>? legacyInbox = null;
-        if (version >= 7)
+        if (version >= 10)
+        {
+            int groupCount = (int)r.Varint();
+            for (int gi = 0; gi < groupCount; gi++)
+            {
+                var issuer = NodeId.From(r.B128());
+                var ns = (int)r.Varint();
+                var ep = (int)r.Varint();
+                int receiptCount = (int)r.Varint();
+                if (issuer.IsZero || (uint)ns > ushort.MaxValue || ep < 0 || receiptCount <= 0)
+                    throw new InvalidDataException("Invalid persisted receipt group.");
+                for (int i = 0; i < receiptCount; i++)
+                {
+                    var batchId = BatchId.From(r.B128());
+                    var author = NodeId.From(r.B128());
+                    byte receiptFlags = r.U8();
+                    if (receiptFlags > 3 || ((receiptFlags & 2) != 0 && (receiptFlags & 1) == 0))
+                        throw new InvalidDataException("Invalid persisted receipt flags.");
+                    bool hasCursorEnd = (receiptFlags & 1) != 0;
+                    long cursorEnd = hasCursorEnd ? (long)r.Varint() : 0;
+                    bool hasFingerprint = (receiptFlags & 2) != 0;
+                    var fingerprint = hasFingerprint ? Digest16.From(r.B128()) : default;
+                    var appliedAt = r.Varint();
+                    var expiresAt = r.Varint();
+                    if (batchId.IsZero || author.IsZero || (expiresAt != 0 && expiresAt < appliedAt))
+                        throw new InvalidDataException("Invalid persisted receipt cursor or expiry.");
+                    var receipt = new InboxReceipt(author, cursorEnd, hasCursorEnd,
+                        fingerprint, hasFingerprint, appliedAt, expiresAt);
+                    if (!n.InboxAuthors.TryAdd((issuer, ns, ep, batchId), receipt))
+                        throw new InvalidDataException("Duplicate persisted batch receipt.");
+                }
+            }
+        }
+        else if (version >= 7)
         {
             int receiptCount = (int)r.Varint();
             for (int i = 0; i < receiptCount; i++)
@@ -622,7 +679,30 @@ public static class NodePersistence
             if (peer == nodeId)
                 n.SeenChanges.Add((peer, ns, changeId));
 
-        if (version >= 6)
+        if (version >= 10)
+        {
+            int groupCount = (int)r.Varint();
+            for (int gi = 0; gi < groupCount; gi++)
+            {
+                int ns = (int)r.Varint();
+                int entryCount = (int)r.Varint();
+                if ((uint)ns > ushort.MaxValue || entryCount <= 0)
+                    throw new InvalidDataException("Invalid persisted ChangeId namespace group.");
+                for (int i = 0; i < entryCount; i++)
+                {
+                    var changeId = BatchId.From(r.B128());
+                    byte known = r.U8();
+                    if (known > 1 || changeId.IsZero)
+                        throw new InvalidDataException("Invalid persisted global ChangeId ledger entry.");
+                    var value = known == 1
+                        ? new ChangeLedgerValue(Digest16.From(r.B128()), isKnown: true)
+                        : new ChangeLedgerValue(default, isKnown: false);
+                    if (!n.GlobalChangeLedger.TryAdd((ns, changeId), value))
+                        throw new InvalidDataException("Duplicate persisted global ChangeId ledger key.");
+                }
+            }
+        }
+        else if (version >= 6)
         {
             int ledgerCount = (int)r.Varint();
             for (int i = 0; i < ledgerCount; i++)
