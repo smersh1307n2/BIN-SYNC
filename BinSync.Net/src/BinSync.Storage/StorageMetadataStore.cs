@@ -207,6 +207,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                 throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
 
             int relayAdded = 0;
+            var interestedPeers = current.InterestedPeers
+                .Where(peer => peer.NamespaceId == incoming.NamespaceId)
+                .Select(peer => (peer.Peer, peer.PeerEpoch))
+                .Concat(current.RequiredPeerStreams
+                    .Where(peer => peer.NamespaceId == incoming.NamespaceId)
+                    .Select(peer => (peer.Peer, peer.PeerEpoch)))
+                .Distinct()
+                .ToArray();
             foreach (var operation in incoming.Operations)
             {
                 var ledgerKey = new LedgerKey(incoming.NamespaceId, operation.ChangeId);
@@ -216,9 +224,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                         throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                     continue;
                 }
-                if (newLedger.Any(item => item.Key == ledgerKey))
-                    throw new InvalidDataException("ChangeId was duplicated within the finalized incoming batch.");
-
                 newLedger.Add((ledgerKey,
                     new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: false)));
                 if (!operation.RelayEligible) continue;
@@ -233,14 +238,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())));
                 relayAdded++;
 
-                var interested = current.InterestedPeers
-                    .Where(peer => peer.NamespaceId == incoming.NamespaceId)
-                    .Select(peer => (peer.Peer, peer.PeerEpoch))
-                    .Concat(current.RequiredPeerStreams
-                        .Where(peer => peer.NamespaceId == incoming.NamespaceId)
-                        .Select(peer => (peer.Peer, peer.PeerEpoch)))
-                    .Distinct();
-                foreach (var peer in interested)
+                foreach (var peer in interestedPeers)
                 {
                     if (peer.Peer == operation.AuthorNodeId) continue;
                     var streamKey = new PeerStreamKey(peer.Peer, peer.PeerEpoch,
