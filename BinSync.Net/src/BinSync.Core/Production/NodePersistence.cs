@@ -1199,7 +1199,7 @@ public static class NodePersistence
                 throw new InvalidOperationException("Outbox operation kind does not match its canonical payload.");
             bool recordTombstone = opKind == OpsConst.TagRecordTomb;
             if (recordTombstone &&
-                (payload.Length < 17 || !payload.Slice(1, 16).SequenceEqual(entry.RecordId.ToArray())))
+                (payload.Length < 31 || !payload.Slice(1, 16).SequenceEqual(entry.RecordId.ToArray())))
                 throw new InvalidOperationException("Record tombstone identity does not match its payload.");
             w.Varint((ulong)authorIndexes[entry.AuthorNodeId]);
             w.Varint((ulong)entry.Seq);
@@ -1244,7 +1244,7 @@ public static class NodePersistence
             RecordId recordId;
             if (opKind == OpsConst.TagRecordTomb)
             {
-                if (payload.Length < 17)
+                if (payload.Length < 31)
                     throw new InvalidDataException("Truncated record-tombstone Outbox payload.");
                 recordId = RecordId.From(payload.AsSpan(1, 16));
             }
