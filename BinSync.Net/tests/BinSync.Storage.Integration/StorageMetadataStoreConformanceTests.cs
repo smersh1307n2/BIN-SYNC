@@ -144,6 +144,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         {
             using (var store = new StorageMetadataStore(directory, 415, deleteOnDispose: false))
             {
+                CompleteBaseline(store, scope, local, peer, 7, 9, author, issuerEpoch: 3);
                 var reserved = store.ReserveOutboundBatch(scope, local, peer, 7, 9, author, first);
                 reserved.Payload[0] = 99;
                 var retryCandidate = new MetadataOutboundBatchReservation
@@ -238,8 +239,11 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Payload = new byte[] { 7, 8 }
         };
 
-        store.ReserveOutboundBatch(scope, local, peer, 2, 7, author, reservation);
+        store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+        store.RegisterInterestedPeerStream(scope, local, peer, 2, 7, author,
+            3, 100, 5, previous);
         var state = store.GetPeerStreamState(scope, local, peer, 2, 7, author);
+        store.ReserveOutboundBatch(scope, local, peer, 2, 7, author, reservation);
         Assert.Equal(3UL, state.AckedCursor);
         Assert.Equal(3UL, state.PushedCursor);
         Assert.Equal(5u, state.IssuerEpoch);
@@ -422,6 +426,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(new[] { author }, store.ReadRelayAuthors(scope, local, 7));
         store.RegisterInterestedPeerStream(scope, local, downstream, 2, 7, author,
             0, 0, 1, new byte[16]);
+        store.CompletePeerInitialSync(scope, local, downstream, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
         var page = store.ReadRelayForPeer(scope, local, downstream, 2, 7, author, 10);
         var item = Assert.Single(page.Items);
         Assert.Equal(1UL, item.Sequence);
@@ -477,6 +483,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     store.RetireInterestedPeer(scope, local, peer, 1, 2, 7));
 
                 store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+                store.CompletePeerInitialSync(scope, local, peer, 2, 7,
+                    new[] { new MetadataPeerStreamBaseline(local, 0, 1) });
                 var reservation = new MetadataOutboundBatchReservation
                 {
                     BatchId = Batch(152), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
@@ -523,6 +531,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         const string scope = "peer-safe-relay-compaction";
         store.RegisterInterestedPeer(scope, local, peerA, 1, 7);
         store.RegisterInterestedPeer(scope, local, peerB, 1, 7);
+        store.CompletePeerInitialSync(scope, local, peerA, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+        store.CompletePeerInitialSync(scope, local, peerB, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
         byte[] envelope = new byte[17];
         Node(9).WriteTo(envelope);
         envelope[16] = 7;
@@ -587,6 +599,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     0, 0, 1, new byte[16]);
                 store.RegisterInterestedPeerStream(scope, local, peerB, 1, 7, author,
                     0, 0, 1, new byte[16]);
+                store.CompletePeerInitialSync(scope, local, peerA, 1, 7,
+                    new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+                store.CompletePeerInitialSync(scope, local, peerB, 1, 7,
+                    new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
 
                 MetadataOutboundBatchReservation Make(byte batch) => new()
                 {
@@ -633,6 +649,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         const string scope = "peer-only-outbound-compaction";
         store.RegisterInterestedPeer(scope, local, peer, 1, 7);
         store.FreezeOutbound(scope, local, 7, local, new[] { FrozenOperation(140, 141) });
+        store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(local, 0, 1) });
 
         var reservation = new MetadataOutboundBatchReservation
         {
@@ -665,6 +683,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Payload = new[] { batch }
         };
 
+        CompleteBaseline(store, scope, local, peerA, 1, 7, author);
+        CompleteBaseline(store, scope, local, peerB, 1, 7, author);
         store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(80, 81));
         store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(82, 83));
         store.RegisterInterestedPeerStream(scope, local, peerB, 1, 7, author, 0, 0, 1, new byte[16]);
@@ -690,6 +710,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         {
             NodeId local = Node(1), peer = Node(2), author = Node(3);
             const string scope = "peer-reservation-epoch";
+            CompleteBaseline(store, scope, local, peer, 4, 7, author, issuerEpoch: 1);
             var first = new MetadataOutboundBatchReservation
             {
                 BatchId = Batch(70), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 1,
@@ -737,6 +758,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-reservation-validation"), 416);
         NodeId local = Node(1), peer = Node(2), author = Node(3);
         const string scope = "peer-reservation-validation";
+        CompleteBaseline(store, scope, local, peer, 1, 7, author);
         var reservation = new MetadataOutboundBatchReservation
         {
             BatchId = Batch(50), IssuerEpoch = 1, CursorStart = 1, CursorEnd = 2,
