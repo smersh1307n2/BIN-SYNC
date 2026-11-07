@@ -81,7 +81,7 @@ public sealed partial class Node
                 {
                     foreach (var e in all)
                     {
-                        long offset = ps.StreamOffsets.TryGetValue(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                        long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
                         long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
                         if (e.Seq > localAck &&
                             (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
@@ -93,7 +93,7 @@ public sealed partial class Node
                 stream = default;
                 foreach (var kv in firstPending)
                 {
-                    long offset = ps.StreamOffsets.TryGetValue(kv.Key, out var savedOffset) ? savedOffset : 0;
+                    long offset = ps.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
                     long localAck = checked(ps.AckedFor(kv.Key) + offset);
                     if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
                 }
@@ -103,7 +103,7 @@ public sealed partial class Node
             }
 
             long streamOffset;
-            if (ps.StreamOffsets.TryGetValue(stream, out var savedStreamOffset))
+            if (ps.TryGetStreamOffset(stream, out var savedStreamOffset))
             {
                 if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
                     throw new SyncException("SNAPSHOT_REQUIRED");
@@ -112,7 +112,7 @@ public sealed partial class Node
             else
             {
                 streamOffset = 0;
-                if (!ps.StreamAcked.ContainsKey(stream))
+                if (!ps.HasStreamAcked(stream))
                 {
                     long firstLocal = long.MaxValue;
                     if (all is not null)
@@ -124,7 +124,7 @@ public sealed partial class Node
                         throw new SyncException("SNAPSHOT_REQUIRED");
                     if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
                 }
-                ps.StreamOffsets[stream] = streamOffset;
+                ps.SetStreamOffset(stream, streamOffset);
             }
 
             long localWm = checked(wm + streamOffset);
@@ -292,7 +292,7 @@ public sealed partial class Node
             var firstPending = new Dictionary<NodeId, long>();
             foreach (var e in all)
             {
-                long offset = ps.StreamOffsets.TryGetValue(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
                 long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
                 if (e.Seq > localAck &&
                     (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
@@ -302,7 +302,7 @@ public sealed partial class Node
             stream = default;
             foreach (var kv in firstPending)
             {
-                long offset = ps.StreamOffsets.TryGetValue(kv.Key, out var savedOffset) ? savedOffset : 0;
+                long offset = ps.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
                 long localAck = checked(ps.AckedFor(kv.Key) + offset);
                 if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
             }
@@ -312,7 +312,7 @@ public sealed partial class Node
         }
 
         long streamOffset;
-        if (ps.StreamOffsets.TryGetValue(stream, out var savedStreamOffset))
+        if (ps.TryGetStreamOffset(stream, out var savedStreamOffset))
         {
             if (savedStreamOffset > 0 && !ps.InitialSyncComplete)
                 throw new SyncException("SNAPSHOT_REQUIRED");
@@ -321,7 +321,7 @@ public sealed partial class Node
         else
         {
             streamOffset = 0;
-            if (!ps.StreamAcked.ContainsKey(stream))
+            if (!ps.HasStreamAcked(stream))
             {
                 long firstLocal = long.MaxValue;
                 foreach (var e in all)
@@ -330,7 +330,7 @@ public sealed partial class Node
                     throw new SyncException("SNAPSHOT_REQUIRED");
                 if (firstLocal != long.MaxValue) streamOffset = Math.Max(0, firstLocal - 1);
             }
-            ps.StreamOffsets[stream] = streamOffset;
+            ps.SetStreamOffset(stream, streamOffset);
         }
 
         long localWm = checked(wm + streamOffset);
@@ -548,7 +548,7 @@ public sealed partial class Node
                     pending = true;
                     break;
                 }
-                long offset = ps.StreamOffsets.TryGetValue(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
+                long offset = ps.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
                 long localAck = checked(ps.AckedFor(e.AuthorNodeId) + offset);
                 if (localAck < e.Seq)
                 {
@@ -635,8 +635,8 @@ public sealed partial class Node
         LastStreamDigest[((NodeId, namespaceId, issuerEpoch), targetPeer)] = batchDigest;
         if (!PeerStates.TryGetValue((targetPeer, namespaceId), out var ps))
             PeerStates[(targetPeer, namespaceId)] = ps = new PeerState(targetPeer, namespaceId);
-        ps.StreamPushed[author] = Math.Max(ps.StreamPushed.TryGetValue(author, out var pushed) ? pushed : 0,
-                                           cursorEnd);
+        ps.SetStreamPushed(author, Math.Max(ps.TryGetStreamPushed(author, out var pushed) ? pushed : 0,
+                                                cursorEnd));
         ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, cursorEnd);
     }
     // EncodeBatchPayload / DecodeBatchPayload → Production/Node.BatchCodec.cs
