@@ -1,6 +1,6 @@
 # Change Staging, Coalescing, and Metadata Retention
 
-**Status:** Architecture decision draft v0.2; retention and Storage Core decisions resolved for API design.  
+**Status:** Architecture decision draft v0.3; staging/Outbox lifecycle is defined, while cross-peer dedup representation and Storage physical format remain optimization gates.  
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Protocol baseline:** BIN-SYNC CORE v2.4.17 FINAL. Cross-peer dedup semantics must be normative before release. The physical representation and any origin-sequence wire extension remain open; do not treat the 32-byte-per-operation ledger as the final optimized design.  
 **Primary concern:** retain exactly the history required for convergence and recovery, without storing every superseded local state forever.
