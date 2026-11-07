@@ -178,6 +178,7 @@ public sealed partial class Node
         var limits = Limits;
         limits?.EnsureCanEnqueueOutbox(this, ns);
         limits?.EnsureSeenChangesCapacity(this);
+        limits?.EnsureGlobalChangeLedgerCapacity(this);
         var key = (NodeId, ns);
         long current = _outboxSeq.TryGetValue(key, out var value) ? value : 0;
         if (current == long.MaxValue) throw new SyncException("INTERNAL");
@@ -219,6 +220,12 @@ public sealed partial class Node
         bool sequenceExisted = false;
         long previousSequence = 0;
         bool seenAdded = false;
+        bool ledgerAdded = false;
+        var ledgerKey = (entry.NamespaceId, entry.ChangeId);
+        var ledgerFingerprint = ChangeIdentity.Fingerprint(entry);
+        if (GlobalChangeLedger.ContainsKey(ledgerKey))
+            throw new InvalidOperationException("Local Outbox ChangeId is already present in the global ledger.");
+        GlobalChangeLedger.EnsureCapacity(GlobalChangeLedger.Count + 1);
 
         try
         {
@@ -271,12 +278,18 @@ public sealed partial class Node
             if (!seenAdded)
                 throw new InvalidOperationException("Local Outbox ChangeId is already present in SeenChanges.");
 
+            ledgerAdded = GlobalChangeLedger.TryAdd(ledgerKey, new ChangeLedgerValue(ledgerFingerprint, isKnown: true));
+            if (!ledgerAdded)
+                throw new InvalidOperationException("Local Outbox ChangeId is already present in the global ledger.");
+
             // The single WAL frame is the commit point. On failure the staged state
             // is invisible to other Node operations and is rolled back below.
             _wal?.AppendLocalMutation(entry, applyToStorage);
         }
         catch
         {
+            if (ledgerAdded)
+                GlobalChangeLedger.Remove(ledgerKey);
             if (seenAdded)
                 SeenChanges.Remove((NodeId, entry.NamespaceId, entry.ChangeId));
 
