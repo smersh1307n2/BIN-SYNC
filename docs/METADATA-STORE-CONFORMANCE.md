@@ -186,14 +186,16 @@ Crash tests must use deterministic fault injection at semantic durability bounda
 
 The current suite already provides valuable protocol/runtime evidence:
 
-- `WalTests` covers Node WAL append/replay, local mutation identity, torn-tail handling and checkpoint interaction.
-- `RemoteBatchWalAtomicityTests` covers failure before publication, semantic WAL replay failure and idempotent replay.
+- `WalTests` covers Node WAL append/replay, local mutation identity, torn-tail handling, attached-WAL commit ordering and checkpoint interaction.
+- `RemoteBatchWalAtomicityTests` covers failure before publication, semantic WAL replay failure, lifecycle preflight and idempotent replay.
+- `Hardening.cs` covers full NodePersistence round-trip, sequence continuation after restart, stream-offset recovery, minimum-peer-ACK/fail-closed behavior, retained ChangeId→OutboxSeq resolution, corrupt/truncated snapshot rejection, count/varint bounds, atomic snapshot replacement and concurrent save/write.
+- `ChangeIdWireTests.cs` covers route-independent ChangeId fingerprints, alternate-route duplicate suppression, equivocation rejection, global-ledger persistence and v5–v12 receipt/ledger migration compatibility.
 - `SnapshotTests` covers snapshot encoding/application, tombstones, chunk bounds and concurrent transfers.
-- `InvariantsAndAdvanced` covers author stream ordering, ACK/re-delivery and multi-node relay behavior.
+- `InvariantsAndAdvanced.cs` covers author-stream ordering, ACK/re-delivery and multi-node relay behavior.
 - `SessionStreamBindingTests` covers namespace/stream binding at the transport boundary.
-- E-24 tests cover route-independent ChangeId fingerprints and equivocation semantics; E-25 tests preserve fail-closed tombstone retention.
+- E-25 tests preserve fail-closed tombstone retention.
 
-These tests exercise the current Node/WAL implementation. They do **not** yet prove conformance of an arbitrary Metadata Store or FLD Storage-only implementation. The following remain unimplemented at the abstraction boundary:
+These tests provide substantial coverage of the current NodePersistence/WAL implementation and should not be repeated as new test cases unless a refactor changes their execution path. They do **not** yet prove conformance of an arbitrary Metadata Store or FLD Storage-only implementation. The following remain unimplemented at the abstraction boundary:
 
 1. A provider-independent semantic store contract and reusable conformance fixture.
 2. A store implementation whose durable state is not a serialized Node object graph.
