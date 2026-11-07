@@ -654,6 +654,74 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Peer_roster_baseline_and_epoch_retirement_commit_as_atomic_deltas()
+    {
+        string directory = Path.Combine(_root, "peer-lifecycle-deltas");
+        Directory.CreateDirectory(directory);
+        const string scope = "peer-lifecycle-deltas";
+        NodeId local = Node(1), peer = Node(2), author = Node(3);
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 443);
+            using (var store = new StorageMetadataStore(storage))
+            {
+                store.FreezeOutbound(scope, local, 7, author,
+                    new[] { FrozenOperation(130, 131), FrozenOperation(132, 133) });
+
+                ulong beforeRegister = storage.LastCommitSeq;
+                store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+                Assert.Equal(beforeRegister + 1, storage.LastCommitSeq);
+                var registered = Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
+                Assert.Equal(author, registered.AuthorStream);
+                Assert.Equal(0UL, registered.State.AckedCursor);
+
+                ulong afterRegister = storage.LastCommitSeq;
+                store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+                Assert.Equal(afterRegister, storage.LastCommitSeq);
+
+                ulong beforeBaseline = storage.LastCommitSeq;
+                store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+                    new[] { new MetadataPeerStreamBaseline(author, 2, 1) });
+                Assert.Equal(beforeBaseline + 1, storage.LastCommitSeq);
+                Assert.True(store.IsPeerInitialSyncComplete(scope, local, peer, 1, 7));
+                Assert.Equal(2UL, store.GetPeerStreamState(scope, local, peer, 1, 7, author).StreamOffset);
+
+                ulong afterBaseline = storage.LastCommitSeq;
+                store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+                    new[] { new MetadataPeerStreamBaseline(author, 2, 1) });
+                Assert.Equal(afterBaseline, storage.LastCommitSeq);
+
+                store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+                store.CompletePeerInitialSync(scope, local, peer, 2, 7,
+                    new[] { new MetadataPeerStreamBaseline(author, 2, 1) });
+
+                ulong beforeRetirement = storage.LastCommitSeq;
+                store.RetireInterestedPeer(scope, local, peer, 1, 2, 7);
+                Assert.Equal(beforeRetirement + 1, storage.LastCommitSeq);
+                Assert.Single(store.ReadInterestedPeers(scope, local, 7));
+                Assert.Equal(2U, Assert.Single(store.ReadInterestedPeers(scope, local, 7)).PeerEpoch);
+                Assert.Empty(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
+
+                ulong afterRetirement = storage.LastCommitSeq;
+                store.RetireInterestedPeer(scope, local, peer, 1, 2, 7);
+                Assert.Equal(afterRetirement, storage.LastCommitSeq);
+            }
+
+            using var reopened = new StorageMetadataStore(storage);
+            Assert.Equal(2U, Assert.Single(reopened.ReadInterestedPeers(scope, local, 7)).PeerEpoch);
+            Assert.Empty(reopened.ReadPeerStreamStates(scope, local, peer, 1, 7));
+            Assert.Equal(2UL, reopened.GetPeerStreamState(scope, local, peer, 2, 7, author).StreamOffset);
+            Assert.Equal(1U, reopened.GetRetiredPeerEpoch(scope, local, peer, 7));
+            Assert.Throws<InvalidDataException>(() => reopened.GetPeerStreamState(scope, local, peer, 1, 7, author));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Namespace_peer_roster_enrolls_future_outbound_author_streams()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-roster-future-stream"), 428);
