@@ -46,11 +46,11 @@ Therefore:
 - no claim that a snapshot baseline alone makes old dedup evidence obsolete;
 - retain legacy receipt rows without transport-epoch provenance; do not guess their origin epoch. Re-attribute only after an exact, authenticated duplicate from a durably registered epoch.
 
-A safe ChangeId GC design needs durable origin author + origin sequence association preserved unchanged through every relay, a namespace-wide minimum contiguous applied-origin frontier across all active members, and a stale-peer/epoch retirement rule. A safe tombstone GC design additionally needs an authoritative namespace membership generation and mandatory full-resync replacement semantics; current snapshot merge does not delete rows absent from the snapshot. These remain protocol/storage format changes and are not enabled.
+A safe ChangeId GC design needs immutable origin author + author epoch + origin sequence preserved unchanged through every relay, an administrator-signed authoritative namespace roster generation, signed monotonic per-member retention checkpoints, the minimum contiguous applied-origin frontier across every member in that roster, and stale-peer/epoch fencing. Missing members/checkpoints contribute zero; legacy rows without origin coordinates are never collected. A safe tombstone GC design additionally needs the same roster/frontier proof and a versioned FULL_REPLACE snapshot that atomically switches the provider's namespace generation; current snapshot merge does not delete rows absent from the snapshot. The exact certificate/checkpoint contract and mandatory implementation order are in [METADATA-STORE-GC-DESIGN.md](METADATA-STORE-GC-DESIGN.md). These features remain disabled until their protocol/storage changes and restart/fault tests are complete.
 
 ## 4. Tombstone/ghost GC remains disabled
 
-E-25 is normative: tombstone and ghost reclamation is disabled until durable namespace membership, a safe frontier, stale-peer fencing and mandatory authoritative full-resync semantics are established. GC_NOTICE is advisory/control information, not deletion authority. Neither elapsed time nor HLC age can substitute for those proofs.
+E-25 is normative: tombstone and ghost reclamation is disabled until durable authoritative namespace membership, a safe per-author frontier, stale-peer fencing and mandatory FULL_REPLACE resync semantics are established. GC_NOTICE is advisory/control information, not deletion authority. Neither elapsed time nor HLC age can substitute for those proofs.
 
 ## 5. Storage cost and release posture
 
