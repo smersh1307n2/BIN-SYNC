@@ -466,7 +466,7 @@ OFR2 validation indexes local applied sequences and issued epochs once per repor
 
 ## 10.22. Snapshot prefix cursors seek by sorted range (2026-11-09)
 
-`StorageSnapshot.PrefixCursor` computes the lexicographic exclusive upper bound for a non-empty prefix and opens a `SortedDictionary.GetViewBetween` range. Cursor startup and `afterKey` continuation now seek into the matching range rather than scanning unrelated partition keys. Empty/all-`0xFF` prefixes retain the safe full-enumeration fallback. Page boundaries and owned `StorageEntry` copies are unchanged.
+`StorageSnapshot` uses a sorted index with a lower-bound binary search for prefix and `afterKey` cursor startup. Cursor reads only matching key pages rather than scanning unrelated partition keys. Snapshot payload arrays are shared as immutable references; each returned `StorageEntry` owns its key/value copies. Empty prefixes and all-`0xFF` prefixes remain supported without special range sentinels. Page boundaries are unchanged.
 
 
 ## 10.23. Immutable freeze rejects author-epoch HLC regression (2026-11-09)
