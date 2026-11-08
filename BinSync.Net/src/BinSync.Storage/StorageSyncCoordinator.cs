@@ -1038,7 +1038,7 @@ public sealed class StorageSyncCoordinator
                     throw;
                 finalizeMetadata = false;
                 isDuplicate = true;
-                applyOperations = new bool[metadataBatch.Operations.Count];
+                applyOperations = Array.AsReadOnly(new bool[metadataBatch.Operations.Count]);
             }
             return new StorageRemoteApplyPlan(token, metadataBatch, finalizeMetadata, isDuplicate, applyOperations);
         }
