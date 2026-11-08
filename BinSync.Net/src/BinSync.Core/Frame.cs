@@ -66,6 +66,7 @@ public static class Frames
         [0x19] = "FULL_REPLACE_COMMIT",
         [0x1A] = "FULL_REPLACE_ACK",
         [0x1B] = "FULL_REPLACE_ABORT",
+        [0x1C] = "FULL_REPLACE_READY",
     };
 
     /// <summary>Read-only map of frame type byte to symbolic name.</summary>
