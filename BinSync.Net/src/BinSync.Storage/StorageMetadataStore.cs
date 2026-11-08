@@ -1024,8 +1024,11 @@ private static bool ValidateIncomingBatchForStaging(
                 && priorLedger.IsLocalOutbound;
             if (priorLedger is not null)
             {
-                if (!LedgerMatches(priorLedger, operation))
-                    throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId ledger.");
+                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint) ||
+                    priorLedger.AuthorNodeId != localAuthor ||
+                    priorLedger.OriginAuthorEpoch != operation.OriginAuthorEpoch ||
+                    (operation.OriginSequence != 0 && priorLedger.OriginSequence != operation.OriginSequence))
+                    throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId ledger or immutable Origin.");
                 if (!alreadyFrozen)
                     throw new InvalidDataException("ChangeId is already known from an incoming route and cannot be published as a new local operation.");
             }
