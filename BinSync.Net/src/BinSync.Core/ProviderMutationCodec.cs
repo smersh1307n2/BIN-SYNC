@@ -67,18 +67,26 @@ public static class ProviderMutationCodec
         bool hasChangeId = !mutation.ChangeId.IsZero;
         bool hasOriginEpoch = mutation.OriginAuthorEpoch != 0;
         bool hasOriginSequence = mutation.OriginSequence != 0;
-        if (hasChangeId != hasOriginEpoch || hasChangeId != hasOriginSequence)
-            throw new ArgumentException("ChangeId, origin epoch and origin sequence must be present together.", nameof(mutation));
+        if (hasChangeId != hasOriginEpoch || (!hasChangeId && hasOriginSequence))
+            throw new ArgumentException("ChangeId and origin epoch must be present together; an unpublished local draft may defer OriginSequence until freeze.", nameof(mutation));
         if (mutation.IsRecordTombstone)
         {
             if (!hasChangeId || mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
                 mutation.KeyEpoch != 0 || mutation.Value.Length != 0)
-                throw new ArgumentException("Record tombstone requires immutable ChangeId/origin provenance and the lifecycle field with key epoch zero and no value.", nameof(mutation));
+                throw new ArgumentException("Record tombstone requires a stable ChangeId/origin epoch and the lifecycle field with key epoch zero and no value.", nameof(mutation));
         }
         else if (mutation.IsTombstone && mutation.Value.Length != 0)
         {
             throw new ArgumentException("Field tombstone mutation must not carry a value payload.", nameof(mutation));
         }
+    }
+
+    /// <summary>Validate an immutable operation that is eligible for remote application.</summary>
+    public static void ValidatePublished(ProviderMutation mutation)
+    {
+        Validate(mutation);
+        if (mutation.ChangeId.IsZero || mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence == 0)
+            throw new ArgumentException("Published operations require complete ChangeId/origin provenance.", nameof(mutation));
     }
 
     public static int CompareCanonical(ProviderMutation left, ProviderMutation right)
