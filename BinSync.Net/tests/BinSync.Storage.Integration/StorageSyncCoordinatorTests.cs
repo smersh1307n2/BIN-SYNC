@@ -1010,6 +1010,120 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Durable_push_selects_lowest_pending_sequence_across_author_streams()
+    {
+        const string scope = "durable-author-stream-fairness";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "durable-author-stream-fairness"), 472);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(18);
+        using var origin = NewNode(20);
+        using var receiver = NewNode(19);
+
+        // Teach the sender the third-party author's durable epoch before it stamps
+        // that author's relay operation for the downstream session.
+        Transport.MakeSession(sender, origin);
+
+        var localOperations = new List<MetadataFrozenOperation>();
+        for (int i = 0; i < 5; i++)
+        {
+            RecordId record = RecordId.From(Guid.Parse($"18000000-0000-0000-0000-{(180 + i):D12}").ToByteArray());
+            Assert.True(sender.WriteField(1, record, 0x0101,
+                new[] { (byte)(0xA0 + i) }, new Hlc((ulong)(1000 + i), 0)));
+            var entry = sender.Outbox[1][i];
+            byte[] payload = new byte[16 + entry.Payload.Length];
+            entry.RecordId.WriteTo(payload);
+            entry.Payload.CopyTo(payload, 16);
+            localOperations.Add(new MetadataFrozenOperation
+            {
+                ChangeId = entry.ChangeId,
+                Fingerprint = entry.ChangeId.ToArray(),
+                Payload = payload
+            });
+        }
+        metadata.FreezeOutbound(scope, sender.NodeId, 1, sender.NodeId, localOperations);
+
+        RecordId relayRecord = RecordId.From(Guid.Parse("20000000-0000-0000-0000-000000000020").ToByteArray());
+        Assert.True(origin.WriteField(1, relayRecord, 0x0102, "relay-first"u8.ToArray(), new Hlc(2000, 0)));
+        var originEntry = Assert.Single(origin.Outbox[1]);
+        byte[] relayPayload = new byte[16 + originEntry.Payload.Length];
+        originEntry.RecordId.WriteTo(relayPayload);
+        originEntry.Payload.CopyTo(relayPayload, 16);
+        metadata.AcceptIncomingBatch(new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = sender.NodeId,
+            SenderPeer = origin.NodeId,
+            SenderEpoch = checked((uint)origin.Epoch),
+            AuthorStreamNodeId = origin.NodeId,
+            NamespaceId = 1,
+            BatchId = BatchId.From(Guid.Parse("20000000-0000-0000-0000-000000000021").ToByteArray()),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0xB2, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = origin.NodeId,
+                    ChangeId = originEntry.ChangeId,
+                    Fingerprint = originEntry.ChangeId.ToArray(),
+                    Payload = relayPayload,
+                    RelayEligible = true
+                }
+            }
+        });
+
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        metadata.RegisterInterestedPeer(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1);
+        metadata.CompletePeerInitialSync(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1, new[]
+            {
+                new MetadataPeerStreamBaseline(sender.NodeId, 0, checked((uint)sender.Epoch)),
+                new MetadataPeerStreamBaseline(origin.NodeId, 0, checked((uint)origin.Epoch))
+            });
+
+        // Simulate a proven prior ACK of A's first four operations. Its next local
+        // cursor is 5, while the newly available relay stream starts at cursor 1.
+        var priorLocalReservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = BatchId.From(Guid.Parse("18000000-0000-0000-0000-000000000022").ToByteArray()),
+            IssuerEpoch = checked((uint)sender.Epoch),
+            CursorStart = 1,
+            CursorEnd = 4,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0xA4, 16).ToArray(),
+            Payload = new byte[] { 0x01 }
+        };
+        metadata.ReserveOutboundBatch(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1, sender.NodeId, priorLocalReservation);
+        metadata.MarkOutboundBatchPushed(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1, sender.NodeId, priorLocalReservation.BatchId);
+        metadata.AcknowledgeOutboundBatch(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1, sender.NodeId, priorLocalReservation.BatchId,
+            4, priorLocalReservation.BatchDigest);
+
+        var receive = acceptor.ReceiveBatchAsync(receiver);
+        Assert.True(await initiator.PushBatchAsync(sender, 1, metadata, scope));
+        Assert.Equal(1, (await receive).Applied);
+
+        var localProgress = metadata.GetPeerStreamState(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1, sender.NodeId);
+        var relayProgress = metadata.GetPeerStreamState(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)receiver.Epoch), 1, origin.NodeId);
+        Assert.Equal(4UL, localProgress.AckedCursor);
+        Assert.Equal(1UL, relayProgress.AckedCursor);
+        Assert.True(receiver.TryGetField(1, relayRecord, 0x0102, out var received));
+        Assert.Equal("relay-first", Encoding.UTF8.GetString(received!.Value));
+    }
+
+    [Fact]
     public void Failed_node_checkpoint_does_not_ack_feed_and_replay_does_not_duplicate_outbox()
     {
         using var provider = new StorageDataProvider(Path.Combine(_root, "provider"), 401, deleteOnDispose: true);
