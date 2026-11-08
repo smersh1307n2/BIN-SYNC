@@ -88,7 +88,7 @@ public sealed class MetadataCoordinatorRetryScanBench
     }
 
     [Benchmark(Description = "Coordinator retry after durable freeze / pending feed row scale")]
-    public int RetryFrozenPublication()
+    public int MetadataCoordinatorRetryFrozenPublication()
     {
         int published = _coordinator.PublishLocalChanges(static _ => { }, limit: PendingFeedRows + 1);
         if (published != PendingFeedRows)
