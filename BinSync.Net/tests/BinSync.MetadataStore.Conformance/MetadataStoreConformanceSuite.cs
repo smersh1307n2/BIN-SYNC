@@ -302,6 +302,9 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Throws<InvalidDataException>(() =>
             store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
                 new[] { FrozenOperation(30, 50), FrozenOperation(32, 53) }));
+        Assert.Throws<InvalidDataException>(() =>
+            store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+                new[] { FrozenOperation(33, 53), FrozenOperation(30, 50) }));
         Assert.Equal(3UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
     }
 
