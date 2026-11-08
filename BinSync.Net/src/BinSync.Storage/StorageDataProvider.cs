@@ -621,6 +621,139 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         }
     }
 
+    /// <summary>
+    /// Physically reclaims record tombstones only after the signed checkpoint proves
+    /// every Active member installed the exact active generation and covered the
+    /// tombstone's immutable origin. The caller must hold a cross-store lease that
+    /// excludes PendingApply, relay/outbound reservations and external reader pins.
+    /// </summary>
+    public int CompactRecordTombstones(
+        int namespaceId, StorageNamespaceGcStore gcStore, TrustStore trustStore,
+        int limit, Func<IDisposable?> acquireGcLease)
+    {
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
+        ArgumentNullException.ThrowIfNull(acquireGcLease);
+        if (!gcStore.IsBoundTo(_storage))
+            throw new ArgumentException("Tombstone GC store must share the provider StorageDatabase.", nameof(gcStore));
+
+        IDisposable? lease = acquireGcLease();
+        if (lease is null)
+            throw new InvalidOperationException("Cross-store tombstone GC proof is unavailable; no tombstones were reclaimed.");
+        using (lease)
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_snapshots.Count != 0)
+                throw new InvalidOperationException("Provider snapshot readers are active; tombstone GC is blocked.");
+
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available for tombstone GC.");
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? checkpoint) ||
+                checkpoint is null || !checkpoint.FullReplaceGeneration.HasValue ||
+                checkpoint.FullReplaceDigest is null ||
+                checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
+                return 0;
+
+            ulong examined = 0;
+            int reclaimed = 0;
+            byte[]? afterTombstoneKey = null;
+            while (reclaimed < limit && examined < (ulong)limit * 8)
+            {
+                using StorageSnapshot snapshot = _storage.OpenSnapshot();
+                Guid activeGeneration = ReadActiveGeneration(snapshot);
+                if (activeGeneration != checkpoint.FullReplaceGeneration.Value)
+                    return reclaimed;
+                ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
+                ulong acked = ReadUInt64(snapshot, [LocalAckWatermark]);
+                if (high != acked)
+                    throw new InvalidOperationException("Unpublished local provider changes block tombstone GC.");
+
+                foreach (StorageEntry sessionRow in snapshot.ScanPrefix(
+                    [FullReplaceSession], ReadOnlySpan<byte>.Empty, int.MaxValue))
+                {
+                    FullReplaceState staging = DecodeFullReplaceState(sessionRow.Value);
+                    if (!staging.IsCommitted)
+                        throw new InvalidOperationException("An uncommitted FULL_REPLACE staging generation blocks tombstone GC.");
+                }
+
+                byte[] tombstonePrefix = CurrentPrefix(CurrentRecordTombstone, activeGeneration);
+                IReadOnlyList<StorageEntry> tombstoneRows = snapshot.ScanPrefix(
+                    tombstonePrefix,
+                    afterTombstoneKey is null ? ReadOnlySpan<byte>.Empty : afterTombstoneKey,
+                    1);
+                if (tombstoneRows.Count == 0)
+                    break;
+
+                StorageEntry tombstoneRow = tombstoneRows[0];
+                ProviderMutation tombstone = DecodeMutation(tombstoneRow.Value);
+                if (!tombstone.IsRecordTombstone || tombstoneRow.Key.Length != 33 ||
+                    tombstone.RecordId != RecordId.From(tombstoneRow.Key.AsSpan(17, 16)) ||
+                    tombstone.ChangeId.IsZero || tombstone.OriginAuthorEpoch == 0 ||
+                    tombstone.OriginSequence == 0 ||
+                    !gcStore.HasProtocolTombstoneGcProof(
+                        roster, trustStore, tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
+                        tombstone.OriginSequence, checkpoint.FullReplaceGeneration.Value,
+                        checkpoint.FullReplaceDigest))
+                {
+                    afterTombstoneKey = tombstoneRow.Key;
+                    examined++;
+                    continue;
+                }
+
+                byte[] fieldPrefix = new byte[33];
+                fieldPrefix[0] = CurrentField;
+                activeGeneration.TryWriteBytes(fieldPrefix.AsSpan(1, 16), true, out _);
+                tombstone.RecordId.WriteTo(fieldPrefix.AsSpan(17, 16));
+                var obsoleteFieldKeys = new List<byte[]>(4096);
+                byte[]? afterFieldKey = null;
+                bool moreFields = true;
+                while (moreFields && obsoleteFieldKeys.Count < 4096)
+                {
+                    IReadOnlyList<StorageEntry> fieldRows = snapshot.ScanPrefix(
+                        fieldPrefix,
+                        afterFieldKey is null ? ReadOnlySpan<byte>.Empty : afterFieldKey,
+                        4096);
+                    if (fieldRows.Count == 0)
+                        break;
+                    foreach (StorageEntry fieldRow in fieldRows)
+                    {
+                        ProviderMutation field = DecodeMutation(fieldRow.Value);
+                        if (Compare(field, tombstone) <= 0)
+                            obsoleteFieldKeys.Add(fieldRow.Key);
+                        afterFieldKey = fieldRow.Key;
+                        if (obsoleteFieldKeys.Count == 4096)
+                            break;
+                    }
+                    moreFields = fieldRows.Count == 4096;
+                }
+
+                using var batch = _storage.BeginWriteBatch();
+                if (_storage.LastCommitSeq != snapshot.CommitSeq)
+                    throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
+                if (obsoleteFieldKeys.Count != 0)
+                {
+                    foreach (byte[] key in obsoleteFieldKeys)
+                        batch.Delete(key);
+                    batch.Commit();
+                    // Keep the tombstone cursor unchanged and rescan the same record
+                    // against a fresh snapshot until every hidden field has been removed.
+                    continue;
+                }
+
+                batch.Delete(tombstoneRow.Key);
+                batch.Commit();
+                reclaimed++;
+                // Keep afterTombstoneKey unchanged: the deleted row is now absent and
+                // the next ScanPrefix call naturally returns the next tombstone.
+            }
+            return reclaimed;
+        }
+    }
+
     public bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation)
     {
         lock (_gate)
