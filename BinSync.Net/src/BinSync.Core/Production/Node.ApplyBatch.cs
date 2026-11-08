@@ -122,6 +122,7 @@ public sealed partial class Node
             }
             if (streamAuthor.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            ValidateAuthorStreamCursorSpan(batch, streamAuthor, batch.Entries.Count);
             batch.AuthorStreamNodeId = streamAuthor;
 
             PeerState? peerState = PeerStates.TryGetValue((senderPeer, batch.NamespaceId), out var foundState)
@@ -181,6 +182,7 @@ public sealed partial class Node
             }
             if (streamAuthor.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            ValidateAuthorStreamCursorSpan(batch, streamAuthor, batch.Entries.Count);
             batch.AuthorStreamNodeId = streamAuthor;
 
             if (ComputeRecordsRoot(batch.Entries) != batch.RecordsRoot ||
@@ -190,6 +192,13 @@ public sealed partial class Node
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             return batch;
         }
+    }
+
+    private static void ValidateAuthorStreamCursorSpan(Batch batch, NodeId streamAuthor, int operationCount)
+    {
+        if (streamAuthor.IsZero || batch.CursorStart < 0 || batch.CursorEnd < batch.CursorStart ||
+            (ulong)batch.CursorEnd - (ulong)batch.CursorStart + 1 != (ulong)operationCount)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
     }
 
     private NodeId ResolveOperationAuthor(object operation, NodeId senderPeer)
@@ -321,8 +330,7 @@ public sealed partial class Node
         // Every Node batch represents one contiguous author-stream range, so its
         // cursor span must match its operation count. This does NOT make the cursor
         // an origin sequence: a relay's range is its own local delivery coordinate.
-        if ((ulong)batch.CursorEnd - (ulong)batch.CursorStart + 1 != (ulong)nEntEarly)
-            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+        ValidateAuthorStreamCursorSpan(batch, streamAuthor, nEntEarly);
         result.DurableAuthor = batch.DurableAuthor;
         var streamKey = (senderPeer, batch.IssuerEpoch, streamAuthor);
         if (!receiveStateOwnedByMetadataStore)
