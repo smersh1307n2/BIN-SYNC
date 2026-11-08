@@ -281,7 +281,7 @@ public class MetadataStoreCardinalityBench
 /// </summary>
 [MemoryDiagnoser]
 [InvocationCount(1)]
-[HideColumns("Error", "StdDev", "Median", "RatioSD")]
+[HideColumns("Error", "StdDev", "Median", "Ratio", "RatioSD")]
 public class MetadataStoreMillionRowBench
 {
     private const string Scope = "metadata-store-million-row-bench";
