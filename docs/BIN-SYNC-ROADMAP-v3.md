@@ -783,3 +783,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `PublishAppliedOriginFrontier` now always acquires the coordinator→Node→shared-Storage application commit barrier, not only for final-author reports. The ChangeLedger frontier and provider unpublished-draft count/max-HLC are therefore sampled against one local commit boundary.
 - [x C] This closes the race where a local Node/provider write could arrive after a zero-draft scan but before a non-final OFR2 report was signed and later used by a FULL_REPLACE retention checkpoint.
 - [~ T] Stress concurrent local writes, remote apply, publication freeze, provider ACK and frontier publication; prove the report is either before or after each operation, never a mixed snapshot.
+
+
+### 2026-11-09 — C-pass: guard provider rehydration and publication cutover
+
+- [x C] `RefreshAfterFullReplace`, `RehydrateNodeFromProviderSnapshot` and `EnableMetadataStoreOwnedPublication` now acquire the same coordinator→Node→shared-Storage barrier before reading provider snapshots, changing Node cache state or switching publication authority.
+- [x C] Nested use from the receiver's already-held commit lease is reentrant on the acquiring thread; Node checkpoint persistence follows the same lock order.
+- [~ T] Verify direct and nested invocation, concurrent Node writes/provider appends, failed persistence and retry, and deadlock freedom under contention.
