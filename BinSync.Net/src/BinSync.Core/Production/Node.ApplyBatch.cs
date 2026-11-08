@@ -208,7 +208,7 @@ public sealed partial class Node
                 (i != 0 && entry.OriginSequence <= previous))
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             if (batch.IssuerNodeId == streamAuthor &&
-                entry.OriginAuthorEpoch != (uint)batch.IssuerEpoch)
+                entry.OriginAuthorEpoch > (uint)batch.IssuerEpoch)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             previous = entry.OriginSequence;
         }
@@ -982,7 +982,7 @@ public sealed partial class Node
             if (entries.Count > 0)
                 batches.Add(new Batch(namespaceId, 0, 1, 0x02, 0, NodeId, Epoch, 0, 0,
                                       BatchId.From(Guid.NewGuid().ToByteArray()), Zero128,
-                                      ComputeRecordsRoot(entries), Zero128, entries));
+                                      ComputeRecordsRoot(entries, includeOrigin: false), Zero128, entries));
         }
         foreach (var b in batches)
             b.BatchDigest = ComputeBatchDigest(b.BatchId, b.NamespaceId, b.IssuerNodeId,
@@ -1016,7 +1016,7 @@ public sealed partial class Node
             if (entry.ChangeId.IsZero || !snapshotChangeIds.Add(entry.ChangeId))
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
 
-        var snapshotRoot = ComputeRecordsRoot(batch.Entries);
+        var snapshotRoot = ComputeRecordsRoot(batch.Entries, includeOrigin: false);
         if (batch.RecordsRoot != snapshotRoot)
             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         var snapshotDigest = ComputeBatchDigest(batch.BatchId, batch.NamespaceId, batch.IssuerNodeId,

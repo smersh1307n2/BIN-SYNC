@@ -72,7 +72,15 @@ public sealed partial class Node
         if (batch.CursorStart < 0 || batch.CursorEnd < batch.CursorStart)
             throw new ArgumentOutOfRangeException(nameof(batch.CursorStart), "Batch cursors must be non-negative and ordered.");
         ArgumentNullException.ThrowIfNull(batch.Entries);
-
+        ulong previousOriginSequence = 0;
+        for (int i = 0; i < batch.Entries.Count; i++)
+        {
+            var entry = batch.Entries[i];
+            if (entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0 ||
+                (i != 0 && entry.OriginSequence <= previousOriginSequence))
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            previousOriginSequence = entry.OriginSequence;
+        }
     }
 
     // The canonical records array carries both an envelope recordId/opKind and an

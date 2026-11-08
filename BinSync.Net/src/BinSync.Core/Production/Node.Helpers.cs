@@ -115,7 +115,7 @@ public sealed partial class Node
     /// Canonical records array: count varint, then per entry:
     /// recordId b128 | changeId b128 | originEpoch u32 | originSequence u64 | opKind u8 | payloadLen varint | payload.
     /// <summary>Write canonical records array into an existing Writer (no intermediate buffer).</summary>
-    public static void WriteRecordsArray(Writer w, List<OutboxEntry> entries)
+    public static void WriteRecordsArray(Writer w, List<OutboxEntry> entries, bool includeOrigin = true)
     {
         w.Varint((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
@@ -123,9 +123,11 @@ public sealed partial class Node
             var e = entries[i];
             if (e.ChangeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
-            if (e.OriginAuthorEpoch == 0 || e.OriginSequence == 0)
+            if (includeOrigin && (e.OriginAuthorEpoch == 0 || e.OriginSequence == 0))
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
-            w.B128(e.RecordId).B128(e.ChangeId).U32(e.OriginAuthorEpoch).U64(e.OriginSequence)
+            w.B128(e.RecordId).B128(e.ChangeId)
+                .U32(includeOrigin ? e.OriginAuthorEpoch : 0)
+                .U64(includeOrigin ? e.OriginSequence : 0)
                 .U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
         }
     }
@@ -191,7 +193,7 @@ public sealed partial class Node
     }
 
     /// <summary>BLAKE3 root over the ordered records array (incremental).</summary>
-    public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries)
+    public static Digest16 ComputeRecordsRoot(List<OutboxEntry> entries, bool includeOrigin = true)
     {
         int est = Domains.DomainRecordsBytes.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
@@ -201,7 +203,7 @@ public sealed partial class Node
         {
             var w = new Writer(buf);
             w.Raw(Domains.DomainRecordsBytes);
-            WriteRecordsArray(w, entries);
+            WriteRecordsArray(w, entries, includeOrigin);
             return Digests.Blake3Digest16(w.WrittenSpan);
         }
         finally
