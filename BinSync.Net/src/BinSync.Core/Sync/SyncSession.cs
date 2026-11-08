@@ -514,6 +514,14 @@ public partial class SyncSession : IAsyncDisposable
                 _pendingAliasUpdates.TryRemove(requestId, out _);
             }
         }
+        catch (OperationCanceledException ex)
+        {
+            // Once an alias proposal may have reached the peer, cancellation must
+            // close this session. Re-handshake rebuilds both maps from durable authors.
+            _sendFlowControl.Fail(ex);
+            _receiveCts.Cancel();
+            throw;
+        }
         catch (SyncException ex)
         {
             _sendFlowControl.Fail(ex);
