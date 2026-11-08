@@ -97,6 +97,80 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void Compact_stream_payload_hydration_rejects_missing_or_mismatched_change_id_identity(
+        bool includeLedger, bool mismatchedAuthor)
+    {
+        string directory = Path.Combine(_root, "compact-stream-corruption-" + includeLedger);
+        Directory.CreateDirectory(directory);
+        const string scope = "compact-stream-corruption-scope";
+        const int namespaceId = 7;
+        NodeId local = Node(1);
+        NodeId ledgerAuthor = mismatchedAuthor ? Node(2) : local;
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+        byte[] identity = new byte[8 + scopeBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(identity, 0x33534D42);
+        BinaryPrimitives.WriteInt32LittleEndian(identity.AsSpan(4), scopeBytes.Length);
+        scopeBytes.CopyTo(identity, 8);
+
+        byte[] streamSuffix = new byte[26];
+        BinaryPrimitives.WriteUInt16LittleEndian(streamSuffix, namespaceId);
+        local.WriteTo(streamSuffix.AsSpan(2));
+        BinaryPrimitives.WriteUInt64BigEndian(streamSuffix.AsSpan(18), 1);
+        byte[] compactPayload = new byte[22];
+        Batch(91).WriteTo(compactPayload);
+        BinaryPrimitives.WriteInt32LittleEndian(compactPayload.AsSpan(16), 2);
+        compactPayload[20] = 0xAA;
+        compactPayload[21] = 0xBB;
+
+        byte[] Key(byte kind, ReadOnlySpan<byte> suffix)
+        {
+            byte[] key = new byte[root.Length + 1 + suffix.Length];
+            root.CopyTo(key, 0);
+            key[root.Length] = kind;
+            suffix.CopyTo(key.AsSpan(root.Length + 1));
+            return key;
+        }
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 421);
+            using (var batch = storage.BeginWriteBatch())
+            {
+                batch.Put(Key(0, ReadOnlySpan<byte>.Empty), identity);
+                batch.Put(Key(21, streamSuffix), compactPayload);
+                if (includeLedger)
+                {
+                    byte[] ledgerSuffix = new byte[18];
+                    BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, namespaceId);
+                    Batch(91).WriteTo(ledgerSuffix.AsSpan(2));
+                    byte[] ledgerValue = new byte[45];
+                    Enumerable.Repeat((byte)9, 16).ToArray().CopyTo(ledgerValue, 0);
+                    ledgerAuthor.WriteTo(ledgerValue.AsSpan(16));
+                    BinaryPrimitives.WriteUInt32LittleEndian(ledgerValue.AsSpan(32), 7);
+                    BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(36), 1);
+                    ledgerValue[44] = 1;
+                    batch.Put(Key(3, ledgerSuffix), ledgerValue);
+                }
+                batch.Commit();
+            }
+
+            using var metadata = new StorageMetadataStore(storage);
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.GetOutboundHighWatermark(scope, local, namespaceId, local));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void Legacy_stream_payload_row_kinds_are_rejected_without_migration()
     {
