@@ -1483,7 +1483,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("namespace-two", Encoding.UTF8.GetString(valueTwo!.Value));
     }
 
-    private sealed class FailOnceAcknowledgeProvider : IDataProvider
+    private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode
     {
         private readonly IDataProvider _inner;
         private bool _failNextAcknowledge = true;
@@ -1498,6 +1498,10 @@ public sealed class StorageSyncCoordinatorTests
         public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit) =>
             _inner.ReadLocalChanges(afterSequence, limit);
         public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
+        public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark) =>
+            ((IProviderPublicationMode)_inner).TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
+        public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark) =>
+            ((IProviderPublicationMode)_inner).EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
 
         public void AcknowledgeLocalChanges(ulong safeThroughSequence)
         {
