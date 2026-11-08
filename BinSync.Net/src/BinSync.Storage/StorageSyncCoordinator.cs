@@ -41,6 +41,34 @@ public sealed class StorageSyncCoordinator
             _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
     }
 
+    /// <summary>Attach the same-partition signed namespace-GC replay fence to durable metadata.</summary>
+    public void AttachNamespaceGcGuard(StorageNamespaceGcStore gcStore, TrustStore trustStore)
+    {
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Namespace-GC replay fencing requires the durable StorageMetadataStore implementation.");
+        storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
+    }
+
+    /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
+    public int CompactChangeLedger(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
+    {
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("ChangeId GC requires the durable StorageMetadataStore implementation.");
+        return storageMetadata.CompactChangeLedger(_scopeId
+            ?? throw new InvalidOperationException("A durable metadata scope is required."),
+            _node.NodeId, namespaceId, limit, acquireGcLease);
+    }
+
+    /// <summary>Compact incoming batch receipts below the signed origin frontier under an external live-reference lease.</summary>
+    public int CompactReceipts(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
+    {
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Receipt GC requires the durable StorageMetadataStore implementation.");
+        return storageMetadata.CompactReceipts(_scopeId
+            ?? throw new InvalidOperationException("A durable metadata scope is required."),
+            _node.NodeId, namespaceId, limit, acquireGcLease);
+    }
+
     /// <summary>
     /// Performs the one-time, fail-closed transition from Node-Outbox mirroring to
     /// Metadata-Store-owned outbound sequencing. The provider feed must already be
