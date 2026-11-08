@@ -307,7 +307,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
                     continue;
                 if (HasLiveChangeIdReference(current, namespaceId, pair.Key.ChangeId) ||
-                    externalReferences.HasExternalChangeIdReference(namespaceId, pair.Key.ChangeId))
+                    externalReferences.HasExternalChangeIdReference(scopeId, localReplica, namespaceId, pair.Key.ChangeId))
                     continue;
 
                 byte[] suffix = new byte[18];
@@ -396,7 +396,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pending.Batch.BatchId == key.BatchId))
                     continue;
                 if (externalReferences.HasExternalReceiptReference(
-                    namespaceId, key.Sender, key.Epoch, receipt.TransportPeerEpoch, key.BatchId))
+                    scopeId, localReplica, namespaceId, key.Sender, key.Epoch,
+                    receipt.TransportPeerEpoch, key.BatchId))
                     continue;
                 if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
                         roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
