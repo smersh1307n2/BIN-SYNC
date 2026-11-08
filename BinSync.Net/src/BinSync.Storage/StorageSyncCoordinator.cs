@@ -981,6 +981,7 @@ public sealed class StorageSyncCoordinator
         RegisterInterestedPeer(session, _namespaceId);
         StorageRemoteApplyPlan? plan = null;
         BatchResult result = await session.ReceiveBatchAsync(_node,
+            beforeApply: null,
             beforeApplyWithOperationDecisions: (batch, payload, senderPeer) =>
             {
                 plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer);
