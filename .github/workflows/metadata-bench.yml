@@ -5,6 +5,10 @@ on:
     branches: ["feature/fld-external-storage"]
     paths:
       - "BinSync.Net/bench/**"
+      - "BinSync.Net/src/BinSync.Core/Production/Node.ProviderSnapshot.cs"
+      - "BinSync.Net/src/BinSync.Storage/StorageSyncCoordinator.cs"
+      - "BinSync.Net/src/BinSync.Storage/StorageDataProvider.cs"
+      - "BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs"
       - ".github/workflows/metadata-bench.yml"
 
 permissions:
