@@ -1,6 +1,6 @@
 # BIN-SYNC CORE normative coverage audit
 
-**Baseline:** BIN-SYNC CORE v2.4.21 FINAL  
+**Baseline:** BIN-SYNC CORE v2.4.22 FINAL  
 **Status:** refreshed against fully verified code/test head `1d9e2494f378f1db0eb855f8da1d84eb7a1e5c57`: 651/651 Core, 31/31 Fuzz/Lab; Storage Integration 149/149 independently on Ubuntu, Windows and macOS. Added conformance coverage includes legacy epoch-unknown PendingApply blocking peer retirement and namespace-scoped receipt reclamation. Receipt GC remains limited to receipts bound to a durably retired transport-peer epoch; ChangeId-ledger and tombstone/ghost GC remain disabled. Linux/macOS directory-entry changes use native directory fsync with fail-closed error propagation; Windows directory-entry durability and actual power-loss behavior are not claimed. This is not a claim that every normative sentence has a one-to-one executable test; remaining release gates are ChangeId/tombstone safe horizons, additional physical I/O fault coverage and repeatable large-cardinality performance evidence.
 
 ## 1. Section coverage matrix
@@ -33,7 +33,7 @@
 3. **Retention:** an ACK or TTL does not authorize deletion of receipts, ChangeId facts, relay history, Outbox payloads and tombstones as one coupled history. Each has its own proof horizon. Inbox receipt GC now has a conservative non-wire horizon: receipts attributed to a durably retired authenticated transport-peer epoch can be deleted atomically with the retired-through fence. Active-epoch and legacy epoch-unknown receipts remain retained; ChangeId and tombstone/ghost GC remain disabled.
 4. **Duplicate ACK:** the receive pseudocode now returns the stored receipt cursor and durable author, not replay-supplied values.
 5. **Relay alias failure:** the old pseudocode silently skipped an operation with an unknown target alias. That contradicts contiguous author-stream cursors and the implementation's fail-closed behavior. The spec now rejects the whole batch with `UNKNOWN_ALIAS`.
-6. **Version label:** commit `da787f38d05c528ab3357d4feb646458dd021d89` explicitly advanced the specification title to v2.4.20 while adding the receipt-retention/per-author-stream contract. The stale `Версия` metadata and end-of-document version statement are aligned to v2.4.21; `ERRATA v2.4.19` intentionally remains the historical version label of E-25, which was introduced in that revision.
+6. **Version label:** commit `da787f38d05c528ab3357d4feb646458dd021d89` explicitly advanced the specification title to v2.4.20 while adding the receipt-retention/per-author-stream contract. The stale `Версия` metadata and end-of-document version statement are aligned to v2.4.22; `ERRATA v2.4.19` intentionally remains the historical version label of E-25, which was introduced in that revision.
 
 These are semantic clarifications/hardening changes; they do not change the wire layout.
 
