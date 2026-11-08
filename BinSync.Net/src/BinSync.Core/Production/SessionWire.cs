@@ -253,6 +253,7 @@ public static class SessionWire
             NodeId nodeId = NodeId.From(payload.Slice(offset, 16));
             offset += 16;
             uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
+            offset += 4;
             if (alias == 0 || nodeId.IsZero || epoch > int.MaxValue)
                 throw new FrameException("FRAME_REJECTED");
             entry = new AliasMapEntry(alias, nodeId, (int)epoch);
