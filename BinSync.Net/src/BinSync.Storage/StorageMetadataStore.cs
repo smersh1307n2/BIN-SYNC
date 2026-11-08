@@ -798,6 +798,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         {
             if (!priorReceipt.Matches(batch))
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
+            if (batch.TransportPeerEpoch > priorReceipt.TransportPeerEpoch)
+                next.Receipts[receiptKey] = new ReceiptValue(priorReceipt.CursorStart,
+                    priorReceipt.CursorEnd, priorReceipt.PreviousBatchDigest.ToArray(),
+                    priorReceipt.BatchDigest.ToArray(), priorReceipt.NewRelayOperationCount,
+                    priorReceipt.DurableAuthor, priorReceipt.HeaderFingerprint.ToArray(),
+                    batch.TransportPeerEpoch);
 
             return new MetadataBatchReceipt(
                 priorReceipt.CursorStart,
