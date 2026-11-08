@@ -772,7 +772,7 @@ private static bool ValidateIncomingBatchForStaging(
             : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
         byte[]? identityValue = identityKey is null
             ? null
-            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+            : EncodePartitionIdentity(partitionKey);
         using var storageBatch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
         if (actualBaseCommitSeq != current.StorageCommitSeq)
@@ -2475,7 +2475,7 @@ private static bool ValidateIncomingBatchForStaging(
             : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
         byte[]? identityValue = identityKey is null
             ? null
-            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+            : EncodePartitionIdentity(partitionKey);
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
         if (actualBaseCommitSeq != current.StorageCommitSeq)
@@ -2540,7 +2540,7 @@ private static bool ValidateIncomingBatchForStaging(
             : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
         byte[]? identityValue = identityKey is null
             ? null
-            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+            : EncodePartitionIdentity(partitionKey);
 
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
@@ -2606,7 +2606,7 @@ private static bool ValidateIncomingBatchForStaging(
             : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
         byte[]? identityValue = identityKey is null
             ? null
-            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+            : EncodePartitionIdentity(partitionKey);
 
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
@@ -2638,7 +2638,7 @@ private static bool ValidateIncomingBatchForStaging(
             : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
         byte[]? identityValue = identityKey is null
             ? null
-            : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+            : EncodePartitionIdentity(partitionKey);
 
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
@@ -2763,7 +2763,7 @@ private static bool ValidateIncomingBatchForStaging(
             ? StorageKey(root, 0, ReadOnlySpan<byte>.Empty)
             : null;
         byte[]? identityValue = addPartitionIdentity
-            ? Encoding.UTF8.GetBytes(partitionKey.ScopeId)
+            ? EncodePartitionIdentity(partitionKey)
             : null;
 
         using var batch = _storage.BeginWriteBatch();
