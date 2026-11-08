@@ -97,6 +97,139 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
+    /// Build and durably publish this member's contiguous applied-origin frontier.
+    /// Published ledger rows and still-unpublished local provider feed rows are both
+    /// included; provider Journal/Feed sequence is never substituted for OriginSequence.
+    /// </summary>
+    public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
+        string scopeId,
+        NodeId localMember,
+        NamespaceRosterCertificate acceptedRoster,
+        IReadOnlyList<ProviderChange> pendingLocalChanges,
+        ReadOnlySpan<byte> memberSeed)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localMember.IsZero) throw new ArgumentException("Local member identity must be non-zero.", nameof(localMember));
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        ArgumentNullException.ThrowIfNull(pendingLocalChanges);
+        if (memberSeed.Length != 32) throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC store before publishing origin frontiers.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(acceptedRoster.NamespaceId, trustStore,
+                    out NamespaceRosterCertificate? currentRoster) || currentRoster is null ||
+                currentRoster.RosterGeneration != acceptedRoster.RosterGeneration ||
+                !NamespaceRosterProtocol.ComputeDigest(currentRoster).AsSpan()
+                    .SequenceEqual(NamespaceRosterProtocol.ComputeDigest(acceptedRoster)))
+                throw new InvalidOperationException("Applied-origin frontier roster is not the current accepted roster.");
+
+            NamespaceRosterMember member = NamespaceRosterProtocol.FindMember(acceptedRoster, localMember);
+            if (member.Status != NamespaceMemberStatus.Active || member.TransportPeerEpoch == 0)
+                throw new InvalidOperationException("Only an Active roster member may publish an applied-origin frontier.");
+
+            var partitionKey = new PartitionKey(scopeId, localMember);
+            PartitionState? current = TryGetPartition(partitionKey, out PartitionState? loaded)
+                ? loaded : null;
+            AppliedOriginFrontierReport? prior = gcStore.ReadOriginFrontiers(acceptedRoster)
+                .FirstOrDefault(report => report.MemberNodeId == localMember);
+            ulong reportSequence = checked((prior?.ReportSequence ?? 0) + 1);
+
+            var sequences = new Dictionary<(NodeId Author, uint Epoch), List<ulong>>();
+            if (current is not null)
+            {
+                foreach (var pair in current.ChangeLedger)
+                {
+                    if (pair.Key.NamespaceId != acceptedRoster.NamespaceId) continue;
+                    OperationOrigin origin = pair.Value.Provenance;
+                    if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
+                        continue;
+                    AddOriginSequence(sequences, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence);
+                }
+            }
+
+            foreach (ProviderChange change in pendingLocalChanges)
+            {
+                ProviderMutation mutation = change.Mutation
+                    ?? throw new InvalidDataException("Pending provider feed contains a null mutation.");
+                if (change.ChangeId.IsZero || mutation.ChangeId != change.ChangeId ||
+                    mutation.AuthorNodeId != localMember || mutation.OriginAuthorEpoch == 0 ||
+                    mutation.OriginSequence == 0)
+                    throw new InvalidDataException("Pending provider feed is missing its stable local ChangeId/origin identity.");
+                AddOriginSequence(sequences, mutation.AuthorNodeId,
+                    mutation.OriginAuthorEpoch, mutation.OriginSequence);
+            }
+
+            var frontier = new Dictionary<(NodeId Author, uint Epoch), ulong>();
+            if (prior is not null)
+            {
+                foreach (AppliedOriginFrontierEntry entry in prior.Entries)
+                    frontier.Add((entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
+                        entry.ContiguousAppliedOriginSequence);
+            }
+
+            foreach (var pair in sequences)
+            {
+                frontier.TryGetValue(pair.Key, out ulong contiguous);
+                pair.Value.Sort();
+                foreach (ulong sequence in pair.Value)
+                {
+                    if (sequence <= contiguous) continue;
+                    if (sequence != contiguous + 1) break;
+                    contiguous = sequence;
+                }
+                if (contiguous != 0) frontier[pair.Key] = contiguous;
+            }
+
+            var entries = frontier
+                .Where(pair => pair.Value != 0)
+                .Select(pair => new AppliedOriginFrontierEntry
+                {
+                    OriginAuthorNodeId = pair.Key.Author,
+                    OriginAuthorEpoch = pair.Key.Epoch,
+                    ContiguousAppliedOriginSequence = pair.Value
+                })
+                .OrderBy(entry => entry.OriginAuthorNodeId, Comparer<NodeId>.Create((left, right) =>
+                {
+                    Span<byte> leftBytes = stackalloc byte[16];
+                    Span<byte> rightBytes = stackalloc byte[16];
+                    left.WriteTo(leftBytes);
+                    right.WriteTo(rightBytes);
+                    return leftBytes.SequenceCompareTo(rightBytes);
+                }))
+                .ThenBy(entry => entry.OriginAuthorEpoch)
+                .ToArray();
+
+            var report = new AppliedOriginFrontierReport
+            {
+                NamespaceId = acceptedRoster.NamespaceId,
+                RosterGeneration = acceptedRoster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster),
+                MemberNodeId = localMember,
+                MemberTransportEpoch = member.TransportPeerEpoch,
+                ReportSequence = reportSequence,
+                Entries = entries
+            };
+            byte[] signed = OriginFrontierProtocol.Sign(report, memberSeed);
+            return gcStore.AcceptOriginFrontier(signed, acceptedRoster);
+        }
+    }
+
+    private static void AddOriginSequence(
+        Dictionary<(NodeId Author, uint Epoch), List<ulong>> sequences,
+        NodeId author, uint epoch, ulong sequence)
+    {
+        var key = (author, epoch);
+        if (!sequences.TryGetValue(key, out List<ulong>? values))
+            sequences.Add(key, values = new List<ulong>());
+        values.Add(sequence);
+    }
+
+    /// <summary>
     /// Reclaim ChangeId ledger rows only below the signed all-active-member origin
     /// frontier and while the caller holds an exclusive cross-store live-reference
     /// lease. The retained checkpoint becomes the durable replay fence.
