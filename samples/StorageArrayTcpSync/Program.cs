@@ -141,9 +141,11 @@ static async Task InitializePeerBaselineOverTcpAsync(
     coordinatorA.RegisterInterestedPeer(sessionA, NamespaceId);
     coordinatorB.RegisterInterestedPeer(sessionB, NamespaceId);
     metadataA.CompletePeerInitialSync("array-tcp-demo", nodeA.NodeId, nodeB.NodeId,
-        checked((uint)nodeB.Epoch), NamespaceId);
+        checked((uint)nodeB.Epoch), NamespaceId,
+        new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, checked((uint)nodeA.Epoch)) });
     metadataB.CompletePeerInitialSync("array-tcp-demo", nodeB.NodeId, nodeA.NodeId,
-        checked((uint)nodeA.Epoch), NamespaceId);
+        checked((uint)nodeA.Epoch), NamespaceId,
+        new[] { new MetadataPeerStreamBaseline(nodeB.NodeId, 0, checked((uint)nodeB.Epoch)) });
 }
 
 static async Task<int> ExchangeOverTcpAsync(
