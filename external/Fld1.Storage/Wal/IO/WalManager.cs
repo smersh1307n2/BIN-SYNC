@@ -13,6 +13,7 @@ public sealed class WalManager : IDisposable
     private readonly string _walDir;
     private readonly ulong _partitionId;
     private readonly WalWriterFence _writerFence;
+    private readonly Action<StorageFaultPoint>? _faultInjector;
     private readonly long _rotateAfterBytes;
     private readonly object _lock = new();
     private WalWriter _active;
@@ -32,7 +33,7 @@ public sealed class WalManager : IDisposable
     }
 
     private WalManager(string walDir, ulong partitionId, long rotateAfterBytes, WalWriter active, int activeSeg,
-        WalWriterFence writerFence)
+        WalWriterFence writerFence, Action<StorageFaultPoint>? faultInjector)
     {
         _walDir = walDir;
         _partitionId = partitionId;
@@ -40,6 +41,7 @@ public sealed class WalManager : IDisposable
         _active = active;
         _activeSeg = activeSeg;
         _writerFence = writerFence;
+        _faultInjector = faultInjector;
     }
 
     public static string SegmentPath(string walDir, ulong partitionId, int seg)
@@ -53,6 +55,14 @@ public sealed class WalManager : IDisposable
         string walDir,
         ulong partitionId,
         long rotateAfterBytes = 64L * 1024 * 1024)
+        => OpenCore(walDir, partitionId, rotateAfterBytes, faultInjector: null);
+
+    internal static (WalManager manager, List<WalRecoveredRecord> records) OpenForTesting(
+        string walDir, ulong partitionId, long rotateAfterBytes, Action<StorageFaultPoint> faultInjector)
+        => OpenCore(walDir, partitionId, rotateAfterBytes, faultInjector);
+
+    private static (WalManager manager, List<WalRecoveredRecord> records) OpenCore(
+        string walDir, ulong partitionId, long rotateAfterBytes, Action<StorageFaultPoint>? faultInjector)
     {
         walDir = Path.GetFullPath(walDir);
         Directory.CreateDirectory(walDir);
@@ -65,9 +75,11 @@ public sealed class WalManager : IDisposable
             if (segs.Count == 0)
             {
                 string path = SegmentPath(walDir, partitionId, 0);
-                var w = WalWriter.Create(path, partitionId, firstCommitSeq: 1);
+                var w = faultInjector is null
+                    ? WalWriter.Create(path, partitionId, firstCommitSeq: 1)
+                    : WalWriter.CreateForTesting(path, partitionId, firstCommitSeq: 1, faultInjector);
                 return (new WalManager(walDir, partitionId, rotateAfterBytes, w, 0,
-                    writerFence), allRecords);
+                    writerFence, faultInjector), allRecords);
             }
 
         ulong? expectedNextSeq = null;
@@ -140,9 +152,11 @@ public sealed class WalManager : IDisposable
         }
 
         ulong nextSeq = expectedNextSeq!.Value;
-            var writer = WalWriter.OpenForAppend(lastPath, partitionId, (ulong)lastValidEnd, nextSeq);
+            var writer = faultInjector is null
+                ? WalWriter.OpenForAppend(lastPath, partitionId, (ulong)lastValidEnd, nextSeq)
+                : WalWriter.OpenForAppendForTesting(lastPath, partitionId, (ulong)lastValidEnd, nextSeq, faultInjector);
             return (new WalManager(walDir, partitionId, rotateAfterBytes, writer, lastSeg,
-                writerFence), allRecords);
+                writerFence, faultInjector), allRecords);
         }
         catch
         {
@@ -219,7 +233,9 @@ public sealed class WalManager : IDisposable
         try
         {
             // New segment contents and header become durable before the segment is published.
-            using (WalWriter.Create(tempPath, _partitionId, firstCommitSeq: nextSeq))
+            using (_faultInjector is null
+                ? WalWriter.Create(tempPath, _partitionId, firstCommitSeq: nextSeq)
+                : WalWriter.CreateForTesting(tempPath, _partitionId, firstCommitSeq: nextSeq, _faultInjector))
             {
             }
 
@@ -227,8 +243,9 @@ public sealed class WalManager : IDisposable
             published = true;
             TryFsyncDirectory(_walDir);
 
-            var nextWriter = WalWriter.OpenForAppend(
-                finalPath, _partitionId, WalHeader.Size, nextSeq);
+            var nextWriter = _faultInjector is null
+                ? WalWriter.OpenForAppend(finalPath, _partitionId, WalHeader.Size, nextSeq)
+                : WalWriter.OpenForAppendForTesting(finalPath, _partitionId, WalHeader.Size, nextSeq, _faultInjector);
 
             WalWriter previous = _active;
             _active = nextWriter;
