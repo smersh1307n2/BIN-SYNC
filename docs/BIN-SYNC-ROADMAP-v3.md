@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `0b4259f3fce4ea790f77c86b9828184fc0baca28`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest verified checkpoint: `70cda009949f6255469fa957a9e545f3ec97da26` — BinSync.Net (Core tests, Fuzz/Lab, public samples and coverage threshold) and FLD Storage Integration (Windows, macOS, Ubuntu) both completed successfully. This verifies code commits `aab64adcd1355565e8a0408bf0146c0b27bb5db1` and `f0c2bd820ce7f9d11c3a39d4bdcb88e88a9d87a6`. New provider-format code/tests (`56d818c`, `ad236fd`) are newer than this checkpoint; latest branch head at the last commit is `ad236fd403e0b20a9c7d888a003e9678084416aa`, exact-head CI pending. Status: PREVIOUS CHECKPOINT GREEN; CURRENT HEAD UNVERIFIED.
 
 ## 1. Target architecture
 
@@ -121,7 +121,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [~ C] Audit all examples/tests and remaining public API for legacy TCP-specific/compatibility-only references; migrate any remaining call sites to canonical `SyncSession`/`ISyncTransport`/provider API during the C pass, then verify in Phase T.
 - [ ] Remove optional provenance capability and downgrade negotiation.
 - [ ] Remove Node-owned duplicate metadata paths where Metadata Store authority is selected; no fallback after durable cutover.
-- [ ] Make v3 format marker mandatory on first durable write and validate on every open/recovery path.
+- [~ C] Added mandatory `BSP3` provider format marker on first provider open/write; unmarked partitions containing provider-owned rows fail closed, and mismatched markers are rejected. Strict v3 feed decoder now rejects missing/zero ChangeId rather than synthesizing one. Code: `56d818c`; regression tests: `ad236fd`; exact-head CI pending.
 - [ ] Ensure all public samples use canonical v3 API.
 
 ### Phase 6 — Conformance, performance and release
@@ -401,3 +401,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Reconciled the branch head after public API and GC design documentation updates: `0b4259f`.
 - [x] Preserved the exact distinction between the last green CI head (`1dfb7d6`) and the newer C-pass code commits (`aab64ad`, `f0c2bd8`).
 - [ ] Do not promote C markers to complete until Phase T verifies exact-head build, tests, Fuzz/Lab and Storage Integration.
+
+
+### 2026-11-08 — Phase 5 C pass: strict provider v3 format
+
+- [x] Verified exact checkpoint `70cda009949f6255469fa957a9e545f3ec97da26`: BinSync.Net workflow run 3914 succeeded (Core tests, Fuzz/Lab, public samples, coverage threshold); FLD Storage Integration run 1948 succeeded on Windows, macOS and Ubuntu. This checkpoint includes receipt reservation retirement guard `aab64ad` and provider local-intent contract `f0c2bd8`.
+- [x] Added mandatory provider format marker `BSP3` at reserved key kind `0x25`. Fresh provider partitions commit it before any provider API writes; unknown marker fails closed; existing provider-owned rows without marker fail closed rather than being reinterpreted as v3.
+- [x] Removed local-feed identity migration/synthesis. Every v3 LocalChange row must carry exactly one nonzero ChangeId; malformed/truncated/identity-less rows fail closed.
+- [x] Added Storage Integration regression tests for marker creation, unmarked legacy-row rejection and v3 feed rows missing ChangeId.
+- [~] C implementation and tests committed as `56d818c` and `ad236fd`; exact-head CI remains pending. Do not treat the test code as executed until CI reports.
