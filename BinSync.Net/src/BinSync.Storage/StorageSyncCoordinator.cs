@@ -7,9 +7,10 @@ public sealed record StorageRemoteApplyPlan(
     Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata, bool IsDuplicate = false);
 
 /// <summary>
-/// Coordinates a BIN-SYNC Node with an application-owned durable Data Provider.
-/// The caller supplies the durable Node checkpoint action so the source-feed ACK
-/// is advanced only after the Node's local Outbox has been persisted.
+/// Coordinates BIN-SYNC with an application-owned durable Data Provider and optional
+/// Metadata Store. Before provider-authoritative cutover, local feed entries are
+/// mirrored through Node Outbox; after cutover, Metadata Store owns outbound sequencing
+/// and Node is rehydrated from the provider snapshot as an application-data cache.
 /// </summary>
 public sealed class StorageSyncCoordinator
 {
@@ -36,12 +37,6 @@ public sealed class StorageSyncCoordinator
         _scopeId = scopeId;
     }
 
-    /// <summary>
-    /// Imports local provider changes into the Node. The provider feed is acknowledged
-    /// only after persistNode has durably saved the Node's Outbox and state.
-    /// Replaying an unacknowledged page is idempotent because the original HLC and
-    /// local author are passed through to Node.WriteField/TombField.
-    /// </summary>
     /// <summary>
     /// Performs the one-time, fail-closed transition from Node-Outbox mirroring to
     /// Metadata-Store-owned outbound sequencing. The provider feed must already be
@@ -95,6 +90,11 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>
+    /// Publishes the provider's pending local feed. Before cutover, winners are imported
+    /// through Node Outbox and frozen to Metadata Store; after cutover, stable provider
+    /// ChangeIds are frozen directly and Node is refreshed from a provider snapshot.
+    /// </summary>
     public int PublishLocalChanges(Action<Node> persistNode, int limit = 1024)
     {
         ArgumentNullException.ThrowIfNull(persistNode);
