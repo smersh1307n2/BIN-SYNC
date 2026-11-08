@@ -48,6 +48,8 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(persistNode);
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Metadata-Store-owned publication requires a durable Metadata Store scope.");
+        if (_metadataStore is not IMetadataOutboundChangeIdentityStore)
+            throw new NotSupportedException("Metadata-Store-owned publication requires the outbound ChangeId identity capability.");
         if (_provider is not IProviderPublicationMode publicationMode)
             throw new NotSupportedException("The attached provider does not support a durable outbound authority cutover.");
 
@@ -116,8 +118,12 @@ public sealed class StorageSyncCoordinator
         bool sawLegacyChangeId = false;
         bool metadataStoreOwnsOutbound = _provider is IProviderPublicationMode initialPublicationMode &&
             initialPublicationMode.TryGetMetadataStoreOwnedPublicationCutover(out cutoverNodeOutboxHigh);
+        IMetadataOutboundChangeIdentityStore? outboundIdentityStore =
+            _metadataStore as IMetadataOutboundChangeIdentityStore;
         if (metadataStoreOwnsOutbound && (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId)))
             throw new InvalidOperationException("Provider publication cutover exists but the durable Metadata Store scope is not attached.");
+        if (metadataStoreOwnsOutbound && outboundIdentityStore is null)
+            throw new NotSupportedException("Provider publication cutover requires the outbound ChangeId identity capability.");
 
         // Drain the complete currently-pending provider feed, not just one page.
         // The winner map is bounded by distinct record/field identities rather than
@@ -146,7 +152,7 @@ public sealed class StorageSyncCoordinator
                 {
                     if (change.ChangeId.IsZero)
                         throw new InvalidDataException("Metadata-Store-owned publication requires stable provider ChangeIds.");
-                    if (_metadataStore!.TryGetOutboundChangeFingerprint(
+                    if (outboundIdentityStore!.TryGetOutboundChangeFingerprint(
                         _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out byte[] frozenFingerprint))
                     {
                         byte[] actualFingerprint = ComputeMetadataFingerprint(change);
