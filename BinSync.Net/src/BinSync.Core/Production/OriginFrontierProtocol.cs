@@ -310,44 +310,84 @@ public static class NamespaceRetentionCheckpointProtocol
                 throw new InvalidDataException("Duplicate frontier report for one roster member.");
         }
 
-        var origins = new SortedDictionary<OriginKey, ulong>();
+        var origins = new SortedDictionary<OriginKey, (ulong Sequence, ulong HlcWall, uint HlcLogical)>();
+        foreach (NamespaceRetiredOriginEpoch closure in roster.RetiredOriginEpochs)
+        {
+            origins.Add(new OriginKey(closure.OriginAuthorNodeId, closure.OriginAuthorEpoch),
+                (closure.FinalIssuedOriginSequence, closure.MaxIssuedHlcWall, closure.MaxIssuedHlcLogical));
+        }
+
         foreach (AppliedOriginFrontierReport report in byMember.Values)
         {
-            foreach (AppliedOriginFrontierEntry entry in report.Entries)
+            foreach (IssuedOriginFrontierEntry issued in report.IssuedOrigins)
             {
-                var key = new OriginKey(entry.OriginAuthorNodeId, entry.OriginAuthorEpoch);
-                if (!origins.ContainsKey(key))
-                    origins.Add(key, ulong.MaxValue);
+                var key = new OriginKey(report.MemberNodeId, issued.OriginAuthorEpoch);
+                var value = (issued.IssuedOriginSequence, issued.MaxIssuedHlcWall, issued.MaxIssuedHlcLogical);
+                if (origins.TryGetValue(key, out var closureValue))
+                {
+                    if (closureValue != value)
+                        throw new InvalidDataException("Active member issued-origin report conflicts with its authority-signed retired-epoch closure.");
+                }
+                else
+                {
+                    origins.Add(key, value);
+                }
             }
+        }
+
+        if (fullReplaceGeneration.HasValue)
+        {
+            foreach (NamespaceRosterMember member in active)
+            {
+                if (!byMember.TryGetValue(member.NodeId, out AppliedOriginFrontierReport? report) ||
+                    report.UnpublishedDraftCount != 0)
+                    throw new InvalidDataException("FULL_REPLACE retention checkpoint requires every Active member to report zero unpublished local drafts.");
+            }
+            ulong requiredHlcWall = 0;
+            uint requiredHlcLogical = 0;
+            foreach (var issued in origins.Values)
+            {
+                if (issued.HlcWall > requiredHlcWall ||
+                    (issued.HlcWall == requiredHlcWall && issued.HlcLogical > requiredHlcLogical))
+                {
+                    requiredHlcWall = issued.HlcWall;
+                    requiredHlcLogical = issued.HlcLogical;
+                }
+            }
+            if (fullReplaceHlcWallFloor < requiredHlcWall ||
+                (fullReplaceHlcWallFloor == requiredHlcWall && fullReplaceHlcLogicalFloor < requiredHlcLogical))
+                throw new InvalidDataException("FULL_REPLACE HLC floor does not cover every signed author-issued epoch high-watermark.");
         }
 
         var safe = new List<RetentionFrontierEntry>(origins.Count);
         foreach (var pair in origins)
         {
-            ulong minimum = ulong.MaxValue;
+            bool allActiveApplied = true;
             foreach (NamespaceRosterMember member in active)
             {
                 if (!byMember.TryGetValue(member.NodeId, out AppliedOriginFrontierReport? report))
                 {
-                    minimum = 0;
+                    allActiveApplied = false;
                     break;
                 }
-                AppliedOriginFrontierEntry? entry = report.Entries.FirstOrDefault(e =>
-                    e.OriginAuthorNodeId == pair.Key.Author && e.OriginAuthorEpoch == pair.Key.Epoch);
-                if (entry is null)
+                AppliedOriginFrontierEntry? applied = report.Entries.FirstOrDefault(entry =>
+                    entry.OriginAuthorNodeId == pair.Key.Author &&
+                    entry.OriginAuthorEpoch == pair.Key.Epoch);
+                if (applied is null || applied.ContiguousAppliedOriginSequence < pair.Value.Sequence)
                 {
-                    minimum = 0;
+                    allActiveApplied = false;
                     break;
                 }
-                minimum = Math.Min(minimum, entry.ContiguousAppliedOriginSequence);
             }
-            if (minimum != 0 && minimum != ulong.MaxValue)
+            if (allActiveApplied && pair.Value.Sequence != 0)
+            {
                 safe.Add(new RetentionFrontierEntry
                 {
                     OriginAuthorNodeId = pair.Key.Author,
                     OriginAuthorEpoch = pair.Key.Epoch,
-                    SafeAppliedOriginSequence = minimum
+                    SafeAppliedOriginSequence = pair.Value.Sequence
                 });
+            }
         }
 
         var checkpoint = new NamespaceRetentionCheckpoint
