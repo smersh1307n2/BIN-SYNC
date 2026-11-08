@@ -1982,7 +1982,14 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
 
         var retry = store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
-            reservation with { BatchId = Batch(207), Payload = new byte[] { 208 } });
+            new MetadataOutboundBatchReservation
+            {
+                BatchId = Batch(207), IssuerEpoch = 1, StreamOffset = 0,
+                CursorStart = 1, CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)208, 16).ToArray(),
+                Payload = new byte[] { 208 }
+            });
         Assert.Equal(reservation.BatchId, retry.BatchId);
         Assert.Equal(reservation.Payload, retry.Payload);
         store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, author, reservation.BatchId);
@@ -1990,7 +1997,14 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest);
 
         Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
-            reservation with { BatchId = Batch(209) }));
+            new MetadataOutboundBatchReservation
+            {
+                BatchId = Batch(209), IssuerEpoch = 1, StreamOffset = 0,
+                CursorStart = 2, CursorEnd = 2,
+                PreviousBatchDigest = reservation.BatchDigest,
+                BatchDigest = Enumerable.Repeat((byte)209, 16).ToArray(),
+                Payload = new byte[] { 209 }
+            }));
         store.RetireInterestedPeer(scope, local, peer, 1, 2, 7);
         Assert.Empty(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
     }
