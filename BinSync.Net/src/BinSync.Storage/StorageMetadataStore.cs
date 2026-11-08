@@ -414,7 +414,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             current.Receives[new ReceiveKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
             current.ReceiveChains[new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch,
-                incoming.NamespaceId)] = new ReceiveChainState(incoming.BatchDigest.ToArray());
+                incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveChainState(incoming.BatchDigest.ToArray());
         }
         else if (refreshedReceipt is not null)
         {
@@ -593,7 +593,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receive = current.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
         var chain = current.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -824,7 +824,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receive = next.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
         var chain = next.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -2988,7 +2988,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         // Legacy v1 combined receive cursor + digest-chain checkpoint.
                         state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId, default),
                             new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
-                        state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId),
+                        state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId, default),
                             new ReceiveChainState(row.Value.AsSpan(8, 16).ToArray()));
                     }
                     else
@@ -3003,11 +3003,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 }
                 case 14:
                 {
-                    RequireLength(key, 22);
+                    if (key.Length is not (22 or 38))
+                        throw new InvalidDataException("Stored receive digest-chain key has an invalid length.");
                     RequireLength(row.Value, 16);
                     var chainKey = new ReceiveChainKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
+                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
+                        key.Length == 38 ? NodeId.From(key.Slice(22, 16)) : default);
+                    if (key.Length == 22)
+                        state.HasLegacyEncoding = true;
                     state.ReceiveChains.Add(chainKey, new ReceiveChainState(row.Value.ToArray()));
                     break;
                 }
