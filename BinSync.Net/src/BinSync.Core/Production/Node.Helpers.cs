@@ -72,6 +72,8 @@ public sealed partial class Node
         NamespaceId = entry.NamespaceId,
         Seq = entry.Seq,
         ChangeId = entry.ChangeId,
+        OriginAuthorEpoch = entry.OriginAuthorEpoch,
+        OriginSequence = entry.OriginSequence,
         RecordId = entry.RecordId,
         OpKind = entry.OpKind,
         Payload = entry.Payload.ToArray(),

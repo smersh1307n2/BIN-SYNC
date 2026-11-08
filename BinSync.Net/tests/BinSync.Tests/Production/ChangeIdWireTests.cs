@@ -778,6 +778,8 @@ public class ChangeIdWireTests
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId.ToArray(),
                 OpKind = e.OpKind,
                 Payload = e.Payload.ToArray(),
