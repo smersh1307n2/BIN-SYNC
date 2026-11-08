@@ -2367,6 +2367,14 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Throws<InvalidOperationException>(() => node.PushOutbox(1, nodeOnlyRecord,
             new OpFieldWrite { FieldId = 0x0821, Wall = 6501, Logical = 0, Value = "legacy"u8.ToArray() }));
 
+        // The namespace fence also blocks the legacy Node-owned receive path.
+        RecordId legacyInboundRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000005").ToByteArray());
+        Assert.True(peer.WriteField(1, legacyInboundRecord, 0x0823,
+            "legacy-inbound"u8.ToArray(), new Hlc(6502, 0)));
+        Transport.MakeSession(peer, node);
+        Assert.Throws<InvalidOperationException>(() => Transport.DeliverBatch(peer, node, 1));
+        Assert.False(node.TryGetField(1, legacyInboundRecord, 0x0823, out _));
+
         // The same logical write remains valid through the provider-owned path.
         provider.AppendLocalChange(new ProviderMutation
         {
@@ -2401,6 +2409,41 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Throws<InvalidOperationException>(() =>
             restartedNode.WriteField(1, record, 0x0820, "must-use-provider"u8.ToArray(), new Hlc(6600, 0)));
         Assert.Equal(0L, restartedNode.GetOutboxHighWatermark(1, restartedNode.NodeId));
+    }
+
+
+    [Fact]
+    public async Task Metadata_authoritative_receive_remains_enabled_after_provider_cutover()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-receive-after-cutover"), 465);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(66);
+        using var receiver = NewNode(67);
+        const string scope = "metadata-receive-after-cutover";
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+
+        RecordId record = RecordId.From(Guid.Parse("66000000-0000-0000-0000-000000000006").ToByteArray());
+        Assert.True(sender.WriteField(1, record, 0x0824,
+            "metadata-authoritative"u8.ToArray(), new Hlc(6700, 0)));
+
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+        Task<bool> send = initiator.PushBatchAsync(sender, 1);
+        await Task.WhenAll(receive, send);
+
+        Assert.True(provider.TryReadCurrent(record, 0x0824, out var current));
+        Assert.Equal("metadata-authoritative", Encoding.UTF8.GetString(current!.Value));
+        Assert.Equal(1UL, metadata.GetReceiveCursor(scope, receiver.NodeId, sender.NodeId,
+            checked((uint)sender.Epoch), 1));
+        Assert.Single(metadata.ReadRelay(scope, receiver.NodeId, 1, sender.NodeId, 0, 10).Items);
+        Assert.Empty(receiver.ReadOutboxEntries(1, sender.NodeId, 0, 10));
     }
 
 }
