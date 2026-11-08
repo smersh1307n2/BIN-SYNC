@@ -344,8 +344,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             using var batch = _storage.BeginWriteBatch();
             if (batch.TryGet(receiptKey, out var prior))
             {
-                if (!prior!.AsSpan().SequenceEqual(fingerprint) &&
-                    !prior.AsSpan().SequenceEqual(FingerprintLegacy(mutations)))
+                if (!prior!.AsSpan().SequenceEqual(fingerprint))
                     throw new InvalidDataException("Apply token was reused with different canonical input.");
                 return new ProviderApplyReceipt(applyToken, prior!.ToArray(), IsDuplicate: true);
             }
@@ -964,31 +963,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
 
 
-    private static byte[] FingerprintLegacy(IReadOnlyList<ProviderMutation> mutations)
-    {
-        var ordered = mutations.ToArray();
-        Array.Sort(ordered, ProviderMutationCodec.CompareCanonical);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Span<byte> count = stackalloc byte[sizeof(int)];
-        BinaryPrimitives.WriteInt32LittleEndian(count, ordered.Length);
-        hash.AppendData(count);
-        Span<byte> fixedPart = stackalloc byte[53];
-        foreach (var mutation in ordered)
-        {
-            mutation.RecordId.WriteTo(fixedPart);
-            BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(16), mutation.FieldId);
-            fixedPart[18] = (byte)((mutation.IsTombstone ? 1 : 0) | (mutation.IsRecordTombstone ? 2 : 0));
-            BinaryPrimitives.WriteUInt64LittleEndian(fixedPart.Slice(19), mutation.HlcWall);
-            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(27), mutation.HlcLogical);
-            mutation.AuthorNodeId.WriteTo(fixedPart.Slice(31));
-            BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(47), mutation.KeyEpoch);
-            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(49), checked((uint)mutation.Value.Length));
-            hash.AppendData(fixedPart);
-            hash.AppendData(mutation.Value);
-        }
-        return hash.GetHashAndReset();
-    }
-
     private static byte[] EncodeLocalFeedChange(byte[] encodedMutation, BatchId changeId)
     {
         if (changeId.IsZero)
@@ -1007,13 +981,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49, 4));
         if (valueLength > int.MaxValue - 81)
             throw new InvalidDataException("Stored provider local feed value length is invalid.");
-        int legacyMutationLength = checked(53 + (int)valueLength);
-        int currentMutationLength = checked(81 + (int)valueLength);
-        int mutationLength = bytes.Length - 16 == currentMutationLength
-            ? currentMutationLength
-            : bytes.Length - 16 == legacyMutationLength
-                ? legacyMutationLength
-                : throw new InvalidDataException("Stored provider local feed entry must contain one canonical mutation and one ChangeId.");
+        int mutationLength = checked(81 + (int)valueLength);
+        if (bytes.Length - 16 != mutationLength)
+            throw new InvalidDataException("Stored provider local feed entry must contain one canonical mutation and one ChangeId.");
         BatchId changeId = BatchId.From(bytes.Slice(mutationLength, 16));
         if (changeId.IsZero)
             throw new InvalidDataException("Stored provider local feed identity must not be zero.");
