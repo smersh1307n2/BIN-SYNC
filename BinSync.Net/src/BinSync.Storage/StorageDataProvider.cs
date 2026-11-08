@@ -20,7 +20,6 @@ public class StorageDataProvider : IDataProvider
     private const byte LocalHighWatermark = 0x21;
     private const byte LocalAckWatermark = 0x22;
     private const byte LocalReadWatermark = 0x23;
-    private const byte LocalChangeIdentity = 0x24;
     private const byte ApplyReceipt = 0x30;
 
     private readonly object _gate = new();
@@ -155,11 +154,7 @@ public class StorageDataProvider : IDataProvider
                 batch.Put(currentKey, owned);
             }
 
-            batch.Put(ChangeKey(sequence), owned);
-            Guid changeId = Guid.NewGuid();
-            if (changeId == Guid.Empty)
-                changeId = Guid.NewGuid();
-            batch.Put(ChangeIdentityKey(sequence), changeId.ToByteArray());
+            batch.Put(ChangeKey(sequence), EncodeLocalFeedChange(mutation));
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
             batch.Commit();
         }
@@ -183,30 +178,38 @@ public class StorageDataProvider : IDataProvider
             ulong start = Math.Max(afterSequence, acked);
             var rows = snapshot.ScanPrefix([LocalChange], ChangeKey(start), limit);
             var changes = new List<ProviderChange>(rows.Count);
+            var legacyRows = new List<(byte[] Key, byte[] Value)>();
             foreach (var row in rows)
             {
                 ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
-                BatchId changeId = default;
-                if (snapshot.TryGet(ChangeIdentityKey(sequence), out var identityBytes))
+                var decoded = DecodeLocalFeedChange(row.Value);
+                BatchId changeId = decoded.ChangeId;
+                if (decoded.NeedsIdentityMigration)
                 {
-                    if (identityBytes!.Length != 16)
-                        throw new InvalidDataException("Stored provider change identity has an invalid length.");
+                    byte[] identityBytes = NewChangeIdentityBytes();
                     changeId = BatchId.From(identityBytes);
+                    byte[] upgradedValue = new byte[row.Value.Length + identityBytes.Length];
+                    row.Value.CopyTo(upgradedValue, 0);
+                    identityBytes.CopyTo(upgradedValue, row.Value.Length);
+                    legacyRows.Add((row.Key, upgradedValue));
                 }
-                changes.Add(new ProviderChange(sequence, DecodeMutation(row.Value))
+                changes.Add(new ProviderChange(sequence, decoded.Mutation)
                 {
                     ChangeId = changeId
                 });
             }
 
             ulong scanned = changes.Count == limit ? changes[^1].Sequence : high;
-            if (scanned > highestRead)
+            if (scanned > highestRead || legacyRows.Count > 0)
             {
                 using var cursorBatch = _storage.BeginWriteBatch();
                 ulong actualBaseCommitSeq = _storage.LastCommitSeq;
                 if (actualBaseCommitSeq != snapshot.CommitSeq)
                     throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
-                cursorBatch.Put([LocalReadWatermark], EncodeUInt64(scanned));
+                foreach (var legacyRow in legacyRows)
+                    cursorBatch.Put(legacyRow.Key, legacyRow.Value);
+                if (scanned > highestRead)
+                    cursorBatch.Put([LocalReadWatermark], EncodeUInt64(scanned));
                 cursorBatch.Commit();
             }
 
@@ -237,7 +240,6 @@ public class StorageDataProvider : IDataProvider
                 ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
                 if (sequence > safeThroughSequence) break;
                 batch.Delete(row.Key);
-                batch.Delete(ChangeIdentityKey(sequence));
             }
 
             batch.Put([LocalAckWatermark], EncodeUInt64(safeThroughSequence));
@@ -482,6 +484,41 @@ public class StorageDataProvider : IDataProvider
         return 0;
     }
 
+    private static byte[] EncodeLocalFeedChange(ProviderMutation mutation)
+    {
+        byte[] encodedMutation = EncodeMutation(mutation);
+        byte[] identity = NewChangeIdentityBytes();
+        byte[] result = new byte[encodedMutation.Length + identity.Length];
+        encodedMutation.CopyTo(result, 0);
+        identity.CopyTo(result, encodedMutation.Length);
+        return result;
+    }
+
+    private static (ProviderMutation Mutation, BatchId ChangeId, bool NeedsIdentityMigration)
+        DecodeLocalFeedChange(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < 53)
+            throw new InvalidDataException("Stored provider local feed mutation is truncated.");
+        uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49, 4));
+        if (valueLength > int.MaxValue)
+            throw new InvalidDataException("Stored provider local feed value length is invalid.");
+        int mutationLength = checked(53 + (int)valueLength);
+        if (bytes.Length == mutationLength)
+            return (DecodeMutation(bytes), default, true);
+        if (bytes.Length != mutationLength + 16)
+            throw new InvalidDataException("Stored provider local feed identity length is invalid.");
+        return (DecodeMutation(bytes[..mutationLength]), BatchId.From(bytes.Slice(mutationLength, 16)), false);
+    }
+
+    private static byte[] NewChangeIdentityBytes()
+    {
+        byte[] identity = new byte[16];
+        Guid id;
+        do { id = Guid.NewGuid(); } while (id == Guid.Empty);
+        id.TryWriteBytes(identity);
+        return identity;
+    }
+
     private static byte[] EncodeMutation(ProviderMutation mutation)
     {
         byte[] result = new byte[53 + mutation.Value.Length];
@@ -568,14 +605,6 @@ public class StorageDataProvider : IDataProvider
     {
         byte[] key = new byte[9];
         key[0] = LocalChange;
-        BinaryPrimitives.WriteUInt64BigEndian(key.AsSpan(1), sequence);
-        return key;
-    }
-
-    private static byte[] ChangeIdentityKey(ulong sequence)
-    {
-        byte[] key = new byte[9];
-        key[0] = LocalChangeIdentity;
         BinaryPrimitives.WriteUInt64BigEndian(key.AsSpan(1), sequence);
         return key;
     }
