@@ -2337,18 +2337,47 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
         Assert.Equal(0, node.GetOutboxCount(1));
 
-        // Direct Node writes are forbidden after cutover; the next coordinator
-        // pass fails closed without consuming the provider feed.
-        node.WriteField(1, nodeOnlyRecord, 0x081F, "node-only"u8.ToArray(), new Hlc(6500, 0));
+        // The cutover fences both local Node writes and the legacy Node-owned
+        // batch builder before either can create an untracked outbound operation.
+        Assert.Throws<InvalidOperationException>(() =>
+            node.WriteField(1, nodeOnlyRecord, 0x081F, "node-only"u8.ToArray(), new Hlc(6500, 0)));
+        using var peer = NewNode(60);
+        Assert.Throws<InvalidOperationException>(() => node.CreateDeltaBatch(peer.NodeId, 1));
+
+        // The same logical write remains valid through the provider-owned path.
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = nodeOnlyRecord, FieldId = 0x081F, AuthorNodeId = node.NodeId,
             HlcWall = 6500, Value = "node-only"u8.ToArray()
         });
-        Assert.Throws<InvalidOperationException>(() => coordinator.PublishLocalChanges(_ => { }));
-        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
-        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(3UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Equal(1L, node.GetOutboxHighWatermark(1, node.NodeId));
+        Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
     }
 
+
+    [Fact]
+    public void Reconstructed_coordinator_reinstalls_Node_write_fence_from_durable_cutover_marker()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "reinstall-node-cutover-fence"), 460);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var originalNode = NewNode(61);
+        const string scope = "reinstall-node-cutover-fence";
+
+        var originalCoordinator = new StorageSyncCoordinator(originalNode, provider, 1, metadata, scope);
+        originalCoordinator.EnableMetadataStoreOwnedPublication(_ => { });
+
+        // A freshly reconstructed Node has no in-memory fence bit. The provider's
+        // durable cutover marker must reinstall it in the coordinator constructor.
+        using var restartedNode = NewNode(61);
+        _ = new StorageSyncCoordinator(restartedNode, provider, 1, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("61000000-0000-0000-0000-000000000001").ToByteArray());
+        Assert.Throws<InvalidOperationException>(() =>
+            restartedNode.WriteField(1, record, 0x0820, "must-use-provider"u8.ToArray(), new Hlc(6600, 0)));
+        Assert.Equal(0L, restartedNode.GetOutboxHighWatermark(1, restartedNode.NodeId));
+    }
 
 }
