@@ -399,14 +399,20 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Directory.CreateDirectory(directory);
         try
         {
-            using var first = StorageDatabase.Open(directory, 86);
-            Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 86));
+            using (var first = StorageDatabase.Open(directory, 86))
+            {
+                Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 86));
 
-            using var batch = first.BeginWriteBatch();
-            batch.Put(new byte[] { 1 }, new byte[] { 2 });
-            batch.Commit();
-            Assert.True(first.TryGet(new byte[] { 1 }, out var value));
-            Assert.Equal(new byte[] { 2 }, value);
+                using var batch = first.BeginWriteBatch();
+                batch.Put(new byte[] { 1 }, new byte[] { 2 });
+                batch.Commit();
+                Assert.True(first.TryGet(new byte[] { 1 }, out var value));
+                Assert.Equal(new byte[] { 2 }, value);
+            }
+
+            using var reopened = StorageDatabase.Open(directory, 86);
+            Assert.True(reopened.TryGet(new byte[] { 1 }, out var reopenedValue));
+            Assert.Equal(new byte[] { 2 }, reopenedValue);
         }
         finally
         {
