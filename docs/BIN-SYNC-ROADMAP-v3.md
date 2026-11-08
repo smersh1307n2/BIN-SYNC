@@ -790,3 +790,9 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `RefreshAfterFullReplace`, `RehydrateNodeFromProviderSnapshot` and `EnableMetadataStoreOwnedPublication` now acquire the same coordinator→Node→shared-Storage barrier before reading provider snapshots, changing Node cache state or switching publication authority.
 - [x C] Nested use from the receiver's already-held commit lease is reentrant on the acquiring thread; Node checkpoint persistence follows the same lock order.
 - [~ T] Verify direct and nested invocation, concurrent Node writes/provider appends, failed persistence and retry, and deadlock freedom under contention.
+
+
+### 2026-11-09 — C-pass: enforce shared storage at FULL_REPLACE receiver construction
+
+- [x C] The durable `StorageFullReplaceReceiver` now rejects a concrete `StorageDataProvider` + `StorageNamespaceGcStore` pair that do not share the same `StorageDatabase`. This aligns receiver generation switching and installed-ACK persistence with the coordinator/metadata transaction gate.
+- [~ T] Verify rejection for split databases and successful commit/ACK persistence when all three durable adapters share one database.
