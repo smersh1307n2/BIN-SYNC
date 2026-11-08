@@ -14,6 +14,9 @@ public interface IMetadataStore : IDisposable
 
     IReadOnlyList<MetadataOutboundItem> FreezeOutbound(string scopeId, NodeId localReplica, int namespaceId,
         NodeId localAuthor, IReadOnlyList<MetadataFrozenOperation> operations);
+    /// <summary>Checks the durable ChangeId ledger and validates the fingerprint for an already-frozen local outbound operation.</summary>
+    bool IsOutboundChangeFrozen(string scopeId, NodeId localReplica, int namespaceId,
+        BatchId changeId, byte[] fingerprint);
     ulong AcquireOutboundLease(string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor, Guid consumerId);
     MetadataOutboundPage ReadOutbound(string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor,
         ulong leaseGeneration, ulong afterSequence, int limit);
