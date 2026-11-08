@@ -507,7 +507,8 @@ public class ChangeIdWireTests
         Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
         Assert.Equal(1, c.Storage[NS].Count);
         Assert.Single(c.Outbox[NS]);
-        Assert.Equal(1UL, c.GetReceiveCursor(NS, a.NodeId, a.Epoch));
+        Assert.Equal(0UL, c.GetReceiveCursor(NS, a.NodeId, a.Epoch));
+        Assert.Equal(1UL, c.GetReceiveCursor(NS, b.NodeId, b.Epoch));
     }
 
     [Fact]
