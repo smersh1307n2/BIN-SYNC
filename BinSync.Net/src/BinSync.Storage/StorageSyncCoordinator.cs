@@ -104,18 +104,18 @@ public sealed class StorageSyncCoordinator
     /// <summary>
     /// Publishes the provider's pending local feed. Before cutover, winners are imported
     /// through Node Outbox and frozen to Metadata Store; after cutover, stable provider
-    /// ChangeIds are frozen directly and Node is refreshed from a provider snapshot.
+    /// ChangeIds are frozen directly and Node is updated incrementally from the feed.
     /// </summary>
     public int PublishLocalChanges(Action<Node> persistNode, int limit = 1024)
     {
         ArgumentNullException.ThrowIfNull(persistNode);
         if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
         lock (_gate)
-            return PublishLocalChangesCore(persistNode, limit, installProviderSnapshot: true);
+            return PublishLocalChangesCore(persistNode, limit);
     }
 
     private int PublishLocalChangesCore(
-        Action<Node> persistNode, int limit, bool installProviderSnapshot)
+        Action<Node> persistNode, int limit)
     {
         var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
         ulong afterSequence = 0;
@@ -256,6 +256,10 @@ public sealed class StorageSyncCoordinator
         int totalChanges,
         Action<Node> persistNode)
     {
+        if (providerChanges.Count != totalChanges)
+            throw new InvalidDataException("Provider feed prefix changed while preparing the Node cache update.");
+        if (providerChanges.Count != 0 && providerChanges[providerChanges.Count - 1].Sequence > scannedThroughSequence)
+            throw new InvalidDataException("Provider cache update extends beyond the scanned ACK prefix.");
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Stable provider ChangeIds require a durable Metadata Store scope.");
 
