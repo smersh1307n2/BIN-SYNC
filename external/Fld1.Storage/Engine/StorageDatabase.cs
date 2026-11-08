@@ -419,6 +419,7 @@ public sealed class StorageSnapshot : IDisposable
 
     public sealed class PrefixCursor : IDisposable
     {
+        private readonly StorageSnapshot _owner;
         private readonly byte[] _prefix;
         private readonly byte[] _afterKey;
         private IEnumerator<KeyValuePair<StorageDatabase.StorageKey, byte[]>>? _enumerator;
@@ -426,6 +427,7 @@ public sealed class StorageSnapshot : IDisposable
 
         internal PrefixCursor(StorageSnapshot owner, byte[] prefix, byte[] afterKey)
         {
+            _owner = owner;
             _prefix = prefix;
             _afterKey = afterKey;
             _enumerator = owner.GetValues().GetEnumerator();
@@ -434,6 +436,7 @@ public sealed class StorageSnapshot : IDisposable
         public IReadOnlyList<StorageEntry> ReadPage(int limit)
         {
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            _ = _owner.GetValues();
             var enumerator = _enumerator
                 ?? throw new ObjectDisposedException(nameof(PrefixCursor));
             if (_finished) return Array.Empty<StorageEntry>();
