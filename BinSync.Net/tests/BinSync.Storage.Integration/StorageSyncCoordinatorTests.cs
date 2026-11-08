@@ -64,6 +64,77 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(0, receiver.GlobalChangeLedgerCount);
     }
 
+
+    [Fact]
+    public async Task Node_checkpoint_failure_after_pending_apply_recovers_from_reopened_storage_and_replays_as_duplicate()
+    {
+        string directory = Path.Combine(_root, "node-checkpoint-crash-recovery");
+        const ulong partitionId = 463;
+        const string scope = "node-checkpoint-crash-recovery";
+        using var sender = NewNode(63);
+        RecordId record = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000063").ToByteArray());
+        Assert.True(sender.WriteField(1, record, 0x0823, "checkpoint-crash"u8.ToArray(), new Hlc(7000, 0)));
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var receiver = NewNode(64))
+        {
+            StorageNodePersistence.Save(storage, receiver);
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+            using var sendCts = new CancellationTokenSource();
+            Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(
+                acceptor,
+                _ => throw new IOException("Injected Node checkpoint failure after Node apply."));
+            Task<bool> send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+            await Assert.ThrowsAsync<IOException>(async () => await receive);
+            sendCts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
+
+            Assert.Single(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            Assert.True(receiver.TryGetField(1, record, 0x0823, out _));
+            Assert.False(provider.TryReadCurrent(record, 0x0823, out _));
+        }
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var receiver = StorageNodePersistence.Load(storage, NodeId.From(NodeIdentity(64))))
+        {
+            // The failed checkpoint left the original durable Node image intact.
+            Assert.False(receiver.TryGetField(1, record, 0x0823, out _));
+            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+            Assert.Equal(1, coordinator.RecoverPendingApplies(node => StorageNodePersistence.Save(storage, node)));
+            Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            Assert.True(receiver.TryGetField(1, record, 0x0823, out var restored));
+            Assert.Equal("checkpoint-crash", Encoding.UTF8.GetString(restored!.Value));
+            Assert.True(provider.TryReadCurrent(record, 0x0823, out var providerValue));
+            Assert.Equal("checkpoint-crash", Encoding.UTF8.GetString(providerValue!.Value));
+
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+            var retryCoordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+            Task<BatchResult> retryReceive = retryCoordinator.ReceiveBatchBeforeAckAsync(
+                acceptor, node => StorageNodePersistence.Save(storage, node));
+            Assert.True(await initiator.PushBatchAsync(sender, 1));
+            BatchResult duplicate = await retryReceive;
+            Assert.True(duplicate.Duplicate);
+            Assert.Equal(0, duplicate.Applied);
+            Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        }
+    }
+
     [Fact]
     public async Task Receive_batch_stages_metadata_intent_before_node_and_provider_apply()
     {
