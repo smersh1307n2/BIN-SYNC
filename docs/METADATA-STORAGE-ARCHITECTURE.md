@@ -965,13 +965,15 @@ The current Storage provider feed carries stable ChangeIds. Before cutover, the 
 **Deferred:** FLD Database's JournalSeq provenance mapping and its dedicated transaction adapter are not part of the current BIN-SYNC + Storage completion gate.
 
 
-## Latest continuation checkpoint — coordinator process-kill crash cuts (2026-11-08)
+## Latest continuation checkpoint — three coordinator process-kill receive cuts (2026-11-08)
 
-- Code/test HEAD: ea8642e729dbc487f0b6f727d897e81a9d280278.
+- Code/test HEAD: b47c86a02998b3d9aa6a8dcbfc991d9c0245ea1e.
 - The experimental file-share WAL lease was reverted after a cross-process lock/test stall. The current single-writer fence is a named OS-managed Mutex, acquired/released on its dedicated process-wide manager thread.
 - Cross-process tests target the actual testhost PID and have unconditional child-process cleanup with bounded waits. Storage Integration uses --blame-hang-timeout 3m --blame-hang-dump-type mini to capture diagnostics for any future hang.
-- Added actual process-kill/reopen coverage at two receive boundaries: after durable Node checkpoint but before provider apply, and after provider commit but before Metadata Store finalization. Recovery replays the PendingApply intent and uses the provider ApplyToken idempotently.
-- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 125/125 independently on Ubuntu, Windows and macOS-15; in-memory and real-TCP samples pass on all three platforms.
+- Added actual process-kill/reopen coverage at three receive boundaries: after PendingApply staging but before Node apply; after Node checkpoint but before provider apply; and after provider commit but before Metadata Store finalization. Recovery replays the immutable intent and uses the provider ApplyToken idempotently.
+- Recovery requires the negotiated alias table and peer epoch in the Node checkpoint. StorageNodePersistence.Save is now explicitly documented and demonstrated in both Storage samples immediately after each successful SyncSession handshake and before the first inbound durable batch.
+- Windows process-kill recovery retries WAL reopen for up to ten seconds to accommodate delayed OS release of the killed process's file handle.
+- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 126/126 independently on Ubuntu, Windows and macOS-15; in-memory and real-TCP samples pass on all three platforms.
 - PR #16 remains Draft/open/unmerged.
 
-**Remaining:** process-kill cuts immediately after PendingApply staging but before Node apply, and after Metadata Store finalization but before network ACK; true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
+**Remaining:** process-kill after Metadata Store finalization but before network ACK; true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
