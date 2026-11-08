@@ -1199,7 +1199,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void ApplyBatch_rejects_original_author_cursor_span_that_does_not_match_operation_count()
+    public void ApplyBatch_rejects_author_stream_cursor_span_that_does_not_match_operation_count()
     {
         using var source = Fix.MakeNode(109);
         using var target = Fix.MakeNode(110);
