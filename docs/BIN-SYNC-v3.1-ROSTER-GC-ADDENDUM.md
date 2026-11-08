@@ -119,11 +119,11 @@ A member signs a bounded vector of contiguous, durably applied origin prefixes:
 
 A frontier is an assertion that every operation in that origin stream through the sequence has been durably applied, not merely received. The member must persist the application before signing. Missing author entries mean zero. Reports must be monotonic; regression, wrong roster generation, wrong member epoch or unknown member key is rejected.
 
-### 4.3 RetentionCheckpoint (`RCP1`)
+### 4.3 RetentionCheckpoint (`RCP2`)
 
 The Namespace Authority verifies member signatures and computes a signed namespace-wide minimum:
 
-- magic `RCP1`;
+- magic `RCP2`;
 - NamespaceId u16;
 - RosterGeneration u64;
 - RosterDigest[32];
@@ -377,7 +377,7 @@ All physical compaction gates are currently false. In addition to the signed ori
 
 `StorageSyncCoordinator.PublishAppliedOriginFrontier(memberSeed)` produces the local Active member's signed OFR1 report from immutable origin identities in the durable Metadata Store ChangeId ledger only. Unpublished provider-feed drafts are excluded: they have no OriginSequence yet. For each `(OriginAuthorNodeId, OriginAuthorEpoch)`, the report advances only through the contiguous prefix after the prior durable report; gaps stop advancement. The report is signed with the member key and persisted by `StorageNamespaceGcStore.AcceptOriginFrontier`.
 
-`StorageSyncCoordinator.PublishRetentionCheckpoint(authoritySeed, fullReplaceGeneration?, fullReplaceDigest?)` reads the latest durable reports and builds RCP1 using the minimum contiguous applied sequence across every Active member. A missing Active-member report conservatively prevents a safe frontier for that origin. Optional FULL_REPLACE binding is accepted only after every Active member's signed installed ACK is durable. The checkpoint is authority-signed and persisted with the existing monotonic sequence/digest-chain checks.
+`StorageSyncCoordinator.PublishRetentionCheckpoint(authoritySeed, fullReplaceGeneration?, fullReplaceDigest?)` reads the latest durable reports and builds RCP2 using the minimum contiguous applied sequence across every Active member. A missing Active-member report conservatively prevents a safe frontier for that origin. Optional FULL_REPLACE binding is accepted only after every Active member's signed installed ACK is durable. The checkpoint is authority-signed and persisted with the existing monotonic sequence/digest-chain checks.
 
 ## 10.12. FULL_REPLACE HLC floor must be installed before ACK
 
@@ -391,3 +391,12 @@ These are C-pass production APIs. Exact-head tests for gaps, report/checkpoint r
 The local provider feed has its own monotonically increasing feed cursor. That cursor is not an operation-origin sequence. `AppendLocalChange` assigns a stable ChangeId and author epoch but leaves OriginSequence zero while the change is still unpublished/coalescible. This draft identity is valid in local provider state and FULL_REPLACE state images; `ProviderMutationCodec.ValidatePublished` requires a complete non-zero origin tuple before remote operation apply.
 
 `StorageMetadataStore.FreezeOutbound` allocates OriginSequence atomically with the outbound operation and global ChangeId ledger row. The allocator is durable and keyed by `(NamespaceId, AuthorNodeId, OriginAuthorEpoch)` (storage key kind 22), separate from the transport/outbound cursor. Coalesced-away drafts consume no origin sequence, so published operations remain contiguous. After freeze, `StorageSyncCoordinator` calls `IProviderPublishedOriginStore.CommitPublishedOrigins` before acknowledging the provider feed; `StorageDataProvider` stamps only the matching current-state winner with the assigned sequence. If stamping or feed ACK fails, retry reads the same frozen identity from the ChangeId ledger and stamping is idempotent. A later FULL_REPLACE state-image replay may carry the draft form but cannot erase an already-published current-row origin.
+
+
+## 10.14. FULL_REPLACE HLC floor is signed by every installed member and bound by RCP2
+
+FRA2 extends the signed installed ACK with `HlcWallFloor[LE u64]` and `HlcLogicalFloor[LE u32]`. The receiver computes the maximum HLC in the committed provider generation, calls its mandatory refresh callback, and only then signs/persists FRA2. The callback can be created with `StorageSyncCoordinator.CreateFullReplaceRefreshCallback(persistNode)`; it advances the local Node HLC to the supplied floor, rehydrates the provider generation, replays PendingApply and persists the refreshed Node state. Failure prevents installed ACK publication.
+
+RCP2 binds `FullReplaceGeneration`, `FullReplaceDigest`, `FullReplaceHlcWallFloor` and `FullReplaceHlcLogicalFloor` in the authority-signed checkpoint payload. `StorageSyncCoordinator.PublishRetentionCheckpoint` requires every Active member's durable installed ACK for that exact generation/digest and requires all ACKs to report the same HLC floor before creating the checkpoint. Checkpoints without a FULL_REPLACE binding must carry zero floor fields. RCP1/FRA1 are not accepted as fallback encodings.
+
+This closes the FULL_REPLACE HLC-floor transport/persistence gap, but it does not complete the global tombstone horizon: author-issued high-watermarks and retired-origin closure remain open. Tombstone/ghost physical GC remains disabled.
