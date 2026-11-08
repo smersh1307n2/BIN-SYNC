@@ -16,6 +16,33 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         => new StorageMetadataStoreConformanceAdapter(Path.Combine(_root, Guid.NewGuid().ToString("N")));
 
     [Fact]
+    public void Outbound_freeze_rejects_missing_origin_epoch_without_allocating_sequence()
+    {
+        string directory = Path.Combine(_root, "missing-origin-epoch");
+        Directory.CreateDirectory(directory);
+        NodeId local = Node(1);
+        const string scope = "missing-origin-epoch-scope";
+        try
+        {
+            using var store = new StorageMetadataStore(directory, 418, deleteOnDispose: true);
+            var operation = new MetadataFrozenOperation
+            {
+                ChangeId = Batch(88),
+                Fingerprint = Enumerable.Repeat((byte)7, 16).ToArray(),
+                Payload = new byte[] { 0x01, 0x02 }
+            };
+
+            Assert.Throws<InvalidDataException>(() =>
+                store.FreezeOutbound(scope, local, 7, local, new[] { operation }));
+            Assert.Equal(0UL, store.GetOutboundHighWatermark(scope, local, 7, local));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Legacy_metadata_partition_and_rows_are_rejected_without_migration()
     {
         string directory = Path.Combine(_root, "legacy-ledger");
