@@ -62,8 +62,7 @@ jobs:
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net
         run: |
-          shopt -s nullglob
-          reports=(BenchmarkDotNet.Artifacts/results/*.md)
+          mapfile -t reports < <(find BenchmarkDotNet.Artifacts -type f -name '*.md' -print)
           if (("${#reports[@]}" == 0)); then
             echo "No BenchmarkDotNet result reports were produced."
             exit 1
