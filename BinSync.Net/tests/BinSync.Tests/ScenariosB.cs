@@ -377,7 +377,7 @@ public class ScenariosB
         // Advance A's stream for C so its next pending sequence is 5.
         for (int i = 0; i < 4; i++)
             Assert.True(a.WriteField(NS, Rid((byte)(0x51 + i)), 0x0100,
-                new[] { (byte)(0xA0 + i) }, new Hlc(100 + i, 0)));
+                new[] { (byte)(0xA0 + i) }, new Hlc((ulong)(100 + i), 0)));
         Transport.SyncRound(a, c, NS);
         Assert.True(a.WriteField(NS, Rid(0x60), 0x0100,
             new byte[] { 0xA5 }, new Hlc(200, 0)));
@@ -392,7 +392,7 @@ public class ScenariosB
         Assert.NotNull(selected);
         Assert.NotEmpty(selected!.Entries);
         Assert.All(selected.Entries, entry => Assert.Equal(b.NodeId, entry.AuthorNodeId));
-        Assert.Equal(1UL, selected.CursorStart);
+        Assert.Equal(1L, selected.CursorStart);
     }
 
     [Fact]
