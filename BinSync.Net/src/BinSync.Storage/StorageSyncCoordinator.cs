@@ -469,8 +469,9 @@ public sealed class StorageSyncCoordinator
         if (metadataHigh < cutoverNodeOutboxHigh)
             throw new InvalidDataException("Metadata Store outbound watermark regressed below the cutover fence.");
 
-        var frozenOperations = new List<MetadataFrozenOperation>(winners.Count);
-        foreach (var change in winners.Values.OrderBy(change => change.Sequence))
+        ProviderChange[] orderedWinners = winners.Values.OrderBy(change => change.Sequence).ToArray();
+        var frozenOperations = new List<MetadataFrozenOperation>(orderedWinners.Length);
+        foreach (var change in orderedWinners)
         {
             if (change.ChangeId.IsZero)
                 throw new InvalidDataException("Metadata-Store-owned publication requires a stable provider ChangeId.");
@@ -488,6 +489,13 @@ public sealed class StorageSyncCoordinator
             if (i > 0 && published[i].Sequence <= published[i - 1].Sequence)
                 throw new InvalidDataException("Metadata Store returned outbound sequences out of order.");
         }
+
+        if (_provider is not IProviderPublishedOriginStore originStore)
+            throw new NotSupportedException("Metadata-Store-owned publication requires durable provider origin stamping.");
+        var publishedOrigins = new ProviderPublishedOrigin[published.Count];
+        for (int i = 0; i < published.Count; i++)
+            publishedOrigins[i] = new ProviderPublishedOrigin(orderedWinners[i], published[i]);
+        originStore.CommitPublishedOrigins(publishedOrigins);
 
         // Keep Node as an application-data cache, but update it from the exact feed
         // prefix instead of scanning and rebuilding the entire provider snapshot.
