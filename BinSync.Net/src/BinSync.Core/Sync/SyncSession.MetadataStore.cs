@@ -135,6 +135,8 @@ public partial class SyncSession
                 }
 
                 if (pageItems.Count == 0) return false;
+                await EnsureRemoteAliasAsync(authorStream,
+                    checked((int)selectedState.IssuerEpoch), ct).ConfigureAwait(false);
                 var created = sender.CreateDeltaBatchPayloadFromMetadata(
                     PeerNodeId, namespaceId, authorStream, pageItems, selectedState,
                     schemaVersion: schemaVersion);
@@ -155,6 +157,8 @@ public partial class SyncSession
                     scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, authorStream, candidate);
             }
 
+            if (reservation.IssuerEpoch != 0)
+                await EnsureRemoteAliasAsync(authorStream, checked((int)reservation.IssuerEpoch), ct).ConfigureAwait(false);
             await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1,
                 reservation.Payload, ct).ConfigureAwait(false);
             peerStateStore.MarkOutboundBatchPushed(
