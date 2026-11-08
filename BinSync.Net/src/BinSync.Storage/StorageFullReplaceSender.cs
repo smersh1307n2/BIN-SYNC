@@ -30,6 +30,10 @@ public static class StorageFullReplaceSender
         NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
         if (roster.AuthorityNodeId != authorityNodeId)
             throw new InvalidDataException("Only the pinned namespace authority may originate FULL_REPLACE.");
+        NamespaceRosterMember authority = roster.Members.FirstOrDefault(member => member.NodeId == authorityNodeId)
+            ?? throw new InvalidDataException("Namespace authority is not listed as a namespace member.");
+        if (authority.Status != NamespaceMemberStatus.Active)
+            throw new InvalidDataException("Retired or Joining namespace authority cannot originate FULL_REPLACE.");
         if (session.PeerNodeId.IsZero || session.PeerEpoch <= 0)
             throw new InvalidDataException("FULL_REPLACE target session has no valid peer identity.");
         NamespaceRosterMember target = roster.Members.FirstOrDefault(member => member.NodeId == session.PeerNodeId)
@@ -65,6 +69,7 @@ public static class StorageFullReplaceSender
                 entryCount, digest, Array.Empty<byte>());
             FullReplaceTransferProtocol.Begin manifest =
                 FullReplaceTransferProtocol.SignBegin(unsignedManifest, authoritySeed);
+            FullReplaceTransferProtocol.VerifyBegin(manifest, roster, trustStore);
 
             await session.SendFullReplaceBeginAsync(manifest, frameSequence: 1, ct).ConfigureAwait(false);
             FullReplaceTransferProtocol.Progress progress =
