@@ -20,9 +20,12 @@ public partial class SyncSession
     }
 
     public async Task<FullReplaceTransferProtocol.Begin> ReceiveFullReplaceBeginAsync(
-        int namespaceId, CancellationToken ct = default)
+        int namespaceId, NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
+        CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        ArgumentNullException.ThrowIfNull(trustStore);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceBegin, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceBegin);
@@ -30,6 +33,7 @@ public partial class SyncSession
         var begin = FullReplaceTransferProtocol.DecodeBegin(frame.Payload);
         if (begin.NamespaceId != namespaceId)
             throw new FrameException("FRAME_REJECTED");
+        FullReplaceTransferProtocol.VerifyBegin(begin, acceptedRoster, trustStore);
         return begin;
     }
 
