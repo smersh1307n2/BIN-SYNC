@@ -36,7 +36,15 @@ public sealed class ProviderMutation
     public required byte[] Value { get; init; }
 }
 
-public sealed record ProviderChange(ulong Sequence, ProviderMutation Mutation);
+public sealed record ProviderChange(ulong Sequence, ProviderMutation Mutation)
+{
+    /// <summary>
+    /// Stable 128-bit identity of this durable local-feed entry. It must remain
+    /// unchanged when the same sequence is read again after interruption/reopen.
+    /// Zero denotes a legacy provider feed that has not yet persisted source identities.
+    /// </summary>
+    public BatchId ChangeId { get; init; }
+}
 public sealed record ProviderChangePage(IReadOnlyList<ProviderChange> Changes, ulong ScannedThroughSequence);
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
