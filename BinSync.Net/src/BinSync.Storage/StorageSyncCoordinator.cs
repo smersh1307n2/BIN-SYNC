@@ -20,6 +20,8 @@ public sealed class StorageSyncCoordinator
     private readonly int _namespaceId;
     private readonly IMetadataStore? _metadataStore;
     private readonly string? _scopeId;
+    private StorageNamespaceGcStore? _namespaceGcStore;
+    private TrustStore? _namespaceGcTrustStore;
     private readonly object _gate = new();
 
     public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId,
@@ -47,6 +49,8 @@ public sealed class StorageSyncCoordinator
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("Namespace-GC replay fencing requires the durable StorageMetadataStore implementation.");
         storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
+        _namespaceGcStore = gcStore;
+        _namespaceGcTrustStore = trustStore;
     }
 
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
@@ -57,6 +61,19 @@ public sealed class StorageSyncCoordinator
         return storageMetadata.CompactChangeLedger(_scopeId
             ?? throw new InvalidOperationException("A durable metadata scope is required."),
             _node.NodeId, namespaceId, limit, acquireGcLease);
+    }
+
+    /// <summary>Compact record tombstones only after the active generation is installed by every Active member.</summary>
+    public int CompactRecordTombstones(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
+    {
+        if (_provider is not StorageDataProvider storageProvider)
+            throw new NotSupportedException("Record-tombstone GC requires the durable StorageDataProvider implementation.");
+        StorageNamespaceGcStore gcStore = _namespaceGcStore
+            ?? throw new InvalidOperationException("Attach the namespace-GC proof store before tombstone GC.");
+        TrustStore trustStore = _namespaceGcTrustStore
+            ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+        return storageProvider.CompactRecordTombstones(
+            namespaceId, gcStore, trustStore, limit, acquireGcLease);
     }
 
     /// <summary>Compact incoming batch receipts below the signed origin frontier under an external live-reference lease.</summary>
