@@ -902,4 +902,44 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public void Retired_generation_reclaims_in_bounded_pages_without_invalidating_detached_snapshots()
+    {
+        string directory = Path.Combine(_root, "provider-generation-reclaim");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 98, deleteOnDispose: false);
+            ProviderMutation prior = Mutation(107, 1, 100, 1);
+            ProviderMutation replacement = Mutation(108, 2, 200, 2);
+            provider.AppendLocalChange(prior);
+            ProviderSnapshotHandle heldSnapshot = provider.OpenSnapshot();
+
+            Guid generation = Guid.Parse("98000000-0000-0000-0000-000000000001");
+            byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 22, new[] { replacement });
+            provider.BeginFullReplace(generation, 22, 1, digest);
+            provider.StageFullReplacePage(generation, 0, new[] { replacement });
+            provider.CommitFullReplace(generation);
+
+            Assert.False(provider.ReclaimInactiveGeneration(Guid.Empty, 1));
+            Assert.True(provider.ReclaimInactiveGeneration(Guid.Empty, 1));
+            Assert.Throws<InvalidOperationException>(() => provider.ReclaimInactiveGeneration(generation, 1));
+
+            ProviderSnapshotPage heldPage = provider.ReadSnapshot(heldSnapshot.Token, 0, 10);
+            Assert.Single(heldPage.Entries);
+            Assert.Equal(prior.RecordId, heldPage.Entries[0].RecordId);
+            Assert.False(provider.TryReadCurrent(prior.RecordId, prior.FieldId, out _));
+            Assert.True(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
+
+            Assert.Throws<InvalidOperationException>(() =>
+                provider.BeginFullReplace(Guid.Empty, 22, 1, digest));
+            provider.ReleaseSnapshot(heldSnapshot.Token);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
