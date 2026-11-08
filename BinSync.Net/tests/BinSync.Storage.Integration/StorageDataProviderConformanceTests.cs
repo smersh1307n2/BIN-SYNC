@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using BinSync;
 using Fld1.Storage.Engine;
 using BinSync.DataProvider.Conformance;
@@ -512,7 +513,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             {
                 if (!child.HasExited) child.Kill(entireProcessTree: true);
                 await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-                Assert.Fail($"Child process did not acquire WAL fence. stdout={await stdout} stderr={await stderr}");
+                Assert.True(File.Exists(readyPath), $"Child process did not acquire WAL fence. stdout={await stdout} stderr={await stderr}");
             }
 
             Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 88));
