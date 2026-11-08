@@ -47,6 +47,13 @@ public sealed class StorageSyncCoordinatorTests
 
         Assert.Single(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
         Assert.False(receiver.TryGetField(1, record, 0x0812, out _));
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.RehydrateNodeFromProviderSnapshot(_ =>
+                throw new InvalidOperationException("simulated interruption after provider snapshot restore")));
+        Assert.Single(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
+        Assert.False(receiver.TryGetField(1, record, 0x0812, out _));
+        Assert.False(provider.TryReadCurrent(record, 0x0812, out _));
+
         Assert.Equal(1, coordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
         Assert.Empty(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
         Assert.True(receiver.TryGetField(1, record, 0x0812, out var nodeValue));
@@ -225,8 +232,10 @@ public sealed class StorageSyncCoordinatorTests
 
         using var recoveredProvider = new StorageDataProvider(storage);
         var recoveredCoordinator = new StorageSyncCoordinator(receiver, recoveredProvider, 1, metadata, scope);
-        Assert.Equal(1, recoveredCoordinator.RecoverPendingApplies(_ => { }));
+        Assert.Equal(1, recoveredCoordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
         Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        Assert.True(receiver.TryGetField(1, record, 0x0813, out var restoredNodeValue));
+        Assert.Equal("node-applied-provider-pending", Encoding.UTF8.GetString(restoredNodeValue!.Value));
         Assert.True(recoveredProvider.TryReadCurrent(record, 0x0813, out var providerValue));
         Assert.Equal("node-applied-provider-pending", Encoding.UTF8.GetString(providerValue!.Value));
     }
@@ -266,8 +275,10 @@ public sealed class StorageSyncCoordinatorTests
         using var recoveredProvider = new StorageDataProvider(storage);
         Assert.Single(recoveredMetadata.ReadPendingApplyIntents(scope, receiver.NodeId));
         var recoveredCoordinator = new StorageSyncCoordinator(receiver, recoveredProvider, 1, recoveredMetadata, scope);
-        Assert.Equal(1, recoveredCoordinator.RecoverPendingApplies(_ => { }));
+        Assert.Equal(1, recoveredCoordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
         Assert.Empty(recoveredMetadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+        Assert.True(receiver.TryGetField(1, record, 0x0814, out var restoredNodeValue));
+        Assert.Equal("provider-committed-metadata-pending", Encoding.UTF8.GetString(restoredNodeValue!.Value));
         Assert.True(recoveredProvider.TryReadCurrent(record, 0x0814, out var providerValue));
         Assert.Equal("provider-committed-metadata-pending", Encoding.UTF8.GetString(providerValue!.Value));
     }
