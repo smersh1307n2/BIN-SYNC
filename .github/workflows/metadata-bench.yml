@@ -27,6 +27,8 @@ jobs:
       - name: Vendor Ed25519 from ZtSharp (MIT subset)
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
+      - name: Print benchmark scope
+        run: echo "Metadata peer baselines plus coordinator retry after durable freeze"
       - name: Restore benchmark project
         working-directory: BinSync.Net
         run: dotnet restore bench/BinSync.Bench/BinSync.Bench.csproj
