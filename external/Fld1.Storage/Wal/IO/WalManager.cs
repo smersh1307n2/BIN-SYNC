@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Fld1.Storage.Wal.Format;
 using Fld1.Storage.Wal.Recovery;
 
@@ -9,8 +10,12 @@ namespace Fld1.Storage.Wal.IO;
 /// </summary>
 public sealed class WalManager : IDisposable
 {
+    private static readonly ConcurrentDictionary<string, byte> ActiveWriters =
+        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private readonly string _walDir;
     private readonly ulong _partitionId;
+    private readonly FileStream _writerLock;
+    private readonly string _writerLockPath;
     private readonly long _rotateAfterBytes;
     private readonly object _lock = new();
     private WalWriter _active;
@@ -29,13 +34,16 @@ public sealed class WalManager : IDisposable
         get { lock (_lock) return (long)_active.WriteOffset; }
     }
 
-    private WalManager(string walDir, ulong partitionId, long rotateAfterBytes, WalWriter active, int activeSeg)
+    private WalManager(string walDir, ulong partitionId, long rotateAfterBytes, WalWriter active, int activeSeg,
+        FileStream writerLock, string writerLockPath)
     {
         _walDir = walDir;
         _partitionId = partitionId;
         _rotateAfterBytes = rotateAfterBytes;
         _active = active;
         _activeSeg = activeSeg;
+        _writerLock = writerLock;
+        _writerLockPath = writerLockPath;
     }
 
     public static string SegmentPath(string walDir, ulong partitionId, int seg)
@@ -50,16 +58,36 @@ public sealed class WalManager : IDisposable
         ulong partitionId,
         long rotateAfterBytes = 64L * 1024 * 1024)
     {
+        walDir = Path.GetFullPath(walDir);
         Directory.CreateDirectory(walDir);
-        var segs = ListSegments(walDir, partitionId);
-        var allRecords = new List<WalRecoveredRecord>();
+        string writerLockPath = Path.Combine(walDir, $"p_{partitionId}.writer.lock");
+        if (!ActiveWriters.TryAdd(writerLockPath, 0))
+            throw new IOException($"WAL partition {partitionId} is already open for writing in this process.");
 
-        if (segs.Count == 0)
+        FileStream? writerLock = null;
+        try
         {
-            string path = SegmentPath(walDir, partitionId, 0);
-            var w = WalWriter.Create(path, partitionId, firstCommitSeq: 1);
-            return (new WalManager(walDir, partitionId, rotateAfterBytes, w, 0), allRecords);
-        }
+            writerLock = new FileStream(writerLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
+                FileShare.ReadWrite, bufferSize: 1, FileOptions.WriteThrough);
+            if (writerLock.Length == 0)
+            {
+                writerLock.WriteByte(0);
+                writerLock.Flush(flushToDisk: true);
+            }
+            // FileShare is not an inter-process writer fence on every supported OS.
+            // The byte-range lock is released by the OS if the process terminates.
+            writerLock.Lock(0, 1);
+
+            var segs = ListSegments(walDir, partitionId);
+            var allRecords = new List<WalRecoveredRecord>();
+
+            if (segs.Count == 0)
+            {
+                string path = SegmentPath(walDir, partitionId, 0);
+                var w = WalWriter.Create(path, partitionId, firstCommitSeq: 1);
+                return (new WalManager(walDir, partitionId, rotateAfterBytes, w, 0,
+                    writerLock, writerLockPath), allRecords);
+            }
 
         ulong? expectedNextSeq = null;
         Span<byte> segmentHeader = stackalloc byte[WalHeader.Size];
@@ -131,8 +159,16 @@ public sealed class WalManager : IDisposable
         }
 
         ulong nextSeq = expectedNextSeq!.Value;
-        var writer = WalWriter.OpenForAppend(lastPath, partitionId, (ulong)lastValidEnd, nextSeq);
-        return (new WalManager(walDir, partitionId, rotateAfterBytes, writer, lastSeg), allRecords);
+            var writer = WalWriter.OpenForAppend(lastPath, partitionId, (ulong)lastValidEnd, nextSeq);
+            return (new WalManager(walDir, partitionId, rotateAfterBytes, writer, lastSeg,
+                writerLock, writerLockPath), allRecords);
+        }
+        catch
+        {
+            writerLock?.Dispose();
+            ActiveWriters.TryRemove(writerLockPath, out _);
+            throw;
+        }
     }
 
     private static List<int> ListSegments(string walDir, ulong partitionId)
@@ -318,7 +354,13 @@ public sealed class WalManager : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
-            _active.Dispose();
+            try { _active.Dispose(); }
+            finally
+            {
+                try { _writerLock.Unlock(0, 1); } catch (IOException) { }
+                _writerLock.Dispose();
+                ActiveWriters.TryRemove(_writerLockPath, out _);
+            }
         }
     }
 }
