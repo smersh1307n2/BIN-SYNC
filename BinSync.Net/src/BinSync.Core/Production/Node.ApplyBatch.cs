@@ -205,10 +205,19 @@ public sealed partial class Node
         catch (SyncException) when (full && embedded.HasValue) { return embedded.Value; }
     }
 
-    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null, bool receiveStateOwnedByMetadataStore = false)
+    internal BatchResult ApplyBatchInternal(Batch batch, NodeId senderPeer, bool persistWal = true, byte[]? durablePayload = null, bool receiveStateOwnedByMetadataStore = false, IReadOnlyList<bool>? metadataApplyOperations = null)
     {
         ThrowIfDisposed();
         ValidateBatchForWire(batch);
+        if (receiveStateOwnedByMetadataStore)
+        {
+            if (metadataApplyOperations is null || metadataApplyOperations.Count != batch.Entries.Count)
+                throw new InvalidDataException("Metadata apply-decision count does not match the incoming batch.");
+        }
+        else if (metadataApplyOperations is not null)
+        {
+            throw new InvalidOperationException("Metadata apply decisions are valid only in Metadata-Store-authoritative receive mode.");
+        }
         // This runtime currently applies LWW_FIELD only. Zero is accepted as the
         // legacy/default spelling; the canonical wire code is 0x02. Never silently
         // apply a different advertised policy using LWW semantics.
@@ -360,19 +369,29 @@ public sealed partial class Node
             resolvedAuthors[idx] = opAuthor; // reuse after commit; no post-commit resolution
             // Fingerprints include the resolved durable author and FULL_AUTHOR_ID
             // encoding, so compact aliases and transport routes cannot affect identity.
-            var ledgerKey = (batch.NamespaceId, e.ChangeId);
-            var fingerprint = ChangeIdentity.Fingerprint(batch.NamespaceId, e.RecordId,
-                e.OpKind, op, opAuthor, e.CausalDepsOrNull);
-            if (GlobalChangeLedger.TryGetValue(ledgerKey, out var knownIdentity))
+            if (receiveStateOwnedByMetadataStore)
             {
-                if (knownIdentity.IsKnown && knownIdentity.Fingerprint != fingerprint)
-                    throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
-                globalDuplicateFlags[idx] = true;
-                if (!knownIdentity.IsKnown)
-                    stagedGlobalLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
+                // Metadata Store is the sole global ChangeId authority. Its durable
+                // PendingApply decision mask tells Node whether this exact operation
+                // was already accepted; Node does not mirror the identity ledger.
+                globalDuplicateFlags[idx] = !metadataApplyOperations![idx];
             }
             else
-                stagedGlobalLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
+            {
+                var ledgerKey = (batch.NamespaceId, e.ChangeId);
+                var fingerprint = ChangeIdentity.Fingerprint(batch.NamespaceId, e.RecordId,
+                    e.OpKind, op, opAuthor, e.CausalDepsOrNull);
+                if (GlobalChangeLedger.TryGetValue(ledgerKey, out var knownIdentity))
+                {
+                    if (knownIdentity.IsKnown && knownIdentity.Fingerprint != fingerprint)
+                        throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+                    globalDuplicateFlags[idx] = true;
+                    if (!knownIdentity.IsKnown)
+                        stagedGlobalLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
+                }
+                else
+                    stagedGlobalLedger[ledgerKey] = new ChangeLedgerValue(fingerprint, isKnown: true);
+            }
 
             // clock skew clamp on incoming HLC wall (§5.3)
             if (WallOf(op) > maxAllowedWall)
@@ -589,12 +608,9 @@ public sealed partial class Node
                 stagedGlobalLedger.Keys.Count(key => !GlobalChangeLedger.ContainsKey(key)));
 
         // The accepted batch must be durable before publishing any new effects. In
-        // metadata-authoritative mode the durable PendingApply is the protocol WAL; Node's
-        // RemoteBatch WAL remains the record-cache recovery log and need not duplicate a
-        // batch whose every ChangeId is already present in the atomically checkpointed ledger.
-        bool alreadyAppliedInNode = receiveStateOwnedByMetadataStore &&
-            (nEnt == 0 || globalDuplicateFlags.All(isDuplicate => isDuplicate));
-        if (persistWal && _wal is not null && !alreadyAppliedInNode)
+        // Metadata-Store-authoritative mode the durable PendingApply is the protocol WAL
+        // and recovery source; do not duplicate its identity or payload in Node's WAL.
+        if (persistWal && _wal is not null && !receiveStateOwnedByMetadataStore)
         {
             var aliases = AliasToNode.TryGetValue(senderPeer, out var sessionMap)
                 ? sessionMap.OrderBy(x => x.Key)
