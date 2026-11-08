@@ -1582,7 +1582,6 @@ public sealed class StorageSyncCoordinatorTests
         using var remote = NewNode(55);
         const string scope = "provider-authoritative-rehydration";
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
-        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
 
         RecordId staleRecord = RecordId.From(Guid.Parse("54000000-0000-0000-0000-000000000054").ToByteArray());
         RecordId providerRecord = RecordId.From(Guid.Parse("55000000-0000-0000-0000-000000000055").ToByteArray());
@@ -1590,6 +1589,12 @@ public sealed class StorageSyncCoordinatorTests
         Transport.MakeSession(remote, node);
         Assert.NotNull(Transport.DeliverBatch(remote, node, 1));
         Assert.True(node.TryGetField(1, staleRecord, 0x0817, out _));
+
+        // The legacy Node-only receive happened before cutover. Provider snapshot
+        // replacement now drops that stale cache state and its duplicate relay row.
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        Assert.False(node.TryGetField(1, staleRecord, 0x0817, out _));
+        Assert.Empty(node.ReadOutboxEntries(1, remote.NodeId, 0, 10));
 
         provider.AppendLocalChange(new ProviderMutation
         {
