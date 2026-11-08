@@ -314,7 +314,7 @@ public sealed partial class Node
                                        int schemaId = 0, int schemaVersion = 1,
                                        bool detachPublicBuffers = false)
     {
-        EnsureNodeOwnedMutationAllowedInternal();
+        EnsureNodeOwnedMutationAllowedInternal(namespaceId);
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
         long wm;
