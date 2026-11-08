@@ -429,3 +429,15 @@ Retention checkpoint derivation is conservative: for an Active author it uses th
 The OFR2 decoder reads and preserves the final-author flag, unpublished-draft count and maximum draft HLC before the applied-entry vector. These fields are part of the signed payload and are not advisory metadata; dropping or misaligning them changes the interpretation of all following lengths and can turn a valid report into trailing-byte rejection. A final report cannot carry pending drafts, and an empty draft set has a zero maximum HLC.
 
 The application commit barrier now holds the coordinator gate, all Node gates in their documented Storage→Outbox→Meta order, and the provider's shared Storage transaction gate. The durable Metadata Store and Data Provider must use the same StorageDatabase or guard acquisition fails closed. `StorageNodePersistence.Save` follows the same Node-before-Storage lock order to avoid inversion. A host must still compose its WAL/FLD transaction lock if it is outside this shared database. These changes provide exclusion, not a cross-store atomic transaction; physical GC remains disabled until host-owned live references are included in the lease.
+
+
+## 10.17. Coordinator-owned v3.1 control-plane exchange (2026-11-09)
+
+`StorageSyncCoordinator` now provides durable orchestration around the negotiated `SyncSession` control frames:
+
+- `SendAcceptedNamespaceRosterAsync` / `ReceiveAndAcceptNamespaceRosterAsync`;
+- `PublishAndSendAppliedOriginFrontierAsync` / `ReceiveAndAcceptOriginFrontierAsync`;
+- `PublishAndSendRetentionCheckpointAsync` / `ReceiveAndAcceptRetentionCheckpointAsync`;
+- `ReceiveAndAcceptFullReplaceInstalledAckAsync`.
+
+Receive helpers first decode and authenticate through the session against the accepted roster, then preserve the original signature while submitting the object to `StorageNamespaceGcStore.Accept*` for monotonicity, current-roster and durable-persistence checks. Outgoing OFR2/RCP2 state is persisted before network send. A lost send is recoverable by sending the next monotonic report/checkpoint. The APIs exchange one control object per session; the host remains responsible for peer selection, periodic scheduling and retry policy.
