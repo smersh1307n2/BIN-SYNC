@@ -449,7 +449,8 @@ public sealed class StorageSyncCoordinator
             ChangeId = change.ChangeId,
             Fingerprint = fingerprint.ToArray(),
             Payload = envelope,
-            OriginAuthorEpoch = checked((uint)_node.Epoch)
+            OriginAuthorEpoch = mutation.OriginAuthorEpoch,
+            OriginSequence = mutation.OriginSequence
         };
     }
 
