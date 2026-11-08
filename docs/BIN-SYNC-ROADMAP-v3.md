@@ -748,3 +748,9 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Incoming control messages are decoded/verified by the session against the accepted roster, then re-encoded with their original signature and passed through the durable `StorageNamespaceGcStore.Accept*` path. Roster changes during the await fail closed at the store's current-roster check.
 - [x C] Outgoing OFR2/RCP2 objects are durably accepted before network send; a lost send can be retried with a newer monotonic report/checkpoint rather than losing the local proof state.
 - [~ T] Validate authority/member role separation, capability negotiation, duplicate frames, stale roster during receive, failed send/retry and report/checkpoint monotonicity in the T-pass.
+
+
+### 2026-11-09 — C-pass: installed-ACK send fence
+
+- [x C] Added `SendDurableFullReplaceInstalledAckAsync`: it requires the ACK to belong to the local node/namespace, finds the exact ACK already durably accepted for that generation, compares transport epoch, roster generation, digest and HLC floor, verifies the member seed against the accepted roster, and only then sends it.
+- [~ T] Exercise ACK lost-send/retry, wrong local member, stale roster, mismatched digest/floor and missing durable ACK cases.
