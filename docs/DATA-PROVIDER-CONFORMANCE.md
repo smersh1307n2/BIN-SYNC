@@ -72,6 +72,20 @@ A provider that cannot expose a native MVCC snapshot plus feed watermark must im
 
 Snapshot installation is not a peer ACK. It does not authorize Outbox/relay compaction, ChangeId-ledger GC, tombstone GC or removal of pending/frozen operations. Those require the protocol's own per-author cut and completion/fencing proof (currently not defined for these retention purposes).
 
+## 4.1. Authoritative FULL_REPLACE provider capability
+
+The optional `IProviderFullReplace` capability is distinct from merge `SNAPSHOT_CHUNK`. The caller must authenticate the authoritative roster/snapshot certificate, serialize the switch against remote APPLY, and prove that no unresolved PendingApply, relay reservation, provider intent or reader pin still depends on the old generation. The provider API does not establish membership authority and does not authorize ChangeId or tombstone GC.
+
+The Storage-backed implementation provides:
+
+- `BeginFullReplace(generation, sourceFeedWatermark, expectedCount, digest)`: durable, idempotent staging manifest bound to the active base generation;
+- `StageFullReplacePage`: contiguous, strictly canonical pages (maximum 4096 entries), duplicate record/field identities rejected;
+- `CommitFullReplace`: streaming digest verification (1024-row scan pages), stale-base fence, then one atomic active-generation pointer switch;
+- `AbortFullReplace`: resumable bounded deletion of uncommitted staging rows;
+- old generations remain physically retained. No generation reclamation is exposed until the cross-store reader/apply/relay/roster safe-GC proof exists.
+
+The digest is SHA-256 over the domain `BIN-SYNC/FULL-REPLACE/v1`, canonical 16-byte RFC-4122 network-order generation id, source feed watermark (u64 LE), entry count (i32 LE), and canonical ProviderMutation bytes sorted by RecordId, record tombstone before fields, then FieldId. The source snapshot token and feed watermark must come from one `OpenSnapshot` barrier; the signed certificate binds the resulting generation/digest. A normal merge snapshot or peer ACK is not a FULL_REPLACE proof.
+
 ## 5. Applying remote changes
 
 The provider must apply one accepted remote batch as an atomic source-data effect, or expose an equivalent recoverable transaction.
@@ -126,6 +140,8 @@ Best-effort or at-least-once operation may be offered only as an explicitly weak
 | Payload ownership | Mutating caller buffers after append/read does not mutate retained change | Borrowed-buffer lifetime bug |
 | Snapshot barrier | Snapshot token and feed watermark captured atomically; all later writes appear in tail | Snapshot-to-feed gap or duplicate |
 | Snapshot lifetime | Snapshot remains stable while source writes/apply/checkpoint proceed; release fences future reads | Mixed-generation or use-after-reclaim |
+| FULL_REPLACE staging | Inactive generation remains invisible; ordered pages resume after reopen; digest mismatch/stale base cannot switch; abort is bounded | Partial replacement, lost staging cursor or stale generation overwrite |
+| FULL_REPLACE retention | Old generation remains until external safe-GC authorization; provider alone cannot reclaim | PendingApply/relay/snapshot resurrection or use-after-reclaim |
 | Remote apply | Atomic batch effect and durable receipt | Partial source mutation |
 | Apply idempotency | Same token/input retry returns original result and does not repeat effect | Duplicate remote application |
 | Apply equivocation | Same token/different input rejects without mutation | Ambiguous recovery identity |
