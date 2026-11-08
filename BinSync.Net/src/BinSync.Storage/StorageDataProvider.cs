@@ -40,7 +40,154 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private readonly Dictionary<Guid, ProviderSnapshotState> _snapshots = new();
     private bool _disposed;
 
-    private sealed record ProviderSnapshotState(ulong LocalHighWatermark, StorageEntry[] Entries);
+    private sealed class ProviderSnapshotState : IDisposable
+    {
+        private const int ScanPageSize = 4096;
+        private readonly StorageSnapshot _snapshot;
+        private readonly byte[] _fieldPrefix;
+        private readonly byte[] _recordTombstonePrefix;
+        private StorageEntry[] _fieldPage = Array.Empty<StorageEntry>();
+        private StorageEntry[] _recordTombstonePage = Array.Empty<StorageEntry>();
+        private int _fieldPageIndex;
+        private int _recordTombstonePageIndex;
+        private byte[]? _lastFieldKey;
+        private byte[]? _lastRecordTombstoneKey;
+        private ProviderMutation? _fieldMutation;
+        private ProviderMutation? _recordTombstoneMutation;
+        private bool _disposed;
+
+        public ulong LocalHighWatermark { get; }
+        public int NextIndex { get; private set; }
+
+        public ProviderSnapshotState(
+            StorageSnapshot snapshot, ulong localHighWatermark,
+            byte[] fieldPrefix, byte[] recordTombstonePrefix)
+        {
+            _snapshot = snapshot;
+            LocalHighWatermark = localHighWatermark;
+            _fieldPrefix = fieldPrefix;
+            _recordTombstonePrefix = recordTombstonePrefix;
+        }
+
+        public bool TryReadNext(out ProviderMutation? mutation)
+        {
+            EnsureOpen();
+            bool hasField = TryPeekField(out ProviderMutation? field);
+            bool hasRecordTombstone = TryPeekRecordTombstone(out ProviderMutation? recordTombstone);
+            if (!hasField && !hasRecordTombstone)
+            {
+                mutation = null;
+                return false;
+            }
+
+            if (hasRecordTombstone &&
+                (!hasField || ProviderMutationCodec.CompareCanonical(recordTombstone!, field!) < 0))
+            {
+                mutation = recordTombstone;
+                ConsumeRecordTombstone();
+            }
+            else
+            {
+                mutation = field;
+                ConsumeField();
+            }
+            NextIndex = checked(NextIndex + 1);
+            return true;
+        }
+
+        public bool HasNext()
+        {
+            EnsureOpen();
+            return TryPeekField(out _) || TryPeekRecordTombstone(out _);
+        }
+
+        public void Reset()
+        {
+            EnsureOpen();
+            _fieldPage = Array.Empty<StorageEntry>();
+            _recordTombstonePage = Array.Empty<StorageEntry>();
+            _fieldPageIndex = 0;
+            _recordTombstonePageIndex = 0;
+            _lastFieldKey = null;
+            _lastRecordTombstoneKey = null;
+            _fieldMutation = null;
+            _recordTombstoneMutation = null;
+            NextIndex = 0;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _snapshot.Dispose();
+            _fieldPage = Array.Empty<StorageEntry>();
+            _recordTombstonePage = Array.Empty<StorageEntry>();
+        }
+
+        private bool TryPeekField(out ProviderMutation? mutation)
+        {
+            EnsureFieldPage();
+            if (_fieldPageIndex >= _fieldPage.Length)
+            {
+                mutation = null;
+                return false;
+            }
+            _fieldMutation ??= DecodeMutation(_fieldPage[_fieldPageIndex].Value);
+            mutation = _fieldMutation;
+            return true;
+        }
+
+        private bool TryPeekRecordTombstone(out ProviderMutation? mutation)
+        {
+            EnsureRecordTombstonePage();
+            if (_recordTombstonePageIndex >= _recordTombstonePage.Length)
+            {
+                mutation = null;
+                return false;
+            }
+            _recordTombstoneMutation ??= DecodeMutation(_recordTombstonePage[_recordTombstonePageIndex].Value);
+            mutation = _recordTombstoneMutation;
+            return true;
+        }
+
+        private void EnsureFieldPage()
+        {
+            if (_fieldPageIndex < _fieldPage.Length) return;
+            _fieldPage = _snapshot.ScanPrefix(
+                _fieldPrefix,
+                _lastFieldKey is null ? ReadOnlySpan<byte>.Empty : _lastFieldKey,
+                ScanPageSize).ToArray();
+            _fieldPageIndex = 0;
+            _fieldMutation = null;
+        }
+
+        private void EnsureRecordTombstonePage()
+        {
+            if (_recordTombstonePageIndex < _recordTombstonePage.Length) return;
+            _recordTombstonePage = _snapshot.ScanPrefix(
+                _recordTombstonePrefix,
+                _lastRecordTombstoneKey is null ? ReadOnlySpan<byte>.Empty : _lastRecordTombstoneKey,
+                ScanPageSize).ToArray();
+            _recordTombstonePageIndex = 0;
+            _recordTombstoneMutation = null;
+        }
+
+        private void ConsumeField()
+        {
+            _lastFieldKey = _fieldPage[_fieldPageIndex].Key;
+            _fieldPageIndex++;
+            _fieldMutation = null;
+        }
+
+        private void ConsumeRecordTombstone()
+        {
+            _lastRecordTombstoneKey = _recordTombstonePage[_recordTombstonePageIndex].Key;
+            _recordTombstonePageIndex++;
+            _recordTombstoneMutation = null;
+        }
+
+        private void EnsureOpen() => ObjectDisposedException.ThrowIf(_disposed, this);
+    }
     private sealed record FullReplaceState(int ExpectedCount, ulong SourceFeedWatermark,
         byte[] ExpectedDigest, int NextIndex, bool IsCommitted, Guid BaseGeneration, byte[] LastSortKey);
 
@@ -280,15 +427,23 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            using StorageSnapshot snapshot = _storage.OpenSnapshot();
-            ulong watermark = ReadUInt64(snapshot, [LocalHighWatermark]);
-            Guid activeGeneration = ReadActiveGeneration(snapshot);
-            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, activeGeneration), ReadOnlySpan<byte>.Empty, int.MaxValue);
-            var recordTombstones = snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, activeGeneration), ReadOnlySpan<byte>.Empty, int.MaxValue);
-            StorageEntry[] entries = MergeSnapshotEntries(fields, recordTombstones);
-            Guid token = Guid.NewGuid();
-            _snapshots.Add(token, new ProviderSnapshotState(watermark, entries));
-            return new ProviderSnapshotHandle(token, watermark);
+            StorageSnapshot snapshot = _storage.OpenSnapshot();
+            try
+            {
+                ulong watermark = ReadUInt64(snapshot, [LocalHighWatermark]);
+                Guid activeGeneration = ReadActiveGeneration(snapshot);
+                Guid token = Guid.NewGuid();
+                _snapshots.Add(token, new ProviderSnapshotState(
+                    snapshot, watermark,
+                    CurrentPrefix(CurrentField, activeGeneration),
+                    CurrentPrefix(CurrentRecordTombstone, activeGeneration)));
+                return new ProviderSnapshotHandle(token, watermark);
+            }
+            catch
+            {
+                snapshot.Dispose();
+                throw;
+            }
         }
     }
 
@@ -297,18 +452,26 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (!_snapshots.TryGetValue(snapshotToken, out var state))
+            if (!_snapshots.TryGetValue(snapshotToken, out ProviderSnapshotState? state))
                 throw new ObjectDisposedException(nameof(snapshotToken));
             if (afterIndex < 0) throw new ArgumentOutOfRangeException(nameof(afterIndex));
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
-            StorageEntry[] all = state.Entries;
-            if (afterIndex > all.Length) throw new ArgumentOutOfRangeException(nameof(afterIndex));
 
-            int end = Math.Min(all.Length, checked(afterIndex + limit));
-            var entries = new List<ProviderMutation>(end - afterIndex);
-            for (int i = afterIndex; i < end; i++)
-                entries.Add(DecodeMutation(all[i].Value));
-            return new ProviderSnapshotPage(entries, end, end == all.Length);
+            // The API accepts an absolute offset. The common sender path is sequential
+            // and O(page); a random/backward seek resets and advances a bounded cursor.
+            if (afterIndex < state.NextIndex)
+                state.Reset();
+            while (state.NextIndex < afterIndex)
+            {
+                if (!state.TryReadNext(out _))
+                    throw new ArgumentOutOfRangeException(nameof(afterIndex));
+            }
+
+            var entries = new List<ProviderMutation>(limit);
+            while (entries.Count < limit && state.TryReadNext(out ProviderMutation? mutation))
+                entries.Add(mutation!);
+            bool complete = !state.HasNext();
+            return new ProviderSnapshotPage(entries, state.NextIndex, complete);
         }
     }
 
@@ -317,7 +480,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            _snapshots.Remove(snapshotToken);
+            if (_snapshots.Remove(snapshotToken, out ProviderSnapshotState? state))
+                state.Dispose();
         }
     }
 
