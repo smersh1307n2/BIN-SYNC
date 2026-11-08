@@ -91,7 +91,7 @@ public static class OriginFrontierProtocol
         uint memberEpoch = reader.U32();
         ulong reportSequence = reader.U64();
         int count = reader.U16();
-        if (count > MaxEntries || count > reader.Remaining / 28)
+        if (count > MaxEntries || reader.Remaining < 2 || count > (reader.Remaining - 2) / 28)
             throw new InvalidDataException("OFR2 entry count exceeds the bounded payload.");
 
         var entries = new List<AppliedOriginFrontierEntry>(count);
@@ -104,9 +104,6 @@ public static class OriginFrontierProtocol
                 ContiguousAppliedOriginSequence = reader.U64()
             });
         }
-        if (!reader.Eof())
-            throw new InvalidDataException("OFR2 contains trailing payload bytes.");
-
         int issuedCount = reader.U16();
         if (issuedCount > MaxEntries || issuedCount > reader.Remaining / 12)
             throw new InvalidDataException("OFR2 issued-origin count exceeds the bounded payload.");
@@ -119,6 +116,8 @@ public static class OriginFrontierProtocol
                 IssuedOriginSequence = reader.U64()
             });
         }
+        if (!reader.Eof())
+            throw new InvalidDataException("OFR2 contains trailing payload bytes.");
 
         var report = new AppliedOriginFrontierReport
         {
