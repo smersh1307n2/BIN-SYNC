@@ -814,3 +814,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Follow-up hardening: an `afterKey` at/above the prefix upper bound now retains a valid completed enumerator, so `ReadPage` returns an empty page rather than treating the cursor as disposed.
 
 - [x C] Roster send helper now signs and verifies against the pinned authority trust entry before transmitting, rejecting a mismatched authority seed locally rather than sending a roster peers will reject.
+
+
+### 2026-11-09 — C-pass: enforce monotonic HLC within an author epoch
+
+- [x C] `StorageMetadataStore.FreezeOutbound` now rejects a new immutable operation whose `(HlcWall,HlcLogical)` is lower than the persisted max for that author epoch. The allocator no longer silently retains a higher max while accepting an older operation that could later resurrect data after tombstone reclamation.
+- [x C] Equal HLC is allowed for same-transaction operations; the per-epoch max advances only when the new HLC is greater.
+- [~ T] Test HLC wall regression, logical regression at equal wall, equal-HLC multi-field batch, restart persistence and concurrent freeze ordering.
