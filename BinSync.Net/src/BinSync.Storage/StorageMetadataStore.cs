@@ -264,7 +264,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 relayHigh[relayKey] = sequence;
                 newRelay.Add((relayKey, new MetadataRelayItem(
                     sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
-                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }));
+                { Provenance = operation.Provenance }));
                 relayAdded++;
 
                 foreach (var peer in interestedPeers)
@@ -652,7 +652,7 @@ private static bool ValidateIncomingBatchForStaging(
                 newRelay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
             relayItems.Add(new MetadataRelayItem(
                 sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
-            { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence });
+            { Provenance = operation.Provenance });
             relayHigh[relayKey] = sequence;
             relayAdded++;
 
@@ -969,8 +969,8 @@ private static bool ValidateIncomingBatchForStaging(
                 ulong sequence = checked(++highWatermark);
                 var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray())
                 {
-                    OriginAuthorEpoch = operation.OriginAuthorEpoch,
-                    OriginSequence = operation.OriginSequence != 0 ? operation.OriginSequence : sequence
+                    Provenance = new OperationOrigin(localAuthor, operation.OriginAuthorEpoch,
+                        operation.OriginSequence != 0 ? operation.OriginSequence : sequence)
                 };
                 frozen.Add(item);
                 frozenByChangeId.Add(operation.ChangeId, item);
@@ -2867,7 +2867,7 @@ private static bool ValidateIncomingBatchForStaging(
                         if (!state.Relay.TryGetValue(relayKey, out var relayItems))
                             state.Relay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
                         relayItems.Add(new MetadataRelayItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload)
-                        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence });
+                        { Provenance = new OperationOrigin(item.AuthorNodeId, item.OriginAuthorEpoch, item.OriginSequence) });
                     }
                     else
                     {
@@ -2875,7 +2875,7 @@ private static bool ValidateIncomingBatchForStaging(
                         if (!state.Outbound.TryGetValue(outboundKey, out var outboundItems))
                             state.Outbound.Add(outboundKey, outboundItems = new List<MetadataOutboundItem>());
                         outboundItems.Add(new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload)
-                        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence });
+                        { Provenance = new OperationOrigin(item.AuthorNodeId, item.OriginAuthorEpoch, item.OriginSequence) });
                     }
                     break;
                 }
@@ -3035,7 +3035,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (originEpoch == 0 || originSequence == 0 || length < 0 || bytes.Length != 32 + length)
             throw new InvalidDataException("Stored stream payload length or origin provenance is invalid.");
         return new MetadataOutboundItem(sequence, author, BatchId.From(bytes.AsSpan(0, 16)), bytes.AsSpan(32).ToArray())
-        { OriginAuthorEpoch = originEpoch, OriginSequence = originSequence };
+        { Provenance = new OperationOrigin(author, originEpoch, originSequence) };
     }
 
     private static void RequireLength(ReadOnlySpan<byte> bytes, int length)
@@ -3340,11 +3340,11 @@ private static bool ValidateIncomingBatchForStaging(
 
     private static MetadataRelayItem CloneRelayItem(MetadataRelayItem item)
         => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray())
-        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence };
+        { Provenance = item.Provenance };
 
     private static MetadataOutboundItem CloneOutboundItem(MetadataOutboundItem item)
         => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray())
-        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence };
+        { Provenance = item.Provenance };
 
     private static void ValidateOutboundLease(PartitionState state, OutboundKey key, ulong generation)
     {
