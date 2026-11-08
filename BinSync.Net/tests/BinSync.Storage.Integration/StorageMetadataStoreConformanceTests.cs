@@ -1122,10 +1122,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     [Fact]
     public void Duplicate_on_new_transport_epoch_refreshes_receipt_retention()
     {
-        using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-refresh-epoch"), 449);
+        string directory = Path.Combine(_root, "receipt-refresh-epoch");
         const string scope = "receipt-refresh-epoch";
         NodeId local = Node(1), sender = Node(2), author = Node(3);
-        store.RegisterInterestedPeer(scope, local, sender, 1, 7);
 
         var original = new MetadataIncomingBatch
         {
@@ -1153,11 +1152,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 }
             }
         };
-        Assert.False(store.AcceptIncomingBatch(original).IsDuplicate);
-
-        store.RegisterInterestedPeer(scope, local, sender, 2, 7);
-        store.CompletePeerInitialSync(scope, local, sender, 2, 7,
-            new[] { new MetadataPeerStreamBaseline(author, 0, 5) });
         var retryOnNewEpoch = new MetadataIncomingBatch
         {
             ScopeId = original.ScopeId,
@@ -1192,14 +1186,24 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             HeaderFingerprint = original.HeaderFingerprint,
             Operations = original.Operations
         };
-        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(unregisteredEpoch));
-        Assert.True(store.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
 
-        store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
+        using (var store = new StorageMetadataStore(directory, 449))
+        {
+            store.RegisterInterestedPeer(scope, local, sender, 1, 7);
+            Assert.False(store.AcceptIncomingBatch(original).IsDuplicate);
+            store.RegisterInterestedPeer(scope, local, sender, 2, 7);
+            store.CompletePeerInitialSync(scope, local, sender, 2, 7,
+                new[] { new MetadataPeerStreamBaseline(author, 0, 5) });
+            Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(unregisteredEpoch));
+            Assert.True(store.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
+        }
 
-        // The receipt now belongs to the latest authenticated transport incarnation,
-        // so retiring epoch 1 must not discard the ACK evidence epoch 2 still needs.
-        Assert.True(store.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
+        using var reopened = new StorageMetadataStore(directory, 449);
+        reopened.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
+
+        // The re-attribution survives restart, so retiring epoch 1 must not discard
+        // the ACK evidence still required by the replacement transport epoch.
+        Assert.True(reopened.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
     }
 
     [Fact]
