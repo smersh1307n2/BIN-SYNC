@@ -56,15 +56,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         private ProviderMutation? _recordTombstoneMutation;
         private bool _disposed;
 
-        public ulong LocalHighWatermark { get; }
         public int NextIndex { get; private set; }
 
         public ProviderSnapshotState(
-            StorageSnapshot snapshot, ulong localHighWatermark,
+            StorageSnapshot snapshot,
             byte[] fieldPrefix, byte[] recordTombstonePrefix)
         {
             _snapshot = snapshot;
-            LocalHighWatermark = localHighWatermark;
             _fieldPrefix = fieldPrefix;
             _recordTombstonePrefix = recordTombstonePrefix;
         }
@@ -434,7 +432,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 Guid activeGeneration = ReadActiveGeneration(snapshot);
                 Guid token = Guid.NewGuid();
                 _snapshots.Add(token, new ProviderSnapshotState(
-                    snapshot, watermark,
+                    snapshot,
                     CurrentPrefix(CurrentField, activeGeneration),
                     CurrentPrefix(CurrentRecordTombstone, activeGeneration)));
                 return new ProviderSnapshotHandle(token, watermark);
