@@ -227,7 +227,8 @@ public static class FullReplaceTransferProtocol
     public static ulong GetNextFrameSequence(int nextIndex)
     {
         if (nextIndex < 0) throw new ArgumentOutOfRangeException(nameof(nextIndex));
-        return checked(2UL + (ulong)((nextIndex + MaxChunkEntries - 1) / MaxChunkEntries));
+        int pages = nextIndex / MaxChunkEntries + (nextIndex % MaxChunkEntries == 0 ? 0 : 1);
+        return checked(2UL + (ulong)pages);
     }
 
     private static void ValidateProgress(Progress value)
@@ -239,6 +240,8 @@ public static class FullReplaceTransferProtocol
             value.ExpectedDigest is null || value.ExpectedDigest.Length != DigestSize ||
             value.NextFrameSequence == 0 ||
             value.NextFrameSequence != GetNextFrameSequence(value.NextIndex) ||
+            (value.NextIndex != value.ExpectedEntryCount &&
+             value.NextIndex % MaxChunkEntries != 0) ||
             (value.IsCommitted && value.NextIndex != value.ExpectedEntryCount))
             throw new ArgumentException("FULL_REPLACE_READY progress is inconsistent.", nameof(value));
     }
