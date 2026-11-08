@@ -333,7 +333,7 @@ public static class NamespaceRetentionCheckpointProtocol
         ArgumentNullException.ThrowIfNull(roster);
         ArgumentNullException.ThrowIfNull(trustStore);
         NamespaceRosterProtocol.Validate(roster);
-        if (encoded.Length < 4 + 2 + 8 + 32 + 8 + 32 + 2 + 1 + 16 + 32 + 12 + 64)
+        if (encoded.Length < 4 + 2 + 8 + 32 + 8 + 32 + 2 + 1 + 64)
             throw new InvalidDataException("RCP1 checkpoint is truncated.");
         int payloadLength = encoded.Length - BatchSignature.SignatureSize;
         byte[] payload = encoded[..payloadLength].ToArray();
