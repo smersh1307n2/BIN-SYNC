@@ -234,7 +234,8 @@ public class MetadataStoreCardinalityBench
                 {
                     ChangeId = BatchId.From(identity),
                     Fingerprint = identity,
-                    Payload = BitConverter.GetBytes(start + i)
+                    Payload = BitConverter.GetBytes(start + i),
+                    OriginAuthorEpoch = 1
                 };
             }
             _store.FreezeOutbound(Scope, Local, NamespaceId, Author, operations);
@@ -337,7 +338,8 @@ public class MetadataStoreMillionRowBench
             {
                 ChangeId = BatchId.From(identity),
                 Fingerprint = identity,
-                Payload = new byte[] { 0xA5, 0x5A }
+                Payload = new byte[] { 0xA5, 0x5A },
+                OriginAuthorEpoch = 1
             };
             IReadOnlyList<MetadataOutboundItem> frozen = _store.FreezeOutbound(
                 Scope, Local, NamespaceId, Author, new[] { operation });
