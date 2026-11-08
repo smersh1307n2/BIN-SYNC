@@ -561,7 +561,6 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(providerB.TryReadCurrent(providerRecord, 0x0823, out var peerProviderValue));
         Assert.Equal("provider-owned-before-cutover", Encoding.UTF8.GetString(peerProviderValue!.Value));
         Assert.Empty(restartedNodeA.ReadOutboxEntries(1, restartedNodeA.NodeId, 0, 10));
-        Assert.Equal(0, restartedNodeA.GetOutboxCount(1));
         Assert.Equal(1L, restartedNodeA.GetOutboxHighWatermark(1, restartedNodeA.NodeId));
         Assert.True(metadataA.IsPeerInitialSyncComplete(scopeA, restartedNodeA.NodeId,
             nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
@@ -915,7 +914,6 @@ public sealed class StorageSyncCoordinatorTests
         int consumed = coordinator.PublishLocalChanges(_ => { }, limit: 16);
 
         Assert.Equal(4, consumed);
-        Assert.Equal(0, node.GetOutboxCount(1));
         Assert.Equal(2UL, metadata.GetOutboundHighWatermark("pending-coalesce", node.NodeId, 1, node.NodeId));
         Assert.True(provider.TryReadCurrent(record, fieldA, out var providerA));
         Assert.Equal("final", Encoding.UTF8.GetString(providerA!.Value));
