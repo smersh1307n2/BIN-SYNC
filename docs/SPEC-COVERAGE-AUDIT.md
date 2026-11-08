@@ -148,3 +148,11 @@ These tests establish the ordering and idempotent recovery behavior at the coord
 - `StorageDataProviderConformanceTests.Legacy_local_feed_row_gets_stable_identity_on_first_read` verifies one-time in-place migration of pre-identity feed rows: the first read appends a durable identity atomically with the read watermark, and repeated reads return the same identity.
 
 These are storage-provider conformance tests, not additional BIN-SYNC protocol invariants. The identity remains transient with the unpublished local feed; it is not a second long-term change-history table.
+
+
+## Incremental outbound freeze retry (2026-11-08)
+
+- `MetadataStoreConformanceSuite.Outbound_freeze_exact_and_partial_retries_preserve_existing_sequences` verifies that a mixed retry returns original sequences for already-frozen ChangeIds, allocates new sequences only for unseen IDs, remains idempotent on replay, and rejects conflicting fingerprint/payload reuse without advancing the high watermark.
+- `StorageMetadataStoreConformanceTests.Partial_outbound_freeze_retry_after_reopen_preserves_existing_sequences` verifies the same behavior across a durable Metadata Store reopen.
+
+This is the required idempotency boundary for replaying a durable provider feed page when additional local changes arrive after freeze but before provider-feed ACK.
