@@ -500,7 +500,9 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     {
         IReadOnlyList<AppliedOriginFrontierReport> reports = ReadOriginFrontiersCore(roster);
         var current = NamespaceRetentionCheckpointProtocol.CreateFromReports(
-            roster, checkpoint.CheckpointSequence, checkpoint.PreviousCheckpointDigest, reports);
+            roster, checkpoint.CheckpointSequence, checkpoint.PreviousCheckpointDigest, reports,
+            checkpoint.FullReplaceGeneration, checkpoint.FullReplaceDigest,
+            checkpoint.FullReplaceHlcWallFloor, checkpoint.FullReplaceHlcLogicalFloor);
         var currentMap = current.SafeFrontier.ToDictionary(
             entry => (entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
             entry => entry.SafeAppliedOriginSequence);
