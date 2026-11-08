@@ -72,6 +72,10 @@ public sealed class StorageSyncCoordinatorTests
         const ulong partitionId = 463;
         const string scope = "node-checkpoint-crash-recovery";
         using var sender = NewNode(63);
+        byte[] receiverIdentity = new byte[16];
+        receiverIdentity[0] = 64;
+        receiverIdentity[15] = (byte)(64 ^ 0xA5);
+        NodeId receiverId = NodeId.From(receiverIdentity);
         RecordId record = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000063").ToByteArray());
         Assert.True(sender.WriteField(1, record, 0x0823, "checkpoint-crash"u8.ToArray(), new Hlc(7000, 0)));
 
@@ -106,7 +110,7 @@ public sealed class StorageSyncCoordinatorTests
         using (var storage = StorageDatabase.Open(directory, partitionId))
         using (var provider = new StorageDataProvider(storage))
         using (var metadata = new StorageMetadataStore(storage))
-        using (var receiver = StorageNodePersistence.Load(storage, NodeId.From(NodeIdentity(64))))
+        using (var receiver = StorageNodePersistence.Load(storage, receiverId))
         {
             // The failed checkpoint left the original durable Node image intact.
             Assert.False(receiver.TryGetField(1, record, 0x0823, out _));
