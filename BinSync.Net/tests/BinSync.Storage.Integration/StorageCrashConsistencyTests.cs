@@ -345,6 +345,28 @@ public sealed class StorageCrashConsistencyTests
     }
 
     [Fact]
+    public void First_open_durably_creates_nested_database_directories()
+    {
+        const ulong partitionId = 925;
+        string directory = Path.Combine(_root, "new-parent", "new-database");
+
+        try
+        {
+            using (var database = StorageDatabase.Open(directory, partitionId))
+                Put(database, 0x51, 0x15);
+
+            using var reopened = StorageDatabase.Open(directory, partitionId);
+            Assert.Equal(1UL, reopened.LastCommitSeq);
+            Assert.True(reopened.TryGet(new byte[] { 0x51 }, out var value));
+            Assert.Equal(new byte[] { 0x15 }, value);
+        }
+        finally
+        {
+            TryDeleteDirectory(_root);
+        }
+    }
+
+    [Fact]
     public void Unix_directory_fsync_rejects_a_non_directory_path()
     {
         if (OperatingSystem.IsWindows())
