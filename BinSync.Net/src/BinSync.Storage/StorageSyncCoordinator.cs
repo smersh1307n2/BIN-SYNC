@@ -150,7 +150,10 @@ public sealed class StorageSyncCoordinator
         if (memberSeed.Length != 32)
             throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
 
-        using IDisposable? authorClosureLease = finalForAuthor ? AcquireApplicationCommitGuard() : null;
+        // The draft count and applied frontier must describe one application
+        // commit boundary even for non-final reports; otherwise a concurrent local
+        // write could race a zero-draft report used by a FULL_REPLACE checkpoint.
+        using IDisposable commitGuard = AcquireApplicationCommitGuard();
         lock (_gate)
         {
             if (_metadataStore is not StorageMetadataStore metadataStore ||
