@@ -4,7 +4,7 @@
 **Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
 **Related metadata contract:** [Metadata Store Semantic Contract and Conformance Plan](METADATA-STORE-CONFORMANCE.md).  
 **Change lifecycle:** [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).  
-**Protocol baseline:** BIN-SYNC CORE v2.4.19 FINAL; this document does not change wire format.
+**Protocol baseline:** BIN-SYNC CORE v2.4.20 FINAL; this document does not change wire format.
 
 ## 1. Purpose and boundary
 
