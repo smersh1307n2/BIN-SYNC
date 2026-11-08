@@ -776,3 +776,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] RCP2 safe-frontier derivation now builds each member's `(author, epoch) → applied sequence` map once and checks every origin/member pair in O(1) average time instead of rescanning each report vector.
 - [x C] This removes the avoidable O(origins × active-members × entries) scan from checkpoint creation while retaining bounded 4096-entry report limits and identical fail-closed conditions.
 - [~ T] Add equivalence/property tests and benchmark 1/16/256/4096 entries × 1/2/64/4096 members; confirm allocations and CPU before accepting the optimization.
+
+
+### 2026-11-09 — C-pass: make every frontier report a consistent application snapshot
+
+- [x C] `PublishAppliedOriginFrontier` now always acquires the coordinator→Node→shared-Storage application commit barrier, not only for final-author reports. The ChangeLedger frontier and provider unpublished-draft count/max-HLC are therefore sampled against one local commit boundary.
+- [x C] This closes the race where a local Node/provider write could arrive after a zero-draft scan but before a non-final OFR2 report was signed and later used by a FULL_REPLACE retention checkpoint.
+- [~ T] Stress concurrent local writes, remote apply, publication freeze, provider ACK and frontier publication; prove the report is either before or after each operation, never a mixed snapshot.
