@@ -43,9 +43,9 @@ public sealed class StorageDatabase : IDisposable
         // or WAL. Otherwise a second process could race recovery against a checkpoint.
         var (wal, records) = WalManager.Open(walDirectory, partitionId, walRotateAfterBytes);
         var database = new StorageDatabase(directory, wal);
-        var snapshot = StorageSnapshotFile.Load(directory, partitionId);
         try
         {
+            var snapshot = StorageSnapshotFile.Load(directory, partitionId);
             if (snapshot is not null)
             {
                 foreach (var pair in snapshot.Values)
