@@ -31,6 +31,7 @@ public sealed class StorageSyncCoordinatorTests
         using var sendCts = new CancellationTokenSource();
         using var receiveCts = new CancellationTokenSource();
         var receive = acceptor.ReceiveBatchAsync(receiver,
+            beforeApply: null,
             beforeApplyWithOperationDecisions: (batch, payload, peer) =>
             {
                 coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
