@@ -242,7 +242,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = authorA, ChangeId = Batch(142),
+                    AuthorNodeId = authorA,
+                    ChangeId = Batch(142),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 142,
                     Fingerprint = Enumerable.Repeat((byte)143, 16).ToArray(),
                     Payload = new byte[] { 1, 4, 2 }, RelayEligible = true
                 }
@@ -251,7 +254,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var secondView = new MetadataIncomingBatch
         {
             ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 5,
-            AuthorStreamNodeId = default, NamespaceId = 9, BatchId = first.BatchId,
+            AuthorStreamNodeId = authorA, NamespaceId = 9, BatchId = first.BatchId,
             CursorStart = first.CursorStart, CursorEnd = first.CursorEnd,
             PreviousBatchDigest = first.PreviousBatchDigest.ToArray(),
             BatchDigest = first.BatchDigest.ToArray(),
@@ -259,7 +262,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = authorA, ChangeId = Batch(142),
+                    AuthorNodeId = authorA,
+                    ChangeId = Batch(142),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 142,
                     Fingerprint = Enumerable.Repeat((byte)143, 16).ToArray(),
                     Payload = new byte[] { 1, 4, 2 }, RelayEligible = true
                 }
@@ -314,6 +320,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(122),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 122,
                     Fingerprint = Enumerable.Repeat((byte)123, 16).ToArray(),
                     Payload = new byte[] { 1, 2, 3 },
                     RelayEligible = true
@@ -348,7 +356,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = author, ChangeId = Batch(133),
+                    AuthorNodeId = author,
+                    ChangeId = Batch(133),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 133,
                     Fingerprint = Enumerable.Repeat((byte)134, 16).ToArray(),
                     Payload = new byte[] { 1, 3, 3 }, RelayEligible = true
                 }
@@ -364,7 +375,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = author, ChangeId = Batch(136),
+                    AuthorNodeId = author,
+                    ChangeId = Batch(136),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 136,
                     Fingerprint = Enumerable.Repeat((byte)137, 16).ToArray(),
                     Payload = new byte[] { 2, 4, 6 }, RelayEligible = true
                 }
@@ -417,7 +431,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = author, ChangeId = Batch(112),
+                    AuthorNodeId = author,
+                    ChangeId = Batch(112),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 112,
                     Fingerprint = Enumerable.Repeat((byte)113, 16).ToArray(),
                     Payload = new byte[17], RelayEligible = true
                 }
@@ -600,6 +617,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(102),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 102,
                     Fingerprint = Enumerable.Repeat((byte)103, 16).ToArray(),
                     Payload = envelope,
                     RelayEligible = true
@@ -657,6 +676,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(87),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 87,
                     Fingerprint = Fingerprint(88),
                     Payload = new byte[] { 89 },
                     RelayEligible = false
@@ -1038,6 +1059,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(243),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 243,
                     Fingerprint = Enumerable.Repeat((byte)244, 16).ToArray(),
                     Payload = new byte[] { 245 }
                 }
@@ -1115,6 +1138,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(223),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 223,
                     Fingerprint = Enumerable.Repeat((byte)224, 16).ToArray(),
                     Payload = new byte[] { 225 }
                 }
@@ -1203,6 +1228,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(213),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 213,
                     Fingerprint = Enumerable.Repeat((byte)214, 16).ToArray(),
                     Payload = new byte[] { 215 }
                 }
@@ -1249,6 +1276,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(163),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 163,
                     Fingerprint = Enumerable.Repeat((byte)164, 16).ToArray(),
                     Payload = new byte[] { 165 }
                 }
@@ -1346,7 +1375,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 new MetadataOperation
                 {
-                    AuthorNodeId = author, ChangeId = Batch(132),
+                    AuthorNodeId = author,
+                    ChangeId = Batch(132),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 132,
                     Fingerprint = Enumerable.Repeat((byte)133, 16).ToArray(),
                     Payload = envelope, RelayEligible = true
                 }
