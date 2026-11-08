@@ -1483,6 +1483,55 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("namespace-two", Encoding.UTF8.GetString(valueTwo!.Value));
     }
 
+    [Fact]
+    public void Metadata_owned_publication_retry_preserves_frozen_change_when_newer_edit_arrives()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-owned-append-after-freeze"), 460);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(60);
+        var provider = new FailOnceAcknowledgeProvider(innerProvider);
+        const string scope = "metadata-owned-append-after-freeze";
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("60000000-0000-0000-0000-000000000001").ToByteArray());
+
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0820, AuthorNodeId = node.NodeId,
+            HlcWall = 6600, Value = "first-frozen-edit"u8.ToArray()
+        });
+        ProviderChange first = Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
+
+        // Metadata freeze commits, but the provider feed ACK is interrupted.
+        Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+
+        // A newer edit arrives while the original feed row is still pending.
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0820, AuthorNodeId = node.NodeId,
+            HlcWall = 6700, Value = "second-edit"u8.ToArray()
+        });
+        var pending = innerProvider.ReadLocalChanges(0, 10).Changes;
+        Assert.Equal(2, pending.Count);
+        ProviderChange second = pending[1];
+
+        // Retry must retain the immutable first operation and append only the new
+        // suffix; it must not coalesce the old frozen ChangeId out of the retry.
+        Assert.Equal(2, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Empty(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Equal(0L, node.GetOutboxHighWatermark(1, node.NodeId));
+
+        ulong lease = metadata.AcquireOutboundLease(scope, node.NodeId, 1, node.NodeId,
+            Guid.Parse("60000000-0000-0000-0000-000000000060"));
+        var outbound = metadata.ReadOutbound(scope, node.NodeId, 1, node.NodeId, lease, 0, 10).Items;
+        Assert.Equal(2, outbound.Count);
+        Assert.Equal(first.ChangeId, outbound[0].ChangeId);
+        Assert.Equal(second.ChangeId, outbound[1].ChangeId);
+    }
+
     private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode
     {
         private readonly IDataProvider _inner;
