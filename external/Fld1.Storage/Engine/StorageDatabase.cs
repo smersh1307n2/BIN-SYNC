@@ -413,7 +413,6 @@ public sealed class StorageSnapshot : IDisposable
     /// <summary>Creates a forward-only, bounded-memory cursor over one sorted key prefix.</summary>
     public PrefixCursor OpenPrefixCursor(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> afterKey = default)
     {
-        if (prefix.IsEmpty) throw new ArgumentException("Storage prefix is required.", nameof(prefix));
         return new PrefixCursor(this, prefix.ToArray(), afterKey.ToArray());
     }
 
@@ -436,12 +435,12 @@ public sealed class StorageSnapshot : IDisposable
         public IReadOnlyList<StorageEntry> ReadPage(int limit)
         {
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
-            _ = _owner.GetValues();
+            var values = _owner.GetValues();
             var enumerator = _enumerator
                 ?? throw new ObjectDisposedException(nameof(PrefixCursor));
             if (_finished) return Array.Empty<StorageEntry>();
 
-            var result = new List<StorageEntry>(limit);
+            var result = new List<StorageEntry>(Math.Min(limit, values.Count));
             while (true)
             {
                 if (!enumerator.MoveNext())
