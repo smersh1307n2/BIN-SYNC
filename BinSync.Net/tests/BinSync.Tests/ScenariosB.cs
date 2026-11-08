@@ -49,10 +49,15 @@ public class ScenariosB
         Transport.MakeSession(a, relay); Transport.MakeSession(relay, c); Transport.MakeSession(a, c);
         a.WriteField(NS, Rid(1), 0x0100, Asc("from-A"), new Hlc(777, 0));
         c.WriteField(NS, Rid(1), 0x0100, Asc("from-C"), new Hlc(777, 0));
+        BatchId originalChangeId = Assert.Single(a.Outbox[NS]).ChangeId;
         Transport.DeliverBatch(a, relay, NS);   // relay stores under ORIGINAL author A [И4]
         var recR = relay.Storage[NS][Rid(1)];
         Assert.Equal(Fix.Nid(1), recR.State[0x0100].AuthorNodeId);  // authorship preserved [А1]
+        Assert.Equal(originalChangeId, Assert.Single(relay.Outbox[NS]).ChangeId);
         Transport.DeliverBatch(relay, c, NS);   // C has own op with same time, larger author → C wins
+        // A's operation loses the LWW comparison on C, but first-seen provenance
+        // still makes that immutable ChangeId relay-eligible.
+        Assert.Contains(originalChangeId, c.Outbox[NS].Select(entry => entry.ChangeId));
         var recC = c.Storage[NS][Rid(1)];
         Assert.Equal(Fix.Nid(3), recC.State[0x0100].AuthorNodeId);
         Transport.SyncRound(relay, c, NS);
@@ -358,6 +363,36 @@ public class ScenariosB
         }
         var ds = new HashSet<string>(new[] { a, b, c }.Select(n => Convert.ToHexString(Digests.RecordDigest(n.Storage[NS][Rid(1)]))));
         Assert.Single(ds);
+    }
+
+    [Fact]
+    public void Delta_batch_prefers_lowest_pending_sequence_across_eligible_author_streams()
+    {
+        var a = Fix.MakeNode(51);
+        var b = Fix.MakeNode(52);
+        var c = Fix.MakeNode(53);
+        Transport.MakeSession(a, b);
+        Transport.MakeSession(a, c);
+
+        // Advance A's stream for C so its next pending sequence is 5.
+        for (int i = 0; i < 4; i++)
+            Assert.True(a.WriteField(NS, Rid((byte)(0x51 + i)), 0x0100,
+                new[] { (byte)(0xA0 + i) }, new Hlc(100 + i, 0)));
+        Transport.SyncRound(a, c, NS);
+        Assert.True(a.WriteField(NS, Rid(0x60), 0x0100,
+            new byte[] { 0xA5 }, new Hlc(200, 0)));
+
+        // A later-arriving author stream begins at sequence 1. It must be selected
+        // ahead of A's contiguous sequence 5, regardless of Outbox insertion order.
+        Assert.True(b.WriteField(NS, Rid(0x61), 0x0100,
+            new byte[] { 0xB1 }, new Hlc(201, 0)));
+        Assert.NotNull(Transport.DeliverBatch(b, a, NS));
+
+        Batch? selected = a.CreateDeltaBatch(c.NodeId, NS);
+        Assert.NotNull(selected);
+        Assert.NotEmpty(selected!.Entries);
+        Assert.All(selected.Entries, entry => Assert.Equal(b.NodeId, entry.AuthorNodeId));
+        Assert.Equal(1L, selected.CursorStart);
     }
 
     [Fact]
