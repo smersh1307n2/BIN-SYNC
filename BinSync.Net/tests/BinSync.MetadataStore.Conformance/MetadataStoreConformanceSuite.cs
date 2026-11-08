@@ -445,6 +445,41 @@ public abstract class MetadataStoreConformanceSuite
     }
 
     [Fact]
+    public void Pending_apply_returns_global_ChangeId_decisions_and_reserves_unfinalized_ids()
+    {
+        using var store = CreateStore();
+        var accepted = CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50));
+        store.AcceptIncomingBatch(accepted);
+
+        var mixed = CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 2, 0, 11,
+            Operation(20, 30, 40, 50),
+            Operation(21, 31, 41, 51));
+        var token = Guid.Parse("00000000-0000-0000-0000-000000000126");
+        var intent = store.BeginPendingApply(mixed, token);
+
+        Assert.Equal(new[] { false, true }, intent.ApplyOperations);
+        var recovered = Assert.Single(store.ReadPendingApplyIntents("scope-a", Node(1)));
+        Assert.Equal(new[] { false, true }, recovered.ApplyOperations);
+
+        var competing = CreateBatch("scope-a", 1, 4, 1, 7, 12, 1, 1, 0, 12,
+            Operation(21, 31, 41, 51));
+        Assert.Throws<InvalidOperationException>(() => store.BeginPendingApply(
+            competing, Guid.Parse("00000000-0000-0000-0000-000000000127")));
+
+        store.FinalizePendingApply("scope-a", Node(1),
+            new MetadataProviderApplyReceipt(token, mixed.BatchDigest.ToArray()));
+
+        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 13, 1, 3, 0, 13,
+            Operation(20, 30, 40, 50),
+            Operation(21, 31, 41, 51),
+            Operation(22, 32, 42, 52));
+        var nextIntent = store.BeginPendingApply(afterFinalize,
+            Guid.Parse("00000000-0000-0000-0000-000000000128"));
+        Assert.Equal(new[] { false, false, true }, nextIntent.ApplyOperations);
+    }
+
+    [Fact]
     public void Pending_apply_rejects_token_or_provider_receipt_equivocation_without_losing_intent()
     {
         using var store = CreateStore();
