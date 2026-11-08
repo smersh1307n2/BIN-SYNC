@@ -4,7 +4,17 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and exact-head CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint before the v3.1 implementation pass: `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` — BinSync.Net Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS; the in-memory SyncSession, TCP and ScenarioHarness public samples passed. Subsequent v3.1 commits are in progress and are NOT green yet. Durable Metadata Bench completed, including one-million-row freeze: 218.1 µs / 7.77 KB for 1,024 local operations. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, field/record tombstone preservation, and the shared Core ProviderMutation codec. The 218.1 µs result is a measurement, not a proven improvement over the earlier 196.9 µs run. Current implementation HEAD at last roadmap refresh: `c56d2e206d0c8578cbfe66158d6e6f1e0824750c`; subsequent commits and CI status are recorded in the execution log below. The previous `2f75b266` checkpoint is historical.
+Mark [x] only after code, tests and exact-head CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint before the v3.1 implementation pass: `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` — BinSync.Net Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS; the in-memory SyncSession, TCP and ScenarioHarness public samples passed. Subsequent v3.1 commits are in progress and are NOT green yet. Durable Metadata Bench completed, including one-million-row freeze: 218.1 µs / 7.77 KB for 1,024 local operations. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, field/record tombstone preservation, and the shared Core ProviderMutation codec. The 218.1 µs result is a measurement, not a proven improvement over the earlier 196.9 µs run. Current implementation HEAD: `0dac1c3cf7a5fd8e740f101ffbbee93bbae16c7e`; this is a C-pass code head, not an exact-head green checkpoint. The previous `2f75b266` checkpoint is historical.
+
+## 0. Active status at current C-pass HEAD
+
+- **Current branch/head:** `feature/fld-external-storage` @ `0dac1c3cf7a5fd8e740f101ffbbee93bbae16c7e`.
+- **Last known fully green checkpoint:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). Later C-pass changes have not been verified on the exact current head.
+- **Workflow:** C implementation first across the remaining phases, in small commits with roadmap updates; only after the C pass is complete begin T (tests/fault injection), then O (optimization), then F (release/finalization). Do not infer correctness from code commits.
+- **Implemented in C:** signed namespace roster/frontier/checkpoint codecs and durable storage; all-active installed-generation ACK tracking; FULL_REPLACE sender/receiver with signed manifest, READY/resume, bounded CHUNK/COMMIT/ABORT and provider generation switch; provider mutation ChangeId/origin provenance; receipt origin-sequence persistence; forgotten-origin replay fence; receipt/ChangeId compaction plumbing.
+- **GC status:** physical receipt GC, ChangeId GC and tombstone/ghost GC are all fail-closed/disabled. Receipt GC additionally requires a durable retired transport-epoch fence, preserved receive cursor and digest chain. Tombstone GC is disabled because v3.1 lacks a global author-issued watermark plus FULL_REPLACE-bound HLC floor. Do not enable any physical GC before the T-pass proof.
+- **Remaining C work:** member frontier production and periodic checkpoint orchestration; global tombstone causal-horizon protocol and retired-origin closure; concrete application-wide commit/GC lease and cross-store live-reference scan; FLD JournalSeq-to-ChangeId/Origin adapter; bounded source snapshot memory; public sample/spec/golden-vector alignment.
+- **T pass is not started on this head.** No tests or CI were run for the current C slice, per the code-first workflow. Historical checklist entries below are execution history; this active section and the latest dated execution entries supersede earlier status snapshots.
 
 ## 1. Target architecture
 
@@ -23,7 +33,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1` (exact-head CI green).
+- Historical implementation checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` (exact-head CI green at that time). Current C-pass HEAD is `0dac1c3cf7a5fd8e740f101ffbbee93bbae16c7e`; exact-head CI has not been run for the current C-pass.
 - BinSync.Net: Core 662/662; Fuzz/Lab SUCCESS; Storage Integration 168/168 on Ubuntu, Windows and macOS.
 - FLD-DB `fix/crash-consistency-outbox` HEAD: `1f5c2528767e575bfb925a19792c69b6ffb1027e` (not modified during this BIN-SYNC pass).
 - Backup branches verified in both repositories: `backup/pre-autonomous-roadmap-v3-2026-11-08`, `backup/bin-sync-storage-gc-receipt-2026-11-08`, `backup/pre-final-bin-sync-storage-2026-11-08`, `backup/post-storage-fault-injection-2026-11-08`.
@@ -104,19 +114,19 @@ Design: [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.m
 - [x D] Specified durable member retirement fence and mandatory FULL_REPLACE before stale-peer rejoin.
 - [x D] Specified reference scan across PendingApply, operation payload, relay/outbound reservation, provider intent, snapshot pin, feed lease and apply token.
 - [x D] Specified crash-consistent deletion plus monotonic forgotten checkpoint and replay rejection below the frontier.
-- [ ] Implement the v3.1 codecs, capability negotiation, signed roster/frontier/checkpoint persistence and adversarial tests. Keep ChangeId GC disabled until all pass.
+- [~] v3.1 codecs, capability negotiation, signed roster/frontier/checkpoint persistence and all-member install ACK are implemented; exact-head adversarial tests remain in Phase T. ChangeId GC remains physically disabled.
 
 #### 4.3 Tombstone / ghost
 
 - [x D] Defined the signed authoritative FULL_REPLACE manifest/ACK, roster binding and separate transfer frames in [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md); implementation requires negotiated v3.1 capabilities, not unversioned v3.0 messages.
 - [x C] Provider `OpenSnapshot` captures the stable image and source feed watermark in one Storage snapshot; the full-replace digest binds the generation and watermark. Signed wire certificate and all-member binding remain blocked on the roster protocol revision.
 - [x D] Specified that every Active member must provide a signed installed ACK for the same or newer generation/digest before tombstone/ghost reclamation.
-- [ ] Implement the all-member installed-generation tracker and enforce it at the provider/metadata GC boundary.
+- [~] All-member installed-generation tracker and provider/metadata proof checks are implemented; physical GC remains disabled pending complete horizon proof and exact-head tests.
 - [x C] `IProviderFullReplace` and `StorageDataProvider` stage generation-scoped rows, verify the canonical SHA-256 manifest in bounded scans, fence commit to the captured base generation, and atomically switch the active-generation pointer. `FullReplaceDigestBuilder` streams canonical pages without full-image sorting/materialization; old generations are retained and physical reclamation remains blocked on cross-store safe-GC proof.
 - [x D] Specified the forgotten deletion frontier, durable epoch fence and full-rebootstrap rule for retired members.
-- [ ] Implement durable frontier persistence, old-generation delta fencing and full rebootstrap enforcement.
+- [~] Durable frontier/checkpoint persistence and parts of generation fencing are implemented; periodic frontier production, retired-origin closure and full rebootstrap orchestration remain open.
 - [ ] Test field tombstone, record tombstone and ghost independently, including offline peers, alternate routes and crashes at every transition.
-- [ ] Keep tombstone/ghost GC disabled until complete proof passes.
+- [x C] Tombstone/ghost physical GC is explicitly disabled; v3.1 sequence-only frontier is insufficient to rule out delayed pre-snapshot operations from other authors.
 
 ### Phase 5 — Public API and clean cutover
 
@@ -493,7 +503,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ C] Added v3.1 frame IDs and `SyncSession` send/receive adapters for signed roster, Origin frontier, retention checkpoint and FULL_REPLACE installed ACK. The methods fail closed unless the relevant v3.1 capabilities were negotiated; frontier/checkpoint and installed-ACK paths also require roster capability.
 - [~ T] Added Storage integration tests for restart persistence, frontier and checkpoint safety horizons, Joining-member activation fencing, rollback/fork and overclaim rejection.
 - [~ T] Added SyncSession tests for signed v3.1 frame exchange and missing-capability rejection. First CI exposed two test expectation failures: the handshake automatically negotiates `IncrementalAliasMap`; production code compiled and the remaining 676 tests passed. Corrected the assertions in commit `43efda1`; exact-head CI for `43efda1` is pending.
-- [ ] The v3.1 implementation is NOT complete: no end-to-end FULL_REPLACE transfer state machine (BEGIN/CHUNK/COMMIT/ABORT), no automatic wiring from SyncSession messages into the durable store, no member-frontier production/periodic exchange orchestration, no signed authority roster lifecycle API, no forgotten-deletion/replay fence integrated into ChangeId ledger, no cross-store live-reference scan at physical GC boundary, and no enablement of ChangeId/tombstone GC.
+- [~] The v3.1 C implementation now includes signed FULL_REPLACE BEGIN/READY/CHUNK/COMMIT/ABORT codecs, sender/receiver state machines, durable resume, signed installed ACK, roster/frontier/checkpoint storage and ChangeId forgotten-origin replay fencing. Remaining: wire the transfer to authority/member lifecycle and SyncSession orchestration, produce/publish frontiers and checkpoints, complete retired-origin closure, provide a real application-wide commit/GC lease, and finish cross-store live-reference scans. Physical receipt/ChangeId/tombstone GC is disabled.
 - [ ] Review the new StorageNamespaceGcStore implementation against the exact Storage transaction/snapshot semantics and add fault-injection/crash-boundary tests before treating persistence as production-ready.
 - [ ] Update v3.1 addendum status and wire/storage vectors after implementation and adversarial tests; do not claim v3.1 conformance from the current adapter tests alone.
 
