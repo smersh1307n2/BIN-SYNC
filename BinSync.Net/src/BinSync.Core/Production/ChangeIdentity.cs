@@ -110,6 +110,66 @@ public static class ChangeIdentity
         return fingerprint;
     }
 
+    /// <summary>
+    /// Fingerprint a provider mutation directly, without materializing a temporary
+    /// operation object. The encoding is byte-identical to the canonical full-author
+    /// operation fingerprint used by the wire receive path.
+    /// </summary>
+    public static Digest16 Fingerprint(int namespaceId, ProviderMutation mutation, NodeId resolvedAuthor)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        Node.ValidateNamespaceId(namespaceId);
+        if (resolvedAuthor.IsZero)
+            throw new ArgumentException("Resolved author must be non-zero.", nameof(resolvedAuthor));
+
+        byte opKind;
+        int operationLength;
+        if (mutation.IsRecordTombstone)
+        {
+            opKind = OpsConst.TagRecordTomb;
+            operationLength = 29 + 16;
+        }
+        else if (mutation.IsTombstone)
+        {
+            opKind = OpsConst.TagFieldTomb;
+            operationLength = 17 + 16;
+        }
+        else
+        {
+            opKind = OpsConst.TagFieldWrite;
+            operationLength = checked(17 + 16 +
+                Codec.VarintLength((ulong)mutation.Value.Length) + mutation.Value.Length);
+        }
+
+        var w = new Writer(Domain.Length + 2 + 16 + 1 +
+            Codec.VarintLength((ulong)operationLength) + operationLength + 1);
+        w.Raw(Domain).U16((ushort)namespaceId).B128(mutation.RecordId).U8(opKind)
+            .Varint((ulong)operationLength);
+
+        if (mutation.IsRecordTombstone)
+        {
+            w.U8(OpsConst.TagRecordTomb).B128(mutation.RecordId)
+                .U64(mutation.HlcWall).U32(mutation.HlcLogical).B128(resolvedAuthor);
+        }
+        else if (mutation.IsTombstone)
+        {
+            w.U8(OpsConst.TagFieldTomb).U16(mutation.FieldId).U16(mutation.KeyEpoch)
+                .U64(mutation.HlcWall).U32(mutation.HlcLogical).B128(resolvedAuthor);
+        }
+        else
+        {
+            w.U8(OpsConst.TagFieldWrite).U16(mutation.FieldId).U16(mutation.KeyEpoch)
+                .U64(mutation.HlcWall).U32(mutation.HlcLogical).B128(resolvedAuthor)
+                .Varint((ulong)mutation.Value.Length).Raw(mutation.Value);
+        }
+
+        w.Varint(0); // Provider mutations carry no causal dependency set.
+        var fingerprint = Digests.Blake3Digest16(w.WrittenSpan);
+        if (fingerprint.IsZero)
+            throw new InvalidDataException("The reserved zero ChangeId fingerprint was produced.");
+        return fingerprint;
+    }
+
     internal static Digest16 Fingerprint(OutboxEntry entry)
     {
         if (!TryFingerprint(entry, out var fingerprint))
