@@ -84,12 +84,14 @@ public sealed class StorageSyncCoordinatorTests
         using (var metadata = new StorageMetadataStore(storage))
         using (var receiver = NewNode(64))
         {
-            StorageNodePersistence.Save(storage, receiver);
             var (toSender, toReceiver) = PipeTransport.CreatePair();
             var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
             var connectTask = SyncSession.ConnectAsync(sender, toSender);
             await using var acceptor = await acceptTask;
             await using var initiator = await connectTask;
+            // Persist the pre-batch checkpoint only after the negotiated alias map
+            // exists, so restart recovery can decode the staged wire payload.
+            StorageNodePersistence.Save(storage, receiver);
             var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
 
             using var sendCts = new CancellationTokenSource();
@@ -114,6 +116,11 @@ public sealed class StorageSyncCoordinatorTests
         {
             // The failed checkpoint left the original durable Node image intact.
             Assert.False(receiver.TryGetField(1, record, 0x0823, out _));
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
             var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
             Assert.Equal(1, coordinator.RecoverPendingApplies(node => StorageNodePersistence.Save(storage, node)));
             Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
@@ -122,11 +129,6 @@ public sealed class StorageSyncCoordinatorTests
             Assert.True(provider.TryReadCurrent(record, 0x0823, out var providerValue));
             Assert.Equal("checkpoint-crash", Encoding.UTF8.GetString(providerValue!.Value));
 
-            var (toSender, toReceiver) = PipeTransport.CreatePair();
-            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
-            var connectTask = SyncSession.ConnectAsync(sender, toSender);
-            await using var acceptor = await acceptTask;
-            await using var initiator = await connectTask;
             var retryCoordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
 
             Task<BatchResult> retryReceive = retryCoordinator.ReceiveBatchBeforeAckAsync(
