@@ -1253,6 +1253,52 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Retiring_transport_epoch_waits_for_legacy_epoch_unknown_pending_apply()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "legacy-pending-retirement-fence"), 452);
+        const string scope = "legacy-pending-retirement-fence";
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        store.RegisterInterestedPeer(scope, local, sender, 1, 7);
+
+        var pending = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 4,
+            TransportPeerEpoch = 0,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(260),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)261, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)262, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch(263),
+                    Fingerprint = Enumerable.Repeat((byte)264, 16).ToArray(),
+                    Payload = new byte[] { 265 }
+                }
+            }
+        };
+        store.BeginPendingApply(pending, Guid.Parse("00000000-0000-0000-0000-000000000452"));
+
+        store.RegisterInterestedPeer(scope, local, sender, 2, 7);
+        store.CompletePeerInitialSync(scope, local, sender, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 4) });
+
+        Assert.Throws<InvalidOperationException>(() =>
+            store.RetireInterestedPeer(scope, local, sender, 1, 2, 7));
+        Assert.Single(store.ReadPendingApplyIntents(scope, local));
+        Assert.Null(store.GetRetiredPeerEpoch(scope, local, sender, 7));
+    }
+
+    [Fact]
     public void Relay_compaction_waits_for_all_namespace_interested_peers()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-safe-relay-compaction"), 429);
