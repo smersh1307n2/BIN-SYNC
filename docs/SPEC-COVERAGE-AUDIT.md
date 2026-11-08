@@ -129,3 +129,13 @@ The index below maps normative invariant families to exact executable methods wh
 **Unmapped or only indirectly evidenced requirements:** [С3]/[С4] general merge algebra, [У2]/[У3]/[У5]/[У7] isolated lifecycle/ghost edges, [Д2]/[Д7]/[Д8] dedicated digest boundary cases, [СМ1]–[СМ7] full destructive-retention protocol, [СХ2]/[СХ4]/[СХ6] raw unknown-field/type rules, [СН3] snapshot-to-outbound-checkpoint binding, [РП1]/[РП2] exact field-resolution edges, exhaustive [Ц1]–[Ц8] corruption-position matrix, and E2EE nonce uniqueness across all restart/replay modes. These are release gaps, not inferred passes.
 
 The methods above provide evidence only for their actual assertions. They do not convert helper-only CRDT APIs into runtime merge-policy support, do not prove destructive GC is implemented, and do not replace deterministic cross-store crash/restart tests.The test families above are evidence sources, not a claim that every invariant has a unique positive and negative test. The highest-risk unmapped families remain retention/GC proof, crash cuts across separate stores, E2EE nonce uniqueness under all replay modes, and runtime schema-policy dispatch.
+
+
+## Provider-authoritative startup recovery (2026-11-08)
+
+The explicit `StorageSyncCoordinator.RehydrateNodeFromProviderSnapshot` path now has integration evidence:
+
+- `StorageSyncCoordinatorTests.Provider_authoritative_rehydration_replaces_node_cache_and_freezes_local_feed` verifies that the provider snapshot replaces stale Node namespace data, while provider-originated local changes are first frozen into the durable outbound Metadata Store.
+- `StorageSyncCoordinatorTests.Pending_receive_intent_replays_wire_batch_into_node_and_provider_after_interruption` now enters through provider-authoritative rehydration and verifies that a durable PendingApply wire intent is replayed only after the provider-derived base is installed, then finalized in Metadata Store.
+
+These tests establish the ordering and idempotent recovery behavior at the coordinator API boundary. They do **not** prove a complete process-kill/reopen matrix for every NodePersistence/WAL boundary, nor do they authorize this mode when local Node writes bypass the provider feed. The default merge-based coordinator path remains distinct for mixed-origin workloads. Full Node/Transport authority cutover and legacy-path retirement remain release gates.
