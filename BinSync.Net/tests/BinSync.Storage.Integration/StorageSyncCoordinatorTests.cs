@@ -1593,11 +1593,11 @@ public sealed class StorageSyncCoordinatorTests
         });
         ProviderChange source = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
 
-        // Freeze and provider ACK commit, but the subsequent Node cache checkpoint
-        // fails. The durable provider and Metadata Store remain the recovery sources.
+        // The immutable Metadata Store freeze commits, but the Node cache checkpoint
+        // fails before provider ACK. The feed must remain replayable across restart.
         Assert.Throws<IOException>(() => originalCoordinator.PublishLocalChanges(
-            _ => throw new IOException("Injected Node snapshot checkpoint failure.")));
-        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+            _ => throw new IOException("Injected Node incremental checkpoint failure.")));
+        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, originalNode.NodeId, 1, originalNode.NodeId));
 
         using var restartedNode = NewNode(61);
@@ -1606,6 +1606,13 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(restartedNode.TryGetField(1, record, 0x0821, out var restored));
         Assert.Equal("durable-provider-value", Encoding.UTF8.GetString(restored!.Value));
         Assert.Empty(restartedNode.ReadOutboxEntries(1, restartedNode.NodeId, 0, 10));
+        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+
+        // Retry recognizes the already-frozen ChangeId, persists the restored cache,
+        // then acknowledges the feed without appending another outbound sequence.
+        Assert.Equal(1, restartedCoordinator.PublishLocalChanges(_ => { }));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, originalNode.NodeId, 1, originalNode.NodeId));
 
         ulong lease = metadata.AcquireOutboundLease(scope, originalNode.NodeId, 1, originalNode.NodeId,
             Guid.Parse("61000000-0000-0000-0000-000000000061"));
