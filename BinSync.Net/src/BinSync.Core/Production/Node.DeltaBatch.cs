@@ -218,10 +218,11 @@ public sealed partial class Node
                         wirePayload = Ops.EncodeOp(op, fullAuthor: false);
                     }
 
-                    if (e.OriginAuthorEpoch == 0 || e.OriginSequence == 0)
+                    var provenance = e.Provenance;
+                    if (!provenance.IsValid)
                         throw new InvalidDataException("Outbox entry is missing immutable origin provenance.");
                     entries[entryIndex++] = new TransportDeltaEntry(
-                        e.RecordId, e.ChangeId, e.OpKind, e.OriginAuthorEpoch, e.OriginSequence, wirePayload);
+                        e.RecordId, e.ChangeId, e.OpKind, provenance.AuthorEpoch, provenance.Sequence, wirePayload);
                 }
             }
 
