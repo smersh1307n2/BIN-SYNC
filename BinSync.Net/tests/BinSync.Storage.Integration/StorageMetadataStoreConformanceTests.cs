@@ -1036,6 +1036,71 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Duplicate_on_new_transport_epoch_refreshes_receipt_retention()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-refresh-epoch"), 449);
+        const string scope = "receipt-refresh-epoch";
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        store.RegisterInterestedPeer(scope, local, sender, 1, 7);
+
+        var original = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 5,
+            TransportPeerEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(220),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)221, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)222, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch(223),
+                    Fingerprint = Enumerable.Repeat((byte)224, 16).ToArray(),
+                    Payload = new byte[] { 225 }
+                }
+            }
+        };
+        Assert.False(store.AcceptIncomingBatch(original).IsDuplicate);
+
+        store.RegisterInterestedPeer(scope, local, sender, 2, 7);
+        store.CompletePeerInitialSync(scope, local, sender, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 5) });
+        var retryOnNewEpoch = new MetadataIncomingBatch
+        {
+            ScopeId = original.ScopeId,
+            LocalReplica = original.LocalReplica,
+            SenderPeer = original.SenderPeer,
+            SenderEpoch = original.SenderEpoch,
+            TransportPeerEpoch = 2,
+            AuthorStreamNodeId = original.AuthorStreamNodeId,
+            NamespaceId = original.NamespaceId,
+            BatchId = original.BatchId,
+            CursorStart = original.CursorStart,
+            CursorEnd = original.CursorEnd,
+            PreviousBatchDigest = original.PreviousBatchDigest,
+            BatchDigest = original.BatchDigest,
+            HeaderFingerprint = original.HeaderFingerprint,
+            Operations = original.Operations
+        };
+        Assert.True(store.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
+
+        store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
+
+        // The receipt now belongs to the latest authenticated transport incarnation,
+        // so retiring epoch 1 must not discard the ACK evidence epoch 2 still needs.
+        Assert.True(store.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
+    }
+
+    [Fact]
     public void Retiring_transport_epoch_waits_for_its_pending_apply_to_finalize()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "pending-apply-retirement-fence"), 448);
