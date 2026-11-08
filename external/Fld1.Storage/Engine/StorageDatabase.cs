@@ -439,8 +439,14 @@ public sealed class StorageSnapshot : IDisposable
             if (_finished) return Array.Empty<StorageEntry>();
 
             var result = new List<StorageEntry>(limit);
-            while (enumerator.MoveNext())
+            while (true)
             {
+                if (!enumerator.MoveNext())
+                {
+                    _finished = true;
+                    break;
+                }
+
                 var pair = enumerator.Current;
                 ReadOnlySpan<byte> key = pair.Key.Span;
                 int prefixOrder = CompareToPrefix(key, _prefix);
@@ -456,11 +462,6 @@ public sealed class StorageSnapshot : IDisposable
                 result.Add(new StorageEntry(key.ToArray(), pair.Value.ToArray()));
                 if (result.Count == limit) break;
             }
-
-            if (result.Count < limit && !enumerator.MoveNext())
-                _finished = true;
-            else if (result.Count < limit && enumerator.Current.Key.Span.SequenceCompareTo(_prefix) > 0)
-                _finished = true;
             return result;
         }
 
