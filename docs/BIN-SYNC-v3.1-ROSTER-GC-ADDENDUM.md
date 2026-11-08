@@ -303,7 +303,7 @@ No exact-head CI, fault-injection, resume/reconnect, or multi-peer proof has yet
 
 ## 10.4. C-pass update — origin provenance and bounded GC (2026-11-08)
 
-Provider mutations now retain the immutable `ChangeId`, origin author epoch and origin sequence in the current provider state, local feed and FULL_REPLACE digest. This closes the prior gap where a record tombstone had no durable origin tuple to compare against the namespace retention frontier. Old provider mutation encodings remain readable but carry no provenance and cannot be physically collected until authenticated data rewrites them.
+Provider mutations now retain the immutable `ChangeId`, origin author epoch and origin sequence in the current provider state, local feed and FULL_REPLACE digest. This closes the prior gap where a record tombstone had no durable origin tuple to compare against the namespace retention frontier. Only the canonical 81-byte-header provider mutation encoding is accepted; older layouts are rejected without a migration decoder.
 
 Three bounded GC paths now exist in code:
 
