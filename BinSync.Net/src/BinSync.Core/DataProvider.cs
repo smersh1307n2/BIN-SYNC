@@ -109,6 +109,19 @@ public sealed record ProviderChange(ulong Sequence, ProviderMutation Mutation)
     public BatchId ChangeId { get; init; }
 }
 public sealed record ProviderChangePage(IReadOnlyList<ProviderChange> Changes, ulong ScannedThroughSequence);
+
+/// <summary>One local feed entry paired with its immutable Metadata Store publication identity.</summary>
+public sealed record ProviderPublishedOrigin(ProviderChange Change, MetadataOutboundItem Published);
+
+/// <summary>
+/// Optional provider capability for atomically stamping the current-state projection
+/// with the Origin assigned by immutable publication. Feed sequence is never OriginSequence.
+/// </summary>
+public interface IProviderPublishedOriginStore
+{
+    void CommitPublishedOrigins(IReadOnlyList<ProviderPublishedOrigin> published);
+}
+
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
 public sealed record ProviderApplyReceipt(Guid ApplyToken, byte[] BatchFingerprint, bool IsDuplicate);
