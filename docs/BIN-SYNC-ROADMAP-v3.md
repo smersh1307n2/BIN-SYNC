@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` — BinSync.Net Core 662/662, Fuzz/Lab SUCCESS, Storage Integration 168/168 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, and field/record tombstone preservation. Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1`; status: GREEN. Latest documentation-only follow-up: `d28e3954c3bf5a663b79eb500f53719fb69253cc`.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` — BinSync.Net Core 662/662, Fuzz/Lab SUCCESS, Storage Integration 168/168 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, and field/record tombstone preservation. Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1`; status: GREEN. Latest documentation-only follow-up: `a94b1def5f7e9f89bd6538782b13c48fdac5a5e1` (includes v3.1 GC addendum links and API/conformance alignment).
 
 ## 1. Target architecture
 
@@ -457,3 +457,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Preserved compact metadata: one shared ChangeId row per operation plus O(members × authors) frontier state; no per-change/per-peer duplicate history and no PendingLocal journal.
 - [x] Defined v3.1 capability negotiation and proposed frame IDs; v3.0 Membership gossip remains advisory and cannot authorize GC.
 - [ ] No v3.1 code or GC enablement yet. ChangeId and tombstone/Ghost GC remain disabled until codec, signature, crash, multi-peer and resurrection tests pass.
+
+
+### 2026-11-08 — v3.1 design documentation synchronized
+
+- [x] Linked the proposed v3.1 roster/GC addendum from the v3.0 specification, Metadata Store GC design and Public API docs without changing v3.0 wire behavior.
+- [x] Updated Data Provider Conformance status to the exact green implementation head `2f75b26`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 168/168 on Ubuntu/Windows/macOS, coverage threshold passed, in-process/TCP/ScenarioHarness samples passed.
+- [x] Kept ChangeId and tombstone/Ghost GC disabled; no v3.1 protocol code is implied by the design document.
