@@ -197,7 +197,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 decisions[i] = true;
             }
         }
-        return decisions;
+        return Array.AsReadOnly(decisions);
     }
 
     private static MetadataBatchReceipt ApplyIncomingBatch(PartitionState next, MetadataIncomingBatch batch)
