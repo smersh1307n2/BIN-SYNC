@@ -731,3 +731,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Audited `StorageNodePersistence.Save` against the new lock order and changed it to acquire Node `Storage→Outbox→Meta` gates before the shared Storage transaction gate. This prevents the inverse Storage→Node order from deadlocking against FULL_REPLACE/GC commit guards.
 - [~ T] Verify parallel Node writes, Node checkpoint saves, provider appends, metadata commits and FULL_REPLACE commit under contention; add deterministic deadlock/race tests during T-pass.
 - [ ] C: continue lifecycle orchestration and snapshot-memory audit; physical GC remains disabled until host WAL/FLD and PendingApply/relay/reservation/snapshot references are proven under the composed lease.
+
+
+### 2026-11-09 — C-pass: repair OFR2 decoder and align canonical documents
+
+- [x C] Fixed OFR2 decoding: the parser now consumes and retains `FinalForAuthor`, `UnpublishedDraftCount`, `MaxUnpublishedDraftHlcWall` and `MaxUnpublishedDraftHlcLogical` before reading the applied-origin vector. Previously the encoder emitted these signed fields but the decoder skipped them, shifting the vector length and causing `OFR2 contains trailing payload bytes` on valid reports.
+- [x C] Added canonical validation: final-author reports cannot contain unpublished drafts; an empty draft set must carry a zero maximum HLC.
+- [x C] Updated v3.1 addendum wire layouts and domain strings from OFR1/NRS1 to OFR2/NRS2, including issued-origin entries and FRA2/RCP2 HLC-floor fields. Corrected the stale statement that author-issued/retired-origin closure remained open.
+- [~ T] The seven Core failures at `747ea0c` included OFR1/RCP1 fixtures, OFR2 decode misalignment, and a record-tombstone fixture rejected by the stricter canonical mutation contract. The OFR2 parser defect is fixed in C; the legacy test fixtures/assertions remain for T-pass migration.
+- [ ] C: finish remaining lifecycle wiring and storage snapshot memory audit; retain all physical GC feature flags as false.
