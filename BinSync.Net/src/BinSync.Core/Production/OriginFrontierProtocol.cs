@@ -10,6 +10,12 @@ public sealed class AppliedOriginFrontierEntry
     public ulong ContiguousAppliedOriginSequence { get; init; }
 }
 
+public sealed class IssuedOriginFrontierEntry
+{
+    public uint OriginAuthorEpoch { get; init; }
+    public ulong IssuedOriginSequence { get; init; }
+}
+
 public sealed class AppliedOriginFrontierReport
 {
     public int NamespaceId { get; init; }
@@ -19,6 +25,8 @@ public sealed class AppliedOriginFrontierReport
     public uint MemberTransportEpoch { get; init; }
     public ulong ReportSequence { get; init; }
     public IReadOnlyList<AppliedOriginFrontierEntry> Entries { get; init; } = Array.Empty<AppliedOriginFrontierEntry>();
+    /// <summary>Final issued high-watermarks for this report's own author identity, one per epoch.</summary>
+    public IReadOnlyList<IssuedOriginFrontierEntry> IssuedOrigins { get; init; } = Array.Empty<IssuedOriginFrontierEntry>();
     public byte[] Signature { get; init; } = Array.Empty<byte>();
 }
 
@@ -44,12 +52,12 @@ public sealed class NamespaceRetentionCheckpoint
     public byte[] Signature { get; init; } = Array.Empty<byte>();
 }
 
-/// <summary>Canonical OFR1 member-signed applied-origin frontier reports.</summary>
+/// <summary>Canonical OFR2 member-signed applied-origin frontier reports.</summary>
 public static class OriginFrontierProtocol
 {
     public const int MaxEntries = 4096;
-    public const string SignDomain = "BIN-SYNC/APPLIED-ORIGIN-FRONTIER/v1";
-    private static ReadOnlySpan<byte> Magic => "OFR1"u8;
+    public const string SignDomain = "BIN-SYNC/APPLIED-ORIGIN-FRONTIER/v2";
+    private static ReadOnlySpan<byte> Magic => "OFR2"u8;
 
     public static byte[] Sign(AppliedOriginFrontierReport report, ReadOnlySpan<byte> memberSeed)
     {
@@ -67,14 +75,14 @@ public static class OriginFrontierProtocol
     {
         ArgumentNullException.ThrowIfNull(roster);
         NamespaceRosterProtocol.Validate(roster);
-        if (encoded.Length < 4 + 2 + 8 + 32 + 16 + 4 + 8 + 2 + 64)
-            throw new InvalidDataException("OFR1 frontier report is truncated.");
+        if (encoded.Length < 4 + 2 + 8 + 32 + 16 + 4 + 8 + 2 + 2 + 64)
+            throw new InvalidDataException("OFR2 frontier report is truncated.");
         int payloadLength = encoded.Length - BatchSignature.SignatureSize;
         byte[] payload = encoded[..payloadLength].ToArray();
         byte[] signature = encoded[payloadLength..].ToArray();
         var reader = new Reader(payload);
         if (!reader.Raw(4).AsSpan().SequenceEqual(Magic))
-            throw new InvalidDataException("OFR1 magic is invalid.");
+            throw new InvalidDataException("OFR2 magic is invalid.");
 
         int namespaceId = reader.U16();
         ulong rosterGeneration = reader.U64();
@@ -84,7 +92,7 @@ public static class OriginFrontierProtocol
         ulong reportSequence = reader.U64();
         int count = reader.U16();
         if (count > MaxEntries || count > reader.Remaining / 28)
-            throw new InvalidDataException("OFR1 entry count exceeds the bounded payload.");
+            throw new InvalidDataException("OFR2 entry count exceeds the bounded payload.");
 
         var entries = new List<AppliedOriginFrontierEntry>(count);
         for (int i = 0; i < count; i++)
@@ -97,7 +105,20 @@ public static class OriginFrontierProtocol
             });
         }
         if (!reader.Eof())
-            throw new InvalidDataException("OFR1 contains trailing payload bytes.");
+            throw new InvalidDataException("OFR2 contains trailing payload bytes.");
+
+        int issuedCount = reader.U16();
+        if (issuedCount > MaxEntries || issuedCount > reader.Remaining / 12)
+            throw new InvalidDataException("OFR2 issued-origin count exceeds the bounded payload.");
+        var issuedOrigins = new List<IssuedOriginFrontierEntry>(issuedCount);
+        for (int i = 0; i < issuedCount; i++)
+        {
+            issuedOrigins.Add(new IssuedOriginFrontierEntry
+            {
+                OriginAuthorEpoch = reader.U32(),
+                IssuedOriginSequence = reader.U64()
+            });
+        }
 
         var report = new AppliedOriginFrontierReport
         {
@@ -108,6 +129,7 @@ public static class OriginFrontierProtocol
             MemberTransportEpoch = memberEpoch,
             ReportSequence = reportSequence,
             Entries = entries,
+            IssuedOrigins = issuedOrigins,
             Signature = signature
         };
         Validate(report);
@@ -116,9 +138,9 @@ public static class OriginFrontierProtocol
         NamespaceRosterMember member = FindMember(roster, memberId);
         if (member.Status != NamespaceMemberStatus.Active ||
             member.TransportPeerEpoch != memberEpoch)
-            throw new InvalidDataException("OFR1 member is not Active at the reported transport epoch.");
+            throw new InvalidDataException("OFR2 member is not Active at the reported transport epoch.");
         if (!BatchSignature.Verify(member.PublicKey, BuildSigningPayload(payload), signature))
-            throw new CryptographicException("OFR1 member signature is invalid.");
+            throw new CryptographicException("OFR2 member signature is invalid.");
         return report;
     }
 
@@ -161,6 +183,12 @@ public static class OriginFrontierProtocol
             writer.U32(entry.OriginAuthorEpoch);
             writer.U64(entry.ContiguousAppliedOriginSequence);
         }
+        writer.U16(checked((ushort)report.IssuedOrigins.Count));
+        foreach (IssuedOriginFrontierEntry issued in report.IssuedOrigins)
+        {
+            writer.U32(issued.OriginAuthorEpoch);
+            writer.U64(issued.IssuedOriginSequence);
+        }
         return writer.Value();
     }
 
@@ -171,27 +199,39 @@ public static class OriginFrontierProtocol
             throw new ArgumentOutOfRangeException(nameof(report), "NamespaceId must fit a non-zero u16.");
         if (report.RosterGeneration == 0 || report.RosterDigest is null ||
             report.RosterDigest.Length != NamespaceRosterProtocol.DigestSize)
-            throw new ArgumentException("OFR1 requires a roster generation and 32-byte roster digest.", nameof(report));
+            throw new ArgumentException("OFR2 requires a roster generation and 32-byte roster digest.", nameof(report));
         if (report.MemberNodeId.IsZero || report.MemberTransportEpoch == 0 || report.ReportSequence == 0)
-            throw new ArgumentException("OFR1 member identity, transport epoch and report sequence must be non-zero.", nameof(report));
+            throw new ArgumentException("OFR2 member identity, transport epoch and report sequence must be non-zero.", nameof(report));
         ArgumentNullException.ThrowIfNull(report.Entries);
         if (report.Entries.Count > MaxEntries)
-            throw new ArgumentOutOfRangeException(nameof(report), $"OFR1 entry count exceeds {MaxEntries}.");
+            throw new ArgumentOutOfRangeException(nameof(report), $"OFR2 entry count exceeds {MaxEntries}.");
         AppliedOriginFrontierEntry? previous = null;
         foreach (AppliedOriginFrontierEntry entry in report.Entries)
         {
             ArgumentNullException.ThrowIfNull(entry);
             if (entry.OriginAuthorNodeId.IsZero || entry.OriginAuthorEpoch == 0 ||
                 entry.ContiguousAppliedOriginSequence == 0)
-                throw new ArgumentException("OFR1 entries require non-zero author, epoch and contiguous sequence.", nameof(report));
+                throw new ArgumentException("OFR2 entries require non-zero author, epoch and contiguous sequence.", nameof(report));
             if (previous is not null && CompareOrigin(previous.OriginAuthorNodeId, previous.OriginAuthorEpoch,
                     entry.OriginAuthorNodeId, entry.OriginAuthorEpoch) >= 0)
-                throw new ArgumentException("OFR1 entries must be strictly sorted and unique by origin author/epoch.", nameof(report));
+                throw new ArgumentException("OFR2 entries must be strictly sorted and unique by origin author/epoch.", nameof(report));
             previous = entry;
+        }
+        ArgumentNullException.ThrowIfNull(report.IssuedOrigins);
+        if (report.IssuedOrigins.Count > MaxEntries)
+            throw new ArgumentOutOfRangeException(nameof(report), $"OFR2 issued-origin count exceeds {MaxEntries}.");
+        uint previousIssuedEpoch = 0;
+        foreach (IssuedOriginFrontierEntry issued in report.IssuedOrigins)
+        {
+            ArgumentNullException.ThrowIfNull(issued);
+            if (issued.OriginAuthorEpoch == 0 || issued.IssuedOriginSequence == 0 ||
+                issued.OriginAuthorEpoch <= previousIssuedEpoch)
+                throw new ArgumentException("OFR2 issued-origin epochs must be non-zero, strictly sorted and unique.", nameof(report));
+            previousIssuedEpoch = issued.OriginAuthorEpoch;
         }
         if (report.Signature is null || (report.Signature.Length != 0 &&
             report.Signature.Length != BatchSignature.SignatureSize))
-            throw new ArgumentException("OFR1 signature must be empty or 64 bytes.", nameof(report));
+            throw new ArgumentException("OFR2 signature must be empty or 64 bytes.", nameof(report));
     }
 
     internal static int CompareOrigin(NodeId leftId, uint leftEpoch, NodeId rightId, uint rightEpoch)
@@ -213,7 +253,7 @@ public static class OriginFrontierProtocol
         if (report.NamespaceId != roster.NamespaceId ||
             report.RosterGeneration != roster.RosterGeneration ||
             !report.RosterDigest.AsSpan().SequenceEqual(NamespaceRosterProtocol.ComputeDigest(roster)))
-            throw new InvalidDataException("OFR1 is not bound to the accepted namespace roster generation/digest.");
+            throw new InvalidDataException("OFR2 is not bound to the accepted namespace roster generation/digest.");
     }
 
     private static byte[] BuildSigningPayload(ReadOnlySpan<byte> payload)
