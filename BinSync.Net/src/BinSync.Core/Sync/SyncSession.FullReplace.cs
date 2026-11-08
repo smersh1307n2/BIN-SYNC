@@ -110,7 +110,7 @@ public partial class SyncSession
         return FullReplaceStreamPrefix | (uint)namespaceId;
     }
 
-    private static void ValidateFullReplaceStream(SessionFrame frame, int namespaceId)
+    private static void ValidateFullReplaceStream(Frame frame, int namespaceId)
     {
         if (frame.StreamId != GetFullReplaceStream(namespaceId))
             throw new FrameException("FRAME_REJECTED");
