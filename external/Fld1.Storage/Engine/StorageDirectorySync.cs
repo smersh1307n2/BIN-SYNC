@@ -30,6 +30,30 @@ internal static class StorageDirectorySync
     [DllImport("libSystem.B.dylib", EntryPoint = "close", SetLastError = true)]
     private static extern int MacOsClose(int fileDescriptor);
 
+    internal static void CreateDirectoryDurable(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        var missing = new Stack<string>();
+        string? current = fullPath;
+        while (!string.IsNullOrEmpty(current) && !Directory.Exists(current))
+        {
+            missing.Push(current);
+            current = Path.GetDirectoryName(current);
+        }
+
+        Directory.CreateDirectory(fullPath);
+
+        // A mkdir changes the parent directory entry. Flush each parent from
+        // the shallowest newly-created directory to the deepest one.
+        while (missing.Count != 0)
+        {
+            string created = missing.Pop();
+            string? parent = Path.GetDirectoryName(created);
+            if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
+                Flush(parent);
+        }
+    }
+
     internal static void Flush(string directory)
     {
         if (OperatingSystem.IsWindows())
