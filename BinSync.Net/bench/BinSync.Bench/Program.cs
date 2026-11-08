@@ -23,6 +23,9 @@ var config = DefaultConfig.Instance
         .WithWarmupCount(3)
         .WithIterationCount(10));
 
-BenchmarkSwitcher.FromAssembly(typeof(BinSync.Bench.MetadataCoordinatorRetryScanBench).Assembly).Run(args, config);
+if (args.Contains("--coordinator-retry-only", StringComparer.Ordinal))
+    BenchmarkRunner.Run<BinSync.Bench.MetadataCoordinatorRetryScanBench>(config);
+else
+    BenchmarkSwitcher.FromAssembly(typeof(BinSync.Bench.MetadataCoordinatorRetryScanBench).Assembly).Run(args, config);
 
 public partial class Program { }
