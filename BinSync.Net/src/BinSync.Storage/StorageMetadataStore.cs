@@ -1336,21 +1336,34 @@ private static bool ValidateIncomingBatchForStaging(
             ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var priorHighWatermark)
                 ? priorHighWatermark
                 : 0;
+            var originHighWatermarks = new Dictionary<OriginStreamKey, ulong>();
             var frozen = new List<MetadataOutboundItem>(newOperations.Count);
             foreach (var operation in newOperations)
             {
                 ulong sequence = checked(++highWatermark);
+                var originKey = new OriginStreamKey(namespaceId, localAuthor, operation.OriginAuthorEpoch);
+                if (!originHighWatermarks.TryGetValue(originKey, out ulong originHigh))
+                {
+                    if (!current.OriginHighWatermarks.TryGetValue(originKey, out originHigh) &&
+                        current.ChangeLedger.Values.Any(value => value.IsLocalOutbound &&
+                            value.AuthorNodeId == localAuthor &&
+                            value.OriginAuthorEpoch == operation.OriginAuthorEpoch))
+                        throw new InvalidDataException("Durable origin-sequence allocator row is missing for an existing local author epoch.");
+                }
+                ulong originSequence = checked(originHigh + 1);
+                if (operation.OriginSequence != 0 && operation.OriginSequence != originSequence)
+                    throw new InvalidDataException("New outbound operation supplied a non-contiguous immutable OriginSequence.");
+                originHighWatermarks[originKey] = originSequence;
                 var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray())
                 {
-                    Provenance = new OperationOrigin(localAuthor, operation.OriginAuthorEpoch,
-                        operation.OriginSequence != 0 ? operation.OriginSequence : sequence)
+                    Provenance = new OperationOrigin(localAuthor, operation.OriginAuthorEpoch, originSequence)
                 };
                 frozen.Add(item);
                 frozenByChangeId.Add(operation.ChangeId, item);
             }
 
             PersistFrozenOutboundDelta(partitionKey, current, key, namespaceId, localAuthor,
-                newOperations, frozen, highWatermark);
+                newOperations, frozen, highWatermark, originHighWatermarks);
         }
 
         var result = new MetadataOutboundItem[operations.Count];
@@ -2612,7 +2625,8 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId localAuthor,
         IReadOnlyList<MetadataFrozenOperation> operations,
         IReadOnlyList<MetadataOutboundItem> frozen,
-        ulong highWatermark)
+        ulong highWatermark,
+        IReadOnlyDictionary<OriginStreamKey, ulong> originHighWatermarks)
     {
         byte[] root = PartitionRoot(partitionKey);
         var newPeerStreams = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>();
@@ -2631,7 +2645,7 @@ private static bool ValidateIncomingBatchForStaging(
                 newRequiredStreams.Add(streamKey);
         }
 
-        var writes = new List<(byte[] Key, byte[] Value)>(operations.Count * 2 + newPeerStreams.Count + newRequiredStreams.Count + 2);
+        var writes = new List<(byte[] Key, byte[] Value)>(operations.Count * 2 + newPeerStreams.Count + newRequiredStreams.Count + originHighWatermarks.Count + 2);
         for (int i = 0; i < operations.Count; i++)
         {
             var operation = operations[i];
@@ -2652,6 +2666,15 @@ private static bool ValidateIncomingBatchForStaging(
             BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(36), item.OriginSequence);
             ledgerValue[44] = 1;
             writes.Add((StorageKey(root, 3, ledgerSuffix), ledgerValue));
+        }
+
+        foreach (var originWatermark in originHighWatermarks)
+        {
+            byte[] suffix = new byte[22];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)originWatermark.Key.NamespaceId));
+            originWatermark.Key.Author.WriteTo(suffix.AsSpan(2));
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), originWatermark.Key.AuthorEpoch);
+            writes.Add((StorageKey(root, 22, suffix), EncodeUInt64(originWatermark.Value)));
         }
 
         byte[] watermarkValue = new byte[16];
@@ -2701,6 +2724,8 @@ private static bool ValidateIncomingBatchForStaging(
             current.Outbound.Add(outboundKey, entries);
         }
         entries.AddRange(frozen);
+        foreach (var originWatermark in originHighWatermarks)
+            current.OriginHighWatermarks[originWatermark.Key] = originWatermark.Value;
         for (int i = 0; i < operations.Count; i++)
         {
             var operation = operations[i];
@@ -3375,6 +3400,19 @@ private static bool ValidateIncomingBatchForStaging(
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18))));
                     break;
                 }
+                case 22:
+                {
+                    RequireLength(key, 22);
+                    RequireLength(row.Value, 8);
+                    var originKey = new OriginStreamKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)),
+                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18)));
+                    if (originKey.Author.IsZero || originKey.AuthorEpoch == 0)
+                        throw new InvalidDataException("Stored origin-sequence allocator identity is invalid.");
+                    state.OriginHighWatermarks.Add(originKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
+                    break;
+                }
                 case 17:
                 {
                     RequireLength(key, 22);
@@ -3904,6 +3942,7 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
+    private readonly record struct OriginStreamKey(int NamespaceId, NodeId Author, uint AuthorEpoch);
     private readonly record struct LeaseState(ulong Generation, Guid ConsumerId);
     private readonly record struct PeerStreamKey(NodeId Peer, uint PeerEpoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct InterestedPeerKey(int NamespaceId, NodeId Peer, uint PeerEpoch);
@@ -3966,6 +4005,7 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
         public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, List<MetadataOutboundItem>> Outbound { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundHighWatermarks { get; } = new();
+        public Dictionary<OriginStreamKey, ulong> OriginHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
         public Dictionary<Guid, PendingApplyValue> PendingApplies { get; } = new();
@@ -4000,6 +4040,7 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
             foreach (var pair in Outbound) clone.Outbound.Add(pair.Key, new List<MetadataOutboundItem>(pair.Value));
             foreach (var pair in OutboundHighWatermarks) clone.OutboundHighWatermarks.Add(pair.Key, pair.Value);
+            foreach (var pair in OriginHighWatermarks) clone.OriginHighWatermarks.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundAck) clone.OutboundAck.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundLeases) clone.OutboundLeases.Add(pair.Key, pair.Value);
             foreach (var pair in PendingApplies) clone.PendingApplies.Add(pair.Key, pair.Value);
