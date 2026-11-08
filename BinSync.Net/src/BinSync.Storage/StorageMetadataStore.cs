@@ -219,7 +219,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 var receiveKey = new ReceiveKey(
                     key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
                 var chainKey = new ReceiveChainKey(key.Sender, key.Epoch, key.NamespaceId);
-                if (!current.Receives.TryGetValue(receiveKey, out ReceiveState? receive) ||
+                if (!current.Receives.TryGetValue(receiveKey, out ReceiveState receive) ||
                     receive.CursorEnd < receipt.CursorEnd ||
                     !current.ReceiveChains.ContainsKey(chainKey))
                     continue;
