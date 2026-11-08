@@ -46,12 +46,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         private readonly StorageSnapshot _snapshot;
         private readonly byte[] _fieldPrefix;
         private readonly byte[] _recordTombstonePrefix;
+        private StorageSnapshot.PrefixCursor _fieldCursor;
+        private StorageSnapshot.PrefixCursor _recordTombstoneCursor;
         private StorageEntry[] _fieldPage = Array.Empty<StorageEntry>();
         private StorageEntry[] _recordTombstonePage = Array.Empty<StorageEntry>();
         private int _fieldPageIndex;
         private int _recordTombstonePageIndex;
-        private byte[]? _lastFieldKey;
-        private byte[]? _lastRecordTombstoneKey;
         private ProviderMutation? _fieldMutation;
         private ProviderMutation? _recordTombstoneMutation;
         private bool _disposed;
@@ -65,6 +65,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             _snapshot = snapshot;
             _fieldPrefix = fieldPrefix;
             _recordTombstonePrefix = recordTombstonePrefix;
+            _fieldCursor = snapshot.OpenPrefixCursor(fieldPrefix);
+            _recordTombstoneCursor = snapshot.OpenPrefixCursor(recordTombstonePrefix);
         }
 
         public bool TryReadNext(out ProviderMutation? mutation)
@@ -106,8 +108,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             _recordTombstonePage = Array.Empty<StorageEntry>();
             _fieldPageIndex = 0;
             _recordTombstonePageIndex = 0;
-            _lastFieldKey = null;
-            _lastRecordTombstoneKey = null;
+            _fieldCursor.Dispose();
+            _recordTombstoneCursor.Dispose();
+            _fieldCursor = _snapshot.OpenPrefixCursor(_fieldPrefix);
+            _recordTombstoneCursor = _snapshot.OpenPrefixCursor(_recordTombstonePrefix);
             _fieldMutation = null;
             _recordTombstoneMutation = null;
             NextIndex = 0;
@@ -117,13 +121,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         {
             if (_disposed) return;
             _disposed = true;
+            _fieldCursor.Dispose();
+            _recordTombstoneCursor.Dispose();
             _snapshot.Dispose();
             _fieldPage = Array.Empty<StorageEntry>();
             _recordTombstonePage = Array.Empty<StorageEntry>();
             _fieldMutation = null;
             _recordTombstoneMutation = null;
-            _lastFieldKey = null;
-            _lastRecordTombstoneKey = null;
         }
 
         private bool TryPeekField(out ProviderMutation? mutation)
@@ -155,10 +159,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         private void EnsureFieldPage()
         {
             if (_fieldPageIndex < _fieldPage.Length) return;
-            _fieldPage = _snapshot.ScanPrefix(
-                _fieldPrefix,
-                _lastFieldKey is null ? ReadOnlySpan<byte>.Empty : _lastFieldKey,
-                ScanPageSize).ToArray();
+            _fieldPage = _fieldCursor.ReadPage(ScanPageSize).ToArray();
             _fieldPageIndex = 0;
             _fieldMutation = null;
         }
@@ -166,24 +167,19 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         private void EnsureRecordTombstonePage()
         {
             if (_recordTombstonePageIndex < _recordTombstonePage.Length) return;
-            _recordTombstonePage = _snapshot.ScanPrefix(
-                _recordTombstonePrefix,
-                _lastRecordTombstoneKey is null ? ReadOnlySpan<byte>.Empty : _lastRecordTombstoneKey,
-                ScanPageSize).ToArray();
+            _recordTombstonePage = _recordTombstoneCursor.ReadPage(ScanPageSize).ToArray();
             _recordTombstonePageIndex = 0;
             _recordTombstoneMutation = null;
         }
 
         private void ConsumeField()
         {
-            _lastFieldKey = _fieldPage[_fieldPageIndex].Key;
             _fieldPageIndex++;
             _fieldMutation = null;
         }
 
         private void ConsumeRecordTombstone()
         {
-            _lastRecordTombstoneKey = _recordTombstonePage[_recordTombstonePageIndex].Key;
             _recordTombstonePageIndex++;
             _recordTombstoneMutation = null;
         }
