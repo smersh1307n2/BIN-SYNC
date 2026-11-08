@@ -295,8 +295,17 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                 return false;
             RetentionFrontierEntry? safe = checkpoint.SafeFrontier.FirstOrDefault(entry =>
                 entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
-            return safe is not null && originSequence <= safe.SafeAppliedOriginSequence &&
-                AreAllActiveMembersInstalledCore(acceptedRoster, fullReplaceGeneration, fullReplaceDigest);
+            if (safe is null || originSequence > safe.SafeAppliedOriginSequence ||
+                !AreAllActiveMembersInstalledCore(acceptedRoster, fullReplaceGeneration, fullReplaceDigest))
+                return false;
+
+            // v3.1 frontiers currently carry only applied sequence, not each origin
+            // author's issued high-watermark plus the post-install HLC floor. A
+            // delayed pre-snapshot operation from another author could otherwise
+            // arrive after this tombstone is removed and resurrect the record.
+            // Keep physical tombstone GC disabled until the protocol carries and
+            // verifies that global causal-horizon proof.
+            return false;
         }
     }
 
