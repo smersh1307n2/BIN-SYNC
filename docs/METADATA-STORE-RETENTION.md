@@ -64,7 +64,7 @@ For a provider being migrated to Metadata Store authority, the pre-cutover Node-
 
 ## 7. Release gates
 
-- Physical Storage fault tests still need partial OS-write and injected device/fsync failure coverage; actual power-loss cannot be proven by process-kill tests alone.
+- Deterministic tests now inject a partial WAL record write, a WAL fsync error and a WAL directory-fsync error after sealed-segment reclamation; they verify fail-closed behavior and reopen recovery. These process-level injections do not reproduce actual device-cache loss, filesystem bugs or power loss.
 - Linux/macOS directory-entry updates use native directory fsync and propagate errors. Windows directory-entry durability is not claimed by the current implementation.
 - Receipt, ChangeId and tombstone GC remain deliberately disabled until the protocol proofs above exist.
 - The section-by-section normative audit still needs requirement-ID to exact-test mapping and cross-implementation coverage for §§4–18.
