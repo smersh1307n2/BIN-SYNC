@@ -739,6 +739,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             LocalReplica = Node(91),
             SenderPeer = Node(92),
             SenderEpoch = 1,
+            TransportPeerEpoch = 17,
             AuthorStreamNodeId = Node(93),
             NamespaceId = 9,
             BatchId = Batch(94),
@@ -753,7 +754,16 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             "EncodeIncomingBatch", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
         var decode = typeof(StorageMetadataStore).GetMethod(
             "DecodeIncomingBatch", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        byte[] version5 = (byte[])encode.Invoke(null, new object[] { batch })!;
+        byte[] version6 = (byte[])encode.Invoke(null, new object[] { batch })!;
+        var decoded6 = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version6 })!;
+        Assert.Equal(17U, decoded6.TransportPeerEpoch);
+
+        int scopeLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(version6.AsSpan(4));
+        int transportEpochOffset = checked(4 + 4 + scopeLength + 16 + 16 + 4);
+        byte[] version5 = new byte[version6.Length - 4];
+        version6.AsSpan(0, transportEpochOffset).CopyTo(version5);
+        version6.AsSpan(transportEpochOffset + 4).CopyTo(version5.AsSpan(transportEpochOffset));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version5.AsSpan(0, 4), -5);
 
         byte[] version4 = version5[..^1];
         System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version4.AsSpan(0, 4), -4);
