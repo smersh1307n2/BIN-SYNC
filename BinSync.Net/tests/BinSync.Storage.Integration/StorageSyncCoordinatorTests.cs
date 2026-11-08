@@ -718,12 +718,14 @@ public sealed class StorageSyncCoordinatorTests
         coordinatorB.EnableMetadataStoreOwnedPublication(_ => { });
         Assert.Empty(originalNodeA.ReadOutboxEntries(1, originalNodeA.NodeId, 0, 10));
         Assert.Empty(originalNodeA.ReadOutboxEntries(1, staleRemote.NodeId, 0, 10));
+        Assert.Equal(0, originalNodeA.GlobalChangeLedgerCount);
 
         // Simulate restart from a pre-rehydration Node checkpoint while the provider's
         // durable cutover marker and empty authoritative snapshot remain current.
         using var restartedNodeA = NodePersistence.LoadFromBytes(staleCheckpoint);
         Assert.True(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         var coordinatorA = new StorageSyncCoordinator(restartedNodeA, providerA, 1, metadataA, scopeA);
+        Assert.Equal(0, restartedNodeA.GlobalChangeLedgerCount);
 
         var (aToB, bFromA) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
