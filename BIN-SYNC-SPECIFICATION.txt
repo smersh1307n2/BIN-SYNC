@@ -1,9 +1,14 @@
-# BIN-SYNC CORE v2.4.20 FINAL
+# BIN-SYNC CORE v2.4.21 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.20 FINAL (receipt identity/header binding; per-author stream retention coordinates; fail-closed receipt and tombstone retention)  
-**Дата:** 2026-11-07  
+**Версия:** 2.4.21 FINAL (correlated live ALIAS_MAP updates; negotiated capability; fail-closed alias collision)  
+**Дата:** 2026-11-08  
+
+**Изменения v2.4.21 относительно v2.4.20:**
+- Определён established-session ALIAS_MAP request/response на control stream: новая привязка атомарно принимается обеими копиями session map до отправки DELTA_BATCH с этим alias.
+- Добавлен HELLO capability `IncrementalAliasMap` (`0x00000004`), корреляция requestId с разными parity для двух направлений и fail-closed поведение при collision, отказе или отмене.
+- Единый receive pump маршрутизирует ALIAS_MAP control updates отдельно от DELTA_BATCH/ACK; raw receive mode остаётся отдельным режимом.
 **Изменения v2.4.20 относительно v2.4.19:**
 - Зафиксирован receipt key `(senderNodeId, senderEpoch, namespaceId, batchId)`; resolved `authorNodeId` остаётся отдельной координатой author-stream и не может менять receipt identity.
 - Разделены peer/session membership и per-author stream progress; безопасный retention рассчитывается независимо для каждого author stream.
@@ -164,7 +169,7 @@ await using var rightSession = await rightTask;
 
 Пользовательский транспорт реализует `ISyncTransport`, объявляет свои гарантии и передаёт полные frames. `IPeerAwareSyncTransport` — необязательное расширение для записи peer NodeId после HELLO.
 
-Для established `SyncSession` используется один reader pump, который принимает полные кадры типов `0x04–0x13` и распределяет их по отдельным очередям по `FrameType`. Это позволяет одновременно выполнять receive-операции разных типов (например, `DELTA_BATCH`/`ACK` и `STATE_DIGEST`) без перехвата чужих кадров. Приёмы одного типа сериализуются: wire protocol пока не содержит correlation ID, поэтому несколько одновременно активных запросов одного типа не могут быть однозначно сопоставлены ответам. Очереди ограничены; переполнение приводит к fail-closed `FLOW_CONTROL_VIOLATION`, а не блокирует общий reader pump и не задерживает доставку других типов. Raw fragment reassembly остаётся отдельным режимом и не смешивается с framed dispatch. Неизвестный тип, некорректная граница пакета или недопустимый кадр завершают receive pump с `FRAME_REJECTED`.
+Для established `SyncSession` используется один reader pump, который принимает полные кадры `ALIAS_MAP=0x03` и типов `0x04–0x13`, распределяет их по отдельным очередям по `FrameType`; ALIAS_MAP обслуживает отдельный control consumer, а остальные типы доступны ожидающим receive-операциям. Это позволяет одновременно выполнять receive-операции разных типов (например, `DELTA_BATCH`/`ACK` и `STATE_DIGEST`) без перехвата чужих кадров. Приёмы одного типа сериализуются: wire protocol пока не содержит correlation ID для нескольких одновременно активных запросов одного типа. Очереди ограничены; переполнение приводит к fail-closed `FLOW_CONTROL_VIOLATION`, а не блокирует общий reader pump и не задерживает доставку других типов. Raw fragment reassembly остаётся отдельным режимом и не смешивается с framed dispatch. Неизвестный тип, некорректная граница пакета или недопустимый кадр завершают receive pump с `FRAME_REJECTED`.
 
 Для каждой пары NodeId допускается ровно одна активная протокольная сессия. Оба конца вызывают симметричный Connect/Accept-neutral метод EstablishAsync: каждый отправляет HELLO и получает HELLO другой стороны. Сторона с меньшим NodeId становится логическим инициатором и отправляет ALIAS_MAP после HELLO_ACK; сторона с большим NodeId отвечает HELLO_ACK и согласованной ALIAS_MAP. Сравниваются 16 байт NodeId в wire-порядке. Направление открытия TCP/WebRTC/другого транспортного канала не определяет протокольную роль.
 
@@ -291,6 +296,40 @@ ALIAS_MAP:
 - При симметричном EstablishAsync узел с лексикографически меньшим 16-байтовым NodeId является логическим инициатором, а узел с большим NodeId — отвечающей стороной. Оба конца отправляют HELLO; физическая сторона открытия транспорта роли не задаёт.
 - Нижний NodeId резервирует слот перед отправкой ALIAS_MAP, верхний — после её получения и проверки; оба удерживают слот до закрытия SyncSession. Только после освобождения обоих слотов разрешено завершить следующий handshake и опубликовать новую alias map для этого peer.
 
+### 4.3.1. Incremental ALIAS_MAP в установленной сессии
+
+Handshake ALIAS_MAP остаётся полной таблицей на control stream. После handshake кадр типа `0x03` может нести incremental update, только если обе стороны объявили в HELLO capability `IncrementalAliasMap = 0x00000004`. Неизвестные capability bits игнорируются; отсутствие этого бита означает, что live update запрещён и при необходимости новой привязки сессия должна быть закрыта и установлена заново.
+
+Форматы payload (все числа LE):
+
+```
+ALIAS_MAP_REQUEST {
+    magic       : u8 = 0xA7
+    kind        : u8 = 0x01
+    requestId   : u32
+    count       : u8 = 1
+    entry {
+        alias   : u16
+        nodeId  : b128
+        epoch   : u32
+    }
+}
+
+ALIAS_MAP_RESPONSE {
+    magic       : u8 = 0xA7
+    kind        : u8 = 0x02
+    requestId   : u32
+    status      : u8   // 0 = accepted, 1 = rejected
+    count       : u8   // 1 iff accepted, otherwise 0
+    entry       : как в request, присутствует только при accepted
+}
+```
+
+Оба варианта используют `FrameType=0x03`, `streamId=0`, `flags=0`; `requestId` ненулевой и является единственным correlation key. Чтобы встречные запросы не совпадали по ID, endpoint с меньшим wire-order NodeId выдаёт чётные requestId, endpoint с большим NodeId — нечётные; response повторяет ID запроса. При wraparound нулевой ID пропускается.
+
+Отправитель сначала строит свободную привязку, но не публикует её в своей session map. Получатель проверяет endpoint epochs, уникальность alias и обратную привязку, затем атомарно применяет ровно одну запись и отправляет accepted response с той же записью. Отправитель атомарно применяет запись только после проверки коррелированного accepted response. Точная повторная привязка идемпотентна. Коллизия, epoch regression, mismatch ответа или rejected response приводят к fail-closed закрытию сессии; частичная карта запрещена. Если отмена произошла после того, как request мог попасть в транспорт, сессия закрывается: восстановление выполняется полным handshake ALIAS_MAP, а не продолжением с неопределённой картой.
+
+Ни один DELTA_BATCH не может ссылаться на новый alias до accepted response. Если peer не объявил `IncrementalAliasMap`, отправитель не передаёт update и завершает попытку `UNKNOWN_ALIAS`, требуя reconnect/full handshake. Узел синхронизирует известную durable-author таблицу перед Node-owned push и выбранный author stream перед Metadata Store push; каждая сессия хранит собственную alias map.
 ## 4.4. Epoch реплики
 
 Каждый `nodeId` имеет монотонный `epoch: u32`, инкрементируемый при:
@@ -957,11 +996,11 @@ FragmentEnvelope {
 
 Канонические значения: `DELTA_BATCH=0x09`, `SNAPSHOT_CHUNK=0x0A`, `ACK=0x0B`, `GC_NOTICE=0x0C`, `KEY_ROTATION=0x11`, `IBLT_REQUEST=0x12`, `IBLT_RESPONSE=0x13`. Реализации MUST использовать эти отдельные значения. Ранее встречавшиеся внутренние коллизии `GC_NOTICE/ACK` и `IBLT/DELTA_BATCH` являются ошибками реализации, а не допустимыми вариантами wire format.
 
-Established `SyncSession` использует единственный reader pump и маршрутизирует полные кадры типов `0x04–0x13` по FrameType. Параллельные операции разных типов могут принимать кадры независимо. Ожидающие приёмы одного типа сериализуются, поскольку wire protocol пока не содержит correlation ID для нескольких одновременно активных запросов одного типа. Raw fragment reassembly остаётся отдельным режимом и не смешивается с framed dispatch.
+Established `SyncSession` использует единственный reader pump и маршрутизирует полные кадры `ALIAS_MAP=0x03` и `0x04–0x13` по FrameType. ALIAS_MAP request/response потребляет отдельный control consumer; остальные кадры направляются в отдельные bounded queues. Параллельные операции разных типов могут принимать кадры независимо. Ожидающие приёмы одного типа сериализуются, поскольку wire protocol не содержит correlation ID для нескольких одновременно активных запросов одного типа (исключение — ALIAS_MAP, у которого есть requestId). Raw fragment reassembly остаётся отдельным режимом и не смешивается с framed dispatch.
 
 ## 12.7–12.16. HELLO, HELLO_ACK, ALIAS_MAP, SCHEMA_MAP, MEMBERSHIP, STATE_DIGEST, NEED_RANGE, NEED_KEYS, IBLT, KEY_ROTATION
 
-Стандартные LE-раскладки.
+Стандартные LE-раскладки. Established-session ALIAS_MAP update использует payload и правила §4.3.1. HELLO capability bit `0x00000004` означает поддержку этих request/response кадров.
 
 ## 12.17. DELTA_BATCH
 
