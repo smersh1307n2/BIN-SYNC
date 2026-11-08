@@ -517,8 +517,15 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             }
 
             Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 88));
-            child.Kill(entireProcessTree: true);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            try
+            {
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (TimeoutException)
+            {
+                child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
 
             using var recovered = StorageDatabase.Open(directory, 88);
             Assert.True(recovered.TryGet(new byte[] { 0x11 }, out var value));
@@ -545,7 +552,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             batch.Commit();
         }
         File.WriteAllText(readyPath, "ready");
-        Thread.Sleep(Timeout.Infinite);
+        Environment.Exit(0);
     }
 
     [Fact]
@@ -558,6 +565,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         string alias = Path.Combine(_root, "wal-directory-alias");
         Directory.CreateDirectory(physical);
         Directory.CreateSymbolicLink(alias, physical);
+        Assert.NotNull(new DirectoryInfo(alias).LinkTarget);
+        Assert.NotNull(new DirectoryInfo(alias).ResolveLinkTarget(returnFinalTarget: true));
 
         using var first = StorageDatabase.Open(physical, 89);
         Assert.Throws<IOException>(() => StorageDatabase.Open(alias, 89));
