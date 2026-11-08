@@ -613,9 +613,19 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                             throw new InvalidDataException("Remote provider apply equivocated at the same HLC and author.");
                         if (existing.ChangeId.IsZero && !mutation.ChangeId.IsZero)
                             batch.Put(key, EncodeMutation(mutation));
+                        else if (existing.ChangeId == mutation.ChangeId &&
+                            existing.OriginAuthorEpoch == mutation.OriginAuthorEpoch &&
+                            existing.OriginSequence == 0 && mutation.OriginSequence != 0)
+                            batch.Put(key, EncodeMutation(mutation)); // FULL_REPLACE draft -> immutable published operation.
+                        else if (existing.ChangeId == mutation.ChangeId &&
+                            existing.OriginAuthorEpoch == mutation.OriginAuthorEpoch &&
+                            existing.OriginSequence != 0 && mutation.OriginSequence == 0)
+                        {
+                            // A later state-image replay must not erase the published origin.
+                        }
                         else if (!existing.ChangeId.IsZero && mutation.ChangeId.IsZero)
                         {
-                            // Legacy materialization may refresh visible fields, but
+                            // A legacy materialization may refresh visible fields, but
                             // it must never erase already-persisted origin identity.
                         }
                         else
