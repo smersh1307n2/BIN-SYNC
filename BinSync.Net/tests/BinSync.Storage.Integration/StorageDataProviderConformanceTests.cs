@@ -290,4 +290,51 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
 
+    [Fact]
+    public void Metadata_store_owned_publication_cutover_marker_survives_reopen()
+    {
+        string directory = Path.Combine(_root, "publication-cutover-marker");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using (var provider = new StorageDataProvider(directory, 83))
+            {
+                provider.EnableMetadataStoreOwnedPublication(17);
+                Assert.True(provider.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutover));
+                Assert.Equal(17UL, cutover);
+            }
+
+            using (var reopened = new StorageDataProvider(directory, 83))
+            {
+                Assert.True(reopened.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutover));
+                Assert.Equal(17UL, cutover);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Metadata_store_owned_publication_cutover_rejects_pending_local_feed()
+    {
+        string directory = Path.Combine(_root, "publication-cutover-pending-feed");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, 84);
+            provider.AppendLocalChange(Mutation(11, 7, 110, 1));
+
+            Assert.Throws<InvalidOperationException>(() =>
+                provider.EnableMetadataStoreOwnedPublication(0));
+            Assert.False(provider.TryGetMetadataStoreOwnedPublicationCutover(out _));
+            Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
