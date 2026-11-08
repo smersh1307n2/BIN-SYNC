@@ -165,6 +165,8 @@ public sealed class MetadataFrozenOperation
     public required byte[] Payload { get; init; }
     public uint OriginAuthorEpoch { get; init; }
     public ulong OriginSequence { get; init; }
+    public ulong HlcWall { get; init; }
+    public uint HlcLogical { get; init; }
 }
 public sealed record MetadataOutboundItem(ulong Sequence, NodeId AuthorNodeId, BatchId ChangeId, byte[] Payload)
 {
