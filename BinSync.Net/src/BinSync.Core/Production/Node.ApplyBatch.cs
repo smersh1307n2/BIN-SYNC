@@ -208,8 +208,7 @@ public sealed partial class Node
                 (i != 0 && entry.OriginSequence <= previous))
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             if (batch.IssuerNodeId == streamAuthor &&
-                (entry.OriginAuthorEpoch > (uint)batch.IssuerEpoch ||
-                 entry.OriginSequence != checked((ulong)batch.CursorStart + (ulong)i)))
+                entry.OriginAuthorEpoch != (uint)batch.IssuerEpoch)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             previous = entry.OriginSequence;
         }
