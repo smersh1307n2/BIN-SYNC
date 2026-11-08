@@ -829,3 +829,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x C] `HasProtocolTombstoneGcProof` now rejects a candidate tombstone whose `(HlcWall,HlcLogical)` exceeds the signed maximum HLC for its exact author epoch, in addition to requiring the tombstone HLC and the entire issued-epoch maximum to be covered by the common FULL_REPLACE floor.
 - [~ T] Add tamper tests for tombstone HLC above issued max, equal-wall logical overflow, below max, and retired versus active author closure.
+
+
+### 2026-11-09 — C-pass: replace unsupported range view with binary-seek snapshot index
+
+- [x C] Replaced the unsupported `SortedDictionary.GetViewBetween` attempt with a `SortedList` snapshot index and a bounded lower-bound binary search over its sorted keys. Prefix and `afterKey` cursors now seek in O(log n) and read only matching pages; the cursor does not allocate a view or enumerate unrelated rows.
+- [x C] Snapshot payload arrays remain shared immutable references; each `StorageEntry` page returns owned key/value arrays. Empty/all-0xFF prefixes and afterKey beyond the range naturally return empty pages.
+- [~ T] Exact-head build and prefix-boundary/stability tests required; the prior CI failure was a compile-time API mismatch, now removed.
