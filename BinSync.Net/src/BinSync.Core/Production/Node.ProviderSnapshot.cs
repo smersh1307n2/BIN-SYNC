@@ -2,6 +2,29 @@ namespace BinSync;
 
 public sealed partial class Node
 {
+    private bool _metadataStoreOwnedPublicationFence;
+
+    /// <summary>
+    /// Fence the Node's legacy local-Outbox and Node-owned send APIs after durable
+    /// Metadata Store publication cutover. The provider cutover marker is authoritative;
+    /// StorageSyncCoordinator reinstalls this in-memory fence when it is reconstructed.
+    /// </summary>
+    internal void EnableMetadataStoreOwnedPublicationFence()
+    {
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            _metadataStoreOwnedPublicationFence = true;
+        }
+    }
+
+    private void EnsureNodeOwnedMutationAllowedInternal()
+    {
+        if (_metadataStoreOwnedPublicationFence)
+            throw new InvalidOperationException(
+                "Node-owned local writes and Outbox transport are disabled after Metadata-Store-owned publication cutover. Write through the Data Provider and StorageSyncCoordinator.");
+    }
+
     /// <summary>
     /// Replace one namespace's in-memory record cache with a complete Data Provider
     /// snapshot. This is a rehydration operation: it does not create Outbox entries,
