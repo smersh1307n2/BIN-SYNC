@@ -390,11 +390,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
             if (expectedEntryCount < 0) throw new ArgumentOutOfRangeException(nameof(expectedEntryCount));
             if (expectedDigest.Length != 32) throw new ArgumentException("Full-replace digest must be SHA-256.", nameof(expectedDigest));
-            if (ReadActiveGeneration(_storage) == generation)
-                throw new InvalidOperationException("Full-replace generation is already active.");
-
             byte[] sessionKey = FullReplaceSessionKey(generation);
             using var snapshot = _storage.OpenSnapshot();
+            Guid activeGeneration = ReadActiveGeneration(snapshot);
             if (snapshot.TryGet(sessionKey, out var existingBytes))
             {
                 FullReplaceState existing = DecodeFullReplaceState(existingBytes!);
@@ -402,8 +400,14 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     existing.SourceFeedWatermark != sourceChangeFeedWatermark ||
                     !existing.ExpectedDigest.AsSpan().SequenceEqual(expectedDigest.Span))
                     throw new InvalidDataException("Full-replace generation was reused with conflicting manifest data.");
+                if (existing.IsCommitted && activeGeneration == generation)
+                    return;
+                if (activeGeneration == generation)
+                    throw new InvalidDataException("Active full-replace generation has an uncommitted manifest.");
                 return;
             }
+            if (activeGeneration == generation)
+                throw new InvalidOperationException("Full-replace generation is already active.");
 
             if (snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, 1).Count != 0 ||
                 snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, 1).Count != 0)
