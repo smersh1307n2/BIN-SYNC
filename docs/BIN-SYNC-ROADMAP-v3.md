@@ -91,6 +91,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 #### 4.1 Inbox receipts
 
 - [x] Conservative retired-transport-epoch receipt GC and PendingApply retirement guard exist in earlier Storage-backed implementation.
+- [~ C] Block retirement/receipt reclamation while any outbound reservation remains attached to the retired transport epoch; implementation added in `aab64ad`. Exact retry/crash regression tests remain in Phase T.
 - [ ] Revalidate against canonical v3 receipt layout; remove legacy-unknown receipt handling because old formats are rejected.
 - [ ] Test lost ACK, duplicate batch, epoch retirement, new epoch initial baseline and crash before/after atomic fence+receipt deletion.
 
@@ -363,3 +364,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Confirmed the 12-byte stream-row reduction, physical compaction correction, immutable Origin recovery, provider freeze/ACK-failure retry proof and measured metadata benchmark are already implemented; do not redo these.
 - [x] Adopted the user's staged execution order: broad implementation pass marked C, then focused correctness/conformance T, measured optimization O, and release finalization F.
 - [ ] Begin C pass at the remaining Phase 3–5 implementation gaps; keep ChangeId and tombstone/ghost GC disabled until their independent safe-frontier proofs are complete.
+
+
+### 2026-11-08 — C pass: receipt retirement reservation guard
+
+- [x] Audited `RetireInterestedPeer` against v3 §0.11 and found that the atomic retirement transaction fenced the old epoch and deleted receipts/peer rows without first rejecting an unresolved outbound `PendingBatch` reservation.
+- [x] Added a fail-closed guard for any pending outbound reservation belonging to the peer and a retired-or-older epoch. A completed replacement baseline no longer silently discards the old incarnation's in-flight send/retry context.
+- [~] C implementation committed as `aab64ad`; targeted lost-ACK, reservation-retirement and crash-boundary tests are explicitly deferred to Phase T. Receipt GC remains conservative; ChangeId and tombstone/ghost GC remain disabled.
