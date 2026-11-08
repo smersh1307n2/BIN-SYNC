@@ -12,7 +12,12 @@ public static class StorageNodePersistence
 {
     private const byte NodeCheckpointKeyPrefix = 0xF0;
 
-    /// <summary>Atomically persist the complete Node image in one Storage write batch.</summary>
+    /// <summary>
+    /// Atomically persist the complete Node image in one Storage write batch.
+    /// Call after each successful SyncSession handshake and before receiving the first
+    /// durable batch: negotiated aliases and peer epochs are required to replay a
+    /// staged PendingApply wire payload after process restart.
+    /// </summary>
     public static void Save(StorageDatabase storage, Node node)
     {
         ArgumentNullException.ThrowIfNull(storage);
