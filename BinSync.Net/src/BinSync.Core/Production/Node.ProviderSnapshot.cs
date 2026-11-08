@@ -179,8 +179,11 @@ public sealed partial class Node
             bool hasNamespace = Storage.TryGetValue(namespaceId, out var namespaceStore);
             namespaceStore ??= new Dictionary<RecordId, Record>();
 
-            var working = new Dictionary<RecordId, Record>(Math.Min(changes.Count, 256));
-            var changedRecords = new HashSet<RecordId>(Math.Min(changes.Count, 256));
+            // Allocate staging maps only when a provider mutation actually changes
+            // the Node cache. ACK-retry commonly replays an already-applied feed
+            // prefix; cloning every record in that no-op replay was pure allocation.
+            Dictionary<RecordId, Record>? working = null;
+            HashSet<RecordId>? changedRecords = null;
             ulong previousSequence = 0;
             int applied = 0;
 
@@ -196,6 +199,28 @@ public sealed partial class Node
                 ProviderMutation mutation = change.Mutation;
                 ValidateProviderMutation(mutation);
 
+                Record record;
+                if (working is not null && working.TryGetValue(mutation.RecordId, out var staged))
+                {
+                    record = staged;
+                }
+                else
+                {
+                    if (namespaceStore.TryGetValue(mutation.RecordId, out var existing))
+                    {
+                        if (!WouldChangeProviderMutation(existing, mutation))
+                            continue;
+                        record = Clone(existing);
+                    }
+                    else
+                    {
+                        record = new Record(mutation.RecordId, (ushort)namespaceId);
+                    }
+
+                    working ??= new Dictionary<RecordId, Record>(Math.Min(changes.Count, 256));
+                    working.Add(mutation.RecordId, record);
+                }
+
                 object operation;
                 if (mutation.IsRecordTombstone)
                 {
@@ -209,9 +234,6 @@ public sealed partial class Node
                 }
                 else if (mutation.IsTombstone)
                 {
-                    if (mutation.FieldId == 0 || mutation.FieldId == Model.LifecycleFieldId ||
-                        mutation.Value is null || mutation.Value.Length != 0)
-                        throw new InvalidDataException("Provider field tombstone is malformed.");
                     operation = new OpFieldTomb
                     {
                         FieldId = mutation.FieldId,
@@ -223,9 +245,6 @@ public sealed partial class Node
                 }
                 else
                 {
-                    if (mutation.FieldId == 0 || mutation.FieldId == Model.LifecycleFieldId ||
-                        mutation.Value is null)
-                        throw new InvalidDataException("Provider field write is malformed.");
                     operation = new OpFieldWrite
                     {
                         FieldId = mutation.FieldId,
@@ -237,22 +256,15 @@ public sealed partial class Node
                     };
                 }
 
-                if (!working.TryGetValue(mutation.RecordId, out var record))
-                {
-                    record = namespaceStore.TryGetValue(mutation.RecordId, out var existing)
-                        ? Clone(existing)
-                        : new Record(mutation.RecordId, (ushort)namespaceId);
-                    working.Add(mutation.RecordId, record);
-                }
-
                 if (ApplyOpInternal(record, operation, NodeId))
                 {
+                    changedRecords ??= new HashSet<RecordId>(Math.Min(changes.Count, 256));
                     changedRecords.Add(mutation.RecordId);
                     applied++;
                 }
             }
 
-            if (changedRecords.Count != 0)
+            if (changedRecords is { Count: > 0 })
             {
                 int newRecordCount = 0;
                 foreach (RecordId recordId in changedRecords)
@@ -272,7 +284,7 @@ public sealed partial class Node
                 }
 
                 foreach (RecordId recordId in changedRecords)
-                    namespaceStore[recordId] = working[recordId];
+                    namespaceStore[recordId] = working![recordId];
             }
 
             foreach (ProviderChange change in changes)
@@ -280,6 +292,55 @@ public sealed partial class Node
 
             return applied;
         }
+    }
+
+    private static bool WouldChangeProviderMutation(Record record, ProviderMutation mutation)
+    {
+        var timestamp = new Hlc(mutation.HlcWall, mutation.HlcLogical);
+        if (mutation.IsRecordTombstone)
+            return Merge.MergeLifecycle(record.LifecycleHlc, record.LifecycleAuthor,
+                record.LifecycleValue, timestamp, mutation.AuthorNodeId, Model.Dead).Changed;
+
+        if (mutation.IsTombstone)
+        {
+            bool hadTomb = record.HasFieldTombs &&
+                record.FieldTombs.TryGetValue(mutation.FieldId, out var previousTomb);
+            var incoming = new FieldState(Array.Empty<byte>(), timestamp,
+                mutation.AuthorNodeId, mutation.KeyEpoch);
+            FieldState winner = incoming;
+            bool tombChanged = !hadTomb;
+            if (hadTomb)
+            {
+                var merged = Merge.MergeField(previousTomb, incoming);
+                winner = merged.Winner;
+                tombChanged = merged.Changed;
+            }
+
+            if (record.State.TryGetValue(mutation.FieldId, out var live))
+            {
+                int order = HlcOps.CompareHlc(winner.Timestamp, winner.AuthorNodeId,
+                    live.Timestamp, live.AuthorNodeId);
+                return order >= 0 || hadTomb;
+            }
+            return tombChanged;
+        }
+
+        if (record.HasFieldTombs &&
+            record.FieldTombs.TryGetValue(mutation.FieldId, out var tomb))
+            return HlcOps.CompareHlc(timestamp, mutation.AuthorNodeId,
+                tomb.Timestamp, tomb.AuthorNodeId) > 0;
+
+        if (!record.State.TryGetValue(mutation.FieldId, out var current))
+            return true;
+
+        if (current.Timestamp.Wall == timestamp.Wall &&
+            current.Timestamp.Logical == timestamp.Logical &&
+            current.AuthorNodeId == mutation.AuthorNodeId &&
+            current.Value.AsSpan().SequenceEqual(mutation.Value))
+            return false;
+
+        return HlcOps.CompareHlc(timestamp, mutation.AuthorNodeId,
+            current.Timestamp, current.AuthorNodeId) > 0;
     }
 
     /// <summary>
