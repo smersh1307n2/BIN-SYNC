@@ -70,6 +70,7 @@ public partial class SyncSession : IAsyncDisposable
     private readonly ConcurrentDictionary<uint, TaskCompletionSource<SessionWire.AliasMapUpdate>> _pendingAliasUpdates = new();
     private readonly Task _aliasUpdatePump;
     private int _aliasUpdateRequestId;
+    private readonly byte _aliasRequestParity;
     /// <summary>Remote peer identity established by HELLO.</summary>
     public NodeId PeerNodeId { get; }
     /// <summary>Peer incarnation epoch established by HELLO.</summary>
@@ -86,6 +87,7 @@ public partial class SyncSession : IAsyncDisposable
         PeerNodeId = peer.NodeId;
         PeerEpoch = peer.Epoch;
         PeerCapabilities = peer.Capabilities;
+        _aliasRequestParity = CompareNodeIds(localNode.NodeId, peer.NodeId) < 0 ? (byte)0 : (byte)1;
         _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
         _aliasUpdatePump = ProcessAliasUpdatesAsync(_receiveCts.Token);
@@ -472,9 +474,13 @@ public partial class SyncSession : IAsyncDisposable
             AliasMapEntry? proposal = _localNode.CreateAliasMapProposal(PeerNodeId, author, epoch);
             if (proposal is null) return;
 
-            uint requestId = unchecked((uint)Interlocked.Increment(ref _aliasUpdateRequestId));
+            uint requestId = unchecked((uint)Interlocked.Add(ref _aliasUpdateRequestId, 2));
+            requestId = (requestId & ~1U) | _aliasRequestParity;
             if (requestId == 0)
-                requestId = unchecked((uint)Interlocked.Increment(ref _aliasUpdateRequestId));
+            {
+                requestId = unchecked((uint)Interlocked.Add(ref _aliasUpdateRequestId, 2));
+                requestId = (requestId & ~1U) | _aliasRequestParity;
+            }
             var completion = new TaskCompletionSource<SessionWire.AliasMapUpdate>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             if (!_pendingAliasUpdates.TryAdd(requestId, completion))
@@ -541,6 +547,9 @@ public partial class SyncSession : IAsyncDisposable
             {
                 byte[] raw = await ReceivePacketAsync(SessionWire.TypeAliasMap, ct).ConfigureAwait(false);
                 SessionWire.AliasMapUpdate update = SessionWire.DecodeAliasMapUpdate(raw);
+                byte expectedParity = update.IsResponse ? _aliasRequestParity : (byte)(_aliasRequestParity ^ 1);
+                if ((update.RequestId & 1U) != expectedParity)
+                    throw new FrameException("FRAME_REJECTED");
                 if (update.IsResponse)
                 {
                     if (update.Accepted)
@@ -558,7 +567,7 @@ public partial class SyncSession : IAsyncDisposable
                     ValidateAliasUpdateEntry(update.Entry);
                     _localNode.ApplyAliasMapAtomic(PeerNodeId, new[] { update.Entry });
                     await SendAliasUpdateFrameAsync(
-                        SessionWire.EncodeAliasMapUpdateResponse(update.RequestId, accepted: true, update.Entry),
+                        SessionWire.EncodeAliasMapUpdateResponse(update.RequestId, accepted: true, entry: update.Entry),
                         ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is SyncException or FrameException or ArgumentException)
