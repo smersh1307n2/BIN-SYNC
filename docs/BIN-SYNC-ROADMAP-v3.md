@@ -23,7 +23,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Reviewed head before the current persistence fix: 56d5142c1a2f7050663a418d4882def50787c1e5; current code/test checkpoint: 4e2ba079678ce3fcaa0058ae43ef652faa33975a.
+- Reviewed head before the current persistence fix: 56d5142c1a2f7050663a418d4882def50787c1e5; last fully green code/test checkpoint: 6969ba8085281f959ebb210bd481856343605e3a; current docs/cleanup head: fb9fd677c6c83659307b129d30cafb2b1f2066ec.
 - The PR merge snapshot a852206fc245c2a0f7469d0e18d19415a2b2c528 failed Build because Node.DeltaBatch.cs:861-862 read Origin fields from a 3-field tuple.
 - The later e6826b4865f8966327a628ae07e95720db58d0ff snapshot completed Build, but Test, Fuzz/Lab and Storage Integration workflows were cancelled before completion.
 - The latest strict-decoder commits have no reported workflow result yet. CI is therefore UNVERIFIED, not green.
@@ -215,3 +215,25 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Core CI at b60c4a0 reduced the Core failures from 7 to 1; the sole remaining failure exposed the test-only Volatile adapter's stale sender-wide cursor model.
 - [x] Updated VolatileMetadataStoreAdapter to model author-specific receive cursors and a separate sender digest chain, matching the v3 storage contract.
 - [ ] Re-run Core, Fuzz/Lab, Storage Integration and samples on 4e2ba079678ce3fcaa0058ae43ef652faa33975a; do not close conformance until exact-head CI is green.
+
+
+### 2026-11-08 — first fully green v3 storage/conformance checkpoint
+
+- [x] Core Build, benchmark build, Core tests, public samples and coverage passed on `6969ba8085281f959ebb210bd481856343605e3a`.
+- [x] Core test result: 654/654 passed.
+- [x] Fuzz/Lab: 31/31 passed.
+- [x] Storage Integration: 149/149 passed on Ubuntu, Windows and macOS (447 successful platform executions).
+- [x] Both durable-array and Storage-backed TCP samples passed on all three platforms.
+- [x] Strict BMS3 first-write identity was verified through Storage Integration; all six partition-creation paths now use the canonical encoder.
+- [x] PendingApply v3 format rejects older -6/-5/-4/-3 encodings; metadata-authoritative recovery requires a full header fingerprint.
+- [x] Legacy StorageMetadataStore rewrite branches and their unused whole-partition migration writer were removed in commit `b105868959b26c8d8ef54f90b51b769f07a51f89`.
+- [x] Removed the unreachable legacy local-origin marker decoder branch and rejected completed PendingApply receipts that omit the durable author.
+- [x] Reconciled the Origin design's direct-author cursor wording with v3's independent OriginSequence/SenderCursor model; no arithmetic inference from peer-relative cursor is permitted.
+- [x] Marked older GC and staging analyses as historical/non-normative where they conflict with v3.0.0.
+- [ ] Exact-head CI for cleanup/docs commits `b105868` through `fb9fd67` is still required; do not treat 6969's green result as proof for later commits.
+- [ ] Phase 1 remains open: canonical Origin value type across Core/Storage/FLD boundaries, full multi-hop A→B→C→D and alternate-route equivocation tests, and crash/recovery proofs.
+- [ ] Phase 2 remains open: metadata row-cardinality/byte-cost benchmark at 500/10k/100k/1M and duplicate-Origin storage reduction review.
+- [ ] Phase 3 remains open: FLD provider adapter and atomic cross-store crash matrix.
+- [ ] Phase 4 remains open: receipt retirement proof, ChangeId GC proof and tombstone/ghost GC proof.
+- [ ] Phase 5 remains open: final public API clean cut, removal of optional receive-authority fallbacks and docs/sample conformance.
+- [ ] Phase 6 remains open: release gate, reproducible benchmarks, package/license audit and final clean CI.
