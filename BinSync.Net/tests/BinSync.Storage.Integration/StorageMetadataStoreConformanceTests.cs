@@ -1906,6 +1906,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(1UL, afterCompaction.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
                 Assert.Equal(1UL, afterCompaction.GetOutboundHighWatermark("durable-scope", Node(1), 7, Node(1)));
                 Assert.Empty(afterCompaction.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
+                Assert.Empty(afterCompaction.ReadOutbound("durable-scope", Node(1), 7, Node(1), 2, 0, 10).Items);
                 Assert.Throws<InvalidDataException>(() => afterCompaction.FreezeOutbound(
                     "durable-scope", Node(1), 7, Node(1), new[] { FrozenOperation(60, 70) }));
                 Assert.True(afterCompaction.AcceptIncomingBatch(first).IsDuplicate);
