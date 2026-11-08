@@ -160,9 +160,12 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             EnsureCurrentRoster(acceptedRoster);
             ValidateCheckpointFrontier(checkpoint, acceptedRoster);
             if (checkpoint.FullReplaceGeneration.HasValue &&
-                !AreAllActiveMembersInstalledCore(acceptedRoster,
-                    checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest))
-                throw new InvalidDataException("Retention checkpoint cannot claim a FULL_REPLACE generation before every Active member ACKs it.");
+                (!TryGetCommonInstalledHlcFloorCore(acceptedRoster,
+                    checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest,
+                    out ulong installedWall, out uint installedLogical) ||
+                 installedWall != checkpoint.FullReplaceHlcWallFloor ||
+                 installedLogical != checkpoint.FullReplaceHlcLogicalFloor))
+                throw new InvalidDataException("RCP2 FULL_REPLACE generation/HLC floor must match every Active member's signed FRA2 ACK.");
 
             byte[] key = CheckpointKey(checkpoint.NamespaceId, checkpoint.RosterGeneration);
             byte[]? priorBytes = ReadValue(key);
@@ -498,9 +501,12 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             NamespaceRetentionCheckpointProtocol.DecodeAndVerify(encoded, roster, trustStore);
         ValidateCheckpointFrontier(checkpoint, roster);
         if (checkpoint.FullReplaceGeneration.HasValue &&
-            !AreAllActiveMembersInstalledCore(roster,
-                checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest))
-            throw new InvalidDataException("Stored retention checkpoint claims an uninstalled FULL_REPLACE generation.");
+            (!TryGetCommonInstalledHlcFloorCore(roster,
+                checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest,
+                out ulong installedWall, out uint installedLogical) ||
+             installedWall != checkpoint.FullReplaceHlcWallFloor ||
+             installedLogical != checkpoint.FullReplaceHlcLogicalFloor))
+            throw new InvalidDataException("Stored RCP2 checkpoint HLC floor does not match all Active FRA2 installation ACKs.");
         return checkpoint;
     }
 
@@ -538,6 +544,43 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         }
         reports.Sort((a, b) => CompareNodeIds(a.MemberNodeId, b.MemberNodeId));
         return reports;
+    }
+
+    private bool TryGetCommonInstalledHlcFloorCore(
+        NamespaceRosterCertificate roster, Guid generation, ReadOnlySpan<byte> digest,
+        out ulong wallFloor, out uint logicalFloor)
+    {
+        wallFloor = 0;
+        logicalFloor = 0;
+        if (generation == Guid.Empty || digest.Length != NamespaceRosterProtocol.DigestSize)
+            return false;
+        NamespaceRosterMember[] active = roster.Members
+            .Where(member => member.Status == NamespaceMemberStatus.Active).ToArray();
+        if (active.Length == 0) return false;
+
+        bool first = true;
+        foreach (NamespaceRosterMember member in active)
+        {
+            byte[]? encoded = ReadValue(FullReplaceAckKey(
+                roster.NamespaceId, roster.RosterGeneration, generation, member.NodeId));
+            if (encoded is null) return false;
+            FullReplaceInstalledAck ack = FullReplaceInstalledAckProtocol.DecodeAndVerify(encoded, roster);
+            if (!ack.Installed || ack.MemberNodeId != member.NodeId ||
+                ack.MemberTransportEpoch != member.TransportPeerEpoch ||
+                ack.Generation != generation || !ack.Digest.AsSpan().SequenceEqual(digest))
+                return false;
+            if (first)
+            {
+                wallFloor = ack.HlcWallFloor;
+                logicalFloor = ack.HlcLogicalFloor;
+                first = false;
+            }
+            else if (ack.HlcWallFloor != wallFloor || ack.HlcLogicalFloor != logicalFloor)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private bool AreAllActiveMembersInstalledCore(
