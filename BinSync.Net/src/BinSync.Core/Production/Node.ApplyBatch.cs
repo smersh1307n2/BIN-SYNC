@@ -592,12 +592,10 @@ public sealed partial class Node
                 NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
                 Seq = relaySequences[idx],
                 ChangeId = relayChangeIds[idx],
-                OriginAuthorEpoch = e.OriginAuthorEpoch,
-                OriginSequence = e.OriginSequence,
+                Provenance = new OperationOrigin(resolvedAuthors[idx], e.OriginAuthorEpoch, e.OriginSequence),
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
                 Payload = durablePayload is null ? e.Payload : e.Payload.ToArray(),
-                AuthorNodeId = resolvedAuthors[idx],
                 CreatedAt = (long)WallOf(op),
             };
             if (e.CausalDepsOrNull is { } causalDeps)
