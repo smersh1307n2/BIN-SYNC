@@ -1565,4 +1565,55 @@ public sealed class StorageSyncCoordinatorTests
         id[15] = (byte)(seed ^ 0xA5);
         return new NodeBuilder().WithNodeId(id).WithEpoch(1).Build();
     }
+    [Fact]
+    public void Metadata_store_owned_publication_requires_legacy_drain_and_fences_node_writes()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-owned-cutover"), 459);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(59);
+        const string scope = "metadata-owned-cutover";
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        RecordId firstRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000001").ToByteArray());
+        RecordId secondRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000002").ToByteArray());
+        RecordId nodeOnlyRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000003").ToByteArray());
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = firstRecord, FieldId = 0x081D, AuthorNodeId = node.NodeId,
+            HlcWall = 6300, Value = "legacy-pending"u8.ToArray()
+        });
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.EnableMetadataStoreOwnedPublication(_ => { }));
+
+        // Before cutover, the existing Node-Outbox path drains and freezes the
+        // pending provider feed. Only an empty, aligned boundary can be enabled.
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = secondRecord, FieldId = 0x081E, AuthorNodeId = node.NodeId,
+            HlcWall = 6400, Value = "metadata-owned"u8.ToArray()
+        });
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Equal(1L, node.GetOutboxHighWatermark(1, node.NodeId));
+
+        // Direct Node writes are forbidden after cutover; the next coordinator
+        // pass fails closed without consuming the provider feed.
+        node.WriteField(1, nodeOnlyRecord, 0x081F, "node-only"u8.ToArray(), new Hlc(6500, 0));
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = nodeOnlyRecord, FieldId = 0x081F, AuthorNodeId = node.NodeId,
+            HlcWall = 6500, Value = "node-only"u8.ToArray()
+        });
+        Assert.Throws<InvalidOperationException>(() => coordinator.PublishLocalChanges(_ => { }));
+        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+    }
+
+
 }
