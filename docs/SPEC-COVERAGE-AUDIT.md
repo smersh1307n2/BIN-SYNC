@@ -34,7 +34,7 @@
 3. **Retention:** an ACK or TTL does not authorize deletion of receipts, ChangeId facts, relay history, Outbox payloads and tombstones as one coupled history. Each has its own proof horizon. Inbox receipt GC remains disabled because v2.4.20 has no explicit bilateral retention-checkpoint frame.
 4. **Duplicate ACK:** the receive pseudocode now returns the stored receipt cursor and durable author, not replay-supplied values.
 5. **Relay alias failure:** the old pseudocode silently skipped an operation with an unknown target alias. That contradicts contiguous author-stream cursors and the implementation's fail-closed behavior. The spec now rejects the whole batch with `UNKNOWN_ALIAS`.
-6. **Version label remains unresolved:** the specification title says `v2.4.20 FINAL`, while its `Версия` metadata and `ERRATA` heading still say `2.4.19`. Do not silently normalize this until the intended release/version history is confirmed.
+6. **Version label:** commit `da787f38d05c528ab3357d4feb646458dd021d89` explicitly advanced the specification title to v2.4.20 while adding the receipt-retention/per-author-stream contract. The stale `Версия` metadata and end-of-document v2.4.13 statement are now aligned to v2.4.20; `ERRATA v2.4.19` intentionally remains the version label of E-25, which was introduced in that revision.
 
 These are semantic clarifications/hardening changes; they do not change the wire layout.
 
