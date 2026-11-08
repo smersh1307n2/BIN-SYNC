@@ -126,8 +126,8 @@ finally
 }
 
 static async Task<int> ExchangeOverTcpAsync(
-    Node nodeA, StorageSyncCoordinator coordinatorA, StorageDatabase storageA, IMetadataStore metadataA,
-    Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB, IMetadataStore metadataB)
+    Node nodeA, StorageSyncCoordinator coordinatorA, StorageDatabase storageA, IMetadataPeerStateStore metadataA,
+    Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB, IMetadataPeerStateStore metadataB)
 {
     await using var listener = TcpSyncListener.Start();
     var acceptTask = listener.AcceptAsync(nodeA);
@@ -145,7 +145,7 @@ static async Task<int> ExchangeOverTcpAsync(
 static async Task<int> PushUntilIdleAsync(
     SyncSession senderSession,
     Node sender,
-    IMetadataStore senderMetadata,
+    IMetadataPeerStateStore senderMetadata,
     string scope,
     SyncSession receiverSession,
     Node receiver,
