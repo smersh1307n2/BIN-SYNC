@@ -108,6 +108,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         ulong unpublishedDraftCount,
         ulong maxUnpublishedDraftHlcWall,
         uint maxUnpublishedDraftHlcLogical,
+        bool finalForAuthor,
         ReadOnlySpan<byte> memberSeed)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
@@ -203,6 +204,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 MemberNodeId = localMember,
                 MemberTransportEpoch = member.TransportPeerEpoch,
                 ReportSequence = reportSequence,
+                FinalForAuthor = finalForAuthor,
                 UnpublishedDraftCount = unpublishedDraftCount,
                 MaxUnpublishedDraftHlcWall = maxUnpublishedDraftHlcWall,
                 MaxUnpublishedDraftHlcLogical = maxUnpublishedDraftHlcLogical,
