@@ -310,6 +310,166 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>Send the locally accepted, authority-signed roster to one negotiated peer.</summary>
+    public async Task SendAcceptedNamespaceRosterAsync(
+        SyncSession session, byte[] authoritySeed, ulong frameSequence = 1,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        StorageNamespaceGcStore gcStore;
+        TrustStore trustStore;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before roster exchange.");
+            trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+        }
+        if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+            roster is null)
+            throw new InvalidOperationException("No accepted namespace roster is available to send.");
+        if (roster.AuthorityNodeId != _node.NodeId)
+            throw new InvalidOperationException("Only the namespace authority may send the accepted roster.");
+        await session.SendNamespaceRosterAsync(roster, authoritySeed, frameSequence, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Receive, verify and durably accept the peer's signed namespace roster.</summary>
+    public async Task<NamespaceRosterCertificate> ReceiveAndAcceptNamespaceRosterAsync(
+        SyncSession session, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        StorageNamespaceGcStore gcStore;
+        TrustStore trustStore;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before roster exchange.");
+            trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+        }
+        NamespaceRosterCertificate received =
+            await session.ReceiveNamespaceRosterAsync(trustStore, ct).ConfigureAwait(false);
+        return gcStore.AcceptNamespaceRoster(
+            EncodeSignedPayload(NamespaceRosterProtocol.EncodePayload(received), received.Signature),
+            trustStore);
+    }
+
+    /// <summary>Publish and persist the local OFR2 report before sending it to the authority peer.</summary>
+    public async Task<AppliedOriginFrontierReport> PublishAndSendAppliedOriginFrontierAsync(
+        SyncSession session, byte[] memberSeed, int pageSize = 1024,
+        ulong frameSequence = 1, bool finalForAuthor = false, uint finalAuthorEpoch = 0,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        AppliedOriginFrontierReport report = PublishAppliedOriginFrontier(
+            memberSeed, pageSize, finalForAuthor, finalAuthorEpoch);
+        await session.SendOriginFrontierAsync(report, memberSeed, frameSequence, ct).ConfigureAwait(false);
+        return report;
+    }
+
+    /// <summary>Receive, verify and durably accept an Active member's OFR2 report.</summary>
+    public async Task<AppliedOriginFrontierReport> ReceiveAndAcceptOriginFrontierAsync(
+        SyncSession session, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        StorageNamespaceGcStore gcStore;
+        NamespaceRosterCertificate roster;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before frontier exchange.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? accepted) ||
+                accepted is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            roster = accepted;
+        }
+        AppliedOriginFrontierReport report =
+            await session.ReceiveOriginFrontierAsync(roster, ct).ConfigureAwait(false);
+        return gcStore.AcceptOriginFrontier(
+            EncodeSignedPayload(OriginFrontierProtocol.EncodePayload(report), report.Signature), roster);
+    }
+
+    /// <summary>Publish and persist the authority checkpoint before sending it to one member.</summary>
+    public async Task<NamespaceRetentionCheckpoint> PublishAndSendRetentionCheckpointAsync(
+        SyncSession session, byte[] authoritySeed, Guid? fullReplaceGeneration = null,
+        byte[]? fullReplaceDigest = null, ulong frameSequence = 1,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        NamespaceRetentionCheckpoint checkpoint = PublishRetentionCheckpoint(
+            authoritySeed, fullReplaceGeneration, fullReplaceDigest);
+        await session.SendRetentionCheckpointAsync(checkpoint, authoritySeed, frameSequence, ct)
+            .ConfigureAwait(false);
+        return checkpoint;
+    }
+
+    /// <summary>Receive, verify and durably accept the authority's RCP2 checkpoint.</summary>
+    public async Task<NamespaceRetentionCheckpoint> ReceiveAndAcceptRetentionCheckpointAsync(
+        SyncSession session, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        StorageNamespaceGcStore gcStore;
+        TrustStore trustStore;
+        NamespaceRosterCertificate roster;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before checkpoint exchange.");
+            trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? accepted) ||
+                accepted is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            roster = accepted;
+        }
+        NamespaceRetentionCheckpoint checkpoint =
+            await session.ReceiveRetentionCheckpointAsync(roster, trustStore, ct).ConfigureAwait(false);
+        return gcStore.AcceptRetentionCheckpoint(
+            EncodeSignedPayload(NamespaceRetentionCheckpointProtocol.EncodePayload(checkpoint), checkpoint.Signature),
+            roster, trustStore);
+    }
+
+    /// <summary>Receive, verify and durably accept a member's FULL_REPLACE installed ACK.</summary>
+    public async Task<FullReplaceInstalledAck> ReceiveAndAcceptFullReplaceInstalledAckAsync(
+        SyncSession session, Guid generation, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (generation == Guid.Empty) throw new ArgumentException("Generation must be non-empty.", nameof(generation));
+        StorageNamespaceGcStore gcStore;
+        NamespaceRosterCertificate roster;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before installed-ACK exchange.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? accepted) ||
+                accepted is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            roster = accepted;
+        }
+        FullReplaceInstalledAck acknowledgement =
+            await session.ReceiveFullReplaceInstalledAckAsync(roster, ct).ConfigureAwait(false);
+        if (acknowledgement.Generation != generation)
+            throw new InvalidDataException("Installed ACK belongs to another FULL_REPLACE generation.");
+        return gcStore.AcceptFullReplaceInstalledAck(
+            EncodeSignedPayload(FullReplaceInstalledAckProtocol.EncodePayload(acknowledgement),
+                acknowledgement.Signature), roster);
+    }
+
+    private static byte[] EncodeSignedPayload(byte[] payload, byte[] signature)
+    {
+        if (signature is null || signature.Length != BatchSignature.SignatureSize)
+            throw new InvalidDataException("A verified signed control message must retain its 64-byte signature.");
+        byte[] encoded = new byte[checked(payload.Length + signature.Length)];
+        payload.CopyTo(encoded, 0);
+        signature.CopyTo(encoded, payload.Length);
+        return encoded;
+    }
+
     /// <summary>
     /// Complete the receiver's mandatory post-FULL_REPLACE local refresh before it
     /// publishes the installed ACK: advance HLC to the signed snapshot floor, rebuild
