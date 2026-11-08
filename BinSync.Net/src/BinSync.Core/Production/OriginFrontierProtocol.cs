@@ -14,6 +14,8 @@ public sealed class IssuedOriginFrontierEntry
 {
     public uint OriginAuthorEpoch { get; init; }
     public ulong IssuedOriginSequence { get; init; }
+    public ulong MaxIssuedHlcWall { get; init; }
+    public uint MaxIssuedHlcLogical { get; init; }
 }
 
 public sealed class AppliedOriginFrontierReport
@@ -24,6 +26,9 @@ public sealed class AppliedOriginFrontierReport
     public NodeId MemberNodeId { get; init; }
     public uint MemberTransportEpoch { get; init; }
     public ulong ReportSequence { get; init; }
+    public ulong UnpublishedDraftCount { get; init; }
+    public ulong MaxUnpublishedDraftHlcWall { get; init; }
+    public uint MaxUnpublishedDraftHlcLogical { get; init; }
     public IReadOnlyList<AppliedOriginFrontierEntry> Entries { get; init; } = Array.Empty<AppliedOriginFrontierEntry>();
     /// <summary>Final issued high-watermarks for this report's own author identity, one per epoch.</summary>
     public IReadOnlyList<IssuedOriginFrontierEntry> IssuedOrigins { get; init; } = Array.Empty<IssuedOriginFrontierEntry>();
@@ -75,7 +80,7 @@ public static class OriginFrontierProtocol
     {
         ArgumentNullException.ThrowIfNull(roster);
         NamespaceRosterProtocol.Validate(roster);
-        if (encoded.Length < 4 + 2 + 8 + 32 + 16 + 4 + 8 + 2 + 2 + 64)
+        if (encoded.Length < 4 + 2 + 8 + 32 + 16 + 4 + 8 + 8 + 8 + 4 + 2 + 2 + 64)
             throw new InvalidDataException("OFR2 frontier report is truncated.");
         int payloadLength = encoded.Length - BatchSignature.SignatureSize;
         byte[] payload = encoded[..payloadLength].ToArray();
@@ -105,7 +110,7 @@ public static class OriginFrontierProtocol
             });
         }
         int issuedCount = reader.U16();
-        if (issuedCount > MaxEntries || issuedCount > reader.Remaining / 12)
+        if (issuedCount > MaxEntries || issuedCount > reader.Remaining / 24)
             throw new InvalidDataException("OFR2 issued-origin count exceeds the bounded payload.");
         var issuedOrigins = new List<IssuedOriginFrontierEntry>(issuedCount);
         for (int i = 0; i < issuedCount; i++)
@@ -113,7 +118,9 @@ public static class OriginFrontierProtocol
             issuedOrigins.Add(new IssuedOriginFrontierEntry
             {
                 OriginAuthorEpoch = reader.U32(),
-                IssuedOriginSequence = reader.U64()
+                IssuedOriginSequence = reader.U64(),
+                MaxIssuedHlcWall = reader.U64(),
+                MaxIssuedHlcLogical = reader.U32()
             });
         }
         if (!reader.Eof())
@@ -175,6 +182,9 @@ public static class OriginFrontierProtocol
         writer.B128(report.MemberNodeId);
         writer.U32(report.MemberTransportEpoch);
         writer.U64(report.ReportSequence);
+        writer.U64(report.UnpublishedDraftCount);
+        writer.U64(report.MaxUnpublishedDraftHlcWall);
+        writer.U32(report.MaxUnpublishedDraftHlcLogical);
         writer.U16(checked((ushort)report.Entries.Count));
         foreach (AppliedOriginFrontierEntry entry in report.Entries)
         {
@@ -187,6 +197,8 @@ public static class OriginFrontierProtocol
         {
             writer.U32(issued.OriginAuthorEpoch);
             writer.U64(issued.IssuedOriginSequence);
+            writer.U64(issued.MaxIssuedHlcWall);
+            writer.U32(issued.MaxIssuedHlcLogical);
         }
         return writer.Value();
     }
