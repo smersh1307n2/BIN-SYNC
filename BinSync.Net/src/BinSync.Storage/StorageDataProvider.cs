@@ -582,8 +582,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (generation == Guid.Empty && limit <= 0)
-                throw new ArgumentOutOfRangeException(nameof(limit));
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
             if (ReadActiveGeneration(_storage) == generation)
                 throw new InvalidOperationException("The active provider generation cannot be reclaimed.");
@@ -599,7 +597,16 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 ? snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, remaining)
                 : Array.Empty<StorageEntry>();
             if (fields.Count == 0 && tombstones.Count == 0)
+            {
+                byte[] sessionKey = FullReplaceSessionKey(generation);
+                if (!snapshot.TryGet(sessionKey, out _)) return true;
+                using var cleanup = _storage.BeginWriteBatch();
+                cleanup.Delete(sessionKey);
+                if (_storage.LastCommitSeq != snapshot.CommitSeq)
+                    throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
+                cleanup.Commit();
                 return true;
+            }
 
             using var batch = _storage.BeginWriteBatch();
             foreach (var row in fields) batch.Delete(row.Key);
