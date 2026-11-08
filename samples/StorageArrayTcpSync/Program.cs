@@ -43,6 +43,8 @@ try
 
         var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId, metadataA, "array-tcp-demo");
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId, metadataB, "array-tcp-demo");
+        coordinatorA.EnableMetadataStoreOwnedPublication(n => StorageNodePersistence.Save(storageA, n));
+        coordinatorB.EnableMetadataStoreOwnedPublication(n => StorageNodePersistence.Save(storageB, n));
 
         providerA.AppendLocalChange(Mutation(recordA, nameA, nodeA.NodeId, 1000, "pump-A"u8));
         providerA.AppendLocalChange(Mutation(recordA, quantityA, nodeA.NodeId, 1001, "4"u8));
@@ -51,7 +53,7 @@ try
         coordinatorA.PublishLocalChanges(n => StorageNodePersistence.Save(storageA, n));
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
 
-        await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
+        await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, metadataA, nodeB, coordinatorB, storageB, metadataB);
         StorageNodePersistence.Save(storageA, nodeA);
         StorageNodePersistence.Save(storageB, nodeB);
         AssertValue(providerA, recordB, nameA, "valve-B");
@@ -80,8 +82,10 @@ try
         ushort quantity = providerB.ResolveFieldId("quantity"u8.ToArray());
         providerB.AppendLocalChange(Mutation(recordB, quantity, nodeB.NodeId, 3000, "9"u8));
         int published = coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
-        if (published != 1 || nodeB.GetOutboxCount(NamespaceId) == 0)
-            throw new InvalidOperationException("Post-restart local update was not enqueued in the Node Outbox.");
+        if (published != 1 ||
+            nodeB.GetOutboxHighWatermark(NamespaceId, nodeB.NodeId) != 0 ||
+            metadataB.GetOutboundHighWatermark("array-tcp-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 3)
+            throw new InvalidOperationException("Post-restart local update was not frozen directly by Metadata Store.");
 
         await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
         StorageNodePersistence.Save(storageA, nodeA);
@@ -122,17 +126,17 @@ finally
 }
 
 static async Task<int> ExchangeOverTcpAsync(
-    Node nodeA, StorageSyncCoordinator coordinatorA, StorageDatabase storageA,
-    Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB)
+    Node nodeA, StorageSyncCoordinator coordinatorA, StorageDatabase storageA, IMetadataStore metadataA,
+    Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB, IMetadataStore metadataB)
 {
     await using var listener = TcpSyncListener.Start();
     var acceptTask = listener.AcceptAsync(nodeA);
     await using var sessionB = await TcpSync.ConnectAsync(nodeB, "127.0.0.1", listener.Port);
     await using var sessionA = await acceptTask;
 
-    int aToB = await PushUntilIdleAsync(sessionA, nodeA, sessionB, nodeB,
+    int aToB = await PushUntilIdleAsync(sessionA, nodeA, metadataA, "array-tcp-demo", sessionB, nodeB,
         (batch, _) => coordinatorB.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageB, nodeB)));
-    int bToA = await PushUntilIdleAsync(sessionB, nodeB, sessionA, nodeA,
+    int bToA = await PushUntilIdleAsync(sessionB, nodeB, metadataB, "array-tcp-demo", sessionA, nodeA,
         (batch, _) => coordinatorA.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageA, nodeA)));
     Console.WriteLine($"TCP batches: A→B={aToB}, B→A={bToA}");
     return aToB + bToA;
@@ -141,6 +145,8 @@ static async Task<int> ExchangeOverTcpAsync(
 static async Task<int> PushUntilIdleAsync(
     SyncSession senderSession,
     Node sender,
+    IMetadataStore senderMetadata,
+    string scope,
     SyncSession receiverSession,
     Node receiver,
     Action<Batch, BatchResult> beforeAck)
@@ -150,7 +156,7 @@ static async Task<int> PushUntilIdleAsync(
     {
         using var receiveCts = new CancellationTokenSource();
         Task<BatchResult> receiveTask = receiverSession.ReceiveBatchAsync(receiver, receiveCts.Token, beforeAck);
-        Task<bool> pushTask = senderSession.PushBatchAsync(sender, NamespaceId);
+        Task<bool> pushTask = senderSession.PushBatchAsync(sender, NamespaceId, senderMetadata, scope);
 
         Task first = await Task.WhenAny(pushTask, receiveTask);
         if (ReferenceEquals(first, receiveTask) && receiveTask.IsFaulted)
