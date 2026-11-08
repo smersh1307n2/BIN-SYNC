@@ -105,3 +105,17 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 - Added durable reopen coverage for both source ChangeId migration and partial outbound freeze retry.
 - Verified source/test head `d3364d310db36cdd84c6e01f379de3ab29f3a112`: 644 core, 92 Storage Integration, 31 Fuzz/Lab, 70.9% coverage; all samples pass.
 - Still not complete: `StorageSyncCoordinator.PublishLocalChanges` uses the Node-Outbox mirror path. The next cutover is direct provider-feed-to-Metadata-Store freeze using stable ChangeId, then provider-snapshot cache installation and feed ACK.
+
+
+## Latest continuation checkpoint — provider-authoritative outbound cutover (2026-11-08)
+
+- Source/test HEAD: `4c4789f06150dd07457adb207dc84879fdea4bd4`.
+- Added `IMetadataStore.TryGetOutboundChangeFingerprint` backed by the durable global ChangeId ledger. Storage and volatile conformance adapters implement the lookup; Storage keeps the identity available after payload compaction.
+- Fixed the interrupted-publication retry edge: if Metadata Store freeze commits but provider feed ACK fails, a newer edit may arrive before retry. The coordinator now recognizes already-frozen ChangeIds, validates their fingerprints, preserves the immutable prefix and coalesces only the not-yet-frozen suffix. New suffix operations receive later Metadata Store sequences; Node Outbox remains fenced.
+- Added an integration regression with injected provider ACK failure, a newer edit to the same field, retry, exact ChangeId ordering and no Node Outbox advancement.
+- Cutover is explicit and durable: provider feed empty/acknowledged, Node and Metadata Store high-watermarks aligned, provider marker persisted. Missing marker with Metadata Store ahead of Node fails closed.
+- Updated the TCP array sample to enable Metadata Store-owned publication and establish an explicit empty peer baseline before direct durable transport.
+- Verified GitHub Actions: BinSync.Net 644/644; Storage Integration 97/97; Fuzz + Lab 31/31; line coverage 70.9%; in-process and real-TCP Storage samples PASS.
+- PR #16 remains Draft, open and unmerged. No merge was performed.
+
+**Remaining:** finish the wider Node/Transport authority migration and startup lifecycle; deterministic physical-Storage crash injection; multi-process fencing/concurrency; controlled BenchmarkDotNet measurements at increasing partition sizes; independent receipt, ChangeId and tombstone GC horizons; normative cross-implementation conformance. FLD Database and its JournalSeq provenance adapter remain deferred.
