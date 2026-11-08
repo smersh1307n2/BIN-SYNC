@@ -115,3 +115,20 @@ The coordinator now applies the exact scanned provider-feed prefix incrementally
 Code head `010742085147b582ba551e3d2df1a65b0b595394` adds a separate coalesced winner map for incremental Node-cache application. Repeated changes to the same canonical record/field are reduced to the maximum HLC winner across the scanned provider-feed prefix, while outbound publication retains the immutable frozen-prefix / unfrozen-suffix boundary. A regression verifies that a later feed row carrying an older HLC cannot overwrite the higher-HLC value in either provider state or Node cache.
 
 This is a correctness and work-shaping improvement. **No separate before/after latency or allocation benchmark has been run for this HLC-coalescing change**, so the matched-runner measurements above remain attributable to the incremental publication implementation at their recorded code revisions, not to this later refinement.
+
+
+## 2026-11-08 local freeze cost vs total ledger cardinality
+
+**Workflow:** `42454569480` (Durable Metadata Bench)  
+**Benchmark code head:** `351027f3d8743638578ebd46975de43522a17919`  
+**Runtime:** .NET 10.0.14, x64 RyuJIT AVX2, BenchmarkDotNet 0.14.0, Ubuntu 26.04.1.  
+**Measured operation:** freeze exactly one new local outbound operation after seeding the same namespace/author with an unrelated existing ChangeId/outbound ledger. Seeding and database creation are in `IterationSetup`, outside the measured method. 3 warmups and 10 measurement iterations; one operation per iteration.
+
+| Existing ChangeId/outbound rows | Mean freeze latency | Managed allocation |
+|---:|---:|---:|
+| 10,000 | 506.8 µs | 9.63 KB |
+| 100,000 | 431.0 µs | 10.46 KB |
+
+**Interpretation:** across a 10× increase in unrelated ledger rows, measured managed allocation remains approximately flat (9.63 → 10.46 KB) and latency does not show linear growth. This is consistent with the current-format row-delta freeze path writing only the new operation/identity and stream watermark rather than cloning/re-encoding the full partition.
+
+**Limitations:** this is an initial scale check, not a production latency claim. The per-iteration operation is below BenchmarkDotNet's recommended 100 ms measurement window; the 10k case has a 13.45% relative confidence-interval margin and the 100k case 19.72%. The 100k run also removed one outlier. No 1,000,000-row case has been measured yet. Keep the broader metadata mutation-cost gate open until longer-duration or batched measurements cover 10k/100k/1m rows and report bytes written, allocations, p50/p95 latency and reopen cost.
