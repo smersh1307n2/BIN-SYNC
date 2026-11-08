@@ -8,7 +8,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 ## 0. Active status at current C-pass HEAD
 
-- **Current branch/head:** `feature/fld-external-storage` @ `067dff33624eecfb6e4c104ca4f0d89ab14dc836` (latest code head `73b5a9420128a3e80421f71a5596df36d481a25f`).
+- **Current branch/head:** `feature/fld-external-storage` @ `067dff33624eecfb6e4c104ca4f0d89ab14dc836` (latest code head `74ebdf59a53b1e1d1fe824f161b1138e53e79ae2`).
 - **Last known fully green checkpoint:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). Later C-pass code is not covered by that result.
 - **Workflow:** C implementation first in small commits with immediate roadmap updates; then T (fixtures, fault injection and conformance), O (measured optimization), F (release). Build errors are repaired immediately; test feedback is recorded but test-suite redesign stays in T.
 - **C implemented:** signed namespace roster/frontier/checkpoint codecs and durable storage; all-active FULL_REPLACE install ACK tracking; sender/receiver with durable staging/resume; forgotten-origin replay fence; receipt/ChangeId/tombstone compaction plumbing with all physical gates disabled; bounded provider prefix cursors and streamed snapshot row validation; member frontier and authority checkpoint production APIs; OFR2 signed issued-origin/max-HLC reports, pending-draft barriers and terminal author closure; NRS2 immutable retired-origin epoch closures; all-active applied-through-final-issued checkpoint derivation; mandatory post-FULL_REPLACE HLC floor refresh/Node rehydration callback; FRA2 signed installed ACK HLC floors and RCP2 authority checkpoint binding requiring identical floors from all Active members; ordered coordinator/provider application commit guard and local author-epoch write closure; freeze-time per-namespace/author/epoch OriginSequence allocator; durable stamping of published winners before provider feed ACK; FULL_REPLACE draft-to-published identity upgrade.
@@ -696,3 +696,11 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Added `IProviderCommitGuard` and `StorageSyncCoordinator.AcquireApplicationCommitGuard` (coordinator→provider lock order). FULL_REPLACE commit refuses to switch while local feed drafts remain; the same lease can be supplied to GC entry points.
 - [~ T] Exact-head CI is queued for this code slice. Golden vectors, report terminality, closure/rejoin, issued-HLC max, pending-draft race, all-member frontier and commit-guard fault tests remain in T.
 - [~ C] Physical GC remains disabled pending the final cross-store live-reference scan, including provider state and the application Node/WAL/FLD commit boundary.
+
+
+### 2026-11-08 — C-pass: enforce terminal author identity and safe rejoin
+
+- [x C] Provider now persists a terminal author-identity marker in addition to per-epoch closure markers. Once a final OFR2 report is published, all local appends are rejected, not merely appends using the last known epoch.
+- [x C] Added explicit `StorageSyncCoordinator.ActivateLocalAuthorEpoch(newEpoch)`. It requires the local member to be Active in the accepted roster, clears the terminal marker, installs a fresh epoch, and never permits reuse of a previously closed epoch.
+- [x C] The final-report path holds the ordered coordinator/provider commit guard while closing known epochs, checking that the feed is empty, closing the author identity and signing the final report.
+- [~ T] Verify crash/restart after provider retirement but before report persistence, report persistence before roster retirement, rejoin with a fresh epoch, and rejection of writes on every old epoch.
