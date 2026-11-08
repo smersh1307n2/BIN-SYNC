@@ -348,6 +348,9 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             }
 
             if (originSequence > finalIssuedSequence ||
+                tombstoneHlcWall > maxIssuedHlcWall ||
+                (tombstoneHlcWall == maxIssuedHlcWall &&
+                 tombstoneHlcLogical > maxIssuedHlcLogical) ||
                 checkpoint.FullReplaceHlcWallFloor < maxIssuedHlcWall ||
                 (checkpoint.FullReplaceHlcWallFloor == maxIssuedHlcWall &&
                  checkpoint.FullReplaceHlcLogicalFloor < maxIssuedHlcLogical))
