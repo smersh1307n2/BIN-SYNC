@@ -45,7 +45,8 @@ internal sealed class WalWriterFence : IDisposable
     private sealed class Manager
     {
         private readonly BlockingCollection<Request> _requests = new();
-        private readonly Dictionary<Guid, Mutex> _held = new();
+        private readonly Dictionary<Guid, (Mutex Mutex, string Name)> _held = new();
+        private readonly HashSet<string> _activeNames = new(StringComparer.Ordinal);
 
         public Manager()
         {
@@ -98,14 +99,18 @@ internal sealed class WalWriterFence : IDisposable
                 {
                     if (request.Release)
                     {
-                        if (_held.Remove(request.Token, out Mutex? mutex))
+                        if (_held.Remove(request.Token, out var held))
                         {
-                            try { mutex.ReleaseMutex(); }
-                            finally { mutex.Dispose(); }
+                            _activeNames.Remove(held.Name);
+                            try { held.Mutex.ReleaseMutex(); }
+                            finally { held.Mutex.Dispose(); }
                         }
                     }
                     else
                     {
+                        if (_activeNames.Contains(request.Name!))
+                            throw new IOException("WAL partition is already open for writing in this process.");
+
                         var mutex = new Mutex(initiallyOwned: false, request.Name!);
                         bool acquired;
                         try
@@ -125,7 +130,8 @@ internal sealed class WalWriterFence : IDisposable
                             throw new IOException("Another process owns the WAL partition writer fence.");
                         }
 
-                        _held.Add(request.Token, mutex);
+                        _held.Add(request.Token, (mutex, request.Name!));
+                        _activeNames.Add(request.Name!);
                     }
                 }
                 catch (Exception ex)
