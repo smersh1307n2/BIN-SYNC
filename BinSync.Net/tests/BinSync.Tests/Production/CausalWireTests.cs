@@ -74,6 +74,7 @@ public class CausalWireTests
             NamespaceId = 1,
             Seq = 1,
             ChangeId = child,
+            OriginAuthorEpoch = 1, OriginSequence = 1,
             RecordId = Rid(1),
             OpKind = 0x01,
             Payload = new byte[] { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }, // minimal-ish
@@ -163,7 +164,7 @@ public class CausalWireTests
         };
         var trailer = CausalWire.EncodeTrailer(new[]
         {
-            new OutboxEntry { ChangeId = Id(0x21), CausalDeps = new List<BatchId>() },
+            new OutboxEntry { ChangeId = Id(0x21), OriginAuthorEpoch = 1, OriginSequence = 1, CausalDeps = new List<BatchId>() },
         });
         var combined = new byte[1 + trailer.Length];
         combined[0] = 0xAA;
@@ -188,6 +189,7 @@ public class CausalWireTests
         {
             NamespaceId = 1,
             ChangeId = child,
+            OriginAuthorEpoch = 1, OriginSequence = 1,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),
