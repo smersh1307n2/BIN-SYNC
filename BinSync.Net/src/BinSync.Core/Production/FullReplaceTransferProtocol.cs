@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace BinSync;
 
@@ -8,7 +10,9 @@ public static class FullReplaceTransferProtocol
     public const int DigestSize = 32;
     public const int MaxChunkEntries = ProviderFullReplaceDigestBuilder.MaxPageEntries;
     public const int MaxChunkBytes = Frames.MAX_PAYLOAD_SIZE;
-    private const int BeginLength = 2 + 16 + 8 + 32 + 8 + 4 + 32;
+    private const int BeginPayloadLength = 2 + 16 + 8 + 32 + 8 + 4 + 32;
+    private const int BeginLength = BeginPayloadLength + BatchSignature.SignatureSize;
+    public const string ManifestSignDomain = "BIN-SYNC/FULL-REPLACE-MANIFEST/v1";
     private const int TransferIdLength = 2 + 16;
 
     public sealed record Begin(
@@ -18,7 +22,8 @@ public static class FullReplaceTransferProtocol
         byte[] RosterDigest,
         ulong SourceChangeFeedWatermark,
         int ExpectedEntryCount,
-        byte[] ExpectedDigest);
+        byte[] ExpectedDigest,
+        byte[] AuthoritySignature);
 
     public sealed record Chunk(
         int NamespaceId,
@@ -28,17 +33,49 @@ public static class FullReplaceTransferProtocol
 
     public sealed record TransferId(int NamespaceId, Guid Generation);
 
+    public static Begin SignBegin(Begin value, ReadOnlySpan<byte> authoritySeed)
+    {
+        ValidateBegin(value);
+        byte[] payload = EncodeBeginPayload(value);
+        byte[] signature = BatchSignature.Sign(authoritySeed, BuildManifestSigningPayload(payload));
+        return value with { AuthoritySignature = signature };
+    }
+
+    public static void VerifyBegin(
+        Begin value, NamespaceRosterCertificate acceptedRoster, TrustStore trustStore)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        ValidateBegin(value);
+        NamespaceRosterProtocol.Validate(acceptedRoster);
+        if (value.AuthoritySignature is null ||
+            value.AuthoritySignature.Length != BatchSignature.SignatureSize)
+            throw new CryptographicException("FULL_REPLACE manifest signature is missing.");
+        byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
+        if (value.NamespaceId != acceptedRoster.NamespaceId ||
+            value.RosterGeneration != acceptedRoster.RosterGeneration ||
+            !value.RosterDigest.AsSpan().SequenceEqual(rosterDigest))
+            throw new InvalidDataException("FULL_REPLACE manifest is not bound to the accepted namespace roster.");
+        if (!trustStore.TryGet(acceptedRoster.AuthorityNodeId, out TrustedPeer? trusted) ||
+            trusted is null || trusted.Revoked || trusted.Mode != TrustMode.PreShared ||
+            trusted.PublicKey.Length != BatchSignature.PublicKeySize)
+            throw new CryptographicException("FULL_REPLACE authority is not pinned with active PreShared trust.");
+        byte[] payload = EncodeBeginPayload(value);
+        if (!BatchSignature.Verify(trusted.PublicKey, BuildManifestSigningPayload(payload), value.AuthoritySignature))
+            throw new CryptographicException("FULL_REPLACE authority signature is invalid.");
+    }
+
     public static byte[] EncodeBegin(Begin value)
     {
         ValidateBegin(value);
+        if (value.AuthoritySignature is null ||
+            value.AuthoritySignature.Length != BatchSignature.SignatureSize)
+            throw new ArgumentException("FULL_REPLACE_BEGIN requires an authority signature.", nameof(value));
+        byte[] payload = EncodeBeginPayload(value);
         byte[] bytes = new byte[BeginLength];
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes, checked((ushort)value.NamespaceId));
-        value.Generation.TryWriteBytes(bytes.AsSpan(2, 16), bigEndian: true, out _);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(18), value.RosterGeneration);
-        value.RosterDigest.CopyTo(bytes, 26);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(58), value.SourceChangeFeedWatermark);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(66), value.ExpectedEntryCount);
-        value.ExpectedDigest.CopyTo(bytes, 70);
+        payload.CopyTo(bytes, 0);
+        value.AuthoritySignature.CopyTo(bytes, BeginPayloadLength);
         return bytes;
     }
 
@@ -53,10 +90,34 @@ public static class FullReplaceTransferProtocol
             bytes.Slice(26, DigestSize).ToArray(),
             BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(58)),
             BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(66)),
-            bytes.Slice(70, DigestSize).ToArray());
+            bytes.Slice(70, DigestSize).ToArray(),
+            bytes.Slice(BeginPayloadLength, BatchSignature.SignatureSize).ToArray());
         try { ValidateBegin(value); }
         catch (ArgumentException ex) { throw new InvalidDataException("FULL_REPLACE_BEGIN is invalid.", ex); }
         return value;
+    }
+
+    private static byte[] EncodeBeginPayload(Begin value)
+    {
+        ValidateBegin(value);
+        byte[] bytes = new byte[BeginPayloadLength];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes, checked((ushort)value.NamespaceId));
+        value.Generation.TryWriteBytes(bytes.AsSpan(2, 16), bigEndian: true, out _);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(18), value.RosterGeneration);
+        value.RosterDigest.CopyTo(bytes, 26);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(58), value.SourceChangeFeedWatermark);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(66), value.ExpectedEntryCount);
+        value.ExpectedDigest.CopyTo(bytes, 70);
+        return bytes;
+    }
+
+    private static byte[] BuildManifestSigningPayload(ReadOnlySpan<byte> payload)
+    {
+        byte[] domain = Encoding.UTF8.GetBytes(ManifestSignDomain);
+        byte[] result = new byte[domain.Length + payload.Length];
+        domain.CopyTo(result, 0);
+        payload.CopyTo(result.AsSpan(domain.Length));
+        return result;
     }
 
     public static byte[] EncodeChunk(Chunk value)
@@ -151,7 +212,9 @@ public static class FullReplaceTransferProtocol
         if (value.RosterGeneration == 0 ||
             value.RosterDigest is null || value.RosterDigest.Length != DigestSize ||
             value.ExpectedEntryCount < 0 ||
-            value.ExpectedDigest is null || value.ExpectedDigest.Length != DigestSize)
+            value.ExpectedDigest is null || value.ExpectedDigest.Length != DigestSize ||
+            value.AuthoritySignature is null || (value.AuthoritySignature.Length != 0 &&
+            value.AuthoritySignature.Length != BatchSignature.SignatureSize))
             throw new ArgumentException("FULL_REPLACE_BEGIN metadata is invalid.", nameof(value));
     }
 
