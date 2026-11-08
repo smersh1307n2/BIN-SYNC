@@ -1,105 +1,205 @@
-# BIN-SYNC CORE v3.0.0 DRAFT
-## Полная спецификация универсального бинарного протокола синхронизации
+# BIN-SYNC CORE v3.0.0 — нормативная спецификация
+## Универсальный протокол синхронизации и контракт долговременного состояния
 
-**Статус:** Breaking protocol revision — implementation in progress  
-**Версия:** 3.0.0 DRAFT (mandatory immutable per-operation origin provenance; clean-break wire and metadata formats)  
-**Дата:** 2026-11-08  
+**Статус:** v3.0.0 DRAFT — целевой обязательный контракт для реализации и conformance.
+**Дата редакции:** 2026-11-08.
+**Тип изменения:** breaking / clean cut. Форматы v2.x не поддерживаются.
 
-## v3.0.0 binding overrides
+> Нормативный приоритет: эта редакция v3.0.0 — единственный источник требований BIN-SYNC. Текст после заголовка «Историческая справка v2.4.22» оставлен только для трассировки дизайна. Он не задаёт wire/storage compatibility и не разрешает fallback. При расхождении действует v3.0.0.
 
-This is a clean-break protocol revision. The v2.4.22 text below is retained only as historical design context; the following rules supersede conflicting v2 layouts and compatibility statements.
+## 0. Краткое содержание обязательных изменений v3
 
-### Outbox and origin identity
+1. Каждая опубликованная операция несёт неизменяемую Origin provenance: (originAuthorNodeId, originAuthorEpoch, originSequence). Она создаётся исходным автором при freeze и сохраняется без изменений через WAL recovery, receive, PendingApply, storage, relay, snapshot и повторную доставку.
+2. ChangeId остаётся глобальной route-independent identity: (scope, namespaceId, ChangeId). Origin — provenance, а не замена ChangeId. Один ChangeId с отличающимся semantic fingerprint или Origin — equivocation и отклоняется до мутации.
+3. Одна логическая операция и один immutable payload обслуживают любое число получателей. Отдельно хранится компактный прогресс по (peer, namespace, author stream); per-peer копии payload и ACK bitmap внутри операции запрещены.
+4. Peer/session state, delivery progress, batch receipt, ChangeId identity, PendingApply, relay payload и tombstone — разные логические факты с независимыми retention horizons. Их можно физически группировать в транзакциях/сегментах, но нельзя смешивать в одну запись с общей максимальной жизнью.
+5. Коалесцирование разрешено только до публикации. После durable freeze operation, ChangeId, Origin, payload и sequence неизменяемы.
+6. WAL отвечает за crash recovery; provider feed/FLD Outbox — за ещё не опубликованные локальные изменения; BIN-SYNC Metadata Store — за опубликованные операции, receipts, delivery/ACK, dedup и relay. Не создавать второй PendingLocal/Pending journal с теми же фактами.
+7. Storage — универсальный opaque byte engine/контракт, не знает о полях, HLC, peers и ChangeId. FLD Database — отдельная семантическая надстройка над Storage. Целевая поставка — две DLL: Fld1.Storage.dll и Fld1.Database.dll.
+8. Старые wire/storage форматы не читаются, не мигрируются и не dual-write. Неизвестный/старый формат отклоняется fail-closed; требуется создание нового v3 store/namespace.
+9. GC разделён на три независимых доказательства: Inbox receipts, ChangeId ledger, tombstones/ghosts. Payload ACK/compaction не является доказательством безопасности ни для одного из этих доменов.
+10. ChangeId GC и tombstone/ghost GC остаются выключенными до реализации и тестирования всех доказательств из §§0.11–0.13.
 
-Every published operation carries immutable Origin = (resolved authorNodeId, originAuthorEpoch, originSequence). originSequence is allocated once at original publication freeze, is monotonic per (namespaceId, authorNodeId) across author epoch changes, and never changes through relay/restart. A relay's local delivery sequence is a separate coordinate. ChangeId remains route-independent; the same ChangeId with a different semantic fingerprint or Origin tuple is equivocation.
+## 0.1. Независимые координаты
 
-### Inbox and PendingApply
+- Origin — постоянное происхождение операции: author NodeId, author incarnation epoch и sequence, выделенный оригинальным автором.
+- Issuer/transport peer — непосредственный отправитель текущего batch. При relay он не равен Origin author.
+- OriginSequence — монотонная последовательность оригинального автора в пределах (scope, namespaceId, originAuthorNodeId). Она не сбрасывается при смене author epoch; allocator durable и защищён от rollback/clone.
+- SenderCursor — последовательность конкретного отправителя/relay для конкретного получателя и author stream. Может иметь peer-relative offset и никогда не подменяет OriginSequence.
+- StorageCommitId, WAL sequence, FLD JournalSeq и OutboxSeq — локальные storage/recovery координаты. Они не являются OriginSequence и не сравниваются между репликами.
+- ChangeId — 128-bit operation identity, одинаковая на всех маршрутах. Не заменяется ни OriginSequence, ни SenderCursor.
+- Published — операция прошла durable freeze и могла быть видна хотя бы одному sender/peer. После этого rewrite/coalesce запрещён.
+- Current state — LWW/merge projection. Не является историей relay и не заменяет immutable operation journal.
 
-The v3 InboxReceipt key is (issuerNodeId, issuerEpoch, namespaceId, batchId), where issuer is the immediate sender/relay. Authenticated transport-peer epoch is stored separately for retirement fencing. Every v3 receipt has a complete header fingerprint, durable author and transport epoch; there are no legacy-unknown receipts. PendingApply stores the exact v3 wire payload and each operation's Origin tuple. Old receipt/PendingApply formats are rejected, not migrated.
+## 0.2. Ownership: единственный владелец каждого факта
 
-### Mandatory v3 DELTA_BATCH record
+| Факт | Авторитетный владелец | Запрещённое дублирование |
+|---|---|---|
+| Crash recovery локальных транзакций | WAL / Storage engine | Второй recovery journal с тем же payload |
+| Незавершённые локальные изменения | Durable provider feed / FLD Outbox / source journal | Отдельная BIN-SYNC PendingLocal-копия |
+| Frozen published operation + Origin + ChangeId | BIN-SYNC Metadata Store (или один эквивалентный authoritative provider store) | Node checkpoint и FLD relay journal как независимые authoritative копии |
+| Current field/record state, tombstone, ghost | Data Provider / FLD Database | Протокольная интерпретация в Storage engine |
+| Per-peer/per-author delivery state | BIN-SYNC Metadata Store | ACK bitmap/recipient list в каждой операции |
+| Batch retry receipt | BIN-SYNC Metadata Store | Полный payload в receipt |
+| Global ChangeId dedup/equivocation | BIN-SYNC Metadata Store | Peer-scoped dedup как единственный источник истины |
+| In-flight cross-store apply | Durable PendingApply intent + provider idempotency token | ACK до завершения durable apply |
+| Physical storage atomicity | Storage engine | Притворная cross-store transaction |
 
-The v3 header issuerNodeId/issuerEpoch identify the immediate sender/relay incarnation. cursorStart/cursorEnd are that sender's local contiguous cursor for the resolved author stream. Each canonical record is:
+Если provider и Metadata Store используют один Storage transaction domain, переход фиксируется атомарно. Если это разные хранилища, source feed остаётся unacked до durable freeze; retry использует тот же ChangeId и сверяет fingerprint/Origin. После подтверждения freeze feed ACK идемпотентен.
 
-~~~
-recordId          : b128
-changeId          : b128
-originAuthorEpoch : u32 LE
-originSequence    : u64 LE
-opKind            : u8
-payloadLen        : canonical ULEB128
-payload           : bytes
-~~~
+## 0.3. Каноническая модель опубликованной операции
 
-The durable author NodeId is resolved from the operation alias in the authenticated ALIAS_MAP. Origin fields are mandatory, nonzero and committed by RecordsRoot, BatchDigest and signature. Every batch contains one resolved author stream. For a direct-author batch (issuerNodeId == authorNodeId), originSequence == cursorStart + recordIndex and originAuthorEpoch <= issuerEpoch. For a relay batch, the cursor is relay-local and MUST NOT be compared with originSequence; origin tuple is copied unchanged, and originSequence values are strictly increasing but may have gaps after duplicate suppression. No optional provenance flag, legacy/unflagged record, v2 parser or downgrade path exists.
+PublishedOperation содержит: scopeId, namespaceId, ChangeId, canonical semantic fingerprint, originAuthorNodeId, originAuthorEpoch, originSequence, recordId, opKind, immutable payload или exact-version provider reference, HLC, keyEpoch и relayEligible.
 
-### Clean-break storage policy
+Unique identity: (scopeId, namespaceId, ChangeId).
+Одна identity имеет ровно один fingerprint и один Origin tuple.
+Та же identity + тот же fingerprint + тот же Origin — duplicate/no-op.
+Та же identity с любым другим fingerprint/Origin — equivocation; весь batch отклоняется до mutation.
+Missing Origin никогда не выводится из issuer, relay cursor, HLC, OutboxSeq, JournalSeq или receipt cursor. Неизвестная provenance блокирует destructive GC.
 
-BIN-SYNC Core persistence and StorageMetadataStore use one explicit v3 format marker and one canonical row layout. Old/unknown versions fail closed and require store recreation. No legacy readers, dual-write paths, migration fallback or compatibility-only public APIs are retained. Corrupt v3 state also fails closed.
+## 0.4. Freeze и coalescing
 
-**Изменения v2.4.22 относительно v2.4.21:**
-- Нормативно определён узкий Inbox receipt GC: receipt удаляется только после durable registration и complete initial-sync baseline replacement transport epoch, атомарно с retired-through fence старой эпохи; unresolved PendingApply блокирует retirement; epoch-unknown legacy receipt сохраняется.
-- Разделены transport-delivery roster и authoritative namespace membership: MEMBERSHIP/InterestedPeers сами по себе не разрешают ChangeId или tombstone GC.
-- Зафиксированы prerequisites для ChangeId GC: immutable origin `(author, authorEpoch, originSequence)`, signed authoritative roster generation и signed monotonic all-member retention checkpoints.
-- Tombstone/ghost GC остаётся fail-closed до per-author safe frontier и атомарного `FULL_REPLACE` snapshot generation; TTL/HLC/GC_NOTICE не являются доказательством.
-**Изменения v2.4.20 относительно v2.4.19:**
-- Зафиксирован receipt key `(senderNodeId, senderEpoch, namespaceId, batchId)`; resolved `authorNodeId` остаётся отдельной координатой author-stream и не может менять receipt identity.
-- Разделены peer/session membership и per-author stream progress; безопасный retention рассчитывается независимо для каждого author stream.
-- Inbox receipt GC отключён без отдельного двустороннего durable checkpoint/fencing contract; ACK, TTL и snapshot сами по себе не разрешают удаление.
-- Relay operation без alias у получателя отклоняет весь batch с `UNKNOWN_ALIAS`, не создавая дыру в author-stream cursor.
+1. До freeze provider feed/FLD Outbox хранит незавершённые локальные изменения. Для LWW_FIELD допускается один winner на canonical key (scope, namespace, record, field), выбранный полным protocol LWW order, а не временем прихода callback.
+2. Record lifecycle и field state coalesce раздельно. Non-coalescible/audit operations не схлопываются.
+3. Remote APPLY не должен стирать ещё не опубликованный local intent. Pending payload/reference живёт независимо от текущего LWW winner.
+4. При freeze атомарно назначаются стабильные ChangeId, OriginAuthorEpoch, OriginSequence и immutable payload/reference; публикуется одна operation row. Sequence allocation и запись операции — одна durable transaction.
+5. Sequence не выделяется до coalescing. Abort не должен создавать видимые дыры. Retry exact input возвращает тот же tuple и не создаёт второй operation.
+6. После freeze payload и Origin неизменяемы, даже если operation не ACKed, уже отправлена, частично отправлена или ACK потерян. Последующие edits создают новые pending intents.
 
-**Изменения v2.4.19 относительно v2.4.18:**
-- Уточнено, что TOMBSTONE_MIN_TTL — лишь минимальный возраст-кандидат и не является доказательством безопасности GC; scalar HLC cutoff/GC_NOTICE сами по себе не разрешают удаление tombstone.
-- До реализации durable namespace safe-frontier, stale-peer fencing и обязательного full-resync gate tombstone/ghost GC отключён; полученный GC_NOTICE не даёт права удалять состояние.
+## 0.5. Per-peer delivery state: общая операция, независимый прогресс
 
-**Исторические изменения v2.4.18 относительно v2.4.17:**
-- Зафиксирована глобальная в пределах реплики дедупликация (namespaceId, ChangeId) независимо от immediate sender/маршрута, с проверкой canonical semantic fingerprint и отказом при equivocation.
-- Локальные изменения записывают ChangeId identity в durable ledger атомарно с Outbox/WAL; повторное получение известного ChangeId не применяется и не ретранслируется.
-- Legacy identity без fingerprint консервативно считается уже виденной; первый повтор может заполнить fingerprint, но не пере-применяет операцию. Безопасный GC horizon не определён; удаление ledger по TTL запрещено.
+Канонический ключ прогресса: (scopeId, peerNodeId, peerEpoch, namespaceId, originAuthorNodeId).
+Минимальные факты: durable peer epoch/retirement fence; initial baseline generation/status; contiguous AckedCursor и PushedCursor; peer-relative SenderCursor offset; last batch digest-chain checkpoint; максимум одна immutable in-flight reservation на stream, если это требуется транспортом.
 
-**Исторические изменения v2.4.17 относительно v2.4.16:**
-- Зафиксированы канонические wire layouts COUNTER_G, COUNTER_PN, SET_OR, SEQ_FRACTIONAL и BLOB_REF: строгая сортировка, уникальность идентификаторов, проверка EOF и ограничение count по оставшемуся payload.
-- Конфликтующие payloads с одинаковой идентичностью элемента SEQ_FRACTIONAL или одинаковым blobId отклоняются вместо выбора левого operand.
-- SCHEMA_MAP отклоняет повторные версии, повторные/неупорядоченные field IDs и пересечение активных и retired IDs; malformed descriptors не пропускаются молча.
+Операция не копируется на каждого peer. Delivery читает общую PublishedOperation и строит author-homogeneous batch. Per-peer state хранит только cursor/digest/reservation. Не вводить per-operation recipient array, ACK bitset или payload copy. Целевая кардинальность O(operations + peers × authorStreams), а не O(operations × peers).
 
-**Исторические изменения v2.4.16 относительно v2.4.15:**
-- WINDOW_UPDATE.frameSeq строго возрастает в направлении сессии; повторные и переставленные назад обновления отклоняются.
-- Реальный HELLO handshake отклоняет incarnation epoch ниже сохранённого peer-wide watermark до обмена ALIAS_MAP; прямой in-process test helper сохраняет возможность проверять поздний EPOCH_REGRESSION на data plane.
-- HLC сравнивает unsigned wall без сужения до Int64; отрицательный источник времени отклоняется, skew boundary вычисляется без signed overflow.
-- Reader проверяет длину length-prefixed значения относительно оставшихся байт до выделения массива; отрицательные позиции varint отклоняются.
-- UTF-8 encoder использует строгую проверку UTF-16; decoder отвергает malformed UTF-8, сохраняя совместимость со снятием одного начального BOM.
+Progress одного author stream можно упаковать в sparse row с presence mask, если ACK/pushed/offset/digest сохраняют независимые update semantics. Не объединять весь namespace в один mutable blob, который заставляет ACK одного peer переписывать состояние всех peers.
 
-**Исторические изменения v2.4.15 относительно v2.4.14:**
-- Определён канонический payload `WINDOW_UPDATE`: положительный `credits: u32 LE`, точная длина 4 байта, target stream в заголовке; обновление выше `MAX_WINDOW_SIZE` отклоняется.
-- Получатель проверяет, что возвращаемый кредит не превышает фактически зарезервированные и ещё не возвращённые payload bytes на соответствующем потоке; незапрошенные WINDOW_UPDATE не увеличивают окно.
-- Flow Control активируется только при согласии обеих сторон; кредиты учитывают payload, а `streamId=0` и сам `WINDOW_UPDATE` исключены из учёта.
-- Кадры, превышающие начальное окно, передаются как `FLAG_FRAGMENT`; приёмная сторона возвращает кредит после переноса фрагмента в ограниченный reassembly buffer. Размер и количество незавершённых reassembly ограничены.
-- Уточнено, что receive pump обрабатывает `WINDOW_UPDATE` inline, не помещая его в пользовательские очереди.
+## 0.6. Wire v3: обязательная immutable provenance
 
-**Исторические изменения v2.4.14 относительно v2.4.13:**
-- `opKind` обязан совпадать с wire tag payload; `RecordTombstone.recordId` обязан совпадать с envelope `recordId`; проверка выполняется до commit для DELTA_BATCH и snapshot batches.
+- Protocol major строго 3. HELLO отклоняет major mismatch. Capability negotiation не может выключить обязательную provenance.
+- Каждый DELTA_BATCH содержит ровно один resolved author stream.
+- Immediate issuer/relay и его epoch остаются в batch header и определяют transport/session receipt identity.
+- Каждая operation содержит обязательные поля: recordId:b128 | changeId:b128 | originAuthorEpoch:u32 LE | originSequence:u64 LE | opKind:u8 | payloadLen:canonical ULEB128 | payload:bytes. Durable author NodeId разрешается из authenticated ALIAS_MAP и сохраняется в storage в full b128 виде.
+- Origin tuple = (resolvedAuthorNodeId, originAuthorEpoch, originSequence). OriginSequence > 0; epoch валиден по incarnation contract.
+- OriginSequence строго возрастает внутри batch для данного author; gaps допустимы. Sequence назначается один раз original author и relay копирует byte-for-byte.
+- Batch cursorStart/cursorEnd относятся только к sender's local contiguous delivery stream. Они не вычисляются из OriginSequence и не заменяют её. Direct-author fast path может проверить durable exact mapping, но не выводит provenance арифметически из peer-relative cursor/offset.
+- Relay может назначить собственный sender cursor, но не меняет ChangeId, fingerprint, author, Origin epoch/sequence, HLC, key epoch или payload.
+- RecordsRoot, BatchDigest и signature покрывают Origin fields. Любое изменение Origin на relay нарушает commitment.
+- Нет optional provenance flags, v2/unflagged records, legacy parser или downgrade fallback.
 
-**Исторические изменения v2.4.13 относительно v2.4.12:**
-- HELLO incarnation watermark хранится отдельно от per-namespace batch watermarks; namespace `0` не используется как служебный ключ.
-- Node-state v5 сохраняет peer-wide HELLO epochs отдельно; reader сохраняет совместимость с v3/v4 и консервативно мигрирует legacy `(peer, 0)`. 
+## 0.7. Каноническое durable metadata v3
 
-**Исторические изменения v2.4.12 относительно v2.4.11:**
-- RecordDigest использует домен BIN-SYNC/RECORD/v2 и kind 0=FieldWrite / 1=FieldTomb; пустое значение и tombstone больше не имеют одинаковый digest.
-- StateRootDigest использует BIN-SYNC/STATE/v2 и не включает агрегированный Outbox cursor.
-- Уточнены сравнение HLC author, field tombstones, нормализация b128 и runtime-профиль merge policies .NET 3.0.0.
-- Неподдерживаемые wire merge policies отклоняются, а не молча применяются как LWW_FIELD.
+Логические категории (физическая группировка допустима только при сохранении атомарности и lifetime):
+1. Published operation store — одна immutable operation/payload на ChangeId identity; local и relay-origin операции используют одну модель.
+2. Global ChangeId identity/index — fingerprint + Origin + reference + relay/retention facts. Если PublishedOperation row переживает payload compaction и остаётся dedup authority, второй ledger row не создаётся. Если payload удаляется отдельно, остаётся одна компактная identity-only row.
+3. PeerAuthorProgress — компактные per-peer/per-author cursors и digest/reservation facts.
+4. InboxReceipt — issuer/epoch/ns/batch identity, complete header fingerprint, resolved author, sender cursor end, digest-chain checkpoint и данные для exact ACK. Payload операций не хранит.
+5. PendingApply — exact inbound v3 batch intent и stable apply token до durable provider effect и receipt/progress finalization. Может ссылаться на immutable operation rows, если доказана lifetime.
+6. CompletedApply — компактный idempotency token/result mapping; отдельный lifetime.
+7. Membership/GC certificates and checkpoints — signed roster generation, member fences, per-member monotonic origin frontiers, forgotten frontier.
+8. Provider publication intent — только если нужен recoverable cross-store handoff; не второй local change journal, удаляется после freeze+feed ACK.
 
-**Исторические изменения v2.4.11 относительно v2.3.9:**
-- Каноническая запись DELTA_BATCH расширена обязательным `changeId b128`: `recordId | changeId | opKind | payloadLen | payload`
-- `recordsRoot`, `batchDigest` и подпись связывают исходный `changeId`; relay сохраняет его побайтно
-- Нулевые и повторяющиеся `changeId` отклоняются до мутации; snapshot дополнительно проверяет `recordsRoot` и `batchDigest`
-- Добавлен mesh-сценарий A→B→C→A с повторной доставкой через независимый маршрут
-- ACK ограничен фактически отправленным cursor по каждому author stream; добавлен ACK_OUT_OF_RANGE (0x0018)
-- Дубликат batch подтверждается автором, сохранённым по ключу Inbox, а не последним автором сессии
-- Node-state v4 сохраняет StreamPushed, InboxAuthors и per-peer/per-author StreamOffsets; чтение v3 сохранено
-- Сохранены wire-format изменения ChangeId из v2.3.8
-- `STATE_ROOT` больше не включает агрегированный Outbox cursor: sequence numbers независимы по author stream; legacy `OutboxCursor` в `STATE_DIGEST` зарезервирован и передаётся как zero
-- Определены единственная активная сессия на пару peer, симметричный HELLO и детерминированная роль по NodeId; TCP/WebRTC transport direction не влияет на роль, wire layout не изменён
+Source feed/FLD Outbox — единственная authority для unpublished edits. Metadata Store не создаёт параллельную PendingLocal таблицу с теми же изменениями.
+
+## 0.8. Receipt, dedup и apply
+
+- Receipt key: (scopeId, issuerNodeId, issuerEpoch, namespaceId, batchId). Issuer — immediate transport peer, не origin author.
+- Authenticated transport-peer epoch хранится отдельно от originAuthorEpoch.
+- Receipt содержит canonical header fingerprint и данные для повторного ACK после lost ACK. Тот же BatchId с другим committed header — failure.
+- Global ChangeId ledger не зависит от issuer/route. Duplicate через alternate route не создаёт вторую relay operation.
+- Весь batch preflight-валидируется: format, alias, Origin, monotonicity, ChangeId conflicts, payload schema, cursor continuity, digest/signature и provider acceptance. Нет partial mutation.
+- При external provider apply PendingApply durable до provider mutation. Apply token idempotent; receipt, receive cursor и digest chain продвигаются только после durable provider success.
+- Duplicate batch path проверяет receipt/header commitment и повторяет сохранённый ACK без повторного decode/apply/causal gate.
+- Relay selection основан на first-seen valid operation/provenance, а не на победе LWW merge. LWW losers могут требовать relay.
+- Peer-scoped SeenChanges недостаточен как единственная dedup authority.
+
+## 0.9. Решения по минимизации метаданных
+
+- Одна PublishedOperation/payload на ChangeId, общая для всех peers.
+- Одна compact progress row на peer/author stream, не ACK row на каждую operation.
+- Один compact receipt на batch, без payload.
+- Одна global ChangeId identity/provenance fact, не per-route seen fact.
+- Один PendingApply только пока external apply unresolved.
+- Не дублировать relay payload, если relay delivery может ссылаться на общую immutable operation row. Если физическое разделение необходимо для compaction/indexing, payload bytes не копируются.
+- CompletedApply хранит только idempotency token/result, не заменяет receipt или ChangeId ledger.
+- Повторяющиеся author keys в ACK/pushed/offset maps объединять только при измеренном выигрыше.
+- Replay reservations удалять атомарно с validated contiguous ACK, сохраняя digest-chain anchor.
+- Receipt, ChangeId identity и tombstone имеют независимые horizons.
+
+## 0.10. Retention domains
+
+| Domain | Текущая политика v3 |
+|---|---|
+| Outbound/relay payload | Compact только через minimum safe contiguous ACK всех required peers/author streams и durable local consumer |
+| Peer stream rows | Удалять только вместе с durable retired-through fence; максимум retired epoch сохранять |
+| Replay reservations | Удалять только когда matching contiguous ACK покрывает reservation; digest anchor сохранять |
+| Inbox receipts | Retire только с authenticated transport epoch fence + complete new initial-sync baseline + no unresolved PendingApply; atomic deletion |
+| CompletedApply | Retain до отдельного provider retry/compaction proof |
+| ChangeId ledger | GC disabled до signed roster + all-member monotonic OriginSequence frontier + reference scan |
+| Tombstone/ghost | GC disabled до того же frontier + authoritative FULL_REPLACE generation + stale-member fence |
+| Unknown/corrupt v3 state | Fail-closed; никогда не угадывать и не удалять |
+
+## 0.11. Доказательство Inbox receipt GC
+
+Receipt удаляется только если: (1) записан authenticated transport epoch; (2) зарегистрирована строго более новая incarnation; (3) complete initial-sync baseline новой incarnation durable committed для namespace; (4) monotonic retired-through fence блокирует retired/older/epoch-less sessions до ALIAS_MAP/data plane; (5) нет unresolved PendingApply/provider intent/reservation/apply token; (6) fence, peer progress retirement и receipt deletion атомарны; (7) restart на каждой границе оставляет либо старый receipt + допустимую старую эпоху, либо новый fence + удалённый receipt, но никогда допускаемую старую эпоху без receipt.
+
+TTL, normal ACK, offline duration, digest advancement и merge snapshot сами по себе receipt GC не разрешают.
+
+## 0.12. Доказательство ChangeId GC — пока запрещено
+
+Identity row collectable только когда:
+1. Origin tuple authenticated и immutable.
+2. Namespace имеет authority-signed roster generation с canonical member set и monotonic generation.
+3. Каждый member предоставляет authenticated signed monotonic contiguous applied-OriginSequence checkpoint для каждого author stream, bound к namespace, roster generation и snapshot generation.
+4. Safe frontier per author — минимум contiguous applied OriginSequence по всем членам roster. Missing/offline/stale/unknown/regressive/invalidly signed member/checkpoint даёт frontier zero и блокирует GC.
+5. Удаление member требует committed newer roster + durable epoch fence; rejoin требует FULL_REPLACE до incremental deltas.
+6. ChangeId row ниже/equal safe frontier и нет PendingApply, operation payload, relay/outbound reservation, provider intent, snapshot pin или unresolved apply token reference.
+7. GC checkpoint monotonic, signed, durable; deletion + checkpoint атомарны либо forgotten knowledge durably persisted first.
+8. Replay ниже committed frontier отвергается, не принимается как новая operation.
+9. Alternate-route, equivocation, restart и membership adversarial tests green.
+
+Если хотя бы одно условие отсутствует — ChangeId row retain indefinitely. ACK payload, transport cursor, TTL, HLC age, storage pressure и GC_NOTICE доказательство не заменяют.
+
+## 0.13. Доказательство Tombstone/Ghost GC — пока запрещено
+
+Нужны все условия ChangeId GC и дополнительно:
+1. Signed authoritative FULL_REPLACE namespace snapshot generation, отличающийся от merge SNAPSHOT_CHUNK.
+2. Snapshot связывает consistent source snapshot token и provider change-feed tail watermark одной atomic barrier.
+3. Все members текущего roster durably установили тот же generation/digest или более новый, доказывающий deletion.
+4. Provider staging полной namespace image и atomic active-generation switch; destination-only stale rows удаляются replacement semantics.
+5. Старое generation живёт до release всех readers/applies/snapshot pins; crash recovery выбирает ровно old или new generation.
+6. Retired/fenced members не могут прислать old-generation delta; rejoin требует FULL_REPLACE.
+7. Forgotten deletion frontier durable до physical tombstone/ghost deletion; frontier не может недооценивать forgotten history.
+8. Field tombstone, record lifecycle tombstone и ghost semantics имеют отдельные adversarial tests.
+9. Нет PendingApply, relay payload, operation identity или snapshot pin, которым tombstone ещё нужен.
+
+Если доказательство неполное — tombstone/ghost retain indefinitely. TTL/HLC/GC_NOTICE/ordinary ACK/merge snapshot не разрешают purge.
+
+## 0.14. Storage, FLD и две DLL
+
+- Fld1.Storage.dll: domain-neutral engine — opaque byte keys/values, atomic batches, WAL/recovery, checksums, snapshots, manifests, ordered scans, storage-native commit IDs и safe generation reclamation. Не содержит BIN-SYNC/FLD types.
+- Fld1.Database.dll: FLD schema, RecordId/FieldId, HLC, LWW/lifecycle, field/record tombstones, provider feed/Outbox, remote APPLY и FLD API; зависит от Storage.
+- BIN-SYNC Core: wire/protocol, author/peer progress, ChangeId/Origin, receipts, dedup, relay, GC policy.
+- BIN-SYNC↔FLD adapter зависит от нейтральных API; JournalSeq никогда не используется как OriginSequence.
+- Третья Common DLL запрещена. Нет Storage→Database или Storage→BIN-SYNC dependency.
+- Storage-only consumers не создают synthetic FLD fields, authors, HLC или Outbox rows.
+- FLD Outbox/source feed владеет unpublished edits. WAL — recovery, не вторая semantic history. После freeze опубликованная operation/delivery принадлежит BIN-SYNC Metadata Store.
+
+## 0.15. Clean-break и ошибки
+
+Protocol major mismatch, missing Origin, zero/regressive OriginSequence, invalid alias, duplicate ChangeId in batch, equivocation, malformed v3 storage marker, truncated/corrupt row, unknown mandatory flags или unsupported required policy → fail closed.
+Нет v2 parser, legacy storage reader, dual-write, implicit migration, fallback, downgrade или legacy public session API.
+Старый partition нельзя открыть как пустой v3. Его можно только явно пересоздать либо обработать отдельным application-level export/import tool вне BIN-SYNC; tool не должен угадывать missing provenance.
+Failed validation не вызывает partial mutation и ACK.
+
+## 0.16. Release conformance и performance
+
+Release требует golden wire/storage vectors; cross-implementation conformance; lost-ACK/restart exact replay; alternate-route dedup/equivocation; multi-hop Origin preservation; crash matrix на freeze, PendingApply, provider apply, receipt, ACK, snapshot switch и GC; malformed/old format rejection; requirement→test mapping; benchmark 500/10k/100k/1m operations и peer/author cardinality; bytes/op, bytes/(peer×author), mutation latency, allocation, compaction CPU. Оптимизация принимается только если correctness unchanged и целевой показатель реально лучше без существенной регрессии других метрик.
+
+## 0.17. Историческая справка v2.4.22 (не нормативна)
+
+Текст прежней спецификации сохранён ниже исключительно для traceability. Никакие v2.x wire/storage behavior не поддерживаются v3. Не реализовывать legacy paths по историческим примерам или формулировкам.
 
 ---
 
