@@ -2543,6 +2543,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private void PersistPendingApply(
         PartitionKey partitionKey, PartitionState current, Guid applyToken, PendingApplyValue value)
     {
+        if (current.HasLegacyEncoding)
+        {
+            var migrated = current.Clone();
+            migrated.PendingApplies.Add(applyToken, value);
+            PersistPartition(partitionKey, current, migrated);
+            return;
+        }
+
         byte[] root = PartitionRoot(partitionKey);
         byte[] key = StorageKey(root, 12, applyToken.ToByteArray());
         byte[] encoded = EncodeIncomingBatch(value.Batch);
