@@ -1484,6 +1484,46 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Provider_authoritative_rehydration_recovers_checkpoint_failure_after_feed_ack()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-rehydrate-after-ack"), 461);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var originalNode = NewNode(61);
+        const string scope = "provider-rehydrate-after-ack";
+        var originalCoordinator = new StorageSyncCoordinator(originalNode, provider, 1, metadata, scope);
+        originalCoordinator.EnableMetadataStoreOwnedPublication(_ => { });
+
+        RecordId record = RecordId.From(Guid.Parse("61000000-0000-0000-0000-000000000001").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0821, AuthorNodeId = originalNode.NodeId,
+            HlcWall = 6800, Value = "durable-provider-value"u8.ToArray()
+        });
+        ProviderChange source = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+
+        // Freeze and provider ACK commit, but the subsequent Node cache checkpoint
+        // fails. The durable provider and Metadata Store remain the recovery sources.
+        Assert.Throws<IOException>(() => originalCoordinator.PublishLocalChanges(
+            _ => throw new IOException("Injected Node snapshot checkpoint failure.")));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, originalNode.NodeId, 1, originalNode.NodeId));
+
+        using var restartedNode = NewNode(61);
+        var restartedCoordinator = new StorageSyncCoordinator(restartedNode, provider, 1, metadata, scope);
+        Assert.Equal(0, restartedCoordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
+        Assert.True(restartedNode.TryGetField(1, record, 0x0821, out var restored));
+        Assert.Equal("durable-provider-value", Encoding.UTF8.GetString(restored!.Value));
+        Assert.Empty(restartedNode.ReadOutboxEntries(1, restartedNode.NodeId, 0, 10));
+
+        ulong lease = metadata.AcquireOutboundLease(scope, originalNode.NodeId, 1, originalNode.NodeId,
+            Guid.Parse("61000000-0000-0000-0000-000000000061"));
+        var outbound = metadata.ReadOutbound(scope, originalNode.NodeId, 1, originalNode.NodeId, lease, 0, 10).Items;
+        Assert.Single(outbound);
+        Assert.Equal(source.ChangeId, outbound[0].ChangeId);
+    }
+
+    [Fact]
     public void Metadata_owned_publication_retry_preserves_frozen_change_when_newer_edit_arrives()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-owned-append-after-freeze"), 460);
