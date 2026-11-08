@@ -1345,8 +1345,7 @@ private static bool ValidateIncomingBatchForStaging(
                 if (!originHighWatermarks.TryGetValue(originKey, out ulong originHigh))
                 {
                     if (!current.OriginHighWatermarks.TryGetValue(originKey, out originHigh) &&
-                        current.ChangeLedger.Values.Any(value => value.IsLocalOutbound &&
-                            value.AuthorNodeId == localAuthor &&
+                        current.ChangeLedger.Values.Any(value => value.AuthorNodeId == localAuthor &&
                             value.OriginAuthorEpoch == operation.OriginAuthorEpoch))
                         throw new InvalidDataException("Durable origin-sequence allocator row is missing for an existing local author epoch.");
                 }
