@@ -2753,7 +2753,7 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 6. Tombstone/ghost GC remains disabled until the same authoritative roster/frontier proof exists and every member has installed the same authoritative full-snapshot generation/digest. A merge snapshot does not delete rows absent from the snapshot. Rejoining or removed members MUST install an atomic FULL_REPLACE snapshot before incremental deltas are accepted.
 7. A retention checkpoint and any resulting physical deletion must be crash-consistent. GC must fail closed on roster mismatch, epoch regression, missing author frontier, incomplete PendingApply, immutable outbound reservation, or snapshot/feed barrier mismatch.
 
-**Текущая реализация:** retired-transport-epoch Inbox receipt GC is implemented conservatively in StorageMetadataStore. ChangeId ledger GC and tombstone/ghost GC remain disabled. GcNotice.PurgeBelowCutoff returns zero. No wire payload layout changes are introduced by E-26; new origin-coordinate, roster-certificate and retention-checkpoint messages require a separately specified negotiated protocol revision before implementation.
+**Текущая реализация:** retired-transport-epoch Inbox receipt GC is implemented conservatively in StorageMetadataStore. ChangeId ledger GC and tombstone/ghost GC remain disabled. GcNotice.PurgeBelowCutoff returns zero. No wire payload layout changes are introduced by E-26; new origin-coordinate, roster-certificate and retention-checkpoint messages require a separately specified negotiated protocol revision before implementation. The proposed v3.1 roster/GC design is recorded in `docs/BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md`; it is not normative v3.0 wire behavior.
 
 ## 10.7. Receipt identity and resolved author
 
