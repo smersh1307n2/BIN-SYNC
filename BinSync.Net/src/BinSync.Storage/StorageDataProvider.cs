@@ -350,8 +350,19 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     if (comparison < 0) continue;
                     if (comparison == 0)
                     {
-                        if (!SameMutation(mutation, existing))
+                        if (SameMutation(mutation, existing))
+                            continue;
+                        if (!SameMutationContent(mutation, existing))
                             throw new InvalidDataException("Remote provider apply equivocated at the same HLC and author.");
+                        if (existing.ChangeId.IsZero && !mutation.ChangeId.IsZero)
+                            batch.Put(key, EncodeMutation(mutation));
+                        else if (!existing.ChangeId.IsZero && mutation.ChangeId.IsZero)
+                        {
+                            // Legacy materialization may refresh visible fields, but
+                            // it must never erase already-persisted origin identity.
+                        }
+                        else
+                            throw new InvalidDataException("Provider mutation identity conflicts at the same HLC and author.");
                         continue;
                     }
                 }
