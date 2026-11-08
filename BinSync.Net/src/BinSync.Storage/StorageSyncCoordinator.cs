@@ -617,7 +617,9 @@ public sealed class StorageSyncCoordinator
             Fingerprint = fingerprint.ToArray(),
             Payload = envelope,
             OriginAuthorEpoch = mutation.OriginAuthorEpoch,
-            OriginSequence = 0
+            OriginSequence = 0,
+            HlcWall = mutation.HlcWall,
+            HlcLogical = mutation.HlcLogical
         };
     }
 
