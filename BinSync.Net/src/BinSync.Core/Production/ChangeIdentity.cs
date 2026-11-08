@@ -38,13 +38,11 @@ public static class ChangeIdentity
     /// hash pass rather than hashing a semantic fingerprint and then hashing it again.
     /// </summary>
     internal static Digest16 LedgerFingerprint(int namespaceId, RecordId recordId, byte opKind,
-        object operation, NodeId originAuthorNodeId, uint originAuthorEpoch, ulong originSequence,
-        IReadOnlyList<BatchId>? causalDeps = null)
+        object operation, OperationOrigin provenance, IReadOnlyList<BatchId>? causalDeps = null)
     {
-        if (originAuthorNodeId.IsZero || originAuthorEpoch == 0 || originSequence == 0)
-            throw new InvalidDataException("A known ChangeId identity requires a complete immutable Origin tuple.");
-        return FingerprintCore(namespaceId, recordId, opKind, operation, originAuthorNodeId,
-            includeOrigin: true, originAuthorEpoch, originSequence, causalDeps);
+        provenance = provenance.EnsureValid();
+        return FingerprintCore(namespaceId, recordId, opKind, operation, provenance.AuthorNodeId,
+            includeOrigin: true, provenance.AuthorEpoch, provenance.Sequence, causalDeps);
     }
 
     private static Digest16 FingerprintCore(int namespaceId, RecordId recordId, byte opKind,
@@ -212,8 +210,7 @@ public static class ChangeIdentity
         }
 
         fingerprint = LedgerFingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind,
-            operation, entry.AuthorNodeId, entry.OriginAuthorEpoch,
-            entry.OriginSequence, entry.CausalDepsOrNull);
+            operation, entry.Provenance, entry.CausalDepsOrNull);
         return true;
     }
 }
