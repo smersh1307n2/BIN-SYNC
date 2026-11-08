@@ -8,7 +8,7 @@ namespace BinSync.Storage;
 /// <summary>
 /// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
-public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace
+public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore
 {
     private const byte ItemMap = 0x01;
     private const byte ItemReverse = 0x02;
@@ -496,6 +496,67 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             ThrowIfDisposed();
             if (_snapshots.Remove(snapshotToken, out ProviderSnapshotState? state))
                 state.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Stamp current-state rows with the immutable Origin assigned by Metadata Store
+    /// freeze. The feed rows remain provisional and are deleted only by the later ACK;
+    /// retries therefore recover the same published sequence from the ChangeId ledger.
+    /// </summary>
+    public void CommitPublishedOrigins(IReadOnlyList<ProviderPublishedOrigin> published)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        if (published.Count == 0) return;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            Guid activeGeneration = ReadActiveGeneration(_storage);
+            using var batch = _storage.BeginWriteBatch();
+            int updated = 0;
+            foreach (ProviderPublishedOrigin entry in published)
+            {
+                ArgumentNullException.ThrowIfNull(entry);
+                ProviderChange change = entry.Change
+                    ?? throw new InvalidDataException("Published-origin entry has no provider feed change.");
+                MetadataOutboundItem outbound = entry.Published
+                    ?? throw new InvalidDataException("Published-origin entry has no frozen Metadata Store item.");
+                ProviderMutation draft = change.Mutation
+                    ?? throw new InvalidDataException("Published-origin feed mutation is missing.");
+                if (change.ChangeId.IsZero || draft.ChangeId != change.ChangeId ||
+                    draft.AuthorNodeId.IsZero || draft.OriginAuthorEpoch == 0 ||
+                    draft.OriginSequence != 0 ||
+                    outbound.ChangeId != change.ChangeId ||
+                    outbound.AuthorNodeId != draft.AuthorNodeId ||
+                    outbound.OriginAuthorEpoch != draft.OriginAuthorEpoch ||
+                    outbound.OriginSequence == 0)
+                    throw new InvalidDataException("Published Metadata Store identity does not match the provisional provider feed entry.");
+
+                byte[] currentKey = draft.IsRecordTombstone
+                    ? CurrentRecordTombstoneKey(activeGeneration, draft.RecordId)
+                    : CurrentKey(activeGeneration, draft.RecordId, draft.FieldId);
+                if (!batch.TryGet(currentKey, out byte[]? currentBytes))
+                    continue; // A newer state or authoritative snapshot superseded this operation.
+                ProviderMutation current = DecodeMutation(currentBytes!);
+                if (current.ChangeId != change.ChangeId)
+                    continue; // Do not stamp over a newer local/remote winner.
+                if (!SameMutationContent(current, draft) ||
+                    current.OriginAuthorEpoch != draft.OriginAuthorEpoch)
+                    throw new InvalidDataException("Current provider row conflicts with the frozen ChangeId content.");
+                if (current.OriginSequence == outbound.OriginSequence)
+                    continue; // Idempotent retry after a successful stamp.
+                if (current.OriginSequence != 0)
+                    throw new InvalidDataException("Current provider row already carries a different immutable OriginSequence.");
+
+                ProviderMutation stamped = CloneMutation(
+                    current, current.ChangeId, current.OriginAuthorEpoch, outbound.OriginSequence);
+                ValidateMutation(stamped);
+                batch.Put(currentKey, EncodeMutation(stamped));
+                updated++;
+            }
+
+            if (updated != 0)
+                batch.Commit();
         }
     }
 
