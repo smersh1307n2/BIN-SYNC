@@ -14,6 +14,12 @@ public enum SessionCapabilities : uint
     FlowControl = 1 << 1,
     /// <summary>§4.3/§12.7 — peer supports correlated live ALIAS_MAP updates after HELLO.</summary>
     IncrementalAliasMap = 1 << 2,
+    /// <summary>v3.1 — signed namespace roster certificate exchange.</summary>
+    NamespaceRosterV31 = 1 << 3,
+    /// <summary>v3.1 — signed applied-origin frontiers and retention checkpoints.</summary>
+    OriginFrontierV31 = 1 << 4,
+    /// <summary>v3.1 — authoritative FULL_REPLACE transfer and installed ACK.</summary>
+    FullReplaceV31 = 1 << 5,
 }
 
 /// <summary>struct: struct.</summary>
