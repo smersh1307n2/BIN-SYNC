@@ -272,3 +272,80 @@ public class MetadataStoreCardinalityBench
         return bytes;
     }
 }
+
+
+/// <summary>
+/// One-operation freeze measurement after a one-million-row unrelated ledger is
+/// seeded once per process. ShortRunJob keeps the setup cost bounded and outside
+/// the measured method.
+/// </summary>
+[MemoryDiagnoser]
+[ShortRunJob]
+[InvocationCount(1)]
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
+public class MetadataStoreMillionRowBench
+{
+    private const string Scope = "metadata-store-million-row-bench";
+    private const int NamespaceId = 1;
+    private static readonly NodeId Local = NodeId.From(IdBytes(1));
+    private static readonly NodeId Author = NodeId.From(IdBytes(2));
+    private StorageMetadataStore _store = null!;
+    private long _nextId = 3_000_000;
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-metadata-million-row-bench-" + Guid.NewGuid().ToString("N"));
+        _store = new StorageMetadataStore(directory, 705, deleteOnDispose: true);
+
+        const int rowCount = 1_000_000;
+        const int seedBatchSize = 2_048;
+        for (int start = 0; start < rowCount; start += seedBatchSize)
+        {
+            int count = Math.Min(seedBatchSize, rowCount - start);
+            var operations = new MetadataFrozenOperation[count];
+            for (int i = 0; i < count; i++)
+            {
+                byte[] identity = IdBytes(start + i + 100);
+                operations[i] = new MetadataFrozenOperation
+                {
+                    ChangeId = BatchId.From(identity),
+                    Fingerprint = identity,
+                    Payload = BitConverter.GetBytes(start + i)
+                };
+            }
+            _store.FreezeOutbound(Scope, Local, NamespaceId, Author, operations);
+        }
+
+        if (_store.GetOutboundHighWatermark(Scope, Local, NamespaceId, Author) != rowCount)
+            throw new InvalidOperationException("Million-row benchmark setup did not seed one million ledger rows.");
+    }
+
+    [GlobalCleanup]
+    public void Cleanup() => _store.Dispose();
+
+    [Benchmark(Description = "Freeze one local operation / 1,000,000 existing ledger rows")]
+    public int FreezeOneOperationAtMillionRows()
+    {
+        byte[] identity = IdBytes(Interlocked.Increment(ref _nextId));
+        var operation = new MetadataFrozenOperation
+        {
+            ChangeId = BatchId.From(identity),
+            Fingerprint = identity,
+            Payload = new byte[] { 0xA5, 0x5A }
+        };
+        IReadOnlyList<MetadataOutboundItem> frozen = _store.FreezeOutbound(
+            Scope, Local, NamespaceId, Author, new[] { operation });
+        if (frozen.Count != 1 || frozen[0].Sequence != 1_000_000UL + (ulong)(_nextId - 3_000_000))
+            throw new InvalidOperationException("Million-row benchmark did not allocate the expected next sequence.");
+        return frozen.Count;
+    }
+
+    private static byte[] IdBytes(long value)
+    {
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64BigEndian(bytes.AsSpan(8), value);
+        return bytes;
+    }
+}
