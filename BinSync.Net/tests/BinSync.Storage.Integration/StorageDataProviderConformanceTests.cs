@@ -993,14 +993,14 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         byte[] expected = StorageDataProvider.ComputeFullReplaceDigest(
             generation, watermark, new[] { first, second, third });
 
-        using var builder = new StorageDataProvider.FullReplaceDigestBuilder(generation, watermark);
+        using var builder = new ProviderFullReplaceDigestBuilder(generation, watermark);
         builder.AppendPage(new[] { first, second });
         builder.AppendPage(new[] { third });
         Assert.Equal(3, builder.EntryCount);
         Assert.Equal(expected, builder.Complete());
         Assert.Throws<InvalidOperationException>(() => builder.AppendPage(new[] { third }));
 
-        using var invalid = new StorageDataProvider.FullReplaceDigestBuilder(
+        using var invalid = new ProviderFullReplaceDigestBuilder(
             Guid.Parse("9a000000-0000-0000-0000-000000000002"), watermark);
         Assert.Throws<InvalidDataException>(() => invalid.AppendPage(new[] { second, first }));
         Assert.Throws<InvalidOperationException>(() => invalid.Complete());
