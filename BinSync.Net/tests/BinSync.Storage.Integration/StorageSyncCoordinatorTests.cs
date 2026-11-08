@@ -513,7 +513,8 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(checked((uint)local.Epoch), newEpochState.IssuerEpoch);
         Assert.Equal(1U, metadata.GetRetiredPeerEpoch(scope, local.NodeId, peer.NodeId, 1));
         Assert.Equal(2U, Assert.Single(metadata.ReadInterestedPeers(scope, local.NodeId, 1)).PeerEpoch);
-        Assert.Single(metadata.ReadOutboundForPeer(scope, local.NodeId,
+        // The full snapshot baseline already covers the current outbound item.
+        Assert.Empty(metadata.ReadOutboundForPeer(scope, local.NodeId,
             peer.NodeId, 2, 1, local.NodeId, 10).Items);
     }
 
