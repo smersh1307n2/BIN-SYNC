@@ -636,7 +636,7 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceivePacketAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (expectedType != SessionWire.TypeAliasMap && (expectedType < 0x04 || expectedType > NamespaceGcFrames.FullReplaceAbort))
+        if (expectedType != SessionWire.TypeAliasMap && (expectedType < 0x04 || expectedType > NamespaceGcFrames.FullReplaceReady))
             throw new InvalidOperationException("Only established-session frame types can be dispatched");
         if (expectedType != SessionWire.TypeAliasMap) EnsureAliasUpdatePumpStarted();
         Channel<byte[]> channel;
@@ -696,7 +696,7 @@ public partial class SyncSession : IAsyncDisposable
                 byte frameType = raw[3];
                 byte flags = raw[4];
                 uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
-                if (frameType != SessionWire.TypeAliasMap && (frameType < 0x04 || frameType > NamespaceGcFrames.FullReplaceAbort))
+                if (frameType != SessionWire.TypeAliasMap && (frameType < 0x04 || frameType > NamespaceGcFrames.FullReplaceReady))
                     throw new FrameException("FRAME_REJECTED");
 
                 if (frameType == Frames.TYPE_WINDOW_UPDATE)
@@ -761,7 +761,7 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceiveExpectedExclusiveAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (expectedType < 0x04 || expectedType > NamespaceGcFrames.FullReplaceAbort)
+        if (expectedType < 0x04 || expectedType > NamespaceGcFrames.FullReplaceReady)
             throw new ArgumentOutOfRangeException(nameof(expectedType));
         var gate = _receiveTypeGates.GetOrAdd(expectedType, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct).ConfigureAwait(false);
