@@ -266,13 +266,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// </summary>
     public int CompactChangeLedger(
         string scopeId, NodeId localReplica, int namespaceId, int limit,
-        Func<IDisposable?> acquireGcLease)
+        Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
         if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
         ArgumentNullException.ThrowIfNull(acquireGcLease);
+        ArgumentNullException.ThrowIfNull(externalReferences);
 
         IDisposable? lease = acquireGcLease();
         if (lease is null)
@@ -305,7 +306,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
                         roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
                     continue;
-                if (HasLiveChangeIdReference(current, namespaceId, pair.Key.ChangeId))
+                if (HasLiveChangeIdReference(current, namespaceId, pair.Key.ChangeId) ||
+                    externalReferences.HasExternalChangeIdReference(
+                        scopeId, localReplica, namespaceId, pair.Key.ChangeId))
                     continue;
 
                 byte[] suffix = new byte[18];
