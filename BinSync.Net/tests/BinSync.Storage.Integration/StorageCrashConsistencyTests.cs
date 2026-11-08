@@ -345,6 +345,21 @@ public sealed class StorageCrashConsistencyTests
     }
 
     [Fact]
+    public void Unix_directory_fsync_rejects_a_non_directory_path()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Windows directory-entry durability is not claimed by this engine.
+
+        string directory = Path.Combine(_root, "directory-fsync-error");
+        Directory.CreateDirectory(directory);
+        string regularFile = Path.Combine(directory, "not-a-directory");
+        File.WriteAllBytes(regularFile, new byte[] { 0x01 });
+
+        IOException error = Assert.Throws<IOException>(() => StorageDirectorySync.Flush(regularFile));
+        Assert.Contains("directory", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Partial_wal_write_fails_closed_and_recovery_discards_the_torn_record()
     {
         const ulong partitionId = 922;
