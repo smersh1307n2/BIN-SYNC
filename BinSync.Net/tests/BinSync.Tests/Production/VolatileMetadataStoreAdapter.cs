@@ -8,7 +8,7 @@ namespace BinSync.Tests.MetadataStore;
 /// Volatile reference adapter for the semantic conformance suite. It is deliberately
 /// test-only and makes no restart-durability claim.
 /// </summary>
-public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdapter
+public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdapter, IMetadataOutboundChangeIdentityStore
 {
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
 
