@@ -7,7 +7,7 @@ public static class FullReplaceTransferProtocol
 {
     public const int DigestSize = 32;
     public const int MaxChunkEntries = ProviderFullReplaceDigestBuilder.MaxPageEntries;
-    public const int MaxChunkBytes = 16 * 1024 * 1024;
+    public const int MaxChunkBytes = Frames.MAX_PAYLOAD_SIZE;
     private const int BeginLength = 2 + 16 + 8 + 32 + 8 + 4 + 32;
     private const int TransferIdLength = 2 + 16;
 
