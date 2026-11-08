@@ -432,6 +432,47 @@ public sealed class StorageSyncCoordinator
             roster, trustStore);
     }
 
+    /// <summary>Send only an installed ACK that is already durable in the local GC store.</summary>
+    public async Task SendDurableFullReplaceInstalledAckAsync(
+        SyncSession session, FullReplaceInstalledAck acknowledgement, byte[] memberSeed,
+        ulong frameSequence = 1, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(acknowledgement);
+        ArgumentNullException.ThrowIfNull(memberSeed);
+        if (acknowledgement.NamespaceId != _namespaceId ||
+            acknowledgement.MemberNodeId != _node.NodeId ||
+            !acknowledgement.Installed || acknowledgement.Generation == Guid.Empty)
+            throw new InvalidDataException("Only this node's installed FULL_REPLACE ACK can be sent.");
+        StorageNamespaceGcStore gcStore;
+        TrustStore trustStore;
+        NamespaceRosterCertificate roster;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before installed-ACK exchange.");
+            trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? accepted) ||
+                accepted is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            roster = accepted;
+        }
+        FullReplaceInstalledAck durable = gcStore.ReadFullReplaceInstalledAcks(roster, acknowledgement.Generation)
+            .FirstOrDefault(item => item.MemberNodeId == _node.NodeId)
+            ?? throw new InvalidOperationException("The installed ACK is not durable; refusing to send it.");
+        if (durable.MemberTransportEpoch != acknowledgement.MemberTransportEpoch ||
+            durable.RosterGeneration != acknowledgement.RosterGeneration ||
+            !durable.Digest.AsSpan().SequenceEqual(acknowledgement.Digest) ||
+            durable.HlcWallFloor != acknowledgement.HlcWallFloor ||
+            durable.HlcLogicalFloor != acknowledgement.HlcLogicalFloor)
+            throw new InvalidDataException("The supplied installed ACK differs from the durable accepted ACK.");
+        byte[] signed = FullReplaceInstalledAckProtocol.Sign(durable, memberSeed);
+        _ = FullReplaceInstalledAckProtocol.DecodeAndVerify(signed, roster);
+        await session.SendFullReplaceInstalledAckAsync(durable, memberSeed, frameSequence, ct)
+            .ConfigureAwait(false);
+    }
+
     /// <summary>Receive, verify and durably accept a member's FULL_REPLACE installed ACK.</summary>
     public async Task<FullReplaceInstalledAck> ReceiveAndAcceptFullReplaceInstalledAckAsync(
         SyncSession session, Guid generation, CancellationToken ct = default)
