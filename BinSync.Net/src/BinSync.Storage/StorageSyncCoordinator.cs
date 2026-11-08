@@ -62,7 +62,7 @@ public sealed class StorageSyncCoordinator
     /// pending provider drafts as a barrier; drafts never consume OriginSequence. Call after local freeze and remote apply.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
-        byte[] memberSeed, int pageSize = 1024, bool finalForAuthor = false)
+        byte[] memberSeed, int pageSize = 1024, bool finalForAuthor = false, uint finalAuthorEpoch = 0)
     {
         ArgumentNullException.ThrowIfNull(memberSeed);
         if (memberSeed.Length != 32)
@@ -84,6 +84,18 @@ public sealed class StorageSyncCoordinator
 
             if (pageSize <= 0 || pageSize > 4096)
                 throw new ArgumentOutOfRangeException(nameof(pageSize));
+            if (finalForAuthor)
+            {
+                if (finalAuthorEpoch == 0 ||
+                    _provider is not IProviderAuthorEpochClosureStore closureStore ||
+                    !closureStore.TryCloseLocalAuthorEpoch(finalAuthorEpoch))
+                    throw new InvalidOperationException("Final author report requires a non-zero epoch with no remaining local feed drafts; the provider epoch is closed atomically before signing.");
+            }
+            else if (finalAuthorEpoch != 0)
+            {
+                throw new ArgumentException("finalAuthorEpoch is only valid when finalForAuthor is true.", nameof(finalAuthorEpoch));
+            }
+
             ulong unpublishedDraftCount = 0;
             ulong maxDraftHlcWall = 0;
             uint maxDraftHlcLogical = 0;
