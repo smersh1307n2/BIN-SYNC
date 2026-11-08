@@ -603,6 +603,22 @@ public sealed partial class Node
         }
     }
 
+    /// <summary>Return the author streams that still have retained Outbox payload rows.</summary>
+    internal IReadOnlyList<NodeId> ReadOutboxAuthors(int namespaceId)
+    {
+        ValidateNamespaceId(namespaceId);
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            if (!Outbox.TryGetValue(namespaceId, out var entries) || entries.Count == 0)
+                return Array.Empty<NodeId>();
+            return entries.Select(entry => entry.AuthorNodeId)
+                .Distinct()
+                .OrderBy(author => author)
+                .ToArray();
+        }
+    }
+
     /// <summary>Return the highest sequence ever allocated for one author stream.</summary>
     public long GetOutboxHighWatermark(int namespaceId, NodeId authorNodeId)
     {
