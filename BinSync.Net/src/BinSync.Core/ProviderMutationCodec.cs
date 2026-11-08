@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 
-namespace BinSync.Core;
+namespace BinSync;
 
 public static class ProviderMutationCodec
 {
