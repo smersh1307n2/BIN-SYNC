@@ -42,6 +42,60 @@ public sealed class StorageSyncCoordinator
     /// Replaying an unacknowledged page is idempotent because the original HLC and
     /// local author are passed through to Node.WriteField/TombField.
     /// </summary>
+    /// <summary>
+    /// Performs the one-time, fail-closed transition from Node-Outbox mirroring to
+    /// Metadata-Store-owned outbound sequencing. The provider feed must already be
+    /// drained through the legacy path; the cutover watermark is persisted by providers
+    /// that support <see cref="IProviderPublicationMode"/>.
+    /// </summary>
+    public void EnableMetadataStoreOwnedPublication(Action<Node> persistNode)
+    {
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException("Metadata-Store-owned publication requires a durable Metadata Store scope.");
+        if (_provider is not IProviderPublicationMode publicationMode)
+            throw new NotSupportedException("The attached provider does not support a durable outbound authority cutover.");
+
+        lock (_gate)
+        {
+            if (publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong existingCutover))
+            {
+                long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+                if (currentNodeHigh < 0 || (ulong)currentNodeHigh != existingCutover)
+                    throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+                return;
+            }
+
+            ProviderChangePage pending = _provider.ReadLocalChanges(0, 1);
+            if (pending.Changes.Count != 0)
+                throw new InvalidOperationException(
+                    "Drain and acknowledge the provider local feed through the Node-Outbox transition path before enabling Metadata-Store-owned publication.");
+
+            long nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+            if (nodeHigh < 0)
+                throw new InvalidDataException("Node Outbox high watermark is invalid.");
+            ulong metadataHigh = _metadataStore.GetOutboundHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+            if (metadataHigh > (ulong)nodeHigh)
+                throw new InvalidOperationException(
+                    "Metadata Store is already ahead of the Node Outbox; a fresh, verified cutover checkpoint is required.");
+
+            // Freeze any remaining pre-cutover Node rows, then rebuild the Node cache
+            // from the provider snapshot. The Node sequence watermark itself is kept
+            // as a fixed fence; all future outbound sequences come from Metadata Store.
+            FreezeLocalOutboxToMetadata();
+            InstallProviderSnapshot(persistNode);
+
+            nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+            metadataHigh = _metadataStore.GetOutboundHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+            if (nodeHigh < 0 || metadataHigh != (ulong)nodeHigh)
+                throw new InvalidOperationException("Node and Metadata Store outbound watermarks are not aligned at cutover.");
+
+            publicationMode.EnableMetadataStoreOwnedPublication((ulong)nodeHigh);
+        }
+    }
+
     public int PublishLocalChanges(Action<Node> persistNode, int limit = 1024)
     {
         ArgumentNullException.ThrowIfNull(persistNode);
@@ -93,13 +147,23 @@ public sealed class StorageSyncCoordinator
                 break;
         }
 
+        bool metadataStoreOwnsOutbound = false;
+        if (_provider is IProviderPublicationMode publicationMode &&
+            publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutoverNodeOutboxHigh))
+        {
+            long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+            if (currentNodeHigh < 0 || (ulong)currentNodeHigh != cutoverNodeOutboxHigh)
+                throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+            metadataStoreOwnsOutbound = true;
+        }
+
         if (totalChanges == 0)
             return 0;
 
-        if (_metadataStore is not null && sawStableChangeId)
+        if (metadataStoreOwnsOutbound)
         {
-            if (sawLegacyChangeId)
-                throw new InvalidDataException("A durable provider feed page cannot mix stable and zero ChangeIds.");
+            if (_metadataStore is null || !sawStableChangeId || sawLegacyChangeId)
+                throw new InvalidDataException("Metadata-Store-owned publication requires non-zero stable ChangeIds for every provider feed entry.");
             return PublishLocalChangesToMetadataStore(
                 winners, scannedThroughSequence, totalChanges, persistNode, installProviderSnapshot);
         }
@@ -138,14 +202,16 @@ public sealed class StorageSyncCoordinator
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Stable provider ChangeIds require a durable Metadata Store scope.");
 
-        // Finish any pre-cutover Node Outbox suffix before allocating Metadata-Store
-        // sequences directly from the provider feed. Once Metadata Store is ahead of
-        // the Node counter, the Node mirror is no longer an allocator.
+        if (_provider is not IProviderPublicationMode publicationMode ||
+            !publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutoverNodeOutboxHigh))
+            throw new InvalidOperationException("Provider-authoritative outbound publication has not been enabled.");
+        long nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+        if (nodeHigh < 0 || (ulong)nodeHigh != cutoverNodeOutboxHigh)
+            throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
         ulong metadataHigh = _metadataStore.GetOutboundHighWatermark(
             _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
-        long nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
-        if (metadataHigh <= (ulong)nodeHigh)
-            FreezeLocalOutboxToMetadata();
+        if (metadataHigh < cutoverNodeOutboxHigh)
+            throw new InvalidDataException("Metadata Store outbound watermark regressed below the cutover fence.");
 
         var frozenOperations = new List<MetadataFrozenOperation>(winners.Count);
         foreach (var change in winners.Values.OrderBy(change => change.Sequence))
