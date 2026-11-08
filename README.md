@@ -4,7 +4,7 @@ Compact binary sync protocol (BIN-SYNC CORE) and a .NET 10 reference implementat
 
 | Artifact | Path |
 |---|---|
-| Spec (v2.4.19 FINAL) | [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt) |
+| Spec (v2.4.20 FINAL) | [BIN-SYNC-SPECIFICATION.txt](BIN-SYNC-SPECIFICATION.txt) |
 | Historical addendum (v2.3.7) | [BIN-SYNC-v2.3.7-ADDENDUM.txt](BIN-SYNC-v2.3.7-ADDENDUM.txt) |
 | Production status | [docs/PRODUCTION-STATUS.md](docs/PRODUCTION-STATUS.md) |
 | Metadata storage / external provider architecture | [docs/METADATA-STORAGE-ARCHITECTURE.md](docs/METADATA-STORAGE-ARCHITECTURE.md) |
