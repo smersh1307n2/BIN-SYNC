@@ -187,6 +187,12 @@ public sealed class StorageFullReplaceReceiver
                 throw new InvalidOperationException("Cross-store FULL_REPLACE commit proof is unavailable; provider state was not switched.");
             using (commitGuard)
             {
+                if (!_gcStore.TryReadNamespaceRoster(_namespaceId, _trustStore,
+                        out NamespaceRosterCertificate? currentRoster) || currentRoster is null ||
+                    currentRoster.RosterGeneration != roster.RosterGeneration ||
+                    !NamespaceRosterProtocol.ComputeDigest(currentRoster).AsSpan()
+                        .SequenceEqual(NamespaceRosterProtocol.ComputeDigest(roster)))
+                    throw new InvalidOperationException("Namespace roster changed before FULL_REPLACE commit.");
                 if (!progress.IsCommitted)
                     _fullReplace.CommitFullReplace(manifest.Generation);
                 _afterCommit();
@@ -263,6 +269,8 @@ public sealed class StorageFullReplaceReceiver
         Task<FullReplaceTransferProtocol.TransferId> abortTask =
             session.ReceiveFullReplaceAbortAsync(_namespaceId, sequence, linked.Token);
         Task completed = await Task.WhenAny(chunkTask, abortTask).ConfigureAwait(false);
+        if (chunkTask.IsCompletedSuccessfully && abortTask.IsCompletedSuccessfully)
+            throw new FrameException("FRAME_REJECTED");
         if (completed == abortTask)
         {
             FullReplaceTransferProtocol.TransferId abort;
@@ -289,6 +297,8 @@ public sealed class StorageFullReplaceReceiver
         Task<FullReplaceTransferProtocol.TransferId> abortTask =
             session.ReceiveFullReplaceAbortAsync(_namespaceId, sequence, linked.Token);
         Task completed = await Task.WhenAny(commitTask, abortTask).ConfigureAwait(false);
+        if (commitTask.IsCompletedSuccessfully && abortTask.IsCompletedSuccessfully)
+            throw new FrameException("FRAME_REJECTED");
         if (completed == abortTask)
         {
             FullReplaceTransferProtocol.TransferId abort;
