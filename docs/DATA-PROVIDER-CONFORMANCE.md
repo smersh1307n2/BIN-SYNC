@@ -149,12 +149,12 @@ The volatile reference provider is for semantic testing only. A durable provider
 
 ## 10. Implementation gates
 
-1. Freeze the observable provider guarantees in this document; keep public API names open.
-2. Add a provider-independent test-only adapter and volatile reference provider.
-3. Cover mapping, durable-feed semantics, snapshot/feed barrier, remote apply idempotency and origin separation.
-4. **Default ownership is now recorded in Metadata Storage Architecture §3.3:** a separate generic Data Provider owns its durable source feed and the Metadata Store/runtime owns canonical PendingLocal staging; FLD Database, acting as both provider and metadata owner, owns PendingLocal inside its Database transaction; a shared transaction domain may co-commit the stage; Storage-only mode has no user-data PendingLocal. Keep public API names open until staging/feed-handoff conformance tests pass.
-5. Only then finalize neutral Data Provider interfaces and refactor BIN-SYNC Runtime/Node persistence.
-6. Validate shared-transaction and separate-store adapters independently. Keep the FLD synchronized-database provenance adapter as a separate integration gate.
+1. **Completed:** provider guarantees are expressed as neutral contracts; `IDataProvider` and the optional `IProviderPublicationMode` are implemented.
+2. **Completed:** provider-independent conformance suite and volatile reference adapter are implemented.
+3. **Completed for the current Storage adapter slice:** mapping, durable-feed paging/ACK, snapshot/feed barrier, remote apply idempotency, origin separation and reopen behavior have conformance/integration coverage.
+4. **Ownership distinction remains binding:** a separate generic provider owns its durable source feed. In the Storage-backed provider-authoritative mode, the Metadata Store owns immutable published payloads and outbound sequence; provider feed ACK follows metadata freeze. FLD Database, acting as both provider and metadata owner, must own its FLD-specific PendingLocal/freeze protocol inside the Database transaction. Storage-only mode has no user-data PendingLocal.
+5. **Partially complete:** neutral provider interfaces and Storage adapters are implemented. Full BIN-SYNC Node/Transport authority migration and the FLD synchronized-Database provenance adapter remain separate gates.
+6. Validate shared-transaction and separate-store adapters independently, including deterministic crash injection. Keep the FLD synchronized-database provenance adapter as a separate integration gate.
 
 
 ## 11. Initial executable conformance status (2026-11-07)
@@ -166,10 +166,14 @@ GitHub Actions run `42359566433` passed the full BIN-SYNC Release build/tests, p
 **Still open:** cross-page durable PendingLocal staging/coalescing, end-to-end proof that source-feed ACK follows durable canonical staging rather than the transitional Node checkpoint + Metadata mirror, and a broader crash matrix around source feed → Node/Metadata publication. The durable StorageDataProvider does provide actual reopen, feed paging/ACK, snapshot/feed barrier and idempotent remote-apply evidence; the volatile reference provider itself still makes no restart-durability claim.
 
 
-## 12. Durable Storage provider status (2026-11-07)
+## 12. Durable Storage provider and outbound authority status (2026-11-08)
 
-The durable `StorageDataProvider` implementation is now part of the BIN-SYNC + Storage integration and passes the inherited provider conformance suite against real `Fld1.Storage`, including process-reopen tests for stable mappings, local feed state, remote apply receipts and current array state.
+The durable `StorageDataProvider` implementation passes the inherited provider conformance suite against real `Fld1.Storage`, including process-reopen tests for stable mappings, local feed state, remote apply receipts and current array state. Its local feed rows carry stable 128-bit ChangeIds and preserve them across reopen until the feed row is acknowledged.
 
-`StorageSyncCoordinator.PublishLocalChanges` now coalesces repeated unpublished LWW field mutations within the bounded provider-feed page before creating Node Outbox entries. It selects the canonical `(HlcWall, HlcLogical, AuthorNodeId)` winner per `(RecordId, FieldId)`; record lifecycle tombstones are coalesced separately. All source-page entries are validated before coalescing, and only the final selected operations enter the Node Outbox. Once frozen/published, operations remain immutable.
+`StorageSyncCoordinator.PublishLocalChanges` drains the complete currently-pending provider feed across pages and coalesces repeated unpublished LWW changes by canonical record/field identity, with record lifecycle tombstones handled separately. It validates every source entry and preserves original HLC/author. Before the explicit authority cutover, selected winners enter Node Outbox and are frozen into Metadata Store. After cutover, selected winners are frozen directly into Metadata Store; Node Outbox allocation is fenced and Node is rebuilt from a stable provider snapshot as an application-data cache.
 
-This is deliberately **page-local coalescing**, not the final durable PendingLocal staging design. The source feed remains the provider's durable history until ACK. Cross-page coalescing and the complete Storage-backed Metadata Store publication boundary remain open; do not claim that all unpublished local edits are globally coalesced yet.
+The cutover requires an empty/acknowledged provider feed and aligned Node/Metadata Store outbound high-watermarks. The provider persists the immutable cutover watermark. The coordinator consults the global ChangeId fingerprint ledger on replay: if a metadata freeze committed but provider ACK failed, already-frozen ChangeIds are retained and only the later unfrozen suffix is coalesced. This preserves the immutability boundary when newer local edits arrive before retry.
+
+Verified BIN-SYNC source/test head `4c4789f06150dd07457adb207dc84879fdea4bd4`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases and 70.9% line coverage; in-process and real-TCP Storage samples pass.
+
+This remains a **provider-feed publication slice**, not the final FLD Database PendingLocal implementation. The source feed is a durable provider journal; it does not yet implement FLD's atomic StageSeq snapshot/freeze-intent promotion protocol from the cross-repository roadmap §7.22. Physical Storage crash-cut tests, multi-process provider feed concurrency, FLD JournalSeq→ChangeId→OutboxSeq provenance, and independent receipt/dedup/tombstone GC horizons remain open.
