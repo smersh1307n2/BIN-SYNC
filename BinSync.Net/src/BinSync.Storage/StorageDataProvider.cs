@@ -1040,18 +1040,22 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     /// excludes PendingApply, relay/outbound reservations and external reader pins.
     /// </summary>
     public int CompactRecordTombstones(
-        int namespaceId, StorageNamespaceGcStore gcStore, TrustStore trustStore,
+        string scopeId, NodeId localReplica, int namespaceId,
+        StorageMetadataStore metadataStore, StorageNamespaceGcStore gcStore, TrustStore trustStore,
         int limit, Func<IDisposable?> acquireGcLease,
         IApplicationGcReferenceScanner externalReferences)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(trustStore);
         if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
         ArgumentNullException.ThrowIfNull(acquireGcLease);
         ArgumentNullException.ThrowIfNull(externalReferences);
-        if (!gcStore.IsBoundTo(_storage))
-            throw new ArgumentException("Tombstone GC store must share the provider StorageDatabase.", nameof(gcStore));
+        if (!SharesStorageWith(metadataStore) || !gcStore.IsBoundTo(_storage))
+            throw new ArgumentException("Provider, Metadata Store and namespace-GC store must share one StorageDatabase.");
         if (!gcStore.IsTombstoneGcProofEnabled)
             return 0;
 
@@ -1114,6 +1118,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         roster, trustStore, tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
                         tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
                         checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest) ||
+                    metadataStore.HasLiveRecordReference(scopeId, localReplica, namespaceId, tombstone.RecordId) ||
                     externalReferences.HasExternalChangeIdReference(namespaceId, tombstone.ChangeId) ||
                     externalReferences.HasExternalRecordReference(
                         namespaceId, tombstone.RecordId, tombstone.ChangeId))
