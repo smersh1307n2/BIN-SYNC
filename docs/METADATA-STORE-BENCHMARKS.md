@@ -70,3 +70,23 @@ The fixture uses the real `StorageDataProvider` and `StorageMetadataStore`. Setu
 **Important scope:** this is the complete `PublishLocalChanges` retry path, including provider snapshot rehydration and Node cache replacement. It is not a scan-only benchmark. `RestoreProviderSnapshot` rebuilds the namespace and copies field values, so its allocations are included. The 1,024-row case had high run-to-run variance (24.9% relative standard deviation); treat that mean as directional. The 4,096-row case was more stable (1.02%).
 
 **Next optimization target:** keep the one-time full snapshot for initial cutover and startup reconciliation, but investigate applying the already-read provider feed incrementally to the Node cache after durable freeze. Any incremental path must preserve atomic cache updates, ChangeId duplicate suppression on ACK retry, tombstones, HLC ordering and checkpoint/restart recovery. Benchmark it against this full-path baseline before replacing the snapshot path.
+
+## 2026-11-08 incremental Node-cache retry
+
+**Run:** GitHub Actions Durable Metadata Bench, run `42440960333`, code head `3546461cd14b4130fe4ea3596bf74997d02f617c`  
+**Runtime:** .NET 10.0.14 · **OS:** Ubuntu 26.04.1 LTS · **CPU:** AMD EPYC 9V74 (GitHub-hosted runner)  
+**Job:** InProcessEmitToolchain, 3 warmup iterations and 10 measurement iterations, one stateful retry per invocation.
+
+The coordinator now applies the exact scanned provider-feed prefix incrementally to the Node data cache after the immutable Metadata Store freeze. It checkpoints Node before acknowledging the provider feed. Startup rehydration retains the full provider snapshot path; ordinary publication retry no longer rebuilds the whole namespace snapshot.
+
+| Pending provider-feed rows | Incremental retry mean | Allocated / retry | Previous full-snapshot retry mean | Previous allocation |
+|---:|---:|---:|---:|---:|
+| 256 | 1.523 ms | 875.93 KB | 2.055 ms | 1.52 MB |
+| 1,024 | 3.829 ms | 3,516.38 KB | 14.324 ms | 6.47 MB |
+| 4,096 | 15.869 ms | 14,148.12 KB | 34.651 ms | 33.92 MB |
+
+**Comparison caveat:** the previous full-snapshot baseline ran on an AMD EPYC 7763 runner; this incremental run used an AMD EPYC 9V74 runner. Treat latency differences as directional, not as a controlled before/after claim. The 1,024-row previous baseline also had high variance (24.9% relative standard deviation). Current-run relative standard deviations were approximately 29.3%, 6.45% and 2.93% for 256/1,024/4,096 rows; the 256-row case is noisy. BenchmarkDotNet also warned that these single-invocation stateful iterations are shorter than its recommended 100 ms measurement window.
+
+**Interpretation:** the current retry path reduced measured managed allocation substantially at all sizes, with the largest case falling from 33.92 MB to 14,148 KB. A same-runner baseline comparison is still required before claiming a precise latency speedup. The direct ChangeId lookup remains allocation-free; the remaining incremental-path allocations include feed materialization, metadata operation encoding and changed-record copy-on-write.
+
+**Next:** retain this result as the incremental checkpoint, add a controlled same-runner old-vs-new comparison, and profile allocations in the feed list / operation encoding / changed-record staging before further changes. Do not replace the full snapshot used for initial cutover and startup recovery.
