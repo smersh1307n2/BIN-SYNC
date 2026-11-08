@@ -1497,6 +1497,38 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Incremental_provider_cache_coalesces_repeated_field_edits_by_maximum_HLC()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "incremental-provider-hlc-coalesce"), 467);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(68);
+        const string scope = "incremental-provider-hlc-coalesce";
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        RecordId recordId = RecordId.From(Guid.Parse("68000000-0000-0000-0000-000000000001").ToByteArray());
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId, FieldId = 0x0831, AuthorNodeId = node.NodeId,
+            HlcWall = 8200, Value = "maximum-HLC"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId, FieldId = 0x0831, AuthorNodeId = node.NodeId,
+            HlcWall = 8100, Value = "later-feed-but-older-HLC"u8.ToArray()
+        });
+
+        Assert.Equal(2, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.True(provider.TryReadCurrent(recordId, 0x0831, out var providerValue));
+        Assert.Equal("maximum-HLC", Encoding.UTF8.GetString(providerValue!.Value));
+        Assert.True(node.TryGetField(1, recordId, 0x0831, out var nodeValue));
+        Assert.Equal("maximum-HLC", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+    }
+
+    [Fact]
     public void Malformed_provider_feed_is_rejected_before_metadata_freeze()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "malformed-provider-feed"), 465);
