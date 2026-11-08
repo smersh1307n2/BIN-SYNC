@@ -27,11 +27,10 @@ public readonly record struct OperationOrigin
     }
 
     /// <summary>Validate a value that may have been obtained from default(T) or untrusted persisted state.</summary>
-    public OperationOrigin EnsureValid(string? paramName = null)
+    public OperationOrigin EnsureValid()
     {
         if (!IsValid)
-            throw new InvalidDataException("Immutable Origin must contain a non-zero author, epoch and sequence.",
-                paramName is null ? null : new ArgumentException(paramName));
+            throw new InvalidDataException("Immutable Origin must contain a non-zero author, epoch and sequence.");
         return this;
     }
 }
