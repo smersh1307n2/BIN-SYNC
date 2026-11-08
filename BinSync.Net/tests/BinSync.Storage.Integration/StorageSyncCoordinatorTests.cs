@@ -1360,6 +1360,7 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 5900,
             Value = "provider-authoritative"u8.ToArray()
         });
+        BatchId expectedChangeId = Assert.Single(provider.ReadLocalChanges(0, 10).Changes).ChangeId;
 
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
         Assert.Equal(0, coordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
@@ -1369,10 +1370,10 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("provider-authoritative", Encoding.UTF8.GetString(restored!.Value));
         Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
-        BatchId changeId = metadata.ReadOutbound(scope, node.NodeId, 1, node.NodeId,
+        BatchId publishedChangeId = metadata.ReadOutbound(scope, node.NodeId, 1, node.NodeId,
             metadata.AcquireOutboundLease(scope, node.NodeId, 1, node.NodeId,
                 Guid.Parse("54000000-0000-0000-0000-000000000001")), 0, 10).Items.Single().ChangeId;
-        Assert.False(changeId.IsZero);
+        Assert.Equal(expectedChangeId, publishedChangeId);
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
     }
 
