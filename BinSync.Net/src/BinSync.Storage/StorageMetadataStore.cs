@@ -255,7 +255,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 var ledgerKey = new LedgerKey(incoming.NamespaceId, operation.ChangeId);
                 if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
                 {
-                    if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                    if (!LedgerMatches(priorLedger, operation))
                         throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                     continue;
                 }
@@ -498,7 +498,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
             if (state.ChangeLedger.TryGetValue(key, out var prior))
             {
-                if (!prior.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!LedgerMatches(prior, operation))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                 decisions[i] = false;
             }
@@ -510,7 +510,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return Array.AsReadOnly(decisions);
     }
 
-    private static bool ValidateIncomingBatchForStaging(
+        private static bool SameOperationIdentity(MetadataOperation left, MetadataOperation right)
+        => left.AuthorNodeId == right.AuthorNodeId
+            && left.OriginAuthorEpoch == right.OriginAuthorEpoch
+            && left.OriginSequence == right.OriginSequence
+            && left.Fingerprint.AsSpan().SequenceEqual(right.Fingerprint);
+
+private static bool ValidateIncomingBatchForStaging(
         PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
     {
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
@@ -548,36 +554,36 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         // Index pending identities once. The durable identity key is
         // (namespace, ChangeId), not ChangeId alone; scanning every pending batch
         // for every incoming operation made staging O(pending × incoming).
-        var pendingIdentities = new Dictionary<LedgerKey, byte[]>();
+        var pendingIdentities = new Dictionary<LedgerKey, MetadataOperation>();
         foreach (var otherPending in state.PendingApplies.Values)
         {
             foreach (var pendingOperation in otherPending.Batch.Operations)
             {
                 var pendingKey = new LedgerKey(otherPending.Batch.NamespaceId, pendingOperation.ChangeId);
-                if (pendingIdentities.TryGetValue(pendingKey, out var knownFingerprint) &&
-                    !knownFingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint))
-                    throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
-                pendingIdentities[pendingKey] = pendingOperation.Fingerprint;
+                if (pendingIdentities.TryGetValue(pendingKey, out var knownOperation) &&
+                    !SameOperationIdentity(knownOperation, pendingOperation))
+                    throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
+                pendingIdentities[pendingKey] = pendingOperation;
             }
         }
 
-        var batchIdentities = new Dictionary<LedgerKey, byte[]>();
+        var batchIdentities = new Dictionary<LedgerKey, MetadataOperation>();
         foreach (var operation in batch.Operations)
         {
             var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
-            if (batchIdentities.TryGetValue(key, out var inBatchFingerprint) &&
-                !inBatchFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint within one incoming batch.");
-            batchIdentities[key] = operation.Fingerprint;
+            if (batchIdentities.TryGetValue(key, out var inBatchOperation) &&
+                !SameOperationIdentity(inBatchOperation, operation))
+                throw new InvalidDataException("ChangeId was reused with different fingerprint or Origin provenance within one incoming batch.");
+            batchIdentities[key] = operation;
 
             if (state.ChangeLedger.TryGetValue(key, out var priorLedger) &&
                 !priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
 
-            if (pendingIdentities.TryGetValue(key, out var pendingFingerprint))
+            if (pendingIdentities.TryGetValue(key, out var pendingOperation))
             {
-                if (!pendingFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                    throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                if (!SameOperationIdentity(pendingOperation, operation))
+                    throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
                 throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
             }
         }
@@ -628,13 +634,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var ledgerKey = new LedgerKey(batch.NamespaceId, operation.ChangeId);
             if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
             {
-                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!LedgerMatches(priorLedger, operation))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                 continue;
             }
             if (newLedger.TryGetValue(ledgerKey, out var stagedLedger))
             {
-                if (!stagedLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!LedgerMatches(stagedLedger, operation))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint within one incoming batch.");
                 continue;
             }
@@ -857,7 +863,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var ledgerKey = new LedgerKey(batch.NamespaceId, operation.ChangeId);
             if (next.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
             {
-                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!LedgerMatches(priorLedger, operation))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                 continue;
             }
@@ -1018,7 +1024,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 && priorLedger.IsLocalOutbound;
             if (priorLedger is not null)
             {
-                if (!priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                if (!LedgerMatches(priorLedger, operation))
                     throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId ledger.");
                 if (!alreadyFrozen)
                     throw new InvalidDataException("ChangeId is already known from an incoming route and cannot be published as a new local operation.");
@@ -3699,7 +3705,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private sealed record PendingApplyValue(MetadataIncomingBatch Batch);
     private sealed record CompletedPendingApplyValue(byte[] BatchDigest, MetadataBatchReceipt Receipt);
 
-    private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound, NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence);
+        private static bool LedgerMatches(ChangeLedgerValue ledger, MetadataOperation operation)
+        => ledger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint)
+            && ledger.AuthorNodeId == operation.AuthorNodeId
+            && ledger.OriginAuthorEpoch == operation.OriginAuthorEpoch
+            && ledger.OriginSequence == operation.OriginSequence;
+
+private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound, NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence);
 
     private sealed class PartitionState
     {
