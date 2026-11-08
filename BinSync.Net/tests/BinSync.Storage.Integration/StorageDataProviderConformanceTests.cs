@@ -392,20 +392,28 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 });
             }));
 
+            object metadataSequenceGate = new();
+            ulong nextOriginSequence = 0;
             Task metadataWrites = Task.Run(() => Parallel.For(0, 64, i =>
             {
                 byte[] identity = new byte[16];
                 identity[14] = 0x80;
                 identity[15] = (byte)(i + 1);
-                metadata.FreezeOutbound(scope, local, 1, local, new[]
+                lock (metadataSequenceGate)
                 {
-                    new MetadataFrozenOperation
+                    ulong originSequence = ++nextOriginSequence;
+                    metadata.FreezeOutbound(scope, local, 1, local, new[]
                     {
-                        ChangeId = BatchId.From(identity),
-                        Fingerprint = identity.ToArray(),
-                        Payload = new[] { checked((byte)i) }
-                    }
-                });
+                        new MetadataFrozenOperation
+                        {
+                            ChangeId = BatchId.From(identity),
+                            Fingerprint = identity.ToArray(),
+                            Payload = new[] { checked((byte)i) },
+                            OriginAuthorEpoch = 1,
+                            OriginSequence = originSequence
+                        }
+                    });
+                }
             }));
 
             await Task.WhenAll(providerWrites, metadataWrites);
