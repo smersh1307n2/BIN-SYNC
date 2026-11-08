@@ -472,7 +472,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 decisions[i] = true;
             }
         }
-        return decisions;
+        return Array.AsReadOnly(decisions);
     }
 
     private static bool ValidateIncomingBatchForStaging(
