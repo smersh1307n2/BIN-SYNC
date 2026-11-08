@@ -202,7 +202,7 @@ public class WalTests
             };
             var entry = new OutboxEntry
             {
-                NamespaceId = 1, Seq = 1, ChangeId = changeId, RecordId = rid,
+                NamespaceId = 1, Seq = 1, ChangeId = changeId, OriginAuthorEpoch = checked((uint)source.Epoch), OriginSequence = 1, RecordId = rid,
                 OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOp(op, fullAuthor: false),
                 AuthorNodeId = source.NodeId, CreatedAt = 12345,
                 CausalDeps = new List<BatchId> { BatchId.From(Guid.NewGuid().ToByteArray()) }

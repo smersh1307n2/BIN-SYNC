@@ -105,6 +105,7 @@ public class CausalApplyTests
         var entry = new OutboxEntry
         {
             NamespaceId = 1,
+            OriginAuthorEpoch = 1, OriginSequence = 1,
             ChangeId = default,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
@@ -128,9 +129,9 @@ public class CausalApplyTests
         var changeId = BatchId.From(Id(0x45));
         var entries = new List<OutboxEntry>
         {
-            new() { NamespaceId = 1, ChangeId = changeId, RecordId = Rid(1),
+            new() { NamespaceId = 1, OriginAuthorEpoch = 1, OriginSequence = 1, ChangeId = changeId, RecordId = Rid(1),
                 Payload = Array.Empty<byte>(), CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) } },
-            new() { NamespaceId = 1, ChangeId = changeId, RecordId = Rid(2),
+            new() { NamespaceId = 1, OriginAuthorEpoch = 1, OriginSequence = 2, ChangeId = changeId, RecordId = Rid(2),
                 Payload = Array.Empty<byte>(), CausalDeps = new List<BatchId> { BatchId.From(Id(0x44)) } },
         };
         var batch = new Batch(
@@ -165,6 +166,8 @@ public class CausalApplyTests
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = BatchId.From(Id(0xE1)),
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId.ToArray(),
                 OpKind = e.OpKind,
                 Payload = e.Payload.ToArray(),
@@ -205,6 +208,8 @@ public class CausalApplyTests
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId.ToArray(),
                 OpKind = e.OpKind,
                 Payload = e.Payload.ToArray(),
@@ -288,6 +293,7 @@ public class CausalApplyTests
             NamespaceId = 1,
             Seq = 1,
             ChangeId = changeId,
+            OriginAuthorEpoch = 1, OriginSequence = 1,
             RecordId = Rid(1),
             OpKind = 0x01,
             Payload = originalPayload,
@@ -328,6 +334,7 @@ public class CausalApplyTests
         {
             NamespaceId = 1,
             ChangeId = changeId,
+            OriginAuthorEpoch = 1, OriginSequence = 1,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),

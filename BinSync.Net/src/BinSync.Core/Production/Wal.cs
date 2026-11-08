@@ -125,7 +125,7 @@ public sealed class Wal : IDisposable
         w.U64((ulong)entry.Seq);
         w.B128(entry.ChangeId);
         if (entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0)
-            throw new InvalidOperationException("WAL local mutation requires immutable Origin provenance.");
+            throw new InvalidDataException("WAL local mutation requires immutable Origin provenance.");
         w.U32(entry.OriginAuthorEpoch).U64(entry.OriginSequence);
         w.B128(entry.RecordId);
         w.U8(entry.OpKind);
