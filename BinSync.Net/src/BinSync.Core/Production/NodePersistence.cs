@@ -1224,10 +1224,11 @@ public static class NodePersistence
             w.Varint((ulong)authorIndexes[entry.AuthorNodeId]);
             w.Varint((ulong)entry.Seq);
             w.B128(entry.ChangeId);
-            if (entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0)
+            var provenance = entry.Provenance;
+            if (!provenance.IsValid)
                 throw new InvalidOperationException("Outbox origin provenance is required.");
-            w.U32(entry.OriginAuthorEpoch);
-            w.U64(entry.OriginSequence);
+            w.U32(provenance.AuthorEpoch);
+            w.U64(provenance.Sequence);
             w.Varint((ulong)payload.Length);
             w.Raw(payload);
             if (!recordTombstone) w.B128(entry.RecordId);
@@ -1284,8 +1285,8 @@ public static class NodePersistence
             {
                 NamespaceId = namespaceId, Seq = sequence, ChangeId = changeId,
                 RecordId = recordId, OpKind = opKind, Payload = payload,
-                OriginAuthorEpoch = originEpoch, OriginSequence = originSequence,
-                AuthorNodeId = authors[authorIndex], CreatedAt = createdAt,
+                Provenance = new OperationOrigin(authors[authorIndex], originEpoch, originSequence),
+                CreatedAt = createdAt,
             };
             for (int di = 0; di < dependencyCount; di++)
                 entry.CausalDeps.Add(BatchId.From(r.B128()));
@@ -1321,8 +1322,9 @@ public static class NodePersistence
         w.Varint((ulong)e.NamespaceId);
         w.U64((ulong)e.Seq);
         w.B128(e.ChangeId);
-        w.U32(e.OriginAuthorEpoch);
-        w.U64(e.OriginSequence);
+        var provenance = e.Provenance.EnsureValid();
+        w.U32(provenance.AuthorEpoch);
+        w.U64(provenance.Sequence);
         w.B128(e.RecordId);
         w.U8(e.OpKind);
         // The payload is a compact-mode op encoding; its value length is a varint, so
@@ -1338,18 +1340,26 @@ public static class NodePersistence
 
     private static OutboxEntry ReadOutboxEntry(Reader r)
     {
+        int namespaceId = ReadNamespaceId(r);
+        long sequence = (long)r.U64();
+        var changeId = BatchId.From(r.B128());
+        uint originEpoch = r.U32();
+        ulong originSequence = r.U64();
+        var recordId = RecordId.From(r.B128());
+        byte opKind = r.U8();
+        byte[] payload = r.Raw(ReadByteLength(r, "outbox payload"));
+        var author = NodeId.From(r.B128());
+        long createdAt = (long)r.U64();
         var e = new OutboxEntry
         {
-            NamespaceId = ReadNamespaceId(r),
-            Seq = (long)r.U64(),
-            ChangeId = BatchId.From(r.B128()),
-            OriginAuthorEpoch = r.U32(),
-            OriginSequence = r.U64(),
-            RecordId = RecordId.From(r.B128()),
-            OpKind = r.U8(),
-            Payload = r.Raw(ReadByteLength(r, "outbox payload")),
-            AuthorNodeId = NodeId.From(r.B128()),
-            CreatedAt = (long)r.U64(),
+            NamespaceId = namespaceId,
+            Seq = sequence,
+            ChangeId = changeId,
+            Provenance = new OperationOrigin(author, originEpoch, originSequence),
+            RecordId = recordId,
+            OpKind = opKind,
+            Payload = payload,
+            CreatedAt = createdAt,
         };
         int depCount = ReadCount(r, 16, "causal dependency");
         for (int i = 0; i < depCount; i++) e.CausalDeps.Add(BatchId.From(r.B128()));
