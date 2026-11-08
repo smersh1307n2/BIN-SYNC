@@ -1029,6 +1029,13 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var replayFromNewEpoch = MakeBatch(authorA, 5, 200, 201, 2);
         Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(replayFromNewEpoch));
 
+        // A genuinely new author epoch can restart its cursor, but the global
+        // ChangeId ledger still suppresses the already accepted operation.
+        var sameChangeIdNewAuthorEpoch = MakeBatch(authorA, 6, 230, 201, 2);
+        var deduplicated = store.AcceptIncomingBatch(sameChangeIdNewAuthorEpoch);
+        Assert.False(deduplicated.IsDuplicate);
+        Assert.Equal(0, deduplicated.NewRelayOperationCount);
+
         // Legacy rows without a recorded transport epoch cannot be attributed to the
         // retired incarnation, so they remain retained rather than being guessed away.
         var legacyReplay = MakeBatch(authorB, 6, 202, 203, 2);
