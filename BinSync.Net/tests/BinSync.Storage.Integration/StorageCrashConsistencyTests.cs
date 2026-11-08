@@ -165,6 +165,8 @@ public sealed class StorageCrashConsistencyTests
                 File.WriteAllBytes(manifestPath, firstManifest);
                 File.WriteAllBytes(firstSnapshotPath, firstSnapshot);
                 Assert.True(File.Exists(secondSnapshotPath)); // orphan generation is harmless
+                File.WriteAllBytes(secondSnapshotPath + ".tmp", new byte[] { 0xFA, 0xFB, 0xFC });
+                File.WriteAllBytes(manifestPath + ".tmp", new byte[] { 0xFD, 0xFE });
             }
             else
             {
@@ -193,6 +195,47 @@ public sealed class StorageCrashConsistencyTests
             TryDeleteDirectory(directory);
             TryDeleteDirectory(walBeforeSecondCheckpoint);
             TryDeleteDirectory(walAfterSecondCheckpoint);
+        }
+    }
+
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Snapshot_manifest_or_referenced_generation_corruption_fails_closed(bool corruptManifest)
+    {
+        const ulong partitionId = 905;
+        string directory = Path.Combine(_root, corruptManifest ? "corrupt-manifest" : "missing-snapshot");
+        string snapshotsDirectory = Path.Combine(directory, "snapshots");
+        string manifestPath = Path.Combine(snapshotsDirectory, $"p_{partitionId}.manifest");
+        string snapshotPath = Path.Combine(snapshotsDirectory, $"p_{partitionId}.1.snap");
+
+        try
+        {
+            using (var database = StorageDatabase.Open(directory, partitionId))
+            {
+                Put(database, 0x08, 0x88);
+                database.Checkpoint();
+            }
+
+            if (corruptManifest)
+            {
+                byte[] manifest = File.ReadAllBytes(manifestPath);
+                manifest[^1] ^= 0x80;
+                File.WriteAllBytes(manifestPath, manifest);
+            }
+            else
+            {
+                File.Delete(snapshotPath);
+            }
+
+            Assert.Throws<InvalidDataException>(() => StorageDatabase.Open(directory, partitionId));
+            Assert.True(File.Exists(manifestPath));
+            Assert.Equal(corruptManifest, File.Exists(snapshotPath) == false);
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
         }
     }
 
