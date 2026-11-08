@@ -321,3 +321,10 @@ A safety review found that the v3.1 tombstone proof is not sufficient to authori
 Accordingly, `StorageNamespaceGcStore.HasProtocolTombstoneGcProof` now fails closed even when its existing sequence and installed-ACK checks pass. `StorageDataProvider.CompactRecordTombstones` retains its bounded crash-repeatable cleanup code but cannot physically reclaim any tombstone under v3.1. This is intentional, not an unfinished test condition.
 
 Before enabling tombstone GC, the protocol must bind (a) each origin author's signed issued high-watermark, (b) every Active member's applied-through value reaching that watermark, (c) a global HLC floor bound to the exact FULL_REPLACE generation/digest, and (d) advancement of each installing Node's HLC before activation. Retired-origin epochs need an explicit closure proof. Until then, tombstones remain retained.
+
+
+## 10.6. Provider origin metadata and v2 snapshot digest
+
+Provider mutations now encode the immutable `ChangeId`, origin author epoch and origin sequence. The provider mutation encoding has an 81-byte fixed header; the prior 53-byte header remains readable as legacy data with no origin tuple. New local feed entries persist the same ChangeId in the mutation and feed envelope and reject identity mismatch. FULL_REPLACE digest domain is now `BIN-SYNC/FULL-REPLACE/v2`, so origin provenance is covered by the snapshot digest. New receipt values also persist the maximum origin sequence in the batch; old receipt encodings remain readable but are not eligible for receipt GC until rewritten with authenticated provenance.
+
+The ChangeId and receipt compaction entry points are wired through `StorageSyncCoordinator` and require the same StorageDatabase GC guard plus an external lease. The replay fence rejects a missing ChangeId row when the signed origin frontier covers that operation. The provider tombstone cleanup code is present but physical deletion is disabled until the global causal-horizon proof is implemented; see §10.5. No build or tests have been run in this C pass.
