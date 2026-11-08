@@ -493,8 +493,15 @@ public sealed class StorageSyncCoordinatorTests
         await using var session = await connectTask;
 
         coordinator.RegisterInterestedPeer(session, 1);
-        metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, 2, 1,
-            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, checked((uint)local.Epoch)) });
+        Assert.Equal(2, metadata.ReadInterestedPeers(scope, local.NodeId, 1).Count);
+        Assert.Null(metadata.GetRetiredPeerEpoch(scope, local.NodeId, peer.NodeId, 1));
+
+        // The old incarnation remains valid until the replacement's complete
+        // bidirectional snapshot baseline is durably committed by the coordinator.
+        var peerReconcile = acceptor.AutoReconcileAsync(peer, 1, initiate: false);
+        var localReconcile = coordinator.AutoReconcileWithMetadataAsync(
+            session, _ => { }, initiate: true);
+        await Task.WhenAll(peerReconcile, localReconcile);
 
         var newEpochState = metadata.GetPeerStreamState(scope, local.NodeId,
             peer.NodeId, 2, 1, local.NodeId);
