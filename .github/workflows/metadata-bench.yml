@@ -37,7 +37,7 @@ jobs:
           dotnet run --configuration Release
           --project bench/BinSync.Bench
           --
-          --filter '*MetadataPeer*'
+          --filter '*Metadata*'
           --artifacts BenchmarkDotNet.Artifacts
 
       - name: Fail if any benchmark case failed
