@@ -505,9 +505,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
         private static bool SameOperationIdentity(MetadataOperation left, MetadataOperation right)
-        => left.AuthorNodeId == right.AuthorNodeId
-            && left.OriginAuthorEpoch == right.OriginAuthorEpoch
-            && left.OriginSequence == right.OriginSequence
+        => left.Provenance == right.Provenance
             && left.Fingerprint.AsSpan().SequenceEqual(right.Fingerprint);
 
 private static bool ValidateIncomingBatchForStaging(
@@ -851,8 +849,7 @@ private static bool ValidateIncomingBatchForStaging(
                 Fingerprint = operation.Fingerprint.ToArray(),
                 Payload = operation.Payload.ToArray(),
                 RelayEligible = operation.RelayEligible,
-                OriginAuthorEpoch = operation.OriginAuthorEpoch,
-                OriginSequence = operation.OriginSequence
+                Provenance = operation.Provenance
             }).ToArray()
         };
 
@@ -3309,11 +3306,11 @@ private static bool ValidateIncomingBatchForStaging(
         ulong previousOriginSequence = 0;
         foreach (var operation in batch.Operations)
         {
-            if (operation.AuthorNodeId != batch.AuthorStreamNodeId ||
-                operation.OriginAuthorEpoch == 0 || operation.OriginSequence == 0 ||
-                operation.OriginSequence <= previousOriginSequence)
+            var provenance = operation.Provenance;
+            if (!provenance.IsValid || provenance.AuthorNodeId != batch.AuthorStreamNodeId ||
+                provenance.Sequence <= previousOriginSequence)
                 throw new InvalidDataException("v3 operation has missing, mismatched or non-monotonic immutable Origin provenance.");
-            previousOriginSequence = operation.OriginSequence;
+            previousOriginSequence = provenance.Sequence;
         }
     }
 
