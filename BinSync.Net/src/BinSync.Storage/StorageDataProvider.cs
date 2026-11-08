@@ -21,6 +21,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private const byte LocalAckWatermark = 0x22;
     private const byte LocalReadWatermark = 0x23;
     private const byte ProviderPublicationMode = 0x24;
+    private const int MaxFullReplacePageEntries = 4096;
     private const byte ProviderFormatMarker = 0x25;
     private const byte ActiveGeneration = 0x26;
     private const byte FullReplaceSession = 0x41;
@@ -436,6 +437,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
             if (startIndex < 0) throw new ArgumentOutOfRangeException(nameof(startIndex));
             if (entries.Count == 0) throw new ArgumentException("Full-replace page must not be empty.", nameof(entries));
+            if (entries.Count > MaxFullReplacePageEntries)
+                throw new ArgumentOutOfRangeException(nameof(entries), "Full-replace page exceeds the bounded provider page size.");
 
             using var snapshot = _storage.OpenSnapshot();
             byte[] sessionKey = FullReplaceSessionKey(generation);
@@ -575,7 +578,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         {
             ThrowIfDisposed();
             if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
-            if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            if (limit <= 0 || limit > MaxFullReplacePageEntries)
+                throw new ArgumentOutOfRangeException(nameof(limit), "Abort page size must be between 1 and the provider bound.");
             if (ReadActiveGeneration(_storage) == generation)
                 throw new InvalidOperationException("The active full-replace generation cannot be aborted.");
             using var snapshot = _storage.OpenSnapshot();
