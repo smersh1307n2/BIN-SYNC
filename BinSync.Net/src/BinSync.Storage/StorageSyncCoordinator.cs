@@ -83,7 +83,7 @@ public sealed class StorageSyncCoordinator
             if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available.");
-            NamespaceRosterProtocol.VerifyOrThrow(roster);
+            NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
 
             var pendingLocal = new List<ProviderChange>();
             ulong afterSequence = 0;
