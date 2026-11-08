@@ -5,7 +5,8 @@ namespace BinSync;
 
 public static class ProviderMutationCodec
 {
-    public const int FixedEncodedLength = 53;
+    public const int FixedEncodedLength = 81;
+    private const int LegacyFixedEncodedLength = 53;
 
     public static byte[] Encode(ProviderMutation mutation)
     {
@@ -19,18 +20,25 @@ public static class ProviderMutationCodec
         mutation.AuthorNodeId.WriteTo(result.AsSpan(31));
         BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(47), mutation.KeyEpoch);
         BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(49), checked((uint)mutation.Value.Length));
+        mutation.ChangeId.WriteTo(result.AsSpan(53, 16));
+        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(69), mutation.OriginAuthorEpoch);
+        BinaryPrimitives.WriteUInt64LittleEndian(result.AsSpan(73), mutation.OriginSequence);
         mutation.Value.CopyTo(result.AsSpan(FixedEncodedLength));
         return result;
     }
 
     public static ProviderMutation Decode(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length < FixedEncodedLength)
+        if (bytes.Length < LegacyFixedEncodedLength)
             throw new InvalidDataException("Stored provider mutation is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
-        if (valueLength > int.MaxValue || bytes.Length != FixedEncodedLength + (int)valueLength ||
-            bytes[18] > 3 || bytes[18] == 3)
+        if (valueLength > int.MaxValue || bytes[18] > 3 || bytes[18] == 3)
             throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
+        int encodedLength = checked(LegacyFixedEncodedLength + (int)valueLength);
+        bool hasProvenance = bytes.Length == FixedEncodedLength + (int)valueLength;
+        if (!hasProvenance && bytes.Length != encodedLength)
+            throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
+        int valueOffset = hasProvenance ? FixedEncodedLength : LegacyFixedEncodedLength;
         var mutation = new ProviderMutation
         {
             RecordId = RecordId.From(bytes.Slice(0, 16)),
@@ -41,7 +49,10 @@ public static class ProviderMutationCodec
             HlcLogical = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(27)),
             AuthorNodeId = NodeId.From(bytes.Slice(31, 16)),
             KeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(47)),
-            Value = bytes.Slice(FixedEncodedLength).ToArray()
+            ChangeId = hasProvenance ? BatchId.From(bytes.Slice(53, 16)) : default,
+            OriginAuthorEpoch = hasProvenance ? BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(69)) : 0,
+            OriginSequence = hasProvenance ? BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(73)) : 0,
+            Value = bytes.Slice(valueOffset).ToArray()
         };
         try { Validate(mutation); }
         catch (ArgumentException exception)
@@ -57,6 +68,11 @@ public static class ProviderMutationCodec
         if (mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero)
             throw new ArgumentException("RecordId and original AuthorNodeId must be non-zero.", nameof(mutation));
         ArgumentNullException.ThrowIfNull(mutation.Value);
+        bool hasChangeId = !mutation.ChangeId.IsZero;
+        bool hasOriginEpoch = mutation.OriginAuthorEpoch != 0;
+        bool hasOriginSequence = mutation.OriginSequence != 0;
+        if (hasChangeId != hasOriginEpoch || hasChangeId != hasOriginSequence)
+            throw new ArgumentException("ChangeId, origin epoch and origin sequence must be present together.", nameof(mutation));
         if (mutation.IsRecordTombstone)
         {
             if (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
