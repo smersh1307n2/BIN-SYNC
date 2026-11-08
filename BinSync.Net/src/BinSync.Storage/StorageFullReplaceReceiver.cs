@@ -9,7 +9,6 @@ public sealed class StorageFullReplaceReceiver
 {
     private const int AbortPageSize = 4096;
     private readonly object _gate = new();
-    private readonly IDataProvider _provider;
     private readonly IProviderFullReplace _fullReplace;
     private readonly IMetadataNamespaceGcStore _gcStore;
     private readonly TrustStore _trustStore;
@@ -37,7 +36,7 @@ public sealed class StorageFullReplaceReceiver
         Func<IDisposable?> acquireCommitGuard,
         Action afterCommit)
     {
-        _provider = provider ?? throw new ArgumentNullException(nameof(provider));
+        ArgumentNullException.ThrowIfNull(provider);
         _fullReplace = provider as IProviderFullReplace
             ?? throw new NotSupportedException("The provider does not support durable FULL_REPLACE staging.");
         _gcStore = gcStore ?? throw new ArgumentNullException(nameof(gcStore));
