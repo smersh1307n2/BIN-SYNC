@@ -46,8 +46,9 @@ The original author NodeId is resolved from the operation's author alias in the 
 
 - Origin fields are included in the ordered Records array, RecordsRoot, BatchDigest and signature commitment.
 - Zero epoch/sequence, malformed length, trailing bytes, unknown author alias, non-monotonic origin sequence within one author batch, and mismatched operation kind are rejected before staging.
-- For a direct-author batch (issuerNodeId == originAuthorNodeId), originAuthorEpoch == issuerEpoch and each originSequence == cursorStart + recordIndex are mandatory.
-- For a relay batch, the batch cursor is relay-local. It is validated against the relay's own stream as usual and is never compared with OriginSequence. The origin tuple is copied unchanged. OriginSequence values in a relay batch must be strictly increasing but may contain gaps where the relay had already accepted an operation through another route.
+- For a direct-author batch (issuerNodeId == originAuthorNodeId), Origin must match the author's durable published-operation identity and the authenticated author incarnation. If the sender cursor is absolute in the author stream, the implementation may verify the exact mapping; if it is peer-relative, validation must use the persisted stream-offset mapping. It must never infer OriginSequence by arithmetic from CursorStart or replace OriginSequence with a sender cursor.
+- For a relay batch, the batch cursor is relay-local and may be peer-relative. It is validated against the relay's own stream and is never compared directly with OriginSequence. The origin tuple is copied unchanged. OriginSequence values in a relay batch must be strictly increasing but may contain gaps where the relay had already accepted an operation through another route.
+- This rule follows BIN-SYNC-SPECIFICATION.txt v3.0.0 §§0.1, 0.3 and the direct-author fast-path requirements; it supersedes the earlier cursor-equality wording in this document.
 - A relay must not infer, regenerate or normalize origin values. A relay row stores both its local relay sequence and the immutable origin tuple.
 - No legacy/unflagged record exists in v3. Missing provenance is malformed input, not an unknown/collectable state.
 
