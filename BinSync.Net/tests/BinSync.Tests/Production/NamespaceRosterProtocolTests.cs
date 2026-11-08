@@ -153,4 +153,20 @@ public sealed class NamespaceRosterProtocolTests
         };
         Assert.Throws<ArgumentException>(() => NamespaceRosterProtocol.Sign(next, authoritySeed));
     }
+    [Fact]
+    public void V31_capabilities_and_frame_ids_are_reserved_without_collisions()
+    {
+        Assert.Equal(1u << 3, (uint)SessionCapabilities.NamespaceRosterV31);
+        Assert.Equal(1u << 4, (uint)SessionCapabilities.OriginFrontierV31);
+        Assert.Equal(1u << 5, (uint)SessionCapabilities.FullReplaceV31);
+        Assert.Equal("NAMESPACE_ROSTER", Frames.FrameTypes[0x14]);
+        Assert.Equal("ORIGIN_FRONTIER", Frames.FrameTypes[0x15]);
+        Assert.Equal("RETENTION_CHECKPOINT", Frames.FrameTypes[0x16]);
+        Assert.Equal("FULL_REPLACE_BEGIN", Frames.FrameTypes[0x17]);
+        Assert.Equal("FULL_REPLACE_CHUNK", Frames.FrameTypes[0x18]);
+        Assert.Equal("FULL_REPLACE_COMMIT", Frames.FrameTypes[0x19]);
+        Assert.Equal("FULL_REPLACE_ACK", Frames.FrameTypes[0x1A]);
+        Assert.Equal("FULL_REPLACE_ABORT", Frames.FrameTypes[0x1B]);
+    }
+
 }
