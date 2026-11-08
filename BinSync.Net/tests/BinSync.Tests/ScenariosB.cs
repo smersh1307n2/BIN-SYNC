@@ -501,6 +501,7 @@ public class ScenariosB
         Transport.MakeSession(a, b);
         Transport.MakeSession(b, c);
         Transport.MakeSession(c, d);
+        Transport.MakeSession(b, d); // Pre-register the alternate relay route before publication.
 
         Assert.True(a.WriteField(NS, Rid(1), 0x0100, Asc("origin-one"), new Hlc(100, 0)));
         Assert.True(a.WriteField(NS, Rid(2), 0x0100, Asc("origin-two"), new Hlc(101, 0)));
@@ -531,9 +532,9 @@ public class ScenariosB
             Assert.Equal(a.NodeId, d.Storage[NS][recordId].State[0x0100].AuthorNodeId);
         }
 
-        // The same operations now arrive directly from A after already arriving via C.
-        Transport.MakeSession(a, d);
-        Assert.NotNull(Transport.DeliverBatch(a, d, NS));
+        // The same operations now arrive from B after already arriving via C.
+        // This is a distinct relay route; D must not enqueue a second copy.
+        Assert.NotNull(Transport.DeliverBatch(b, d, NS));
         var finalRelay = d.Outbox[NS].Where(entry => originByChangeId.ContainsKey(entry.ChangeId)).ToArray();
         Assert.Equal(2, finalRelay.Length);
         Assert.Equal(2, finalRelay.Select(entry => entry.ChangeId).Distinct().Count());
