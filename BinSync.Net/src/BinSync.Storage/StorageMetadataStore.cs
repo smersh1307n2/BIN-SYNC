@@ -428,10 +428,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     private static void ValidateIncomingTransportPeerEpoch(PartitionState state, MetadataIncomingBatch batch)
     {
-        if (batch.TransportPeerEpoch != 0 &&
-            state.RetiredPeerEpochs.TryGetValue((batch.NamespaceId, batch.SenderPeer), out uint retiredThrough) &&
-            batch.TransportPeerEpoch <= retiredThrough)
-            throw new InvalidDataException("Incoming batch belongs to a retired transport peer epoch.");
+        if (!state.RetiredPeerEpochs.TryGetValue(
+                (batch.NamespaceId, batch.SenderPeer), out uint retiredThrough))
+            return;
+        if (batch.TransportPeerEpoch == 0 || batch.TransportPeerEpoch <= retiredThrough)
+            throw new InvalidDataException(
+                "Incoming batch has no verifiable current transport epoch or belongs to a retired transport peer epoch.");
     }
 
     private static IReadOnlyList<bool> BuildPendingApplyDecisions(
@@ -1553,7 +1555,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var oldRosterKey = new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch);
             if (current.PendingApplies.Values.Any(intent =>
                     intent.Batch.SenderPeer == peer &&
-                    intent.Batch.TransportPeerEpoch == retiredPeerEpoch))
+                    (intent.Batch.TransportPeerEpoch == 0 ||
+                     intent.Batch.TransportPeerEpoch == retiredPeerEpoch)))
                 throw new InvalidOperationException(
                     "Cannot retire a transport peer epoch while one of its PendingApply intents is unresolved; recover or finalize it first.");
             ReceiptKey[] oldReceipts = current.Receipts
