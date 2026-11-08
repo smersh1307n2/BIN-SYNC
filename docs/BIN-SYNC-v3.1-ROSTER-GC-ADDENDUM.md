@@ -274,3 +274,18 @@ The code-first pass has added:
 This is only the wire/transport foundation. It does **not** yet implement the receiver state machine, signed authoritative snapshot manifest verification, durable provider staging orchestration, sequence/page continuity across calls, crash recovery, or installed-ACK publication. The receive adapter now requires an explicit expected frame sequence and validates the dedicated transfer stream. The BEGIN manifest now carries a domain-separated Ed25519 signature and the receive adapter verifies it against the independently verified roster and pinned PreShared authority key. This authenticates the manifest, but does not itself authorize provider mutation: the receiver must still enforce the roster member/transport binding, durable staging continuity, commit guard and installed-ACK persistence. The provider's existing Begin/Stage/Commit primitives remain caller-controlled and the old generation remains retained.
 
 The previous exact-head run at `640af0d` built successfully and ran Fuzz/Lab successfully, but 677/678 Core tests passed. The single failure was caused by the session receive dispatcher still rejecting frame types above 0x13; both remaining guards were corrected in `e012460`. The corrected head has not yet been re-tested. No v3.1 conformance or GC enablement is claimed.
+
+
+## 10.2. C-pass update — receiver state machine and resumable transfer (2026-11-08)
+
+The FULL_REPLACE transport foundation now includes a complete sender/receiver code path:
+
+- `FULL_REPLACE_READY` (0x1C) reports the durable receiver cursor, expected count/digest, committed state and next frame sequence.
+- Transfer pages are canonical 4096-entry pages except the final page. This makes restart position and frame sequence deterministic; the receiver rejects short non-final pages, gaps, overlaps and out-of-order pages.
+- `StorageFullReplaceSender` holds one provider snapshot across digest and transfer passes, signs the authority manifest, resumes from READY, sends COMMIT and persists the verified signed installed ACK.
+- `StorageFullReplaceReceiver` validates the pinned authority and roster, preflights its own signing key before provider mutation, resumes durable staging, detects ABORT while waiting for data, and commits only while holding an application-supplied exclusive cross-store guard. It refreshes the live Node cache and persists its signed installed ACK after the provider switch.
+- `IProviderFullReplace.TryGetFullReplaceProgress` exposes the durable staging cursor; `StorageDataProvider` implements it from the persisted staging manifest.
+
+This remains a C-pass implementation, not a T-pass proof. The commit guard is deliberately mandatory and supplied by the embedding application; it must serialize remote APPLY and local provider publication and prove there are no unresolved PendingApply intents, relay/outbound reservations, provider feed intents or reader pins that depend on the old generation. The receiver does not silently assume these cross-store facts. Old generations remain retained. No ChangeId, tombstone or ghost GC is enabled.
+
+Exact-head build, unit/integration tests, fault injection, reconnect/resume, multi-peer/rejoin and platform durability verification remain pending.
