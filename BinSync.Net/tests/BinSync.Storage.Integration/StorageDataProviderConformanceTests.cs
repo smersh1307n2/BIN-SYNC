@@ -548,4 +548,19 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Thread.Sleep(Timeout.Infinite);
     }
 
+    [Fact]
+    public void Wal_writer_fence_rejects_symlink_alias_of_same_partition()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Windows symlink creation may require Developer Mode or elevated privileges.
+
+        string physical = Path.Combine(_root, "physical-wal-directory");
+        string alias = Path.Combine(_root, "wal-directory-alias");
+        Directory.CreateDirectory(physical);
+        Directory.CreateSymbolicLink(alias, physical);
+
+        using var first = StorageDatabase.Open(physical, 89);
+        Assert.Throws<IOException>(() => StorageDatabase.Open(alias, 89));
+    }
+
 }
