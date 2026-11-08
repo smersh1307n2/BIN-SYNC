@@ -38,7 +38,11 @@
 
 These are semantic clarifications/hardening changes; they do not change the wire layout.
 
-## 3. Remaining implementation/specification gaps
+## 3. Retention policy reference
+
+The independent lifecycle and GC contract is documented in [METADATA-STORE-RETENTION.md](METADATA-STORE-RETENTION.md). Standalone Node-owned Core/volatile operation remains supported; provider cutover is a separate one-way authority transition. Outbound/relay payload compaction is ACK/baseline/frontier gated. ChangeId, Inbox receipt, receive-chain and tombstone GC remain disabled until their independent protocol proofs exist.
+
+## 4. Remaining implementation/specification gaps
 
 - **Receipt DTO parity:** the Storage-backed authoritative receive path now persists `DurableAuthor` and the canonical full-wire-header fingerprint in Metadata Store receipts/completed PendingApply state. The coordinator verifies both before ACK. The legacy Node-owned receive path remains for non-cutover/volatile namespaces; it is now explicitly fenced at the Node API boundary once a namespace has a durable provider cutover marker.
 - **Receive authority:** for Storage-backed authoritative receive, Metadata Store validates receipt identity, full header fingerprint, ChangeId equivocation, cursor and digest-chain continuity before Node mutation. Node receives a per-operation new/duplicate mask and does not read/write its global ChangeId ledger or append duplicate RemoteBatch WAL. The non-Storage legacy path remains Node-owned; do not describe the opt-in cutover as universal.
