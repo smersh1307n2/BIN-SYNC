@@ -107,4 +107,41 @@ public sealed partial class Node
             return restored.Count;
         }
     }
+    /// <summary>
+    /// Drops the Node's duplicate local Outbox payload projection after a durable
+    /// Metadata Store cutover. The sequence watermark and ChangeId/WAL replay markers
+    /// are deliberately retained; the caller must have frozen the complete prefix
+    /// into the authoritative Metadata Store before invoking this method.
+    /// </summary>
+    internal int DiscardOutboxPayloadsThrough(int namespaceId, NodeId author, long safeThroughSequence)
+    {
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (author.IsZero)
+            throw new ArgumentException("Author identity must be non-zero.", nameof(author));
+        if (safeThroughSequence < 0)
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+
+        lock (_lockStorage) lock (_lockOutbox)
+        {
+            ThrowIfDisposed();
+            long highWatermark = _outboxSeq.TryGetValue((author, namespaceId), out long current)
+                ? current
+                : 0;
+            if (highWatermark != safeThroughSequence)
+                throw new InvalidOperationException("Node Outbox changed after the Metadata Store cutover fence.");
+
+            if (!Outbox.TryGetValue(namespaceId, out var entries))
+                return 0;
+            if (entries.Any(entry => entry.AuthorNodeId == author && entry.Seq > safeThroughSequence))
+                throw new InvalidDataException("Node Outbox contains an entry beyond the requested cutover fence.");
+
+            int removed = entries.RemoveAll(entry =>
+                entry.AuthorNodeId == author && entry.Seq <= safeThroughSequence);
+            if (entries.Count == 0)
+                Outbox.Remove(namespaceId);
+            return removed;
+        }
+    }
+
 }
