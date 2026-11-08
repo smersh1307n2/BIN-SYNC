@@ -14,8 +14,6 @@ public enum SessionCapabilities : uint
     FlowControl = 1 << 1,
     /// <summary>§4.3/§12.7 — peer supports correlated live ALIAS_MAP updates after HELLO.</summary>
     IncrementalAliasMap = 1 << 2,
-    /// <summary>Peer supports immutable per-operation origin provenance on DELTA_BATCH records.</summary>
-    ImmutableOriginProvenance = 1 << 3,
 }
 
 /// <summary>struct: struct.</summary>
@@ -32,6 +30,8 @@ public readonly record struct AliasMapEntry(
 /// </summary>
 public static class SessionWire
 {
+    /// <summary>The only accepted BIN-SYNC protocol major for this v3 clean cut.</summary>
+    public const ushort ProtocolMajor = 3;
     /// <summary>Control message type: HELLO.</summary>
     public const byte TypeHello = 0x01;
     /// <summary>Constant type hello ack.</summary>
@@ -71,7 +71,7 @@ public static class SessionWire
         try
         {
             var w = new Writer(rented);
-            w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
+            w.B128(h.NodeId).U32((uint)h.Epoch).U16(ProtocolMajor).U32((uint)h.Capabilities);
             return FrameCodec.BuildFrame(TypeHello, ControlStreamId, 1, w.WrittenSpan);
         }
         finally
@@ -89,12 +89,15 @@ public static class SessionWire
     private static HelloPayload DecodeHelloPayload(byte[] frameBytes, byte expectedType)
     {
         var frame = ParseControlFrame(frameBytes, expectedType);
-        if (frame.Payload.Length != 24)
+        if (frame.Payload.Length != 26)
             throw new FrameException("FRAME_REJECTED");
         var r = new Reader(frame.Payload);
         var nodeId = NodeId.From(r.B128());
         uint epoch = r.U32();
+        ushort protocolMajor = r.U16();
         uint capabilities = r.U32();
+        if (protocolMajor != ProtocolMajor)
+            throw new FrameException("FRAME_REJECTED");
         if (epoch > int.MaxValue)
             throw new FrameException("FRAME_REJECTED");
         return new HelloPayload(nodeId, (int)epoch, (SessionCapabilities)capabilities);
