@@ -866,6 +866,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             && left.LocalReplica == right.LocalReplica
             && left.SenderPeer == right.SenderPeer
             && left.SenderEpoch == right.SenderEpoch
+            && left.TransportPeerEpoch == right.TransportPeerEpoch
             && left.AuthorStreamNodeId == right.AuthorStreamNodeId
             && left.NamespaceId == right.NamespaceId
             && left.BatchId == right.BatchId
@@ -884,6 +885,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             LocalReplica = batch.LocalReplica,
             SenderPeer = batch.SenderPeer,
             SenderEpoch = batch.SenderEpoch,
+            TransportPeerEpoch = batch.TransportPeerEpoch,
             AuthorStreamNodeId = batch.AuthorStreamNodeId,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
@@ -3232,11 +3234,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         byte[] scope = Encoding.UTF8.GetBytes(batch.ScopeId);
-        writer.Write(-5); // version 5: persist full header fingerprint with authority mode
+        writer.Write(-6); // version 6: persist authenticated transport peer epoch
         writer.Write(scope.Length); writer.Write(scope);
         writer.Write(batch.LocalReplica.ToArray());
         writer.Write(batch.SenderPeer.ToArray());
         writer.Write(batch.SenderEpoch);
+        writer.Write(batch.TransportPeerEpoch);
         writer.Write(batch.AuthorStreamNodeId.ToArray());
         writer.Write(checked((ushort)batch.NamespaceId));
         writer.Write(batch.BatchId.ToArray());
@@ -3266,15 +3269,17 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
         int versionOrScopeLength = reader.ReadInt32();
-        bool hasAuthorStream = versionOrScopeLength is -2 or -3 or -4 or -5;
-        bool hasWirePayload = versionOrScopeLength is -3 or -4 or -5;
-        bool hasReceiveStateAuthority = versionOrScopeLength is -4 or -5;
-        bool hasHeaderFingerprint = versionOrScopeLength == -5;
+        bool hasTransportPeerEpoch = versionOrScopeLength == -6;
+        bool hasAuthorStream = versionOrScopeLength is -2 or -3 or -4 or -5 or -6;
+        bool hasWirePayload = versionOrScopeLength is -3 or -4 or -5 or -6;
+        bool hasReceiveStateAuthority = versionOrScopeLength is -4 or -5 or -6;
+        bool hasHeaderFingerprint = versionOrScopeLength is -5 or -6;
         int scopeLength = hasAuthorStream ? reader.ReadInt32() : versionOrScopeLength;
         string scope = Encoding.UTF8.GetString(ReadExactly(reader, scopeLength));
         NodeId local = NodeId.From(ReadExactly(reader, 16));
         NodeId sender = NodeId.From(ReadExactly(reader, 16));
         uint epoch = reader.ReadUInt32();
+        uint transportPeerEpoch = hasTransportPeerEpoch ? reader.ReadUInt32() : 0;
         NodeId authorStream = hasAuthorStream ? NodeId.From(ReadExactly(reader, 16)) : default;
         int ns = reader.ReadUInt16();
         BatchId batchId = BatchId.From(ReadExactly(reader, 16));
@@ -3317,6 +3322,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             LocalReplica = local,
             SenderPeer = sender,
             SenderEpoch = epoch,
+            TransportPeerEpoch = transportPeerEpoch,
             AuthorStreamNodeId = authorStream,
             NamespaceId = ns,
             BatchId = batchId,
