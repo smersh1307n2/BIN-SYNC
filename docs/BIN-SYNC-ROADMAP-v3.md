@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 7e097b23d9a57391aa4a573b6b2cf21e154a4ff3. The last fully completed green code CI is f91df0b4ef93f5a53f419420aa578dfe36bc293b (Core tests, Fuzz/Lab, Storage Integration on Ubuntu/Windows/macOS). Follow-up test-name/comment commits 24d22b0/e7e1eb4 were included in run 42484616004, but the .NET test job was cancelled; Storage Integration run 42484616067 was cancelled. A rerun was also cancelled after the branch advanced. No failure has been reported in these cancelled jobs; exact latest-head CI is UNVERIFIED. Current head is 50 commits ahead of prior checkpoint 4e2ba079678ce3fcaa0058ae43ef652faa33975a, no divergence.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: a0230a7708184f68e1cf05ff2dde9b65115b07a8. The last fully completed green code CI remains f91df0b4ef93f5a53f419420aa578dfe36bc293b. CI for the new OperationOrigin refactor head is running (Core, Fuzz/Lab, Storage Integration and metadata benchmark); do not close this package until the exact head completes.
 
 ## 1. Target architecture
 
@@ -53,7 +53,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 ### Phase 1 — Repair red build and finish immutable Origin end-to-end
 
 - [~] Fixed the initial tuple/model mismatch in Node.DeltaBatch.cs by carrying Origin in the outbound metadata item tuple; continue auditing every clone and serialization boundary.
-- [ ] Define one canonical Origin value type for local writes, Node Outbox, MetadataOperation, decoded inbound operation, PendingApply, relay, checkpoint and snapshot.
+- [~] Introduced canonical OperationOrigin and integrated it into local Outbox creation, OutboxEntry, MetadataOperation, PendingApply encoding/decoding, Storage ledger comparisons, relay/outbound DTOs, Node checkpoint and inbound ledger fingerprinting. Snapshot-specific and provider-freeze boundaries plus remaining scalar-only adapters still need audit before closing.
 - [~] Local outbound freeze assigns OriginSequence from the durable author stream sequence and preserves supplied Origin on replay; audit atomic allocator/retry behavior and provider freeze before closing.
 - [x] Removed the invalid equality between OriginSequence and peer-relative sender cursor; direct-author validation only rejects an Origin epoch from the future.
 - [x] Make provenance mandatory in every v3 DELTA_BATCH; remove optional ImmutableOriginProvenance capability and reject protocol-major mismatch. HELLO and HELLO_ACK both carry and validate ProtocolMajor=3.
@@ -271,3 +271,12 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Added an explicit v3 normative override to Metadata Storage Architecture so its historical v2–v16 format analysis cannot be mistaken for active compatibility/migration requirements.
 - [x] Corrected the architecture status to NodePersistence v17 / WAL v3 and distinguished the Node-local 16-byte Origin-bound digest from the separate 45-byte Storage Metadata ChangeId identity row.
 - [x] Recorded the latest completed green checkpoint (f91df0b) and classified subsequent cancelled CI as UNVERIFIED, not failed.
+
+### 2026-11-08 — canonical OperationOrigin implementation package (verification pending)
+
+- [x] Added immutable OperationOrigin value type with non-zero author/epoch/sequence validation and explicit invalid-default handling.
+- [x] Added canonical Provenance projections to OutboxEntry, MetadataOperation, MetadataRelayItem and MetadataOutboundItem; relay-local Sequence remains separate from Origin.Sequence.
+- [x] Routed local Outbox creation, batch relay staging, DeltaBatch validation, Node checkpoint serialization, WAL replay and Node global ledger fingerprinting through OperationOrigin.
+- [x] Routed Storage ChangeId ledger matching, 45-byte identity encoding, PendingApply encoding/decoding, relay/outbound cloning and published payload encoding through OperationOrigin.
+- [x] Added unit tests for invalid/default provenance, value equality and separation of local relay sequence from immutable origin sequence.
+- [~] Exact-head CI is running for a0230a7; no result is claimed yet. Follow-up work remains for provider freeze input, snapshot boundaries and remaining scalar-only conversions.
