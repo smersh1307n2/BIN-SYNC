@@ -109,8 +109,8 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 
 ## Latest continuation checkpoint — provider-authoritative outbound cutover (2026-11-08)
 
-- Source/test HEAD: `4c4789f06150dd07457adb207dc84879fdea4bd4`.
-- Added `IMetadataStore.TryGetOutboundChangeFingerprint` backed by the durable global ChangeId ledger. Storage and volatile conformance adapters implement the lookup; Storage keeps the identity available after payload compaction.
+- Code/test HEAD: `77e7f9e648111671fa200a19bf2a1508b6b993bb` (644/644 core, 97/97 Storage Integration, 31/31 Fuzz/Lab, 70.9% coverage; all samples pass). The base `IMetadataStore` contract remains source-compatible: outbound ChangeId lookup is an optional `IMetadataOutboundChangeIdentityStore` capability. Latest PR HEAD after documentation-only updates: `06a47fbe9910888cb93ea3c3703fb37fe9fd8f25`.
+- Added optional `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeFingerprint` backed by the durable global ChangeId ledger. Storage and volatile conformance adapters implement the lookup; Storage keeps the identity available after payload compaction without breaking third-party `IMetadataStore` implementations.
 - Fixed the interrupted-publication retry edge: if Metadata Store freeze commits but provider feed ACK fails, a newer edit may arrive before retry. The coordinator now recognizes already-frozen ChangeIds, validates their fingerprints, preserves the immutable prefix and coalesces only the not-yet-frozen suffix. New suffix operations receive later Metadata Store sequences; Node Outbox remains fenced.
 - Added an integration regression with injected provider ACK failure, a newer edit to the same field, retry, exact ChangeId ordering and no Node Outbox advancement.
 - Cutover is explicit and durable: provider feed empty/acknowledged, Node and Metadata Store high-watermarks aligned, provider marker persisted. Missing marker with Metadata Store ahead of Node fails closed.
