@@ -49,6 +49,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
+        _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
         if (current.HasLegacyEncoding)
         {
             var migrated = current.Clone();
