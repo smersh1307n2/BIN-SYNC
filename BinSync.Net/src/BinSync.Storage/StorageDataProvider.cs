@@ -28,7 +28,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private readonly string? _directory;
     private readonly bool _deleteOnDispose;
     private readonly bool _ownsStorage;
-    private readonly Dictionary<Guid, StorageSnapshot> _snapshots = new();
+    private readonly Dictionary<Guid, StorageEntry[]> _snapshots = new();
     private bool _disposed;
 
     public StorageDataProvider(string directory, ulong partitionId = 1, bool deleteOnDispose = false)
@@ -255,10 +255,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         lock (_gate)
         {
             ThrowIfDisposed();
-            StorageSnapshot snapshot = _storage.OpenSnapshot();
-            Guid token = Guid.NewGuid();
-            _snapshots.Add(token, snapshot);
+            using StorageSnapshot snapshot = _storage.OpenSnapshot();
             ulong watermark = ReadUInt64(snapshot, [LocalHighWatermark]);
+            var fields = snapshot.ScanPrefix([CurrentField], ReadOnlySpan<byte>.Empty, int.MaxValue);
+            var recordTombstones = snapshot.ScanPrefix([CurrentRecordTombstone], ReadOnlySpan<byte>.Empty, int.MaxValue);
+            StorageEntry[] entries = MergeSnapshotEntries(fields, recordTombstones);
+            Guid token = Guid.NewGuid();
+            _snapshots.Add(token, entries);
             return new ProviderSnapshotHandle(token, watermark);
         }
     }
@@ -268,23 +271,17 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (!_snapshots.TryGetValue(snapshotToken, out var snapshot))
+            if (!_snapshots.TryGetValue(snapshotToken, out var all))
                 throw new ObjectDisposedException(nameof(snapshotToken));
             if (afterIndex < 0) throw new ArgumentOutOfRangeException(nameof(afterIndex));
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            if (afterIndex > all.Length) throw new ArgumentOutOfRangeException(nameof(afterIndex));
 
-            var rows = snapshot.ScanPrefix([CurrentField], ReadOnlySpan<byte>.Empty, int.MaxValue);
-            var recordTombstones = snapshot.ScanPrefix([CurrentRecordTombstone], ReadOnlySpan<byte>.Empty, int.MaxValue);
-            var all = new List<ProviderMutation>(rows.Count + recordTombstones.Count);
-            foreach (var row in rows) all.Add(DecodeMutation(row.Value));
-            foreach (var row in recordTombstones) all.Add(DecodeMutation(row.Value));
-            all.Sort(CompareSnapshotOrder);
-            if (afterIndex > all.Count) throw new ArgumentOutOfRangeException(nameof(afterIndex));
-            var entries = new List<ProviderMutation>(Math.Min(limit, all.Count - afterIndex));
-            int end = Math.Min(all.Count, checked(afterIndex + limit));
+            int end = Math.Min(all.Length, checked(afterIndex + limit));
+            var entries = new List<ProviderMutation>(end - afterIndex);
             for (int i = afterIndex; i < end; i++)
-                entries.Add(CloneMutation(all[i]));
-            return new ProviderSnapshotPage(entries, end, end == all.Count);
+                entries.Add(DecodeMutation(all[i].Value));
+            return new ProviderSnapshotPage(entries, end, end == all.Length);
         }
     }
 
@@ -293,8 +290,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (_snapshots.Remove(snapshotToken, out var snapshot))
-                snapshot.Dispose();
+            _snapshots.Remove(snapshotToken);
         }
     }
 
@@ -429,7 +425,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         {
             if (_disposed) return;
             _disposed = true;
-            foreach (var snapshot in _snapshots.Values) snapshot.Dispose();
             _snapshots.Clear();
             if (_ownsStorage) _storage.Dispose();
             if (_deleteOnDispose && _directory is { } directory)
@@ -622,6 +617,57 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             KeyEpoch = mutation.KeyEpoch,
             Value = mutation.Value.ToArray()
         };
+
+    private static StorageEntry[] MergeSnapshotEntries(
+        IReadOnlyList<StorageEntry> fields,
+        IReadOnlyList<StorageEntry> recordTombstones)
+    {
+        var merged = new StorageEntry[checked(fields.Count + recordTombstones.Count)];
+        int fieldIndex = 0;
+        int tombstoneIndex = 0;
+        int outputIndex = 0;
+
+        while (fieldIndex < fields.Count || tombstoneIndex < recordTombstones.Count)
+        {
+            if (fieldIndex >= fields.Count)
+            {
+                merged[outputIndex++] = recordTombstones[tombstoneIndex++];
+                continue;
+            }
+            if (tombstoneIndex >= recordTombstones.Count)
+            {
+                merged[outputIndex++] = fields[fieldIndex++];
+                continue;
+            }
+
+            if (CompareSnapshotEntries(fields[fieldIndex], recordTombstones[tombstoneIndex]) <= 0)
+                merged[outputIndex++] = fields[fieldIndex++];
+            else
+                merged[outputIndex++] = recordTombstones[tombstoneIndex++];
+        }
+
+        return merged;
+    }
+
+    private static int CompareSnapshotEntries(StorageEntry left, StorageEntry right)
+    {
+        if (left.Key.Length < 17 || right.Key.Length < 17)
+            throw new InvalidDataException("Provider snapshot contains a truncated storage key.");
+
+        int recordOrder = left.Key.AsSpan(1, 16).SequenceCompareTo(right.Key.AsSpan(1, 16));
+        if (recordOrder != 0) return recordOrder;
+
+        bool leftTombstone = left.Key[0] == CurrentRecordTombstone;
+        bool rightTombstone = right.Key[0] == CurrentRecordTombstone;
+        if (leftTombstone != rightTombstone) return leftTombstone ? -1 : 1;
+        if (leftTombstone) return 0;
+
+        if (left.Key[0] != CurrentField || right.Key[0] != CurrentField ||
+            left.Key.Length != 19 || right.Key.Length != 19)
+            throw new InvalidDataException("Provider snapshot contains an invalid current-field key.");
+
+        return left.Key.AsSpan(17, 2).SequenceCompareTo(right.Key.AsSpan(17, 2));
+    }
 
     private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
     {
