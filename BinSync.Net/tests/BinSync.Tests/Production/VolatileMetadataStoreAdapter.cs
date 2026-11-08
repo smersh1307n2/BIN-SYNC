@@ -382,13 +382,13 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         return result;
     }
 
-    public bool IsOutboundChangeFrozen(
-        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, byte[] fingerprint)
+    public bool TryGetOutboundChangeFingerprint(
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, out byte[] fingerprint)
     {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
         if (changeId.IsZero)
             throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
-        ValidateDigest(fingerprint, nameof(fingerprint));
+        fingerprint = Array.Empty<byte>();
         if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
             return false;
 
@@ -400,10 +400,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 throw new InvalidDataException("Frozen outbound ChangeId is missing its global fingerprint.");
             return false;
         }
-        if (!priorFingerprint.AsSpan().SequenceEqual(fingerprint))
-            throw new InvalidDataException("Provider ChangeId conflicts with the durable global ChangeId fingerprint.");
         if (!state.OutboundChangeIds.Contains(key))
             throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
+        fingerprint = priorFingerprint.ToArray();
         return true;
     }
 
