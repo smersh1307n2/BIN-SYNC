@@ -108,6 +108,133 @@ public sealed partial class Node
         }
     }
     /// <summary>
+    /// Apply the already-read local provider feed to the Node's in-memory cache without
+    /// rebuilding the namespace from a full snapshot. Metadata Store remains the
+    /// outbound ChangeId authority; this cache update creates no Outbox or identity
+    /// ledger rows. The caller checkpoints the Node before acknowledging the feed.
+    /// </summary>
+    internal int ApplyProviderChanges(int namespaceId, IReadOnlyList<ProviderChange> changes)
+    {
+        ArgumentNullException.ThrowIfNull(changes);
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (changes.Count == 0)
+            return 0;
+
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            bool hasNamespace = Storage.TryGetValue(namespaceId, out var namespaceStore);
+            namespaceStore ??= new Dictionary<RecordId, Record>();
+
+            var working = new Dictionary<RecordId, Record>(Math.Min(changes.Count, 256));
+            var changedRecords = new HashSet<RecordId>(Math.Min(changes.Count, 256));
+            ulong previousSequence = 0;
+            int applied = 0;
+
+            for (int i = 0; i < changes.Count; i++)
+            {
+                ProviderChange change = changes[i];
+                if (change.Sequence == 0 || change.Sequence <= previousSequence)
+                    throw new InvalidDataException("Provider changes must have strictly increasing non-zero sequences.");
+                previousSequence = change.Sequence;
+                if (change.ChangeId.IsZero)
+                    throw new InvalidDataException("Provider changes require stable non-zero ChangeIds.");
+
+                ProviderMutation mutation = change.Mutation;
+                if (mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero ||
+                    mutation.AuthorNodeId != NodeId)
+                    throw new InvalidDataException("Provider mutation identity does not match the local Node.");
+                if (mutation.IsRecordTombstone && mutation.IsTombstone)
+                    throw new InvalidDataException("Provider mutation cannot be both a field and record tombstone.");
+
+                object operation;
+                if (mutation.IsRecordTombstone)
+                {
+                    operation = new OpRecordTombstone
+                    {
+                        RecordId = mutation.RecordId,
+                        Wall = mutation.HlcWall,
+                        Logical = mutation.HlcLogical,
+                        Origin = 1
+                    };
+                }
+                else if (mutation.IsTombstone)
+                {
+                    if (mutation.FieldId == 0 || mutation.FieldId == Model.LifecycleFieldId ||
+                        mutation.Value is null || mutation.Value.Length != 0)
+                        throw new InvalidDataException("Provider field tombstone is malformed.");
+                    operation = new OpFieldTomb
+                    {
+                        FieldId = mutation.FieldId,
+                        KeyEpoch = mutation.KeyEpoch,
+                        Wall = mutation.HlcWall,
+                        Logical = mutation.HlcLogical,
+                        Origin = 1
+                    };
+                }
+                else
+                {
+                    if (mutation.FieldId == 0 || mutation.FieldId == Model.LifecycleFieldId ||
+                        mutation.Value is null)
+                        throw new InvalidDataException("Provider field write is malformed.");
+                    operation = new OpFieldWrite
+                    {
+                        FieldId = mutation.FieldId,
+                        KeyEpoch = mutation.KeyEpoch,
+                        Wall = mutation.HlcWall,
+                        Logical = mutation.HlcLogical,
+                        Origin = 1,
+                        Value = mutation.Value.ToArray()
+                    };
+                }
+
+                if (!working.TryGetValue(mutation.RecordId, out var record))
+                {
+                    record = namespaceStore.TryGetValue(mutation.RecordId, out var existing)
+                        ? Clone(existing)
+                        : new Record(mutation.RecordId, (ushort)namespaceId);
+                    working.Add(mutation.RecordId, record);
+                }
+
+                if (ApplyOpInternal(record, operation, NodeId))
+                {
+                    changedRecords.Add(mutation.RecordId);
+                    applied++;
+                }
+            }
+
+            if (changedRecords.Count != 0)
+            {
+                int newRecordCount = 0;
+                foreach (RecordId recordId in changedRecords)
+                    if (!namespaceStore.ContainsKey(recordId))
+                        newRecordCount++;
+                Limits?.EnsureCanApplySnapshot(this, newRecordCount);
+
+                if (!hasNamespace)
+                {
+                    namespaceStore.EnsureCapacity(changedRecords.Count);
+                    Storage.EnsureCapacity(Storage.Count + 1);
+                    Storage.Add(namespaceId, namespaceStore);
+                }
+                else
+                {
+                    namespaceStore.EnsureCapacity(namespaceStore.Count + newRecordCount);
+                }
+
+                foreach (RecordId recordId in changedRecords)
+                    namespaceStore[recordId] = working[recordId];
+            }
+
+            foreach (ProviderChange change in changes)
+                Clock.Observe(new Hlc(change.Mutation.HlcWall, change.Mutation.HlcLogical));
+
+            return applied;
+        }
+    }
+
+    /// <summary>
     /// Drops the Node's duplicate local Outbox payload projection after a durable
     /// Metadata Store cutover. The sequence watermark and ChangeId/WAL replay markers
     /// are deliberately retained; the caller must have frozen the complete prefix
