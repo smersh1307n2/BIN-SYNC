@@ -648,10 +648,11 @@ public sealed class StorageSyncCoordinator
                 .Select(item => item.PeerEpoch).Distinct().ToArray();
             bool hasPriorIncarnation = priorPeerEpochs.Length != 0 ||
                 peerStore.GetRetiredPeerEpoch(_scopeId!, _node.NodeId, peer, namespaceId) is not null;
+            // Register the replacement first, but keep prior epochs active until
+            // AutoReconcileWithMetadataAsync commits this epoch's complete baseline.
+            // Retiring earlier would reclaim receipts before the replacement can
+            // prove its initial state and would fence a still-needed retry path.
             peerStore.RegisterInterestedPeer(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId);
-            foreach (uint oldEpoch in priorPeerEpochs)
-                peerStore.RetireInterestedPeer(_scopeId!, _node.NodeId, peer,
-                    oldEpoch, peerEpoch, namespaceId);
 
             var known = peerStore.ReadPeerStreamStates(_scopeId!, _node.NodeId, peer, peerEpoch, namespaceId)
                 .ToDictionary(stream => stream.AuthorStream, stream => stream.State);
@@ -839,6 +840,16 @@ public sealed class StorageSyncCoordinator
         persistNode(_node);
         peerStore.CompletePeerInitialSync(
             _scopeId!, _node.NodeId, peer, peerEpoch, _namespaceId, baselines);
+
+        // Receipt reclamation is permitted only after the replacement epoch's
+        // complete baseline is durable. Until this point the prior incarnation
+        // remains registered and can finish any in-flight PendingApply.
+        foreach (uint oldEpoch in peerStore.ReadInterestedPeers(_scopeId!, _node.NodeId, _namespaceId)
+                     .Where(item => item.Peer == peer && item.PeerEpoch < peerEpoch)
+                     .Select(item => item.PeerEpoch).Distinct())
+            peerStore.RetireInterestedPeer(
+                _scopeId!, _node.NodeId, peer, oldEpoch, peerEpoch, _namespaceId);
+
         return result;
     }
 
