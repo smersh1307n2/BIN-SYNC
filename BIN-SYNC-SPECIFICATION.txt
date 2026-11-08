@@ -1,14 +1,15 @@
-# BIN-SYNC CORE v2.4.21 FINAL
+# BIN-SYNC CORE v2.4.22 FINAL
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.21 FINAL (correlated live ALIAS_MAP updates; negotiated capability; fail-closed alias collision)  
+**Версия:** 2.4.22 FINAL (durable retired-epoch receipt GC; authoritative retention-roster prerequisites; fail-closed ChangeId/tombstone GC)  
 **Дата:** 2026-11-08  
 
-**Изменения v2.4.21 относительно v2.4.20:**
-- Определён established-session ALIAS_MAP request/response на control stream: новая привязка атомарно принимается обеими копиями session map до отправки DELTA_BATCH с этим alias.
-- Добавлен HELLO capability `IncrementalAliasMap` (`0x00000004`), корреляция requestId с разными parity для двух направлений и fail-closed поведение при collision, отказе или отмене.
-- Единый receive pump маршрутизирует ALIAS_MAP control updates отдельно от DELTA_BATCH/ACK; raw receive mode остаётся отдельным режимом.
+**Изменения v2.4.22 относительно v2.4.21:**
+- Нормативно определён узкий Inbox receipt GC: receipt удаляется только атомарно с durable retired-through fence authenticated transport-peer epoch; unresolved PendingApply блокирует retirement; epoch-unknown legacy receipt сохраняется.
+- Разделены transport-delivery roster и authoritative namespace membership: MEMBERSHIP/InterestedPeers сами по себе не разрешают ChangeId или tombstone GC.
+- Зафиксированы prerequisites для ChangeId GC: immutable origin `(author, authorEpoch, originSequence)`, signed authoritative roster generation и signed monotonic all-member retention checkpoints.
+- Tombstone/ghost GC остаётся fail-closed до per-author safe frontier и атомарного `FULL_REPLACE` snapshot generation; TTL/HLC/GC_NOTICE не являются доказательством.
 **Изменения v2.4.20 относительно v2.4.19:**
 - Зафиксирован receipt key `(senderNodeId, senderEpoch, namespaceId, batchId)`; resolved `authorNodeId` остаётся отдельной координатой author-stream и не может менять receipt identity.
 - Разделены peer/session membership и per-author stream progress; безопасный retention рассчитывается независимо для каждого author stream.
@@ -2585,6 +2586,24 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 
 **Wire format:** без изменений. E-25 ужесточает интерпретацию существующего GC_NOTICE и запрещает небезопасное поведение; будущий durable frontier может потребовать отдельной protocol revision после определения полного handshake/ACK contract.
 
+
+# ERRATA v2.4.22
+
+## E-26. §§10.7 / 11.2–11.9 — independent durable retention horizons
+
+**Дефект:** один общий peer ACK, snapshot baseline или membership hint нельзя использовать для удаления всех видов метаданных. Inbox receipt, ChangeId fingerprint, provider apply-token receipt, receive cursor/digest-chain checkpoint, outbound/relay payload и tombstone имеют разные причины удержания. Удаление receipt/identity по TTL или удаление ChangeId по peer ACK допускает повторную доставку, equivocation или resurrection.
+
+**Нормативно:**
+
+1. Outbound/relay payload compaction использует только contiguous per-author peer ACK/baseline frontier и отдельный local consumer ACK, если он существует. Этот delivery frontier не разрешает удалять Inbox receipts, ChangeId fingerprints, CompletedPendingApply tokens или tombstones.
+2. Inbox receipt identity остаётся `(senderNodeId, senderEpoch, namespaceId, batchId)`. Authenticated transport peer epoch хранится отдельно и не подменяет author/issuer epoch.
+3. Storage-backed receipt GC разрешён только когда более новая transport-peer incarnation durably registered, old epoch durably fenced by monotonic retired-through marker, и receipt deletion commits atomically with that fence. Retirement MUST be blocked while a matching or epoch-unknown PendingApply is unresolved. Receive entry points MUST reject retired/epoch-less traffic after a retirement fence. Legacy receipts with unknown transport epoch MUST be retained until an exact authenticated duplicate from a registered current epoch re-attributes them. Active-epoch receipts and CompletedPendingApply tokens are not deleted by this rule.
+4. The existing MEMBERSHIP message and InterestedPeers roster are not an authoritative namespace membership set. They MUST NOT be used as the denominator for ChangeId or tombstone GC.
+5. ChangeId ledger GC remains disabled until each operation carries immutable origin author, author epoch and origin sequence unchanged through every relay; a committed authoritative namespace roster generation exists; and every member in that roster has durably published a signed monotonic retention checkpoint with a contiguous applied frontier for each origin stream. Missing members/checkpoints contribute zero. Provenance-less legacy ledger rows are non-collectable. No TTL, HLC-age, LRU, size-based eviction, Outbox ACK or relay ACK may remove ChangeId identity.
+6. Tombstone/ghost GC remains disabled until the same authoritative roster/frontier proof exists and every member has installed the same authoritative full-snapshot generation/digest. A merge snapshot does not delete rows absent from the snapshot. Rejoining or removed members MUST install an atomic FULL_REPLACE snapshot before incremental deltas are accepted.
+7. A retention checkpoint and any resulting physical deletion must be crash-consistent. GC must fail closed on roster mismatch, epoch regression, missing author frontier, incomplete PendingApply, immutable outbound reservation, or snapshot/feed barrier mismatch.
+
+**Текущая реализация:** retired-transport-epoch Inbox receipt GC is implemented conservatively in StorageMetadataStore. ChangeId ledger GC and tombstone/ghost GC remain disabled. GcNotice.PurgeBelowCutoff returns zero. No wire payload layout changes are introduced by E-26; new origin-coordinate, roster-certificate and retention-checkpoint messages require a separately specified negotiated protocol revision before implementation.
 
 ## 10.7. Receipt identity and resolved author
 
