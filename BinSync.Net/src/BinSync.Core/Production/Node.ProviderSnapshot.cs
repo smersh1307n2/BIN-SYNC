@@ -2,27 +2,28 @@ namespace BinSync;
 
 public sealed partial class Node
 {
-    private bool _metadataStoreOwnedPublicationFence;
+    private readonly HashSet<int> _metadataStoreOwnedPublicationFences = new();
 
     /// <summary>
-    /// Fence the Node's legacy local-Outbox and Node-owned send APIs after durable
-    /// Metadata Store publication cutover. The provider cutover marker is authoritative;
-    /// StorageSyncCoordinator reinstalls this in-memory fence when it is reconstructed.
+    /// Fence the Node's legacy local-Outbox and Node-owned send APIs for one namespace
+    /// after durable Metadata Store publication cutover. The provider cutover marker is
+    /// authoritative; StorageSyncCoordinator reinstalls this in-memory fence on restart.
     /// </summary>
-    internal void EnableMetadataStoreOwnedPublicationFence()
+    internal void EnableMetadataStoreOwnedPublicationFence(int namespaceId)
     {
+        ValidateNamespaceId(namespaceId);
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             ThrowIfDisposed();
-            _metadataStoreOwnedPublicationFence = true;
+            _metadataStoreOwnedPublicationFences.Add(namespaceId);
         }
     }
 
-    private void EnsureNodeOwnedMutationAllowedInternal()
+    private void EnsureNodeOwnedMutationAllowedInternal(int namespaceId)
     {
-        if (_metadataStoreOwnedPublicationFence)
+        if (_metadataStoreOwnedPublicationFences.Contains(namespaceId))
             throw new InvalidOperationException(
-                "Node-owned local writes and Outbox transport are disabled after Metadata-Store-owned publication cutover. Write through the Data Provider and StorageSyncCoordinator.");
+                "Node-owned local writes and Outbox transport are disabled for this namespace after Metadata-Store-owned publication cutover. Write through the Data Provider and StorageSyncCoordinator.");
     }
 
     /// <summary>
