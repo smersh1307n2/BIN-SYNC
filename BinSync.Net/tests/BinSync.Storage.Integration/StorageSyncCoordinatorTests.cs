@@ -1386,10 +1386,15 @@ public sealed class StorageSyncCoordinatorTests
             scope, node, sender, 1, recordOne, 0x0819, "namespace-one", 0xA1);
         MetadataIncomingBatch batchTwo = CreatePendingProviderBatch(
             scope, node, sender, 2, recordTwo, 0x081A, "namespace-two", 0xA2);
-        metadata.BeginPendingApply(batchOne, Guid.NewGuid());
         metadata.BeginPendingApply(batchTwo, Guid.NewGuid());
 
         var coordinatorOne = new StorageSyncCoordinator(node, providerOne, 1, metadata, scope);
+        Assert.Equal(0, coordinatorOne.RehydrateNodeFromProviderSnapshot(_ => { }));
+        MetadataPendingApplyIntent foreign = Assert.Single(
+            metadata.ReadPendingApplyIntents(scope, node.NodeId));
+        Assert.Equal(2, foreign.Batch.NamespaceId);
+
+        metadata.BeginPendingApply(batchOne, Guid.NewGuid());
         Assert.Throws<InvalidOperationException>(() =>
             coordinatorOne.RehydrateNodeFromProviderSnapshot(_ => { }));
         Assert.Equal(2, metadata.ReadPendingApplyIntents(scope, node.NodeId).Count);
