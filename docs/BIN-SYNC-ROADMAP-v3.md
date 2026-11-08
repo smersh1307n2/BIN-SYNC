@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Verified checkpoint: `70cda009949f6255469fa957a9e545f3ec97da26` passed BinSync.Net (Core, Fuzz/Lab, samples, coverage) and FLD Storage Integration on Windows/macOS/Ubuntu. The strict BSP3 provider marker/feed identity package (`56d818c`, `ad236fd`) has Core workflow run 3919 SUCCESS; FLD Storage Integration run 1952 is still in progress on macOS while Windows/Ubuntu jobs were cancelled by superseding commits. Newer cutover-ledger changes (`d6b02b2`, `6725463`) and spec/provider-doc alignment (`dffd148`, `f9c0cb9`) are not yet verified. Current branch head at this log entry is `67254635129ca9d44c1cf4771bbb2797a092d382`; status: PARTIALLY VERIFIED, exact-head CI pending.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest fully verified checkpoint: `8564f5eb3b9ef6478f6cc7c295fea84ac99509d3` — BinSync.Net Core 662/662, Fuzz/Lab workflow SUCCESS, Storage Integration 165/165 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, and stale reservation ACK/baseline retirement behavior. Newer commits `1ec26b8`, `25224f4`, `0ba5876` add author-epoch matching to the replacement-baseline proof and enforce bounded provider pages; exact-head CI is pending. Current branch HEAD: `0ba5876b70996aedf608e9c3993884614fa21693`; status: PREVIOUS CHECKPOINT GREEN, CURRENT HEAD UNVERIFIED.
 
 ## 1. Target architecture
 
@@ -23,15 +23,14 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Prior roadmap checkpoint: 4e2ba079678ce3fcaa0058ae43ef652faa33975a. Current implementation/doc head: 206f4f849f3ffc74b9812950fcadccd06507dc33; 49 commits ahead, no divergence. Last completed exact-code green checkpoint: f91df0b4ef93f5a53f419420aa578dfe36bc293b; subsequent follow-up/spec docs CI was pending at last inspection.
-- The PR merge snapshot a852206fc245c2a0f7469d0e18d19415a2b2c528 failed Build because Node.DeltaBatch.cs:861-862 read Origin fields from a 3-field tuple.
-- The later e6826b4865f8966327a628ae07e95720db58d0ff snapshot completed Build, but Test, Fuzz/Lab and Storage Integration workflows were cancelled before completion.
-- The latest strict-decoder commits have no reported workflow result yet. CI is therefore UNVERIFIED, not green.
-- Last documented green baseline is 92f6631871072799087ee1732f4d65bdaeeff523: Core 648/648, Fuzz/Lab 31/31, Storage Integration 136/136. Historical only; not verification of current HEAD.
+- Current branch HEAD: `0ba5876b70996aedf608e9c3993884614fa21693`.
+- Latest exact-code green checkpoint: `8564f5eb3b9ef6478f6cc7c295fea84ac99509d3` — Core 662/662; Fuzz/Lab SUCCESS; Storage Integration 165/165 on Ubuntu, Windows and macOS.
+- The three commits after that checkpoint (`1ec26b8`, `25224f4`, `0ba5876`) are awaiting exact-head CI; do not treat the prior green result as their verification.
+- Backup branches exist, including `backup/pre-autonomous-roadmap-v3-2026-11-08`, `backup/bin-sync-storage-gc-receipt-2026-11-08`, `backup/pre-final-bin-sync-storage-2026-11-08`, and `backup/post-storage-fault-injection-2026-11-08`.
 
 ### FLD-DB: fix/crash-consistency-outbox
 
-- HEAD: 4ad95ca99d8cc0b904f28ccb7ae722e316dd2044.
+- HEAD: `1f5c2528767e575bfb925a19792c69b6ffb1027e`.
 - Generic Storage engine, WAL/recovery/checkpoint foundations, FLD field layer, Outbox and remote APPLY are present.
 - Two-DLL architecture is documented; extraction/contract completion and multi-application process model remain release gates.
 - Re-run cross-repository integration CI after v3 contracts are aligned.
@@ -80,20 +79,20 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [x] Provider feed/FLD Outbox is the sole authority for unpublished local changes in Metadata-Store-owned publication mode; no parallel MetadataStore PendingLocal table. The cutover fence rejects a non-empty local feed/Node Outbox state that would make ownership ambiguous.
 - [x] Verify LWW field coalescing across provider pages; field writes and record-lifecycle tombstones use distinct coalescing identities. Provider conformance separately covers lifecycle tombstone/ghost ordering.
 - [~ C] Make the provider contract explicitly require remote APPLY to leave the local unpublished feed and its ACK state untouched; StorageDataProvider already follows this boundary. Same-field remote-wins/restart conformance remains Phase T.
-- [ ] Freeze ChangeId + Origin + payload atomically into BIN-SYNC; ACK source feed only after durable freeze.
-- [ ] Make freeze replay idempotent when metadata commit succeeds but provider ACK fails; later edits remain suffix operations.
+- [x] Freeze ChangeId + immutable Origin + payload into Metadata Store atomically; provider source-feed ACK follows durable freeze and Node checkpoint persistence.
+- [x] Freeze replay is idempotent when metadata commit succeeds but provider ACK fails; frozen ChangeIds are recognized and only the later unfrozen suffix is coalesced/published.
 - [ ] Map FLD JournalSeq to stable ChangeId/Origin without using JournalSeq as OriginSequence.
 - [ ] Complete Storage/DataProvider/MetadataStore conformance including reopen and crash boundaries.
-- [ ] Storage DLL remains protocol-agnostic; field/HLC/tombstone semantics stay in Database DLL.
+- [x] Storage DLL remains protocol-agnostic; field/HLC/tombstone semantics stay in Database DLL.
 
 ### Phase 4 — Safe GC, independently proven
 
 #### 4.1 Inbox receipts
 
 - [x] Conservative retired-transport-epoch receipt GC and PendingApply retirement guard exist in earlier Storage-backed implementation.
-- [~ C] Block retirement/receipt reclamation while any outbound reservation remains attached to the retired transport epoch; implementation added in `aab64ad`. Exact retry/crash regression tests remain in Phase T.
-- [ ] Revalidate against canonical v3 receipt layout; remove legacy-unknown receipt handling because old formats are rejected.
-- [ ] Test lost ACK, duplicate batch, epoch retirement, new epoch initial baseline and crash before/after atomic fence+receipt deletion.
+- [x C] Retirement now blocks old PendingBatch reclamation unless the exact reservation is ACKed or the replacement baseline for the same author epoch covers `old StreamOffset + PendingBatch.CursorEnd`. Before the retired-through fence, a stale epoch may only resume/mark-pushed/ACK that exact reservation; it cannot reserve new data. Epoch-zero and cross-author-epoch baselines never discharge the reservation.
+- [x] Revalidated canonical v3 receipt identity. Old receipt key/value formats are rejected; v3 rows with unknown transport epoch are retained and never assigned guessed provenance.
+- [~ T] Added tests for short-baseline blocking, exact stale-epoch retry/ACK, replacement-baseline supersession, author-epoch mismatch, duplicate/retired epoch and reopen. Exact-head CI at `8564f5e` passed 165/165 on three OS; newer author-epoch guard test is pending CI.
 
 #### 4.2 ChangeId ledger
 
@@ -107,10 +106,10 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 #### 4.3 Tombstone / ghost
 
-- [ ] Define signed authoritative FULL_REPLACE generation distinct from merge SNAPSHOT_CHUNK.
-- [ ] Bind provider snapshot token and change-feed tail watermark to one atomic barrier.
+- [ ] Define signed authoritative FULL_REPLACE generation and roster certificate distinct from merge SNAPSHOT_CHUNK (requires a separately negotiated protocol revision; v3.0 wire must not grow unversioned messages).
+- [~ C] Provider `OpenSnapshot` captures the stable image and source feed watermark in one Storage snapshot; the full-replace digest binds the generation and watermark. Signed wire certificate and all-member binding remain blocked on the roster protocol revision.
 - [ ] Require all roster members to install same or later generation/digest.
-- [ ] Stage full namespace image and atomically switch active Storage generation; remove destination-only stale rows.
+- [~ C] `IProviderFullReplace` and `StorageDataProvider` stage generation-scoped rows, verify the canonical SHA-256 manifest in bounded scans, fence commit to the captured base generation, and atomically switch the active-generation pointer. Old generations are retained; physical reclamation remains blocked on cross-store safe-GC proof.
 - [ ] Persist forgotten deletion frontier before physical purge; fence old-generation deltas and force full rebootstrap.
 - [ ] Test field tombstone, record tombstone and ghost independently, including offline peers, alternate routes and crashes at every transition.
 - [ ] Keep tombstone/ghost GC disabled until complete proof passes.
@@ -120,8 +119,8 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [x C] The public `TcpSyncSession` surface is already removed by the v3 clean cut; `docs/PUBLIC-API.md` explicitly records the removal and generic `SyncSession` as the transport-independent API. No compatibility wrapper is to be restored.
 - [~ C] Audit all examples/tests and remaining public API for legacy TCP-specific/compatibility-only references; migrate any remaining call sites to canonical `SyncSession`/`ISyncTransport`/provider API during the C pass, then verify in Phase T.
 - [x] Removed optional immutable-Origin provenance negotiation: v3 HELLO/HELLO_ACK carry and require ProtocolMajor=3; `SessionCapabilities` contains no provenance/downgrade bit and decode rejects every other major.
-- [ ] Remove Node-owned duplicate metadata paths where Metadata Store authority is selected; no fallback after durable cutover.
-- [~ C] Added mandatory `BSP3` provider format marker on first provider open/write; unmarked partitions containing provider-owned rows fail closed, and mismatched markers are rejected. Strict v3 feed decoder now rejects missing/zero ChangeId rather than synthesizing one. Code: `56d818c`; regression tests: `ad236fd`; exact-head CI pending.
+- [x C] On Metadata-Store-owned cutover, Node drops its namespace `GlobalChangeLedger` and Outbox payload projections; `SeenChanges` remains only as the distinct WAL replay marker. Cutover/restart assertions pass.
+- [x C] Mandatory `BSP3` provider marker and active-generation pointer are written atomically on fresh open; unmarked/unknown partitions fail closed. Current state keys are generation-scoped; LocalChange rows require exactly one nonzero ChangeId suffix and no read-time synthesis. Exact checkpoint CI green.
 - [ ] Ensure all public samples use canonical v3 API.
 
 ### Phase 6 — Conformance, performance and release
@@ -419,3 +418,17 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Added cutover and stale-Node-checkpoint restart assertions that the Node global ledger is empty after the provider/Metadata Store authority fence.
 - [~] Code/test commits: `d6b02b2`, `6725463`. Exact-head Core + Storage Integration CI pending.
 - [x] Updated the normative v3 §0.7 provider storage paragraph and Data Provider conformance contract to specify `BSP3`, strict nonzero ChangeId suffix and fail-closed legacy handling; no read-time identity synthesis.
+
+
+### 2026-11-08 — Phase 3/4/5 C pass: provider generation and safe retirement
+
+- [x] Added optional `IProviderFullReplace` capability with durable Begin/Stage/Commit/Abort operations. Staged rows remain invisible; Commit validates SHA-256 and atomically switches active generation.
+- [x] Bound a staged replacement to its captured base generation so a stale concurrent replacement cannot overwrite a newer active generation. Repeated Begin/Commit after a successful switch is idempotent.
+- [x] Made digest verification streaming in bounded 1024-row scans; staging and abort pages are capped at 4096 entries. Abort is resumable/bounded. Old generations remain physically retained until a separately proven cross-store GC path exists.
+- [x] Generation ids use canonical RFC-4122 network byte order in digest, active pointer, session manifest and generation-scoped keys.
+- [x] Added provider integration coverage for invisible staging, atomic switch, digest mismatch, stale-base rejection, restart/resume, old-generation snapshot stability and retention. The verified checkpoint before the latest three commits passed 165/165 on all OS.
+- [x] Tightened peer retirement: exact stale-epoch PendingBatch may finish only before the durable retired-through fence; a replacement snapshot can discharge it only when same-author-epoch baseline covers the absolute end cursor. Unknown epoch and author-epoch mismatch fail closed.
+- [x] Added tests for exact stale reservation retry/ACK, insufficient baseline, authoritative baseline supersession and cross-author-epoch mismatch.
+- [x] Verified backup branches exist for both BIN-SYNC and FLD-DB; no backup branch was overwritten.
+- [~] Latest exact-head CI pending for `1ec26b8`, `25224f4`, `0ba5876`; prior exact green `8564f5e` was Core 662/662, Fuzz/Lab success, Storage Integration 165/165 on Ubuntu/Windows/macOS.
+- [ ] Signed namespace roster, all-member OriginSequence frontier, forgotten deletion checkpoint and tombstone/ghost GC remain disabled until the separate negotiated protocol revision and adversarial proof are complete.
