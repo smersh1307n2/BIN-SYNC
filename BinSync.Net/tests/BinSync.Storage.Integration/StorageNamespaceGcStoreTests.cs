@@ -120,9 +120,9 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(9)), 3, 90));
                 Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(9)), 3, 91));
                 Assert.True(gc.HasProtocolTombstoneGcProof(
-                    roster, trust, NodeId.From(Id(9)), 3, 90, generation, replaceDigest));
+                    roster, trust, NodeId.From(Id(9)), 3, 90, 0, 0, generation, replaceDigest));
                 Assert.False(gc.HasProtocolTombstoneGcProof(
-                    roster, trust, NodeId.From(Id(9)), 3, 91, generation, replaceDigest));
+                    roster, trust, NodeId.From(Id(9)), 3, 91, 0, 0, generation, replaceDigest));
             }
 
             using (var reopened = StorageDatabase.Open(directory, 901))
@@ -136,7 +136,7 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.Equal(2, gc.ReadOriginFrontiers(restoredRoster).Count);
                 Assert.Equal(2, gc.ReadFullReplaceInstalledAcks(restoredRoster, generation).Count);
                 Assert.True(gc.HasProtocolTombstoneGcProof(
-                    restoredRoster, trust, NodeId.From(Id(9)), 3, 90, generation, replaceDigest));
+                    restoredRoster, trust, NodeId.From(Id(9)), 3, 90, 0, 0, generation, replaceDigest));
             }
         }
         finally
