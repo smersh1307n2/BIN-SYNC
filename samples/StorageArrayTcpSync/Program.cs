@@ -137,7 +137,6 @@ static async Task InitializePeerBaselineOverTcpAsync(
     var acceptTask = listener.AcceptAsync(nodeA);
     await using var sessionB = await TcpSync.ConnectAsync(nodeB, "127.0.0.1", listener.Port);
     await using var sessionA = await acceptTask;
-    StorageNodePersistence.Save(((StorageDatabase?)null)!, nodeA);
 
     coordinatorA.RegisterInterestedPeer(sessionA, NamespaceId);
     coordinatorB.RegisterInterestedPeer(sessionB, NamespaceId);
@@ -157,6 +156,9 @@ static async Task<int> ExchangeOverTcpAsync(
     var acceptTask = listener.AcceptAsync(nodeA);
     await using var sessionB = await TcpSync.ConnectAsync(nodeB, "127.0.0.1", listener.Port);
     await using var sessionA = await acceptTask;
+    // Persist the negotiated alias table before either direction can stage PendingApply.
+    StorageNodePersistence.Save(storageA, nodeA);
+    StorageNodePersistence.Save(storageB, nodeB);
 
     int aToB = await PushUntilIdleAsync(sessionA, nodeA, metadataA, "array-tcp-demo", sessionB, nodeB,
         (batch, _) => coordinatorB.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageB, nodeB)));
