@@ -1611,11 +1611,8 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(restartedNode.TryGetField(1, record, 0x0821, out var restored));
         Assert.Equal("durable-provider-value", Encoding.UTF8.GetString(restored!.Value));
         Assert.Empty(restartedNode.ReadOutboxEntries(1, restartedNode.NodeId, 0, 10));
-        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
-
-        // Retry recognizes the already-frozen ChangeId, persists the restored cache,
-        // then acknowledges the feed without appending another outbound sequence.
-        Assert.Equal(1, restartedCoordinator.PublishLocalChanges(_ => { }));
+        // Rehydration first retries the already-frozen feed incrementally, checkpoints
+        // the Node cache, ACKs the provider feed, then performs the full startup snapshot.
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, originalNode.NodeId, 1, originalNode.NodeId));
 
