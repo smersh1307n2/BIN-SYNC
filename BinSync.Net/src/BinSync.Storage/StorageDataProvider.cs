@@ -44,6 +44,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         private const int ScanPageSize = 1024;
         private readonly StorageSnapshot _snapshot;
+        private readonly Guid _activeGeneration;
         private readonly byte[] _fieldPrefix;
         private readonly byte[] _recordTombstonePrefix;
         private StorageSnapshot.PrefixCursor _fieldCursor;
@@ -59,10 +60,11 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         public int NextIndex { get; private set; }
 
         public ProviderSnapshotState(
-            StorageSnapshot snapshot,
+            StorageSnapshot snapshot, Guid activeGeneration,
             byte[] fieldPrefix, byte[] recordTombstonePrefix)
         {
             _snapshot = snapshot;
+            _activeGeneration = activeGeneration;
             _fieldPrefix = fieldPrefix;
             _recordTombstonePrefix = recordTombstonePrefix;
             _fieldCursor = snapshot.OpenPrefixCursor(fieldPrefix);
@@ -138,7 +140,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 mutation = null;
                 return false;
             }
-            _fieldMutation ??= DecodeMutation(_fieldPage[_fieldPageIndex].Value);
+            if (_fieldMutation is null)
+            {
+                StorageEntry row = _fieldPage[_fieldPageIndex];
+                ProviderMutation decoded = DecodeMutation(row.Value);
+                ValidateGenerationEntry(_activeGeneration, row, decoded);
+                _fieldMutation = decoded;
+            }
             mutation = _fieldMutation;
             return true;
         }
@@ -151,7 +159,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 mutation = null;
                 return false;
             }
-            _recordTombstoneMutation ??= DecodeMutation(_recordTombstonePage[_recordTombstonePageIndex].Value);
+            if (_recordTombstoneMutation is null)
+            {
+                StorageEntry row = _recordTombstonePage[_recordTombstonePageIndex];
+                ProviderMutation decoded = DecodeMutation(row.Value);
+                ValidateGenerationEntry(_activeGeneration, row, decoded);
+                _recordTombstoneMutation = decoded;
+            }
             mutation = _recordTombstoneMutation;
             return true;
         }
@@ -432,7 +446,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 Guid activeGeneration = ReadActiveGeneration(snapshot);
                 Guid token = Guid.NewGuid();
                 _snapshots.Add(token, new ProviderSnapshotState(
-                    snapshot,
+                    snapshot, activeGeneration,
                     CurrentPrefix(CurrentField, activeGeneration),
                     CurrentPrefix(CurrentRecordTombstone, activeGeneration)));
                 return new ProviderSnapshotHandle(token, watermark);
