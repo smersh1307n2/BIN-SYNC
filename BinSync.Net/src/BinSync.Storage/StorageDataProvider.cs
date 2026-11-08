@@ -145,7 +145,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            ValidateMutation(mutation);
             using var batch = _storage.BeginWriteBatch();
             ulong current = batch.TryGet([LocalHighWatermark], out var currentBytes)
                 ? ReadUInt64(currentBytes!)
@@ -443,7 +442,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             for (int i = 0; i < entries.Count; i++)
             {
                 ProviderMutation mutation = entries[i];
-                ValidateMutation(mutation);
+                ArgumentNullException.ThrowIfNull(mutation);
                 byte[] sortKey = FullReplaceSortKey(mutation);
                 if (state.NextIndex + i > 0 &&
                     lastSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
