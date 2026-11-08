@@ -165,7 +165,7 @@ public sealed class StorageSyncCoordinator
                         _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out ReadOnlyMemory<byte> frozenFingerprint))
                     {
                         Digest16 actualFingerprint = ComputeMetadataFingerprint(change);
-                        if (Digest16.From(frozenFingerprint.Span) != actualFingerprint)
+                        if (frozenFingerprint.Length != 16 || Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
                         lastFrozenFeedSequence = change.Sequence;
                         // Any non-frozen rows before this frozen source sequence were
