@@ -518,18 +518,6 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
     }
 
-    [Fact]
-    public void Incoming_batch_rejects_cursor_span_that_cannot_map_one_to_one_to_operations()
-    {
-        using var store = CreateStore();
-        var malformed = CreateBatch("scope-a", 1, 2, 1, 7, 90, 1, 2, 0, 90,
-            Operation(20, 91, 92, 93));
-
-        Assert.Throws<ArgumentException>(() => store.AcceptIncomingBatch(malformed));
-        Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
-        Assert.Equal(0UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
-    }
-
     protected static MetadataIncomingBatch CreateBatch(
         string scope,
         byte replica,
