@@ -946,4 +946,39 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public void Full_replace_staging_resumes_after_provider_restart()
+    {
+        string directory = Path.Combine(_root, "provider-full-replace-restart");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ProviderMutation first = Mutation(110, 1, 100, 1);
+            ProviderMutation second = Mutation(110, 2, 101, 1);
+            Guid generation = Guid.Parse("99000000-0000-0000-0000-000000000001");
+            byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 24, new[] { first, second });
+
+            using (var provider = new StorageDataProvider(directory, partitionId: 99, deleteOnDispose: false))
+            {
+                provider.BeginFullReplace(generation, 24, 2, digest);
+                provider.StageFullReplacePage(generation, 0, new[] { first });
+                Assert.False(provider.TryReadCurrent(first.RecordId, first.FieldId, out _));
+            }
+
+            using (var reopened = new StorageDataProvider(directory, partitionId: 99, deleteOnDispose: false))
+            {
+                reopened.BeginFullReplace(generation, 24, 2, digest);
+                reopened.StageFullReplacePage(generation, 1, new[] { second });
+                reopened.CommitFullReplace(generation);
+                Assert.True(reopened.TryReadCurrent(first.RecordId, first.FieldId, out _));
+                Assert.True(reopened.TryReadCurrent(second.RecordId, second.FieldId, out _));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
