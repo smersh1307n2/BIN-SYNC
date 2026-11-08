@@ -603,7 +603,7 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceivePacketAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (expectedType < 0x04 || expectedType > 0x13)
+        if (expectedType != SessionWire.TypeAliasMap && (expectedType < 0x04 || expectedType > 0x13))
             throw new InvalidOperationException("Only established-session frame types can be dispatched");
         Channel<byte[]> channel;
         lock (_receiveSync)
@@ -662,7 +662,7 @@ public partial class SyncSession : IAsyncDisposable
                 byte frameType = raw[3];
                 byte flags = raw[4];
                 uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
-                if (frameType < 0x04 || frameType > 0x13)
+                if (frameType != SessionWire.TypeAliasMap && (frameType < 0x04 || frameType > 0x13))
                     throw new FrameException("FRAME_REJECTED");
 
                 if (frameType == Frames.TYPE_WINDOW_UPDATE)
