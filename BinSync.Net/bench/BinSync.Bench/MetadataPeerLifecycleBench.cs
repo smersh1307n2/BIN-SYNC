@@ -136,7 +136,7 @@ public class MetadataPeerChangeIdentityLookupBench
 {
     private const string Scope = "metadata-change-identity-bench";
     private const int NamespaceId = 1;
-    private const int LookupOperationsPerInvocation = 1_048_576;
+    private const int LookupOperationsPerInvocation = 1_572_864;
     private static readonly NodeId Local = NodeId.From(IdBytes(1));
     private static readonly NodeId Author = NodeId.From(IdBytes(2));
     private StorageMetadataStore _store = null!;
