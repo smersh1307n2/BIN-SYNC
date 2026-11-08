@@ -722,3 +722,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Updated the Storage integration call sites for the new tombstone-HLC proof contract (compile/API alignment only; no new behavioral assertions were added in this C slice).
 - [~ T] CI at `747ea0c` compiled production code and Fuzz/Lab passed, but Core tests had 7 failures in OFR1/RCP1 expectations and record-tombstone mutation validation. Storage Integration failed to compile on the changed tombstone-HLC signature; call sites are now aligned. Re-run exact-head CI and then migrate the obsolete v1 test fixtures to OFR2/RCP2 during T-pass.
 - [ ] C: finish concrete lifecycle wiring (authority roster transitions, periodic frontier publication/exchange, checkpoint production and receiver callbacks), and verify all stores use the shared StorageDatabase/transaction gate before claiming a complete app-wide barrier. Physical GC stays disabled.
+
+
+### 2026-11-09 — C-pass: shared-storage proof and lock-order correction
+
+- [x C] `AcquireApplicationCommitGuard` now fails closed if the durable `StorageMetadataStore` and `StorageDataProvider` do not share the same `StorageDatabase`; the provider/metadata/GC transaction gate is therefore one concrete lock when these durable implementations are attached.
+- [x C] Added internal shared-database identity checks without exposing storage handles through the public provider API.
+- [x C] Audited `StorageNodePersistence.Save` against the new lock order and changed it to acquire Node `Storage→Outbox→Meta` gates before the shared Storage transaction gate. This prevents the inverse Storage→Node order from deadlocking against FULL_REPLACE/GC commit guards.
+- [~ T] Verify parallel Node writes, Node checkpoint saves, provider appends, metadata commits and FULL_REPLACE commit under contention; add deterministic deadlock/race tests during T-pass.
+- [ ] C: continue lifecycle orchestration and snapshot-memory audit; physical GC remains disabled until host WAL/FLD and PendingApply/relay/reservation/snapshot references are proven under the composed lease.
