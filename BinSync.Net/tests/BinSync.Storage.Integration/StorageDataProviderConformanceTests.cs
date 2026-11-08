@@ -486,7 +486,6 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_DIR"] = directory;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_READY"] = readyPath;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
-        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_PID"] = ownerPidPath;
 
         try
         {
@@ -564,6 +563,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_DIR"] = directory;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_READY"] = readyPath;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
+        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_PID"] = ownerPidPath;
 
         try
         {
@@ -616,7 +616,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 }
             }
 
-            Assert.NotNull(recovered, $"WAL fence was not released after owner PID {ownerPid} exited. {lastError}");
+            Assert.True(recovered is not null, $"WAL fence was not released after owner PID {ownerPid} exited. {lastError}");
             using (recovered!)
             {
                 Assert.True(recovered!.TryGet(new byte[] { 0x11 }, out var value));
