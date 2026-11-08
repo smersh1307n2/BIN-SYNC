@@ -67,9 +67,9 @@ The fixture uses the real `StorageDataProvider` and `StorageMetadataStore`. Setu
 | 1,024 | 12.768 ms | 6.47 MB |
 | 4,096 | 35.213 ms | 33.92 MB |
 
-**Important scope:** this is the complete `PublishLocalChanges` retry path, including provider snapshot rehydration and Node cache replacement. It is not a scan-only benchmark. `RestoreProviderSnapshot` rebuilds the namespace and copies field values, so its allocations are included. The 1,024-row case had high run-to-run variance (24.9% relative standard deviation); treat that mean as directional. The 4,096-row case was more stable (1.02%).
+**Important scope:** this is the complete `PublishLocalChanges` retry path, including provider snapshot rehydration and Node cache replacement. It is not a scan-only benchmark. `RestoreProviderSnapshot` rebuilds the namespace and copies field values, so its allocations are included. The 1,024-row case had very high variance (about 78.8% relative standard deviation); treat that mean as directional. The 4,096-row case was more stable (about 2.5%).
 
-**Next optimization target:** keep the one-time full snapshot for initial cutover and startup reconciliation, but investigate applying the already-read provider feed incrementally to the Node cache after durable freeze. Any incremental path must preserve atomic cache updates, ChangeId duplicate suppression on ACK retry, tombstones, HLC ordering and checkpoint/restart recovery. Benchmark it against this full-path baseline before replacing the snapshot path.
+**Implementation result:** the incremental provider-feed path described in the following sections replaces this per-retry full snapshot rebuild. The matched-runner comparison in the final section confirms lower latency and allocation at all tested sizes. Retain this full snapshot path for initial cutover and startup reconciliation; continue profiling feed materialization, operation encoding and changed-record copy-on-write.
 
 ## 2026-11-08 incremental Node-cache retry
 
