@@ -208,6 +208,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             incoming.NamespaceId, incoming.BatchId);
         MetadataBatchReceipt receipt;
         bool isNewReceipt = !current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
+        ReceiptValue? refreshedReceipt = null;
         var newLedger = new List<(LedgerKey Key, ChangeLedgerValue Value)>();
         var newRelay = new List<(RelayKey Key, MetadataRelayItem Item)>();
         var relayHigh = new Dictionary<RelayKey, ulong>();
@@ -221,6 +222,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             receipt = new MetadataBatchReceipt(priorReceipt.CursorStart, priorReceipt.CursorEnd,
                 priorReceipt.BatchDigest.ToArray(), priorReceipt.NewRelayOperationCount, IsDuplicate: true)
             { DurableAuthor = priorReceipt.DurableAuthor, HeaderFingerprint = priorReceipt.HeaderFingerprint.ToArray() };
+            if (incoming.TransportPeerEpoch > priorReceipt.TransportPeerEpoch)
+                refreshedReceipt = new ReceiptValue(priorReceipt.CursorStart, priorReceipt.CursorEnd,
+                    priorReceipt.PreviousBatchDigest.ToArray(), priorReceipt.BatchDigest.ToArray(),
+                    priorReceipt.NewRelayOperationCount, priorReceipt.DurableAuthor,
+                    priorReceipt.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch);
         }
         else
         {
@@ -299,19 +305,21 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (identityKey is not null) writes.Add((identityKey, identityValue!));
         writes.Add((completedKey, completedValue));
 
-        if (isNewReceipt)
+        if (isNewReceipt || refreshedReceipt is not null)
         {
             byte[] receiptSuffix = new byte[38];
             incoming.SenderPeer.WriteTo(receiptSuffix);
             BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
             incoming.BatchId.WriteTo(receiptSuffix.AsSpan(22));
-            var receiptValueState = new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
+            var receiptValueState = refreshedReceipt ?? new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
                 incoming.PreviousBatchDigest.ToArray(), incoming.BatchDigest.ToArray(),
                 receipt.NewRelayOperationCount, receipt.DurableAuthor,
                 incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch);
             writes.Add((StorageKey(root, 1, receiptSuffix), EncodeReceiptValue(receiptValueState)));
 
+            if (isNewReceipt)
+            {
             byte[] receiveSuffix = new byte[38];
             incoming.SenderPeer.WriteTo(receiveSuffix);
             BinaryPrimitives.WriteUInt32LittleEndian(receiveSuffix.AsSpan(16), incoming.SenderEpoch);
@@ -326,6 +334,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt32LittleEndian(chainSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(chainSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
             writes.Add((StorageKey(root, 14, chainSuffix), incoming.BatchDigest.ToArray()));
+            }
         }
 
         foreach (var item in newLedger)
@@ -405,6 +414,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
             current.ReceiveChains[new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId)] = new ReceiveChainState(incoming.BatchDigest.ToArray());
+        }
+        else if (refreshedReceipt is not null)
+        {
+            current.Receipts[receiptKey] = refreshedReceipt;
         }
         foreach (var item in newLedger) current.ChangeLedger.Add(item.Key, item.Value);
         foreach (var item in newRelay)
@@ -564,6 +577,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         {
             if (!priorReceipt.Matches(batch))
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
+            RefreshReceiptTransportEpoch(partitionKey, current, receiptKey, priorReceipt,
+                batch.TransportPeerEpoch);
             return new MetadataBatchReceipt(priorReceipt.CursorStart, priorReceipt.CursorEnd,
                 priorReceipt.BatchDigest.ToArray(), priorReceipt.NewRelayOperationCount, IsDuplicate: true)
             {
@@ -2155,6 +2170,32 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return true;
     }
 
+
+    private void RefreshReceiptTransportEpoch(
+        PartitionKey partitionKey, PartitionState current, ReceiptKey key,
+        ReceiptValue prior, uint transportPeerEpoch)
+    {
+        if (transportPeerEpoch == 0 || transportPeerEpoch <= prior.TransportPeerEpoch)
+            return;
+        var refreshed = new ReceiptValue(prior.CursorStart, prior.CursorEnd,
+            prior.PreviousBatchDigest.ToArray(), prior.BatchDigest.ToArray(),
+            prior.NewRelayOperationCount, prior.DurableAuthor,
+            prior.HeaderFingerprint.ToArray(), transportPeerEpoch);
+        byte[] storageKey = EncodeReceiptKey(partitionKey, key);
+        byte[] value = EncodeReceiptValue(refreshed);
+        using var batch = _storage.BeginWriteBatch();
+        ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+        if (actualBaseCommitSeq != current.StorageCommitSeq)
+            throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
+        batch.Put(storageKey, value);
+        batch.Commit();
+        current.Receipts[key] = refreshed;
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        current.PersistedEntries[Convert.ToHexString(storageKey)] = (storageKey, value);
+        current.StorageCommitSeq = _storage.LastCommitSeq;
+        current.IsPersisted = true;
+    }
 
     private void PersistStreamWatermark(
         PartitionKey partitionKey, PartitionState current, byte storageKind,
