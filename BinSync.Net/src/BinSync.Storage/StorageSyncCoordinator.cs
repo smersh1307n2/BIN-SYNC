@@ -547,26 +547,34 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
-    public int CompactChangeLedger(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
+    public int CompactChangeLedger(
+        int namespaceId, int limit, Func<IDisposable?> acquireGcLease,
+        IApplicationGcReferenceScanner externalReferences)
     {
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("ChangeId GC requires the durable StorageMetadataStore implementation.");
         return storageMetadata.CompactChangeLedger(_scopeId
             ?? throw new InvalidOperationException("A durable metadata scope is required."),
-            _node.NodeId, namespaceId, limit, acquireGcLease);
+            _node.NodeId, namespaceId, limit, acquireGcLease, externalReferences);
     }
 
-    /// <summary>v3.1 tombstone compaction is fail-closed and returns zero until the global causal horizon protocol is complete.</summary>
-    public int CompactRecordTombstones(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
+    /// <summary>Attempt fail-closed record-tombstone compaction with internal and host live-reference scans.</summary>
+    public int CompactRecordTombstones(
+        int namespaceId, int limit, Func<IDisposable?> acquireGcLease,
+        IApplicationGcReferenceScanner externalReferences)
     {
         if (_provider is not StorageDataProvider storageProvider)
             throw new NotSupportedException("Record-tombstone GC requires the durable StorageDataProvider implementation.");
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Record-tombstone GC requires the durable StorageMetadataStore implementation.");
         StorageNamespaceGcStore gcStore = _namespaceGcStore
             ?? throw new InvalidOperationException("Attach the namespace-GC proof store before tombstone GC.");
         TrustStore trustStore = _namespaceGcTrustStore
             ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
         return storageProvider.CompactRecordTombstones(
-            namespaceId, gcStore, trustStore, limit, acquireGcLease);
+            _scopeId ?? throw new InvalidOperationException("A durable metadata scope is required."),
+            _node.NodeId, namespaceId, storageMetadata, gcStore, trustStore,
+            limit, acquireGcLease, externalReferences);
     }
 
     /// <summary>Compact incoming batch receipts below the signed origin frontier under an external live-reference lease.</summary>
