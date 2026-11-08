@@ -304,16 +304,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
             incoming.BatchId.WriteTo(receiptSuffix.AsSpan(22));
-            byte[] receiptValue = incoming.HeaderFingerprint.Length == 16 ? new byte[84] : new byte[68];
-            BinaryPrimitives.WriteUInt64LittleEndian(receiptValue, incoming.CursorStart);
-            BinaryPrimitives.WriteUInt64LittleEndian(receiptValue.AsSpan(8), incoming.CursorEnd);
-            incoming.PreviousBatchDigest.CopyTo(receiptValue, 16);
-            incoming.BatchDigest.CopyTo(receiptValue, 32);
-            BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), receipt.NewRelayOperationCount);
-            receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
-            if (incoming.HeaderFingerprint.Length == 16)
-                incoming.HeaderFingerprint.CopyTo(receiptValue, 68);
-            writes.Add((StorageKey(root, 1, receiptSuffix), receiptValue));
+            var receiptValueState = new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
+                incoming.PreviousBatchDigest.ToArray(), incoming.BatchDigest.ToArray(),
+                receipt.NewRelayOperationCount, receipt.DurableAuthor,
+                incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch);
+            writes.Add((StorageKey(root, 1, receiptSuffix), EncodeReceiptValue(receiptValueState)));
 
             byte[] receiveSuffix = new byte[38];
             incoming.SenderPeer.WriteTo(receiveSuffix);
@@ -647,15 +642,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         BinaryPrimitives.WriteUInt32LittleEndian(receiptSuffix.AsSpan(16), batch.SenderEpoch);
         BinaryPrimitives.WriteUInt16LittleEndian(receiptSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
         batch.BatchId.WriteTo(receiptSuffix.AsSpan(22));
-        byte[] receiptValue = batch.HeaderFingerprint.Length == 16 ? new byte[84] : new byte[68];
-        BinaryPrimitives.WriteUInt64LittleEndian(receiptValue, batch.CursorStart);
-        BinaryPrimitives.WriteUInt64LittleEndian(receiptValue.AsSpan(8), batch.CursorEnd);
-        batch.PreviousBatchDigest.CopyTo(receiptValue, 16);
-        batch.BatchDigest.CopyTo(receiptValue, 32);
-        BinaryPrimitives.WriteInt32LittleEndian(receiptValue.AsSpan(48), relayAdded);
-        receipt.DurableAuthor.WriteTo(receiptValue.AsSpan(52));
-        if (batch.HeaderFingerprint.Length == 16)
-            batch.HeaderFingerprint.CopyTo(receiptValue, 68);
+        var receiptValueState = new ReceiptValue(batch.CursorStart, batch.CursorEnd,
+            batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(),
+            relayAdded, receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(),
+            batch.TransportPeerEpoch);
+        byte[] receiptValue = EncodeReceiptValue(receiptValueState);
 
         byte[] receiveSuffix = new byte[38];
         batch.SenderPeer.WriteTo(receiveSuffix);
@@ -905,6 +896,23 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 RelayEligible = operation.RelayEligible
             }).ToArray()
         };
+
+    private static byte[] EncodeReceiptValue(ReceiptValue receipt)
+    {
+        int baseLength = receipt.HeaderFingerprint.Length == 16 ? 84 : 68;
+        byte[] value = new byte[baseLength + (receipt.TransportPeerEpoch == 0 ? 0 : 4)];
+        BinaryPrimitives.WriteUInt64LittleEndian(value, receipt.CursorStart);
+        BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), receipt.CursorEnd);
+        receipt.PreviousBatchDigest.CopyTo(value, 16);
+        receipt.BatchDigest.CopyTo(value, 32);
+        BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(48), receipt.NewRelayOperationCount);
+        receipt.DurableAuthor.WriteTo(value.AsSpan(52));
+        if (receipt.HeaderFingerprint.Length == 16)
+            receipt.HeaderFingerprint.CopyTo(value, 68);
+        if (receipt.TransportPeerEpoch != 0)
+            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(baseLength), receipt.TransportPeerEpoch);
+        return value;
+    }
 
     private static MetadataBatchReceipt CloneReceipt(MetadataBatchReceipt receipt, bool isDuplicate)
         => new MetadataBatchReceipt(receipt.CursorStart, receipt.CursorEnd, receipt.BatchDigest.ToArray(),
@@ -2685,16 +2693,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
             pair.Key.BatchId.WriteTo(suffix.AsSpan(22));
-            byte[] value = pair.Value.HeaderFingerprint.Length == 16 ? new byte[84] : new byte[68];
-            BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorStart);
-            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), pair.Value.CursorEnd);
-            pair.Value.PreviousBatchDigest.CopyTo(value, 16);
-            pair.Value.BatchDigest.CopyTo(value, 32);
-            BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(48), pair.Value.NewRelayOperationCount);
-            pair.Value.DurableAuthor.WriteTo(value.AsSpan(52));
-            if (pair.Value.HeaderFingerprint.Length == 16)
-                pair.Value.HeaderFingerprint.CopyTo(value, 68);
-            Add(StorageKey(root, 1, suffix), value);
+            Add(StorageKey(root, 1, suffix), EncodeReceiptValue(pair.Value));
         }
 
         foreach (var pair in state.Receives)
@@ -2871,7 +2870,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 {
                     if (key.Length is not (38 or 54))
                         throw new InvalidDataException("Metadata receipt key has an invalid length.");
-                    if (row.Value.Length is not (52 or 68 or 84))
+                    if (row.Value.Length is not (52 or 56 or 68 or 72 or 84 or 88))
                         throw new InvalidDataException("Stored inbox receipt value has an invalid length.");
                     var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
@@ -2884,7 +2883,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         row.Value.AsSpan(32, 16).ToArray(),
                         BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(48)),
                         row.Value.Length >= 68 ? NodeId.From(row.Value.AsSpan(52, 16)) : default,
-                        row.Value.Length == 84 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>()));
+                        row.Value.Length is 84 or 88 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>(),
+                        row.Value.Length is 56 or 72 or 88
+                            ? BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(row.Value.Length - 4))
+                            : 0));
                     break;
                 }
                 case 2:
@@ -3515,7 +3517,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         byte[] batchDigest,
         int newRelayOperationCount,
         NodeId durableAuthor = default,
-        byte[]? headerFingerprint = null)
+        byte[]? headerFingerprint = null,
+        uint transportPeerEpoch = 0)
     {
         public ulong CursorStart { get; } = cursorStart;
         public ulong CursorEnd { get; } = cursorEnd;
@@ -3524,6 +3527,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         public int NewRelayOperationCount { get; } = newRelayOperationCount;
         public NodeId DurableAuthor { get; } = durableAuthor;
         public byte[] HeaderFingerprint { get; } = headerFingerprint ?? Array.Empty<byte>();
+        public uint TransportPeerEpoch { get; } = transportPeerEpoch;
 
         public bool Matches(MetadataIncomingBatch batch)
             => CursorStart == batch.CursorStart
