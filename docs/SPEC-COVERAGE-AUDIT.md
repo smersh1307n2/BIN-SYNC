@@ -140,3 +140,11 @@ The explicit `StorageSyncCoordinator.RehydrateNodeFromProviderSnapshot` path now
 - `StorageSyncCoordinatorTests.Provider_authoritative_recovery_processes_only_its_namespace_pending_intents` verifies that coordinators recover only their namespace from a shared Metadata Store scope, foreign namespace intents do not block rehydration, and a current-namespace legacy intent without wire payload causes fail-closed behavior until recovered through `RecoverPendingApplies`.
 
 These tests establish the ordering and idempotent recovery behavior at the coordinator API boundary. They do **not** prove a complete process-kill/reopen matrix for every NodePersistence/WAL boundary, nor do they authorize this mode when local Node writes bypass the provider feed. The default merge-based coordinator path remains distinct for mixed-origin workloads. Full Node/Transport authority cutover and legacy-path retirement remain release gates.
+
+
+## Durable provider feed identity (2026-11-08)
+
+- `StorageDataProviderConformanceTests.Local_feed_change_identity_survives_reopen_and_is_removed_on_ack` verifies that a provider local-feed ChangeId survives process reopen and is removed together with the feed row after acknowledgement.
+- `StorageDataProviderConformanceTests.Legacy_local_feed_row_gets_stable_identity_on_first_read` verifies one-time in-place migration of pre-identity feed rows: the first read appends a durable identity atomically with the read watermark, and repeated reads return the same identity.
+
+These are storage-provider conformance tests, not additional BIN-SYNC protocol invariants. The identity remains transient with the unpublished local feed; it is not a second long-term change-history table.
