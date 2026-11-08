@@ -23,7 +23,7 @@ public sealed partial class Node
     {
         if (_metadataStoreOwnedPublicationFences.Contains(namespaceId))
             throw new InvalidOperationException(
-                "Node-owned local writes and Outbox transport are disabled for this namespace after Metadata-Store-owned publication cutover. Write through the Data Provider and StorageSyncCoordinator.");
+                "Legacy Node-owned local writes, receive validation and Outbox transport are disabled for this namespace after Metadata-Store-owned publication cutover. Use the Data Provider and StorageSyncCoordinator's Metadata-Store-authoritative receive path.");
     }
 
     /// <summary>
