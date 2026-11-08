@@ -115,6 +115,7 @@ public sealed partial class Node
 
     internal OutboxEntry? PushOutboxInternal(int ns, RecordId recordId, object op)
     {
+        EnsureNodeOwnedMutationAllowedInternal();
         var entry = PrepareOutboxEntryInternal(ns, recordId, op, NodeId.ToArray(), suppressRestoredEcho: true);
         if (entry is null) return null;
         CommitLocalMutationInternal(entry, stagedRecord: null, applyToStorage: false);
@@ -382,6 +383,7 @@ public sealed partial class Node
     internal bool WriteFieldInternal(int namespaceId, RecordId recordId, int fieldId, byte[] value, Hlc? hlc = null)
     {
         ThrowIfDisposed();
+        EnsureNodeOwnedMutationAllowedInternal();
         ValidateNamespaceId(namespaceId);
         ValidateWritableFieldId(fieldId);
         ArgumentNullException.ThrowIfNull(value);
@@ -449,6 +451,7 @@ public sealed partial class Node
     internal bool TombFieldInternal(int namespaceId, RecordId recordId, int fieldId, Hlc? hlc = null)
     {
         ThrowIfDisposed();
+        EnsureNodeOwnedMutationAllowedInternal();
         ValidateNamespaceId(namespaceId);
         ValidateWritableFieldId(fieldId);
         Storage.TryGetValue(namespaceId, out var store);
@@ -493,6 +496,7 @@ public sealed partial class Node
     internal bool DeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         ThrowIfDisposed();
+        EnsureNodeOwnedMutationAllowedInternal();
         ValidateNamespaceId(namespaceId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
@@ -535,6 +539,7 @@ public sealed partial class Node
     internal bool UndeleteRecordInternal(int namespaceId, RecordId recordId, Hlc? hlc = null)
     {
         ThrowIfDisposed();
+        EnsureNodeOwnedMutationAllowedInternal();
         ValidateNamespaceId(namespaceId);
         Storage.TryGetValue(namespaceId, out var store);
         store ??= new Dictionary<RecordId, Record>();
