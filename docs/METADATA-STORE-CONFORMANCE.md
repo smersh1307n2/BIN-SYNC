@@ -287,6 +287,15 @@ The durable adapter currently persists:
 - PendingApply intents and compact completed-apply receipts;
 - consistent logical snapshots across adapter operations.
 
-**Important remaining authority gap:** Node/Transport still owns and uses its own Outbox, `PeerStates`, pushed/ACKed/offset watermarks, `LastStreamDigest` and batch replay identity mappings. The Storage adapter's outbound stream is currently populated from Node's Outbox by `StorageSyncCoordinator`; it is a durable mirror, not yet the transport's source of truth. The next migration gate is to add peer/author progress and immutable per-peer outbound batch reservations to the Metadata Store contract, then move the transport read/ACK path onto those durable records.
+**Remaining authority boundary:** before provider cutover, the legacy transition path still mirrors Node Outbox into Metadata Store. After explicit StorageDataProvider cutover, stable provider ChangeIds are frozen directly into Metadata Store and Metadata Store assigns the outbound sequence; the provider feed is ACKed only after freeze. The optional `IMetadataPeerStateStore` now owns durable peer/author progress and immutable per-peer batch reservations for the Storage-backed transport overload. Node remains the encoder/alias/session context and retains its legacy Outbox/peer-state path for non-Storage mode; complete runtime-wide Node/Transport state removal is not claimed.
 
-The current Storage integration test run at this commit is being used to validate legacy ChangeId-origin-marker migration into the compact ledger representation; do not mark that gate complete until its CI result is green.
+
+## 12. Provider-authoritative outbound publication capability (2026-11-08)
+
+The base `IMetadataStore` contract remains source-compatible for third-party implementations. Durable provider-feed replay uses a separate optional `IMetadataOutboundChangeIdentityStore` capability, implemented by `StorageMetadataStore` and the volatile conformance adapter. It returns the durable global fingerprint for an already-frozen local outbound ChangeId, including after the payload row has been compacted; the caller recomputes and compares the canonical provider-operation fingerprint before treating the feed row as already published.
+
+The Storage coordinator requires this optional capability before enabling provider-authoritative cutover. It does not add a mandatory per-change table or duplicate payload. Existing local feed ChangeIds and the global ChangeId ledger are the identity link.
+
+Conformance/recovery edge now covered: metadata freeze commits, provider feed ACK is interrupted, a newer edit to the same field arrives, and retry must retain the earlier frozen ChangeId while appending only the later unfrozen suffix. The regression verifies the exact two ChangeIds, outbound sequence order, provider feed ACK and unchanged Node Outbox watermark.
+
+Verified at BIN-SYNC source/test head `4c4789f06150dd07457adb207dc84879fdea4bd4`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases, 70.9% line coverage; in-process and real-TCP Storage samples pass. Later optional-capability refactoring preserves the base `IMetadataStore` contract and is being revalidated by the current PR checks.
