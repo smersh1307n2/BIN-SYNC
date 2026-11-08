@@ -307,6 +307,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var key = new OutboundKey(namespaceId, localAuthor);
         var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
         var newOperations = new List<MetadataFrozenOperation>(operations.Count);
+        bool sawNewOperation = false;
+        ulong previousExistingSequence = 0;
         foreach (var operation in operations)
         {
             var changeKey = new OutboundChangeKey(namespaceId, operation.ChangeId);
@@ -326,9 +328,12 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
 
             if (!alreadyFrozen)
             {
+                sawNewOperation = true;
                 newOperations.Add(operation);
                 continue;
             }
+            if (sawNewOperation)
+                throw new InvalidDataException("Previously frozen outbound operations must form a prefix of an incremental retry.");
 
             if (!current.Outbound.TryGetValue(key, out var priorEntries))
                 throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
@@ -336,6 +341,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             var prior = priorEntries.FirstOrDefault(item => item.ChangeId == operation.ChangeId);
             if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload))
                 throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
+            if (prior.Sequence <= previousExistingSequence)
+                throw new InvalidDataException("Previously frozen outbound operations are not in author-sequence order.");
+            previousExistingSequence = prior.Sequence;
             existingByChangeId.Add(operation.ChangeId, CloneOutboundItem(prior));
         }
 
