@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: code head `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda`; Core 662/662 and Fuzz/Lab 31/31 passed on the exact head. Storage Integration 156/156 passed on Ubuntu, Windows and macOS at code head `98b956d1cf021d32545968a64541739e54360465`; the later Core-only timeout adjustment does not alter Storage code. Durable Metadata Bench run `42487879970` passed.n: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS. The docs-only follow-up is recorded separately; Durable Metadata Bench for the compact-row change is still running.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `84119128a9cf1f6e208199f72d6e7262d94ea27a`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
 
 ## 1. Target architecture
 
