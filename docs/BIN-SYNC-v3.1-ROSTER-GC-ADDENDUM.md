@@ -325,6 +325,11 @@ Before enabling tombstone GC, the protocol must bind (a) each origin author's si
 
 ## 10.6. Provider origin metadata and v2 snapshot digest
 
-Provider mutations now encode the immutable `ChangeId`, origin author epoch and origin sequence. The provider mutation encoding has an 81-byte fixed header; the prior 53-byte header remains readable as legacy data with no origin tuple. New local feed entries persist the same ChangeId in the mutation and feed envelope and reject identity mismatch. FULL_REPLACE digest domain is now `BIN-SYNC/FULL-REPLACE/v2`, so origin provenance is covered by the snapshot digest. New receipt values also persist the maximum origin sequence in the batch; old receipt encodings remain readable but are not eligible for receipt GC until rewritten with authenticated provenance.
+Provider mutations now encode the immutable `ChangeId`, origin author epoch and origin sequence. The provider mutation encoding has an 81-byte fixed header; the prior 53-byte header is rejected; no fallback decoder is present. New local feed entries persist the same ChangeId in the mutation and feed envelope and reject identity mismatch. FULL_REPLACE digest domain is now `BIN-SYNC/FULL-REPLACE/v2`, so origin provenance is covered by the snapshot digest. New receipt values also persist the maximum origin sequence in the batch; old receipt encodings are rejected; no migration decoder is present.
 
 The ChangeId and receipt compaction entry points are wired through `StorageSyncCoordinator` and require the same StorageDatabase GC guard plus an external lease. The replay fence rejects a missing ChangeId row when the signed origin frontier covers that operation. The provider tombstone cleanup code is present but physical deletion is disabled until the global causal-horizon proof is implemented; see §10.5. No build or tests have been run in this C pass.
+
+
+## 10.7. Canonical encoding policy
+
+The v3.1 implementation uses canonical encodings only: provider mutations require the 81-byte fixed header, local feed envelopes require the canonical mutation plus exactly one ChangeId, and receipt values require the origin-sequence-bearing format. Earlier in-development layouts are rejected; no hidden compatibility decoder or automatic migration path is provided. Ordinary field materialization from Node LWW state may carry zero operation provenance, but record tombstones and immutable remote/local operations must carry complete ChangeId/origin identity.
