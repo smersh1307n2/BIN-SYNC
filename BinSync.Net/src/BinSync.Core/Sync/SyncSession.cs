@@ -68,7 +68,8 @@ public partial class SyncSession : IAsyncDisposable
     private readonly Node _localNode;
     private readonly SemaphoreSlim _aliasUpdateGate = new(1, 1);
     private readonly ConcurrentDictionary<uint, TaskCompletionSource<SessionWire.AliasMapUpdate>> _pendingAliasUpdates = new();
-    private readonly Task _aliasUpdatePump;
+    private readonly object _aliasUpdateSync = new();
+    private Task? _aliasUpdatePump;
     private int _aliasUpdateRequestId;
     private readonly byte _aliasRequestParity;
     /// <summary>Remote peer identity established by HELLO.</summary>
@@ -90,7 +91,6 @@ public partial class SyncSession : IAsyncDisposable
         _aliasRequestParity = CompareNodeIds(localNode.NodeId, peer.NodeId) < 0 ? (byte)0 : (byte)1;
         _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
-        _aliasUpdatePump = ProcessAliasUpdatesAsync(_receiveCts.Token);
     }
 
     /// <summary>Establish as initiator; local NodeId must be lower than the peer NodeId.</summary>
@@ -437,8 +437,13 @@ public partial class SyncSession : IAsyncDisposable
             }
             finally
             {
-                try { await _aliasUpdatePump.ConfigureAwait(false); }
-                catch (OperationCanceledException) { }
+                Task? aliasPump;
+                lock (_aliasUpdateSync) aliasPump = _aliasUpdatePump;
+                if (aliasPump is not null)
+                {
+                    try { await aliasPump.ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
+                }
             }
             if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
         }
@@ -455,8 +460,15 @@ public partial class SyncSession : IAsyncDisposable
             throw new InvalidOperationException("A SyncSession is bound to the Node instance used during its handshake.");
     }
 
+    private void EnsureAliasUpdatePumpStarted()
+    {
+        lock (_aliasUpdateSync)
+            _aliasUpdatePump ??= ProcessAliasUpdatesAsync(_receiveCts.Token);
+    }
+
     private async Task EnsureRemoteAliasesAsync(CancellationToken ct)
     {
+        EnsureAliasUpdatePumpStarted();
         foreach (var author in _localNode.DurableAuthorsSnapshot()
                      .OrderBy(item => Convert.ToHexString(item.Key.ToArray()), StringComparer.Ordinal))
         {
@@ -468,6 +480,7 @@ public partial class SyncSession : IAsyncDisposable
     private async Task EnsureRemoteAliasAsync(NodeId author, int epoch, CancellationToken ct)
     {
         if (author == _localNode.NodeId || author == PeerNodeId) return;
+        EnsureAliasUpdatePumpStarted();
         await _aliasUpdateGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -605,6 +618,7 @@ public partial class SyncSession : IAsyncDisposable
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         if (expectedType != SessionWire.TypeAliasMap && (expectedType < 0x04 || expectedType > 0x13))
             throw new InvalidOperationException("Only established-session frame types can be dispatched");
+        if (expectedType != SessionWire.TypeAliasMap) EnsureAliasUpdatePumpStarted();
         Channel<byte[]> channel;
         lock (_receiveSync)
         {
