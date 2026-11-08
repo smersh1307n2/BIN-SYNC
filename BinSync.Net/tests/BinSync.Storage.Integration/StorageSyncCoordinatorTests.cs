@@ -2576,20 +2576,20 @@ public sealed class StorageSyncCoordinatorTests
     public void Metadata_owned_freeze_survives_provider_ack_failure_and_appends_later_suffix_with_store_allocated_origin()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-freeze-ack-retry"), 466);
-        var inner = new StorageDataProvider(storage);
-        using var provider = new FailOnceAcknowledgeProvider(inner);
+        using var inner = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
         using var node = NewNode(68);
         const string scope = "metadata-freeze-ack-retry";
         RecordId record = RecordId.From(Guid.Parse("68000000-0000-0000-0000-000000000068").ToByteArray());
 
         for (ushort field = 0x0800; field < 0x0805; field++)
-            provider.AppendLocalChange(new ProviderMutation
+            inner.AppendLocalChange(new ProviderMutation
             {
                 RecordId = record, FieldId = field, AuthorNodeId = node.NodeId,
                 HlcWall = field, Value = new byte[] { (byte)field }
             });
-        provider.AcknowledgeLocalChanges(provider.LocalChangeHighWatermark);
+        inner.AcknowledgeLocalChanges(inner.LocalChangeHighWatermark);
+        using var provider = new FailOnceAcknowledgeProvider(inner);
 
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
         coordinator.EnableMetadataStoreOwnedPublication(_ => { });
@@ -2599,7 +2599,6 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = record, FieldId = 0x0810, AuthorNodeId = node.NodeId,
             HlcWall = 6000, Value = "first-frozen"u8.ToArray()
         });
-        provider.FailNextAcknowledge = true;
         Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }, limit: 2));
 
         var firstPendingFeed = Assert.Single(provider.ReadLocalChanges(0, 16).Changes);
@@ -2668,49 +2667,6 @@ public sealed class StorageSyncCoordinatorTests
             checked((uint)sender.Epoch), 1));
         Assert.Single(metadata.ReadRelay(scope, receiver.NodeId, 1, sender.NodeId, 0, 10).Items);
         Assert.Empty(receiver.ReadOutboxEntries(1, sender.NodeId, 0, 10));
-    }
-
-    private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode
-    {
-        private readonly IDataProvider _inner;
-        private readonly IProviderPublicationMode _publicationMode;
-
-        public FailOnceAcknowledgeProvider(IDataProvider inner)
-        {
-            _inner = inner;
-            _publicationMode = (IProviderPublicationMode)inner;
-        }
-
-        public bool FailNextAcknowledge { get; set; }
-        public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
-        public RecordId ResolveRecordId(ReadOnlyMemory<byte> sourceItemKey) => _inner.ResolveRecordId(sourceItemKey);
-        public ushort ResolveFieldId(ReadOnlyMemory<byte> sourceFieldKey) => _inner.ResolveFieldId(sourceFieldKey);
-        public void AppendLocalChange(ProviderMutation mutation) => _inner.AppendLocalChange(mutation);
-        public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit) => _inner.ReadLocalChanges(afterSequence, limit);
-
-        public void AcknowledgeLocalChanges(ulong safeThroughSequence)
-        {
-            if (FailNextAcknowledge)
-            {
-                FailNextAcknowledge = false;
-                throw new IOException("Injected provider feed ACK failure after durable metadata freeze.");
-            }
-            _inner.AcknowledgeLocalChanges(safeThroughSequence);
-        }
-
-        public ProviderSnapshotHandle OpenSnapshot() => _inner.OpenSnapshot();
-        public ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit)
-            => _inner.ReadSnapshot(snapshotToken, afterIndex, limit);
-        public void ReleaseSnapshot(Guid snapshotToken) => _inner.ReleaseSnapshot(snapshotToken);
-        public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations)
-            => _inner.ApplyRemoteBatch(applyToken, mutations);
-        public bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation)
-            => _inner.TryReadCurrent(recordId, fieldId, out mutation);
-        public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark)
-            => _publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
-        public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark)
-            => _publicationMode.EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
-        public void Dispose() => _inner.Dispose();
     }
 
 }
