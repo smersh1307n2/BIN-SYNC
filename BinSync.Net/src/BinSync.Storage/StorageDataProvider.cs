@@ -1041,13 +1041,15 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     /// </summary>
     public int CompactRecordTombstones(
         int namespaceId, StorageNamespaceGcStore gcStore, TrustStore trustStore,
-        int limit, Func<IDisposable?> acquireGcLease)
+        int limit, Func<IDisposable?> acquireGcLease,
+        IApplicationGcReferenceScanner externalReferences)
     {
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(trustStore);
         if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
         ArgumentNullException.ThrowIfNull(acquireGcLease);
+        ArgumentNullException.ThrowIfNull(externalReferences);
         if (!gcStore.IsBoundTo(_storage))
             throw new ArgumentException("Tombstone GC store must share the provider StorageDatabase.", nameof(gcStore));
         if (!gcStore.IsTombstoneGcProofEnabled)
@@ -1111,7 +1113,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     !gcStore.HasProtocolTombstoneGcProof(
                         roster, trustStore, tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
                         tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
-                        checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest))
+                        checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest) ||
+                    externalReferences.HasExternalChangeIdReference(namespaceId, tombstone.ChangeId) ||
+                    externalReferences.HasExternalRecordReference(
+                        namespaceId, tombstone.RecordId, tombstone.ChangeId))
                 {
                     afterTombstoneKey = tombstoneRow.Key;
                     examined++;
