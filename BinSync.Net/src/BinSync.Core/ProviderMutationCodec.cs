@@ -123,7 +123,7 @@ public sealed class ProviderFullReplaceDigestBuilder : IDisposable
             Span<byte> sortKey = stackalloc byte[19];
             foreach (var mutation in entries)
             {
-                ProviderMutationCodec.Validate(mutation);
+                ArgumentNullException.ThrowIfNull(mutation);
                 ProviderMutationCodec.WriteSortKey(mutation, sortKey);
                 if (_entryCount > 0 && _lastSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
                     throw new InvalidDataException("Full-replace digest pages must be strictly ordered and contain no duplicate identities.");
@@ -192,7 +192,7 @@ public static class ProviderFullReplaceDigest
             throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
         ArgumentNullException.ThrowIfNull(mutations);
         ProviderMutation[] ordered = mutations.ToArray();
-        foreach (var mutation in ordered) ProviderMutationCodec.Validate(mutation);
+        foreach (var mutation in ordered) ArgumentNullException.ThrowIfNull(mutation);
         Array.Sort(ordered, ProviderMutationCodec.CompareCanonical);
         using var builder = new ProviderFullReplaceDigestBuilder(generation, sourceChangeFeedWatermark);
         for (int offset = 0; offset < ordered.Length; offset += ProviderFullReplaceDigestBuilder.MaxPageEntries)
