@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 6e5cdb76be8e9322227561ca12012855a0910bdf. Exact-head CI is green: Core 662/662, Fuzz/Lab 31/31, Storage Integration 150/150 on Ubuntu, Windows and macOS. Durable Metadata Bench also completed successfully after fixing all v3 Origin epoch fixtures and strengthening the NA-result detector.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: code head `f6f041bfc9b2841d33c2dbf4e39fff160fc6d4ee`; exact-head CI is green: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS. The docs-only follow-up is recorded separately; Durable Metadata Bench for the compact-row change is still running.
 
 ## 1. Target architecture
 
@@ -66,14 +66,14 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 - [ ] Inventory every persisted row/key and byte cardinality in StorageMetadataStore, Node checkpoint, FLD Outbox, ApplyJournal and WAL.
 - [ ] Establish one canonical v3 format marker and row codec; reject absent/old/unknown markers.
-- [~] Stream payload rows now persist Origin epoch/sequence; global ChangeId identity rows now persist fingerprint + author NodeId + Origin epoch/sequence. One-row/no-payload-duplication audit remains.
+- [x] Relay/outbound payload rows persist only ChangeId[16] + payloadLength[u32] + payload; Origin is hydrated from the single global 45-byte ChangeId identity row. Missing ledger rows and author/stream mismatches fail closed. Physical compaction now deletes current row kinds 20/21 after reopen; exact CI passed 155/155 on all three OS platforms. [~] Full cross-store cardinality/byte audit remains.
 - [x] Node global ChangeId ledger stores a fixed 16-byte BLAKE3 identity digest that binds semantic mutation + immutable Origin tuple in one hash pass; no separate 29-byte Origin suffix is stored in the ledger value. [~] Storage metadata identity-row cardinality and cross-store duplication still require a byte-level audit and benchmark.
 - [ ] Collapse repeated author IDs in ACK/pushed/offset maps into one sparse progress row only if benchmarks prove a win.
 - [ ] Remove acknowledged replay reservations atomically with contiguous ACK, preserving digest-chain anchor.
 - [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
 - [ ] Remove duplicate relay payload copies and unnecessary WAL/ApplyJournal duplication only after recovery proof.
 - [ ] Remove duplicate Node and Metadata Store ChangeId authority after provider cutover.
-- [ ] Record before/after bytes/op, bytes/peer-author, allocations, mutation latency and compaction CPU at 500/10k/100k/1m rows.
+- [~] Record before/after bytes/op, bytes/peer-author, allocations, mutation latency and compaction CPU at 500/10k/100k/1m rows. Exact row saving is 12 bytes per retained relay/outbound operation (32+payload → 20+payload); the durable benchmark workflow is still running for throughput/allocation confirmation.
 
 ### Phase 3 — Publication and FLD Storage contract
 
@@ -296,7 +296,7 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Corrected stale statements that claimed Origin was absent and optional capability negotiation was required.
 - [x] Kept ChangeId GC and tombstone/ghost GC disabled. Origin is now available, but the authoritative signed namespace roster, per-member/per-author contiguous applied-origin frontier, FULL_REPLACE snapshot generation and stale-rejoin fence are not implemented.
 - [x] Explicitly documented that Origin gaps are allowed and that a safe frontier must be contiguous; relay/receive/Outbox cursors cannot substitute for it.
-- [ ] Next Phase 2 optimization: remove the duplicated 12-byte OriginEpoch/OriginSequence suffix from each relay/outbound payload row by hydrating from the global ChangeId ledger at load; validate no extra I/O and compare benchmark throughput/allocations before keeping it.
+- [x] Removed the duplicated 12-byte OriginEpoch/OriginSequence suffix from each relay/outbound payload row; hydration uses the already-loaded ChangeId ledger (no additional Storage read). Added exact persisted-row and fail-closed corruption tests. Benchmark confirmation remains open.
 
 ### 2026-11-08 — compact stream-row regression and CI correction
 
@@ -304,8 +304,16 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Updated remaining compact payload writers and added durable integration coverage for the exact 20-byte fixed overhead, payload round-trip, and rejection of legacy stream-row layouts.
 - [x] Exact-head Core/Fuzz workflow succeeded on the implementation head; Storage Integration exposed one xUnit analyzer error (xUnit2031) in the new assertion, not a production-code or runtime failure.
 - [x] Fixed the analyzer violation by using Assert.Single(collection, predicate) in commit `95140bb`.
-- [ ] Re-run the full Storage Integration matrix and Core/Fuzz after the assertion fix; only then close the compact-row test gate.
+- [x] Re-ran exact code head `f6f041b`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS. The xUnit2031 assertion issue and the stale compaction key-kind bug are fixed.
 
 - [~] Tighten the compact-row corruption boundary with explicit tests that orphaned payload rows and ledger/stream author mismatches fail closed during hydration; add this before accepting the 12-byte reduction.
 - [~] CI exposed a second compact-row issue: compaction still targeted legacy row kinds 4/7 after writers moved to 20/21. Fix deletion keys and assert physical removal after reopen before accepting the storage reduction.
 - [ ] Continue with ChangeId/receipt/tombstone GC safe-frontier proof; GC remains disabled because a complete namespace membership roster, contiguous per-author applied-origin frontier, snapshot generation and stale-rejoin fence are not yet available.
+
+### 2026-11-08 — compact-row compaction fix and exact-head green
+
+- [x] Corrected compaction to delete current persisted relay/outbound payload row kinds 20/21 (previous code still targeted historical kinds 4/7).
+- [x] Added a reopen assertion proving outbound payload rows are physically absent after compaction; retained ChangeId identity still prevents republishing the same operation.
+- [x] Added fail-closed tests for compact payload rows with a missing global ChangeId ledger row and for author mismatch between stream key and ledger provenance.
+- [x] Exact code head `f6f041bfc9b2841d33c2dbf4e39fff160fc6d4ee`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 independently on Ubuntu, Windows and macOS. Both push and PR workflow matrices passed.
+- [~] Durable Metadata Bench triggered by the Storage implementation change is still running; keep throughput/allocation acceptance open until its report is inspected.
