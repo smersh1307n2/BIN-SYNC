@@ -24,13 +24,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private const byte ProviderFormatMarker = 0x25;
     private const byte ActiveGeneration = 0x26;
     private const byte FullReplaceSession = 0x41;
-    private const byte RetiredGeneration = 0x43;
     private const byte ApplyReceipt = 0x30;
     private static ReadOnlySpan<byte> ProviderFormatV3 => [0x42, 0x53, 0x50, 0x33];
     private static readonly byte[] ProviderOwnedPrefixes =
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
          LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
-         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, RetiredGeneration, ApplyReceipt];
+         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt];
 
     private readonly object _gate;
     private readonly StorageDatabase _storage;
@@ -394,8 +393,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             byte[] sessionKey = FullReplaceSessionKey(generation);
             using var snapshot = _storage.OpenSnapshot();
             Guid activeGeneration = ReadActiveGeneration(snapshot);
-            if (snapshot.TryGet(RetiredGenerationKey(generation), out _))
-                throw new InvalidOperationException("A retired full-replace generation cannot be reused.");
             if (snapshot.TryGet(sessionKey, out var existingBytes))
             {
                 FullReplaceState existing = DecodeFullReplaceState(existingBytes!);
@@ -540,7 +537,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             byte[] generationBytes = new byte[16];
             generation.TryWriteBytes(generationBytes);
             batch.Put([ActiveGeneration], generationBytes);
-            batch.Put(RetiredGenerationKey(state.BaseGeneration), [1]);
             batch.Put(sessionKey, EncodeFullReplaceState(state with { IsCommitted = true }));
             batch.Commit();
         }
@@ -569,54 +565,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (_storage.LastCommitSeq != snapshot.CommitSeq)
                 throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
             batch.Commit();
-        }
-    }
-
-    /// <summary>
-    /// Reclaim an inactive generation in bounded batches. The retired-generation
-    /// fence is retained after its rows are gone so the same generation id cannot
-    /// later be reused as a fresh replacement.
-    /// </summary>
-    public bool ReclaimInactiveGeneration(Guid generation, int limit)
-    {
-        lock (_gate)
-        {
-            ThrowIfDisposed();
-            if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
-            if (ReadActiveGeneration(_storage) == generation)
-                throw new InvalidOperationException("The active provider generation cannot be reclaimed.");
-
-            using var snapshot = _storage.OpenSnapshot();
-            if (!snapshot.TryGet(RetiredGenerationKey(generation), out var retiredMarker) ||
-                retiredMarker!.Length != 1 || retiredMarker[0] != 1)
-                throw new InvalidOperationException("Generation has no durable retirement fence.");
-
-            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, limit);
-            int remaining = limit - fields.Count;
-            var tombstones = remaining > 0
-                ? snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, remaining)
-                : Array.Empty<StorageEntry>();
-            if (fields.Count == 0 && tombstones.Count == 0)
-            {
-                byte[] sessionKey = FullReplaceSessionKey(generation);
-                if (!snapshot.TryGet(sessionKey, out _)) return true;
-                using var cleanup = _storage.BeginWriteBatch();
-                cleanup.Delete(sessionKey);
-                if (_storage.LastCommitSeq != snapshot.CommitSeq)
-                    throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
-                cleanup.Commit();
-                return true;
-            }
-
-            using var batch = _storage.BeginWriteBatch();
-            foreach (var row in fields) batch.Delete(row.Key);
-            foreach (var row in tombstones) batch.Delete(row.Key);
-            if (fields.Count < limit && tombstones.Count < remaining)
-                batch.Delete(FullReplaceSessionKey(generation));
-            if (_storage.LastCommitSeq != snapshot.CommitSeq)
-                throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
-            batch.Commit();
-            return false;
         }
     }
 
@@ -1005,14 +953,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         byte[] bytes = new byte[16];
         generation.TryWriteBytes(bytes);
         return bytes;
-    }
-
-    private static byte[] RetiredGenerationKey(Guid generation)
-    {
-        byte[] key = new byte[17];
-        key[0] = RetiredGeneration;
-        generation.TryWriteBytes(key.AsSpan(1));
-        return key;
     }
 
     private static byte[] FullReplaceSessionKey(Guid generation)
