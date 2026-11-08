@@ -1954,4 +1954,74 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+
+    [Fact]
+    public void Stale_epoch_can_finish_only_its_exact_durable_reservation_before_retirement()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "stale-peer-exact-ack"), 451);
+        NodeId local = Node(1), peer = Node(2), author = Node(1);
+        const string scope = "stale-peer-exact-ack";
+        store.FreezeOutbound(scope, local, 7, author, new[] { FrozenOperation(201, 202) });
+        store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+        store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(203), IssuerEpoch = 1, StreamOffset = 0,
+            CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)204, 16).ToArray(),
+            Payload = new byte[] { 205, 206 }
+        };
+        store.ReserveOutboundBatch(scope, local, peer, 1, 7, author, reservation);
+        store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, author, reservation.BatchId);
+
+        store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+        store.CompletePeerInitialSync(scope, local, peer, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+
+        var retry = store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
+            reservation with { BatchId = Batch(207), Payload = new byte[] { 208 } });
+        Assert.Equal(reservation.BatchId, retry.BatchId);
+        Assert.Equal(reservation.Payload, retry.Payload);
+        store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, author, reservation.BatchId);
+        store.AcknowledgeOutboundBatch(scope, local, peer, 1, 7, author,
+            reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest);
+
+        Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
+            reservation with { BatchId = Batch(209) }));
+        store.RetireInterestedPeer(scope, local, peer, 1, 2, 7);
+        Assert.Empty(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
+    }
+
+    [Fact]
+    public void Replacement_snapshot_baseline_can_supersede_old_pending_outbound_reservation()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "replacement-baseline-supersedes-pending"), 452);
+        NodeId local = Node(1), peer = Node(2), author = Node(1);
+        const string scope = "replacement-baseline-supersedes-pending";
+        store.FreezeOutbound(scope, local, 7, author, new[] { FrozenOperation(211, 212) });
+        store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+        store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(213), IssuerEpoch = 1, StreamOffset = 0,
+            CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)214, 16).ToArray(),
+            Payload = new byte[] { 215 }
+        };
+        store.ReserveOutboundBatch(scope, local, peer, 1, 7, author, reservation);
+
+        store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+        store.CompletePeerInitialSync(scope, local, peer, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 1, 1) });
+
+        store.RetireInterestedPeer(scope, local, peer, 1, 2, 7);
+        Assert.Empty(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
+        Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
+    }
+
 }
