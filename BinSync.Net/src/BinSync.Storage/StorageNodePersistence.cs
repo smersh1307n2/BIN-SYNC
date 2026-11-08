@@ -18,10 +18,13 @@ public static class StorageNodePersistence
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(node);
 
-        byte[] image = NodePersistence.SerializeToBytes(node);
-        using var batch = storage.BeginWriteBatch();
-        batch.Put(Key(node.NodeId), image);
-        batch.Commit();
+        lock (StorageDatabaseTransactionGate.For(storage))
+        {
+            byte[] image = NodePersistence.SerializeToBytes(node);
+            using var batch = storage.BeginWriteBatch();
+            batch.Put(Key(node.NodeId), image);
+            batch.Commit();
+        }
     }
 
     /// <summary>Load and integrity-check a Node checkpoint by its stable NodeId.</summary>
