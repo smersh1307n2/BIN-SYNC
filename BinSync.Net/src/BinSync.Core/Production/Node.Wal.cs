@@ -181,8 +181,7 @@ public sealed partial class Node
 
             var decoded = Ops.DecodeOp(entry.Payload, fullAuthor: false).Op;
             var fingerprint = ChangeIdentity.LedgerFingerprint(entry.NamespaceId, entry.RecordId,
-                entry.OpKind, decoded, NodeId, entry.OriginAuthorEpoch,
-                entry.OriginSequence, entry.CausalDepsOrNull);
+                entry.OpKind, decoded, entry.Provenance, entry.CausalDepsOrNull);
             var ledgerKey = (entry.NamespaceId, entry.ChangeId);
             if (GlobalChangeLedger.TryGetValue(ledgerKey, out var existingIdentity) &&
                 existingIdentity.IsKnown && existingIdentity.Fingerprint != fingerprint)
