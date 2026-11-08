@@ -536,3 +536,15 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Capped CHUNK bytes to `Frames.MAX_PAYLOAD_SIZE` (rather than the full 16 MiB frame size), leaving room for the frame header.
 - [~ T] These new codec/authentication/sequence paths have not yet been covered by a fresh exact-head CI run. Do not mark transfer conformance complete.
 - [ ] Next C slice: durable receiver orchestration over `IProviderFullReplace`, persisted staging progress/resume, authority/member transport binding, duplicate/replay handling, atomic commit guard, signed installed-ACK persistence and Node cache rehydration. Keep the old generation and all tombstones until the independent GC proof is complete.
+
+
+### 2026-11-08 — FULL_REPLACE end-to-end C-pass implementation slice
+
+- [x C] Added `FULL_REPLACE_READY` (0x1C) and extended all session dispatch guards through that frame. READY returns the durable staged cursor, manifest count/digest, committed state and next transfer-frame sequence.
+- [x C] Added a canonical READY codec with strict fixed length, identity, digest, range, committed-state and page-boundary checks. Resume uses fixed 4096-entry pages (last page may be shorter), making the next frame sequence derivable and deterministic.
+- [x C] Extended `IProviderFullReplace` with an optional durable progress query and implemented it in `StorageDataProvider`, reading the persisted staging cursor after reopen.
+- [x C] Added `StorageFullReplaceSender`: stable provider snapshot, first bounded digest pass, signed authority manifest, READY/resume negotiation, bounded second pass, COMMIT and signed installed-ACK verification/persistence.
+- [x C] Added `StorageFullReplaceReceiver`: authority peer/epoch and roster verification, local member signing-key preflight before any switch, durable BEGIN/resume, strict contiguous page staging, concurrent ABORT detection, guarded atomic provider commit, Node-cache refresh callback, and durable local installed-ACK persistence. The caller must provide an exclusive commit lease that proves no PendingApply, relay/outbound reservation, provider intent or reader pin can be invalidated.
+- [x C] Added signed ACK re-encoding so the authority can persist the exact verified member signature received over the session.
+- [~ T] None of these new FULL_REPLACE sender/receiver, READY, resume, ABORT, signature or commit-guard paths has yet been run through exact-head CI. The earlier 640af0d failure was diagnosed and the dispatcher guards fixed, but the current C-pass package remains unverified.
+- [ ] Remaining C work: connect sender/receiver to the actual namespace authority/member lifecycle and `StorageSyncCoordinator` public orchestration; implement periodic origin-frontier publication/checkpoint generation, forgotten-origin replay fencing and a concrete cross-store live-reference GC scan. ChangeId and tombstone/ghost GC remain disabled.
