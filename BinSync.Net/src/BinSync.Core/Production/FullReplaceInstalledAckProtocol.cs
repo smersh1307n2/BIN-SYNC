@@ -12,15 +12,17 @@ public sealed class FullReplaceInstalledAck
     public byte[] Digest { get; init; } = Array.Empty<byte>();
     public NodeId MemberNodeId { get; init; }
     public uint MemberTransportEpoch { get; init; }
+    public ulong HlcWallFloor { get; init; }
+    public uint HlcLogicalFloor { get; init; }
     public bool Installed { get; init; }
     public byte[] Signature { get; init; } = Array.Empty<byte>();
 }
 
-/// <summary>Canonical FRA1 member-signed proof of durable FULL_REPLACE installation.</summary>
+/// <summary>Canonical FRA2 member-signed proof of durable FULL_REPLACE installation.</summary>
 public static class FullReplaceInstalledAckProtocol
 {
-    public const string SignDomain = "BIN-SYNC/FULL-REPLACE-INSTALLED-ACK/v1";
-    private static ReadOnlySpan<byte> Magic => "FRA1"u8;
+    public const string SignDomain = "BIN-SYNC/FULL-REPLACE-INSTALLED-ACK/v2";
+    private static ReadOnlySpan<byte> Magic => "FRA2"u8;
 
     public static byte[] Sign(FullReplaceInstalledAck acknowledgement, ReadOnlySpan<byte> memberSeed)
     {
@@ -38,7 +40,7 @@ public static class FullReplaceInstalledAckProtocol
     {
         ArgumentNullException.ThrowIfNull(roster);
         NamespaceRosterProtocol.Validate(roster);
-        const int payloadLength = 4 + 2 + 8 + 32 + 16 + 32 + 16 + 4 + 1;
+        const int payloadLength = 4 + 2 + 8 + 32 + 16 + 32 + 16 + 4 + 8 + 4 + 1;
         if (encoded.Length != payloadLength + BatchSignature.SignatureSize)
             throw new InvalidDataException("FRA1 acknowledgement length is invalid.");
 
@@ -56,6 +58,8 @@ public static class FullReplaceInstalledAckProtocol
             Digest = reader.Raw(NamespaceRosterProtocol.DigestSize),
             MemberNodeId = NodeId.From(reader.B128()),
             MemberTransportEpoch = reader.U32(),
+            HlcWallFloor = reader.U64(),
+            HlcLogicalFloor = reader.U32(),
             Installed = reader.U8() switch
             {
                 0 => false,
@@ -104,6 +108,8 @@ public static class FullReplaceInstalledAckProtocol
         writer.Raw(acknowledgement.Digest);
         writer.B128(acknowledgement.MemberNodeId);
         writer.U32(acknowledgement.MemberTransportEpoch);
+        writer.U64(acknowledgement.HlcWallFloor);
+        writer.U32(acknowledgement.HlcLogicalFloor);
         writer.U8(acknowledgement.Installed ? (byte)1 : (byte)0);
         return writer.Value();
     }
