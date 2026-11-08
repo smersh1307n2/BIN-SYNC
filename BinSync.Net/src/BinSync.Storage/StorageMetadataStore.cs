@@ -1575,6 +1575,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var replacement = new InterestedPeerKey(namespaceId, peer, replacementPeerEpoch);
             if (!current.InterestedPeers.Contains(replacement))
                 throw new InvalidOperationException("The replacement peer epoch must be durably registered before retirement.");
+            if (!current.CompletedPeerBaselines.Contains(replacement))
+                throw new InvalidOperationException(
+                    "The replacement peer epoch must complete its durable initial-sync baseline before retirement.");
             uint latestActiveEpoch = current.InterestedPeers
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer)
                 .Select(key => key.PeerEpoch).DefaultIfEmpty(0U).Max();
