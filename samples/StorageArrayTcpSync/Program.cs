@@ -87,7 +87,7 @@ try
             metadataB.GetOutboundHighWatermark("array-tcp-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 3)
             throw new InvalidOperationException("Post-restart local update was not frozen directly by Metadata Store.");
 
-        await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
+        await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, metadataA, nodeB, coordinatorB, storageB, metadataB);
         StorageNodePersistence.Save(storageA, nodeA);
         StorageNodePersistence.Save(storageB, nodeB);
         AssertValue(providerA, recordB, quantity, "9");
@@ -106,7 +106,7 @@ try
             Value = Array.Empty<byte>()
         });
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
-        await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, nodeB, coordinatorB, storageB);
+        await ExchangeOverTcpAsync(nodeA, coordinatorA, storageA, metadataA, nodeB, coordinatorB, storageB, metadataB);
         StorageNodePersistence.Save(storageA, nodeA);
         StorageNodePersistence.Save(storageB, nodeB);
 
