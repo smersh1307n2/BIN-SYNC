@@ -100,7 +100,8 @@ public sealed class OutboxEntry
     /// <summary>Canonical immutable origin tuple; Seq remains a separate local relay coordinate.</summary>
     public OperationOrigin Provenance
     {
-        get => new(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+        get => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
+            ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
         set
         {
             AuthorNodeId = value.AuthorNodeId;
