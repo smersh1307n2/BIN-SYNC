@@ -119,7 +119,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
-    public void Legacy_local_feed_row_gets_stable_identity_on_first_read()
+    public void Legacy_local_feed_row_without_change_id_fails_closed()
     {
         string directory = Path.Combine(_root, "legacy-feed-identity");
         Directory.CreateDirectory(directory);
@@ -138,10 +138,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 batch.Commit();
             }
 
-            ProviderChange first = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
-            Assert.False(first.ChangeId.IsZero);
-            ProviderChange replayed = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
-            Assert.Equal(first.ChangeId, replayed.ChangeId);
+            Assert.Throws<InvalidDataException>(() => provider.ReadLocalChanges(0, 10));
         }
         finally
         {
@@ -419,7 +416,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             await Task.WhenAll(providerWrites, metadataWrites);
             Assert.Equal(64UL, provider.LocalChangeHighWatermark);
             Assert.Equal(64UL, metadata.GetOutboundHighWatermark(scope, local, 1, local));
-            Assert.Equal(128UL, storage.LastCommitSeq);
+            // BSP3 marker + active-generation pointer are committed before concurrent writes.\n            Assert.Equal(129UL, storage.LastCommitSeq);
         }
         finally
         {
