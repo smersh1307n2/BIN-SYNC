@@ -41,6 +41,22 @@ public interface IProviderPublicationMode
     void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark);
 }
 
+/// <summary>
+/// Optional provider capability for an authenticated authoritative FULL_REPLACE.
+/// The caller validates the roster certificate and snapshot generation before
+/// invoking this API. Staging is invisible until CommitFullReplace atomically
+/// switches the provider's active generation.
+/// </summary>
+public interface IProviderFullReplace
+{
+    void BeginFullReplace(Guid generation, ulong sourceChangeFeedWatermark,
+        int expectedEntryCount, ReadOnlyMemory<byte> expectedDigest);
+    void StageFullReplacePage(Guid generation, int startIndex,
+        IReadOnlyList<ProviderMutation> entries);
+    void CommitFullReplace(Guid generation);
+    void AbortFullReplace(Guid generation);
+}
+
 public sealed class ProviderMutation
 {
     public required RecordId RecordId { get; init; }
