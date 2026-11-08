@@ -2130,7 +2130,21 @@ public sealed class StorageSyncCoordinatorTests
                 child.Kill(entireProcessTree: true);
             await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            using var storage = StorageDatabase.Open(directory, partitionId);
+            StorageDatabase? reopenedStorage = null;
+            Exception? reopenError = null;
+            DateTime reopenDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (reopenedStorage is null && DateTime.UtcNow < reopenDeadline)
+            {
+                try { reopenedStorage = StorageDatabase.Open(directory, partitionId); }
+                catch (IOException ex)
+                {
+                    reopenError = ex;
+                    await Task.Delay(50);
+                }
+            }
+            Assert.True(reopenedStorage is not null,
+                $"Storage WAL did not release after owner process termination. {reopenError}");
+            using var storage = reopenedStorage!;
             using var provider = new StorageDataProvider(storage);
             using var metadata = new StorageMetadataStore(storage);
             NodeId receiverId;
