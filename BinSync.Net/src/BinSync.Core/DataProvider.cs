@@ -131,13 +131,15 @@ public interface IProviderPublishedOriginStore
 public interface IApplicationGcReferenceScanner
 {
     bool HasExternalReceiptReference(
-        int namespaceId, NodeId senderPeer, uint authorEpoch,
-        uint transportPeerEpoch, BatchId batchId);
+        string scopeId, NodeId localReplica, int namespaceId,
+        NodeId senderPeer, uint authorEpoch, uint transportPeerEpoch, BatchId batchId);
 
-    bool HasExternalChangeIdReference(int namespaceId, BatchId changeId);
+    bool HasExternalChangeIdReference(
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId);
 
     bool HasExternalRecordReference(
-        int namespaceId, RecordId recordId, BatchId tombstoneChangeId);
+        string scopeId, NodeId localReplica, int namespaceId,
+        RecordId recordId, BatchId tombstoneChangeId);
 }
 
 /// <summary>Durable provider capability for terminally closing one local author epoch.</summary>
