@@ -22,12 +22,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private const byte LocalReadWatermark = 0x23;
     private const byte ProviderPublicationMode = 0x24;
     private const byte ProviderFormatMarker = 0x25;
+    private const byte ActiveGeneration = 0x26;
     private const byte ApplyReceipt = 0x30;
     private static ReadOnlySpan<byte> ProviderFormatV3 => [0x42, 0x53, 0x50, 0x33];
     private static readonly byte[] ProviderOwnedPrefixes =
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
          LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
-         ProviderPublicationMode, ApplyReceipt];
+         ProviderPublicationMode, ActiveGeneration, ApplyReceipt];
 
     private readonly object _gate;
     private readonly StorageDatabase _storage;
@@ -147,9 +148,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
                 : 0;
             ulong sequence = checked(current + 1);
             byte[] owned = EncodeMutation(mutation);
+            Guid activeGeneration = ReadActiveGeneration(_storage);
             byte[] currentKey = mutation.IsRecordTombstone
-                ? CurrentRecordTombstoneKey(mutation.RecordId)
-                : CurrentKey(mutation.RecordId, mutation.FieldId);
+                ? CurrentRecordTombstoneKey(activeGeneration, mutation.RecordId)
+                : CurrentKey(activeGeneration, mutation.RecordId, mutation.FieldId);
             if (batch.TryGet(currentKey, out var currentFieldBytes))
             {
                 ProviderMutation existing = DecodeMutation(currentFieldBytes!);
@@ -254,8 +256,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             ThrowIfDisposed();
             using StorageSnapshot snapshot = _storage.OpenSnapshot();
             ulong watermark = ReadUInt64(snapshot, [LocalHighWatermark]);
-            var fields = snapshot.ScanPrefix([CurrentField], ReadOnlySpan<byte>.Empty, int.MaxValue);
-            var recordTombstones = snapshot.ScanPrefix([CurrentRecordTombstone], ReadOnlySpan<byte>.Empty, int.MaxValue);
+            Guid activeGeneration = ReadActiveGeneration(snapshot);
+            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, activeGeneration), ReadOnlySpan<byte>.Empty, int.MaxValue);
+            var recordTombstones = snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, activeGeneration), ReadOnlySpan<byte>.Empty, int.MaxValue);
             StorageEntry[] entries = MergeSnapshotEntries(fields, recordTombstones);
             Guid token = Guid.NewGuid();
             _snapshots.Add(token, new ProviderSnapshotState(watermark, entries));
@@ -322,9 +325,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
 
             foreach (var mutation in mutations)
             {
+                Guid activeGeneration = ReadActiveGeneration(_storage);
                 byte[] key = mutation.IsRecordTombstone
-                    ? CurrentRecordTombstoneKey(mutation.RecordId)
-                    : CurrentKey(mutation.RecordId, mutation.FieldId);
+                    ? CurrentRecordTombstoneKey(activeGeneration, mutation.RecordId)
+                    : CurrentKey(activeGeneration, mutation.RecordId, mutation.FieldId);
                 if (batch.TryGet(key, out var priorValue))
                 {
                     ProviderMutation existing = DecodeMutation(priorValue!);
@@ -352,10 +356,11 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (_storage.TryGet(CurrentKey(recordId, fieldId), out var value))
+            Guid activeGeneration = ReadActiveGeneration(_storage);
+            if (_storage.TryGet(CurrentKey(activeGeneration, recordId, fieldId), out var value))
             {
                 ProviderMutation field = DecodeMutation(value!);
-                if (_storage.TryGet(CurrentRecordTombstoneKey(recordId), out var tombstoneBytes))
+                if (_storage.TryGet(CurrentRecordTombstoneKey(activeGeneration, recordId), out var tombstoneBytes))
                 {
                     ProviderMutation tombstone = DecodeMutation(tombstoneBytes!);
                     if (Compare(tombstone, field) >= 0)
@@ -443,6 +448,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             {
                 if (!existing!.AsSpan().SequenceEqual(ProviderFormatV3))
                     throw new InvalidDataException("Storage Data Provider format marker is not v3.");
+                _ = ReadActiveGeneration(snapshot);
                 return;
             }
 
@@ -458,6 +464,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             if (actualBaseCommitSeq != snapshot.CommitSeq)
                 throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
             batch.Put([ProviderFormatMarker], ProviderFormatV3);
+            batch.Put([ActiveGeneration], new byte[16]);
             batch.Commit();
         }
     }
@@ -676,22 +683,25 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
 
     private static int CompareSnapshotEntries(StorageEntry left, StorageEntry right)
     {
-        if (left.Key.Length < 17 || right.Key.Length < 17)
-            throw new InvalidDataException("Provider snapshot contains a truncated storage key.");
+        if (left.Key.Length < 33 || right.Key.Length < 33)
+            throw new InvalidDataException("Provider snapshot contains a truncated generation-scoped storage key.");
+        if (!left.Key.AsSpan(1, 16).SequenceEqual(right.Key.AsSpan(1, 16)))
+            throw new InvalidDataException("Provider snapshot mixes active generations.");
 
-        int recordOrder = left.Key.AsSpan(1, 16).SequenceCompareTo(right.Key.AsSpan(1, 16));
+        int recordOrder = left.Key.AsSpan(17, 16).SequenceCompareTo(right.Key.AsSpan(17, 16));
         if (recordOrder != 0) return recordOrder;
 
         bool leftTombstone = left.Key[0] == CurrentRecordTombstone;
         bool rightTombstone = right.Key[0] == CurrentRecordTombstone;
         if (leftTombstone != rightTombstone) return leftTombstone ? -1 : 1;
-        if (leftTombstone) return 0;
+        if (leftTombstone) return left.Key.Length == 33 && right.Key.Length == 33 ? 0 :
+            throw new InvalidDataException("Provider snapshot contains an invalid record tombstone key.");
 
         if (left.Key[0] != CurrentField || right.Key[0] != CurrentField ||
-            left.Key.Length != 19 || right.Key.Length != 19)
+            left.Key.Length != 35 || right.Key.Length != 35)
             throw new InvalidDataException("Provider snapshot contains an invalid current-field key.");
 
-        return left.Key.AsSpan(17, 2).SequenceCompareTo(right.Key.AsSpan(17, 2));
+        return left.Key.AsSpan(33, 2).SequenceCompareTo(right.Key.AsSpan(33, 2));
     }
 
     private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
@@ -703,21 +713,45 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         return left.FieldId.CompareTo(right.FieldId);
     }
 
-    private static byte[] CurrentKey(RecordId recordId, ushort fieldId)
+    private static byte[] CurrentKey(Guid generation, RecordId recordId, ushort fieldId)
     {
-        byte[] key = new byte[19];
+        byte[] key = new byte[35];
         key[0] = CurrentField;
-        recordId.WriteTo(key.AsSpan(1, 16));
-        BinaryPrimitives.WriteUInt16BigEndian(key.AsSpan(17), fieldId);
+        generation.TryWriteBytes(key.AsSpan(1, 16));
+        recordId.WriteTo(key.AsSpan(17, 16));
+        BinaryPrimitives.WriteUInt16BigEndian(key.AsSpan(33), fieldId);
         return key;
     }
 
-    private static byte[] CurrentRecordTombstoneKey(RecordId recordId)
+    private static byte[] CurrentRecordTombstoneKey(Guid generation, RecordId recordId)
     {
-        byte[] key = new byte[17];
+        byte[] key = new byte[33];
         key[0] = CurrentRecordTombstone;
-        recordId.WriteTo(key.AsSpan(1));
+        generation.TryWriteBytes(key.AsSpan(1, 16));
+        recordId.WriteTo(key.AsSpan(17));
         return key;
+    }
+
+    private static byte[] CurrentPrefix(byte kind, Guid generation)
+    {
+        byte[] prefix = new byte[17];
+        prefix[0] = kind;
+        generation.TryWriteBytes(prefix.AsSpan(1));
+        return prefix;
+    }
+
+    private static Guid ReadActiveGeneration(StorageDatabase storage)
+    {
+        if (!storage.TryGet([ActiveGeneration], out var value) || value!.Length != 16)
+            throw new InvalidDataException("Storage Data Provider active generation marker is missing or malformed.");
+        return new Guid(value);
+    }
+
+    private static Guid ReadActiveGeneration(StorageSnapshot snapshot)
+    {
+        if (!snapshot.TryGet([ActiveGeneration], out var value) || value!.Length != 16)
+            throw new InvalidDataException("Storage Data Provider active generation marker is missing or malformed.");
+        return new Guid(value);
     }
 
     private static byte[] ChangeKey(ulong sequence)
