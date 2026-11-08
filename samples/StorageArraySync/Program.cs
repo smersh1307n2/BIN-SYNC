@@ -61,6 +61,9 @@ try
             throw new InvalidOperationException("Frozen outbound array payload is not readable from Storage metadata.");
 
         Transport.MakeSession(nodeA, nodeB);
+        // Persist negotiated aliases before the first inbound batch can stage PendingApply.
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
         int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
         {
             // Persist the Node's accepted receipt/state first, then materialize the
