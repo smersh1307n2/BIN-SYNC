@@ -180,8 +180,10 @@ public sealed partial class Node
                 throw new InvalidDataException("WAL local-mutation sequence is not the next expected value.");
 
             var decoded = Ops.DecodeOp(entry.Payload, fullAuthor: false).Op;
-            var fingerprint = ChangeIdentity.Fingerprint(entry.NamespaceId, entry.RecordId,
+            var semanticFingerprint = ChangeIdentity.Fingerprint(entry.NamespaceId, entry.RecordId,
                 entry.OpKind, decoded, NodeId);
+            var fingerprint = ChangeIdentity.BindOrigin(semanticFingerprint, NodeId,
+                entry.OriginAuthorEpoch, entry.OriginSequence);
             var ledgerKey = (entry.NamespaceId, entry.ChangeId);
             if (GlobalChangeLedger.TryGetValue(ledgerKey, out var existingIdentity) &&
                 existingIdentity.IsKnown && existingIdentity.Fingerprint != fingerprint)
