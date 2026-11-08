@@ -1,42 +1,78 @@
-using System.Collections.Concurrent;
-using System.Security.Cryptography;
-using System.Text;
-
 namespace Fld1.Storage.Wal.IO;
 
 /// <summary>
-/// Holds a named, OS-managed single-writer mutex for one WAL partition. A single
-/// process-wide owner thread acquires and releases every named Mutex so callers may
-/// dispose StorageDatabase from any thread without violating Mutex thread affinity.
-/// The OS releases all held mutexes if the process terminates.
+/// Holds a process- and OS-managed exclusive lease for one WAL partition.
+/// The lock file is permanent; exclusivity comes from the open handle's
+/// FileShare.None lock, which the OS releases when the process exits.
+/// A process-local set rejects duplicate opens before opening a second handle
+/// to the same file (important for Unix file-lock semantics).
 /// </summary>
 internal sealed class WalWriterFence : IDisposable
 {
-    private static readonly Lazy<Manager> SharedManager = new(static () => new Manager());
-    private readonly Guid _token;
+    private static readonly object Gate = new();
+    private static readonly HashSet<string> ActiveNames = new(StringComparer.Ordinal);
+    private readonly string _identity;
+    private readonly FileStream _lockStream;
     private int _disposed;
 
-    private WalWriterFence(Guid token) => _token = token;
+    private WalWriterFence(string identity, FileStream lockStream)
+    {
+        _identity = identity;
+        _lockStream = lockStream;
+    }
 
     public static WalWriterFence Acquire(string walDirectory, ulong partitionId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(walDirectory);
         string fullPath = ResolvePhysicalDirectory(walDirectory);
         string identity = fullPath + "|" + partitionId.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        string digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
-        string name = OperatingSystem.IsWindows()
-            ? "Global\\Fld1Storage_" + digest
-            : "Fld1Storage_" + digest;
 
-        Guid token = SharedManager.Value.Acquire(name);
-        return new WalWriterFence(token);
+        lock (Gate)
+        {
+            if (!ActiveNames.Add(identity))
+                throw new IOException("WAL partition is already open for writing in this process.");
+
+            FileStream? lockStream = null;
+            try
+            {
+                Directory.CreateDirectory(fullPath);
+                string lockPath = Path.Combine(fullPath, $"p_{partitionId}.writer.lock");
+                lockStream = new FileStream(
+                    lockPath,
+                    FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    bufferSize: 1,
+                    FileOptions.None);
+                return new WalWriterFence(identity, lockStream);
+            }
+            catch (Exception ex)
+            {
+                lockStream?.Dispose();
+                ActiveNames.Remove(identity);
+                if (ex is IOException)
+                    throw new IOException("WAL partition is already open for writing.", ex);
+                throw new IOException("Failed to acquire the WAL partition writer fence.", ex);
+            }
+        }
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        SharedManager.Value.Release(_token);
+
+        lock (Gate)
+        {
+            try
+            {
+                _lockStream.Dispose();
+            }
+            finally
+            {
+                ActiveNames.Remove(_identity);
+            }
+        }
     }
 
     private static string ResolvePhysicalDirectory(string path)
@@ -96,125 +132,5 @@ internal sealed class WalWriterFence : IDisposable
         }
 
         throw new IOException("WAL directory path contains too many symbolic-link indirections.");
-    }
-
-    private sealed class Manager
-    {
-        private readonly BlockingCollection<Request> _requests = new();
-        private readonly Dictionary<Guid, (Mutex Mutex, string Name)> _held = new();
-        private readonly HashSet<string> _activeNames = new(StringComparer.Ordinal);
-
-        public Manager()
-        {
-            var owner = new Thread(ProcessRequests)
-            {
-                IsBackground = true,
-                Name = "Fld1.Storage.WalFenceManager"
-            };
-            owner.Start();
-        }
-
-        public Guid Acquire(string name)
-        {
-            var request = new Request(name, Guid.NewGuid(), release: false);
-            _requests.Add(request);
-            request.Completed.Wait();
-            try
-            {
-                if (request.Error is not null)
-                    throw new IOException("WAL partition is already open for writing.", request.Error);
-                return request.Token;
-            }
-            finally
-            {
-                request.Completed.Dispose();
-            }
-        }
-
-        public void Release(Guid token)
-        {
-            var request = new Request(null, token, release: true);
-            _requests.Add(request);
-            request.Completed.Wait();
-            try
-            {
-                if (request.Error is not null)
-                    throw new IOException("Failed to release the WAL partition writer fence.", request.Error);
-            }
-            finally
-            {
-                request.Completed.Dispose();
-            }
-        }
-
-        private void ProcessRequests()
-        {
-            foreach (Request request in _requests.GetConsumingEnumerable())
-            {
-                try
-                {
-                    if (request.Release)
-                    {
-                        if (_held.Remove(request.Token, out var held))
-                        {
-                            _activeNames.Remove(held.Name);
-                            try { held.Mutex.ReleaseMutex(); }
-                            finally { held.Mutex.Dispose(); }
-                        }
-                    }
-                    else
-                    {
-                        if (_activeNames.Contains(request.Name!))
-                            throw new IOException("WAL partition is already open for writing in this process.");
-
-                        var mutex = new Mutex(initiallyOwned: false, request.Name!);
-                        bool acquired;
-                        try
-                        {
-                            acquired = mutex.WaitOne(0);
-                        }
-                        catch (AbandonedMutexException)
-                        {
-                            // The previous process terminated while owning the mutex.
-                            // This thread now owns it; WAL recovery proceeds under fence.
-                            acquired = true;
-                        }
-
-                        if (!acquired)
-                        {
-                            mutex.Dispose();
-                            throw new IOException("Another process owns the WAL partition writer fence.");
-                        }
-
-                        _held.Add(request.Token, (mutex, request.Name!));
-                        _activeNames.Add(request.Name!);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    request.Error = ex;
-                }
-                finally
-                {
-                    request.Completed.Set();
-                }
-            }
-        }
-    }
-
-    private sealed class Request
-    {
-        public string? Name { get; }
-        public Guid Token { get; }
-        public bool Release { get; }
-        public ManualResetEventSlim Completed { get; } = new(false);
-        public Exception? Error { get; set; }
-
-        public Request(string? name, Guid token, bool release)
-        {
-            Name = name;
-            Token = token;
-            Release = release;
-        }
     }
 }
