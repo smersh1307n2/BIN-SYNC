@@ -981,4 +981,29 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public void Full_replace_digest_builder_streams_canonical_pages_without_materializing()
+    {
+        ProviderMutation first = Mutation(120, 1, 100, 1);
+        ProviderMutation second = Mutation(120, 2, 101, 1);
+        ProviderMutation third = Mutation(121, 1, 102, 1);
+        Guid generation = Guid.Parse("9a000000-0000-0000-0000-000000000001");
+        const ulong watermark = 25;
+        byte[] expected = StorageDataProvider.ComputeFullReplaceDigest(
+            generation, watermark, new[] { first, second, third });
+
+        using var builder = new StorageDataProvider.FullReplaceDigestBuilder(generation, watermark);
+        builder.AppendPage(new[] { first, second });
+        builder.AppendPage(new[] { third });
+        Assert.Equal(3, builder.EntryCount);
+        Assert.Equal(expected, builder.Complete());
+        Assert.Throws<InvalidOperationException>(() => builder.AppendPage(new[] { third }));
+
+        using var invalid = new StorageDataProvider.FullReplaceDigestBuilder(
+            Guid.Parse("9a000000-0000-0000-0000-000000000002"), watermark);
+        Assert.Throws<InvalidDataException>(() => invalid.AppendPage(new[] { second, first }));
+        Assert.Throws<InvalidOperationException>(() => invalid.Complete());
+    }
+
 }
