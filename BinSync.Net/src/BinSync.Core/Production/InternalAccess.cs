@@ -3,6 +3,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("BinSync.Tests")]
+[assembly: InternalsVisibleTo("BinSync.Storage.Integration")]
 [assembly: InternalsVisibleTo("ScenarioHarness")]
 [assembly: InternalsVisibleTo("TwoNodeLoopback")]
 [assembly: InternalsVisibleTo("TwoNodeTcp")]
@@ -17,6 +18,9 @@ public sealed partial class Node
     /// Mutation only via engine APIs (tests must not write through this).
     /// </summary>
     internal IReadOnlyDictionary<(NodeId, int), long> OutboxSeqRef => _outboxSeq;
+
+    /// <summary>Test-only observation that Metadata-Store-owned receive does not mirror global ChangeIds into Node.</summary>
+    internal int GlobalChangeLedgerCount => GlobalChangeLedger.Count;
 
     /// <summary>
     /// Atomic multi-entry write (production hardening): the whole batch of field writes
