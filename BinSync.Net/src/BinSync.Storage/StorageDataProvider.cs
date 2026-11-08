@@ -509,9 +509,15 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new InvalidDataException("Full-replace staged row count differs from the signed manifest.");
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark, ordered.Length);
+            ProviderMutation? previousMutation = null;
             foreach (var entry in ordered)
             {
                 ProviderMutation mutation = DecodeMutation(entry.Value);
+                ValidateGenerationEntry(generation, entry, mutation);
+                if (previousMutation is not null &&
+                    CompareSnapshotOrder(previousMutation, mutation) >= 0)
+                    throw new InvalidDataException("Full-replace staged image is not in canonical unique order.");
+                previousMutation = mutation;
                 hash.AppendData(EncodeMutation(mutation));
             }
             byte[] actualDigest = hash.GetHashAndReset();
@@ -915,6 +921,31 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         if (left.IsRecordTombstone != right.IsRecordTombstone)
             return left.IsRecordTombstone ? -1 : 1;
         return left.FieldId.CompareTo(right.FieldId);
+    }
+
+    private static void ValidateGenerationEntry(Guid generation, StorageEntry entry, ProviderMutation mutation)
+    {
+        if (entry.Key.Length < 17 || !entry.Key.AsSpan(1, 16).SequenceEqual(GenerationBytes(generation)))
+            throw new InvalidDataException("Full-replace row belongs to a different generation.");
+        if (mutation.IsRecordTombstone)
+        {
+            if (entry.Key[0] != CurrentRecordTombstone || entry.Key.Length != 33 ||
+                !entry.Key.AsSpan(17, 16).SequenceEqual(mutation.RecordId.ToArray()))
+                throw new InvalidDataException("Full-replace record tombstone key does not match its value.");
+            return;
+        }
+
+        if (entry.Key[0] != CurrentField || entry.Key.Length != 35 ||
+            !entry.Key.AsSpan(17, 16).SequenceEqual(mutation.RecordId.ToArray()) ||
+            BinaryPrimitives.ReadUInt16BigEndian(entry.Key.AsSpan(33, 2)) != mutation.FieldId)
+            throw new InvalidDataException("Full-replace field key does not match its value.");
+    }
+
+    private static byte[] GenerationBytes(Guid generation)
+    {
+        byte[] bytes = new byte[16];
+        generation.TryWriteBytes(bytes);
+        return bytes;
     }
 
     private static byte[] FullReplaceSessionKey(Guid generation)
