@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `d501785af099ff3127c7dd5bda9dc31ebe685162`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `0b4259f3fce4ea790f77c86b9828184fc0baca28`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
 
 ## 1. Target architecture
 
@@ -394,3 +394,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Updated `docs/PUBLIC-API.md` normative reference from the historical v2.4.17 text to BIN-SYNC-SPECIFICATION.txt v3.0.0 clean-break contract.
 - [~] Remaining C work: scan and migrate every sample/test/API call site still using TCP-specific or compatibility-only entry points. The complete build/reference audit is deferred to Phase T.
 - [~] Current branch head at this log entry: `d501785`; exact-head CI remains pending for the C-pass code changes `aab64ad` and `f0c2bd8`.
+
+
+### 2026-11-08 — roadmap checkpoint after API documentation pass
+
+- [x] Reconciled the branch head after public API and GC design documentation updates: `0b4259f`.
+- [x] Preserved the exact distinction between the last green CI head (`1dfb7d6`) and the newer C-pass code commits (`aab64ad`, `f0c2bd8`).
+- [ ] Do not promote C markers to complete until Phase T verifies exact-head build, tests, Fuzz/Lab and Storage Integration.
