@@ -292,6 +292,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     public bool HasProtocolTombstoneGcProof(
         NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
         NodeId originAuthor, uint originEpoch, ulong originSequence,
+        ulong tombstoneHlcWall, uint tombstoneHlcLogical,
         Guid fullReplaceGeneration, ReadOnlySpan<byte> fullReplaceDigest)
     {
         if (originAuthor.IsZero || originEpoch == 0 || originSequence == 0 ||
@@ -303,21 +304,69 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             NamespaceRetentionCheckpoint? checkpoint = TryReadRetentionCheckpointCore(acceptedRoster, trustStore);
             if (checkpoint is null ||
                 checkpoint.FullReplaceGeneration != fullReplaceGeneration ||
-                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(fullReplaceDigest))
+                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(fullReplaceDigest) ||
+                tombstoneHlcWall > checkpoint.FullReplaceHlcWallFloor ||
+                (tombstoneHlcWall == checkpoint.FullReplaceHlcWallFloor &&
+                 tombstoneHlcLogical > checkpoint.FullReplaceHlcLogicalFloor) ||
+                !TryGetCommonInstalledHlcFloorCore(acceptedRoster, fullReplaceGeneration,
+                    fullReplaceDigest, out ulong installedWall, out uint installedLogical) ||
+                installedWall != checkpoint.FullReplaceHlcWallFloor ||
+                installedLogical != checkpoint.FullReplaceHlcLogicalFloor)
                 return false;
+
+            ulong finalIssuedSequence;
+            ulong maxIssuedHlcWall;
+            uint maxIssuedHlcLogical;
+            NamespaceRetiredOriginEpoch? closure = acceptedRoster.RetiredOriginEpochs.FirstOrDefault(entry =>
+                entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
+            if (closure is not null)
+            {
+                finalIssuedSequence = closure.FinalIssuedOriginSequence;
+                maxIssuedHlcWall = closure.MaxIssuedHlcWall;
+                maxIssuedHlcLogical = closure.MaxIssuedHlcLogical;
+            }
+            else
+            {
+                NamespaceRosterMember? authorMember = acceptedRoster.Members.FirstOrDefault(member =>
+                    member.NodeId == originAuthor);
+                if (authorMember is null || authorMember.Status != NamespaceMemberStatus.Active)
+                    return false;
+                AppliedOriginFrontierReport? authorReport = ReadOriginFrontiersCore(acceptedRoster)
+                    .FirstOrDefault(report => report.MemberNodeId == originAuthor);
+                IssuedOriginFrontierEntry? issued = authorReport?.IssuedOrigins.FirstOrDefault(entry =>
+                    entry.OriginAuthorEpoch == originEpoch);
+                if (issued is null) return false;
+                finalIssuedSequence = issued.IssuedOriginSequence;
+                maxIssuedHlcWall = issued.MaxIssuedHlcWall;
+                maxIssuedHlcLogical = issued.MaxIssuedHlcLogical;
+            }
+
+            if (originSequence > finalIssuedSequence ||
+                checkpoint.FullReplaceHlcWallFloor < maxIssuedHlcWall ||
+                (checkpoint.FullReplaceHlcWallFloor == maxIssuedHlcWall &&
+                 checkpoint.FullReplaceHlcLogicalFloor < maxIssuedHlcLogical))
+                return false;
+
             RetentionFrontierEntry? safe = checkpoint.SafeFrontier.FirstOrDefault(entry =>
                 entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
-            if (safe is null || originSequence > safe.SafeAppliedOriginSequence ||
+            if (safe is null || safe.SafeAppliedOriginSequence < finalIssuedSequence ||
                 !AreAllActiveMembersInstalledCore(acceptedRoster, fullReplaceGeneration, fullReplaceDigest))
                 return false;
 
-            // v3.1 frontiers currently carry only applied sequence, not each origin
-            // author's issued high-watermark plus the post-install HLC floor. A
-            // delayed pre-snapshot operation from another author could otherwise
-            // arrive after this tombstone is removed and resurrect the record.
-            // Keep physical tombstone GC disabled until the protocol carries and
-            // verifies that global causal-horizon proof.
-            return false;
+            IReadOnlyList<AppliedOriginFrontierReport> reports = ReadOriginFrontiersCore(acceptedRoster);
+            foreach (NamespaceRosterMember member in acceptedRoster.Members.Where(item =>
+                item.Status == NamespaceMemberStatus.Active))
+            {
+                AppliedOriginFrontierReport? report = reports.FirstOrDefault(item => item.MemberNodeId == member.NodeId);
+                if (report is null || report.UnpublishedDraftCount != 0)
+                    return false;
+                AppliedOriginFrontierEntry? applied = report.Entries.FirstOrDefault(entry =>
+                    entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
+                if (applied is null || applied.ContiguousAppliedOriginSequence < finalIssuedSequence)
+                    return false;
+            }
+
+            return true;
         }
     }
 
