@@ -208,7 +208,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ReceiptKey key = pair.Key;
                 ReceiptValue receipt = pair.Value;
                 if (key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
-                    key.Epoch == 0 || receipt.CursorEnd == 0)
+                    key.Epoch == 0 || receipt.OriginSequence == 0)
                     continue;
                 if (current.PendingApplies.Values.Any(pending =>
                     pending.Batch.SenderPeer == key.Sender &&
@@ -246,7 +246,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             pair.Value.Any(item => item.ChangeId.Equals(changeId))))
             return true;
         if (state.Outbound.Any(pair => pair.Key.NamespaceId == namespaceId &&
-            pair.Value.Any(item => item.ChangeId.EqualsBytes(changeId))))
+            pair.Value.Any(item => item.ChangeId.Equals(changeId))))
             return true;
         if (state.PendingApplies.Values.Any(pending =>
             pending.Batch.NamespaceId == namespaceId &&
