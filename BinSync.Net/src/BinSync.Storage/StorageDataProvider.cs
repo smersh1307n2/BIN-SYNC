@@ -487,7 +487,7 @@ public class StorageDataProvider : IDataProvider
     private static byte[] EncodeLocalFeedChange(byte[] encodedMutation)
     {
         byte[] identity = NewChangeIdentityBytes();
-        byte[] result = new byte[encodedMutation.Length + identity.Length];
+        byte[] result = new byte[checked(encodedMutation.Length + identity.Length)];
         encodedMutation.CopyTo(result, 0);
         identity.CopyTo(result, encodedMutation.Length);
         return result;
@@ -504,9 +504,12 @@ public class StorageDataProvider : IDataProvider
         int mutationLength = checked(53 + (int)valueLength);
         if (bytes.Length == mutationLength)
             return (DecodeMutation(bytes), default, true);
-        if (bytes.Length != mutationLength + 16)
+        if (bytes.Length - mutationLength != 16)
             throw new InvalidDataException("Stored provider local feed identity length is invalid.");
-        return (DecodeMutation(bytes[..mutationLength]), BatchId.From(bytes.Slice(mutationLength, 16)), false);
+        BatchId changeId = BatchId.From(bytes.Slice(mutationLength, 16));
+        if (changeId.IsZero)
+            throw new InvalidDataException("Stored provider local feed identity must not be zero.");
+        return (DecodeMutation(bytes[..mutationLength]), changeId, false);
     }
 
     private static byte[] NewChangeIdentityBytes()
