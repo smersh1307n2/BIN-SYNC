@@ -849,3 +849,5 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Threaded the required host scanner through the public `StorageSyncCoordinator` GC entry points; there is no coordinator wrapper that can silently invoke ChangeId or record-tombstone compaction without the scanner.
 
 - [x C] Extended the mandatory host scanner to receipts as well: receipt GC now checks external `(namespace, sender, author epoch, transport epoch, batch id)` references in addition to durable PendingApply, retired transport fence, receive cursor/digest chain and signed origin frontier. All three physical GC entry points require the scanner.
+
+- [x C] External scanner contract now receives `(scopeId, localReplica, namespaceId)` on every callback, so one host adapter can safely serve multiple BIN-SYNC partitions without cross-scope ambiguity.
