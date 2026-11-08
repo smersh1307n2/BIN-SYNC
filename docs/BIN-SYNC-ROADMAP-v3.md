@@ -575,3 +575,13 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Exposed attachment and compaction entry points through `StorageSyncCoordinator`; GC fails closed until the same-partition GC store/trust are attached and the caller supplies the cross-store lease.
 - [~ T] No exact-head build, unit tests, crash injection or GC proof tests have run for these changes. The C markers describe implemented code only.
 - [ ] Remaining C work: verify provider mutation identity propagation through every local Node/outbox/reconcile path; wire a concrete application commit/GC lease that serializes Node, MetadataStore, provider, pending apply and peer reservations; add a durable membership transition that prevents re-activation without a matching FULL_REPLACE ACK; connect frontier production/checkpoint signing to periodic peer exchange; review old metadata-row migration behavior. Keep physical GC disabled in production until the T pass validates the gates.
+
+
+### 2026-11-08 — GC safety review correction: tombstone physical GC remains disabled
+
+- [x C] The provider now persists ChangeId and origin epoch/sequence in current mutations and FULL_REPLACE snapshots, enabling a future tombstone proof to bind the actual tombstone operation.
+- [x C] Implemented bounded, crash-repeatable tombstone cleanup plumbing, including deletion of older hidden fields before the tombstone marker.
+- [x C] Re-reviewed the v3.1 proof and found it insufficient for safe physical tombstone deletion: a checkpoint covering only the tombstone author's sequence does not exclude a delayed, pre-snapshot operation from another author whose sequence is above the common frontier but whose HLC is older than the tombstone.
+- [x C] Disabled `HasProtocolTombstoneGcProof` fail-closed. Therefore `CompactRecordTombstones` currently reclaims nothing, despite the cleanup implementation being present. Do not describe tombstone GC as operational.
+- [ ] Required proof extension before enabling tombstone GC: signed per-origin author-issued high-watermarks, all Active members' applied-through values reaching those watermarks, a FULL_REPLACE-bound global HLC floor, and mandatory advancement of every installing Node's HLC before it becomes Active. Retired-origin closure must also be represented; otherwise tombstones from retired authors remain uncollectable.
+- [ ] T pass must test delayed pre-snapshot writes from a second author, skewed HLCs, author restart/epoch change, joining/rejoining members, and interrupted bounded cleanup. Receipts and ChangeId GC remain separately guarded by their signed origin sequence horizons.
