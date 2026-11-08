@@ -73,7 +73,7 @@ internal static class StorageSnapshotFile
     {
         if (generation == 0) throw new ArgumentOutOfRangeException(nameof(generation));
         string snapshots = Path.Combine(directory, "snapshots");
-        Directory.CreateDirectory(snapshots);
+        StorageDirectorySync.CreateDirectoryDurable(snapshots);
 
         byte[] snapshot = EncodeSnapshot(partitionId, generation, commitSeq, values);
         uint snapshotCrc = BinaryPrimitives.ReadUInt32LittleEndian(snapshot.AsSpan(snapshot.Length - 4));
