@@ -821,3 +821,5 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `StorageMetadataStore.FreezeOutbound` now rejects a new immutable operation whose `(HlcWall,HlcLogical)` is lower than the persisted max for that author epoch. The allocator no longer silently retains a higher max while accepting an older operation that could later resurrect data after tombstone reclamation.
 - [x C] Equal HLC is allowed for same-transaction operations; the per-epoch max advances only when the new HLC is greater.
 - [~ T] Test HLC wall regression, logical regression at equal wall, equal-HLC multi-field batch, restart persistence and concurrent freeze ordering.
+
+- [x C] Extended the freeze-time HLC monotonicity fence across all epochs of the same namespace/author, not just within one epoch. A rejoined author cannot publish a lower HLC under its fresh epoch than the maximum issued HLC from a previously closed epoch.
