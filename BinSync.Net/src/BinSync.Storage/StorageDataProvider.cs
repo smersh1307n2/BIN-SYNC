@@ -404,7 +404,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
         public void AppendPage(IReadOnlyList<ProviderMutation> entries)
         {
-            ObjectDisposedException.ThrowIf(_completed, this);
+            if (_completed) throw new InvalidOperationException("Full-replace digest builder is already completed.");
             if (_faulted) throw new InvalidOperationException("Full-replace digest builder is faulted.");
             ArgumentNullException.ThrowIfNull(entries);
             if (entries.Count > MaxFullReplacePageEntries)
@@ -431,7 +431,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
         public byte[] Complete()
         {
-            ObjectDisposedException.ThrowIf(_completed, this);
+            if (_completed) throw new InvalidOperationException("Full-replace digest builder is already completed.");
             if (_faulted) throw new InvalidOperationException("Full-replace digest builder is faulted.");
             AppendFullReplaceCount(_hash, _entryCount);
             _completed = true;
