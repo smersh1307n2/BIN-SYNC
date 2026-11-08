@@ -2341,6 +2341,10 @@ public sealed class StorageSyncCoordinatorTests
         // batch builder before either can create an untracked outbound operation.
         Assert.Throws<InvalidOperationException>(() =>
             node.WriteField(1, nodeOnlyRecord, 0x081F, "node-only"u8.ToArray(), new Hlc(6500, 0)));
+        node.E2eeKeys = new E2eeKeyRing();
+        node.E2eeKeys.Set(1, new byte[32]);
+        Assert.Throws<InvalidOperationException>(() =>
+            node.WriteFieldSealed(1, nodeOnlyRecord, 0x081F, "sealed-node-only"u8.ToArray(), new Hlc(6500, 1)));
         // The authority fence is namespace-scoped; unrelated namespaces retain
         // the ordinary Node-owned path.
         RecordId otherNamespaceRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000004").ToByteArray());
