@@ -259,3 +259,18 @@ Still required before v3.1 conformance or any GC enablement:
 3. Integrate forgotten-origin replay rejection with the ChangeId ledger and prove safe deletion against all live references across provider, PendingApply, reservations, relay/outbound payloads, snapshots and leases.
 4. Add crash/fault injection at every persistence and generation-switch boundary, multi-peer/rejoin/resurrection and adversarial signature/rollback/fork tests.
 5. Verify exact wire compatibility, frame registry uniqueness, bounded memory/CPU and exact-head CI before enabling ChangeId or tombstone/Ghost GC. Both remain disabled.
+
+
+## 10.1. C-pass update — FULL_REPLACE transfer foundation (2026-11-08)
+
+The code-first pass has added:
+
+- Canonical BEGIN manifest envelope fields: namespace, generation, roster generation/digest, source feed watermark, expected entry count and SHA-256 digest.
+- Bounded CHUNK codec: at most 4096 provider mutations and no more than the frame payload limit; exact lengths, canonical ProviderMutation decoding and trailing-byte rejection.
+- COMMIT/ABORT transfer identity envelopes.
+- Capability-gated SyncSession send/receive adapters on a dedicated per-namespace transfer stream.
+- Receive dispatcher acceptance of v3.1 frame IDs through FULL_REPLACE_ABORT.
+
+This is only the wire/transport foundation. It does **not** yet implement the receiver state machine, signed authoritative snapshot manifest verification, durable provider staging orchestration, sequence/page continuity across calls, crash recovery, or installed-ACK publication. In particular, the current BEGIN codec fields are not themselves a cryptographic authority signature; do not treat a decoded BEGIN as authorization to replace provider state. The provider's existing Begin/Stage/Commit primitives remain caller-controlled and the old generation remains retained.
+
+The previous exact-head run at `640af0d` built successfully and ran Fuzz/Lab successfully, but 677/678 Core tests passed. The single failure was caused by the session receive dispatcher still rejecting frame types above 0x13; both remaining guards were corrected in `e012460`. The corrected head has not yet been re-tested. No v3.1 conformance or GC enablement is claimed.
