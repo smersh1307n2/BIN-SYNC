@@ -57,6 +57,48 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Acquire the application commit barrier in lock order (coordinator, provider).
+    /// Use this lease for FULL_REPLACE commit, author retirement and local GC.
+    /// Dispose on the acquiring thread.
+    /// </summary>
+    public IDisposable AcquireApplicationCommitGuard()
+    {
+        Monitor.Enter(_gate);
+        try
+        {
+            if (_provider is not IProviderCommitGuard providerGuard)
+                throw new NotSupportedException("The attached provider does not expose an exclusive commit guard.");
+            return new ApplicationCommitLease(providerGuard.AcquireCommitGuard(), _gate);
+        }
+        catch
+        {
+            Monitor.Exit(_gate);
+            throw;
+        }
+    }
+
+    private sealed class ApplicationCommitLease : IDisposable
+    {
+        private IDisposable? _providerLease;
+        private object? _coordinatorGate;
+        public ApplicationCommitLease(IDisposable providerLease, object coordinatorGate)
+        {
+            _providerLease = providerLease;
+            _coordinatorGate = coordinatorGate;
+        }
+        public void Dispose()
+        {
+            IDisposable? providerLease = Interlocked.Exchange(ref _providerLease, null);
+            object? coordinatorGate = Interlocked.Exchange(ref _coordinatorGate, null);
+            try { providerLease?.Dispose(); }
+            finally
+            {
+                if (coordinatorGate is not null) Monitor.Exit(coordinatorGate);
+            }
+        }
+    }
+
+    /// <summary>
     /// Publish this member's signed contiguous applied-origin frontier. The scan
     /// scans the durable ChangeId ledger for applied origins and separately reports
     /// pending provider drafts as a barrier; drafts never consume OriginSequence. Call after local freeze and remote apply.
@@ -68,6 +110,7 @@ public sealed class StorageSyncCoordinator
         if (memberSeed.Length != 32)
             throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
 
+        using IDisposable? authorClosureLease = finalForAuthor ? AcquireApplicationCommitGuard() : null;
         lock (_gate)
         {
             if (_metadataStore is not StorageMetadataStore metadataStore ||
