@@ -525,6 +525,7 @@ public sealed class StorageSyncCoordinator
         Action<Node> persistNode, ulong hlcWallFloor, uint hlcLogicalFloor)
     {
         ArgumentNullException.ThrowIfNull(persistNode);
+        using IDisposable commitGuard = AcquireApplicationCommitGuard();
         lock (_gate)
         {
             _node.AdvanceClockToFloor(hlcWallFloor, hlcLogicalFloor);
@@ -585,6 +586,7 @@ public sealed class StorageSyncCoordinator
     public void EnableMetadataStoreOwnedPublication(Action<Node> persistNode)
     {
         ArgumentNullException.ThrowIfNull(persistNode);
+        using IDisposable commitGuard = AcquireApplicationCommitGuard();
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Metadata-Store-owned publication requires a durable Metadata Store scope.");
         if (_metadataStore is not IMetadataOutboundChangeIdentityStore)
@@ -1255,6 +1257,7 @@ public sealed class StorageSyncCoordinator
     public int RehydrateNodeFromProviderSnapshot(Action<Node> persistNode)
     {
         ArgumentNullException.ThrowIfNull(persistNode);
+        using IDisposable commitGuard = AcquireApplicationCommitGuard();
         if (_metadataStore is null)
             throw new InvalidOperationException("Provider-authoritative rehydration requires a durable Metadata Store.");
         if (string.IsNullOrWhiteSpace(_scopeId))
