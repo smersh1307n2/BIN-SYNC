@@ -502,6 +502,55 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Auto_reconcile_replaces_stale_Node_checkpoint_after_provider_cutover()
+    {
+        using var storageA = StorageDatabase.Open(Path.Combine(_root, "auto-rehydrate-a"), 463);
+        using var storageB = StorageDatabase.Open(Path.Combine(_root, "auto-rehydrate-b"), 464);
+        using var providerA = new StorageDataProvider(storageA);
+        using var providerB = new StorageDataProvider(storageB);
+        using var metadataA = new StorageMetadataStore(storageA);
+        using var metadataB = new StorageMetadataStore(storageB);
+        using var originalNodeA = NewNode(63);
+        using var nodeB = NewNode(64);
+        using var staleRemote = NewNode(65);
+        const string scopeA = "auto-rehydrate-a";
+        const string scopeB = "auto-rehydrate-b";
+
+        RecordId staleRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000001").ToByteArray());
+        staleRemote.WriteField(1, staleRecord, 0x0822, "stale-node-checkpoint"u8.ToArray(), new Hlc(6900, 0));
+        Transport.MakeSession(staleRemote, originalNodeA);
+        Assert.NotNull(Transport.DeliverBatch(staleRemote, originalNodeA, 1));
+        byte[] staleCheckpoint = NodePersistence.SerializeToBytes(originalNodeA);
+
+        var initialCoordinatorA = new StorageSyncCoordinator(originalNodeA, providerA, 1, metadataA, scopeA);
+        var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, scopeB);
+        initialCoordinatorA.EnableMetadataStoreOwnedPublication(_ => { });
+        coordinatorB.EnableMetadataStoreOwnedPublication(_ => { });
+
+        // Simulate restart from a pre-rehydration Node checkpoint while the provider's
+        // durable cutover marker and empty authoritative snapshot remain current.
+        using var restartedNodeA = NodePersistence.LoadFromBytes(staleCheckpoint);
+        Assert.True(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
+        var coordinatorA = new StorageSyncCoordinator(restartedNodeA, providerA, 1, metadataA, scopeA);
+
+        var (aToB, bFromA) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
+        var connectTask = SyncSession.ConnectAsync(restartedNodeA, aToB);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        await Task.WhenAll(
+            coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
+            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false));
+
+        Assert.False(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
+        Assert.False(nodeB.TryGetField(1, staleRecord, 0x0822, out _));
+        Assert.False(providerB.TryReadCurrent(staleRecord, 0x0822, out _));
+        Assert.True(metadataA.IsPeerInitialSyncComplete(scopeA, restartedNodeA.NodeId,
+            nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
+    }
+
+    [Fact]
     public async Task Initial_reconcile_rehydrates_empty_node_from_provider_snapshot_after_feed_ack()
     {
         using var storageA = StorageDatabase.Open(Path.Combine(_root, "provider-rehydrate-a"), 443);
