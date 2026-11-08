@@ -1129,7 +1129,26 @@ FragmentEnvelope {
 
 Established `SyncSession` использует единственный reader pump и маршрутизирует полные кадры `ALIAS_MAP=0x03` и `0x04–0x13` по FrameType. ALIAS_MAP request/response потребляет отдельный control consumer; остальные кадры направляются в отдельные bounded queues. Параллельные операции разных типов могут принимать кадры независимо. Ожидающие приёмы одного типа сериализуются, поскольку wire protocol не содержит correlation ID для нескольких одновременно активных запросов одного типа (исключение — ALIAS_MAP, у которого есть requestId). Raw fragment reassembly остаётся отдельным режимом и не смешивается с framed dispatch.
 
-## 12.7–12.16. HELLO, HELLO_ACK, ALIAS_MAP, SCHEMA_MAP, MEMBERSHIP, STATE_DIGEST, NEED_RANGE, NEED_KEYS, IBLT, KEY_ROTATION
+## 12.7. HELLO
+
+FrameType `0x01`, control stream `0`, flags `0`. Payload ровно 26 байт:
+
+```
+HELLO {
+    nodeId        : b128
+    epoch         : u32 LE
+    protocolMajor : u16 LE = 3
+    capabilities  : u32 LE
+}
+```
+
+Canonical implementation sequence number is `1`. A receiver MUST reject any payload whose length is not exactly 26 bytes, any `protocolMajor != 3`, invalid frame type/stream/flags, or epoch outside the supported signed 32-bit incarnation range. Unknown capability bits may be ignored; no capability can disable mandatory v3 provenance.
+
+## 12.8. HELLO_ACK
+
+FrameType `0x02`, control stream `0`, flags `0`. Payload has the exact same 26-byte layout as HELLO, with `protocolMajor = 3`; canonical implementation sequence number is `2`. HELLO_ACK is not interchangeable with HELLO. A receiver MUST apply the same length, major-version, frame and epoch validation.
+
+## 12.9–12.16. ALIAS_MAP, SCHEMA_MAP, MEMBERSHIP, STATE_DIGEST, NEED_RANGE, NEED_KEYS, IBLT, KEY_ROTATION
 
 Стандартные LE-раскладки. Established-session ALIAS_MAP update использует payload и правила §4.3.1. HELLO capability bit `0x00000004` означает поддержку этих request/response кадров.
 
