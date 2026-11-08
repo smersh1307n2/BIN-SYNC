@@ -6,7 +6,9 @@ namespace Fld1.Storage.Engine;
 /// </summary>
 internal enum StorageFaultPoint
 {
+    AfterWalPartialWrite,
     AfterWalAppendBeforeFlush,
+    BeforeWalFsync,
     AfterWalFlushBeforePublish,
     AfterSnapshotFileFlushBeforeRename,
     AfterSnapshotRenameBeforeManifest,
