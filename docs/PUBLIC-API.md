@@ -22,6 +22,8 @@ Everything `internal`, under `*.Tests`, `bench/`, and unmarked helpers is **not*
 
 Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them is configuration, not a silent default change.
 
+**GC extension note:** signed namespace rosters, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE wire frames are proposed for a separately negotiated v3.1 extension (`BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md`). They are not v3.0 public/wire contracts; ChangeId and tombstone/Ghost GC remain disabled.
+
 ---
 
 ## Shape of the 3.0 API (vs early 2.x / 1.x)
