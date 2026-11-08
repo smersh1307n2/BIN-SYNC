@@ -661,7 +661,7 @@ public class SnapshotTests
             Payload = new byte[] { 0xFF },
             AuthorNodeId = source.NodeId,
         });
-        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries, includeOrigin: false);
         batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
             batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
             batch.RecordsRoot, batch.PrevBatchDigest);
@@ -691,7 +691,7 @@ public class SnapshotTests
             AuthorNodeId = original.AuthorNodeId,
             CreatedAt = original.CreatedAt,
         });
-        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries, includeOrigin: false);
         batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
             batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
             batch.RecordsRoot, batch.PrevBatchDigest);
@@ -710,7 +710,7 @@ public class SnapshotTests
         Assert.Equal(2, batches.Count);
         var batch = batches[0];
         batch.Entries.AddRange(batches[1].Entries);
-        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries);
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries, includeOrigin: false);
         batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
             batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
             batch.RecordsRoot, batch.PrevBatchDigest);
