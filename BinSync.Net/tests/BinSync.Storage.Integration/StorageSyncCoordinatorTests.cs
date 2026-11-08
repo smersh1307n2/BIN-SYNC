@@ -2050,6 +2050,151 @@ public sealed class StorageSyncCoordinatorTests
         };
     }
 
+
+    [Fact]
+    public async Task Process_kill_after_node_checkpoint_recovers_pending_apply_and_provider_state()
+    {
+        string directory = Path.Combine(_root, "process-kill-after-node-checkpoint");
+        const ulong partitionId = 468;
+        const string scope = "process-kill-after-node-checkpoint";
+        string readyPath = Path.Combine(_root, "coordinator-child-ready");
+        string ownerPidPath = Path.Combine(_root, "coordinator-child-pid");
+        string? projectDirectory = AppContext.BaseDirectory;
+        while (projectDirectory is not null &&
+               !File.Exists(Path.Combine(projectDirectory, "BinSync.Storage.Integration.csproj")))
+            projectDirectory = Directory.GetParent(projectDirectory)?.FullName;
+        Assert.NotNull(projectDirectory);
+
+        string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?.Name ?? "Release";
+        var start = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = projectDirectory!,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("test");
+        start.ArgumentList.Add(Path.Combine(projectDirectory!, "BinSync.Storage.Integration.csproj"));
+        start.ArgumentList.Add("--no-build");
+        start.ArgumentList.Add("--no-restore");
+        start.ArgumentList.Add("--configuration");
+        start.ArgumentList.Add(configuration);
+        start.ArgumentList.Add("--filter");
+        start.ArgumentList.Add("FullyQualifiedName~Coordinator_process_kill_child_probe");
+        start.Environment["BIN_SYNC_COORDINATOR_CRASH_DIR"] = directory;
+        start.Environment["BIN_SYNC_COORDINATOR_CRASH_READY"] = readyPath;
+        start.Environment["BIN_SYNC_COORDINATOR_CRASH_PID"] = ownerPidPath;
+
+        System.Diagnostics.Process? child = null;
+        try
+        {
+            child = System.Diagnostics.Process.Start(start);
+            Assert.NotNull(child);
+            Task<string> stdout = child!.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = child.StandardError.ReadToEndAsync();
+
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (!File.Exists(readyPath) && !child.HasExited && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            if (!File.Exists(readyPath))
+            {
+                if (!child.HasExited)
+                    child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(File.Exists(readyPath),
+                    $"Child did not reach the post-checkpoint crash cut. stdout={await stdout} stderr={await stderr}");
+            }
+
+            int ownerPid = int.Parse(File.ReadAllText(ownerPidPath));
+            using (var owner = System.Diagnostics.Process.GetProcessById(ownerPid))
+            {
+                owner.Kill(entireProcessTree: true);
+                await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            if (!child.HasExited)
+                child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            using var storage = StorageDatabase.Open(directory, partitionId);
+            using var provider = new StorageDataProvider(storage);
+            using var metadata = new StorageMetadataStore(storage);
+            NodeId receiverId;
+            using (var identity = NewNode(122))
+                receiverId = identity.NodeId;
+            using var receiver = StorageNodePersistence.Load(storage, receiverId);
+
+            Assert.Single(metadata.ReadPendingApplyIntents(scope, receiverId));
+            RecordId record = RecordId.From(Guid.Parse("7a000000-0000-0000-0000-00000000007a").ToByteArray());
+            Assert.True(receiver.TryGetField(1, record, 0x087a, out var checkpointed));
+            Assert.Equal("crash-cut-after-node-checkpoint", Encoding.UTF8.GetString(checkpointed!.Value));
+            Assert.False(provider.TryReadCurrent(record, 0x087a, out _));
+
+            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+            Assert.Equal(1, coordinator.RecoverPendingApplies(
+                node => StorageNodePersistence.Save(storage, node)));
+            Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiverId));
+            Assert.True(provider.TryReadCurrent(record, 0x087a, out var recovered));
+            Assert.Equal("crash-cut-after-node-checkpoint", Encoding.UTF8.GetString(recovered!.Value));
+            Assert.True(receiver.TryGetField(1, record, 0x087a, out var recoveredNode));
+            Assert.Equal("crash-cut-after-node-checkpoint", Encoding.UTF8.GetString(recoveredNode!.Value));
+        }
+        finally
+        {
+            if (child is not null)
+            {
+                try { if (!child.HasExited) child.Kill(entireProcessTree: true); } catch { }
+                try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+                child.Dispose();
+            }
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Coordinator_process_kill_child_probe()
+    {
+        string? directory = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_DIR");
+        string? readyPath = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_READY");
+        string? ownerPidPath = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_PID");
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(readyPath) ||
+            string.IsNullOrWhiteSpace(ownerPidPath))
+            return;
+
+        const ulong partitionId = 468;
+        const string scope = "process-kill-after-node-checkpoint";
+        RecordId record = RecordId.From(Guid.Parse("7a000000-0000-0000-0000-00000000007a").ToByteArray());
+        using var storage = StorageDatabase.Open(directory, partitionId);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(121);
+        using var receiver = NewNode(122);
+        StorageNodePersistence.Save(storage, receiver);
+
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        Assert.True(sender.WriteField(1, record, 0x087a,
+            "crash-cut-after-node-checkpoint"u8.ToArray(), new Hlc(8700, 0)));
+
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+        Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, node =>
+        {
+            StorageNodePersistence.Save(storage, node);
+            File.WriteAllText(ownerPidPath, Environment.ProcessId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+            File.WriteAllText(readyPath, "node-checkpoint-durable");
+            Thread.Sleep(Timeout.Infinite);
+        });
+        Task<bool> send = initiator.PushBatchAsync(sender, 1);
+        await Task.WhenAll(receive, send);
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
