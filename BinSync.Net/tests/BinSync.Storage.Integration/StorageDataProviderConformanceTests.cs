@@ -71,7 +71,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         {
             using (var provider = new StorageDataProvider(directory, partitionId: 82, deleteOnDispose: false))
             {
-                provider.AppendLocalChange(Mutation(9, 5, 600, 1));
+                provider.AppendLocalChange(Mutation(9, 5, 60, 1));
                 ProviderChange change = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
                 Assert.False(change.ChangeId.IsZero);
                 changeId = change.ChangeId;
@@ -100,7 +100,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         {
             using var storage = StorageDatabase.Open(directory, partitionId: 83);
             using var provider = new StorageDataProvider(storage);
-            provider.AppendLocalChange(Mutation(10, 6, 700, 1));
+            provider.AppendLocalChange(Mutation(10, 6, 70, 1));
 
             byte[] feedKey = [0x20, 0, 0, 0, 0, 0, 0, 0, 1];
             Assert.True(storage.TryGet(feedKey, out var encoded));
