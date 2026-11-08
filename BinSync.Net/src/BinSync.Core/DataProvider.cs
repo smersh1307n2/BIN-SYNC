@@ -92,8 +92,7 @@ public sealed class ProviderMutation
             ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
         init
         {
-            if (value.AuthorNodeId != AuthorNodeId)
-                throw new ArgumentException("Provider mutation provenance author must match AuthorNodeId.");
+            AuthorNodeId = value.AuthorNodeId;
             OriginAuthorEpoch = value.AuthorEpoch;
             OriginSequence = value.Sequence;
         }
