@@ -73,7 +73,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
 - [ ] Remove duplicate relay payload copies and unnecessary WAL/ApplyJournal duplication only after recovery proof.
 - [ ] Remove duplicate Node and Metadata Store ChangeId authority after provider cutover.
-- [~] Record before/after bytes/op, bytes/peer-author, allocations, mutation latency and compaction CPU at 500/10k/100k/1m rows. Exact row saving is 12 bytes per retained relay/outbound operation (32+payload → 20+payload); the durable benchmark workflow is still running for throughput/allocation confirmation.
+- [~] Record before/after bytes/op, bytes/peer-author, allocations, mutation latency and compaction CPU at 500/10k/100k/1m rows. Exact row saving is 12 bytes per retained relay/outbound operation (32+payload → 20+payload); the durable benchmark completed successfully: 10k rows 408.4 µs / 8.14 KB, 100k rows 375.9 µs / 10.34 KB, 1M rows (1,024-operation freeze) 196.9 µs / 7.77 KB. Against the prior recorded baselines (449.2 µs at 10k, 434.1 µs / 10,944 B at 100k, 232.8 µs / 7.84 KB at 1M), these measurements are faster with slightly lower allocation; compare only as same-workflow directional evidence, not as a cross-machine guarantee.
 
 ### Phase 3 — Publication and FLD Storage contract
 
@@ -326,3 +326,12 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Confirmed coalescing across provider page boundaries and separation of field vs record-lifecycle coalescing keys.
 - [ ] Add explicit crash test for Metadata-Store-owned freeze succeeding while provider feed ACK fails, including a later suffix edit; assert retry reuses frozen ChangeId/Origin/payload and does not duplicate or renumber it.
 - [ ] Add explicit regression assertion that provider feed sequence/FLD JournalSeq is not copied into OriginSequence.
+
+### 2026-11-08 — durable metadata benchmark after compact-row reduction
+
+- [x] Durable Metadata Bench run `42487879970` completed successfully after the compact Storage layout and compaction-key correction.
+- [x] Freeze one local operation at 10k ChangeId rows: 408.4 µs / 8.14 KB allocated (previous recorded baseline: 449.2 µs).
+- [x] Freeze one local operation at 100k rows: 375.9 µs / 10.34 KB (previous baseline: 434.1 µs / 10,944 B).
+- [x] Freeze 1,024 operations with 1,000,000 existing ChangeId rows: 196.9 µs / 7.77 KB (previous baseline: 232.8 µs / 7.84 KB).
+- [x] The compact stream row saves exactly 12 persisted bytes per retained relay/outbound operation; correctness and physical compaction tests pass. No benchmark evidence of a freeze-time/allocation regression; keep the optimization.
+- [~] Coordinator retry scan remains linear: 1.196 ms / 256 rows, 5.055 ms / 1,024, 13.823 ms / 4,096; allocations 744.59 KB, 2,997.63 KB, 12,097.38 KB. This is a measured future optimization candidate, but do not change without a better measured trade-off.
