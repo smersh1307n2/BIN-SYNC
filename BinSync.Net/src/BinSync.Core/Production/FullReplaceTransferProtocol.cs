@@ -33,6 +33,10 @@ public static class FullReplaceTransferProtocol
 
     public sealed record TransferId(int NamespaceId, Guid Generation);
 
+    public sealed record Progress(
+        int NamespaceId, Guid Generation, int ExpectedEntryCount, int NextIndex,
+        byte[] ExpectedDigest, bool IsCommitted, ulong NextFrameSequence);
+
     public static Begin SignBegin(Begin value, ReadOnlySpan<byte> authoritySeed)
     {
         ValidateBegin(value);
@@ -182,6 +186,61 @@ public static class FullReplaceTransferProtocol
         if (offset != bytes.Length)
             throw new InvalidDataException("FULL_REPLACE_CHUNK contains trailing bytes.");
         return new Chunk(namespaceId, generation, startIndex, entries);
+    }
+
+    public static byte[] EncodeProgress(Progress value)
+    {
+        ValidateProgress(value);
+        byte[] bytes = new byte[67];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes, checked((ushort)value.NamespaceId));
+        value.Generation.TryWriteBytes(bytes.AsSpan(2, 16), bigEndian: true, out _);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(18), value.ExpectedEntryCount);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(22), value.NextIndex);
+        value.ExpectedDigest.CopyTo(bytes, 26);
+        bytes[58] = value.IsCommitted ? (byte)1 : (byte)0;
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(59), value.NextFrameSequence);
+        return bytes;
+    }
+
+    public static Progress DecodeProgress(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 67)
+            throw new InvalidDataException("FULL_REPLACE_READY length is invalid.");
+        var value = new Progress(
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes),
+            new Guid(bytes.Slice(2, 16), bigEndian: true),
+            BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(18)),
+            BinaryPrimitives.ReadInt32LittleEndian(bytes.Slice(22)),
+            bytes.Slice(26, DigestSize).ToArray(),
+            bytes[58] switch
+            {
+                0 => false,
+                1 => true,
+                _ => throw new InvalidDataException("FULL_REPLACE_READY committed flag is invalid.")
+            },
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(59)));
+        try { ValidateProgress(value); }
+        catch (ArgumentException ex) { throw new InvalidDataException("FULL_REPLACE_READY is invalid.", ex); }
+        return value;
+    }
+
+    public static ulong GetNextFrameSequence(int nextIndex)
+    {
+        if (nextIndex < 0) throw new ArgumentOutOfRangeException(nameof(nextIndex));
+        return checked(2UL + (ulong)((nextIndex + MaxChunkEntries - 1) / MaxChunkEntries));
+    }
+
+    private static void ValidateProgress(Progress value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ValidateTransferId(value.NamespaceId, value.Generation);
+        if (value.ExpectedEntryCount < 0 || value.NextIndex < 0 ||
+            value.NextIndex > value.ExpectedEntryCount ||
+            value.ExpectedDigest is null || value.ExpectedDigest.Length != DigestSize ||
+            value.NextFrameSequence == 0 ||
+            value.NextFrameSequence != GetNextFrameSequence(value.NextIndex) ||
+            (value.IsCommitted && value.NextIndex != value.ExpectedEntryCount))
+            throw new ArgumentException("FULL_REPLACE_READY progress is inconsistent.", nameof(value));
     }
 
     public static byte[] EncodeTransferId(TransferId value)
