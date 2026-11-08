@@ -457,3 +457,8 @@ The provider refuses to set the terminal author-identity marker while its persis
 ## 10.20. Bounded linear report/checkpoint validation (2026-11-09)
 
 OFR2 validation indexes local applied sequences and issued epochs once per report; immutable retired-epoch closure matching is also indexed. RCP2 derivation indexes each member's applied `(author, epoch)` vector once, then computes the all-Active-member minimum without rescanning report arrays for each origin. The canonical 4096-entry bounds remain unchanged. Performance acceptance and equivalence tests remain T-pass work.
+
+
+## 10.21. Storage snapshot payload sharing (2026-11-09)
+
+`StorageDatabase.OpenSnapshot` still copies the sorted key index for point-in-time isolation, but it now shares the immutable stored value arrays rather than cloning every payload. This is safe because commits copy caller-owned buffers on publication and replace value references instead of mutating arrays; snapshot APIs return owned copies to callers. Total snapshot index memory remains O(number of keys), not O(page), until the engine adopts a persistent immutable index/MVCC root.
