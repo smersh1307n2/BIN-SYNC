@@ -171,6 +171,95 @@ public static class SessionWire
         return list;
     }
 
+    private const byte AliasMapUpdateMagic = 0xA7;
+    private const byte AliasMapUpdateRequest = 1;
+    private const byte AliasMapUpdateResponse = 2;
+
+    internal readonly record struct AliasMapUpdate(
+        uint RequestId, bool IsResponse, bool Accepted, AliasMapEntry Entry);
+
+    /// <summary>
+    /// Encode one established-session ALIAS_MAP proposal. The receiver applies the
+    /// entry atomically and replies with the same request id and negotiated entry.
+    /// </summary>
+    internal static byte[] EncodeAliasMapUpdateRequest(uint requestId, AliasMapEntry entry)
+        => EncodeAliasMapUpdate(requestId, AliasMapUpdateRequest, accepted: true, entry);
+
+    internal static byte[] EncodeAliasMapUpdateResponse(
+        uint requestId, bool accepted, AliasMapEntry entry = default)
+        => EncodeAliasMapUpdate(requestId, AliasMapUpdateResponse, accepted, entry);
+
+    private static byte[] EncodeAliasMapUpdate(
+        uint requestId, byte kind, bool accepted, AliasMapEntry entry)
+    {
+        if (requestId == 0) throw new ArgumentOutOfRangeException(nameof(requestId));
+        bool hasEntry = kind == AliasMapUpdateRequest || accepted;
+        if (hasEntry && (entry.Alias == 0 || entry.NodeId.IsZero || entry.Epoch < 0))
+            throw new ArgumentException("Invalid incremental alias binding.", nameof(entry));
+
+        byte[] payload = new byte[hasEntry ? 30 + (kind == AliasMapUpdateResponse ? 1 : 0) : 8];
+        payload[0] = AliasMapUpdateMagic;
+        payload[1] = kind;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2), requestId);
+        int offset = 6;
+        if (kind == AliasMapUpdateResponse)
+            payload[offset++] = accepted ? (byte)0 : (byte)1;
+        payload[offset++] = hasEntry ? (byte)1 : (byte)0;
+        if (hasEntry)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(offset), entry.Alias);
+            offset += 2;
+            entry.NodeId.WriteTo(payload.AsSpan(offset));
+            offset += 16;
+            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(offset), checked((uint)entry.Epoch));
+        }
+        return FrameCodec.BuildFrame(TypeAliasMap, ControlStreamId, 3, payload);
+    }
+
+    /// <summary>Decode an established-session incremental ALIAS_MAP request or response.</summary>
+    internal static AliasMapUpdate DecodeAliasMapUpdate(byte[] frameBytes)
+    {
+        var frame = ParseControlFrame(frameBytes, TypeAliasMap);
+        ReadOnlySpan<byte> payload = frame.Payload;
+        if (payload.Length < 8 || payload[0] != AliasMapUpdateMagic ||
+            payload[1] is not (AliasMapUpdateRequest or AliasMapUpdateResponse))
+            throw new FrameException("FRAME_REJECTED");
+
+        byte kind = payload[1];
+        uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(2, 4));
+        if (requestId == 0) throw new FrameException("FRAME_REJECTED");
+        int offset = 6;
+        bool accepted = true;
+        if (kind == AliasMapUpdateResponse)
+        {
+            if (offset >= payload.Length || payload[offset] > 1)
+                throw new FrameException("FRAME_REJECTED");
+            accepted = payload[offset++] == 0;
+        }
+
+        if (offset >= payload.Length) throw new FrameException("FRAME_REJECTED");
+        byte count = payload[offset++];
+        if (count > 1 || (kind == AliasMapUpdateRequest && count != 1) ||
+            (kind == AliasMapUpdateResponse && accepted != (count == 1)))
+            throw new FrameException("FRAME_REJECTED");
+
+        AliasMapEntry entry = default;
+        if (count == 1)
+        {
+            if (payload.Length - offset != 22) throw new FrameException("FRAME_REJECTED");
+            ushort alias = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(offset, 2));
+            offset += 2;
+            NodeId nodeId = NodeId.From(payload.Slice(offset, 16));
+            offset += 16;
+            uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
+            if (alias == 0 || nodeId.IsZero || epoch > int.MaxValue)
+                throw new FrameException("FRAME_REJECTED");
+            entry = new AliasMapEntry(alias, nodeId, (int)epoch);
+        }
+        if (offset != payload.Length) throw new FrameException("FRAME_REJECTED");
+        return new AliasMapUpdate(requestId, kind == AliasMapUpdateResponse, accepted, entry);
+    }
+
     /// <summary>Encode error into canonical wire bytes.</summary>
     public static byte[] EncodeError(string codeName, string? detail = null)
     {
