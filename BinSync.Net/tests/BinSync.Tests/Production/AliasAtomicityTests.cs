@@ -107,6 +107,35 @@ public sealed class AliasAtomicityTests
 
 
     [Fact]
+    public void EnsureAlias_publishes_incremental_binding_on_both_session_copies_only()
+    {
+        using var local = new Node(Fix.Nid(111));
+        using var peer = new Node(Fix.Nid(112));
+        using var otherPeer = new Node(Fix.Nid(113));
+        NodeId author = Fix.Nid(114);
+        NodeId otherAuthor = Fix.Nid(115);
+
+        int? alias = local.EnsureAlias(peer, author, 7);
+        Assert.NotNull(alias);
+        Assert.Equal(author, local.ResolveAlias(peer.NodeId, alias.Value));
+        Assert.Equal(author, peer.ResolveAlias(local.NodeId, alias.Value));
+
+        int? otherAlias = local.EnsureAlias(otherPeer, otherAuthor, 8);
+        Assert.NotNull(otherAlias);
+        Assert.Equal(otherAuthor, local.ResolveAlias(otherPeer.NodeId, otherAlias.Value));
+        Assert.Equal(otherAuthor, otherPeer.ResolveAlias(local.NodeId, otherAlias.Value));
+
+        Assert.DoesNotContain(local.AliasToNode[otherPeer.NodeId].Values,
+            binding => binding.Id == author);
+        Assert.DoesNotContain(otherPeer.AliasToNode[local.NodeId].Values,
+            binding => binding.Id == author);
+        Assert.DoesNotContain(local.AliasToNode[peer.NodeId].Values,
+            binding => binding.Id == otherAuthor);
+        Assert.DoesNotContain(peer.AliasToNode[local.NodeId].Values,
+            binding => binding.Id == otherAuthor);
+    }
+
+    [Fact]
     public void ApplyAliasMap_is_atomic_when_a_late_entry_conflicts()
     {
         using var local = new Node(Fix.Nid(101));
