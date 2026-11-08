@@ -732,7 +732,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static byte[] Fingerprint(IReadOnlyList<ProviderMutation> mutations)
     {
         var ordered = mutations.ToArray();
-        Array.Sort(ordered, CompareCanonicalKey);
+        Array.Sort(ordered, ProviderMutationCodec.CompareCanonical);
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> count = stackalloc byte[sizeof(int)];
@@ -757,33 +757,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         return hash.GetHashAndReset();
     }
 
-    private static int CompareCanonicalKey(ProviderMutation left, ProviderMutation right)
-    {
-        int c = CompareRecordIds(left.RecordId, right.RecordId);
-        if (c != 0) return c;
-        if (left.IsRecordTombstone != right.IsRecordTombstone)
-            return left.IsRecordTombstone ? -1 : 1;
-        return left.FieldId.CompareTo(right.FieldId);
-    }
 
-    private static int CompareRecordIds(RecordId left, RecordId right)
-    {
-        ulong leftLo = left.Lo, rightLo = right.Lo;
-        for (int i = 0; i < sizeof(ulong); i++)
-        {
-            int c = ((byte)(leftLo >> (i * 8))).CompareTo((byte)(rightLo >> (i * 8)));
-            if (c != 0) return c;
-        }
-
-        ulong leftHi = left.Hi, rightHi = right.Hi;
-        for (int i = 0; i < sizeof(ulong); i++)
-        {
-            int c = ((byte)(leftHi >> (i * 8))).CompareTo((byte)(rightHi >> (i * 8)));
-            if (c != 0) return c;
-        }
-
-        return 0;
-    }
 
     private static byte[] EncodeLocalFeedChange(byte[] encodedMutation)
     {
