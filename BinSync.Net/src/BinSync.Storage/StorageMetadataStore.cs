@@ -1485,6 +1485,20 @@ private static bool ValidateIncomingBatchForStaging(
                      intent.Batch.TransportPeerEpoch <= nextRetiredThrough)))
                 throw new InvalidOperationException(
                     "Cannot retire a transport peer epoch while one of its PendingApply intents is unresolved; recover or finalize it first.");
+
+            // A replacement epoch's completed snapshot baseline does not resolve an
+            // outbound batch already reserved for the old incarnation. Its exact
+            // payload/digest may still be needed to finish the old send or recover a
+            // lost ACK. Keep both the reservation and old receipts until that stream
+            // is explicitly resolved; never let receipt GC erase its retry context.
+            if (current.PeerStreams.Any(pair =>
+                    pair.Key.NamespaceId == namespaceId &&
+                    pair.Key.Peer == peer &&
+                    pair.Key.PeerEpoch <= nextRetiredThrough &&
+                    pair.Value.PendingBatch is not null))
+                throw new InvalidOperationException(
+                    "Cannot retire a transport peer epoch while an outbound batch reservation is unresolved; finish or explicitly recover the reservation first.");
+
             ReceiptKey[] oldReceipts = current.Receipts
                 .Where(pair => pair.Key.Sender == peer && pair.Key.NamespaceId == namespaceId &&
                     pair.Value.TransportPeerEpoch != 0 &&
