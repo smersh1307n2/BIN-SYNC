@@ -302,7 +302,14 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     {
         roster = null;
         byte[]? pointer = ReadValue(CurrentRosterKey(namespaceId));
-        if (pointer is null) return false;
+        if (pointer is null)
+        {
+            Span<byte> namespacePrefix = stackalloc byte[2];
+            BinaryPrimitives.WriteUInt16LittleEndian(namespacePrefix, checked((ushort)namespaceId));
+            if (Scan(Key(RosterKind, namespacePrefix)).Count != 0)
+                throw new InvalidDataException("Namespace roster certificates exist without a current-roster pointer.");
+            return false;
+        }
         if (pointer.Length != 8 + NamespaceRosterProtocol.DigestSize)
             throw new InvalidDataException("Current namespace roster pointer is corrupt.");
         ulong generation = BinaryPrimitives.ReadUInt64LittleEndian(pointer);
