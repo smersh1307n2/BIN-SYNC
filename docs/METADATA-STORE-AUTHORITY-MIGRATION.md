@@ -37,21 +37,21 @@ The outbound safe-compaction coordinate is local author sequence: `AckedCursor +
 
 | State | Current authoritative owner | Required owner in Storage-backed mode |
 |---|---|---|
-| User field values and lifecycle | Provider plus Node's in-memory copy | Data Provider; Node view is reconstructible/cache |
+| User field values and lifecycle | Data Provider; Node namespace view is a rebuildable cache in provider-authoritative mode | Data Provider |
 | Local source feed | StorageDataProvider | Data Provider |
-| PendingLocal before freeze | Provider feed / coordinator | Provider or Metadata Store, one explicit owner |
-| Frozen outbound payload and sequence | Node allocates/stages locally; Metadata Store owns the immutable transport/replay copy after freeze | Metadata Store |
-| Global ChangeId fingerprint ledger | Node and Metadata Store copies | Metadata Store |
-| Per-peer, per-author ACK/pushed/offset | Metadata Store in durable transport mode; Node is a runtime mirror | Metadata Store |
-| Outbound BatchId/digest replay mapping | Metadata Store reservation; Node retains a runtime mirror | Metadata Store |
-| Inbound batch receipts and receive digest chain | Metadata Store receipt/chain is committed after provider apply; Node still performs duplicate validation as a transitional mirror | Metadata Store |
-| Relay payload and relay progress | Node and Metadata Store | Metadata Store |
+| PendingLocal before freeze | Provider feed / coordinator; no second per-edit metadata journal | One explicit provider-owned staging source until freeze |
+| Frozen outbound payload and sequence | Metadata Store after provider cutover; Node Outbox only in pre-cutover/legacy mode | Metadata Store |
+| Global ChangeId fingerprint ledger | Metadata Store is authoritative in Storage-backed publication/receive mode; Node retains an application replay cache | Metadata Store |
+| Per-peer, per-author ACK/pushed/offset | Metadata Store in durable transport mode; Node dictionaries remain for legacy mode | Metadata Store |
+| Outbound BatchId/digest replay mapping | Metadata Store immutable reservation in durable transport mode; Node retains legacy state | Metadata Store |
+| Inbound batch receipts and receive digest chain | Metadata Store in Storage-backed receive mode; Node validation remains for legacy transport | Metadata Store |
+| Relay payload and relay progress | Metadata Store in durable Storage-backed mode; Node remains legacy owner otherwise | Metadata Store |
 | Pending provider APPLY | Metadata Store intent plus provider receipt | Metadata Store + provider receipt |
 | Alias map for a live session | Node/session memory | Runtime cache; not durable |
 | Durable author/epoch knowledge | Node `DurableAuthors`, `KnownEpochs`, `PeerSessionEpochs` | Explicit durable control metadata or a documented reconstructible source |
 | Diagnostic queues/events | Node memory | Runtime only |
 
-A critical remaining boundary: the Storage-backed receive path no longer uses Node receive cursors/inbox/digest as acceptance authority, but Node's legacy transport path still does. The Node WAL can still replay remote batches into its local cache; it is not consulted for Storage-backed receipt decisions, but remains until provider rehydration and legacy-path cutover are complete. Node's GlobalChangeLedger remains an application-side replay cache, while Metadata Store's ChangeId ledger is authoritative for Storage-backed relay/equivocation decisions.
+The Storage-backed receive path no longer uses Node receive cursors/inbox/digest as acceptance authority, but Node's legacy transport path still does. The Node WAL can replay remote batches into its local data cache; it is not consulted for Storage-backed receipt decisions. In provider-authoritative outbound mode, the Node Outbox is fenced at cutover and is not the source of new local outbound sequences. Node's GlobalChangeLedger remains an application-side replay cache, while Metadata Store's ChangeId ledger is authoritative for Storage-backed publication and relay/equivocation decisions.
 
 A critical implementation detail: Node's per-peer progress is not a single ACK counter. It includes per-author ACKed and pushed watermarks, stream offsets, replay mappings for cursor ranges, initial-sync state and received-stream cursors. The sender digest chain is also peer-specific. These values are part of correctness, not optional diagnostics.
 
