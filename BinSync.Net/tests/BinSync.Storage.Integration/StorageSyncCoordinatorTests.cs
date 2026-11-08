@@ -625,11 +625,6 @@ public sealed class StorageSyncCoordinatorTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
 
-        // Learn a third-party author only after the sender/receiver TCP session is
-        // established. The live ALIAS_MAP control update must reach the receiver
-        // before the relay DELTA_BATCH is sent.
-        Transport.MakeSession(sender, origin);
-
         RecordId record = RecordId.From(Guid.Parse("44000000-0000-0000-0000-000000000044").ToByteArray());
         providerA.AppendLocalChange(new ProviderMutation
         {
@@ -1080,6 +1075,11 @@ public sealed class StorageSyncCoordinatorTests
         var connectTask = SyncSession.ConnectAsync(sender, toSender);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
+
+        // Learn a third-party author only after the sender/receiver TCP session is
+        // established. The live ALIAS_MAP control update must reach the receiver
+        // before the relay DELTA_BATCH is sent.
+        Transport.MakeSession(sender, origin);
 
         metadata.RegisterInterestedPeer(scope, sender.NodeId, receiver.NodeId,
             checked((uint)receiver.Epoch), 1);
