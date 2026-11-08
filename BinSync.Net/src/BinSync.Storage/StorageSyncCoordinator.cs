@@ -409,6 +409,9 @@ public sealed class StorageSyncCoordinator
             var intents = _metadataStore.ReadPendingApplyIntents(_scopeId!, _node.NodeId)
                 .Where(intent => intent.Batch.NamespaceId == _namespaceId)
                 .ToArray();
+            if (intents.Any(intent => intent.Batch.WirePayload.Length == 0))
+                throw new InvalidOperationException(
+                    "Provider-authoritative rehydration requires replayable PendingApply wire payloads; recover legacy intents before replacing the Node cache.");
 
             BatchId[] pendingRemoteChangeIds = intents
                 .SelectMany(intent => intent.Batch.Operations)
