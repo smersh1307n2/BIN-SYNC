@@ -30,7 +30,7 @@ CompactOutboundThrough and CompactRelayThrough are the only current destructive 
 - Payload deletion is committed in Storage before the in-memory projection is changed.
 - High-watermarks, ACK state, peer state, and ChangeId ledger rows are not deleted by payload compaction.
 
-Retiring a peer epoch removes its roster, baseline and per-author peer-stream rows in one delta transaction, while persisting the maximum retired epoch. A later connection using that epoch or an older one is rejected. Inbox receipts attributed to that retired transport epoch are also deleted in the same transaction; epoch-unknown legacy receipts and ChangeId evidence are not.
+Retiring a peer epoch is allowed only after a newer peer epoch is durably registered and its complete initial-sync baseline is committed. It removes the old roster, baseline, per-author peer-stream rows and eligible Inbox receipts in one delta transaction, while persisting the maximum retired epoch. A later connection using that epoch or an older one is rejected. Inbox receipts attributed to that retired transport epoch are also deleted in the same transaction; epoch-unknown legacy receipts and ChangeId evidence are not.
 
 ## 3. Why global ChangeId GC and active-epoch Inbox GC are still disabled
 
