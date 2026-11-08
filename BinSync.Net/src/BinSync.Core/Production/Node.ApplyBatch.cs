@@ -318,6 +318,12 @@ public sealed partial class Node
             if (ResolveAuthor(decodedOps[di]) != streamAuthor)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         }
+        // Only an original-author batch has enough authenticated context to derive
+        // immutable origin sequence from its cursor. A relay's cursor is a separate
+        // local coordinate and must never be interpreted as the origin sequence.
+        if (batch.IssuerNodeId == streamAuthor &&
+            (ulong)batch.CursorEnd - (ulong)batch.CursorStart + 1 != (ulong)nEntEarly)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         result.DurableAuthor = batch.DurableAuthor;
         var streamKey = (senderPeer, batch.IssuerEpoch, streamAuthor);
         if (!receiveStateOwnedByMetadataStore)
