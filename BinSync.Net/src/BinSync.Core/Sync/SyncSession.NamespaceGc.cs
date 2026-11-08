@@ -29,7 +29,7 @@ public partial class SyncSession
         AppliedOriginFrontierReport report, byte[] memberSeed, ulong frameSequence = 1,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.OriginFrontierV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.OriginFrontierV31);
         byte[] payload = OriginFrontierProtocol.Sign(report, memberSeed);
         await SendFrameAsync(NamespaceGcFrames.OriginFrontier, SessionWire.ControlStreamId,
             frameSequence, payload, ct).ConfigureAwait(false);
@@ -73,7 +73,7 @@ public partial class SyncSession
         FullReplaceInstalledAck acknowledgement, byte[] memberSeed, ulong frameSequence = 1,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         byte[] payload = FullReplaceInstalledAckProtocol.Sign(acknowledgement, memberSeed);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceAck, SessionWire.ControlStreamId,
             frameSequence, payload, ct).ConfigureAwait(false);
