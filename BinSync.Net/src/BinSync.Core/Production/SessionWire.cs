@@ -12,6 +12,8 @@ public enum SessionCapabilities : uint
     FullAuthorId = 1 << 0,
     /// <summary>§3.6.3 — peer will honor WINDOW_UPDATE on this transport.</summary>
     FlowControl = 1 << 1,
+    /// <summary>§4.3/§12.7 — peer supports correlated live ALIAS_MAP updates after HELLO.</summary>
+    IncrementalAliasMap = 1 << 2,
 }
 
 /// <summary>struct: struct.</summary>
