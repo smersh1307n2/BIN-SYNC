@@ -491,6 +491,58 @@ public class ScenariosB
     }
 
     [Fact]
+    public void Scenario43_FourNodeOriginRelayAndAlternateRouteDedup()
+    {
+        var a = Fix.MakeNode(201);
+        var b = Fix.MakeNode(202);
+        var c = Fix.MakeNode(203);
+        var d = Fix.MakeNode(204);
+
+        Transport.MakeSession(a, b);
+        Transport.MakeSession(b, c);
+        Transport.MakeSession(c, d);
+
+        Assert.True(a.WriteField(NS, Rid(1), 0x0100, Asc("origin-one"), new Hlc(100, 0)));
+        Assert.True(a.WriteField(NS, Rid(2), 0x0100, Asc("origin-two"), new Hlc(101, 0)));
+        var originByChangeId = a.Outbox[NS].ToDictionary(
+            entry => entry.ChangeId,
+            entry => (entry.AuthorNodeId, entry.OriginAuthorEpoch, entry.OriginSequence));
+        Assert.Equal(2, originByChangeId.Count);
+
+        // Four-node chain: only A knows the original operations at publication time.
+        Assert.NotNull(Transport.DeliverBatch(a, b, NS));
+        Assert.NotNull(Transport.DeliverBatch(b, c, NS));
+        Assert.NotNull(Transport.DeliverBatch(c, d, NS));
+
+        foreach (var relay in new[] { b, c, d })
+        {
+            var relayed = relay.Outbox[NS].Where(entry => originByChangeId.ContainsKey(entry.ChangeId)).ToArray();
+            Assert.Equal(2, relayed.Length);
+            Assert.Equal(2, relayed.Select(entry => entry.ChangeId).Distinct().Count());
+            foreach (var entry in relayed)
+                Assert.Equal(originByChangeId[entry.ChangeId],
+                    (entry.AuthorNodeId, entry.OriginAuthorEpoch, entry.OriginSequence));
+        }
+
+        foreach (var recordId in new[] { Rid(1), Rid(2) })
+        {
+            Assert.Equal(a.NodeId, b.Storage[NS][recordId].State[0x0100].AuthorNodeId);
+            Assert.Equal(a.NodeId, c.Storage[NS][recordId].State[0x0100].AuthorNodeId);
+            Assert.Equal(a.NodeId, d.Storage[NS][recordId].State[0x0100].AuthorNodeId);
+        }
+
+        // The same operations now arrive directly from A after already arriving via C.
+        Transport.MakeSession(a, d);
+        Assert.NotNull(Transport.DeliverBatch(a, d, NS));
+        var finalRelay = d.Outbox[NS].Where(entry => originByChangeId.ContainsKey(entry.ChangeId)).ToArray();
+        Assert.Equal(2, finalRelay.Length);
+        Assert.Equal(2, finalRelay.Select(entry => entry.ChangeId).Distinct().Count());
+        foreach (var entry in finalRelay)
+            Assert.Equal(originByChangeId[entry.ChangeId],
+                (entry.AuthorNodeId, entry.OriginAuthorEpoch, entry.OriginSequence));
+    }
+
+    [Fact]
     public void Scenario42_ThreeNodeChaos()
     {
         // §17.42 / С1–С4, Д1–Д5 — randomized chaos, 4 mesh rounds → byte-identical convergence.
