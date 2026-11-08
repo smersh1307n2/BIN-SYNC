@@ -208,6 +208,7 @@ public partial class SyncSession : IAsyncDisposable
         await _pushGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+        await EnsureRemoteAliasesAsync(ct).ConfigureAwait(false);
         var batch = sender.CreateDeltaBatchPayloadForTransport(PeerNodeId, namespaceId,
             schemaVersion: schemaVersion);
         if (batch is null) return false;
