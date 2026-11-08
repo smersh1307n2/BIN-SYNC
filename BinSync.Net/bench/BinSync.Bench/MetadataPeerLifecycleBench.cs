@@ -158,7 +158,7 @@ public class MetadataPeerChangeIdentityLookupBench : MetadataPeerLifecycleBenchB
         {
             BatchId changeId = _changeIds[i % _changeIds.Length];
             if (!_identityStore.TryGetOutboundChangeFingerprint(
-                    Scope, Local, NamespaceId, Author, changeId, out ReadOnlyMemory<byte> fingerprint) ||
+                    Scope, Local, NamespaceId, changeId, out ReadOnlyMemory<byte> fingerprint) ||
                 fingerprint.Length != 16)
                 throw new InvalidOperationException("Frozen ChangeId fingerprint lookup failed.");
         }
