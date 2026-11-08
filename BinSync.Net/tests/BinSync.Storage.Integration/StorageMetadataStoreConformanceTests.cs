@@ -958,6 +958,74 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Retiring_transport_peer_epoch_reclaims_only_receipts_bound_to_that_epoch()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-retention-epoch"), 447);
+        const string scope = "receipt-retention-epoch";
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+
+        store.RegisterInterestedPeer(scope, local, sender, 1, 7);
+
+        MetadataIncomingBatch MakeBatch(NodeId author, uint authorEpoch, byte batchId,
+            byte changeId, byte transportEpoch)
+            => new()
+            {
+                ScopeId = scope,
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = authorEpoch,
+                TransportPeerEpoch = transportEpoch,
+                AuthorStreamNodeId = author,
+                NamespaceId = 7,
+                BatchId = Batch(batchId),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)(batchId + 1), 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)(batchId + 2), 16).ToArray(),
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = author,
+                        ChangeId = Batch(changeId),
+                        Fingerprint = Enumerable.Repeat((byte)(changeId + 1), 16).ToArray(),
+                        Payload = new byte[] { changeId }
+                    }
+                }
+            };
+
+        var epochBound = MakeBatch(authorA, 5, 200, 201, 1);
+        var legacyUnbound = MakeBatch(authorB, 6, 202, 203, 0);
+        Assert.False(store.AcceptIncomingBatch(epochBound).IsDuplicate);
+        Assert.False(store.AcceptIncomingBatch(legacyUnbound).IsDuplicate);
+
+        store.RegisterInterestedPeer(scope, local, sender, 2, 7);
+        store.CompletePeerInitialSync(scope, local, sender, 2, 7,
+            new[]
+            {
+                new MetadataPeerStreamBaseline(authorA, 0, 5),
+                new MetadataPeerStreamBaseline(authorB, 0, 6)
+            });
+        store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
+
+        Assert.Equal(1U, store.GetRetiredPeerEpoch(scope, local, sender, 7));
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(epochBound));
+        Assert.Throws<InvalidDataException>(() =>
+            store.BeginPendingApply(epochBound, Guid.Parse("00000000-0000-0000-0000-000000000447")));
+
+        // The old transport-bound receipt is gone. The retained receive cursor rejects
+        // the replay, rather than treating it as a duplicate and re-ACKing it.
+        var replayFromNewEpoch = MakeBatch(authorA, 5, 200, 201, 2);
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(replayFromNewEpoch));
+
+        // Legacy rows without a recorded transport epoch cannot be attributed to the
+        // retired incarnation, so they remain retained rather than being guessed away.
+        var legacyReplay = MakeBatch(authorB, 6, 202, 203, 2);
+        Assert.True(store.AcceptIncomingBatch(legacyReplay).IsDuplicate);
+    }
+
+    [Fact]
     public void Relay_compaction_waits_for_all_namespace_interested_peers()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-safe-relay-compaction"), 429);
