@@ -27,7 +27,7 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v15";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v16";
     private const string Version14StateTag = "BIN-SYNC/NODESTATE/v14";
     private const string Version13StateTag = "BIN-SYNC/NODESTATE/v13";
     private const string Version12StateTag = "BIN-SYNC/NODESTATE/v12";
@@ -43,7 +43,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 15;
+    private const ushort Version = 16;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
@@ -119,8 +119,8 @@ public static class NodePersistence
         if (ReadBEU32(r) != Magic)
             throw new InvalidDataException("Not a BinSync node-state file (bad magic).");
         var ver = ReadBEU16(r);
-        if (ver != Version && ver != 14 && ver != 13 && ver != 12 && ver != 11 && ver != 10 && ver != 9 && ver != 8 && ver != 7 && ver != 6 && ver != 5 && ver != 4 && ver != 3)
-            throw new InvalidDataException($"Unsupported state version {ver} (expected {Version}, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4 or legacy 3).");
+        if (ver != Version)
+            throw new InvalidDataException("Unsupported state version " + ver + "; BIN-SYNC v3 requires state version " + Version + ". Recreate the node store.");
 
         var bodyLen = ReadBEU64(r);
         if (bodyLen != (ulong)(bytes.Length - 14 - DigestLen))
@@ -1224,6 +1224,10 @@ public static class NodePersistence
             w.Varint((ulong)authorIndexes[entry.AuthorNodeId]);
             w.Varint((ulong)entry.Seq);
             w.B128(entry.ChangeId);
+            if (entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0)
+                throw new InvalidOperationException("Outbox origin provenance is required.");
+            w.U32(entry.OriginAuthorEpoch);
+            w.U64(entry.OriginSequence);
             w.Varint((ulong)payload.Length);
             w.Raw(payload);
             if (!recordTombstone) w.B128(entry.RecordId);
@@ -1254,6 +1258,10 @@ public static class NodePersistence
                 throw new InvalidDataException("Compact Outbox author index is out of range.");
             long sequence = ReadInt64Varint(r, "Outbox sequence");
             var changeId = BatchId.From(r.B128());
+            uint originEpoch = r.U32();
+            ulong originSequence = r.U64();
+            if (originEpoch == 0 || originSequence == 0)
+                throw new InvalidDataException("Persisted Outbox origin provenance is invalid.");
             byte[] payload = r.Raw(ReadByteLength(r, "Outbox payload"));
             if (payload.Length == 0)
                 throw new InvalidDataException("Empty compact Outbox operation payload.");
@@ -1276,6 +1284,7 @@ public static class NodePersistence
             {
                 NamespaceId = namespaceId, Seq = sequence, ChangeId = changeId,
                 RecordId = recordId, OpKind = opKind, Payload = payload,
+                OriginAuthorEpoch = originEpoch, OriginSequence = originSequence,
                 AuthorNodeId = authors[authorIndex], CreatedAt = createdAt,
             };
             for (int di = 0; di < dependencyCount; di++)
@@ -1312,6 +1321,8 @@ public static class NodePersistence
         w.Varint((ulong)e.NamespaceId);
         w.U64((ulong)e.Seq);
         w.B128(e.ChangeId);
+        w.U32(e.OriginAuthorEpoch);
+        w.U64(e.OriginSequence);
         w.B128(e.RecordId);
         w.U8(e.OpKind);
         // The payload is a compact-mode op encoding; its value length is a varint, so
@@ -1332,6 +1343,8 @@ public static class NodePersistence
             NamespaceId = ReadNamespaceId(r),
             Seq = (long)r.U64(),
             ChangeId = BatchId.From(r.B128()),
+            OriginAuthorEpoch = r.U32(),
+            OriginSequence = r.U64(),
             RecordId = RecordId.From(r.B128()),
             OpKind = r.U8(),
             Payload = r.Raw(ReadByteLength(r, "outbox payload")),
