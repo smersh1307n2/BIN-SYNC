@@ -15,6 +15,7 @@ public partial class SyncSession
         int schemaVersion = 1, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(sender);
+        ValidateLocalNode(sender);
         ArgumentNullException.ThrowIfNull(peerStateStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (sender.NodeId.IsZero) throw new ArgumentException("Sender identity must be non-zero.", nameof(sender));
