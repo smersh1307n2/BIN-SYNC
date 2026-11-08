@@ -206,6 +206,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
                     key.Epoch == 0 || receipt.OriginSequence == 0)
                     continue;
+                var receiveKey = new ReceiveKey(
+                    key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
+                var chainKey = new ReceiveChainKey(key.Sender, key.Epoch, key.NamespaceId);
+                if (!current.Receives.TryGetValue(receiveKey, out ReceiveState? receive) ||
+                    receive.CursorEnd < receipt.CursorEnd ||
+                    !current.ReceiveChains.ContainsKey(chainKey))
+                    continue;
                 if (current.PendingApplies.Values.Any(pending =>
                     pending.Batch.SenderPeer == key.Sender &&
                     pending.Batch.SenderEpoch == key.Epoch &&
