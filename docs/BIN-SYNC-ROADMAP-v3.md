@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 0d873a17344a4cda9e976dfe37670274352eb1cb. CI for this checkpoint is running; Build has passed in Core and on the Linux/macOS Storage jobs, but tests and remaining jobs are not complete. Do not infer a green result yet.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 4e2ba079678ce3fcaa0058ae43ef652faa33975a. Last completed CI evidence is for b60c4a0: Core Build/benchmarks passed, Fuzz/Lab 31/31 passed, and Core had one remaining conformance failure in the test-only Volatile adapter; Storage test run for b60c4a0 is pending. The latest adapter correction is not yet verified by CI.
 
 ## 1. Target architecture
 
@@ -23,7 +23,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Reviewed head before the current persistence fix: 56d5142c1a2f7050663a418d4882def50787c1e5; current code fix: 0d873a17344a4cda9e976dfe37670274352eb1cb.
+- Reviewed head before the current persistence fix: 56d5142c1a2f7050663a418d4882def50787c1e5; current code/test checkpoint: 4e2ba079678ce3fcaa0058ae43ef652faa33975a.
 - The PR merge snapshot a852206fc245c2a0f7469d0e18d19415a2b2c528 failed Build because Node.DeltaBatch.cs:861-862 read Origin fields from a 3-field tuple.
 - The later e6826b4865f8966327a628ae07e95720db58d0ff snapshot completed Build, but Test, Fuzz/Lab and Storage Integration workflows were cancelled before completion.
 - The latest strict-decoder commits have no reported workflow result yet. CI is therefore UNVERIFIED, not green.
@@ -202,3 +202,16 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Existing PendingApply restart conformance test exercises the first-write/reopen path; broader storage integration tests are running.
 - [ ] Close this gate only after Storage Integration passes on Windows/Linux/macOS and Core tests remain green on the same source commit.
 - [ ] Continue auditing all persistence paths for first-write identity, marker validation and crash/reopen consistency.
+
+
+### 2026-11-08 — v3 conformance fixture and reference-adapter alignment
+
+- [x] Updated shared Metadata Store conformance factories to provide mandatory Origin epoch/sequence and a resolved single-author stream.
+- [x] Reworked inherited multi-author conformance cases into separate author-stream batches; digest chaining remains sender/epoch/namespace ordered while cursors are author-specific.
+- [x] Updated direct Storage integration fixtures to carry Origin, including relay, pending-apply, equivocation and coordinator recovery cases.
+- [x] Replaced the obsolete PendingApply v3/v4 decode-success expectation with explicit rejection of all pre-v3 formats; current v3 encoding remains round-trippable.
+- [x] Corrected snapshot test hashing to use the dedicated snapshot state-root form without operation Origin coordinates; retained mandatory Origin for DELTA_BATCH/Causal fixtures.
+- [x] Updated Node persistence fixture from v15 to v16 (including its tagged-hash domain).
+- [x] Core CI at b60c4a0 reduced the Core failures from 7 to 1; the sole remaining failure exposed the test-only Volatile adapter's stale sender-wide cursor model.
+- [x] Updated VolatileMetadataStoreAdapter to model author-specific receive cursors and a separate sender digest chain, matching the v3 storage contract.
+- [ ] Re-run Core, Fuzz/Lab, Storage Integration and samples on 4e2ba079678ce3fcaa0058ae43ef652faa33975a; do not close conformance until exact-head CI is green.
