@@ -80,6 +80,24 @@ public sealed class ProviderMutation
     public required NodeId AuthorNodeId { get; init; }
     public ushort KeyEpoch { get; init; }
     public required byte[] Value { get; init; }
+    /// <summary>Stable global identity of the immutable source operation; zero only for legacy materialized rows.</summary>
+    public BatchId ChangeId { get; init; }
+    /// <summary>Immutable origin author incarnation; zero only for legacy materialized rows.</summary>
+    public uint OriginAuthorEpoch { get; init; }
+    /// <summary>Immutable origin sequence; zero only for legacy materialized rows.</summary>
+    public ulong OriginSequence { get; init; }
+    public OperationOrigin Provenance
+    {
+        get => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
+            ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+        init
+        {
+            if (value.AuthorNodeId != AuthorNodeId)
+                throw new ArgumentException("Provider mutation provenance author must match AuthorNodeId.");
+            OriginAuthorEpoch = value.AuthorEpoch;
+            OriginSequence = value.Sequence;
+        }
+    }
 }
 
 public sealed record ProviderChange(ulong Sequence, ProviderMutation Mutation)
