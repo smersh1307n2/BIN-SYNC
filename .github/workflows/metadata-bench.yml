@@ -46,7 +46,7 @@ jobs:
           dotnet run --configuration Release
           --project bench/BinSync.Bench
           --
-          --filter '*MetadataCoordinatorRetryScanBench*'
+          --coordinator-retry-only
           --artifacts BenchmarkDotNet.RetryArtifacts
 
       - name: Fail if any benchmark case failed
