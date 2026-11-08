@@ -60,6 +60,10 @@ public sealed class StorageSyncCoordinator
                 long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
                 if (currentNodeHigh < 0 || (ulong)currentNodeHigh != existingCutover)
                     throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+                // Idempotent enable also completes a cutover interrupted after the
+                // provider marker commit but before the duplicate Node payload cache
+                // was checkpointed away.
+                InstallProviderSnapshot(persistNode);
                 return;
             }
 
@@ -89,6 +93,11 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidOperationException("Node and Metadata Store outbound watermarks are not aligned at cutover.");
 
             publicationMode.EnableMetadataStoreOwnedPublication((ulong)nodeHigh);
+            // Metadata Store now owns the immutable outbound payloads. Retain the
+            // Node sequence fence and replay identities, but remove duplicate local
+            // payload rows from the Node checkpoint.
+            _node.DiscardOutboxPayloadsThrough(_namespaceId, _node.NodeId, nodeHigh);
+            persistNode(_node);
         }
     }
 
@@ -723,6 +732,17 @@ public sealed class StorageSyncCoordinator
             }
 
             _node.RestoreProviderSnapshot(_namespaceId, mutations, pendingRemoteChangeIds);
+            if (_provider is IProviderPublicationMode publicationMode &&
+                publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutoverNodeHigh))
+            {
+                long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+                if (currentNodeHigh < 0 || (ulong)currentNodeHigh != cutoverNodeHigh)
+                    throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+                // The provider snapshot is authoritative after cutover. The Node's
+                // old local Outbox payload rows are redundant and must not be revived
+                // by a stale checkpoint; keep only the monotonic sequence fence.
+                _node.DiscardOutboxPayloadsThrough(_namespaceId, _node.NodeId, currentNodeHigh);
+            }
             // Persist the clean provider-derived base before replaying pending intents.
             // If recovery is interrupted, the same durable intents can safely replay.
             persistNode(_node);
