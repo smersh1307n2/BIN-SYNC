@@ -89,8 +89,17 @@ public sealed class MetadataOperation
     public uint OriginAuthorEpoch { get; init; }
     public ulong OriginSequence { get; init; }
     /// <summary>Canonical immutable origin tuple for this globally identified operation.</summary>
-    public OperationOrigin Provenance => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
-        ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+    public OperationOrigin Provenance
+    {
+        get => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
+            ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+        init
+        {
+            AuthorNodeId = value.AuthorNodeId;
+            OriginAuthorEpoch = value.AuthorEpoch;
+            OriginSequence = value.Sequence;
+        }
+    }
 }
 
 public sealed class MetadataIncomingBatch
@@ -136,8 +145,17 @@ public sealed record MetadataRelayItem(ulong Sequence, NodeId OriginalAuthor, Ba
     public uint OriginAuthorEpoch { get; init; }
     public ulong OriginSequence { get; init; }
     /// <summary>Immutable original author provenance; Sequence above is the local relay sequence.</summary>
-    public OperationOrigin Provenance => OriginalAuthor.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
-        ? default : new OperationOrigin(OriginalAuthor, OriginAuthorEpoch, OriginSequence);
+    public OperationOrigin Provenance
+    {
+        get => OriginalAuthor.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
+            ? default : new OperationOrigin(OriginalAuthor, OriginAuthorEpoch, OriginSequence);
+        init
+        {
+            OriginalAuthor = value.AuthorNodeId;
+            OriginAuthorEpoch = value.AuthorEpoch;
+            OriginSequence = value.Sequence;
+        }
+    }
 }
 public sealed record MetadataRelayPage(IReadOnlyList<MetadataRelayItem> Items, ulong ScannedThroughSequence);
 public sealed class MetadataFrozenOperation
@@ -153,7 +171,16 @@ public sealed record MetadataOutboundItem(ulong Sequence, NodeId AuthorNodeId, B
     public uint OriginAuthorEpoch { get; init; }
     public ulong OriginSequence { get; init; }
     /// <summary>Immutable origin; Sequence above is the local outbound stream sequence.</summary>
-    public OperationOrigin Provenance => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
-        ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+    public OperationOrigin Provenance
+    {
+        get => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
+            ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+        init
+        {
+            AuthorNodeId = value.AuthorNodeId;
+            OriginAuthorEpoch = value.AuthorEpoch;
+            OriginSequence = value.Sequence;
+        }
+    }
 }
 public sealed record MetadataOutboundPage(IReadOnlyList<MetadataOutboundItem> Items, ulong ScannedThroughSequence);
