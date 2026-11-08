@@ -369,15 +369,76 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         var ordered = mutations.ToArray();
         foreach (var mutation in ordered) ValidateMutation(mutation);
         Array.Sort(ordered, CompareSnapshotOrder);
-        for (int i = 1; i < ordered.Length; i++)
-            if (CompareSnapshotOrder(ordered[i - 1], ordered[i]) == 0)
-                throw new InvalidDataException("Full-replace snapshot contains duplicate record/field identities.");
+        using var builder = new FullReplaceDigestBuilder(generation, sourceChangeFeedWatermark);
+        for (int offset = 0; offset < ordered.Length; offset += MaxFullReplacePageEntries)
+        {
+            int count = Math.Min(MaxFullReplacePageEntries, ordered.Length - offset);
+            builder.AppendPage(new ArraySegment<ProviderMutation>(ordered, offset, count));
+        }
+        return builder.Complete();
+    }
 
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        AppendFullReplaceHeader(hash, generation, sourceChangeFeedWatermark, ordered.Length);
-        foreach (var mutation in ordered)
-            hash.AppendData(EncodeMutation(mutation));
-        return hash.GetHashAndReset();
+    /// <summary>
+    /// Incremental digest builder for a stable provider snapshot. Append pages in
+    /// canonical order as returned by ReadSnapshot; no full-image materialization or
+    /// sort is required. Entry count is appended at completion so the builder can
+    /// stream before the total is known.
+    /// </summary>
+    public sealed class FullReplaceDigestBuilder : IDisposable
+    {
+        private readonly IncrementalHash _hash;
+        private readonly byte[] _lastSortKey = new byte[19];
+        private int _entryCount;
+        private bool _completed;
+        private bool _faulted;
+
+        public FullReplaceDigestBuilder(Guid generation, ulong sourceChangeFeedWatermark)
+        {
+            if (generation == Guid.Empty)
+                throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            AppendFullReplaceHeader(_hash, generation, sourceChangeFeedWatermark);
+        }
+
+        public int EntryCount => _entryCount;
+
+        public void AppendPage(IReadOnlyList<ProviderMutation> entries)
+        {
+            ObjectDisposedException.ThrowIf(_completed, this);
+            if (_faulted) throw new InvalidOperationException("Full-replace digest builder is faulted.");
+            ArgumentNullException.ThrowIfNull(entries);
+            if (entries.Count > MaxFullReplacePageEntries)
+                throw new ArgumentOutOfRangeException(nameof(entries), "Digest page exceeds the bounded provider page size.");
+            try
+            {
+                foreach (var mutation in entries)
+                {
+                    ValidateMutation(mutation);
+                    byte[] sortKey = FullReplaceSortKey(mutation);
+                    if (_entryCount > 0 && _lastSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
+                        throw new InvalidDataException("Full-replace digest pages must be strictly ordered and contain no duplicate identities.");
+                    _hash.AppendData(EncodeMutation(mutation));
+                    sortKey.CopyTo(_lastSortKey, 0);
+                    _entryCount = checked(_entryCount + 1);
+                }
+            }
+            catch
+            {
+                _faulted = true;
+                throw;
+            }
+        }
+
+        public byte[] Complete()
+        {
+            ObjectDisposedException.ThrowIf(_completed, this);
+            if (_faulted) throw new InvalidOperationException("Full-replace digest builder is faulted.");
+            AppendFullReplaceCount(_hash, _entryCount);
+            _completed = true;
+            return _hash.GetHashAndReset();
+        }
+
+        public void Dispose() => _hash.Dispose();
     }
 
     /// <summary>Start or idempotently resume staging one authoritative replacement generation.</summary>
@@ -512,7 +573,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new InvalidOperationException("Full-replace snapshot is incomplete.");
 
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark, state.ExpectedCount);
+            AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark);
             using var fields = EnumeratePrefix(snapshot, CurrentPrefix(CurrentField, generation)).GetEnumerator();
             using var tombstones = EnumeratePrefix(snapshot, CurrentPrefix(CurrentRecordTombstone, generation)).GetEnumerator();
             bool hasField = fields.MoveNext();
@@ -556,6 +617,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             }
             if (stagedCount != state.ExpectedCount)
                 throw new InvalidDataException("Full-replace staged row count differs from the signed manifest.");
+            AppendFullReplaceCount(hash, stagedCount);
             byte[] actualDigest = hash.GetHashAndReset();
             if (!CryptographicOperations.FixedTimeEquals(actualDigest, state.ExpectedDigest))
                 throw new InvalidDataException("Full-replace staged image digest does not match its manifest.");
@@ -1023,14 +1085,20 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
     private static void AppendFullReplaceHeader(IncrementalHash hash, Guid generation,
-        ulong sourceChangeFeedWatermark, int count)
+        ulong sourceChangeFeedWatermark)
     {
         hash.AppendData("BIN-SYNC/FULL-REPLACE/v1"u8);
-        Span<byte> header = stackalloc byte[28];
+        Span<byte> header = stackalloc byte[24];
         generation.TryWriteBytes(header[..16], true, out _);
         BinaryPrimitives.WriteUInt64LittleEndian(header[16..24], sourceChangeFeedWatermark);
-        BinaryPrimitives.WriteInt32LittleEndian(header[24..28], count);
         hash.AppendData(header);
+    }
+
+    private static void AppendFullReplaceCount(IncrementalHash hash, int count)
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        BinaryPrimitives.WriteInt32LittleEndian(bytes, count);
+        hash.AppendData(bytes);
     }
 
     private static byte[] EncodeFullReplaceState(FullReplaceState state)
