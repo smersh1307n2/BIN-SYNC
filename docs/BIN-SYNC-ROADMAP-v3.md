@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest fully verified checkpoint: `8564f5eb3b9ef6478f6cc7c295fea84ac99509d3` — BinSync.Net Core 662/662, Fuzz/Lab workflow SUCCESS, Storage Integration 165/165 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, and stale reservation ACK/baseline retirement behavior. Newer commits `1ec26b8`, `25224f4`, `0ba5876` add author-epoch matching to the replacement-baseline proof and enforce bounded provider pages; exact-head CI is pending. Current branch HEAD: `0ba5876b70996aedf608e9c3993884614fa21693`; status: PREVIOUS CHECKPOINT GREEN, CURRENT HEAD UNVERIFIED.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` — BinSync.Net Core 662/662, Fuzz/Lab SUCCESS, Storage Integration 168/168 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, and field/record tombstone preservation. Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1`; status: GREEN.
 
 ## 1. Target architecture
 
@@ -23,10 +23,10 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Current branch HEAD: `0ba5876b70996aedf608e9c3993884614fa21693`.
-- Latest exact-code green checkpoint: `8564f5eb3b9ef6478f6cc7c295fea84ac99509d3` — Core 662/662; Fuzz/Lab SUCCESS; Storage Integration 165/165 on Ubuntu, Windows and macOS.
-- The three commits after that checkpoint (`1ec26b8`, `25224f4`, `0ba5876`) are awaiting exact-head CI; do not treat the prior green result as their verification.
-- Backup branches exist, including `backup/pre-autonomous-roadmap-v3-2026-11-08`, `backup/bin-sync-storage-gc-receipt-2026-11-08`, `backup/pre-final-bin-sync-storage-2026-11-08`, and `backup/post-storage-fault-injection-2026-11-08`.
+- Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1` (exact-head CI green).
+- BinSync.Net: Core 662/662; Fuzz/Lab SUCCESS; Storage Integration 168/168 on Ubuntu, Windows and macOS.
+- FLD-DB `fix/crash-consistency-outbox` HEAD: `1f5c2528767e575bfb925a19792c69b6ffb1027e` (not modified during this BIN-SYNC pass).
+- Backup branches verified in both repositories: `backup/pre-autonomous-roadmap-v3-2026-11-08`, `backup/bin-sync-storage-gc-receipt-2026-11-08`, `backup/pre-final-bin-sync-storage-2026-11-08`, `backup/post-storage-fault-injection-2026-11-08`.
 
 ### FLD-DB: fix/crash-consistency-outbox
 
@@ -92,7 +92,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [x] Conservative retired-transport-epoch receipt GC and PendingApply retirement guard exist in earlier Storage-backed implementation.
 - [x C] Retirement now blocks old PendingBatch reclamation unless the exact reservation is ACKed or the replacement baseline for the same author epoch covers `old StreamOffset + PendingBatch.CursorEnd`. Before the retired-through fence, a stale epoch may only resume/mark-pushed/ACK that exact reservation; it cannot reserve new data. Epoch-zero and cross-author-epoch baselines never discharge the reservation.
 - [x] Revalidated canonical v3 receipt identity. Old receipt key/value formats are rejected; v3 rows with unknown transport epoch are retained and never assigned guessed provenance.
-- [~ T] Added tests for short-baseline blocking, exact stale-epoch retry/ACK, replacement-baseline supersession, author-epoch mismatch, duplicate/retired epoch and reopen. Exact-head CI at `8564f5e` passed 165/165 on three OS; newer author-epoch guard test is pending CI.
+- [x T] Added tests for short-baseline blocking, exact stale-epoch retry/ACK, replacement-baseline supersession and author-epoch mismatch. Exact-head CI at `2f75b26` passed 168/168 on three OS. Atomic retirement transaction remains one commit; dedicated injected-crash-at-commit-boundary coverage remains a Phase T follow-up.
 
 #### 4.2 ChangeId ledger
 
@@ -107,9 +107,9 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 #### 4.3 Tombstone / ghost
 
 - [ ] Define signed authoritative FULL_REPLACE generation and roster certificate distinct from merge SNAPSHOT_CHUNK (requires a separately negotiated protocol revision; v3.0 wire must not grow unversioned messages).
-- [~ C] Provider `OpenSnapshot` captures the stable image and source feed watermark in one Storage snapshot; the full-replace digest binds the generation and watermark. Signed wire certificate and all-member binding remain blocked on the roster protocol revision.
+- [x C] Provider `OpenSnapshot` captures the stable image and source feed watermark in one Storage snapshot; the full-replace digest binds the generation and watermark. Signed wire certificate and all-member binding remain blocked on the roster protocol revision.
 - [ ] Require all roster members to install same or later generation/digest.
-- [~ C] `IProviderFullReplace` and `StorageDataProvider` stage generation-scoped rows, verify the canonical SHA-256 manifest in bounded scans, fence commit to the captured base generation, and atomically switch the active-generation pointer. Old generations are retained; physical reclamation remains blocked on cross-store safe-GC proof.
+- [x C] `IProviderFullReplace` and `StorageDataProvider` stage generation-scoped rows, verify the canonical SHA-256 manifest in bounded scans, fence commit to the captured base generation, and atomically switch the active-generation pointer. `FullReplaceDigestBuilder` streams canonical pages without full-image sorting/materialization; old generations are retained and physical reclamation remains blocked on cross-store safe-GC proof.
 - [ ] Persist forgotten deletion frontier before physical purge; fence old-generation deltas and force full rebootstrap.
 - [ ] Test field tombstone, record tombstone and ghost independently, including offline peers, alternate routes and crashes at every transition.
 - [ ] Keep tombstone/ghost GC disabled until complete proof passes.
@@ -432,3 +432,15 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Verified backup branches exist for both BIN-SYNC and FLD-DB; no backup branch was overwritten.
 - [~] Latest exact-head CI pending for `1ec26b8`, `25224f4`, `0ba5876`; prior exact green `8564f5e` was Core 662/662, Fuzz/Lab success, Storage Integration 165/165 on Ubuntu/Windows/macOS.
 - [ ] Signed namespace roster, all-member OriginSequence frontier, forgotten deletion checkpoint and tombstone/ghost GC remain disabled until the separate negotiated protocol revision and adversarial proof are complete.
+
+
+### 2026-11-08 — exact green checkpoint: streamed FULL_REPLACE and GC reservation proof
+
+- [x] Re-ran exact-head CI on `2f75b266c7c2d720d87b106573182393d5d15ea1`: Core 662/662; Fuzz/Lab SUCCESS; Storage Integration 168/168 on Ubuntu, Windows and macOS.
+- [x] Added `StorageDataProvider.FullReplaceDigestBuilder`: callers stream canonical snapshot pages; count is appended after the entry stream, so total count need not be known before the first page. The convenience helper remains for small/materialized images.
+- [x] Receiver verifies the full-replace digest with bounded 1024-row scans; staging/abort pages are capped at 4096. No full-image materialization during commit.
+- [x] Added field-tombstone and record-tombstone preservation coverage; fixed the fixture HLC so the record tombstone actually dominates the field write.
+- [x] Added author-epoch equality to replacement-baseline retirement proof; a higher cursor from a different author epoch cannot discharge an old reservation.
+- [x] Updated v3 spec, Public API and Data Provider Conformance docs with canonical RFC-4122 generation encoding, digest byte order, bounded page limits, caller safety obligations and old-generation retention.
+- [ ] Promote `FullReplaceDigestBuilder`/canonical ProviderMutation encoding to a Core-level shared codec before implementing the FLD-DB provider adapter; avoid coupling the FLD adapter to StorageDataProvider internals.
+- [ ] Implement signed namespace roster, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE installed ACKs in a separately negotiated v3.1 extension. Until then ChangeId and tombstone/ghost GC remain disabled.
