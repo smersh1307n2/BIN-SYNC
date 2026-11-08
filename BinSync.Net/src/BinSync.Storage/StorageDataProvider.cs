@@ -364,6 +364,27 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         IEnumerable<ProviderMutation> mutations)
         => ProviderFullReplaceDigest.Compute(generation, sourceChangeFeedWatermark, mutations);
 
+    public bool TryGetFullReplaceProgress(Guid generation, out ProviderFullReplaceProgress? progress)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (generation == Guid.Empty)
+                throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            using var snapshot = _storage.OpenSnapshot();
+            if (!snapshot.TryGet(FullReplaceSessionKey(generation), out var bytes))
+            {
+                progress = null;
+                return false;
+            }
+            FullReplaceState state = DecodeFullReplaceState(bytes!);
+            progress = new ProviderFullReplaceProgress(
+                generation, state.SourceFeedWatermark, state.ExpectedCount,
+                state.NextIndex, state.ExpectedDigest.ToArray(), state.IsCommitted);
+            return true;
+        }
+    }
+
     /// <summary>Start or idempotently resume staging one authoritative replacement generation.</summary>
     public void BeginFullReplace(Guid generation, ulong sourceChangeFeedWatermark,
         int expectedEntryCount, ReadOnlyMemory<byte> expectedDigest)
