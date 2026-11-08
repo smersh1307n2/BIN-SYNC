@@ -291,7 +291,7 @@ public class MetadataStoreMillionRowBench
     private StorageMetadataStore _store = null!;
     private long _nextId = 3_000_000;
 
-    [GlobalSetup]
+    [IterationSetup]
     public void Setup()
     {
         string directory = Path.Combine(Path.GetTempPath(),
@@ -321,7 +321,7 @@ public class MetadataStoreMillionRowBench
             throw new InvalidOperationException("Million-row benchmark setup did not seed one million ledger rows.");
     }
 
-    [GlobalCleanup]
+    [IterationCleanup]
     public void Cleanup() => _store.Dispose();
 
     [Benchmark(Description = "Freeze one local operation / 1,000,000 existing ledger rows")]
