@@ -11,4 +11,5 @@ public static class NamespaceGcFrames
     public const byte FullReplaceCommit = 0x19;
     public const byte FullReplaceAck = 0x1A;
     public const byte FullReplaceAbort = 0x1B;
+    public const byte FullReplaceReady = 0x1C;
 }
