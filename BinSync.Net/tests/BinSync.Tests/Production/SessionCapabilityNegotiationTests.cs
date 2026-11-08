@@ -1,37 +1,43 @@
-using BinSync;
 using Xunit;
 
-namespace BinSync.Tests;
+namespace BinSync.Tests.Production;
 
-public sealed class SessionCapabilityNegotiationTests
+public sealed class SessionProtocolMajorTests
 {
     [Fact]
-    public async Task Immutable_origin_provenance_is_negotiated_only_when_both_peers_advertise_it()
+    public void Hello_and_ack_round_trip_with_protocol_major_three()
     {
-        using var a = Fix.MakeNode(701);
-        using var b = Fix.MakeNode(702);
-        var (aPipe, bPipe) = PipeTransport.CreatePair();
-        var capability = SessionCapabilities.ImmutableOriginProvenance;
-        var accept = SyncSession.AcceptAsync(b, bPipe, caps: capability);
-        await using var client = await SyncSession.ConnectAsync(a, aPipe, caps: capability);
-        await using var server = await accept;
+        var hello = new HelloPayload(NodeId.From(Fix.Rid(1)), 7, SessionCapabilities.FlowControl);
+        Assert.Equal((ushort)3, SessionWire.ProtocolMajor);
+        Assert.Equal(hello, SessionWire.DecodeHello(SessionWire.EncodeHello(hello)));
+        Assert.Equal(hello, SessionWire.DecodeHelloAck(SessionWire.EncodeHelloAck(hello)));
+    }
 
-        Assert.True((client.NegotiatedCapabilities & capability) != 0);
-        Assert.True((server.NegotiatedCapabilities & capability) != 0);
+    [Theory]
+    [InlineData((ushort)2)]
+    [InlineData((ushort)4)]
+    public void Hello_and_ack_reject_other_protocol_majors(ushort major)
+    {
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHello(BuildControlFrame(
+            SessionWire.TypeHello, 1, major, includeMajor: true)));
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHelloAck(BuildControlFrame(
+            SessionWire.TypeHelloAck, 2, major, includeMajor: true)));
     }
 
     [Fact]
-    public async Task Immutable_origin_provenance_is_not_negotiated_for_a_legacy_peer()
+    public void V2_hello_payload_without_major_is_rejected()
     {
-        using var a = Fix.MakeNode(703);
-        using var b = Fix.MakeNode(704);
-        var (aPipe, bPipe) = PipeTransport.CreatePair();
-        var capability = SessionCapabilities.ImmutableOriginProvenance;
-        var accept = SyncSession.AcceptAsync(b, bPipe);
-        await using var client = await SyncSession.ConnectAsync(a, aPipe, caps: capability);
-        await using var server = await accept;
+        Assert.Throws<FrameException>(() => SessionWire.DecodeHello(BuildControlFrame(
+            SessionWire.TypeHello, 1, 2, includeMajor: false)));
+    }
 
-        Assert.Equal(SessionCapabilities.IncrementalAliasMap, client.NegotiatedCapabilities);
-        Assert.Equal(SessionCapabilities.IncrementalAliasMap, server.NegotiatedCapabilities);
+    private static byte[] BuildControlFrame(byte type, ulong sequence, ushort major, bool includeMajor)
+    {
+        var writer = new Writer(includeMajor ? 26 : 24);
+        writer.B128(NodeId.From(Fix.Rid(1))).U32(7);
+        if (includeMajor)
+            writer.U16(major);
+        writer.U32((uint)SessionCapabilities.FlowControl);
+        return FrameCodec.BuildFrame(type, SessionWire.ControlStreamId, sequence, writer.WrittenSpan);
     }
 }
