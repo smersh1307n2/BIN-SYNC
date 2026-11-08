@@ -967,7 +967,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static void ValidateGenerationEntry(Guid generation, StorageEntry entry, ProviderMutation mutation)
     {
         Span<byte> generationBytes = stackalloc byte[16];
-        generation.TryWriteBytes(generationBytes);
+        generation.TryWriteBytes(generationBytes, true, out _);
         if (entry.Key.Length < 17 || !entry.Key.AsSpan(1, 16).SequenceEqual(generationBytes))
             throw new InvalidDataException("Full-replace row belongs to a different generation.");
 
@@ -1073,7 +1073,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         byte[] key = new byte[33];
         key[0] = CurrentRecordTombstone;
-        generation.TryWriteBytes(key.AsSpan(1, 16));
+        generation.TryWriteBytes(key.AsSpan(1, 16), true, out _);
         recordId.WriteTo(key.AsSpan(17));
         return key;
     }
@@ -1097,7 +1097,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         if (!snapshot.TryGet([ActiveGeneration], out var value) || value!.Length != 16)
             throw new InvalidDataException("Storage Data Provider active generation marker is missing or malformed.");
-        return new Guid(value);
+        return new Guid(value!, true);
     }
 
     private static byte[] ChangeKey(ulong sequence)
