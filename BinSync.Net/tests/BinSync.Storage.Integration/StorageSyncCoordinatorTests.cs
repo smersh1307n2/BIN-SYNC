@@ -909,7 +909,7 @@ public sealed class StorageSyncCoordinatorTests
         ulong lease = metadata.AcquireOutboundLease("pending-coalesce-pages", node.NodeId, 1, node.NodeId,
             Guid.Parse("24000000-0000-0000-0000-000000000001"));
         var values = metadata.ReadOutbound("pending-coalesce-pages", node.NodeId, 1, node.NodeId, lease, 0, 10).Items
-            .Select(entry => Ops.DecodeOp(entry.Payload.AsSpan(16)).Op)
+            .Select(entry => Ops.DecodeOp(entry.Payload.AsSpan(16).ToArray()).Op)
             .OfType<OpFieldWrite>()
             .Select(operation => Encoding.UTF8.GetString(operation.Value))
             .ToArray();
