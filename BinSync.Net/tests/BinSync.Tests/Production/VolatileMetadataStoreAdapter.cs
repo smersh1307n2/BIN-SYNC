@@ -305,8 +305,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             return Array.Empty<MetadataOutboundItem>();
 
         var key = new OutboundKey(namespaceId, localAuthor);
-        var existing = new List<MetadataOutboundItem>(operations.Count);
-        int existingCount = 0;
+        var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
+        var newOperations = new List<MetadataFrozenOperation>(operations.Count);
         foreach (var operation in operations)
         {
             var changeKey = new OutboundChangeKey(namespaceId, operation.ChangeId);
@@ -324,48 +324,54 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 throw new InvalidDataException("Frozen outbound ChangeId is missing its global fingerprint.");
             }
 
-            if (!alreadyFrozen) continue;
+            if (!alreadyFrozen)
+            {
+                newOperations.Add(operation);
+                continue;
+            }
+
             if (!current.Outbound.TryGetValue(key, out var priorEntries))
                 throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
 
             var prior = priorEntries.FirstOrDefault(item => item.ChangeId == operation.ChangeId);
             if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload))
                 throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
-            existing.Add(CloneOutboundItem(prior));
-            existingCount++;
-        }
-
-        // A freeze retry is idempotent only when the complete original batch is
-        // present. A mixed old/new batch is ambiguous and must be retried as a whole.
-        if (existingCount != 0)
-        {
-            if (existingCount != operations.Count)
-                throw new InvalidDataException("Outbound freeze retry partially overlaps an earlier freeze.");
-            return existing;
+            existingByChangeId.Add(operation.ChangeId, CloneOutboundItem(prior));
         }
 
         var next = current.Clone();
-        if (!next.Outbound.TryGetValue(key, out var entries))
-        {
-            entries = new List<MetadataOutboundItem>();
-            next.Outbound.Add(key, entries);
-        }
+        var frozenByChangeId = new Dictionary<BatchId, MetadataOutboundItem>(operations.Count);
+        foreach (var existing in existingByChangeId)
+            frozenByChangeId.Add(existing.Key, existing.Value);
 
-        var frozen = new List<MetadataOutboundItem>(operations.Count);
-        foreach (var operation in operations)
+        if (newOperations.Count > 0)
         {
-            ulong previousHighWatermark = next.OutboundHighWatermarks.TryGetValue(key, out var outboundHighWatermark) ? outboundHighWatermark : 0;
-            ulong sequence = checked(previousHighWatermark + 1);
-            var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
-            entries.Add(item);
-            frozen.Add(CloneOutboundItem(item));
-            next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
-            next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId), operation.Fingerprint.ToArray());
-            next.OutboundHighWatermarks[key] = sequence;
+            if (!next.Outbound.TryGetValue(key, out var entries))
+            {
+                entries = new List<MetadataOutboundItem>();
+                next.Outbound.Add(key, entries);
+            }
+
+            foreach (var operation in newOperations)
+            {
+                ulong previousHighWatermark = next.OutboundHighWatermarks.TryGetValue(key, out var outboundHighWatermark)
+                    ? outboundHighWatermark
+                    : 0;
+                ulong sequence = checked(previousHighWatermark + 1);
+                var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
+                entries.Add(item);
+                next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
+                next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId), operation.Fingerprint.ToArray());
+                next.OutboundHighWatermarks[key] = sequence;
+                frozenByChangeId.Add(operation.ChangeId, item);
+            }
         }
 
         _partitions[partitionKey] = next;
-        return frozen;
+        var result = new MetadataOutboundItem[operations.Count];
+        for (int i = 0; i < operations.Count; i++)
+            result[i] = CloneOutboundItem(frozenByChangeId[operations[i].ChangeId]);
+        return result;
     }
 
     public ulong AcquireOutboundLease(
