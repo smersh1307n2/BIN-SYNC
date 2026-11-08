@@ -36,10 +36,10 @@ The receive cursor remains durable. If a new incarnation replays an already acce
 
 ### Limits of the current receipt GC
 
-- Receipts for the currently active transport epoch are retained; pruning them after a later same-stream batch is accepted is a possible optimization, but it needs an explicit proof that the sender durably committed the previous ACK and a fully author-scoped digest chain.
+- Receipts for the currently active transport epoch are retained; pruning them after a later same-stream batch is accepted is a possible optimization, but it needs an explicit proof that the sender durably committed the previous ACK and a sender/epoch/namespace digest chain, which is shared across the sender's author streams.
 - Legacy receipts with transport epoch zero are retained indefinitely.
 - CompletedPendingApply tokens are not deleted by this receipt GC; they have a separate idempotency role and need their own identity/horizon work.
-- Receive cursors and digest-chain checkpoints are retained. Do not delete them merely because receipts were removed.
+- Receive cursors remain author-scoped; the sender digest chain is intentionally shared across author streams for one sender/epoch/namespace. Both are retained. Do not delete either merely because receipts were removed.
 
 ## 3. ChangeId ledger GC: still disabled
 
