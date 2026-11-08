@@ -94,6 +94,8 @@ public sealed class MetadataIncomingBatch
     public required NodeId LocalReplica { get; init; }
     public required NodeId SenderPeer { get; init; }
     public required uint SenderEpoch { get; init; }
+    /// <summary>Authenticated transport peer session epoch; zero only for legacy callers without session context.</summary>
+    public uint TransportPeerEpoch { get; init; }
     /// <summary>Original author stream carried by this batch; cursors are independent per author.</summary>
     public NodeId AuthorStreamNodeId { get; init; }
     public required int NamespaceId { get; init; }
