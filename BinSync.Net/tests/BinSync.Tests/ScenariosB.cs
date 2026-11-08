@@ -95,6 +95,8 @@ public class ScenariosB
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
                 Payload = Ops.EncodeOp(obj),

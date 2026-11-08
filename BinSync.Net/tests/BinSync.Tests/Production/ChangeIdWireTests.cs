@@ -282,6 +282,8 @@ public class ChangeIdWireTests
             NamespaceId = 1,
             Seq = 1,
             ChangeId = changeId,
+            OriginAuthorEpoch = original.Entries[0].OriginAuthorEpoch,
+            OriginSequence = original.Entries[0].OriginSequence,
             RecordId = original.Entries[0].RecordId,
             OpKind = original.Entries[0].OpKind,
             Payload = Ops.EncodeOp(echoedOp, fullAuthor: true),
@@ -481,6 +483,8 @@ public class ChangeIdWireTests
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
                 Payload = e.Payload.ToArray(),
@@ -853,6 +857,7 @@ public class ChangeIdWireTests
             snapshot.Entries.Select(e => new OutboxEntry
             {
                 NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = default,
+                OriginAuthorEpoch = e.OriginAuthorEpoch, OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId, OpKind = e.OpKind, Payload = e.Payload,
                 AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
             }).ToList());
@@ -864,6 +869,7 @@ public class ChangeIdWireTests
         {
             NamespaceId = e.NamespaceId, Seq = e.Seq,
             ChangeId = i == 0 ? BatchId.From(Id(0x77)) : e.ChangeId,
+            OriginAuthorEpoch = e.OriginAuthorEpoch, OriginSequence = e.OriginSequence,
             RecordId = e.RecordId, OpKind = e.OpKind, Payload = e.Payload,
             AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
         }).ToList();
@@ -877,6 +883,7 @@ public class ChangeIdWireTests
         var duplicateEntries = snapshot.Entries.Select(e => new OutboxEntry
         {
             NamespaceId = e.NamespaceId, Seq = e.Seq, ChangeId = snapshot.Entries[0].ChangeId,
+            OriginAuthorEpoch = e.OriginAuthorEpoch, OriginSequence = e.OriginSequence,
             RecordId = e.RecordId, OpKind = e.OpKind, Payload = e.Payload,
             AuthorNodeId = e.AuthorNodeId, CreatedAt = e.CreatedAt
         }).ToList();

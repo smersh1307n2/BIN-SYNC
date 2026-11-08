@@ -450,6 +450,7 @@ public class WalTests
             var entry = new OutboxEntry
             {
                 NamespaceId = 1, Seq = 1, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+                OriginAuthorEpoch = 1, OriginSequence = 1,
                 RecordId = Fix.Rid(9201), OpKind = OpsConst.TagFieldWrite,
                 Payload = Ops.EncodeOp(op, fullAuthor: false), AuthorNodeId = node.NodeId,
                 CreatedAt = 100

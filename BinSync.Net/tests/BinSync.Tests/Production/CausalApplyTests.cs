@@ -365,6 +365,7 @@ public class CausalApplyTests
         {
             NamespaceId = 1,
             ChangeId = changeId,
+            OriginAuthorEpoch = 1, OriginSequence = 1,
             RecordId = Rid(1),
             Payload = Array.Empty<byte>(),
             AuthorNodeId = n.NodeId.ToArray(),
