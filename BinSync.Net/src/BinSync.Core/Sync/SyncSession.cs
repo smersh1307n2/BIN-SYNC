@@ -422,7 +422,7 @@ public partial class SyncSession : IAsyncDisposable
         _typedFragmentState.Clear();
         var disposedError = new ObjectDisposedException(nameof(SyncSession));
         foreach (var pending in _pendingAliasUpdates.Values)
-            pending.TrySetException(disposedError);
+            pending.Completion.TrySetException(disposedError);
         _receiveCts.Cancel();
         try
         {
