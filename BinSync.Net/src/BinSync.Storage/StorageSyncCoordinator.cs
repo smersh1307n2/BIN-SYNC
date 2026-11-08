@@ -150,6 +150,28 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>
+    /// Complete the receiver's mandatory post-FULL_REPLACE local refresh before it
+    /// publishes the installed ACK: advance HLC to the signed snapshot floor, rebuild
+    /// the Node cache from the newly committed provider generation, replay durable
+    /// PendingApply intents, and checkpoint the resulting Node state.
+    /// Pass this method as the receiver's (wall, logical) refresh callback.
+    /// </summary>
+    public void RefreshAfterFullReplace(
+        Action<Node> persistNode, ulong hlcWallFloor, uint hlcLogicalFloor)
+    {
+        ArgumentNullException.ThrowIfNull(persistNode);
+        lock (_gate)
+        {
+            _node.AdvanceClockToFloor(hlcWallFloor, hlcLogicalFloor);
+            InstallProviderSnapshot(persistNode);
+            HlcClockSnapshot clock = _node.ClockState;
+            if (clock.LastWall < hlcWallFloor ||
+                (clock.LastWall == hlcWallFloor && clock.LastLogical < hlcLogicalFloor))
+                throw new InvalidOperationException("Node HLC did not retain the installed FULL_REPLACE floor.");
+        }
+    }
+
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
     public int CompactChangeLedger(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
     {
