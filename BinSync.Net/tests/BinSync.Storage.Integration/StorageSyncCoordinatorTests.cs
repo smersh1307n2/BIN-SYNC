@@ -171,8 +171,12 @@ public sealed class StorageSyncCoordinatorTests
         using var sendCts = new CancellationTokenSource();
         using var receiveCts = new CancellationTokenSource();
         Task<BatchResult> firstReceive = acceptor.ReceiveBatchAsync(receiver,
-            beforeApply: (batch, payload, peer) =>
-                firstPlan = coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer),
+            beforeApply: null,
+            beforeApplyWithOperationDecisions: (batch, payload, peer) =>
+            {
+                firstPlan = coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
+                return firstPlan.ApplyOperations;
+            },
             beforeAck: (batch, _) =>
             {
                 var plan = firstPlan ?? throw new InvalidOperationException("Pending intent was not staged.");
