@@ -2990,6 +2990,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                             new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
                         state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId, default),
                             new ReceiveChainState(row.Value.AsSpan(8, 16).ToArray()));
+                        state.HasLegacyEncoding = true;
                     }
                     else
                     {
@@ -3178,6 +3179,54 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 default:
                     throw new InvalidDataException($"Unknown metadata storage key kind {kind}.");
             }
+        }
+
+        // Older stores kept one digest chain per sender/epoch/namespace while
+        // receive cursors were already author-scoped. Reconstruct the independent
+        // author chains from the latest durable receipt for each receive cursor.
+        // Without those receipts the prior digest cannot be assigned safely, so fail
+        // closed rather than letting one author's chain validate another author's data.
+        foreach (var legacyChain in state.ReceiveChains
+                     .Where(pair => pair.Key.AuthorStream.IsZero).ToArray())
+        {
+            var streams = state.Receives
+                .Where(pair => pair.Key.Sender == legacyChain.Key.Sender &&
+                    pair.Key.Epoch == legacyChain.Key.Epoch &&
+                    pair.Key.NamespaceId == legacyChain.Key.NamespaceId &&
+                    !pair.Key.AuthorStream.IsZero && pair.Value.CursorEnd != 0)
+                .ToArray();
+            if (streams.Length == 0)
+                continue;
+
+            var latestDigests = new List<byte[]>();
+            foreach (var stream in streams)
+            {
+                var receipts = state.Receipts
+                    .Where(pair => pair.Key.Sender == legacyChain.Key.Sender &&
+                        pair.Key.Epoch == legacyChain.Key.Epoch &&
+                        pair.Key.NamespaceId == legacyChain.Key.NamespaceId &&
+                        pair.Value.DurableAuthor == stream.Key.AuthorStream &&
+                        pair.Value.CursorEnd == stream.Value.CursorEnd)
+                    .Select(pair => pair.Value)
+                    .ToArray();
+                if (receipts.Length == 0)
+                    throw new InvalidDataException(
+                        "Legacy shared receive digest chain cannot be migrated: latest author receipt is missing.");
+                byte[] digest = receipts[0].BatchDigest;
+                if (receipts.Any(receipt => !receipt.BatchDigest.AsSpan().SequenceEqual(digest)))
+                    throw new InvalidDataException(
+                        "Legacy shared receive digest chain has conflicting latest receipts for one author stream.");
+                var authorChainKey = new ReceiveChainKey(legacyChain.Key.Sender,
+                    legacyChain.Key.Epoch, legacyChain.Key.NamespaceId, stream.Key.AuthorStream);
+                state.ReceiveChains[authorChainKey] = new ReceiveChainState(digest.ToArray());
+                latestDigests.Add(digest);
+            }
+
+            if (!latestDigests.Any(digest => digest.AsSpan().SequenceEqual(legacyChain.Value.LastBatchDigest)))
+                throw new InvalidDataException(
+                    "Legacy shared receive digest chain does not match any author's latest durable receipt.");
+            state.ReceiveChains.Remove(legacyChain.Key);
+            state.HasLegacyEncoding = true;
         }
 
         if (!identitySeen)
