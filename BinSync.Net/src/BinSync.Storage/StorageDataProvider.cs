@@ -570,28 +570,36 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
     /// <summary>Discard an uncommitted staged generation without changing active application state.</summary>
-    public void AbortFullReplace(Guid generation)
+    public bool AbortFullReplace(Guid generation, int limit)
     {
         lock (_gate)
         {
             ThrowIfDisposed();
             if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
             if (ReadActiveGeneration(_storage) == generation)
                 throw new InvalidOperationException("The active full-replace generation cannot be aborted.");
             using var snapshot = _storage.OpenSnapshot();
             byte[] sessionKey = FullReplaceSessionKey(generation);
-            if (!snapshot.TryGet(sessionKey, out var stateBytes)) return;
+            if (!snapshot.TryGet(sessionKey, out var stateBytes)) return true;
             if (DecodeFullReplaceState(stateBytes!).IsCommitted)
                 throw new InvalidOperationException("Committed full-replace generation cannot be aborted.");
-            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
-            var tombstones = snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
+
+            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, limit);
+            int remaining = limit - fields.Count;
+            var tombstones = remaining > 0
+                ? snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, remaining)
+                : Array.Empty<StorageEntry>();
+            bool complete = fields.Count < limit && tombstones.Count < remaining;
+
             using var batch = _storage.BeginWriteBatch();
             foreach (var row in fields) batch.Delete(row.Key);
             foreach (var row in tombstones) batch.Delete(row.Key);
-            batch.Delete(sessionKey);
+            if (complete) batch.Delete(sessionKey);
             if (_storage.LastCommitSeq != snapshot.CommitSeq)
                 throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
             batch.Commit();
+            return complete;
         }
     }
 
