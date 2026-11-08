@@ -471,6 +471,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         string directory = Path.Combine(_root, "cross-process-wal-writer-fence");
         Directory.CreateDirectory(directory);
         string readyPath = Path.Combine(directory, "child-ready");
+        string releasePath = Path.Combine(directory, "child-release");
         string? projectDirectory = AppContext.BaseDirectory;
         while (projectDirectory is not null &&
                !File.Exists(Path.Combine(projectDirectory, "BinSync.Storage.Integration.csproj")))
@@ -498,6 +499,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         start.ArgumentList.Add("FullyQualifiedName~Wal_writer_fence_child_process_probe");
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_DIR"] = directory;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_READY"] = readyPath;
+        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
 
         try
         {
@@ -517,6 +519,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             }
 
             Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 88));
+            File.WriteAllText(releasePath, "release");
             try
             {
                 await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -542,7 +545,9 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     {
         string? directory = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_DIR");
         string? readyPath = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_READY");
-        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(readyPath))
+        string? releasePath = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_RELEASE");
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(readyPath) ||
+            string.IsNullOrWhiteSpace(releasePath))
             return;
 
         using var storage = StorageDatabase.Open(directory, 88);
@@ -552,6 +557,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             batch.Commit();
         }
         File.WriteAllText(readyPath, "ready");
+        while (!File.Exists(releasePath))
+            Thread.Sleep(10);
         Environment.Exit(0);
     }
 
