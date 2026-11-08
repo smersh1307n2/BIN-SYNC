@@ -2588,7 +2588,8 @@ public sealed class StorageSyncCoordinatorTests
                 RecordId = record, FieldId = field, AuthorNodeId = node.NodeId,
                 HlcWall = field, Value = new byte[] { (byte)field }
             });
-        inner.AcknowledgeLocalChanges(inner.LocalChangeHighWatermark);
+        var seedPage = inner.ReadLocalChanges(0, 16);
+        inner.AcknowledgeLocalChanges(seedPage.ScannedThroughSequence);
         using var provider = new FailOnceAcknowledgeProvider(inner);
 
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
