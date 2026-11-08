@@ -54,6 +54,8 @@ A feed consumer must be able to:
 
 The provider's feed token is not a BIN-SYNC author OutboxSeq, peer StreamOffset, HLC, WAL CommitSeq or Storage CommitSeq. Translation is explicit at the adapter/runtime boundary.
 
+Each `ProviderChange` also carries a stable, non-zero 128-bit `ChangeId`. The provider-local `Sequence` is only the feed cursor; it is not the protocol Outbox sequence. The same feed entry must return the same `ChangeId` after repeated reads and process reopen. `StorageDataProvider` stores the identity as a 16-byte suffix in the existing local-feed row, so it adds no second metadata row and is removed automatically when that feed row is acknowledged. Legacy feed rows without the suffix are upgraded on first read by atomically appending a generated identity and advancing the read watermark. A malformed or zero stored identity fails closed. Metadata-Store-owned outbound publication will require this identity; volatile/legacy providers may still expose zero until they implement the durable identity contract.
+
 For state-only providers with no durable feed, snapshot comparison can preserve final-state LWW differences only. It cannot preserve intermediate events or local operations overwritten before observation. That limitation must be an explicit provider capability, not silently presented as event-history synchronization.
 
 ## 4. Snapshot and feed barrier
