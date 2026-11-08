@@ -23,7 +23,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private const byte ProviderPublicationMode = 0x24;
     private const byte ApplyReceipt = 0x30;
 
-    private readonly object _gate = new();
+    private readonly object _gate;
     private readonly StorageDatabase _storage;
     private readonly string? _directory;
     private readonly bool _deleteOnDispose;
@@ -38,12 +38,14 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         _deleteOnDispose = deleteOnDispose;
         _ownsStorage = true;
         _storage = StorageDatabase.Open(directory, partitionId);
+        _gate = StorageDatabaseTransactionGate.For(_storage);
     }
 
     /// <summary>Attach to a caller-owned shared Storage database.</summary>
     public StorageDataProvider(StorageDatabase storage)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _gate = StorageDatabaseTransactionGate.For(_storage);
         _ownsStorage = false;
         _deleteOnDispose = false;
     }
