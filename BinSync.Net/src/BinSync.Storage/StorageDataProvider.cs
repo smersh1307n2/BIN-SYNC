@@ -1003,7 +1003,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         if (bytes.Length < 69)
             throw new InvalidDataException("Stored v3 provider local feed mutation or ChangeId is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49, 4));
-        if (valueLength > int.MaxValue)
+        if (valueLength > int.MaxValue - 81)
             throw new InvalidDataException("Stored provider local feed value length is invalid.");
         int legacyMutationLength = checked(53 + (int)valueLength);
         int currentMutationLength = checked(81 + (int)valueLength);
