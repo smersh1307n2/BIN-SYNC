@@ -2059,6 +2059,7 @@ public sealed class StorageSyncCoordinatorTests
 
 
     [Theory]
+    [InlineData("after-pending-apply")]
     [InlineData("after-node-checkpoint")]
     [InlineData("after-provider-commit")]
     public async Task Process_kill_at_receive_durability_cut_recovers_pending_apply_and_provider_state(string crashCut)
@@ -2139,8 +2140,10 @@ public sealed class StorageSyncCoordinatorTests
 
             Assert.Single(metadata.ReadPendingApplyIntents(scope, receiverId));
             RecordId record = RecordId.From(Guid.Parse("7a000000-0000-0000-0000-00000000007a").ToByteArray());
-            Assert.True(receiver.TryGetField(1, record, 0x087a, out var checkpointed));
-            Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(checkpointed!.Value));
+            bool nodeAlreadyCheckpointed = receiver.TryGetField(1, record, 0x087a, out var checkpointed);
+            Assert.Equal(crashCut != "after-pending-apply", nodeAlreadyCheckpointed);
+            if (nodeAlreadyCheckpointed)
+                Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(checkpointed!.Value));
             bool providerAlreadyCommitted = provider.TryReadCurrent(record, 0x087a, out var providerBeforeRecovery);
             Assert.Equal(crashCut == "after-provider-commit", providerAlreadyCommitted);
             if (providerAlreadyCommitted)
@@ -2207,14 +2210,32 @@ public sealed class StorageSyncCoordinatorTests
             Encoding.UTF8.GetBytes("crash-cut-" + crashCut), new Hlc(8700, 0)));
 
         var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
-        Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, node =>
+        if (crashCut == "after-pending-apply")
         {
-            StorageNodePersistence.Save(storage, node);
-            if (crashCut == "after-node-checkpoint")
-                signalAndBlock();
-        });
-        Task<bool> send = initiator.PushBatchAsync(sender, 1);
-        await Task.WhenAll(receive, send);
+            Task<BatchResult> receiveBeforeNodeApply = acceptor.ReceiveBatchAsync(receiver,
+                beforeApply: null,
+                beforeApplyWithOperationDecisions: (batch, payload, peer) =>
+                {
+                    var plan = coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
+                    signalAndBlock();
+                    return plan.ApplyOperations;
+                },
+                beforeAck: null,
+                receiveStateOwnedByMetadataStore: true);
+            Task<bool> sendBeforeNodeApply = initiator.PushBatchAsync(sender, 1);
+            await Task.WhenAll(receiveBeforeNodeApply, sendBeforeNodeApply);
+        }
+        else
+        {
+            Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, node =>
+            {
+                StorageNodePersistence.Save(storage, node);
+                if (crashCut == "after-node-checkpoint")
+                    signalAndBlock();
+            });
+            Task<bool> send = initiator.PushBatchAsync(sender, 1);
+            await Task.WhenAll(receive, send);
+        }
     }
 
     private static Node NewNode(byte seed)
