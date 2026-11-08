@@ -68,11 +68,11 @@ The existing `MEMBERSHIP` frame remains advisory gossip. It is not a signed rost
 
 All integer fields are little-endian unless explicitly stated. NodeIds and Ed25519 keys have fixed lengths. Lists are strictly sorted and unique. Every signed payload uses a domain-separation prefix and rejects trailing bytes.
 
-### 4.1 NamespaceRosterCertificate (`NRS1`)
+### 4.1 NamespaceRosterCertificate (`NRS2`)
 
 Canonical payload before signature:
 
-- magic `NRS1`;
+- magic `NRS2`;
 - NamespaceId u16;
 - RosterGeneration u64;
 - PreviousRosterDigest[32];
@@ -84,7 +84,7 @@ Canonical payload before signature:
   - TransportPeerEpoch u32;
   - Status u8: Joining=0, Active=1, Retired=2;
   - RetiredThroughEpoch u32 (zero unless Retired);
-- Ed25519 signature[64] by the pinned Namespace Authority over `BIN-SYNC/NAMESPACE-ROSTER/v1 || canonical-payload`.
+- Ed25519 signature[64] by the pinned Namespace Authority over `BIN-SYNC/NAMESPACE-ROSTER/v2 || canonical-payload`.
 
 RosterDigest is SHA-256 of the canonical payload including the domain prefix but excluding the signature.
 
@@ -99,25 +99,30 @@ Validation:
 
 Joining members contribute frontier zero. They cannot become Active until the current authoritative FULL_REPLACE generation is installed and acknowledged.
 
-### 4.2 AppliedOriginFrontier (`OFR1`)
+### 4.2 AppliedOriginFrontier (`OFR2`)
 
 A member signs a bounded vector of contiguous, durably applied origin prefixes:
 
-- magic `OFR1`;
+- magic `OFR2`;
 - NamespaceId u16;
 - RosterGeneration u64;
 - RosterDigest[32];
 - MemberNodeId[16];
 - MemberTransportEpoch u32;
 - ReportSequence u64;
+- FinalForAuthor u8 (0/1);
+- UnpublishedDraftCount u64;
+- MaxUnpublishedDraftHlcWall u64;
+- MaxUnpublishedDraftHlcLogical u32;
 - EntryCount u16;
 - entries sorted by (OriginAuthorNodeId, OriginAuthorEpoch):
   - OriginAuthorNodeId[16];
   - OriginAuthorEpoch u32;
   - ContiguousAppliedOriginSequence u64;
-- Ed25519 signature[64] by the member key bound in the accepted roster over `BIN-SYNC/APPLIED-ORIGIN-FRONTIER/v1 || canonical-payload`.
+- IssuedOriginCount u16 followed by entries sorted by OriginAuthorEpoch: OriginAuthorEpoch u32, IssuedOriginSequence u64, MaxIssuedHlcWall u64, MaxIssuedHlcLogical u32;
+- Ed25519 signature[64] by the member key bound in the accepted roster over `BIN-SYNC/APPLIED-ORIGIN-FRONTIER/v2 || canonical-payload`.
 
-A frontier is an assertion that every operation in that origin stream through the sequence has been durably applied, not merely received. The member must persist the application before signing. Missing author entries mean zero. Reports must be monotonic; regression, wrong roster generation, wrong member epoch or unknown member key is rejected.
+A frontier is an assertion that every operation in that origin stream through the sequence has been durably applied, not merely received. The member must persist the application before signing. Missing author entries mean zero. Reports must be monotonic; regression, wrong roster generation, wrong member epoch or unknown member key is rejected. A member's IssuedOrigins must cover every locally-authored applied epoch and cannot be below its own applied frontier. A final report requires zero unpublished drafts and is terminal.
 
 ### 4.3 RetentionCheckpoint (`RCP2`)
 
@@ -134,8 +139,8 @@ The Namespace Authority verifies member signatures and computes a signed namespa
   - OriginAuthorNodeId[16];
   - OriginAuthorEpoch u32;
   - SafeAppliedOriginSequence u64;
-- optional fully-installed FULL_REPLACE generation[16 RFC-4122 network order] and digest[32];
-- Ed25519 signature[64] by the pinned authority over `BIN-SYNC/RETENTION-CHECKPOINT/v1 || canonical-payload`.
+- optional fully-installed FULL_REPLACE generation[16 RFC-4122 network order], digest[32], HlcWallFloor u64 and HlcLogicalFloor u32;
+- Ed25519 signature[64] by the pinned authority over `BIN-SYNC/RETENTION-CHECKPOINT/v2 || canonical-payload`.
 
 For each origin author/epoch, SafeAppliedOriginSequence is the minimum contiguous frontier across **every Active member in the roster generation**. Joining or missing reports contribute zero. The checkpoint is persisted atomically with the accepted roster generation and cannot regress.
 
@@ -375,7 +380,7 @@ All physical compaction gates are currently false. In addition to the signed ori
 
 ## 10.11. Member applied-origin frontier and authority checkpoint production
 
-`StorageSyncCoordinator.PublishAppliedOriginFrontier(memberSeed)` produces the local Active member's signed OFR1 report from immutable origin identities in the durable Metadata Store ChangeId ledger only. Unpublished provider-feed drafts are excluded: they have no OriginSequence yet. For each `(OriginAuthorNodeId, OriginAuthorEpoch)`, the report advances only through the contiguous prefix after the prior durable report; gaps stop advancement. The report is signed with the member key and persisted by `StorageNamespaceGcStore.AcceptOriginFrontier`.
+`StorageSyncCoordinator.PublishAppliedOriginFrontier(memberSeed)` produces the local Active member's signed OFR2 report from immutable origin identities in the durable Metadata Store ChangeId ledger only. Unpublished provider-feed drafts are excluded: they have no OriginSequence yet. For each `(OriginAuthorNodeId, OriginAuthorEpoch)`, the report advances only through the contiguous prefix after the prior durable report; gaps stop advancement. The report is signed with the member key and persisted by `StorageNamespaceGcStore.AcceptOriginFrontier`.
 
 `StorageSyncCoordinator.PublishRetentionCheckpoint(authoritySeed, fullReplaceGeneration?, fullReplaceDigest?)` reads the latest durable reports and builds RCP2 using the minimum contiguous applied sequence across every Active member. A missing Active-member report conservatively prevents a safe frontier for that origin. Optional FULL_REPLACE binding is accepted only after every Active member's signed installed ACK is durable. The checkpoint is authority-signed and persisted with the existing monotonic sequence/digest-chain checks.
 
@@ -399,7 +404,7 @@ FRA2 extends the signed installed ACK with `HlcWallFloor[LE u64]` and `HlcLogica
 
 RCP2 binds `FullReplaceGeneration`, `FullReplaceDigest`, `FullReplaceHlcWallFloor` and `FullReplaceHlcLogicalFloor` in the authority-signed checkpoint payload. `StorageSyncCoordinator.PublishRetentionCheckpoint` requires every Active member's durable installed ACK for that exact generation/digest and requires all ACKs to report the same HLC floor before creating the checkpoint. Checkpoints without a FULL_REPLACE binding must carry zero floor fields. RCP1/FRA1 are not accepted as fallback encodings.
 
-This closes the FULL_REPLACE HLC-floor transport/persistence gap, but it does not complete the global tombstone horizon: author-issued high-watermarks and retired-origin closure remain open. Tombstone/ghost physical GC remains disabled.
+This closes the FULL_REPLACE HLC-floor transport/persistence gap. The subsequent OFR2/NRS2 extension now carries author-issued high-watermarks and retired-origin closure; physical tombstone/ghost GC remains disabled until cross-store live-reference scans and adversarial T-pass proof are complete.
 
 
 ## 10.15. OFR2/NRS2 author closure and complete-issued horizon
@@ -416,4 +421,11 @@ NRS2 carries `RetiredOriginEpochs[]`, each with author, epoch, final issued sequ
 
 Retention checkpoint derivation is conservative: for an Active author it uses that author's signed issued high-watermark; for a Retired author it uses the NRS2 closure. An origin enters the safe frontier only when every Active member's signed applied frontier covers the entire final issued sequence. A FULL_REPLACE-bound RCP2 checkpoint additionally requires a report from every Active member with zero unpublished drafts and an installed FRA2 ACK from every Active member. The shared HLC floor must cover the maximum HLC of every issued author epoch. This closes the author-issued/retired-origin and pending-draft gaps in the causal horizon.
 
-`StorageSyncCoordinator.AcquireApplicationCommitGuard()` acquires locks in coordinator→provider order. Final-author report creation holds this lease; the FULL_REPLACE receiver must receive `coordinator.AcquireApplicationCommitGuard` as its commit-guard factory. The receiver checks that the local provider feed is empty while the lease is held, then switches generation and runs the HLC refresh callback before ACK. Use the same lease together with the host's WAL/FLD lock for local GC calls. The receiver refuses to switch generations while local provider feed drafts remain. The physical GC feature flags remain false until the remaining cross-store live-reference scan and adversarial T-pass proof are complete.
+`StorageSyncCoordinator.AcquireApplicationCommitGuard()` acquires locks in coordinator→Node Storage→Outbox→Meta→provider/shared-Storage order, and rejects a durable Metadata Store/Data Provider pair that do not share one StorageDatabase. Final-author report creation holds this lease; the FULL_REPLACE receiver must receive `coordinator.AcquireApplicationCommitGuard` as its commit-guard factory. The receiver checks that the local provider feed is empty while the lease is held, then switches generation and runs the HLC refresh callback before ACK. Use the same lease together with the host's WAL/FLD lock for local GC calls. The receiver refuses to switch generations while local provider feed drafts remain. The physical GC feature flags remain false until the remaining cross-store live-reference scan and adversarial T-pass proof are complete.
+
+
+## 10.16. OFR2 decoder and Node-inclusive application barrier (2026-11-09)
+
+The OFR2 decoder reads and preserves the final-author flag, unpublished-draft count and maximum draft HLC before the applied-entry vector. These fields are part of the signed payload and are not advisory metadata; dropping or misaligning them changes the interpretation of all following lengths and can turn a valid report into trailing-byte rejection. A final report cannot carry pending drafts, and an empty draft set has a zero maximum HLC.
+
+The application commit barrier now holds the coordinator gate, all Node gates in their documented Storage→Outbox→Meta order, and the provider's shared Storage transaction gate. The durable Metadata Store and Data Provider must use the same StorageDatabase or guard acquisition fails closed. `StorageNodePersistence.Save` follows the same Node-before-Storage lock order to avoid inversion. A host must still compose its WAL/FLD transaction lock if it is outside this shared database. These changes provide exclusion, not a cross-store atomic transaction; physical GC remains disabled until host-owned live references are included in the lease.
