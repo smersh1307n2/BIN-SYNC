@@ -197,7 +197,7 @@ public static class SessionWire
         if (hasEntry && (entry.Alias == 0 || entry.NodeId.IsZero || entry.Epoch < 0))
             throw new ArgumentException("Invalid incremental alias binding.", nameof(entry));
 
-        byte[] payload = new byte[hasEntry ? 30 + (kind == AliasMapUpdateResponse ? 1 : 0) : 8];
+        byte[] payload = new byte[6 + (kind == AliasMapUpdateResponse ? 1 : 0) + 1 + (hasEntry ? 22 : 0)];
         payload[0] = AliasMapUpdateMagic;
         payload[1] = kind;
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2), requestId);
