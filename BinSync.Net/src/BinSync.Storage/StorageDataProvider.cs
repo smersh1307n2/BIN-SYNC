@@ -1028,6 +1028,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         {
             if (_disposed) return;
             _disposed = true;
+            foreach (ProviderSnapshotState snapshot in _snapshots.Values)
+                snapshot.Dispose();
             _snapshots.Clear();
             if (_ownsStorage) _storage.Dispose();
             if (_deleteOnDispose && _directory is { } directory)
