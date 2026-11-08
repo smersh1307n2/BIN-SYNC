@@ -28,9 +28,13 @@ permissions:
 
 jobs:
   test:
-    name: durable provider integration (.NET 10)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: durable provider integration (.NET 10) (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -52,6 +56,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: binsync-fld-storage-integration
+          name: binsync-fld-storage-integration-${{ matrix.os }}
           path: "**/TestResults/*.trx"
           if-no-files-found: ignore
