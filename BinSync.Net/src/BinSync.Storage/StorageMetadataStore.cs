@@ -18,6 +18,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private readonly string? _directory;
     private readonly bool _deleteOnDispose;
     private readonly bool _ownsStorage;
+    private StorageNamespaceGcStore? _namespaceGcStore;
+    private TrustStore? _namespaceGcTrustStore;
     private bool _disposed;
 
     public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = false)
@@ -37,6 +39,64 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         _gate = StorageDatabaseTransactionGate.For(_storage);
     }
 
+    /// <summary>
+    /// Attach the signed namespace retention checkpoint guard. The GC store must share
+    /// this exact StorageDatabase so replay checks and metadata commits serialize on
+    /// the same transaction gate.
+    /// </summary>
+    public void AttachNamespaceGcGuard(StorageNamespaceGcStore gcStore, TrustStore trustStore)
+    {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        if (!gcStore.IsBoundTo(_storage))
+            throw new ArgumentException("Namespace GC state must share the Metadata Store StorageDatabase.", nameof(gcStore));
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_namespaceGcStore is not null &&
+                (!ReferenceEquals(_namespaceGcStore, gcStore) ||
+                 !ReferenceEquals(_namespaceGcTrustStore, trustStore)))
+                throw new InvalidOperationException("Namespace GC replay guard cannot be replaced after attachment.");
+            _namespaceGcStore = gcStore;
+            _namespaceGcTrustStore = trustStore;
+        }
+    }
+
+    private void RejectForgottenOrigins(PartitionState state, MetadataIncomingBatch batch)
+    {
+        StorageNamespaceGcStore? gcStore = _namespaceGcStore;
+        TrustStore? trustStore = _namespaceGcTrustStore;
+        if (gcStore is null || trustStore is null)
+            return;
+
+        var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, batch.BatchId);
+        if (state.Receipts.TryGetValue(receiptKey, out ReceiptValue? receipt))
+        {
+            if (!receipt.Matches(batch))
+                throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
+            return;
+        }
+
+        if (!gcStore.TryReadNamespaceRoster(batch.NamespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+            roster is null)
+            return;
+
+        foreach (MetadataOperation operation in batch.Operations)
+        {
+            if (state.ChangeLedger.ContainsKey(new LedgerKey(batch.NamespaceId, operation.ChangeId)))
+                continue;
+            if (operation.AuthorNodeId.IsZero || operation.OriginAuthorEpoch == 0 ||
+                operation.OriginSequence == 0)
+                continue;
+            if (gcStore.IsOriginCoveredByRetentionCheckpoint(
+                    roster, trustStore, operation.AuthorNodeId,
+                    operation.OriginAuthorEpoch, operation.OriginSequence))
+                throw new InvalidDataException(
+                    "Incoming operation has no retained ChangeId receipt but its origin is below the signed retention frontier; stale replay is rejected.");
+        }
+    }
+
     public bool SupportsRestartDurability => true;
 
     public MetadataBatchReceipt AcceptIncomingBatch(MetadataIncomingBatch batch)
@@ -50,6 +110,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
         ValidateIncomingTransportPeerEpoch(current, batch);
+        RejectForgottenOrigins(current, batch);
         _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
         return AcceptIncomingBatchDelta(partitionKey, current, batch);
     
@@ -73,6 +134,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         bool hasPriorReceipt = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
         if (hasPriorReceipt && !priorReceipt!.Matches(batch))
             throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
+        RejectForgottenOrigins(current, batch);
 
         if (current.CompletedPendingApplies.TryGetValue(applyToken, out var completed))
         {
@@ -165,6 +227,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             throw new InvalidOperationException("Pending apply intent does not exist.");
         if (!pending.Batch.BatchDigest.AsSpan().SequenceEqual(providerReceipt.BatchDigest))
             throw new InvalidDataException("Provider receipt does not match the pending apply input.");
+        RejectForgottenOrigins(current, pending.Batch);
 
         // Finalization is a hot durability boundary. Do not clone and re-encode the
         // entire partition here: a single incoming batch must write only its receipt,
