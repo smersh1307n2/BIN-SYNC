@@ -453,18 +453,21 @@ public class ChangeIdWireTests
     public void ChangeId_ledger_fingerprint_binds_the_immutable_origin_tuple()
     {
         NodeId author = NodeId.From(Fix.Rid(10));
-        var semantic = ChangeIdentity.Fingerprint(7, RecordId.From(Fix.Rid(1)), 1,
-            new OpFieldWrite
-            {
-                FieldId = 0x0100, KeyEpoch = 0, Wall = 100, Logical = 0,
-                Origin = 1, Value = new byte[] { 0x73, 0x61, 0x6D, 0x65 }
-            }, author);
-
-        var original = ChangeIdentity.BindOrigin(semantic, author, 3, 41);
-        Assert.Equal(original, ChangeIdentity.BindOrigin(semantic, author, 3, 41));
-        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, author, 3, 42));
-        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, author, 4, 41));
-        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, NodeId.From(Fix.Rid(11)), 3, 41));
+        var operation = new OpFieldWrite
+        {
+            FieldId = 0x0100, KeyEpoch = 0, Wall = 100, Logical = 0,
+            Origin = 1, Value = new byte[] { 0x73, 0x61, 0x6D, 0x65 }
+        };
+        var original = ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
+            operation, author, 3, 41);
+        Assert.Equal(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
+            operation, author, 3, 41));
+        Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
+            operation, author, 3, 42));
+        Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
+            operation, author, 4, 41));
+        Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
+            operation, NodeId.From(Fix.Rid(11)), 3, 41));
     }
 
     [Fact]
