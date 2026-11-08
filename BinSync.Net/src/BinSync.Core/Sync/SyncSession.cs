@@ -65,6 +65,11 @@ public partial class SyncSession : IAsyncDisposable
     private bool _rawReceiveActive;
     private bool _receiveCompleted;
     private Exception? _receiveFailure;
+    private readonly Node _localNode;
+    private readonly SemaphoreSlim _aliasUpdateGate = new(1, 1);
+    private readonly ConcurrentDictionary<uint, TaskCompletionSource<SessionWire.AliasMapUpdate>> _pendingAliasUpdates = new();
+    private readonly Task _aliasUpdatePump;
+    private int _aliasUpdateRequestId;
     /// <summary>Remote peer identity established by HELLO.</summary>
     public NodeId PeerNodeId { get; }
     /// <summary>Peer incarnation epoch established by HELLO.</summary>
@@ -72,8 +77,9 @@ public partial class SyncSession : IAsyncDisposable
     /// <summary>Capabilities advertised by the peer.</summary>
     public SessionCapabilities PeerCapabilities { get; }
 
-    protected SyncSession(ISyncTransport transport, HelloPayload peer, SessionCapabilities localCapabilities, bool ownsTransport, IDisposable sessionLease)
+    protected SyncSession(Node localNode, ISyncTransport transport, HelloPayload peer, SessionCapabilities localCapabilities, bool ownsTransport, IDisposable sessionLease)
     {
+        _localNode = localNode ?? throw new ArgumentNullException(nameof(localNode));
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _ownsTransport = ownsTransport;
         _sessionLease = sessionLease ?? throw new ArgumentNullException(nameof(sessionLease));
@@ -82,6 +88,7 @@ public partial class SyncSession : IAsyncDisposable
         PeerCapabilities = peer.Capabilities;
         _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
+        _aliasUpdatePump = ProcessAliasUpdatesAsync(_receiveCts.Token);
     }
 
     /// <summary>Establish as initiator; local NodeId must be lower than the peer NodeId.</summary>
@@ -96,7 +103,7 @@ public partial class SyncSession : IAsyncDisposable
             EnsureTransportCapabilities(transport);
             var handshake = await InitiateAsync(local, transport, caps, ct).ConfigureAwait(false);
             lease = handshake.Lease;
-            var session = new SyncSession(transport, handshake.Peer, caps, ownsTransport, lease);
+            var session = new SyncSession(local, transport, handshake.Peer, caps, ownsTransport, lease);
             lease = null;
             return session;
         }
@@ -183,7 +190,7 @@ public partial class SyncSession : IAsyncDisposable
                 local.CommitSession(peer.NodeId, peer.Epoch, merged);
             }
 
-            var session = new SyncSession(transport, peer, caps, ownsTransport, lease!);
+            var session = new SyncSession(local, transport, peer, caps, ownsTransport, lease!);
             lease = null;
             return session;
         }
@@ -418,12 +425,145 @@ public partial class SyncSession : IAsyncDisposable
                 try { await pump.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
             }
+            try { await _aliasUpdatePump.ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
             if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
             Interlocked.Exchange(ref _sessionLease, null)?.Dispose();
             _receiveCts.Dispose();
+        }
+    }
+
+    private async Task EnsureRemoteAliasesAsync(CancellationToken ct)
+    {
+        foreach (var author in _localNode.DurableAuthorsSnapshot()
+                     .OrderBy(item => Convert.ToHexString(item.Key.ToArray()), StringComparer.Ordinal))
+        {
+            if (author.Key == _localNode.NodeId || author.Key == PeerNodeId) continue;
+            await EnsureRemoteAliasAsync(author.Key, author.Value, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task EnsureRemoteAliasAsync(NodeId author, int epoch, CancellationToken ct)
+    {
+        await _aliasUpdateGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            AliasMapEntry? proposal = _localNode.CreateAliasMapProposal(PeerNodeId, author, epoch);
+            if (proposal is null) return;
+
+            uint requestId = unchecked((uint)Interlocked.Increment(ref _aliasUpdateRequestId));
+            if (requestId == 0)
+                requestId = unchecked((uint)Interlocked.Increment(ref _aliasUpdateRequestId));
+            var completion = new TaskCompletionSource<SessionWire.AliasMapUpdate>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!_pendingAliasUpdates.TryAdd(requestId, completion))
+                throw new InvalidOperationException("Alias update request id collision.");
+
+            try
+            {
+                await SendAliasUpdateFrameAsync(
+                    SessionWire.EncodeAliasMapUpdateRequest(requestId, proposal.Value), ct).ConfigureAwait(false);
+                SessionWire.AliasMapUpdate response = await completion.Task.WaitAsync(ct).ConfigureAwait(false);
+                if (!response.Accepted || response.Entry.NodeId != author ||
+                    response.Entry.Epoch != epoch || response.Entry.Alias != proposal.Value.Alias)
+                    throw new SyncException("UNKNOWN_ALIAS");
+            }
+            finally
+            {
+                _pendingAliasUpdates.TryRemove(requestId, out _);
+            }
+        }
+        catch (SyncException ex)
+        {
+            _sendFlowControl.Fail(ex);
+            _receiveCts.Cancel();
+            throw;
+        }
+        finally
+        {
+            _aliasUpdateGate.Release();
+        }
+    }
+
+    private async Task SendAliasUpdateFrameAsync(byte[] frame, CancellationToken ct)
+    {
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await _transport.SendAsync(frame, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _sendFlowControl.Fail(ex);
+            _receiveCts.Cancel();
+            throw;
+        }
+        finally
+        {
+            _sendGate.Release();
+        }
+    }
+
+    private void ValidateAliasUpdateEntry(AliasMapEntry entry)
+    {
+        if (entry.NodeId == _localNode.NodeId && entry.Epoch != _localNode.Epoch)
+            throw new FrameException("FRAME_REJECTED");
+        if (entry.NodeId == PeerNodeId && entry.Epoch != PeerEpoch)
+            throw new FrameException("FRAME_REJECTED");
+    }
+
+    private async Task ProcessAliasUpdatesAsync(CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                byte[] raw = await ReceivePacketAsync(SessionWire.TypeAliasMap, ct).ConfigureAwait(false);
+                SessionWire.AliasMapUpdate update = SessionWire.DecodeAliasMapUpdate(raw);
+                if (update.IsResponse)
+                {
+                    if (update.Accepted)
+                    {
+                        ValidateAliasUpdateEntry(update.Entry);
+                        _localNode.ApplyAliasMapAtomic(PeerNodeId, new[] { update.Entry });
+                    }
+                    if (_pendingAliasUpdates.TryGetValue(update.RequestId, out var completion))
+                        completion.TrySetResult(update);
+                    continue;
+                }
+
+                try
+                {
+                    ValidateAliasUpdateEntry(update.Entry);
+                    _localNode.ApplyAliasMapAtomic(PeerNodeId, new[] { update.Entry });
+                    await SendAliasUpdateFrameAsync(
+                        SessionWire.EncodeAliasMapUpdateResponse(update.RequestId, accepted: true, update.Entry),
+                        ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is SyncException or FrameException or ArgumentException)
+                {
+                    await SendAliasUpdateFrameAsync(
+                        SessionWire.EncodeAliasMapUpdateResponse(update.RequestId, accepted: false),
+                        ct).ConfigureAwait(false);
+                    var failure = new SyncException("UNKNOWN_ALIAS");
+                    _sendFlowControl.Fail(failure);
+                    _receiveCts.Cancel();
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            foreach (var pending in _pendingAliasUpdates.Values)
+                pending.TrySetException(ex);
+            _sendFlowControl.Fail(ex);
+            _receiveCts.Cancel();
         }
     }
 
