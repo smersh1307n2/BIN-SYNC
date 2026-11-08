@@ -1119,9 +1119,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
                         checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest) ||
                     metadataStore.HasLiveRecordReference(scopeId, localReplica, namespaceId, tombstone.RecordId) ||
-                    externalReferences.HasExternalChangeIdReference(namespaceId, tombstone.ChangeId) ||
+                    externalReferences.HasExternalChangeIdReference(scopeId, localReplica, namespaceId, tombstone.ChangeId) ||
                     externalReferences.HasExternalRecordReference(
-                        namespaceId, tombstone.RecordId, tombstone.ChangeId))
+                        scopeId, localReplica, namespaceId, tombstone.RecordId, tombstone.ChangeId))
                 {
                     afterTombstoneKey = tombstoneRow.Key;
                     examined++;
