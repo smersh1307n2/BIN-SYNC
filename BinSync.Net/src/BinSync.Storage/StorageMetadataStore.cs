@@ -352,7 +352,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)item.Key.NamespaceId));
             item.Key.Author.WriteTo(suffix.AsSpan(2));
             BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Item.Sequence);
-            writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.Item.ChangeId, item.Item.Provenance, item.Item.Payload)));
+            writes.Add((StorageKey(root, 20, suffix), EncodePayloadItem(item.Item.ChangeId, item.Item.Payload)));
         }
 
         foreach (var pair in relayHigh)
@@ -730,7 +730,7 @@ private static bool ValidateIncomingBatchForStaging(
                 BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
                 pair.Key.Author.WriteTo(suffix.AsSpan(2));
                 BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.ChangeId, item.Provenance, item.Payload)));
+                writes.Add((StorageKey(root, 20, suffix), EncodePayloadItem(item.ChangeId, item.Payload)));
             }
         }
         foreach (var pair in relayHigh)
@@ -2214,7 +2214,7 @@ private static bool ValidateIncomingBatchForStaging(
             BinaryPrimitives.WriteUInt16LittleEndian(outboundSuffix, checked((ushort)namespaceId));
             localAuthor.WriteTo(outboundSuffix.AsSpan(2));
             BinaryPrimitives.WriteUInt64BigEndian(outboundSuffix.AsSpan(18), item.Sequence);
-            writes.Add((StorageKey(root, 7, outboundSuffix), EncodePayloadItem(item.ChangeId, item.Provenance, item.Payload)));
+            writes.Add((StorageKey(root, 21, outboundSuffix), EncodePayloadItem(item.ChangeId, item.Provenance, item.Payload)));
 
             byte[] ledgerSuffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, checked((ushort)namespaceId));
@@ -2666,7 +2666,7 @@ private static bool ValidateIncomingBatchForStaging(
                 pair.Key.Author.WriteTo(suffix.AsSpan(2));
                 BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
                 byte[] value = EncodePayloadItem(item.ChangeId, item.Provenance, item.Payload);
-                Add(StorageKey(root, 4, suffix), value);
+                Add(StorageKey(root, 20, suffix), value);
             }
         }
 
@@ -2690,7 +2690,7 @@ private static bool ValidateIncomingBatchForStaging(
                 BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
                 pair.Key.Author.WriteTo(suffix.AsSpan(2));
                 BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                Add(StorageKey(root, 7, suffix), EncodePayloadItem(item.ChangeId, item.Provenance, item.Payload));
+                Add(StorageKey(root, 21, suffix), EncodePayloadItem(item.ChangeId, item.Provenance, item.Payload));
             }
         }
 
@@ -2783,7 +2783,7 @@ private static bool ValidateIncomingBatchForStaging(
             ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
             if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
             byte kind = suffix[0];
-            if (kind is 6 or 9 or 11 ||
+            if (kind is 4 or 6 or 7 or 9 or 11 ||
                 (kind == 3 && row.Value.Length != 45) ||
                 ((kind is 5 or 8) && row.Value.Length != 16))
                 throw new InvalidDataException("Legacy metadata row encoding is not supported by BIN-SYNC v3.");
@@ -2852,8 +2852,8 @@ private static bool ValidateIncomingBatchForStaging(
                             BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(36))));
                     break;
                 }
-                case 4:
-                case 7:
+                case 20:
+                case 21:
                 {
                     RequireLength(key, 26);
                     var relayKey = new RelayKey(
@@ -2861,20 +2861,18 @@ private static bool ValidateIncomingBatchForStaging(
                         NodeId.From(key.Slice(2, 16)));
                     ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(key.Slice(18, 8));
                     var item = DecodePayloadItem(sequence, relayKey.Author, row.Value);
-                    if (kind == 4)
+                    if (kind == 20)
                     {
                         if (!state.Relay.TryGetValue(relayKey, out var relayItems))
                             state.Relay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
-                        relayItems.Add(new MetadataRelayItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload)
-                        { Provenance = new OperationOrigin(item.AuthorNodeId, item.OriginAuthorEpoch, item.OriginSequence) });
+                        relayItems.Add(new MetadataRelayItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload));
                     }
                     else
                     {
                         var outboundKey = new OutboundKey(relayKey.NamespaceId, relayKey.Author);
                         if (!state.Outbound.TryGetValue(outboundKey, out var outboundItems))
                             state.Outbound.Add(outboundKey, outboundItems = new List<MetadataOutboundItem>());
-                        outboundItems.Add(new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload)
-                        { Provenance = new OperationOrigin(item.AuthorNodeId, item.OriginAuthorEpoch, item.OriginSequence) });
+                        outboundItems.Add(new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload));
                     }
                     break;
                 }
@@ -2994,6 +2992,11 @@ private static bool ValidateIncomingBatchForStaging(
 
         if (!identitySeen)
             throw new InvalidDataException("Metadata partition is missing its scope identity record.");
+
+        // Payload rows intentionally omit OriginEpoch/OriginSequence. The global
+        // ChangeId ledger is the single durable owner of immutable provenance.
+        // Hydrate after the full scan so correctness does not depend on row ordering.
+        HydrateStreamProvenance(state);
         return state;
     }
 
@@ -3012,28 +3015,62 @@ private static bool ValidateIncomingBatchForStaging(
         return bytes;
     }
 
-    private static byte[] EncodePayloadItem(BatchId changeId, OperationOrigin provenance, byte[] payload)
+    private static byte[] EncodePayloadItem(BatchId changeId, byte[] payload)
     {
-        provenance = provenance.EnsureValid();
-        byte[] bytes = new byte[32 + payload.Length];
+        // Origin is stored once in the global ChangeId ledger, not duplicated in
+        // both the identity row and every relay/outbound payload row.
+        byte[] bytes = new byte[20 + payload.Length];
         changeId.WriteTo(bytes);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), provenance.AuthorEpoch);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(20), provenance.Sequence);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(28), payload.Length);
-        payload.CopyTo(bytes, 32);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(16), payload.Length);
+        payload.CopyTo(bytes, 20);
         return bytes;
     }
 
     private static MetadataOutboundItem DecodePayloadItem(ulong sequence, NodeId author, byte[] bytes)
     {
-        if (bytes.Length < 32) throw new InvalidDataException("Stored stream payload is truncated.");
-        uint originEpoch = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(16));
-        ulong originSequence = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(20));
-        int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(28));
-        if (originEpoch == 0 || originSequence == 0 || length < 0 || bytes.Length != 32 + length)
-            throw new InvalidDataException("Stored stream payload length or origin provenance is invalid.");
-        return new MetadataOutboundItem(sequence, author, BatchId.From(bytes.AsSpan(0, 16)), bytes.AsSpan(32).ToArray())
-        { Provenance = new OperationOrigin(author, originEpoch, originSequence) };
+        if (bytes.Length < 20) throw new InvalidDataException("Stored stream payload is truncated.");
+        int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(16));
+        if (length < 0 || bytes.Length != 20 + length)
+            throw new InvalidDataException("Stored compact stream payload length is invalid.");
+        return new MetadataOutboundItem(sequence, author, BatchId.From(bytes.AsSpan(0, 16)), bytes.AsSpan(20).ToArray());
+    }
+
+    private static void HydrateStreamProvenance(PartitionState state)
+    {
+        foreach (var (key, items) in state.Relay)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                var provenance = ResolvePayloadProvenance(state, key.NamespaceId, key.Author,
+                    item.ChangeId, isLocalOutbound: false);
+                items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor,
+                    item.ChangeId, item.Payload) { Provenance = provenance };
+            }
+        }
+
+        foreach (var (key, items) in state.Outbound)
+        {
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                var provenance = ResolvePayloadProvenance(state, key.NamespaceId, key.Author,
+                    item.ChangeId, isLocalOutbound: true);
+                items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId,
+                    item.ChangeId, item.Payload) { Provenance = provenance };
+            }
+        }
+    }
+
+    private static OperationOrigin ResolvePayloadProvenance(PartitionState state, int namespaceId,
+        NodeId author, BatchId changeId, bool isLocalOutbound)
+    {
+        if (!state.ChangeLedger.TryGetValue(new LedgerKey(namespaceId, changeId), out var ledger))
+            throw new InvalidDataException("Stream payload row has no global ChangeId identity row.");
+        var provenance = ledger.Provenance.EnsureValid();
+        if (provenance.AuthorNodeId != author || ledger.IsLocalOutbound != isLocalOutbound)
+            throw new InvalidDataException("Stream payload row conflicts with its global ChangeId identity row.");
+        return provenance;
     }
 
     private static void RequireLength(ReadOnlySpan<byte> bytes, int length)
