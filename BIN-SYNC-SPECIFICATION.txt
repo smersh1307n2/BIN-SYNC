@@ -6,7 +6,7 @@
 **Дата:** 2026-11-08  
 
 **Изменения v2.4.22 относительно v2.4.21:**
-- Нормативно определён узкий Inbox receipt GC: receipt удаляется только атомарно с durable retired-through fence authenticated transport-peer epoch; unresolved PendingApply блокирует retirement; epoch-unknown legacy receipt сохраняется.
+- Нормативно определён узкий Inbox receipt GC: receipt удаляется только после durable registration и complete initial-sync baseline replacement transport epoch, атомарно с retired-through fence старой эпохи; unresolved PendingApply блокирует retirement; epoch-unknown legacy receipt сохраняется.
 - Разделены transport-delivery roster и authoritative namespace membership: MEMBERSHIP/InterestedPeers сами по себе не разрешают ChangeId или tombstone GC.
 - Зафиксированы prerequisites для ChangeId GC: immutable origin `(author, authorEpoch, originSequence)`, signed authoritative roster generation и signed monotonic all-member retention checkpoints.
 - Tombstone/ghost GC остаётся fail-closed до per-author safe frontier и атомарного `FULL_REPLACE` snapshot generation; TTL/HLC/GC_NOTICE не являются доказательством.
@@ -811,15 +811,11 @@ InboxReceipt {
 
 ### 10.2.1. Inbox GC
 
-`expiresAt` — только условие допуска к рассмотрению retention, но не доказательство безопасности удаления. Для удаления receipt необходимы одновременно:
+`expiresAt` — только advisory time field и не является самостоятельным разрешением на удаление. TTL, обычный ACK, последующий batch, snapshot или локальное истечение времени сами по себе не доказывают безопасность reclamation.
 
-1. `expiresAt > 0` и `expiresAt < now`;
-2. durable per-author receive checkpoint и digest-chain checkpoint уже покрывают весь batch;
-3. отправитель явно подтвердил durable продвижение за этот batch так, что корректный sender больше не имеет права повторять его;
-4. старые сессии/эпохи, способные воспроизвести batch, fenced или обязаны пройти полный resync;
-5. после удаления receipt остаётся достаточно durable dedup/equivocation state, чтобы старый batch не мог быть применён как новый.
+**Storage-backed исключение E-26:** Inbox receipt может быть удалён только вместе с durable retired-through fence authenticated transport-peer epoch, когда более новая peer incarnation зарегистрирована и её complete initial-sync baseline durably committed. Retirement блокируется любым unresolved PendingApply для peer/namespace, включая legacy intent с неизвестным transport epoch. Receive path после fence отклоняет retired и epoch-less traffic. Receipt с неизвестным transport epoch сохраняется до exact authenticated duplicate от зарегистрированной текущей эпохи, который атомарно re-attributes receipt. Active-epoch receipts и CompletedPendingApply tokens сохраняются.
 
-Протокол v2.4.20 не определяет отдельный wire-level receipt-retention confirmation. Поэтому обычный ACK, локальное истечение времени, последующий batch или snapshot сами по себе не дают полной двусторонней гарантии для произвольного reconnect/replay. **Текущее нормативное поведение: Inbox receipt GC выключен; новые receipts используют `expiresAt=0` и удерживаются бессрочно.** Будущий GC требует отдельного protocol extension с явным checkpoint/fencing contract.
+Вне этого узкого E-26 storage lifecycle receipt GC выключен; новые receipts используют `expiresAt=0`. Старый receipt нельзя удалить по времени, ACK, cursor, digest-chain advancement или snapshot без retired-epoch fence. Это не wire-level expiry и не разрешение на произвольную compaction.
 
 ### 10.2.2. Потерянный ACK
 
@@ -831,7 +827,7 @@ InboxReceipt {
 6. Entry payload, replay-supplied ChangeIds и causal dependencies на duplicate path не декодируются/не применяются; duplicate обязан обходить causal gate. Изменённый payload при неизменном BatchId и неизменном header commitment игнорируется как повтор, а не применяется.
 7. Для legacy-unknown receipt без headerFingerprint сохраняется прежнее поведение: batch считается duplicate, но conflicting-header validation до миграции невозможна.
 
-`appliedAt` фиксирует HLC wall time принятия. `expiresAt=0` — бессрочное удержание до отдельного доказанного retention horizon; receipt GC не включается автоматически.
+`appliedAt` фиксирует HLC wall time принятия. `expiresAt=0` запрещает TTL-based expiry. StorageMetadataStore может reclaim receipt только по E-26; все остальные receipts удерживаются.
 
 ## 10.3. Peer state
 
@@ -2324,6 +2320,7 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 | **2.4.2** | **2026-11-05** | **AutoReconcile exchanges snapshot baselines in both directions; InitialSyncComplete is set only after the peer confirms receipt; peer-relative Outbox offset initialization fails closed with SNAPSHOT_REQUIRED until the baseline is complete.** |
 | **2.4.3** | **2026-11-05** | **Public transport-independent SyncSession; TCP/TLS moved to a dedicated adapter; explicit reliable/ordered transport capability contract; raw UDP requires a reliability adapter. No wire-format change.** |
 | **2.4.20** | **2026-11-07** | **Receipt identity separated from resolved author; per-author retention coordinates; fail-closed receipt GC; relay alias failure is batch-atomic. No wire-layout change.** |
+| **2.4.22** | **2026-11-08** | **Narrow Storage-backed Inbox receipt GC behind a completed replacement-peer baseline and durable epoch fence; ChangeId and tombstone GC prerequisites remain fail-closed. No wire-layout change.** |
 
 ---
 
@@ -2597,7 +2594,7 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 
 1. Outbound/relay payload compaction использует только contiguous per-author peer ACK/baseline frontier и отдельный local consumer ACK, если он существует. Этот delivery frontier не разрешает удалять Inbox receipts, ChangeId fingerprints, CompletedPendingApply tokens или tombstones.
 2. Inbox receipt identity остаётся `(senderNodeId, senderEpoch, namespaceId, batchId)`. Authenticated transport peer epoch хранится отдельно и не подменяет author/issuer epoch.
-3. Storage-backed receipt GC разрешён только когда более новая transport-peer incarnation durably registered, old epoch durably fenced by monotonic retired-through marker, и receipt deletion commits atomically with that fence. Retirement MUST be blocked while a matching or epoch-unknown PendingApply is unresolved. Receive entry points MUST reject retired/epoch-less traffic after a retirement fence. Legacy receipts with unknown transport epoch MUST be retained until an exact authenticated duplicate from a registered current epoch re-attributes them. Active-epoch receipts and CompletedPendingApply tokens are not deleted by this rule.
+3. Storage-backed receipt GC разрешён только когда более новая transport-peer incarnation durably registered и её complete initial-sync baseline durably committed, old epoch durably fenced by monotonic retired-through marker, и receipt deletion commits atomically with that fence. Retirement MUST be blocked while a matching or epoch-unknown PendingApply is unresolved. Receive entry points MUST reject retired/epoch-less traffic after a retirement fence. Legacy receipts with unknown transport epoch MUST be retained until an exact authenticated duplicate from a registered current epoch re-attributes them. Active-epoch receipts and CompletedPendingApply tokens are not deleted by this rule.
 4. The existing MEMBERSHIP message and InterestedPeers roster are not an authoritative namespace membership set. They MUST NOT be used as the denominator for ChangeId or tombstone GC.
 5. ChangeId ledger GC remains disabled until each operation carries immutable origin author, author epoch and origin sequence unchanged through every relay; a committed authoritative namespace roster generation exists; and every member in that roster has durably published a signed monotonic retention checkpoint with a contiguous applied frontier for each origin stream. Missing members/checkpoints contribute zero. Provenance-less legacy ledger rows are non-collectable. No TTL, HLC-age, LRU, size-based eviction, Outbox ACK or relay ACK may remove ChangeId identity.
 6. Tombstone/ghost GC remains disabled until the same authoritative roster/frontier proof exists and every member has installed the same authoritative full-snapshot generation/digest. A merge snapshot does not delete rows absent from the snapshot. Rejoining or removed members MUST install an atomic FULL_REPLACE snapshot before incremental deltas are accepted.
