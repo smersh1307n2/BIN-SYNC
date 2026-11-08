@@ -77,6 +77,8 @@ jobs:
               factor = {"ns": 1e-6, "us": 1e-3, "µs": 1e-3, "ms": 1.0}[match.group(2)]
               return float(match.group(1)) * factor
           def kib(value):
+              if value.strip() in ("-", "0 B", "0 KB", "0 MB"):
+                  return None
               match = re.fullmatch(r"\s*([0-9.]+)\s*(B|KB|MB)\s*", value)
               if not match: raise ValueError(value)
               factor = {"B": 1/1024, "KB": 1.0, "MB": 1024.0}[match.group(2)]
@@ -90,7 +92,14 @@ jobs:
               old, new = baseline[size], incremental[size]
               old_ms, new_ms = number(old["Mean"]), number(new["Mean"])
               old_kb, new_kb = kib(old["Allocated"]), kib(new["Allocated"])
-              print(f"| {size} | {old_ms:.3f} | {new_ms:.3f} | {(old_ms-new_ms)/old_ms*100:.1f}% | {old_kb:.1f} | {new_kb:.1f} | {(old_kb-new_kb)/old_kb*100:.1f}% |")
+              if old_kb is None or new_kb is None or old_kb <= 0:
+                  old_cell = "N/A" if old_kb is None else f"{old_kb:.1f}"
+                  new_cell = "N/A" if new_kb is None else f"{new_kb:.1f}"
+                  allocation_change = "N/A"
+              else:
+                  old_cell, new_cell = f"{old_kb:.1f}", f"{new_kb:.1f}"
+                  allocation_change = f"{(old_kb-new_kb)/old_kb*100:.1f}%"
+              print(f"| {size} | {old_ms:.3f} | {new_ms:.3f} | {(old_ms-new_ms)/old_ms*100:.1f}% | {old_cell} | {new_cell} | {allocation_change} |")
           PY
 
       - name: Upload raw comparison reports
