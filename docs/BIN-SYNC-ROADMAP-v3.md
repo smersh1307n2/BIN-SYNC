@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: e7e1eb4f0cb1ac5dcb7178bd6dc0ffce04c27439. Latest full green CI evidence is for code head f91df0b4ef93f5a53f419420aa578dfe36bc293b: Core tests and Fuzz/Lab succeeded; Storage Integration succeeded on Ubuntu, Windows and macOS. Follow-up commits 24d22b0 and e7e1eb4 only corrected v17 fixture labels and an XML comment; exact-head CI for these follow-ups is running. The earlier 4e2ba079 checkpoint is not resolvable; comparison anchor used was 56d5142c1a2f7050663a418d4882def50787c1e5.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 206f4f849f3ffc74b9812950fcadccd06507dc33. Code head f91df0b4ef93f5a53f419420aa578dfe36bc293b has green Core/Fuzz-Lab and three-platform Storage CI. Follow-up v17 fixture/comment commits were included in CI run 42484616004/42484616067; these runs were in progress at last inspection. The latest protocol-specification edit is documentation-only and has not yet been included in a completed CI run. There are 49 commits after the prior roadmap checkpoint 4e2ba079678ce3fcaa0058ae43ef652faa33975a, with no divergence.
 
 ## 1. Target architecture
 
@@ -23,7 +23,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Reviewed head before the current persistence fix: 56d5142c1a2f7050663a418d4882def50787c1e5; last fully green code/test checkpoint: 6969ba8085281f959ebb210bd481856343605e3a; current docs/cleanup head: fb9fd677c6c83659307b129d30cafb2b1f2066ec.
+- Prior roadmap checkpoint: 4e2ba079678ce3fcaa0058ae43ef652faa33975a. Current implementation/doc head: 206f4f849f3ffc74b9812950fcadccd06507dc33; 49 commits ahead, no divergence. Last completed exact-code green checkpoint: f91df0b4ef93f5a53f419420aa578dfe36bc293b; subsequent follow-up/spec docs CI was pending at last inspection.
 - The PR merge snapshot a852206fc245c2a0f7469d0e18d19415a2b2c528 failed Build because Node.DeltaBatch.cs:861-862 read Origin fields from a 3-field tuple.
 - The later e6826b4865f8966327a628ae07e95720db58d0ff snapshot completed Build, but Test, Fuzz/Lab and Storage Integration workflows were cancelled before completion.
 - The latest strict-decoder commits have no reported workflow result yet. CI is therefore UNVERIFIED, not green.
@@ -240,7 +240,7 @@ Append a dated entry after each meaningful implementation package. Update checkl
 
 ### 2026-11-08 — Origin equivocation, v3 handshake and exact-head green verification
 
-- [x] Reconciled 59 commits after the previous reviewed anchor 56d5142c1a2f7050663a418d4882def50787c1e5; branch is ahead by 59 with no divergence.
+- [x] Reconciled 49 commits after the actual previous roadmap checkpoint 4e2ba079678ce3fcaa0058ae43ef652faa33975a; branch is ahead by 49 with no divergence (56d5142 was an earlier comparison anchor, not the last roadmap checkpoint).
 - [x] Added/verified four-node A→B→C→D relay plus alternate-route dedup scenario (Scenario43_FourNodeOriginRelayAndAlternateRouteDedup).
 - [x] Added atomic rejection coverage for reusing a global ChangeId with a different immutable Origin tuple; checks stored value, inbox/outbox and receive cursor remain unchanged.
 - [x] Removed optional ImmutableOriginProvenance capability negotiation. HELLO and HELLO_ACK now carry ProtocolMajor=3; v2 payload length and major 2/4 are rejected.
@@ -250,3 +250,10 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Exact-head CI for f91df0b4ef93f5a53f419420aa578dfe36bc293b: BinSync.Net test workflow succeeded; Fuzz/Lab (§17) succeeded; FLD Storage Integration succeeded on Ubuntu, Windows and macOS.
 - [~] Follow-up review: v17 fixture name/temp-file label and checkpoint image XML comment were corrected in commits 24d22b0 and e7e1eb4. Verify exact-head CI after these two small follow-ups. Do not infer test-count totals from successful workflow status alone.
 - [ ] Next: finish audit of canonical fingerprint equivalence for all operation types and causal dependencies; add provider-origin freeze/replay and PendingApply crash-recovery tests; then continue Phase 2 row-cardinality/byte-cost audit.
+
+### 2026-11-08 — handshake wire contract synchronized
+
+- [x] Audited the implementation's HELLO and HELLO_ACK encoder/decoder against the v3 specification.
+- [x] Added normative exact payload layout to §12.7–12.8: NodeId b128, epoch u32 LE, protocolMajor u16 LE (=3), capabilities u32 LE; exactly 26 bytes, control stream 0, flags 0; HELLO/ACK are distinct frame types.
+- [x] Documented fail-closed major/length/frame validation and the canonical implementation sequence numbers.
+- [ ] Verify CI on the documentation/current head; no implementation behavior changed in this spec-only package.
