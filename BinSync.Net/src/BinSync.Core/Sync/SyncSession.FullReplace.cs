@@ -38,6 +38,31 @@ public partial class SyncSession
         return begin;
     }
 
+    public async Task SendFullReplaceReadyAsync(
+        FullReplaceTransferProtocol.Progress progress, ulong frameSequence = 1,
+        CancellationToken ct = default)
+    {
+        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        ArgumentNullException.ThrowIfNull(progress);
+        ValidateFullReplaceSequence(frameSequence);
+        await SendFrameAsync(NamespaceGcFrames.FullReplaceReady, GetFullReplaceStream(progress.NamespaceId),
+            frameSequence, FullReplaceTransferProtocol.EncodeProgress(progress), ct).ConfigureAwait(false);
+    }
+
+    public async Task<FullReplaceTransferProtocol.Progress> ReceiveFullReplaceReadyAsync(
+        int namespaceId, ulong expectedFrameSequence, CancellationToken ct = default)
+    {
+        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceReady, ct)
+            .ConfigureAwait(false);
+        var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceReady);
+        ValidateFullReplaceStream(frame, namespaceId, expectedFrameSequence);
+        var progress = FullReplaceTransferProtocol.DecodeProgress(frame.Payload);
+        if (progress.NamespaceId != namespaceId)
+            throw new FrameException("FRAME_REJECTED");
+        return progress;
+    }
+
     public async Task SendFullReplaceChunkAsync(
         FullReplaceTransferProtocol.Chunk chunk, ulong frameSequence,
         CancellationToken ct = default)
