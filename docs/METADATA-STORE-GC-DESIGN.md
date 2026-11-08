@@ -25,10 +25,10 @@ The implemented proof is deliberately narrower:
 
 1. A durable receive intent records both the existing author-stream epoch and the authenticated transport peer epoch. The latter is distinct: a relay may carry a third-party author stream.
 2. Registering a newer peer incarnation durably records the replacement peer epoch and retires the older epoch. The retired-through marker is the persistent fence.
-3. All new Metadata-Store receive entry points reject an epoch-less batch once a retired epoch exists, and reject any transport epoch at or below the retired-through marker.
+3. All new Metadata-Store receive entry points require a nonzero transport epoch to match a durably registered InterestedPeer row, reject an epoch-less batch once a retired epoch exists, and reject any transport epoch at or below the retired-through marker.
 4. In the same Storage transaction that persists the retired-through marker and removes old peer-stream rows, receipts whose sender and recorded transport epoch match the retired incarnation are deleted.
 5. Retirement is rejected while a matching (or legacy epoch-unknown) PendingApply intent remains unresolved. Recovery/finalization must complete first.
-6. Legacy receipt rows without transport-epoch provenance are retained. The implementation never guesses which incarnation created them.
+6. Legacy receipt rows without transport-epoch provenance are retained; an exact duplicate accepted from a durably registered current epoch re-attributes the receipt to that epoch. The implementation never guesses which incarnation created a legacy row.
 
 The receipt deletion and epoch fence are one atomic Storage commit. A crash can therefore expose either the old receipt plus old epoch state, or the retired fence with those receipts gone, never a state in which an old transport epoch is accepted after its retry receipt was deleted.
 
@@ -37,7 +37,7 @@ The receive cursor remains durable. If a new incarnation replays an already acce
 ### Limits of the current receipt GC
 
 - Receipts for the currently active transport epoch are retained; pruning them after a later same-stream batch is accepted is a possible optimization, but it needs an explicit proof that the sender durably committed the previous ACK and a sender/epoch/namespace digest chain, which is shared across the sender's author streams.
-- Legacy receipts with transport epoch zero are retained indefinitely.
+- Legacy receipts with transport epoch zero are retained until an exact authenticated duplicate arrives from a registered current epoch; that replay updates the receipt's transport epoch. No provenance is inferred without the duplicate.
 - CompletedPendingApply tokens are not deleted by this receipt GC; they have a separate idempotency role and need their own identity/horizon work.
 - Receive cursors remain author-scoped; the sender digest chain is intentionally shared across author streams for one sender/epoch/namespace. Both are retained. Do not delete either merely because receipts were removed.
 
