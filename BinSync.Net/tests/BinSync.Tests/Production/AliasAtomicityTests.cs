@@ -107,6 +107,32 @@ public sealed class AliasAtomicityTests
 
 
     [Fact]
+    public void Incremental_alias_map_wire_request_and_response_roundtrip()
+    {
+        var entry = new AliasMapEntry(3, Fix.Nid(116), 7);
+
+        var request = SessionWire.DecodeAliasMapUpdate(
+            SessionWire.EncodeAliasMapUpdateRequest(41, entry));
+        Assert.Equal(41U, request.RequestId);
+        Assert.False(request.IsResponse);
+        Assert.True(request.Accepted);
+        Assert.Equal(entry, request.Entry);
+
+        var response = SessionWire.DecodeAliasMapUpdate(
+            SessionWire.EncodeAliasMapUpdateResponse(41, accepted: true, entry));
+        Assert.Equal(41U, response.RequestId);
+        Assert.True(response.IsResponse);
+        Assert.True(response.Accepted);
+        Assert.Equal(entry, response.Entry);
+
+        var rejected = SessionWire.DecodeAliasMapUpdate(
+            SessionWire.EncodeAliasMapUpdateResponse(42, accepted: false));
+        Assert.Equal(42U, rejected.RequestId);
+        Assert.True(rejected.IsResponse);
+        Assert.False(rejected.Accepted);
+    }
+
+    [Fact]
     public void EnsureAlias_publishes_incremental_binding_on_both_session_copies_only()
     {
         using var local = new Node(Fix.Nid(111));
