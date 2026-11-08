@@ -57,7 +57,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [~] Local outbound freeze assigns OriginSequence from the durable author stream sequence and preserves supplied Origin on replay; audit atomic allocator/retry behavior and provider freeze before closing.
 - [x] Removed the invalid equality between OriginSequence and peer-relative sender cursor; direct-author validation only rejects an Origin epoch from the future.
 - [x] Make provenance mandatory in every v3 DELTA_BATCH; remove optional ImmutableOriginProvenance capability and reject protocol-major mismatch. HELLO and HELLO_ACK both carry and validate ProtocolMajor=3.
-- [ ] Preserve Origin through preflight, PendingApply crash recovery, provider apply, relay, snapshot and restart.
+- [x] Preserve immutable Origin through preflight, persisted PendingApply/recovery, provider apply decision, relay and Storage restart; integration tests compare the same OperationOrigin before interruption, after reopen/recovery and in the relayed item. Snapshot is a state image, not a list of published operations; it must not synthesize per-operation Origin. Its authoritative FULL_REPLACE generation is a separate Phase 4 requirement.
 - [x] Cover direct author, A→B→C→D relay, alternate-route deduplication, duplicate delivery and Origin equivocation in Core scenarios/tests; exact-head CI passed.
 - [x] Same ChangeId with changed semantic fingerprint or immutable Origin is rejected atomically; same operation via another route does not create a second relay payload (regression coverage green).
 - [x] Exact-head Core test + Fuzz/Lab workflows passed; Storage Integration passed on Ubuntu, Windows and macOS. Samples/build are included in the Core workflow. Keep release-wide coverage/threshold and golden-vector gates in Phase 6.
@@ -77,8 +77,8 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### Phase 3 — Publication and FLD Storage contract
 
-- [ ] Provider feed/FLD Outbox is the sole authority for unpublished local changes; no parallel MetadataStore PendingLocal table.
-- [ ] Verify coalescing across provider pages and separate commits for LWW field writes and record lifecycle changes.
+- [x] Provider feed/FLD Outbox is the sole authority for unpublished local changes in Metadata-Store-owned publication mode; no parallel MetadataStore PendingLocal table. The cutover fence rejects a non-empty local feed/Node Outbox state that would make ownership ambiguous.
+- [x] Verify LWW field coalescing across provider pages; field writes and record-lifecycle tombstones use distinct coalescing identities. Provider conformance separately covers lifecycle tombstone/ghost ordering.
 - [ ] Preserve pending local intent independently of visible LWW state when remote APPLY wins before publication.
 - [ ] Freeze ChangeId + Origin + payload atomically into BIN-SYNC; ACK source feed only after durable freeze.
 - [ ] Make freeze replay idempotent when metadata commit succeeds but provider ACK fails; later edits remain suffix operations.
@@ -317,3 +317,12 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Added fail-closed tests for compact payload rows with a missing global ChangeId ledger row and for author mismatch between stream key and ledger provenance.
 - [x] Exact code head `f6f041bfc9b2841d33c2dbf4e39fff160fc6d4ee`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 independently on Ubuntu, Windows and macOS. Both push and PR workflow matrices passed.
 - [~] Durable Metadata Bench triggered by the Storage implementation change is still running; keep throughput/allocation acceptance open until its report is inspected.
+
+### 2026-11-08 — Origin recovery assertions and provider-feed audit
+
+- [x] Extended PendingApply interruption and Node-checkpoint/restart integration tests to assert exact OperationOrigin equality from the source Outbox through the durable PendingApply batch and recovered relay row.
+- [x] Exact code head `69b3710bd4bb66d0b85c86b2ff8008af4754263a`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS; push and PR workflows both green.
+- [x] Audited Metadata-Store-owned publication: fresh provider changes supply author epoch but no OriginSequence; Metadata Store allocates the durable author stream sequence during atomic freeze, then the coordinator checkpoints Node cache and only then ACKs the provider feed.
+- [x] Confirmed coalescing across provider page boundaries and separation of field vs record-lifecycle coalescing keys.
+- [ ] Add explicit crash test for Metadata-Store-owned freeze succeeding while provider feed ACK fails, including a later suffix edit; assert retry reuses frozen ChangeId/Origin/payload and does not duplicate or renumber it.
+- [ ] Add explicit regression assertion that provider feed sequence/FLD JournalSeq is not copied into OriginSequence.
