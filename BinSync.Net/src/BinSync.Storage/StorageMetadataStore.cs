@@ -3010,14 +3010,13 @@ private static bool ValidateIncomingBatchForStaging(
         return bytes;
     }
 
-    private static byte[] EncodePayloadItem(BatchId changeId, uint originAuthorEpoch, ulong originSequence, byte[] payload)
+    private static byte[] EncodePayloadItem(BatchId changeId, OperationOrigin provenance, byte[] payload)
     {
-        if (originAuthorEpoch == 0 || originSequence == 0)
-            throw new InvalidDataException("Published operation is missing immutable origin provenance.");
+        provenance = provenance.EnsureValid();
         byte[] bytes = new byte[32 + payload.Length];
         changeId.WriteTo(bytes);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), originAuthorEpoch);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(20), originSequence);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), provenance.AuthorEpoch);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(20), provenance.Sequence);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(28), payload.Length);
         payload.CopyTo(bytes, 32);
         return bytes;
@@ -3161,10 +3160,11 @@ private static bool ValidateIncomingBatchForStaging(
         writer.Write(batch.Operations.Count);
         foreach (var operation in batch.Operations)
         {
-            writer.Write(operation.AuthorNodeId.ToArray());
+            var provenance = operation.Provenance.EnsureValid();
+            writer.Write(provenance.AuthorNodeId.ToArray());
             writer.Write(operation.ChangeId.ToArray());
-            writer.Write(operation.OriginAuthorEpoch);
-            writer.Write(operation.OriginSequence);
+            writer.Write(provenance.AuthorEpoch);
+            writer.Write(provenance.Sequence);
             writer.Write(operation.Fingerprint);
             writer.Write(operation.RelayEligible);
             writer.Write(operation.Payload.Length);
@@ -3219,10 +3219,8 @@ private static bool ValidateIncomingBatchForStaging(
             int payloadLength = reader.ReadInt32();
             operations[i] = new MetadataOperation
             {
-                AuthorNodeId = author,
                 ChangeId = changeId,
-                OriginAuthorEpoch = originAuthorEpoch,
-                OriginSequence = originSequence,
+                Provenance = new OperationOrigin(author, originAuthorEpoch, originSequence),
                 Fingerprint = fingerprint,
                 RelayEligible = relay,
                 Payload = ReadExactly(reader, payloadLength)
