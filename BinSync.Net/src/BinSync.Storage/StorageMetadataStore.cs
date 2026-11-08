@@ -122,6 +122,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before ChangeId GC.");
             TrustStore trustStore = _namespaceGcTrustStore
                 ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.IsChangeIdGcProofEnabled)
+                return 0;
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 return 0;
@@ -191,6 +193,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before receipt GC.");
             TrustStore trustStore = _namespaceGcTrustStore
                 ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.IsReceiptGcProofEnabled)
+                return 0;
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 return 0;
@@ -205,6 +209,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ReceiptValue receipt = pair.Value;
                 if (key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
                     key.Epoch == 0 || receipt.OriginSequence == 0)
+                    continue;
+                NamespaceRosterMember? senderMember = roster.Members.FirstOrDefault(member =>
+                    member.NodeId == key.Sender);
+                if (senderMember is null || senderMember.Status != NamespaceMemberStatus.Retired ||
+                    receipt.TransportPeerEpoch == 0 ||
+                    receipt.TransportPeerEpoch > senderMember.RetiredThroughEpoch)
                     continue;
                 var receiveKey = new ReceiveKey(
                     key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
