@@ -42,7 +42,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
     private sealed class ProviderSnapshotState : IDisposable
     {
-        private const int ScanPageSize = 4096;
+        private const int ScanPageSize = 1024;
         private readonly StorageSnapshot _snapshot;
         private readonly byte[] _fieldPrefix;
         private readonly byte[] _recordTombstonePrefix;
@@ -120,6 +120,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             _snapshot.Dispose();
             _fieldPage = Array.Empty<StorageEntry>();
             _recordTombstonePage = Array.Empty<StorageEntry>();
+            _fieldMutation = null;
+            _recordTombstoneMutation = null;
+            _lastFieldKey = null;
+            _lastRecordTombstoneKey = null;
         }
 
         private bool TryPeekField(out ProviderMutation? mutation)
