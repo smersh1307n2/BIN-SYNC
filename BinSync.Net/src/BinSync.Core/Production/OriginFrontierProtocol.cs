@@ -355,6 +355,16 @@ public static class NamespaceRetentionCheckpointProtocol
                 throw new InvalidDataException("Duplicate frontier report for one roster member.");
         }
 
+        var appliedByMember = new Dictionary<NodeId, Dictionary<OriginKey, ulong>>(byMember.Count);
+        foreach (AppliedOriginFrontierReport report in byMember.Values)
+        {
+            var memberFrontier = new Dictionary<OriginKey, ulong>(report.Entries.Count);
+            foreach (AppliedOriginFrontierEntry entry in report.Entries)
+                memberFrontier.Add(new OriginKey(entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
+                    entry.ContiguousAppliedOriginSequence);
+            appliedByMember.Add(report.MemberNodeId, memberFrontier);
+        }
+
         var origins = new SortedDictionary<OriginKey, (ulong Sequence, ulong HlcWall, uint HlcLogical)>();
         foreach (NamespaceRetiredOriginEpoch closure in roster.RetiredOriginEpochs)
         {
@@ -410,15 +420,9 @@ public static class NamespaceRetentionCheckpointProtocol
             bool allActiveApplied = true;
             foreach (NamespaceRosterMember member in active)
             {
-                if (!byMember.TryGetValue(member.NodeId, out AppliedOriginFrontierReport? report))
-                {
-                    allActiveApplied = false;
-                    break;
-                }
-                AppliedOriginFrontierEntry? applied = report.Entries.FirstOrDefault(entry =>
-                    entry.OriginAuthorNodeId == pair.Key.Author &&
-                    entry.OriginAuthorEpoch == pair.Key.Epoch);
-                if (applied is null || applied.ContiguousAppliedOriginSequence < pair.Value.Sequence)
+                if (!appliedByMember.TryGetValue(member.NodeId, out Dictionary<OriginKey, ulong>? memberFrontier) ||
+                    !memberFrontier.TryGetValue(pair.Key, out ulong appliedSequence) ||
+                    appliedSequence < pair.Value.Sequence)
                 {
                     allActiveApplied = false;
                     break;
