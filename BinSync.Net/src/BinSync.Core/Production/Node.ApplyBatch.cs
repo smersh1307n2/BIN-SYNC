@@ -418,9 +418,9 @@ public sealed partial class Node
             else
             {
                 var ledgerKey = (batch.NamespaceId, e.ChangeId);
+                var provenance = new OperationOrigin(opAuthor, e.OriginAuthorEpoch, e.OriginSequence);
                 var fingerprint = ChangeIdentity.LedgerFingerprint(batch.NamespaceId, e.RecordId,
-                    e.OpKind, op, opAuthor, e.OriginAuthorEpoch, e.OriginSequence,
-                    e.CausalDepsOrNull);
+                    e.OpKind, op, provenance, e.CausalDepsOrNull);
                 if (GlobalChangeLedger.TryGetValue(ledgerKey, out var knownIdentity))
                 {
                     if (knownIdentity.IsKnown && knownIdentity.Fingerprint != fingerprint)
