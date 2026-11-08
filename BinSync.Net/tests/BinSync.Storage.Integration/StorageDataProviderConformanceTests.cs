@@ -860,7 +860,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             Assert.Throws<InvalidDataException>(() => provider.CommitFullReplace(generation));
             Assert.True(provider.TryReadCurrent(prior.RecordId, prior.FieldId, out _));
             Assert.False(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
-            provider.AbortFullReplace(generation);
+            Assert.True(provider.AbortFullReplace(generation, 10));
         }
         finally
         {
