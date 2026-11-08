@@ -22,7 +22,7 @@ public partial class SyncSession
 
     public async Task<FullReplaceTransferProtocol.Begin> ReceiveFullReplaceBeginAsync(
         int namespaceId, NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
-        ulong expectedFrameSequence = 1, CancellationToken ct = default)
+        ulong expectedFrameSequence, CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(acceptedRoster);
