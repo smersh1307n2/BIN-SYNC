@@ -58,6 +58,14 @@ public static class Frames
         [0x11] = "KEY_ROTATION",
         [0x12] = "IBLT_REQUEST",
         [0x13] = "IBLT_RESPONSE",
+        [0x14] = "NAMESPACE_ROSTER",
+        [0x15] = "ORIGIN_FRONTIER",
+        [0x16] = "RETENTION_CHECKPOINT",
+        [0x17] = "FULL_REPLACE_BEGIN",
+        [0x18] = "FULL_REPLACE_CHUNK",
+        [0x19] = "FULL_REPLACE_COMMIT",
+        [0x1A] = "FULL_REPLACE_ACK",
+        [0x1B] = "FULL_REPLACE_ABORT",
     };
 
     /// <summary>Read-only map of frame type byte to symbolic name.</summary>
