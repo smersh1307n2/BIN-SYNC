@@ -50,6 +50,12 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     /// <summary>v3.1 lacks the global author-issued/HLC horizon; physical tombstone GC is intentionally disabled.</summary>
     public bool IsTombstoneGcProofEnabled => false;
 
+    /// <summary>ChangeId physical GC remains disabled until exact-head adversarial proof tests pass.</summary>
+    public bool IsChangeIdGcProofEnabled => false;
+
+    /// <summary>Receipt GC remains disabled until retired-epoch and lost-ACK proof tests pass.</summary>
+    public bool IsReceiptGcProofEnabled => false;
+
     public NamespaceRosterCertificate AcceptNamespaceRoster(ReadOnlySpan<byte> encoded, TrustStore trustStore)
     {
         ArgumentNullException.ThrowIfNull(trustStore);
