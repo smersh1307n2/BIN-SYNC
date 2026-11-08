@@ -1473,6 +1473,8 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(snapshotsAtCutover, faultingProvider.SnapshotOpenCount);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.True(node.TryGetField(1, firstRecord, 0x081B, out var firstAfterAckFailure));
+        Assert.Equal("first", Encoding.UTF8.GetString(firstAfterAckFailure!.Value));
 
         innerProvider.AppendLocalChange(new ProviderMutation
         {
