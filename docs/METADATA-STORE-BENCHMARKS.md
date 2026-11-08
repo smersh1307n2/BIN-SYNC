@@ -90,3 +90,22 @@ The coordinator now applies the exact scanned provider-feed prefix incrementally
 **Interpretation:** the current retry path reduced measured managed allocation substantially at all sizes, with the largest case falling from 33.92 MB to 14,148 KB. A same-runner baseline comparison is still required before claiming a precise latency speedup. The direct ChangeId lookup remains allocation-free; the remaining incremental-path allocations include feed materialization, metadata operation encoding and changed-record copy-on-write.
 
 **Next:** retain this result as the incremental checkpoint, add a controlled same-runner old-vs-new comparison, and profile allocations in the feed list / operation encoding / changed-record staging before further changes. Do not replace the full snapshot used for initial cutover and startup recovery.
+
+## 2026-11-08 matched-runner full-snapshot vs incremental comparison
+
+**Workflow run:** `42444167368`  
+**Baseline code:** `8e6833e5aa5fe7086dbd72b18cf71e45f30169c9` (full provider snapshot rebuild on retry)  
+**Incremental code:** `69ed0b5c964357a3c90552b9d697026d86280447` (incremental provider-feed application to Node cache)  
+**Environment for both runs:** Ubuntu 26.04.1 LTS · AMD EPYC 7763 · .NET SDK 10.0.403 · .NET runtime 10.0.14 · BenchmarkDotNet 0.14.0. Both revisions ran sequentially in the same GitHub Actions job/runner with the same stateful benchmark configuration (3 warmups, 10 measurement iterations, one retry per invocation).
+
+| Pending feed rows | Full snapshot mean | Incremental mean | Mean latency reduction | Full snapshot allocated | Incremental allocated | Allocation reduction |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 3.796 ms | 2.308 ms | 39.2% | 1.52 MB | 876.14 KB | 43.7% |
+| 1,024 | 7.384 ms | 4.746 ms | 35.7% | 6.47 MB | 3,516.05 KB | 46.9% |
+| 4,096 | 40.997 ms | 17.522 ms | 57.3% | 33.92 MB | 14,147.82 KB | 59.3% |
+
+**Variance:** full-snapshot relative standard deviations were 36.9%, 16.1% and 2.16% for 256/1,024/4,096 rows; incremental relative standard deviations were 12.3%, 12.8% and 2.13%. The 256-row baseline is noisy; the 4,096-row comparison is stable. BenchmarkDotNet still warns that these single-invocation stateful iterations are below its recommended 100 ms measurement window.
+
+**Decision:** retain incremental provider-feed application. On the matched runner it reduced mean latency at all three sizes and cut measured managed allocation by approximately 44–59%. The strongest stable result is the 4,096-row case: 40.997 → 17.522 ms and 33.92 MB → 14,147.82 KB. This comparison is materially stronger than the earlier cross-runner exploratory result in the previous section. Continue profiling feed materialization, operation encoding and changed-record copy-on-write; do not replace the full snapshot path used for initial cutover/startup recovery.
+
+**Raw artifact:** GitHub Actions artifact `metadata-retry-comparison` from run `42444167368` contains both CSV and Markdown reports.
