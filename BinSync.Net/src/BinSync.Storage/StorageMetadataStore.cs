@@ -128,12 +128,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     .SequenceEqual(NamespaceRosterProtocol.ComputeDigest(acceptedRoster)))
                 throw new InvalidOperationException("Applied-origin frontier roster is not the current accepted roster.");
 
-            NamespaceRosterMember member = NamespaceRosterProtocol.FindMember(acceptedRoster, localMember);
+            NamespaceRosterMember member = acceptedRoster.Members.FirstOrDefault(candidate => candidate.NodeId == localMember)
+                ?? throw new InvalidDataException("Local member is not present in the accepted namespace roster.");
             if (member.Status != NamespaceMemberStatus.Active || member.TransportPeerEpoch == 0)
                 throw new InvalidOperationException("Only an Active roster member may publish an applied-origin frontier.");
 
             var partitionKey = new PartitionKey(scopeId, localMember);
-            PartitionState? current = TryGetPartition(partitionKey, out PartitionState? loaded)
+            PartitionState? current = TryGetPartition(partitionKey, out PartitionState loaded)
                 ? loaded : null;
             AppliedOriginFrontierReport? prior = gcStore.ReadOriginFrontiers(acceptedRoster)
                 .FirstOrDefault(report => report.MemberNodeId == localMember);
