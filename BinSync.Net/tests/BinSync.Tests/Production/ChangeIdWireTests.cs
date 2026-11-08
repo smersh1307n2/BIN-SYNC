@@ -461,7 +461,7 @@ public class ChangeIdWireTests
         var original = ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
             operation, new OperationOrigin(author, 3, 41));
         Assert.Equal(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
-            operation, author, 3, 41));
+            operation, new OperationOrigin(author, 3, 41)));
         Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
             operation, new OperationOrigin(author, 3, 42)));
         Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
