@@ -53,12 +53,12 @@ internal sealed class WalWriterFence : IDisposable
             string actualSegment = segment;
             if (Directory.Exists(current))
             {
-                string[] matches = Directory.EnumerateFileSystemEntries(current)
-                    .Select(Path.GetFileName)
+                string?[] matches = Directory.EnumerateFileSystemEntries(current)
+                    .Select(entry => Path.GetFileName(entry))
                     .Where(name => name is not null &&
                         string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
                     .Take(2)
-                    .ToArray()!;
+                    .ToArray();
                 if (matches.Length == 1)
                     actualSegment = matches[0]!;
                 else if (matches.Length > 1 &&
