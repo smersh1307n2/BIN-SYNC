@@ -452,3 +452,8 @@ OFR2 verification is roster-aware: when the accepted NRS2 roster contains retire
 ## 10.19. Provider terminal retirement validates the active epoch (2026-11-09)
 
 The provider refuses to set the terminal author-identity marker while its persisted active epoch lacks the corresponding durable per-epoch closure marker. Rejoin also fails closed if a retired identity still contains an active-epoch marker. This prevents a mismatched `finalAuthorEpoch` from silently retiring the identity while leaving the real active epoch reusable.
+
+
+## 10.20. Bounded linear report/checkpoint validation (2026-11-09)
+
+OFR2 validation indexes local applied sequences and issued epochs once per report; immutable retired-epoch closure matching is also indexed. RCP2 derivation indexes each member's applied `(author, epoch)` vector once, then computes the all-Active-member minimum without rescanning report arrays for each origin. The canonical 4096-entry bounds remain unchanged. Performance acceptance and equivalence tests remain T-pass work.
