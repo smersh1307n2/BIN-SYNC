@@ -161,7 +161,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
         if (state.Receipts.ContainsKey(receiptKey))
-            return decisions;
+            return Array.AsReadOnly(decisions);
 
         foreach (var otherPending in state.PendingApplies)
         {
