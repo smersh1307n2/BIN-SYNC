@@ -250,8 +250,8 @@ public static class NamespaceRosterProtocol
                 throw new ArgumentException("Retired-origin closure requires author, epoch and final issued sequence.", nameof(roster));
             NamespaceRosterMember? authorMember = roster.Members.FirstOrDefault(member =>
                 member.NodeId == retired.OriginAuthorNodeId);
-            if (authorMember is null || authorMember.Status != NamespaceMemberStatus.Retired)
-                throw new ArgumentException("Retired-origin closure must reference an explicitly Retired roster member.", nameof(roster));
+            if (authorMember is null)
+                throw new ArgumentException("Retired-origin closure must reference a retained roster member identity.", nameof(roster));
             if (previousRetired is not null)
             {
                 int authorOrder = CompareNodeIds(previousRetired.OriginAuthorNodeId, retired.OriginAuthorNodeId);
