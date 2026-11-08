@@ -621,3 +621,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x C] `CompactReceipts` now additionally requires the durable per-author receive cursor to cover the receipt's `CursorEnd` and the sender digest-chain row to remain present. Receipt deletion therefore cannot remove the only transport replay fence; old cursor continuations fail even after the receipt is gone.
 - [~ T] Exact-head tests for receipt deletion, duplicate retry after lost ACK, cursor continuity, digest-chain preservation and PendingApply races remain queued for the T pass.
+
+
+### 2026-11-08 — C-pass: bounded provider snapshot enumeration
+
+- [x C] Replaced the second full `StorageEntry[]` materialization in `StorageDataProvider.OpenSnapshot` with a pinned `StorageSnapshot` and two sorted 4096-row keyset cursors (fields + record tombstones). `ReadSnapshot` streams merged canonical order, supports sequential pages and absolute-offset reset/skip, and disposes the pinned snapshot on release/provider shutdown.
+- [~ C] The provider no longer duplicates every current row in a second array, but `StorageDatabase.OpenSnapshot` itself still clones the underlying partition. Fully bounded memory requires a storage-engine immutable-root/iterator snapshot API; do not claim O(page) total memory yet.
+- [~ T] Exact paging boundary, random/backward seek, release/dispose, snapshot stability under concurrent writes, and fullreplace two-pass digest consistency remain untested on current HEAD.
