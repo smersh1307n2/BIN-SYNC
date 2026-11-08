@@ -117,9 +117,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
-    /// Build and durably publish this member's contiguous applied-origin frontier.
-    /// Published ledger rows and still-unpublished local provider feed rows are both
-    /// included; provider Journal/Feed sequence is never substituted for OriginSequence.
+    /// Build and durably publish this member's contiguous applied-origin frontier
+    /// from immutable ChangeLedger rows only. Unpublished provider drafts are supplied
+    /// separately as a checkpoint barrier; their feed cursor is never an OriginSequence.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
         string scopeId,
