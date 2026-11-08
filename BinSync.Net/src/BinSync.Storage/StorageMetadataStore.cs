@@ -418,6 +418,50 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    /// <summary>
+    /// Check BIN-SYNC-owned pending work for any operation on a record. Malformed
+    /// retained payloads fail closed. A pending immutable peer reservation blocks
+    /// conservatively because it may retain a payload copy no longer in the live page.
+    /// </summary>
+    public bool HasLiveRecordReference(
+        string scopeId, NodeId localReplica, int namespaceId, RecordId recordId)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+                return false;
+
+            if (state.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                return true;
+            if (state.PendingApplies.Values.Any(pending =>
+                pending.Batch.NamespaceId == namespaceId &&
+                pending.Batch.Operations.Any(operation => PayloadReferencesRecord(operation.Payload, recordId))))
+                return true;
+            if (state.Relay.Any(pair => pair.Key.NamespaceId == namespaceId &&
+                pair.Value.Any(item => PayloadReferencesRecord(item.Payload, recordId))))
+                return true;
+            return state.Outbound.Any(pair => pair.Key.NamespaceId == namespaceId &&
+                pair.Value.Any(item => PayloadReferencesRecord(item.Payload, recordId)));
+        }
+    }
+
+    private static bool PayloadReferencesRecord(byte[] payload, RecordId recordId)
+    {
+        try
+        {
+            return ProviderMutationCodec.Decode(payload).RecordId == recordId;
+        }
+        catch
+        {
+            // Unknown/corrupt retained payloads are live until repaired or explicitly
+            // acknowledged; never let a decoder failure authorize physical GC.
+            return true;
+        }
+    }
+
     private static bool HasLiveChangeIdReference(PartitionState state, int namespaceId, BatchId changeId)
     {
         if (state.Relay.Any(pair => pair.Key.NamespaceId == namespaceId &&
