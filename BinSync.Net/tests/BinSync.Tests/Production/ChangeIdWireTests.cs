@@ -452,63 +452,67 @@ public class ChangeIdWireTests
     [Fact]
     public void ChangeId_ledger_fingerprint_binds_the_immutable_origin_tuple()
     {
-        var semantic = ChangeIdentity.Fingerprint(7, Rid(1), 1,
-            new OpFieldWrite(0x0100, Asc("same"), new Hlc(100, 0)), Node(10));
+        NodeId author = NodeId.From(Fix.Rid(10));
+        var semantic = ChangeIdentity.Fingerprint(7, RecordId.From(Fix.Rid(1)), 1,
+            new OpFieldWrite(0x0100, new byte[] { 0x73, 0x61, 0x6D, 0x65 }, new Hlc(100, 0)), author);
 
-        var original = ChangeIdentity.BindOrigin(semantic, Node(10), 3, 41);
-        Assert.Equal(original, ChangeIdentity.BindOrigin(semantic, Node(10), 3, 41));
-        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, Node(10), 3, 42));
-        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, Node(10), 4, 41));
-        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, Node(11), 3, 41));
+        var original = ChangeIdentity.BindOrigin(semantic, author, 3, 41);
+        Assert.Equal(original, ChangeIdentity.BindOrigin(semantic, author, 3, 41));
+        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, author, 3, 42));
+        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, author, 4, 41));
+        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, NodeId.From(Fix.Rid(11)), 3, 41));
     }
 
     [Fact]
     public void Global_ChangeId_reuse_with_different_origin_is_rejected_atomically()
     {
-        var a = Fix.MakeNode(21);
-        var b = Fix.MakeNode(22);
-        var c = Fix.MakeNode(23);
+        using var a = Fix.MakeNode(121);
+        using var b = Fix.MakeNode(122);
+        using var c = Fix.MakeNode(123);
 
-        Assert.True(a.WriteField(NS, Rid(1), 0x0100, Asc("original"), new Hlc(100, 0)));
-        var original = a.CreateDeltaBatch(b.NodeId, NS)!;
-        Assert.NotNull(original);
-        Assert.Equal(1, original.Entries.Count);
+        Transport.MakeSession(a, b);
+        Assert.True(a.WriteField(1, Fix.Rid(0x72), 0x100, new byte[] { 0x11 }));
+        var original = a.CreateDeltaBatch(b.NodeId, 1)!;
+        a.SignBatchFor(original, b.NodeId);
+        var accepted = b.ApplyBatchPayload(a.EncodeBatchPayload(original), a.NodeId);
+        a.AdvanceStream(b.NodeId, 1, original);
+        a.ProcessAck(b.NodeId, 1, accepted.CursorEnd, accepted.DurableAuthor);
 
-        Assert.Equal("OK", b.ApplyBatch(original, a.NodeId).CodeName);
-        var relay = b.CreateDeltaBatch(c.NodeId, NS)!;
-        Assert.NotNull(relay);
-        Assert.Equal("OK", c.ApplyBatch(relay, b.NodeId).CodeName);
+        Transport.MakeSession(b, c);
+        Assert.NotNull(Transport.DeliverBatch(b, c, 1));
+        var recordId = original.Entries[0].RecordId;
+        Assert.True(c.TryGetField(1, recordId, 0x100, out var before));
+        Assert.Equal(new byte[] { 0x11 }, before!.Value);
+        int outboxBefore = c.OutboxSize(1);
+        int inboxBefore = c.Inbox.Count;
 
         Transport.MakeSession(a, c);
-        var conflict = new Batch(
-            original.BatchId,
-            original.NamespaceId,
-            original.SenderNodeId,
-            original.SenderEpoch,
-            original.CursorStart,
-            original.CursorEnd,
-            original.PreviousBatchDigest.ToArray(),
-            original.Entries.Select(Clone).ToList(),
-            Array.Empty<byte>(),
-            Array.Empty<byte>(),
-            original.AliasMap,
-            original.CausalBaseDigest.ToArray(),
-            original.CausalFrontier,
-            original.CausalFrontierDigest.ToArray())
-        {
-            CausalFrontierEntries = original.CausalFrontierEntries,
-            CausalFrontierAuthorEpochs = original.CausalFrontierAuthorEpochs,
-            AuthorStreamNodeId = original.AuthorStreamNodeId
-        };
+        var conflict = new Batch(original.NamespaceId, original.SchemaId, original.SchemaVersion,
+            original.MergePolicy, original.Flags, original.IssuerNodeId, original.IssuerEpoch,
+            original.CursorStart, original.CursorEnd, original.BatchId, original.PrevBatchDigest,
+            original.RecordsRoot, original.BatchDigest,
+            original.Entries.Select(e => new OutboxEntry
+            {
+                NamespaceId = e.NamespaceId,
+                Seq = e.Seq,
+                ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
+                RecordId = e.RecordId,
+                OpKind = e.OpKind,
+                Payload = e.Payload.ToArray(),
+                AuthorNodeId = e.AuthorNodeId,
+                CreatedAt = e.CreatedAt
+            }).ToList());
         conflict.Entries[0].OriginSequence = checked(conflict.Entries[0].OriginSequence + 1);
         Rehash(conflict);
 
         var error = Assert.Throws<SyncException>(() => c.ApplyBatch(conflict, a.NodeId));
         Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
-        Assert.Equal(1, c.Storage[NS].Count);
-        Assert.Single(c.Outbox[NS]);
-        Assert.Equal(0UL, c.GetReceiveCursor(NS, a.NodeId, a.Epoch));
-        Assert.Equal(1UL, c.GetReceiveCursor(NS, b.NodeId, b.Epoch));
+        Assert.Equal(inboxBefore, c.Inbox.Count);
+        Assert.Equal(outboxBefore, c.OutboxSize(1));
+        Assert.True(c.TryGetField(1, recordId, 0x100, out var after));
+        Assert.Equal(new byte[] { 0x11 }, after!.Value);
     }
 
     [Fact]
