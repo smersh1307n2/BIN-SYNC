@@ -84,8 +84,9 @@ public static class StorageFullReplaceSender
                 ProviderSnapshotPage page = provider.ReadSnapshot(
                     snapshot.Token, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
                 ValidatePage(page, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
-                if (page.Entries.Count == 0)
-                    throw new InvalidDataException("Provider snapshot ended before the signed entry count.");
+                if (page.Entries.Count == 0 || page.NextIndex > entryCount ||
+                    page.IsComplete != (page.NextIndex == entryCount))
+                    throw new InvalidDataException("Provider snapshot changed or ended before the signed entry count.");
                 await session.SendFullReplaceChunkAsync(
                     new FullReplaceTransferProtocol.Chunk(roster.NamespaceId, generation, nextIndex, page.Entries),
                     frameSequence, ct).ConfigureAwait(false);
