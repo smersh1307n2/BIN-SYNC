@@ -92,6 +92,81 @@ public sealed class ChangeIdentityProviderMutationTests
             ChangeIdentity.Fingerprint(3, mutation, Author));
     }
 
+    [Fact]
+    public void Provider_mutation_codec_roundtrips_write_and_tombstone_variants()
+    {
+        ProviderMutation[] mutations =
+        {
+            new()
+            {
+                RecordId = RecordId.From(Identity(10)), FieldId = 0x0101, KeyEpoch = 7,
+                HlcWall = 123, HlcLogical = 4, AuthorNodeId = Author,
+                Value = new byte[] { 1, 2, 3 }
+            },
+            new()
+            {
+                RecordId = RecordId.From(Identity(11)), FieldId = 0x0102, KeyEpoch = 0,
+                HlcWall = 124, HlcLogical = 5, AuthorNodeId = Author,
+                IsTombstone = true, Value = Array.Empty<byte>()
+            },
+            new()
+            {
+                RecordId = RecordId.From(Identity(12)), FieldId = Model.LifecycleFieldId,
+                HlcWall = 125, HlcLogical = 6, AuthorNodeId = Author,
+                IsRecordTombstone = true, Value = Array.Empty<byte>()
+            }
+        };
+
+        foreach (var mutation in mutations)
+        {
+            ProviderMutation decoded = ProviderMutationCodec.Decode(ProviderMutationCodec.Encode(mutation));
+            Assert.Equal(mutation.RecordId, decoded.RecordId);
+            Assert.Equal(mutation.FieldId, decoded.FieldId);
+            Assert.Equal(mutation.IsTombstone, decoded.IsTombstone);
+            Assert.Equal(mutation.IsRecordTombstone, decoded.IsRecordTombstone);
+            Assert.Equal(mutation.HlcWall, decoded.HlcWall);
+            Assert.Equal(mutation.HlcLogical, decoded.HlcLogical);
+            Assert.Equal(mutation.AuthorNodeId, decoded.AuthorNodeId);
+            Assert.Equal(mutation.KeyEpoch, decoded.KeyEpoch);
+            Assert.Equal(mutation.Value, decoded.Value);
+        }
+    }
+
+    [Fact]
+    public void Provider_mutation_codec_rejects_invalid_flags_and_trailing_bytes()
+    {
+        var mutation = new ProviderMutation
+        {
+            RecordId = RecordId.From(Identity(13)), FieldId = 1, AuthorNodeId = Author,
+            Value = new byte[] { 1 }
+        };
+        byte[] encoded = ProviderMutationCodec.Encode(mutation);
+
+        byte[] invalidFlags = encoded.ToArray();
+        invalidFlags[18] = 3;
+        Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.Decode(invalidFlags));
+
+        byte[] trailing = encoded.Concat(new byte[] { 0 }).ToArray();
+        Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.Decode(trailing));
+    }
+
+    [Fact]
+    public void Provider_mutation_codec_orders_record_tombstones_before_fields()
+    {
+        RecordId record = RecordId.From(Identity(14));
+        var recordTombstone = new ProviderMutation
+        {
+            RecordId = record, FieldId = Model.LifecycleFieldId, AuthorNodeId = Author,
+            IsRecordTombstone = true, Value = Array.Empty<byte>()
+        };
+        var field = new ProviderMutation
+        {
+            RecordId = record, FieldId = 1, AuthorNodeId = Author,
+            Value = new byte[] { 1 }
+        };
+        Assert.True(ProviderMutationCodec.CompareCanonical(recordTombstone, field) < 0);
+    }
+
     private static byte[] Identity(byte value)
     {
         var bytes = new byte[16];
