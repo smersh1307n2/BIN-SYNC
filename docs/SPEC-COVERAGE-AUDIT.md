@@ -92,7 +92,7 @@ The named baseline scenarios 1–25 map directly to executable test methods. Ext
 | 24. Unknown alias atomic rollback | `ScenariosB.Scenario24_UnknownAliasAtomicRollback` |
 | 25. Concurrent delete by author | `ScenariosB.Scenario25_ConcurrentDeleteByAuthor` |
 
-Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 644 passing core tests, 89 passing durable Storage Integration tests and 31 passing Fuzz/Lab cases on the latest verified code/test head `c71ec35480245f085c5aa76b337e275deb3e0c81` (coverage 70.9%).
+Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 644 passing core tests, 92 passing durable Storage Integration tests and 31 passing Fuzz/Lab cases on the latest verified source/test head `d3364d310db36cdd84c6e01f379de3ab29f3a112` (coverage 70.9%).
 
 **Interpretation guard:** a scenario test proves only the assertions inside that method. In particular, scenario 10 proves fail-closed behavior, not that destructive tombstone GC is implemented; scenario 13 proves quarantine behavior, not that a complete safe-frontier GC engine exists.
 
