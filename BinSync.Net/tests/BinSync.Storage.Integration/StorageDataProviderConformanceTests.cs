@@ -922,18 +922,28 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             provider.StageFullReplacePage(generation, 0, new[] { replacement });
             provider.CommitFullReplace(generation);
 
+            ProviderMutation latest = Mutation(109, 3, 300, 3);
+            Guid latestGeneration = Guid.Parse("98000000-0000-0000-0000-000000000002");
+            byte[] latestDigest = StorageDataProvider.ComputeFullReplaceDigest(latestGeneration, 23, new[] { latest });
+            provider.BeginFullReplace(latestGeneration, 23, 1, latestDigest);
+            provider.StageFullReplacePage(latestGeneration, 0, new[] { latest });
+            provider.CommitFullReplace(latestGeneration);
+
             Assert.False(provider.ReclaimInactiveGeneration(Guid.Empty, 1));
             Assert.True(provider.ReclaimInactiveGeneration(Guid.Empty, 1));
-            Assert.Throws<InvalidOperationException>(() => provider.ReclaimInactiveGeneration(generation, 1));
+            Assert.False(provider.ReclaimInactiveGeneration(generation, 1));
+            Assert.True(provider.ReclaimInactiveGeneration(generation, 1));
+            Assert.Throws<InvalidOperationException>(() => provider.ReclaimInactiveGeneration(latestGeneration, 1));
 
             ProviderSnapshotPage heldPage = provider.ReadSnapshot(heldSnapshot.Token, 0, 10);
             Assert.Single(heldPage.Entries);
             Assert.Equal(prior.RecordId, heldPage.Entries[0].RecordId);
             Assert.False(provider.TryReadCurrent(prior.RecordId, prior.FieldId, out _));
-            Assert.True(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
+            Assert.False(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
+            Assert.True(provider.TryReadCurrent(latest.RecordId, latest.FieldId, out _));
 
             Assert.Throws<InvalidOperationException>(() =>
-                provider.BeginFullReplace(Guid.Empty, 22, 1, digest));
+                provider.BeginFullReplace(generation, 22, 1, digest));
             provider.ReleaseSnapshot(heldSnapshot.Token);
         }
         finally
