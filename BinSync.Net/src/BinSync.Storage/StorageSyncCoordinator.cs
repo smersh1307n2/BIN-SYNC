@@ -153,7 +153,27 @@ public sealed class StorageSyncCoordinator
             long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
             if (currentNodeHigh < 0 || (ulong)currentNodeHigh != cutoverNodeOutboxHigh)
                 throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+            if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
+                throw new InvalidOperationException("Provider publication cutover exists but the durable Metadata Store scope is not attached.");
+            ulong currentMetadataHigh = _metadataStore.GetOutboundHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+            if (currentMetadataHigh < cutoverNodeOutboxHigh)
+                throw new InvalidDataException("Metadata Store outbound watermark regressed below the provider cutover fence.");
             metadataStoreOwnsOutbound = true;
+        }
+        else if (_metadataStore is not null && !string.IsNullOrWhiteSpace(_scopeId))
+        {
+            // If the provider-side cutover marker is missing after Metadata Store
+            // has advanced beyond the Node sequence, never silently fall back to the
+            // legacy mirror path: that could publish an already-frozen feed row twice.
+            long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+            if (currentNodeHigh < 0)
+                throw new InvalidDataException("Node Outbox high watermark is invalid.");
+            ulong currentMetadataHigh = _metadataStore.GetOutboundHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+            if (currentMetadataHigh > (ulong)currentNodeHigh)
+                throw new InvalidOperationException(
+                    "Metadata Store is ahead of Node Outbox but the provider cutover marker is missing; refusing legacy publication.");
         }
 
         if (totalChanges == 0)
