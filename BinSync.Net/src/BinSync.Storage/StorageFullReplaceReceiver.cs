@@ -9,6 +9,7 @@ public sealed class StorageFullReplaceReceiver
 {
     private const int AbortPageSize = 4096;
     private readonly object _gate = new();
+    private readonly IDataProvider _provider;
     private readonly IProviderFullReplace _fullReplace;
     private readonly IMetadataNamespaceGcStore _gcStore;
     private readonly TrustStore _trustStore;
@@ -19,7 +20,7 @@ public sealed class StorageFullReplaceReceiver
     private readonly uint _localMemberEpoch;
     private readonly byte[] _localMemberSeed;
     private readonly Func<IDisposable?> _acquireCommitGuard;
-    private readonly Action _afterCommit;
+    private readonly Action<ulong, uint> _advanceHlcAndRefresh;
     private NamespaceRosterCertificate? _roster;
     private FullReplaceTransferProtocol.Begin? _manifest;
 
@@ -34,9 +35,10 @@ public sealed class StorageFullReplaceReceiver
         uint localMemberEpoch,
         byte[] localMemberSeed,
         Func<IDisposable?> acquireCommitGuard,
-        Action afterCommit)
+        Action<ulong, uint> advanceHlcAndRefresh)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        _provider = provider;
         _fullReplace = provider as IProviderFullReplace
             ?? throw new NotSupportedException("The provider does not support durable FULL_REPLACE staging.");
         _gcStore = gcStore ?? throw new ArgumentNullException(nameof(gcStore));
@@ -51,7 +53,7 @@ public sealed class StorageFullReplaceReceiver
             throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(localMemberSeed));
         _acquireCommitGuard = acquireCommitGuard
             ?? throw new ArgumentNullException(nameof(acquireCommitGuard));
-        _afterCommit = afterCommit ?? throw new ArgumentNullException(nameof(afterCommit));
+        _advanceHlcAndRefresh = advanceHlcAndRefresh ?? throw new ArgumentNullException(nameof(advanceHlcAndRefresh));
         _namespaceId = namespaceId;
         _authorityPeer = authorityPeer;
         _authorityPeerEpoch = authorityPeerEpoch;
@@ -195,7 +197,8 @@ public sealed class StorageFullReplaceReceiver
                     throw new InvalidOperationException("Namespace roster changed before FULL_REPLACE commit.");
                 if (!progress.IsCommitted)
                     _fullReplace.CommitFullReplace(manifest.Generation);
-                _afterCommit();
+                (ulong hlcWall, uint hlcLogical) = ReadCommittedHlcFloor();
+                _advanceHlcAndRefresh(hlcWall, hlcLogical);
                 var acknowledgement = new FullReplaceInstalledAck
                 {
                     NamespaceId = _namespaceId,
@@ -337,6 +340,42 @@ public sealed class StorageFullReplaceReceiver
             while (!_fullReplace.AbortFullReplace(manifest.Generation, AbortPageSize)) { }
             _manifest = null;
             _roster = null;
+        }
+    }
+
+    private (ulong Wall, uint Logical) ReadCommittedHlcFloor()
+    {
+        ProviderSnapshotHandle snapshot = _provider.OpenSnapshot();
+        try
+        {
+            ulong maxWall = 0;
+            uint maxLogical = 0;
+            int afterIndex = 0;
+            const int pageSize = 4096;
+            while (true)
+            {
+                ProviderSnapshotPage page = _provider.ReadSnapshot(snapshot.Token, afterIndex, pageSize);
+                foreach (ProviderMutation mutation in page.Entries)
+                {
+                    if (mutation.HlcWall > maxWall ||
+                        (mutation.HlcWall == maxWall && mutation.HlcLogical > maxLogical))
+                    {
+                        maxWall = mutation.HlcWall;
+                        maxLogical = mutation.HlcLogical;
+                    }
+                }
+                if (page.NextIndex < afterIndex || page.NextIndex - afterIndex != page.Entries.Count)
+                    throw new InvalidDataException("Committed FULL_REPLACE snapshot cursor is non-contiguous.");
+                afterIndex = page.NextIndex;
+                if (page.IsComplete) break;
+                if (page.Entries.Count == 0)
+                    throw new InvalidDataException("Committed FULL_REPLACE snapshot ended before its completion marker.");
+            }
+            return (maxWall, maxLogical);
+        }
+        finally
+        {
+            _provider.ReleaseSnapshot(snapshot.Token);
         }
     }
 
