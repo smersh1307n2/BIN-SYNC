@@ -92,6 +92,8 @@ Before publication, eligible pending LWW operations may be coalesced according t
 - never rewrite or coalesce an already frozen entry;
 - preserve original author, HLC, KeyEpoch, operation kind and payload across retry/restart.
 
+`FreezeOutbound` is idempotent per ChangeId, not per caller batch shape. A retry may contain previously frozen feed entries plus newer entries appended before the provider feed ACK completed: the store verifies the old fingerprint/payload and returns its original sequence, while assigning new sequences only to unseen ChangeIds in the same transaction. Conflicting reuse of an existing ChangeId still rejects the entire freeze without assigning any new sequence. This permits a stable provider page to be replayed safely even if the feed grew after the first freeze attempt.
+
 Reads are bounded and stable. A reader must not hold a global writer lock during network I/O. Multiple consumers require lease or generation fencing. A stale consumer must not ACK after a newer consumer takes ownership.
 
 For a separate Data Provider feed, the Metadata Store/runtime handoff must also persist the canonical pending operations, a replay/equivocation receipt for the source page and the provider's staged-through cursor atomically. The provider feed prefix is acknowledged only after this stage transaction is durable. If the process stops before provider ACK, replay of the same source page must be idempotent. The ownership and ordering rules are detailed in [Metadata Storage Architecture §3.3](METADATA-STORAGE-ARCHITECTURE.md) and [Data Provider Conformance](DATA-PROVIDER-CONFORMANCE.md).
