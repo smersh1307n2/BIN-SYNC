@@ -977,8 +977,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     tombstone.OriginSequence == 0 ||
                     !gcStore.HasProtocolTombstoneGcProof(
                         roster, trustStore, tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
-                        tombstone.OriginSequence, checkpoint.FullReplaceGeneration.Value,
-                        checkpoint.FullReplaceDigest))
+                        tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
+                        checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest))
                 {
                     afterTombstoneKey = tombstoneRow.Key;
                     examined++;
