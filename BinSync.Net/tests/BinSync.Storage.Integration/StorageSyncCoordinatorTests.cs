@@ -1445,6 +1445,51 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Incremental_provider_cache_preserves_field_and_record_tombstone_ordering()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "incremental-provider-tombstones"), 466);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(67);
+        const string scope = "incremental-provider-tombstones";
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        RecordId recordId = RecordId.From(Guid.Parse("67000000-0000-0000-0000-000000000001").ToByteArray());
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId, FieldId = 0x0831, AuthorNodeId = node.NodeId,
+            HlcWall = 7200, Value = "old"u8.ToArray()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId, FieldId = 0x0831, IsTombstone = true,
+            AuthorNodeId = node.NodeId, HlcWall = 7300, Value = Array.Empty<byte>()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId, FieldId = Model.LifecycleFieldId, IsRecordTombstone = true,
+            AuthorNodeId = node.NodeId, HlcWall = 7400, Value = Array.Empty<byte>()
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = recordId, FieldId = 0x0832, AuthorNodeId = node.NodeId,
+            HlcWall = 7500, Value = "ghost"u8.ToArray()
+        });
+
+        Assert.Equal(4, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(3UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.True(node.TryGetRecord(1, recordId, out var restored));
+        Assert.True(restored!.IsDead);
+        Assert.True(restored.FieldTombs.ContainsKey(0x0831));
+        var visible = restored.VisibleFields();
+        Assert.False(visible.ContainsKey(0x0831));
+        Assert.True(visible.TryGetValue(0x0832, out var ghost));
+        Assert.Equal("ghost", Encoding.UTF8.GetString(ghost!.Value));
+    }
+
+    [Fact]
     public void Malformed_provider_feed_is_rejected_before_metadata_freeze()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "malformed-provider-feed"), 465);
