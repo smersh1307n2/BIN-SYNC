@@ -2062,6 +2062,7 @@ public sealed class StorageSyncCoordinatorTests
     [InlineData("after-pending-apply")]
     [InlineData("after-node-checkpoint")]
     [InlineData("after-provider-commit")]
+    [InlineData("after-metadata-finalize")]
     public async Task Process_kill_at_receive_durability_cut_recovers_pending_apply_and_provider_state(string crashCut)
     {
         string directory = Path.Combine(_root, "process-kill-" + crashCut);
@@ -2152,20 +2153,32 @@ public sealed class StorageSyncCoordinatorTests
                 receiverId = identity.NodeId;
             using var receiver = StorageNodePersistence.Load(storage, receiverId);
 
-            Assert.Single(metadata.ReadPendingApplyIntents(scope, receiverId));
+            IReadOnlyList<MetadataPendingApplyIntent> pendingIntents =
+                metadata.ReadPendingApplyIntents(scope, receiverId);
+            Assert.Equal(crashCut == "after-metadata-finalize" ? 0 : 1, pendingIntents.Count);
             RecordId record = RecordId.From(Guid.Parse("7a000000-0000-0000-0000-00000000007a").ToByteArray());
             bool nodeAlreadyCheckpointed = receiver.TryGetField(1, record, 0x087a, out var checkpointed);
             Assert.Equal(crashCut != "after-pending-apply", nodeAlreadyCheckpointed);
             if (nodeAlreadyCheckpointed)
                 Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(checkpointed!.Value));
             bool providerAlreadyCommitted = provider.TryReadCurrent(record, 0x087a, out var providerBeforeRecovery);
-            Assert.Equal(crashCut == "after-provider-commit", providerAlreadyCommitted);
+            Assert.Equal(crashCut is "after-provider-commit" or "after-metadata-finalize", providerAlreadyCommitted);
             if (providerAlreadyCommitted)
                 Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(providerBeforeRecovery!.Value));
 
             var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
-            Assert.Equal(1, coordinator.RecoverPendingApplies(
-                node => StorageNodePersistence.Save(storage, node)));
+            if (crashCut == "after-metadata-finalize")
+            {
+                using var senderIdentity = NewNode(121);
+                Assert.Equal(1UL, metadata.GetReceiveCursor(scope, receiverId, senderIdentity.NodeId, 1, 1));
+                Assert.Equal(0, coordinator.RecoverPendingApplies(
+                    node => StorageNodePersistence.Save(storage, node)));
+            }
+            else
+            {
+                Assert.Equal(1, coordinator.RecoverPendingApplies(
+                    node => StorageNodePersistence.Save(storage, node)));
+            }
             Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiverId));
             Assert.True(provider.TryReadCurrent(record, 0x087a, out var recovered));
             Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(recovered!.Value));
@@ -2240,6 +2253,27 @@ public sealed class StorageSyncCoordinatorTests
                 receiveStateOwnedByMetadataStore: true);
             Task<bool> sendBeforeNodeApply = initiator.PushBatchAsync(sender, 1);
             await Task.WhenAll(receiveBeforeNodeApply, sendBeforeNodeApply);
+        }
+        else if (crashCut == "after-metadata-finalize")
+        {
+            StorageRemoteApplyPlan? plan = null;
+            Task<BatchResult> receiveBeforeAck = acceptor.ReceiveBatchAsync(receiver,
+                beforeApply: null,
+                beforeApplyWithOperationDecisions: (batch, payload, peer) =>
+                {
+                    plan = coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
+                    return plan.ApplyOperations;
+                },
+                beforeAck: (batch, _) =>
+                {
+                    var accepted = plan ?? throw new InvalidOperationException("PendingApply was not staged.");
+                    coordinator.ApplyRemoteBatchAfterNodeApply(batch, accepted,
+                        node => StorageNodePersistence.Save(storage, node));
+                    signalAndBlock();
+                },
+                receiveStateOwnedByMetadataStore: true);
+            Task<bool> sendBeforeAck = initiator.PushBatchAsync(sender, 1);
+            await Task.WhenAll(receiveBeforeAck, sendBeforeAck);
         }
         else
         {
