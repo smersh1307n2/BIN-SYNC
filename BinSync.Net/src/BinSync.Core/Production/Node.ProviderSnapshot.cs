@@ -35,6 +35,21 @@ public sealed partial class Node
     }
 
     /// <summary>
+    /// Advance the local HLC to at least a floor recovered from an authoritative,
+    /// fully verified provider snapshot. This is a restore operation, not a remote
+    /// receive tick, so it does not apply network clock-skew rejection.
+    /// </summary>
+    public void AdvanceClockToFloor(ulong wall, uint logical)
+    {
+        var floor = new Hlc(wall, logical);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            Clock.Observe(floor);
+        }
+    }
+
+    /// <summary>
     /// Replace one namespace's in-memory record cache with a complete Data Provider
     /// snapshot. This is a rehydration operation: it does not create Outbox entries,
     /// WAL records or local ChangeIds. Pending remote ChangeIds are removed from the
