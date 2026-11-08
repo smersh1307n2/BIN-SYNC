@@ -14,9 +14,6 @@ public interface IMetadataStore : IDisposable
 
     IReadOnlyList<MetadataOutboundItem> FreezeOutbound(string scopeId, NodeId localReplica, int namespaceId,
         NodeId localAuthor, IReadOnlyList<MetadataFrozenOperation> operations);
-    /// <summary>Checks the durable ChangeId ledger and validates the fingerprint for an already-frozen local outbound operation.</summary>
-    bool TryGetOutboundChangeFingerprint(string scopeId, NodeId localReplica, int namespaceId,
-        BatchId changeId, out byte[] fingerprint);
     ulong AcquireOutboundLease(string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor, Guid consumerId);
     MetadataOutboundPage ReadOutbound(string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor,
         ulong leaseGeneration, ulong afterSequence, int limit);
@@ -33,6 +30,18 @@ public interface IMetadataStore : IDisposable
     ulong GetReceiveCursor(string scopeId, NodeId localReplica, NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream)
         => GetReceiveCursor(scopeId, localReplica, sender, senderEpoch, namespaceId);
     ulong GetRelayHighWatermark(string scopeId, NodeId localReplica, int namespaceId, NodeId originalAuthor);
+}
+
+/// <summary>
+/// Optional Metadata Store capability used by durable provider-feed replay.
+/// It avoids requiring every third-party IMetadataStore implementation to expose
+/// BIN-SYNC's local outbound ChangeId ledger.
+/// </summary>
+public interface IMetadataOutboundChangeIdentityStore
+{
+    /// <summary>Returns the durable fingerprint when the ChangeId is already frozen as a local outbound operation.</summary>
+    bool TryGetOutboundChangeFingerprint(string scopeId, NodeId localReplica, int namespaceId,
+        BatchId changeId, out byte[] fingerprint);
 }
 
 public interface IMetadataStoreSnapshot : IDisposable
