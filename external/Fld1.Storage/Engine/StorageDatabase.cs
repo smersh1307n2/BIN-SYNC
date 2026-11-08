@@ -160,14 +160,12 @@ public sealed class StorageDatabase : IDisposable
         lock (_gate)
         {
             EnsureUsable();
-            var copy = new SortedDictionary<StorageKey, byte[]>(StorageKeyComparer.Instance);
+            // SortedList builds one compact sorted index from the live dictionary.
             // Stored value arrays are immutable after publication: Commit copies
             // caller-owned buffers before assigning them and later commits replace
-            // references rather than mutating arrays. A snapshot therefore needs
-            // its own sorted index, but can safely share the immutable key/value
-            // objects instead of cloning every payload byte.
-            foreach (var pair in _values)
-                copy.Add(pair.Key, pair.Value);
+            // references rather than mutating arrays, so snapshot payload bytes can
+            // be shared safely instead of cloned.
+            var copy = new SortedList<StorageKey, byte[]>(_values, StorageKeyComparer.Instance);
             return new StorageSnapshot(copy, _lastCommitSeq);
         }
     }
@@ -387,10 +385,10 @@ public sealed class StorageWriteBatch : IDisposable
 /// <summary>Immutable, stable point-in-time view of a Storage partition.</summary>
 public sealed class StorageSnapshot : IDisposable
 {
-    private SortedDictionary<StorageDatabase.StorageKey, byte[]>? _values;
+    private SortedList<StorageDatabase.StorageKey, byte[]>? _values;
     public ulong CommitSeq { get; }
 
-    internal StorageSnapshot(SortedDictionary<StorageDatabase.StorageKey, byte[]> values, ulong commitSeq)
+    internal StorageSnapshot(SortedList<StorageDatabase.StorageKey, byte[]> values, ulong commitSeq)
     {
         _values = values;
         CommitSeq = commitSeq;
@@ -426,92 +424,73 @@ public sealed class StorageSnapshot : IDisposable
         private readonly StorageSnapshot _owner;
         private readonly byte[] _prefix;
         private readonly byte[] _afterKey;
-        private IEnumerator<KeyValuePair<StorageDatabase.StorageKey, byte[]>>? _enumerator;
+        private int _index;
         private bool _finished;
+        private bool _disposed;
 
         internal PrefixCursor(StorageSnapshot owner, byte[] prefix, byte[] afterKey)
         {
             _owner = owner;
             _prefix = prefix;
             _afterKey = afterKey;
-            SortedDictionary<StorageDatabase.StorageKey, byte[]> values = owner.GetValues();
-            byte[]? upperBytes = PrefixUpperBound(prefix);
-            if (upperBytes is null)
-            {
-                _enumerator = values.GetEnumerator();
-                return;
-            }
-
-            StorageDatabase.StorageKey lower = new(prefix);
-            if (afterKey.Length != 0 && afterKey.AsSpan().SequenceCompareTo(prefix) > 0)
-            {
-                if (afterKey.AsSpan().SequenceCompareTo(upperBytes) >= 0)
-                {
-                    _enumerator = values.GetEnumerator();
-                    _finished = true;
-                    return;
-                }
-                lower = new StorageDatabase.StorageKey(afterKey);
-            }
-
-            // SortedDictionary range views seek to the first key in O(log n);
-            // a prefix cursor no longer walks unrelated keys from the partition root.
-            _enumerator = values.GetViewBetween(
-                lower, new StorageDatabase.StorageKey(upperBytes)).GetEnumerator();
+            SortedList<StorageDatabase.StorageKey, byte[]> values = owner.GetValues();
+            ReadOnlySpan<byte> startKey = afterKey.Length != 0 &&
+                afterKey.AsSpan().SequenceCompareTo(prefix) > 0
+                    ? afterKey
+                    : prefix;
+            _index = LowerBound(values, startKey);
         }
 
-        private static byte[]? PrefixUpperBound(ReadOnlySpan<byte> prefix)
+        private static int LowerBound(
+            SortedList<StorageDatabase.StorageKey, byte[]> values, ReadOnlySpan<byte> key)
         {
-            if (prefix.IsEmpty) return null;
-            byte[] upper = prefix.ToArray();
-            for (int i = upper.Length - 1; i >= 0; i--)
+            int low = 0;
+            int high = values.Count;
+            while (low < high)
             {
-                if (upper[i] == byte.MaxValue) continue;
-                upper[i]++;
-                return upper.AsSpan(0, i + 1).ToArray();
+                int middle = low + ((high - low) >> 1);
+                if (values.Keys[middle].Span.SequenceCompareTo(key) < 0)
+                    low = middle + 1;
+                else
+                    high = middle;
             }
-            return null;
+            return low;
         }
 
         public IReadOnlyList<StorageEntry> ReadPage(int limit)
         {
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
-            var values = _owner.GetValues();
-            var enumerator = _enumerator
-                ?? throw new ObjectDisposedException(nameof(PrefixCursor));
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            SortedList<StorageDatabase.StorageKey, byte[]> values = _owner.GetValues();
             if (_finished) return Array.Empty<StorageEntry>();
 
-            var result = new List<StorageEntry>(Math.Min(limit, values.Count));
-            while (true)
+            var result = new List<StorageEntry>(Math.Min(limit, Math.Max(0, values.Count - _index)));
+            while (_index < values.Count && result.Count < limit)
             {
-                if (!enumerator.MoveNext())
-                {
-                    _finished = true;
-                    break;
-                }
-
-                var pair = enumerator.Current;
-                ReadOnlySpan<byte> key = pair.Key.Span;
-                int prefixOrder = CompareToPrefix(key, _prefix);
+                StorageDatabase.StorageKey key = values.Keys[_index];
+                byte[] value = values.Values[_index];
+                _index++;
+                ReadOnlySpan<byte> keyBytes = key.Span;
+                int prefixOrder = CompareToPrefix(keyBytes, _prefix);
                 if (prefixOrder < 0) continue;
                 if (prefixOrder > 0)
                 {
                     _finished = true;
                     break;
                 }
-                if (_afterKey.Length != 0 && key.SequenceCompareTo(_afterKey) <= 0)
+                if (_afterKey.Length != 0 && keyBytes.SequenceCompareTo(_afterKey) <= 0)
                     continue;
 
-                result.Add(new StorageEntry(key.ToArray(), pair.Value.ToArray()));
-                if (result.Count == limit) break;
+                result.Add(new StorageEntry(keyBytes.ToArray(), value.ToArray()));
             }
+            if (_index >= values.Count)
+                _finished = true;
             return result;
         }
 
         public void Dispose()
         {
-            _enumerator?.Dispose();
-            _enumerator = null;
+            _disposed = true;
             _finished = true;
         }
 
@@ -524,7 +503,7 @@ public sealed class StorageSnapshot : IDisposable
         }
     }
 
-    private SortedDictionary<StorageDatabase.StorageKey, byte[]> GetValues()
+    private SortedList<StorageDatabase.StorageKey, byte[]> GetValues()
         => _values ?? throw new ObjectDisposedException(nameof(StorageSnapshot));
 
     public void Dispose() => _values = null;
