@@ -127,7 +127,7 @@ public partial class SyncSession : IAsyncDisposable
             EnsureTransportCapabilities(transport);
             var handshake = await AcceptHandshakeAsync(local, transport, caps, ct).ConfigureAwait(false);
             lease = handshake.Lease;
-            var session = new SyncSession(transport, handshake.Peer, caps, ownsTransport, lease);
+            var session = new SyncSession(local, transport, handshake.Peer, caps, ownsTransport, lease);
             lease = null;
             return session;
         }
@@ -245,6 +245,7 @@ public partial class SyncSession : IAsyncDisposable
         Func<Batch, ReadOnlyMemory<byte>, NodeId, IReadOnlyList<bool>>? beforeApplyWithOperationDecisions = null)
     {
         ArgumentNullException.ThrowIfNull(receiver);
+        ValidateLocalNode(receiver);
         await _batchReceiveGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -416,6 +417,9 @@ public partial class SyncSession : IAsyncDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         _sendFlowControl.Fail(new ObjectDisposedException(nameof(SyncSession)));
         _typedFragmentState.Clear();
+        var disposedError = new ObjectDisposedException(nameof(SyncSession));
+        foreach (var pending in _pendingAliasUpdates.Values)
+            pending.TrySetException(disposedError);
         _receiveCts.Cancel();
         try
         {
@@ -437,6 +441,12 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
+    private void ValidateLocalNode(Node local)
+    {
+        if (!ReferenceEquals(local, _localNode))
+            throw new InvalidOperationException("A SyncSession is bound to the Node instance used during its handshake.");
+    }
+
     private async Task EnsureRemoteAliasesAsync(CancellationToken ct)
     {
         foreach (var author in _localNode.DurableAuthorsSnapshot()
@@ -449,6 +459,7 @@ public partial class SyncSession : IAsyncDisposable
 
     private async Task EnsureRemoteAliasAsync(NodeId author, int epoch, CancellationToken ct)
     {
+        if (author == _localNode.NodeId || author == PeerNodeId) return;
         await _aliasUpdateGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -558,6 +569,9 @@ public partial class SyncSession : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            var stopped = new ObjectDisposedException(nameof(SyncSession));
+            foreach (var pending in _pendingAliasUpdates.Values)
+                pending.TrySetException(stopped);
         }
         catch (Exception ex)
         {
