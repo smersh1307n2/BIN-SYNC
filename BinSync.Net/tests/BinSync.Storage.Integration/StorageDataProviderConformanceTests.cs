@@ -563,4 +563,17 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Assert.Throws<IOException>(() => StorageDatabase.Open(alias, 89));
     }
 
+    [Fact]
+    public void Wal_writer_fence_rejects_case_alias_on_case_insensitive_filesystems()
+    {
+        string directory = Path.Combine(_root, "case-alias-wal-directory");
+        Directory.CreateDirectory(directory);
+        string alias = directory.ToUpperInvariant();
+        if (!Directory.Exists(alias) || string.Equals(directory, alias, StringComparison.Ordinal))
+            return;
+
+        using var first = StorageDatabase.Open(directory, 90);
+        Assert.Throws<IOException>(() => StorageDatabase.Open(alias, 90));
+    }
+
 }
