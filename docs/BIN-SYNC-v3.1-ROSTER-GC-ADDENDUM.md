@@ -349,7 +349,7 @@ Physical receipt, ChangeId and tombstone collection are all explicitly disabled 
 
 ## 10.10. Canonical provider mutation v2 wire/storage layout
 
-The v3.1 FULL_REPLACE provider mutation encoding has an 81-byte fixed header followed by `Value[ValueLength]`:
+The v3.1 FULL_REPLACE/provider-state mutation encoding has an 81-byte fixed header followed by `Value[ValueLength]`. For an unpublished local draft, ChangeId and OriginAuthorEpoch are present while OriginSequence is zero; published operations and remote DELTA_BATCH apply require a non-zero OriginSequence:
 
 | Offset | Size | Field |
 |---:|---:|---|
@@ -375,7 +375,7 @@ All physical compaction gates are currently false. In addition to the signed ori
 
 ## 10.11. Member applied-origin frontier and authority checkpoint production
 
-`StorageSyncCoordinator.PublishAppliedOriginFrontier(memberSeed, pageSize)` produces the local Active member's signed OFR1 report. It combines (a) immutable origin identities in the durable Metadata Store ChangeId ledger and (b) still-unacknowledged local provider-feed mutations. The provider feed's own sequence is never substituted for `OriginSequence`. For each `(OriginAuthorNodeId, OriginAuthorEpoch)`, the report advances only through the contiguous prefix after the prior durable report; gaps stop advancement. The report is signed with the member key and persisted by `StorageNamespaceGcStore.AcceptOriginFrontier`.
+`StorageSyncCoordinator.PublishAppliedOriginFrontier(memberSeed)` produces the local Active member's signed OFR1 report from immutable origin identities in the durable Metadata Store ChangeId ledger only. Unpublished provider-feed drafts are excluded: they have no OriginSequence yet. For each `(OriginAuthorNodeId, OriginAuthorEpoch)`, the report advances only through the contiguous prefix after the prior durable report; gaps stop advancement. The report is signed with the member key and persisted by `StorageNamespaceGcStore.AcceptOriginFrontier`.
 
 `StorageSyncCoordinator.PublishRetentionCheckpoint(authoritySeed, fullReplaceGeneration?, fullReplaceDigest?)` reads the latest durable reports and builds RCP1 using the minimum contiguous applied sequence across every Active member. A missing Active-member report conservatively prevents a safe frontier for that origin. Optional FULL_REPLACE binding is accepted only after every Active member's signed installed ACK is durable. The checkpoint is authority-signed and persisted with the existing monotonic sequence/digest-chain checks.
 
@@ -384,3 +384,10 @@ All physical compaction gates are currently false. In addition to the signed ori
 `StorageFullReplaceReceiver.Commit` computes the maximum `(HlcWall,HlcLogical)` in the committed provider generation and invokes its mandatory refresh callback before creating/persisting the signed installed ACK. The intended callback is `StorageSyncCoordinator.RefreshAfterFullReplace(persistNode, wall, logical)`: it advances `Node` HLC to the floor, rehydrates the Node cache from the committed provider generation, replays durable PendingApply intents, and persists the refreshed Node state. `Node.AdvanceClockToFloor` is a restore operation and deliberately does not apply remote clock-skew rejection. The caller must provide this callback; ACK must not be emitted if refresh or persistence fails.
 
 These are C-pass production APIs. Exact-head tests for gaps, report/checkpoint rollback, crash/retry, callback ordering and all-member installation remain T-pass obligations. Physical receipt, ChangeId and tombstone/ghost GC remain disabled.
+
+
+## 10.13. OriginSequence is allocated at immutable freeze, not provider-feed append
+
+The local provider feed has its own monotonically increasing feed cursor. That cursor is not an operation-origin sequence. `AppendLocalChange` assigns a stable ChangeId and author epoch but leaves OriginSequence zero while the change is still unpublished/coalescible. This draft identity is valid in local provider state and FULL_REPLACE state images; `ProviderMutationCodec.ValidatePublished` requires a complete non-zero origin tuple before remote operation apply.
+
+`StorageMetadataStore.FreezeOutbound` allocates OriginSequence atomically with the outbound operation and global ChangeId ledger row. The allocator is durable and keyed by `(NamespaceId, AuthorNodeId, OriginAuthorEpoch)` (storage key kind 22), separate from the transport/outbound cursor. Coalesced-away drafts consume no origin sequence, so published operations remain contiguous. After freeze, `StorageSyncCoordinator` calls `IProviderPublishedOriginStore.CommitPublishedOrigins` before acknowledging the provider feed; `StorageDataProvider` stamps only the matching current-state winner with the assigned sequence. If stamping or feed ACK fails, retry reads the same frozen identity from the ChangeId ledger and stamping is idempotent. A later FULL_REPLACE state-image replay may carry the draft form but cannot erase an already-published current-row origin.
