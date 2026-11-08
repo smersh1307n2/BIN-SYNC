@@ -927,6 +927,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     store.RetireInterestedPeer(scope, local, peer, 1, 2, 7));
 
                 store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+                Assert.Throws<InvalidOperationException>(() =>
+                    store.RetireInterestedPeer(scope, local, peer, 1, 2, 7));
                 store.CompletePeerInitialSync(scope, local, peer, 2, 7,
                     new[] { new MetadataPeerStreamBaseline(local, 0, 1) });
                 var reservation = new MetadataOutboundBatchReservation
