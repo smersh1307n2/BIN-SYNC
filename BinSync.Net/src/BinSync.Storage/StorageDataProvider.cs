@@ -371,8 +371,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             ThrowIfDisposed();
             if (generation == Guid.Empty)
                 throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
-            using var snapshot = _storage.OpenSnapshot();
-            if (!snapshot.TryGet(FullReplaceSessionKey(generation), out var bytes))
+            if (!_storage.TryGet(FullReplaceSessionKey(generation), out var bytes))
             {
                 progress = null;
                 return false;
