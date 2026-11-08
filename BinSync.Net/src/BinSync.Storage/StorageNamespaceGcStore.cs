@@ -115,6 +115,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             if (priorBytes is not null)
             {
                 AppliedOriginFrontierReport prior = OriginFrontierProtocol.DecodeAndVerify(priorBytes, acceptedRoster);
+                if (prior.FinalForAuthor && report.ReportSequence > prior.ReportSequence)
+                    throw new InvalidDataException("A final author frontier is terminal; no later origin report is accepted.");
                 if (report.ReportSequence < prior.ReportSequence)
                     throw new InvalidDataException("Applied-origin frontier report sequence regressed.");
                 if (report.ReportSequence == prior.ReportSequence)
@@ -480,6 +482,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         AppliedOriginFrontierReport report = ReadOriginFrontiersCore(prior)
             .FirstOrDefault(item => item.MemberNodeId == author)
             ?? throw new InvalidDataException("An Active author must publish a signed issued-origin report before retirement.");
+        if (!report.FinalForAuthor || report.UnpublishedDraftCount != 0)
+            throw new InvalidDataException("An Active author must publish a final, draft-free signed report before retirement.");
 
         NamespaceRetiredOriginEpoch[] expected = report.IssuedOrigins
             .Select(entry => new NamespaceRetiredOriginEpoch
