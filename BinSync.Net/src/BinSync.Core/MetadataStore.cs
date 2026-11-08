@@ -70,6 +70,13 @@ public sealed record MetadataProviderApplyReceipt(Guid ApplyToken, byte[] BatchD
 public sealed record MetadataPendingApplyIntent(Guid ApplyToken, MetadataIncomingBatch Batch)
 {
     public bool IsDuplicate { get; init; }
+
+    /// <summary>
+    /// Per-operation apply decisions made by the Metadata Store's global ChangeId ledger.
+    /// True means the operation is new and must be applied to Node data; false means the
+    /// same fingerprint was already accepted and Node must not recreate a second identity ledger.
+    /// </summary>
+    public IReadOnlyList<bool> ApplyOperations { get; init; } = Array.Empty<bool>();
 }
 
 public sealed class MetadataOperation
