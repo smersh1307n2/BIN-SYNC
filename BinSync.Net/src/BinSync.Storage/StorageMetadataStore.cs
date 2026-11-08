@@ -1136,7 +1136,7 @@ private static bool ValidateIncomingBatchForStaging(
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        CompactStreamPayload(partitionKey, current, 7,
+        CompactStreamPayload(partitionKey, current, 21,
             namespaceId, localAuthor, safeThroughSequence, relay: false);
     
         }
@@ -1983,7 +1983,7 @@ private static bool ValidateIncomingBatchForStaging(
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        CompactStreamPayload(partitionKey, current, 4,
+        CompactStreamPayload(partitionKey, current, 20,
             namespaceId, originalAuthor, safeThroughSequence, relay: true);
     
         }
@@ -2127,7 +2127,7 @@ private static bool ValidateIncomingBatchForStaging(
         PartitionKey partitionKey, PartitionState current, byte storageKind,
         int namespaceId, NodeId author, ulong safeThroughSequence, bool relay)
     {
-        if ((relay && storageKind != 4) || (!relay && storageKind != 7))
+        if ((relay && storageKind != 20) || (!relay && storageKind != 21))
             throw new ArgumentOutOfRangeException(nameof(storageKind));
         byte[] root = PartitionRoot(partitionKey);
         List<ulong> removedSequences;
