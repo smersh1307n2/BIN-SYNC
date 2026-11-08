@@ -51,7 +51,7 @@ jobs:
       - name: Build
         run: dotnet build BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-restore
       - name: Test
-        run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --logger "console;verbosity=detailed" --logger "trx;LogFileName=storage-integration.trx"
+        run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --blame-hang-timeout 3m --blame-hang-dump-type mini --logger "console;verbosity=detailed" --logger "trx;LogFileName=storage-integration.trx"
       - name: Run durable array synchronization sample
         run: dotnet run --project samples/StorageArraySync/StorageArraySync.csproj --configuration Release
       - name: Run Storage-backed TCP array synchronization sample
