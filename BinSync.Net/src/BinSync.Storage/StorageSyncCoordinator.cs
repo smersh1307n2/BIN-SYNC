@@ -102,6 +102,54 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>
+    /// Publish the authority-signed retention checkpoint from the latest durable
+    /// member reports. The checkpoint remains conservative when any Active member
+    /// has not reported; a FULL_REPLACE binding is accepted only after every Active
+    /// member's signed installation ACK has been persisted.
+    /// </summary>
+    public NamespaceRetentionCheckpoint PublishRetentionCheckpoint(
+        byte[] authoritySeed,
+        Guid? fullReplaceGeneration = null,
+        byte[]? fullReplaceDigest = null)
+    {
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        if (authoritySeed.Length != 32)
+            throw new ArgumentException("Ed25519 namespace authority seed must be 32 bytes.", nameof(authoritySeed));
+        if (fullReplaceGeneration.HasValue &&
+            (fullReplaceGeneration.Value == Guid.Empty ||
+             fullReplaceDigest is null || fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize))
+            throw new ArgumentException("A FULL_REPLACE checkpoint binding requires a non-empty generation and 32-byte digest.");
+        if (!fullReplaceGeneration.HasValue && fullReplaceDigest is { Length: > 0 })
+            throw new ArgumentException("FULL_REPLACE digest cannot be supplied without a generation.", nameof(fullReplaceDigest));
+
+        lock (_gate)
+        {
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the signed namespace-GC store before publishing retention checkpoints.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+            if (roster.AuthorityNodeId != _node.NodeId)
+                throw new InvalidOperationException("Only the pinned namespace authority may publish a retention checkpoint.");
+
+            gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? prior);
+            ulong sequence = checked((prior?.CheckpointSequence ?? 0) + 1);
+            byte[] previousDigest = prior is null
+                ? new byte[NamespaceRosterProtocol.DigestSize]
+                : NamespaceRetentionCheckpointProtocol.ComputeDigest(prior);
+            IReadOnlyList<AppliedOriginFrontierReport> reports = gcStore.ReadOriginFrontiers(roster);
+            NamespaceRetentionCheckpoint checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, sequence, previousDigest, reports,
+                fullReplaceGeneration, fullReplaceDigest ?? Array.Empty<byte>());
+            byte[] signed = NamespaceRetentionCheckpointProtocol.Sign(checkpoint, authoritySeed);
+            return gcStore.AcceptRetentionCheckpoint(signed, roster, trustStore);
+        }
+    }
+
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
     public int CompactChangeLedger(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
     {
