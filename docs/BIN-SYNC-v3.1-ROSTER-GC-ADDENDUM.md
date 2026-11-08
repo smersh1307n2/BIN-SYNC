@@ -342,6 +342,6 @@ The v3.1 implementation uses canonical encodings only: provider mutations requir
 
 ## 10.9. Provider snapshot enumeration and GC enablement
 
-`StorageDataProvider.OpenSnapshot` now retains a pinned storage snapshot and streams the two current-state prefixes in canonical merged order using 4096-row keyset pages. This removes the extra full provider-row array and preserves a stable two-pass FULL_REPLACE view. The underlying `StorageDatabase.OpenSnapshot` still clones the partition, so total snapshot memory is not yet O(page).
+`StorageDataProvider.OpenSnapshot` now retains a pinned storage snapshot and streams the two current-state prefixes in canonical merged order using persistent sorted-prefix cursors with 1024-row internal scan pages. This removes the extra full provider-row array and preserves a stable two-pass FULL_REPLACE view. The underlying `StorageDatabase.OpenSnapshot` still clones the partition, so total snapshot memory is not yet O(page).
 
 Physical receipt, ChangeId and tombstone collection are all explicitly disabled in v3.1 (`IsReceiptGcProofEnabled`, `IsChangeIdGcProofEnabled`, `IsTombstoneGcProofEnabled` are false). Receipt eligibility code additionally requires the sender's durable retired-transport-epoch fence, retained receive cursor/digest chain, safe origin frontier and no PendingApply. These compaction methods are plumbing only until exact-head proof tests and the remaining causal-horizon/application-lease work are complete.
