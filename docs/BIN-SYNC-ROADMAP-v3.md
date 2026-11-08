@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 206f4f849f3ffc74b9812950fcadccd06507dc33. Code head f91df0b4ef93f5a53f419420aa578dfe36bc293b has green Core/Fuzz-Lab and three-platform Storage CI. Follow-up v17 fixture/comment commits were included in CI run 42484616004/42484616067; these runs were in progress at last inspection. The latest protocol-specification edit is documentation-only and has not yet been included in a completed CI run. There are 49 commits after the prior roadmap checkpoint 4e2ba079678ce3fcaa0058ae43ef652faa33975a, with no divergence.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 7e097b23d9a57391aa4a573b6b2cf21e154a4ff3. The last fully completed green code CI is f91df0b4ef93f5a53f419420aa578dfe36bc293b (Core tests, Fuzz/Lab, Storage Integration on Ubuntu/Windows/macOS). Follow-up test-name/comment commits 24d22b0/e7e1eb4 were included in run 42484616004, but the .NET test job was cancelled; Storage Integration run 42484616067 was cancelled. A rerun was also cancelled after the branch advanced. No failure has been reported in these cancelled jobs; exact latest-head CI is UNVERIFIED. Current head is 50 commits ahead of prior checkpoint 4e2ba079678ce3fcaa0058ae43ef652faa33975a, no divergence.
 
 ## 1. Target architecture
 
@@ -256,4 +256,11 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Audited the implementation's HELLO and HELLO_ACK encoder/decoder against the v3 specification.
 - [x] Added normative exact payload layout to §12.7–12.8: NodeId b128, epoch u32 LE, protocolMajor u16 LE (=3), capabilities u32 LE; exactly 26 bytes, control stream 0, flags 0; HELLO/ACK are distinct frame types.
 - [x] Documented fail-closed major/length/frame validation and the canonical implementation sequence numbers.
-- [ ] Verify CI on the documentation/current head; no implementation behavior changed in this spec-only package.
+- [ ] Verify CI on the latest branch head. CI for code head f91df0b was green; runs after the test-name/comment follow-ups were cancelled, not failed. No implementation behavior changed in this spec-only package.
+
+### 2026-11-08 — latest CI reconciliation after follow-up commits
+
+- [x] Rechecked the full commit graph from the previous roadmap checkpoint: 50 commits ahead, 0 behind.
+- [x] Rechecked workflow attempts for the v17 fixture/comment follow-ups: test and Storage jobs were cancelled; Fuzz/Lab succeeded in the first attempt. A later rerun attempt was also cancelled.
+- [x] Classified the state correctly as UNVERIFIED for the latest head, not red: the last completed full green run remains f91df0b (Core tests, Fuzz/Lab and Storage Integration on three OS platforms).
+- [ ] Obtain a non-cancelled run on the current code head before closing exact-head verification.
