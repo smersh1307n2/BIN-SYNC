@@ -47,7 +47,11 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
     internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
 
-    /// <summary>v3.1 lacks the global author-issued/HLC horizon; physical tombstone GC is intentionally disabled.</summary>
+    /// <summary>
+    /// OFR2/NRS2/FRA2/RCP2 now carry the author-issued, retirement and HLC horizon
+    /// proof. Physical tombstone GC remains disabled until provider/Node/WAL/FLD
+    /// live-reference scans are covered by the same application-wide lease and T-pass.
+    /// </summary>
     public bool IsTombstoneGcProofEnabled => false;
 
     /// <summary>ChangeId physical GC remains disabled until exact-head adversarial proof tests pass.</summary>
