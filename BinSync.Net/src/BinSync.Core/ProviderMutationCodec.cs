@@ -6,7 +6,6 @@ namespace BinSync;
 public static class ProviderMutationCodec
 {
     public const int FixedEncodedLength = 81;
-    private const int LegacyFixedEncodedLength = 53;
 
     public static byte[] Encode(ProviderMutation mutation)
     {
@@ -29,16 +28,13 @@ public static class ProviderMutationCodec
 
     public static ProviderMutation Decode(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length < LegacyFixedEncodedLength)
+        if (bytes.Length < FixedEncodedLength)
             throw new InvalidDataException("Stored provider mutation is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
-        if (valueLength > int.MaxValue - FixedEncodedLength || bytes[18] > 3 || bytes[18] == 3)
+        if (valueLength > int.MaxValue - FixedEncodedLength ||
+            bytes.Length != FixedEncodedLength + (int)valueLength ||
+            bytes[18] > 3 || bytes[18] == 3)
             throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
-        int encodedLength = LegacyFixedEncodedLength + (int)valueLength;
-        bool hasProvenance = bytes.Length == FixedEncodedLength + (int)valueLength;
-        if (!hasProvenance && bytes.Length != encodedLength)
-            throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
-        int valueOffset = hasProvenance ? FixedEncodedLength : LegacyFixedEncodedLength;
         var mutation = new ProviderMutation
         {
             RecordId = RecordId.From(bytes.Slice(0, 16)),
@@ -49,10 +45,10 @@ public static class ProviderMutationCodec
             HlcLogical = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(27)),
             AuthorNodeId = NodeId.From(bytes.Slice(31, 16)),
             KeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(47)),
-            ChangeId = hasProvenance ? BatchId.From(bytes.Slice(53, 16)) : default,
-            OriginAuthorEpoch = hasProvenance ? BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(69)) : 0,
-            OriginSequence = hasProvenance ? BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(73)) : 0,
-            Value = bytes.Slice(valueOffset).ToArray()
+            ChangeId = BatchId.From(bytes.Slice(53, 16)),
+            OriginAuthorEpoch = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(69)),
+            OriginSequence = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(73)),
+            Value = bytes.Slice(FixedEncodedLength).ToArray()
         };
         try { Validate(mutation); }
         catch (ArgumentException exception)
