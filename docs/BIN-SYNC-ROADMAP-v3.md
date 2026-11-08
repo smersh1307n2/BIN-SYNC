@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest verified checkpoint: `70cda009949f6255469fa957a9e545f3ec97da26` — BinSync.Net (Core tests, Fuzz/Lab, public samples and coverage threshold) and FLD Storage Integration (Windows, macOS, Ubuntu) both completed successfully. This verifies code commits `aab64adcd1355565e8a0408bf0146c0b27bb5db1` and `f0c2bd820ce7f9d11c3a39d4bdcb88e88a9d87a6`. New provider-format code/tests (`56d818c`, `ad236fd`) are newer than this checkpoint; latest branch head at the last commit is `ad236fd403e0b20a9c7d888a003e9678084416aa`, exact-head CI pending. Status: PREVIOUS CHECKPOINT GREEN; CURRENT HEAD UNVERIFIED.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Verified checkpoint: `70cda009949f6255469fa957a9e545f3ec97da26` passed BinSync.Net (Core, Fuzz/Lab, samples, coverage) and FLD Storage Integration on Windows/macOS/Ubuntu. The strict BSP3 provider marker/feed identity package (`56d818c`, `ad236fd`) has Core workflow run 3919 SUCCESS; FLD Storage Integration run 1952 is still in progress on macOS while Windows/Ubuntu jobs were cancelled by superseding commits. Newer cutover-ledger changes (`d6b02b2`, `6725463`) and spec/provider-doc alignment (`dffd148`, `f9c0cb9`) are not yet verified. Current branch head at this log entry is `67254635129ca9d44c1cf4771bbb2797a092d382`; status: PARTIALLY VERIFIED, exact-head CI pending.
 
 ## 1. Target architecture
 
@@ -72,7 +72,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [ ] Remove acknowledged replay reservations atomically with contiguous ACK, preserving digest-chain anchor.
 - [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
 - [ ] Remove duplicate relay payload copies and unnecessary WAL/ApplyJournal duplication only after recovery proof.
-- [ ] Remove duplicate Node and Metadata Store ChangeId authority after provider cutover.
+- [~ C] On Metadata-Store-owned publication cutover, Node now drops its namespace-local `GlobalChangeLedger`; Metadata Store remains the only ChangeId authority. `SeenChanges` WAL replay markers are deliberately retained as a separate recovery concern. Cutover/restart assertions added; exact-head CI pending.
 - [~] Record before/after bytes/op, bytes/peer-author, allocations, mutation latency and compaction CPU at 500/10k/100k/1m rows. Exact row saving is 12 bytes per retained relay/outbound operation (32+payload → 20+payload); the durable benchmark completed successfully: 10k rows 408.4 µs / 8.14 KB, 100k rows 375.9 µs / 10.34 KB, 1M rows (1,024-operation freeze) 196.9 µs / 7.77 KB. Against the prior recorded baselines (449.2 µs at 10k, 434.1 µs / 10,944 B at 100k, 232.8 µs / 7.84 KB at 1M), these measurements are faster with slightly lower allocation; compare only as same-workflow directional evidence, not as a cross-machine guarantee.
 
 ### Phase 3 — Publication and FLD Storage contract
@@ -119,7 +119,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 - [x C] The public `TcpSyncSession` surface is already removed by the v3 clean cut; `docs/PUBLIC-API.md` explicitly records the removal and generic `SyncSession` as the transport-independent API. No compatibility wrapper is to be restored.
 - [~ C] Audit all examples/tests and remaining public API for legacy TCP-specific/compatibility-only references; migrate any remaining call sites to canonical `SyncSession`/`ISyncTransport`/provider API during the C pass, then verify in Phase T.
-- [ ] Remove optional provenance capability and downgrade negotiation.
+- [x] Removed optional immutable-Origin provenance negotiation: v3 HELLO/HELLO_ACK carry and require ProtocolMajor=3; `SessionCapabilities` contains no provenance/downgrade bit and decode rejects every other major.
 - [ ] Remove Node-owned duplicate metadata paths where Metadata Store authority is selected; no fallback after durable cutover.
 - [~ C] Added mandatory `BSP3` provider format marker on first provider open/write; unmarked partitions containing provider-owned rows fail closed, and mismatched markers are rejected. Strict v3 feed decoder now rejects missing/zero ChangeId rather than synthesizing one. Code: `56d818c`; regression tests: `ad236fd`; exact-head CI pending.
 - [ ] Ensure all public samples use canonical v3 API.
@@ -410,3 +410,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Removed local-feed identity migration/synthesis. Every v3 LocalChange row must carry exactly one nonzero ChangeId; malformed/truncated/identity-less rows fail closed.
 - [x] Added Storage Integration regression tests for marker creation, unmarked legacy-row rejection and v3 feed rows missing ChangeId.
 - [~] C implementation and tests committed as `56d818c` and `ad236fd`; exact-head CI remains pending. Do not treat the test code as executed until CI reports.
+
+
+### 2026-11-08 — Phase 5 C pass: remove duplicate Node ChangeId authority
+
+- [x] Audited the v3 handshake: HELLO and HELLO_ACK both encode `SessionWire.ProtocolMajor=3`; decode rejects any other major. The `SessionCapabilities` enum has no optional immutable-Origin provenance or downgrade capability. Marked the clean-cut requirement complete.
+- [x] On durable Metadata-Store-owned publication cutover, `Node.EnableMetadataStoreOwnedPublicationFence` now removes the namespace's `GlobalChangeLedger` entries. `SeenChanges` remains intact because it is a distinct local WAL replay marker, not a second ChangeId identity authority.
+- [x] Added cutover and stale-Node-checkpoint restart assertions that the Node global ledger is empty after the provider/Metadata Store authority fence.
+- [~] Code/test commits: `d6b02b2`, `6725463`. Exact-head Core + Storage Integration CI pending.
+- [x] Updated the normative v3 §0.7 provider storage paragraph and Data Provider conformance contract to specify `BSP3`, strict nonzero ChangeId suffix and fail-closed legacy handling; no read-time identity synthesis.
