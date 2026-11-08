@@ -812,3 +812,5 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ T] Verify prefix boundaries (`00`, `FF`, carry across suffix bytes), exact `afterKey`, empty pages, disposal and concurrent commits; benchmark scan cost for 1M rows with sparse prefixes.
 
 - [x C] Follow-up hardening: an `afterKey` at/above the prefix upper bound now retains a valid completed enumerator, so `ReadPage` returns an empty page rather than treating the cursor as disposed.
+
+- [x C] Roster send helper now signs and verifies against the pinned authority trust entry before transmitting, rejecting a mismatched authority seed locally rather than sending a roster peers will reject.
