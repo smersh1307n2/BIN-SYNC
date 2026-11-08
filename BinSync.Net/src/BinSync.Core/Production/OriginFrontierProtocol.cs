@@ -187,8 +187,8 @@ public static class OriginFrontierProtocol
                 throw new ArgumentException("OFR1 entries must be strictly sorted and unique by origin author/epoch.", nameof(report));
             previous = entry;
         }
-        if (report.Signature is not null && report.Signature.Length != 0 &&
-            report.Signature.Length != BatchSignature.SignatureSize)
+        if (report.Signature is null || (report.Signature.Length != 0 &&
+            report.Signature.Length != BatchSignature.SignatureSize))
             throw new ArgumentException("OFR1 signature must be empty or 64 bytes.", nameof(report));
     }
 
