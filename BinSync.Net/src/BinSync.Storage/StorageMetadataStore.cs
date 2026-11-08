@@ -84,12 +84,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (state.ChangeLedger.ContainsKey(new LedgerKey(batch.NamespaceId, operation.ChangeId)))
                 continue;
             if (operation.AuthorNodeId.IsZero || operation.OriginAuthorEpoch == 0 ||
-                operation.OriginSequence == 0)
-            {
-                if (hasReceipt)
-                    throw new InvalidDataException("Stored batch receipt exists but its ChangeId ledger row is missing without origin provenance.");
-                continue;
-            }
+                operation.OriginSequence == 0 || operation.ChangeId.IsZero)
+                throw new InvalidDataException("Incoming v3 operation is missing immutable ChangeId/origin provenance.");
             if (gcStore.IsOriginCoveredByRetentionCheckpoint(
                     roster, trustStore, operation.AuthorNodeId,
                     operation.OriginAuthorEpoch, operation.OriginSequence))
