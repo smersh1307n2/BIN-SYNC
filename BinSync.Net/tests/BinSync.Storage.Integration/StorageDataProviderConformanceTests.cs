@@ -420,4 +420,48 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+    [Fact]
+    public void Wal_writer_fence_recovers_an_abandoned_mutex_before_wal_recovery()
+    {
+        string directory = Path.Combine(_root, "abandoned-wal-writer-fence");
+        Directory.CreateDirectory(directory);
+        const ulong partitionId = 87;
+        string fullPath = Path.GetFullPath(directory);
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+            fullPath = fullPath.ToUpperInvariant();
+        string identity = fullPath + "|" + partitionId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        string digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(identity)));
+        string mutexName = OperatingSystem.IsWindows()
+            ? "Global\\Fld1Storage_" + digest
+            : "Fld1Storage_" + digest;
+
+        try
+        {
+            using var abandoned = new Mutex(initiallyOwned: false, mutexName);
+            using var acquired = new ManualResetEventSlim(false);
+            var owner = new Thread(() =>
+            {
+                abandoned.WaitOne();
+                acquired.Set();
+                // Deliberately exit without ReleaseMutex: the OS must mark the
+                // named mutex abandoned and transfer ownership to the next opener.
+            });
+            owner.Start();
+            Assert.True(acquired.Wait(TimeSpan.FromSeconds(5)));
+            owner.Join();
+
+            using var storage = StorageDatabase.Open(directory, partitionId);
+            using var batch = storage.BeginWriteBatch();
+            batch.Put(new byte[] { 7 }, new byte[] { 8 });
+            batch.Commit();
+            Assert.True(storage.TryGet(new byte[] { 7 }, out var value));
+            Assert.Equal(new byte[] { 8 }, value);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
