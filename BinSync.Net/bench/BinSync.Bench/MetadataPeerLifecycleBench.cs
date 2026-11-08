@@ -276,8 +276,7 @@ public class MetadataStoreCardinalityBench
 
 /// <summary>
 /// One-operation freeze measurement after a one-million-row unrelated ledger is
-/// seeded once per process. ShortRunJob keeps the setup cost bounded and outside
-/// the measured method.
+/// seeded before each measured iteration. Setup remains outside the measured method.
 /// </summary>
 [MemoryDiagnoser]
 [InvocationCount(1)]
@@ -297,6 +296,7 @@ public class MetadataStoreMillionRowBench
         string directory = Path.Combine(Path.GetTempPath(),
             "binsync-metadata-million-row-bench-" + Guid.NewGuid().ToString("N"));
         _store = new StorageMetadataStore(directory, 705, deleteOnDispose: true);
+        _nextId = 3_000_000;
 
         const int rowCount = 1_000_000;
         const int seedBatchSize = 2_048;
