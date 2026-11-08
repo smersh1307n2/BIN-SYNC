@@ -12,7 +12,7 @@ namespace BinSync.Storage;
 /// </summary>
 public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore
 {
-    private readonly object _gate = new();
+    private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
     private readonly StorageDatabase _storage;
     private readonly string? _directory;
@@ -27,12 +27,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         _deleteOnDispose = deleteOnDispose;
         _ownsStorage = true;
         _storage = StorageDatabase.Open(directory, partitionId);
+        _gate = StorageDatabaseTransactionGate.For(_storage);
     }
 
     /// <summary>Attach to a caller-owned shared Storage database.</summary>
     public StorageMetadataStore(StorageDatabase storage)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _gate = StorageDatabaseTransactionGate.For(_storage);
     }
 
     public bool SupportsRestartDurability => true;
