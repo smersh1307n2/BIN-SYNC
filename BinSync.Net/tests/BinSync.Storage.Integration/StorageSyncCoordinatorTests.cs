@@ -1390,7 +1390,10 @@ public sealed class StorageSyncCoordinatorTests
         metadata.BeginPendingApply(batchTwo, Guid.NewGuid());
 
         var coordinatorOne = new StorageSyncCoordinator(node, providerOne, 1, metadata, scope);
-        Assert.Equal(1, coordinatorOne.RehydrateNodeFromProviderSnapshot(_ => { }));
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinatorOne.RehydrateNodeFromProviderSnapshot(_ => { }));
+        Assert.Equal(2, metadata.ReadPendingApplyIntents(scope, node.NodeId).Count);
+        Assert.Equal(1, coordinatorOne.RecoverPendingApplies());
         MetadataPendingApplyIntent remaining = Assert.Single(
             metadata.ReadPendingApplyIntents(scope, node.NodeId));
         Assert.Equal(2, remaining.Batch.NamespaceId);
@@ -1399,7 +1402,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(providerTwo.TryReadCurrent(recordTwo, 0x081A, out _));
 
         var coordinatorTwo = new StorageSyncCoordinator(node, providerTwo, 2, metadata, scope);
-        Assert.Equal(1, coordinatorTwo.RehydrateNodeFromProviderSnapshot(_ => { }));
+        Assert.Equal(1, coordinatorTwo.RecoverPendingApplies());
         Assert.Empty(metadata.ReadPendingApplyIntents(scope, node.NodeId));
         Assert.True(providerTwo.TryReadCurrent(recordTwo, 0x081A, out var valueTwo));
         Assert.Equal("namespace-two", Encoding.UTF8.GetString(valueTwo!.Value));
@@ -1410,7 +1413,7 @@ public sealed class StorageSyncCoordinatorTests
         ushort fieldId, string value, byte fingerprintSeed)
     {
         Assert.True(sender.WriteField(namespaceId, recordId, fieldId,
-            Encoding.UTF8.GetBytes(value), new Hlc(6000 + namespaceId, 0)));
+            Encoding.UTF8.GetBytes(value), new Hlc(6000UL + (ulong)namespaceId, 0)));
         OutboxEntry entry = Assert.Single(sender.ReadOutboxEntries(namespaceId, sender.NodeId, 0, 10));
         byte[] envelope = new byte[16 + entry.Payload.Length];
         recordId.WriteTo(envelope);
