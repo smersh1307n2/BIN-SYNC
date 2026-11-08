@@ -86,6 +86,8 @@ public sealed class MetadataOperation
     public required byte[] Fingerprint { get; init; }
     public required byte[] Payload { get; init; }
     public bool RelayEligible { get; init; } = true;
+    public uint OriginAuthorEpoch { get; init; }
+    public ulong OriginSequence { get; init; }
 }
 
 public sealed class MetadataIncomingBatch
@@ -126,13 +128,23 @@ public sealed record MetadataBatchReceipt(ulong CursorStart, ulong CursorEnd, by
     /// <summary>Canonical full-wire-header fingerprint committed with the receipt.</summary>
     public byte[] HeaderFingerprint { get; init; } = Array.Empty<byte>();
 }
-public sealed record MetadataRelayItem(ulong Sequence, NodeId OriginalAuthor, BatchId ChangeId, byte[] Payload);
+public sealed record MetadataRelayItem(ulong Sequence, NodeId OriginalAuthor, BatchId ChangeId, byte[] Payload)
+{
+    public uint OriginAuthorEpoch { get; init; }
+    public ulong OriginSequence { get; init; }
+}
 public sealed record MetadataRelayPage(IReadOnlyList<MetadataRelayItem> Items, ulong ScannedThroughSequence);
 public sealed class MetadataFrozenOperation
 {
     public required BatchId ChangeId { get; init; }
     public required byte[] Fingerprint { get; init; }
     public required byte[] Payload { get; init; }
+    public uint OriginAuthorEpoch { get; init; }
+    public ulong OriginSequence { get; init; }
 }
-public sealed record MetadataOutboundItem(ulong Sequence, NodeId AuthorNodeId, BatchId ChangeId, byte[] Payload);
+public sealed record MetadataOutboundItem(ulong Sequence, NodeId AuthorNodeId, BatchId ChangeId, byte[] Payload)
+{
+    public uint OriginAuthorEpoch { get; init; }
+    public ulong OriginSequence { get; init; }
+}
 public sealed record MetadataOutboundPage(IReadOnlyList<MetadataOutboundItem> Items, ulong ScannedThroughSequence);

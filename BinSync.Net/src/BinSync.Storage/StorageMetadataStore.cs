@@ -270,7 +270,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ulong sequence = checked(high + 1);
                 relayHigh[relayKey] = sequence;
                 newRelay.Add((relayKey, new MetadataRelayItem(
-                    sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())));
+                    sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
+                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }
+                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }));
                 relayAdded++;
 
                 foreach (var peer in interestedPeers)
@@ -647,7 +649,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!newRelay.TryGetValue(relayKey, out var relayItems))
                 newRelay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
             relayItems.Add(new MetadataRelayItem(
-                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray()));
+                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
+            { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }
+            { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence });
             relayHigh[relayKey] = sequence;
             relayAdded++;
 
@@ -723,7 +727,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
                 pair.Key.Author.WriteTo(suffix.AsSpan(2));
                 BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.ChangeId, item.Payload)));
+                writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload)));
             }
         }
         foreach (var pair in relayHigh)
@@ -870,7 +874,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 : 0;
             ulong sequence = checked(previousHighWatermark + 1);
             entries.Add(new MetadataRelayItem(
-                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray()));
+                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
+            { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence });
             next.RelayHighWatermarks[relayKey] = sequence;
             EnsureRegisteredPeerStreams(next, batch.NamespaceId, operation.AuthorNodeId, batch.SenderEpoch);
             relayAdded++;
@@ -1050,7 +1055,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             foreach (var operation in newOperations)
             {
                 ulong sequence = checked(++highWatermark);
-                var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
+                var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray())
+                {
+                    OriginAuthorEpoch = operation.OriginAuthorEpoch,
+                    OriginSequence = operation.OriginSequence != 0 ? operation.OriginSequence : sequence
+                };
                 frozen.Add(item);
                 frozenByChangeId.Add(operation.ChangeId, item);
             }
@@ -3055,14 +3064,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     {
                         if (!state.Relay.TryGetValue(relayKey, out var relayItems))
                             state.Relay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
-                        relayItems.Add(new MetadataRelayItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload));
+                        relayItems.Add(new MetadataRelayItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload)
+                        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence });
                     }
                     else
                     {
                         var outboundKey = new OutboundKey(relayKey.NamespaceId, relayKey.Author);
                         if (!state.Outbound.TryGetValue(outboundKey, out var outboundItems))
                             state.Outbound.Add(outboundKey, outboundItems = new List<MetadataOutboundItem>());
-                        outboundItems.Add(new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload));
+                        outboundItems.Add(new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload)
+                        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence });
                     }
                     break;
                 }
@@ -3214,22 +3225,29 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return bytes;
     }
 
-    private static byte[] EncodePayloadItem(BatchId changeId, byte[] payload)
+    private static byte[] EncodePayloadItem(BatchId changeId, uint originAuthorEpoch, ulong originSequence, byte[] payload)
     {
-        byte[] bytes = new byte[20 + payload.Length];
+        if (originAuthorEpoch == 0 || originSequence == 0)
+            throw new InvalidDataException("Published operation is missing immutable origin provenance.");
+        byte[] bytes = new byte[32 + payload.Length];
         changeId.WriteTo(bytes);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(16), payload.Length);
-        payload.CopyTo(bytes, 20);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(16), originAuthorEpoch);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(20), originSequence);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(28), payload.Length);
+        payload.CopyTo(bytes, 32);
         return bytes;
     }
 
     private static MetadataOutboundItem DecodePayloadItem(ulong sequence, NodeId author, byte[] bytes)
     {
-        if (bytes.Length < 20) throw new InvalidDataException("Stored stream payload is truncated.");
-        int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(16));
-        if (length < 0 || bytes.Length != 20 + length)
-            throw new InvalidDataException("Stored stream payload length is invalid.");
-        return new MetadataOutboundItem(sequence, author, BatchId.From(bytes.AsSpan(0, 16)), bytes.AsSpan(20).ToArray());
+        if (bytes.Length < 32) throw new InvalidDataException("Stored stream payload is truncated.");
+        uint originEpoch = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(16));
+        ulong originSequence = BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(20));
+        int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(28));
+        if (originEpoch == 0 || originSequence == 0 || length < 0 || bytes.Length != 32 + length)
+            throw new InvalidDataException("Stored stream payload length or origin provenance is invalid.");
+        return new MetadataOutboundItem(sequence, author, BatchId.From(bytes.AsSpan(0, 16)), bytes.AsSpan(32).ToArray())
+        { OriginAuthorEpoch = originEpoch, OriginSequence = originSequence };
     }
 
     private static void RequireLength(ReadOnlySpan<byte> bytes, int length)
@@ -3514,10 +3532,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     private static MetadataRelayItem CloneRelayItem(MetadataRelayItem item)
-        => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray());
+        => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray())
+        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence };
 
     private static MetadataOutboundItem CloneOutboundItem(MetadataOutboundItem item)
-        => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray());
+        => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray())
+        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence };
 
     private static void ValidateOutboundLease(PartitionState state, OutboundKey key, ulong generation)
     {

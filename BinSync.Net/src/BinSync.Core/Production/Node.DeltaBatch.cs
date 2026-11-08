@@ -830,7 +830,7 @@ public sealed partial class Node
 
     internal OutboundBatchPayload? CreateDeltaBatchPayloadFromMetadata(
         NodeId targetPeer, int namespaceId, NodeId authorStream,
-        IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> metadataEntries,
+        IReadOnlyList<(ulong Sequence, BatchId ChangeId, uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)> metadataEntries,
         MetadataPeerStreamState durableProgress, int schemaId = 0, int schemaVersion = 1)
     {
         ArgumentNullException.ThrowIfNull(metadataEntries);

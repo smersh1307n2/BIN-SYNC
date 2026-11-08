@@ -403,7 +403,8 @@ public sealed class StorageSyncCoordinator
         {
             ChangeId = change.ChangeId,
             Fingerprint = fingerprint.ToArray(),
-            Payload = envelope
+            Payload = envelope,
+            OriginAuthorEpoch = checked((uint)_node.Epoch)
         };
     }
 
@@ -493,7 +494,9 @@ public sealed class StorageSyncCoordinator
                 {
                     ChangeId = entry.ChangeId,
                     Fingerprint = fingerprint.ToArray(),
-                    Payload = envelope
+                    Payload = envelope,
+                    OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                    OriginSequence = entry.OriginSequence
                 });
                 expected = checked(expected + 1);
             }
@@ -1223,6 +1226,8 @@ public sealed class StorageSyncCoordinator
                 AuthorNodeId = batch.DurableAuthor,
                 ChangeId = entry.ChangeId,
                 Fingerprint = fingerprint.ToArray(),
+                OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                OriginSequence = entry.OriginSequence,
                 Payload = envelope,
                 RelayEligible = true
             });

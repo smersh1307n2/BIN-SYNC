@@ -126,7 +126,7 @@ public partial class SyncSession
                 {
                     var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
-                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray();
+                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload)).ToArray();
                 }
                 else
                 {
