@@ -105,13 +105,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         string scopeId,
         NodeId localMember,
         NamespaceRosterCertificate acceptedRoster,
-        IReadOnlyList<ProviderChange> pendingLocalChanges,
         ReadOnlySpan<byte> memberSeed)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localMember.IsZero) throw new ArgumentException("Local member identity must be non-zero.", nameof(localMember));
         ArgumentNullException.ThrowIfNull(acceptedRoster);
-        ArgumentNullException.ThrowIfNull(pendingLocalChanges);
         if (memberSeed.Length != 32) throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
 
         lock (_gate)
@@ -153,17 +151,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 }
             }
 
-            foreach (ProviderChange change in pendingLocalChanges)
-            {
-                ProviderMutation mutation = change.Mutation
-                    ?? throw new InvalidDataException("Pending provider feed contains a null mutation.");
-                if (change.ChangeId.IsZero || mutation.ChangeId != change.ChangeId ||
-                    mutation.AuthorNodeId != localMember || mutation.OriginAuthorEpoch == 0 ||
-                    mutation.OriginSequence == 0)
-                    throw new InvalidDataException("Pending provider feed is missing its stable local ChangeId/origin identity.");
-                AddOriginSequence(sequences, mutation.AuthorNodeId,
-                    mutation.OriginAuthorEpoch, mutation.OriginSequence);
-            }
 
             var frontier = new Dictionary<(NodeId Author, uint Epoch), ulong>();
             if (prior is not null)
