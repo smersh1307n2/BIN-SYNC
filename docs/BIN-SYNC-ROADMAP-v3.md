@@ -823,3 +823,9 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ T] Test HLC wall regression, logical regression at equal wall, equal-HLC multi-field batch, restart persistence and concurrent freeze ordering.
 
 - [x C] Extended the freeze-time HLC monotonicity fence across all epochs of the same namespace/author, not just within one epoch. A rejoined author cannot publish a lower HLC under its fresh epoch than the maximum issued HLC from a previously closed epoch.
+
+
+### 2026-11-09 — C-pass: tombstone proof binds row HLC to issued epoch maximum
+
+- [x C] `HasProtocolTombstoneGcProof` now rejects a candidate tombstone whose `(HlcWall,HlcLogical)` exceeds the signed maximum HLC for its exact author epoch, in addition to requiring the tombstone HLC and the entire issued-epoch maximum to be covered by the common FULL_REPLACE floor.
+- [~ T] Add tamper tests for tombstone HLC above issued max, equal-wall logical overflow, below max, and retired versus active author closure.
