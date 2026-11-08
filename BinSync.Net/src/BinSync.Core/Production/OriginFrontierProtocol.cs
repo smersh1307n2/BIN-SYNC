@@ -240,7 +240,21 @@ public static class OriginFrontierProtocol
             if (issued.OriginAuthorEpoch == 0 || issued.IssuedOriginSequence == 0 ||
                 issued.OriginAuthorEpoch <= previousIssuedEpoch)
                 throw new ArgumentException("OFR2 issued-origin epochs must be non-zero, strictly sorted and unique.", nameof(report));
+            AppliedOriginFrontierEntry? ownApplied = report.Entries.FirstOrDefault(entry =>
+                entry.OriginAuthorNodeId == report.MemberNodeId &&
+                entry.OriginAuthorEpoch == issued.OriginAuthorEpoch);
+            if (ownApplied is null ||
+                ownApplied.ContiguousAppliedOriginSequence < issued.IssuedOriginSequence)
+                throw new ArgumentException("An author-issued watermark cannot exceed the member's own contiguous applied frontier.", nameof(report));
             previousIssuedEpoch = issued.OriginAuthorEpoch;
+        }
+        foreach (AppliedOriginFrontierEntry ownApplied in report.Entries.Where(entry =>
+            entry.OriginAuthorNodeId == report.MemberNodeId))
+        {
+            IssuedOriginFrontierEntry? issued = report.IssuedOrigins.FirstOrDefault(entry =>
+                entry.OriginAuthorEpoch == ownApplied.OriginAuthorEpoch);
+            if (issued is null || issued.IssuedOriginSequence < ownApplied.ContiguousAppliedOriginSequence)
+                throw new ArgumentException("A member report must include the issued watermark for each locally authored applied epoch.", nameof(report));
         }
         if (report.Signature is null || (report.Signature.Length != 0 &&
             report.Signature.Length != BatchSignature.SignatureSize))
