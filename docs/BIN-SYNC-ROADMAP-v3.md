@@ -679,3 +679,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] After immutable freeze, coordinator stamps the assigned origin onto the matching current provider winner before feed ACK. Stamp is idempotent and checks the durable feed row; failed stamp/ACK retries recover the same identity from the ChangeId ledger. Remote apply still requires a complete non-zero origin tuple; FULL_REPLACE state images may carry draft identity and later upgrade it without erasing an existing published origin.
 - [x C] Member applied-origin frontiers now derive only from frozen ChangeId ledger rows; unpub drafts are not reported as applied/published origins.
 - [~ T] Add tests for coalesced writes, epoch rollover, per-epoch allocator restart, crash after freeze/before stamp, crash after stamp/before feed ACK, draft FULL_REPLACE followed by published delta upgrade, and strict remote partial-origin rejection. Current exact-head CI pending.
+
+
+### 2026-11-08 — C-pass: durable freeze-time origin assignment and provider stamp
+
+- [x C] Added `IProviderPublishedOriginStore` and implemented it in `StorageDataProvider`. The coordinator pairs each coalesced winning feed entry with the exact immutable Metadata Store item, validates the still-present durable feed row, stamps the assigned origin onto the matching current-state winner, then persists the Node cache and only afterward ACKs the feed.
+- [x C] A failed provider stamp or feed ACK leaves the feed replayable. The Metadata Store ChangeId ledger returns the same previously frozen OriginSequence; provider stamping is idempotent. A newer current-state winner is never overwritten by an older feed entry.
+- [x C] FULL_REPLACE state images may carry a draft `(ChangeId, AuthorEpoch, OriginSequence=0)`. If its immutable DELTA arrives later at the same HLC, provider apply upgrades the exact same ChangeId/epoch draft to the assigned non-zero OriginSequence; replaying a draft cannot erase a published origin.
+- [x C] Scoped the missing allocator-row fail-closed check by namespace, since one Metadata Store partition can contain multiple namespaces.
+- [~ T] Add fault-injection around metadata freeze → provider stamp → Node checkpoint → feed ACK, plus concurrent newer-edit and FULL_REPLACE-draft upgrade cases. Exact-head CI is pending.
