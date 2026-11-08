@@ -947,7 +947,7 @@ The Storage adapter now has two complementary serialization layers:
 - The fence rejects a second open of the same partition in one process and across processes. The design is BCL-only; no P/Invoke or native library dependency was added.
 - This is deliberately **single-writer per partition**, not multi-writer. Parallel adapter operations sharing one in-process `StorageDatabase` are serialized; separate processes cannot write the same partition concurrently.
 
-Verified at BIN-SYNC `be0d48db38e1c7f56cbd392311204a89120e72c5`: 644/644 core tests, 102/102 Storage Integration tests, 31/31 Fuzz/Lab cases, 70.8% line coverage; both Storage array samples and the real-TCP restart/tombstone flow pass. Integration regressions cover concurrent provider+metadata commits through one shared database, second-writer rejection, and successful reopen after the first writer disposes.
+Verified at BIN-SYNC `016ddb553a6d2c84abe2027145dfdbd92f229d35`: 644/644 core tests, 103/103 Storage Integration tests, 31/31 Fuzz/Lab cases, 70.8% line coverage; both Storage array samples and the real-TCP restart/tombstone flow pass. Integration regressions cover concurrent provider+metadata commits through one shared database, second-writer rejection, successful reopen after dispose, and recovery after the mutex owner thread terminates without releasing.
 
 **Still to validate:** a separate-process integration test (including process termination while holding the fence) on each supported OS, symlink/alias path canonicalization, and physical power-loss cuts during WAL rotation/checkpoint. The current tests prove same-process rejection/reopen and the normal OS mutex path, not a complete hardware crash matrix.
 
