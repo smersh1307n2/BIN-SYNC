@@ -477,3 +477,8 @@ For each `(NamespaceId, AuthorNodeId)`, newly frozen operations must have HLC gr
 ## 10.24. Tombstone HLC must belong to its issued author epoch (2026-11-09)
 
 The protocol tombstone proof rejects a candidate whose HLC exceeds the signed maximum HLC for its exact `(author, epoch)`, even if the global FULL_REPLACE floor is higher. It separately requires both the candidate tombstone HLC and the entire epoch's maximum issued HLC to be covered by the common installed FULL_REPLACE floor. This prevents a corrupted or mismatched row from borrowing another epoch's higher HLC floor.
+
+
+## 10.25. Physical GC requires explicit host live-reference scanners (2026-11-09)
+
+`IApplicationGcReferenceScanner` is a mandatory host contract for physical ChangeId and record-tombstone reclamation. It checks references outside BIN-SYNC's Storage database, including host WAL/FLD outbox and pending application work, while the caller's composed application commit lease is held. `CompactChangeLedger` checks internal relay/outbound/PendingApply/reservation references and this external scanner. `CompactRecordTombstones` additionally requires the durable Metadata Store, checks internal pending apply/relay/outbound payloads by RecordId (malformed payloads fail closed), blocks on pending immutable reservations, and checks host ChangeId/record references. Provider, Metadata Store and namespace-GC store must share one StorageDatabase. These API gates do not enable physical GC; the host adapter and adversarial T-pass remain mandatory.
