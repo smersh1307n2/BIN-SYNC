@@ -362,6 +362,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     if (next.Status == NamespaceMemberStatus.Active &&
                         next.TransportPeerEpoch < oldMember.TransportPeerEpoch)
                         throw new InvalidDataException("Active member transport epoch regressed.");
+                    if (next.Status == NamespaceMemberStatus.Active)
+                        ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
                     if (next.Status == NamespaceMemberStatus.Retired)
                     {
                         if (next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
@@ -382,12 +384,15 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     {
                         throw new InvalidDataException("Joining member transport epoch regressed.");
                     }
+                    else if (next.Status == NamespaceMemberStatus.Joining)
+                    {
+                        ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
+                    }
                     else if (next.Status == NamespaceMemberStatus.Retired)
                     {
                         if (next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
                             throw new InvalidDataException("RetiredThroughEpoch does not cover the previous Joining epoch.");
-                        if (candidate.RetiredOriginEpochs.Any(entry => entry.OriginAuthorNodeId == oldMember.NodeId))
-                            throw new InvalidDataException("A Joining member cannot close author epochs before it was Active.");
+                        ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
                     }
                     break;
 
@@ -407,9 +412,13 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
         foreach (NamespaceRosterMember member in candidate.Members)
         {
-            if (!prior.Members.Any(old => old.NodeId == member.NodeId) &&
-                member.Status != NamespaceMemberStatus.Joining)
-                throw new InvalidDataException("A new namespace member must enter as Joining, never directly as Active.");
+            if (!prior.Members.Any(old => old.NodeId == member.NodeId))
+            {
+                if (member.Status != NamespaceMemberStatus.Joining)
+                    throw new InvalidDataException("A new namespace member must enter as Joining, never directly as Active.");
+                if (candidate.RetiredOriginEpochs.Any(entry => entry.OriginAuthorNodeId == member.NodeId))
+                    throw new InvalidDataException("A new Joining member cannot arrive with a retired-origin closure.");
+            }
         }
     }
 
