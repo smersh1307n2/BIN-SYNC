@@ -50,6 +50,15 @@ jobs:
           --
           --coordinator-retry-only
 
+      - name: Run metadata mutation cardinality benchmark
+        working-directory: BinSync.Net
+        run: >
+          dotnet run --configuration Release
+          --project bench/BinSync.Bench
+          --
+          --metadata-cardinality-only
+          --artifacts BenchmarkDotNet.Artifacts/cardinality
+
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net
         run: |
