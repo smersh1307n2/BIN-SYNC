@@ -71,9 +71,9 @@ public static class ProviderMutationCodec
             throw new ArgumentException("ChangeId, origin epoch and origin sequence must be present together.", nameof(mutation));
         if (mutation.IsRecordTombstone)
         {
-            if (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
+            if (!hasChangeId || mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
                 mutation.KeyEpoch != 0 || mutation.Value.Length != 0)
-                throw new ArgumentException("Record tombstone must use the lifecycle field, key epoch zero and no value.", nameof(mutation));
+                throw new ArgumentException("Record tombstone requires immutable ChangeId/origin provenance and the lifecycle field with key epoch zero and no value.", nameof(mutation));
         }
         else if (mutation.IsTombstone && mutation.Value.Length != 0)
         {
