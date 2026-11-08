@@ -1043,7 +1043,9 @@ public sealed class StorageSyncCoordinatorTests
             {
                 ChangeId = entry.ChangeId,
                 Fingerprint = entry.ChangeId.ToArray(),
-                Payload = payload
+                Payload = payload,
+                OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                OriginSequence = entry.OriginSequence
             });
         }
         metadata.FreezeOutbound(scope, sender.NodeId, 1, sender.NodeId, localOperations);
@@ -1075,7 +1077,9 @@ public sealed class StorageSyncCoordinatorTests
                     ChangeId = originEntry.ChangeId,
                     Fingerprint = originEntry.ChangeId.ToArray(),
                     Payload = relayPayload,
-                    RelayEligible = true
+                    RelayEligible = true,
+                    OriginAuthorEpoch = originEntry.OriginAuthorEpoch,
+                    OriginSequence = originEntry.OriginSequence
                 }
             }
         });
@@ -1571,14 +1575,18 @@ public sealed class StorageSyncCoordinatorTests
                         AuthorNodeId = sender.NodeId,
                         ChangeId = changeId,
                         Fingerprint = fingerprint,
-                        Payload = envelope
+                        Payload = envelope,
+                        OriginAuthorEpoch = checked((uint)sender.Epoch),
+                        OriginSequence = 1
                     },
                     new MetadataOperation
                     {
                         AuthorNodeId = sender.NodeId,
                         ChangeId = BatchId.From(Guid.Parse("c5000000-0000-0000-0000-00000000000c").ToByteArray()),
                         Fingerprint = tombstoneFingerprint,
-                        Payload = tombstoneEnvelope
+                        Payload = tombstoneEnvelope,
+                        OriginAuthorEpoch = checked((uint)sender.Epoch),
+                        OriginSequence = 2
                     }
                 }
             }, applyToken);
@@ -1673,7 +1681,9 @@ public sealed class StorageSyncCoordinatorTests
                     AuthorNodeId = foreignAuthor,
                     ChangeId = localEntry.ChangeId,
                     Fingerprint = Enumerable.Repeat((byte)0xA5, 16).ToArray(),
-                    Payload = new byte[] { 0x01 }
+                    Payload = new byte[] { 0x01 },
+                    OriginAuthorEpoch = localEntry.OriginAuthorEpoch,
+                    OriginSequence = localEntry.OriginSequence
                 }
             }
         });
@@ -1992,7 +2002,9 @@ public sealed class StorageSyncCoordinatorTests
             {
                 ChangeId = BatchId.From(Guid.Parse("62000000-0000-0000-0000-000000000062").ToByteArray()),
                 Fingerprint = new byte[16],
-                Payload = new byte[] { 1, 2, 3 }
+                Payload = new byte[] { 1, 2, 3 },
+                OriginAuthorEpoch = 1,
+                OriginSequence = 1
             }
         });
 
@@ -2195,7 +2207,9 @@ public sealed class StorageSyncCoordinatorTests
                     ChangeId = entry.ChangeId,
                     Fingerprint = Enumerable.Repeat(fingerprintSeed, 16).ToArray(),
                     Payload = envelope,
-                    RelayEligible = false
+                    RelayEligible = false,
+                    OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                    OriginSequence = entry.OriginSequence
                 }
             }
         };
