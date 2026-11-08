@@ -14,7 +14,7 @@ namespace BinSync.Bench;
 [MemoryDiagnoser]
 [InvocationCount(1)]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
-public sealed class MetadataCoordinatorRetryScanBench
+public class MetadataCoordinatorRetryScanBench
 {
     private const string Scope = "metadata-coordinator-retry-bench";
     private const int NamespaceId = 1;
