@@ -154,8 +154,7 @@ public sealed class StorageSyncCoordinator
 
             foreach (var change in page.Changes)
             {
-                if (change.Mutation.AuthorNodeId != _node.NodeId)
-                    throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
+                _node.ValidateProviderMutation(change.Mutation);
                 if (change.Mutation.KeyEpoch != 0)
                     throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
                 sawStableChangeId |= !change.ChangeId.IsZero;
