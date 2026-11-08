@@ -54,7 +54,7 @@ public interface IProviderFullReplace
     void StageFullReplacePage(Guid generation, int startIndex,
         IReadOnlyList<ProviderMutation> entries);
     void CommitFullReplace(Guid generation);
-    void AbortFullReplace(Guid generation);
+    bool AbortFullReplace(Guid generation, int limit);
 }
 
 public sealed class ProviderMutation
