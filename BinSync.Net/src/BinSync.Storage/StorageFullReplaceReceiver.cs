@@ -85,6 +85,19 @@ public sealed class StorageFullReplaceReceiver
                 throw new InvalidDataException("Local member is retired or its transport epoch does not match the roster.");
 
             FullReplaceTransferProtocol.VerifyBegin(manifest, roster, _trustStore);
+            var localAckProbe = new FullReplaceInstalledAck
+            {
+                NamespaceId = _namespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                Generation = manifest.Generation,
+                Digest = manifest.ExpectedDigest.ToArray(),
+                MemberNodeId = _localMember,
+                MemberTransportEpoch = _localMemberEpoch,
+                Installed = true
+            };
+            byte[] probe = FullReplaceInstalledAckProtocol.Sign(localAckProbe, _localMemberSeed);
+            _ = FullReplaceInstalledAckProtocol.DecodeAndVerify(probe, roster);
             if (_manifest is not null &&
                 (_manifest.Generation != manifest.Generation ||
                  !_manifest.ExpectedDigest.AsSpan().SequenceEqual(manifest.ExpectedDigest)))
@@ -252,12 +265,16 @@ public sealed class StorageFullReplaceReceiver
         Task completed = await Task.WhenAny(chunkTask, abortTask).ConfigureAwait(false);
         if (completed == abortTask)
         {
-            FullReplaceTransferProtocol.TransferId abort = await abortTask.ConfigureAwait(false);
+            FullReplaceTransferProtocol.TransferId abort;
+            try { abort = await abortTask.ConfigureAwait(false); }
+            catch { linked.Cancel(); await ObserveCancelledAsync(chunkTask).ConfigureAwait(false); throw; }
             linked.Cancel();
             await ObserveCancelledAsync(chunkTask).ConfigureAwait(false);
             return (null, abort);
         }
-        FullReplaceTransferProtocol.Chunk chunk = await chunkTask.ConfigureAwait(false);
+        FullReplaceTransferProtocol.Chunk chunk;
+        try { chunk = await chunkTask.ConfigureAwait(false); }
+        catch { linked.Cancel(); await ObserveCancelledAsync(abortTask).ConfigureAwait(false); throw; }
         linked.Cancel();
         await ObserveCancelledAsync(abortTask).ConfigureAwait(false);
         return (chunk, null);
@@ -274,12 +291,16 @@ public sealed class StorageFullReplaceReceiver
         Task completed = await Task.WhenAny(commitTask, abortTask).ConfigureAwait(false);
         if (completed == abortTask)
         {
-            FullReplaceTransferProtocol.TransferId abort = await abortTask.ConfigureAwait(false);
+            FullReplaceTransferProtocol.TransferId abort;
+            try { abort = await abortTask.ConfigureAwait(false); }
+            catch { linked.Cancel(); await ObserveCancelledAsync(commitTask).ConfigureAwait(false); throw; }
             linked.Cancel();
             await ObserveCancelledAsync(commitTask).ConfigureAwait(false);
             return (null, abort);
         }
-        FullReplaceTransferProtocol.TransferId commit = await commitTask.ConfigureAwait(false);
+        FullReplaceTransferProtocol.TransferId commit;
+        try { commit = await commitTask.ConfigureAwait(false); }
+        catch { linked.Cancel(); await ObserveCancelledAsync(abortTask).ConfigureAwait(false); throw; }
         linked.Cancel();
         await ObserveCancelledAsync(abortTask).ConfigureAwait(false);
         return (commit, null);
