@@ -2199,13 +2199,15 @@ public sealed class StorageSyncCoordinatorTests
         using var metadata = new StorageMetadataStore(storage);
         using var sender = NewNode(121);
         using var receiver = NewNode(122);
-        StorageNodePersistence.Save(storage, receiver);
 
         var (toSender, toReceiver) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
         var connectTask = SyncSession.ConnectAsync(sender, toSender);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
+        // Persist the negotiated alias table before any durable receive intent can
+        // be staged; recovery decodes the exact wire payload after process restart.
+        StorageNodePersistence.Save(storage, receiver);
         Assert.True(sender.WriteField(1, record, 0x087a,
             Encoding.UTF8.GetBytes("crash-cut-" + crashCut), new Hlc(8700, 0)));
 
