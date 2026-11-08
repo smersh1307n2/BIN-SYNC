@@ -105,6 +105,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         string scopeId,
         NodeId localMember,
         NamespaceRosterCertificate acceptedRoster,
+        ulong unpublishedDraftCount,
+        ulong maxUnpublishedDraftHlcWall,
+        uint maxUnpublishedDraftHlcLogical,
         ReadOnlySpan<byte> memberSeed)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
@@ -200,6 +203,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 MemberNodeId = localMember,
                 MemberTransportEpoch = member.TransportPeerEpoch,
                 ReportSequence = reportSequence,
+                UnpublishedDraftCount = unpublishedDraftCount,
+                MaxUnpublishedDraftHlcWall = maxUnpublishedDraftHlcWall,
+                MaxUnpublishedDraftHlcLogical = maxUnpublishedDraftHlcLogical,
                 Entries = entries,
                 IssuedOrigins = current is null
                     ? Array.Empty<IssuedOriginFrontierEntry>()
