@@ -23,10 +23,10 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- HEAD: ae5db37ca4e5c32fe71d320a62c831260ea53fdb.
-- CI run 42474680383 failed during Build.
-- Compiler errors: Node.DeltaBatch.cs:861-862; tuple (Sequence, ChangeId, Payload) is accessed as if it also contained OriginAuthorEpoch and OriginSequence.
-- Tests and Fuzz/Lab were skipped because Build failed.
+- Reviewed head: 56d5142c1a2f7050663a418d4882def50787c1e5 (continuation docs + strict Storage decoder package); branch is 28 commits ahead of ae5db37ca4e5c32fe71d320a62c831260ea53fdb.
+- The PR merge snapshot a852206fc245c2a0f7469d0e18d19415a2b2c528 failed Build because Node.DeltaBatch.cs:861-862 read Origin fields from a 3-field tuple.
+- The later e6826b4865f8966327a628ae07e95720db58d0ff snapshot completed Build, but Test, Fuzz/Lab and Storage Integration workflows were cancelled before completion.
+- The latest strict-decoder commits have no reported workflow result yet. CI is therefore UNVERIFIED, not green.
 - Last documented green baseline is 92f6631871072799087ee1732f4d65bdaeeff523: Core 648/648, Fuzz/Lab 31/31, Storage Integration 136/136. Historical only; not verification of current HEAD.
 
 ### FLD-DB: fix/crash-consistency-outbox
@@ -170,7 +170,7 @@ Append a dated entry after each meaningful implementation package. Update checkl
 ### 2026-11-08 — continuation audit after ae5db37
 
 - [x] Located the roadmap at `docs/BIN-SYNC-ROADMAP-v3.md` (not repository root) and re-read its execution checklist and progress history.
-- [x] Compared `ae5db37ca4e5c32fe71d320a62c831260ea53fdb` with the current branch: 23 commits ahead, no divergence. The current roadmap identifies `e6826b4865f8966327a628ae07e95720db58d0ff` as the reviewed head.
+- [x] Compared `ae5db37ca4e5c32fe71d320a62c831260ea53fdb` with the current branch: 28 commits ahead, no divergence. The reviewed implementation head is now `56d5142c1a2f7050663a418d4882def50787c1e5`.
 - [x] Re-read the v3 normative specification, immutable-Origin/safe-GC design, metadata architecture, Metadata Store and Data Provider conformance contracts, change-staging/retention policy, Metadata GC design, public API contract, spec coverage audit and FLD integration contract.
 - [x] Confirmed the old tuple compiler error was real on the PR merge snapshot `a852206fc245c2a0f7469d0e18d19415a2b2c528`: the method accepted a 3-field metadata tuple but dereferenced Origin fields. The current branch version has the 5-field tuple, and the `e6826b4` CI attempt completed Build successfully.
 - [x] Confirmed that the CI attempt for `e6826b4` was cancelled during Test, Fuzz/Lab and Storage Integration; this is not a green result and does not supersede the earlier 640 passed / 14 failed evidence.
@@ -185,3 +185,10 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Replaced the old test that expected legacy ledger/watermark migration with a regression asserting that a BMS3 partition containing a pre-v3 ChangeId ledger row fails closed and is not rewritten.
 - [ ] CI has not yet reported for this package. Do not mark the decoder gate complete until Storage Integration and full Core/Fuzz/Lab workflows pass on the exact branch head.
 - [ ] Audit and remove now-unreachable `HasLegacyEncoding` rewrite branches only after confirming no current v3 decoder path can set the flag and the regression suite proves old partitions fail closed.
+
+
+### 2026-11-08 — current branch checkpoint
+
+- [x] Updated the baseline to reviewed head `56d5142c1a2f7050663a418d4882def50787c1e5`; 28 commits ahead of `ae5db37`, no divergence.
+- [x] Corrected the distinction between the old merge-build failure, the later successful compile, cancelled test workflows, and the unverified decoder package.
+- [ ] Obtain a complete, non-cancelled CI result for this exact head before treating any tests as passed.
