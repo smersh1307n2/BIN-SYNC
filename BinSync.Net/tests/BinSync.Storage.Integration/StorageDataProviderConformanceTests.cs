@@ -437,8 +437,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 batch.Commit();
             }
 
-            // File-share leases have no mutex-thread affinity. Disposal from a
-            // different thread must release the OS handle and permit the next writer.
+            // The named Mutex is owned by the process-wide manager thread. Disposal
+            // from this caller thread must enqueue release to that owner and permit the next writer.
             await Task.Run(storage.Dispose);
 
             using var reopened = StorageDatabase.Open(directory, partitionId);
@@ -487,9 +487,10 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_READY"] = readyPath;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
 
+        Process? child = null;
         try
         {
-            using var child = Process.Start(start);
+            child = Process.Start(start);
             Assert.NotNull(child);
             Task<string> stdout = child!.StandardOutput.ReadToEndAsync();
             Task<string> stderr = child.StandardError.ReadToEndAsync();
@@ -522,6 +523,13 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
         finally
         {
+            try { File.WriteAllText(releasePath, "release"); } catch { }
+            if (child is not null)
+            {
+                try { if (!child.HasExited) child.Kill(entireProcessTree: true); } catch { }
+                try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+                child.Dispose();
+            }
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
@@ -565,9 +573,10 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_PID"] = ownerPidPath;
 
+        Process? child = null;
         try
         {
-            using var child = Process.Start(start);
+            child = Process.Start(start);
             Assert.NotNull(child);
             Task<string> stdout = child!.StandardOutput.ReadToEndAsync();
             Task<string> stderr = child.StandardError.ReadToEndAsync();
@@ -625,6 +634,13 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
         finally
         {
+            try { File.WriteAllText(releasePath, "release"); } catch { }
+            if (child is not null)
+            {
+                try { if (!child.HasExited) child.Kill(entireProcessTree: true); } catch { }
+                try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+                child.Dispose();
+            }
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
