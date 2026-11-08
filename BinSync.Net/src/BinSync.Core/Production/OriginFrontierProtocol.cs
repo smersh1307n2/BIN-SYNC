@@ -467,8 +467,8 @@ public static class NamespaceRetentionCheckpointProtocol
         {
             throw new ArgumentException("RCP1 digest cannot be present without a FULL_REPLACE generation.", nameof(checkpoint));
         }
-        if (checkpoint.Signature is not null && checkpoint.Signature.Length != 0 &&
-            checkpoint.Signature.Length != BatchSignature.SignatureSize)
+        if (checkpoint.Signature is null || (checkpoint.Signature.Length != 0 &&
+            checkpoint.Signature.Length != BatchSignature.SignatureSize))
             throw new ArgumentException("RCP1 signature must be empty or 64 bytes.", nameof(checkpoint));
     }
 
