@@ -122,6 +122,22 @@ public interface IProviderPublishedOriginStore
     void CommitPublishedOrigins(IReadOnlyList<ProviderPublishedOrigin> published);
 }
 
+/// <summary>
+/// Host-owned live-reference scan required before physical ChangeId/tombstone GC.
+/// Implementations inspect WAL/FLD outbox, pending application work and other
+/// durable references outside BIN-SYNC's own Storage database. Call only while
+/// the caller's composed application commit lease is held; exceptions fail closed.
+/// </summary>
+public interface IApplicationGcReferenceScanner
+{
+    bool HasExternalChangeIdReference(
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId);
+
+    bool HasExternalRecordReference(
+        string scopeId, NodeId localReplica, int namespaceId,
+        RecordId recordId, BatchId tombstoneChangeId);
+}
+
 /// <summary>Durable provider capability for terminally closing one local author epoch.</summary>
 public interface IProviderAuthorEpochClosureStore
 {
