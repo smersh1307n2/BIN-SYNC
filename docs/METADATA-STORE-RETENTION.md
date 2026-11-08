@@ -30,13 +30,13 @@ CompactOutboundThrough and CompactRelayThrough are the only current destructive 
 - Payload deletion is committed in Storage before the in-memory projection is changed.
 - High-watermarks, ACK state, peer state, and ChangeId ledger rows are not deleted by payload compaction.
 
-Retiring a peer epoch removes its roster, baseline and per-author peer-stream rows in one delta transaction, while persisting the maximum retired epoch. A later connection using that epoch or an older one is rejected. This is lifecycle cleanup, not permission to delete receipt or ChangeId evidence.
+Retiring a peer epoch removes its roster, baseline and per-author peer-stream rows in one delta transaction, while persisting the maximum retired epoch. A later connection using that epoch or an older one is rejected. Inbox receipts attributed to that retired transport epoch are also deleted in the same transaction; epoch-unknown legacy receipts and ChangeId evidence are not.
 
 ## 3. Why global ChangeId GC and active-epoch Inbox GC are still disabled
 
 The ChangeId ledger is keyed by (namespace, ChangeId) and currently stores a canonical fingerprint plus local/incoming origin. It intentionally survives Outbound/Relay payload compaction. It does not currently encode enough durable origin-stream sequence information to prove that every stale route capable of replaying a ChangeId has crossed a common safe frontier.
 
-Inbox receipts are keyed by (sender, author epoch, namespace, BatchId), and now also record the authenticated transport-peer epoch separately. They preserve cursor range, previous/current digest, durable author and (for new authoritative receipts) the canonical full-wire-header fingerprint. When a newer peer incarnation is registered, the old transport epoch is durably fenced. In the same Storage transaction, receipts attributed to that retired transport epoch are deleted. Retirement is blocked while a matching or epoch-unknown PendingApply remains unresolved. Receive entry points reject old epochs and reject epoch-less input after a retirement fence exists. Legacy receipts without transport-epoch provenance remain retained.
+Inbox receipts are keyed by (sender, author epoch, namespace, BatchId), and now also record the authenticated transport-peer epoch separately. They preserve cursor range, previous/current digest, durable author and (for new authoritative receipts) the canonical full-wire-header fingerprint. When a newer peer incarnation is registered, the old transport epoch is durably fenced. In the same Storage transaction, receipts attributed to that retired transport epoch are deleted. Retirement is blocked while a matching or epoch-unknown PendingApply remains unresolved. Receive entry points reject old epochs and reject epoch-less input after a retirement fence exists. Legacy receipts without transport-epoch provenance remain retained until an exact duplicate is received from a durably registered current epoch; that authenticated replay re-attributes the receipt to the new epoch so it can be reclaimed only when that epoch is later retired.
 
 The active transport epoch's receipts are still retained. The last receipt may be needed to answer a retransmission after an ACK was lost. CompletedPendingApply tokens and receive cursor/digest-chain checkpoints are also retained; they have separate lifecycle rules.
 
@@ -44,7 +44,7 @@ Therefore:
 - no TTL, size-based eviction, LRU eviction, or age-based cleanup;
 - no coupling of ChangeId deletion to relay/outbound payload ACK;
 - no claim that a snapshot baseline alone makes old dedup evidence obsolete;
-- retain legacy receipt rows without transport-epoch provenance; do not guess their origin epoch.
+- retain legacy receipt rows without transport-epoch provenance; do not guess their origin epoch. Re-attribute only after an exact, authenticated duplicate from a durably registered epoch.
 
 A safe ChangeId GC design needs durable origin author + origin sequence association preserved unchanged through every relay, a namespace-wide minimum contiguous applied-origin frontier across all active members, and a stale-peer/epoch retirement rule. A safe tombstone GC design additionally needs an authoritative namespace membership generation and mandatory full-resync replacement semantics; current snapshot merge does not delete rows absent from the snapshot. These remain protocol/storage format changes and are not enabled.
 
@@ -54,7 +54,7 @@ E-25 is normative: tombstone and ghost reclamation is disabled until durable nam
 
 ## 5. Storage cost and release posture
 
-The current policy deliberately trades bounded metadata growth for correctness. Payload bytes can be reclaimed when the per-stream ACK/baseline proof exists; dedup receipts, ChangeId facts, receive-chain anchors and tombstones remain until their independent proof is available. Do not advertise bounded total metadata size or automatic historical GC.
+The current policy deliberately trades bounded metadata growth for correctness. Payload bytes can be reclaimed when the per-stream ACK/baseline proof exists. Retired-epoch inbox receipts can be reclaimed behind the durable transport fence; active receipts, ChangeId facts, receive-chain anchors and tombstones remain until their independent proof is available. Do not advertise bounded total metadata size or automatic historical GC.
 
 Measure growth using realistic operation and peer cardinalities before deployment. A future GC implementation must include crash-consistent checkpoint publication, restart/replay tests, stale-peer rejoin tests, equivocation tests across the GC boundary, and a measured metadata-size comparison. Do not implement speculative GC as part of routine payload compaction.
 
