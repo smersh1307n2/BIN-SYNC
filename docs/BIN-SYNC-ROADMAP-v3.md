@@ -803,3 +803,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `StorageDatabase.OpenSnapshot` now clones the sorted key index but shares the immutable stored value arrays. `Commit` copies caller-owned buffers on publication and later commits replace references rather than mutating arrays; snapshot reads still return owned copies through `TryGet`/bounded cursor pages.
 - [~ C] Snapshot creation still allocates an O(number-of-keys) sorted-index copy. A persistent immutable index/root or MVCC tree would be needed to reach O(page) total snapshot memory; do not claim that bound yet.
 - [~ T] Verify snapshot stability across replace/delete/reopen, concurrent commit and cursor paging; benchmark allocations/RSS with large values and 1M rows.
+
+
+### 2026-11-09 — C-pass: prefix cursor seeks into sorted range
+
+- [x C] `StorageSnapshot.PrefixCursor` now computes the exclusive lexicographic upper bound of a byte prefix and uses `SortedDictionary.GetViewBetween` to seek directly to the matching key range. With `afterKey`, it starts at that cursor position instead of scanning unrelated keys from the partition beginning.
+- [x C] Empty/all-0xFF prefixes retain the safe fallback; the existing page/trailing-key checks remain in place.
+- [~ T] Verify prefix boundaries (`00`, `FF`, carry across suffix bytes), exact `afterKey`, empty pages, disposal and concurrent commits; benchmark scan cost for 1M rows with sparse prefixes.
