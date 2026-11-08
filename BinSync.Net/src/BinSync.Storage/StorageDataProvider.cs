@@ -231,6 +231,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         EnsureFormatMarker();
     }
 
+    internal bool SharesStorageWith(StorageMetadataStore metadataStore)
+    {
+        ArgumentNullException.ThrowIfNull(metadataStore);
+        return metadataStore.IsBoundTo(_storage);
+    }
+
     public bool SupportsRestartDurability => true;
 
     public ulong LocalChangeHighWatermark
