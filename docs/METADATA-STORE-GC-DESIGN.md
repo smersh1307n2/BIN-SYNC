@@ -103,6 +103,47 @@ and relay-preservation path are implemented and tested, callers MUST NOT adverti
 the bit as evidence that provenance is operational. In particular, a local relay
 cursor must never be substituted for origin sequence.
 
+## 5.0.2. Draft DELTA_BATCH record extension
+
+The capability bit is only a negotiation hook. The following record extension is
+the proposed interoperable encoding and remains **disabled / not yet implemented**:
+
+- Reserve one Batch.Flags bit, ORIGIN_PROVENANCE_RECORDS, to indicate that every
+  record has the extension trailer. The flag is valid only when
+  ImmutableOriginProvenance was negotiated by both peers.
+- Keep the existing record prefix byte-for-byte unchanged:
+  RecordId[16] || ChangeId[16] || OpKind[1] || PayloadLength[varint] || Payload.
+- When the flag is set, append one provenance-presence byte after each payload.
+  0 means origin is unknown (legacy/imported row); 1 is followed by
+  OriginAuthorNodeId[16] || OriginAuthorEpoch[u32 LE] || OriginSequence[u64 LE].
+  Other presence values are invalid. A present tuple requires a non-zero author and
+  a non-zero sequence; epoch zero is allowed if it is the author's actual epoch.
+- The trailer is part of the ordered records array, RecordsRoot, and therefore
+  the existing BatchDigest chain. Re-encoding, fragmentation, signing, replay
+  reservation, and durable retry must preserve the exact trailer bytes.
+- A receiver rejects the flag unless the session negotiated the capability. It
+  validates that the tuple author equals the operation's resolved durable author.
+  For a direct-author batch (IssuerNodeId == resolved author), it additionally
+  checks author epoch equality and OriginSequence == CursorStart + record index.
+  For a relay batch, the batch cursor is a relay-local coordinate and is never
+  compared with the immutable origin sequence.
+- For an unflagged legacy direct-author batch, a receiver may derive provenance only
+  after the single-author and exact cursor-span checks. For an unflagged relay batch,
+  provenance remains unknown and non-collectable; it must not be guessed.
+- If a ChangeId already has known provenance, a later known tuple must match exactly.
+  Unknown provenance never overwrites known provenance. A conflicting known tuple
+  is equivocation and fails closed. A legacy unknown ledger row may remain unknown;
+  it is never eligible for GC merely because a later route has a matching payload.
+- A relay preserves the tuple in its durable relay row and emits it unchanged on
+  every subsequent hop. The relay's own stream sequence remains separate metadata.
+
+The implementation sequence is: (1) operation and pending-intent model; (2) versioned
+ChangeId-ledger and relay/outbound codecs with legacy decoding; (3) origin propagation
+through StorageSyncCoordinator and metadata-backed batch construction; (4) flagged wire
+encode/decode and session capability enforcement; (5) multi-hop, mixed-route,
+restart, equivocation, and legacy replay conformance tests. Only after all five stages
+may the safe-frontier work consume these coordinates.
+
 ## 5.1. Authoritative namespace roster and retention checkpoint contract
 
 The existing MEMBERSHIP frame is not an authoritative roster: it is built from locally learned durable authors, and its MembershipEpoch is currently a hint rather than a committed namespace generation. InterestedPeers is a transport-delivery roster, not the set of all replicas that may later replay old state. Neither may be used as the denominator for ChangeId or tombstone GC.
