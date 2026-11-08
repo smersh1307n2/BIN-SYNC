@@ -62,6 +62,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
+
     private void RejectForgottenOrigins(PartitionState state, MetadataIncomingBatch batch)
     {
         StorageNamespaceGcStore? gcStore = _namespaceGcStore;
