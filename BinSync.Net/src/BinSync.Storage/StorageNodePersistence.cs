@@ -23,6 +23,10 @@ public static class StorageNodePersistence
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(node);
 
+        // Match the application commit barrier's lock order: Node gates before
+        // the shared Storage transaction gate. Taking Storage first and then
+        // serializing Node would deadlock against FULL_REPLACE/GC commit guards.
+        using IDisposable nodeGates = node.EnterAllGates();
         lock (StorageDatabaseTransactionGate.For(storage))
         {
             byte[] image = NodePersistence.SerializeToBytes(node);
