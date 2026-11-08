@@ -1,13 +1,13 @@
 // Global ChangeId identity ledger. Route/alias-independent semantic fingerprints.
 namespace BinSync;
 
-/// <summary>One durable ChangeId fingerprint; unknown entries are migrated legacy markers.</summary>
+/// <summary>One durable ChangeId identity fingerprint; zero is reserved for unknown compacted entries.</summary>
 internal readonly struct ChangeLedgerValue
 {
     /// <summary>
-    /// Zero is reserved as the explicit legacy-unknown marker; every known semantic
-    /// fingerprint must be non-zero. This keeps the value at 16 bytes instead of
-    /// adding a padded Boolean to every global-ledger entry.
+    /// Zero is reserved for entries whose original semantic payload is no longer available
+    /// to fingerprint. Every known origin-bound identity must be non-zero. This keeps
+    /// the global ledger value at 16 bytes without a padded Boolean.
     /// </summary>
     public Digest16 Fingerprint { get; }
     public bool IsKnown => !Fingerprint.IsZero;
@@ -26,37 +26,35 @@ public static class ChangeIdentity
     private static readonly byte[] Domain = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-ID/v1");
     private static readonly byte[] LedgerDomain = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-LEDGER/v1");
 
-    /// <summary>
-    /// Bind the canonical semantic mutation fingerprint to its immutable original
-    /// author tuple. This compact 16-byte value is what the Node ChangeId ledger
-    /// persists; sender/relay cursors are deliberately absent.
-    /// </summary>
-    internal static Digest16 BindOrigin(Digest16 semanticFingerprint,
-        NodeId originAuthorNodeId, uint originAuthorEpoch, ulong originSequence)
-    {
-        if (semanticFingerprint.IsZero || originAuthorNodeId.IsZero ||
-            originAuthorEpoch == 0 || originSequence == 0)
-            throw new InvalidDataException("A known ChangeId identity requires a complete immutable Origin tuple.");
-
-        var w = new Writer(LedgerDomain.Length + 16 + 4 + 8 + 16);
-        w.Raw(LedgerDomain).B128(originAuthorNodeId).U32(originAuthorEpoch)
-            .U64(originSequence).B128(semanticFingerprint);
-        var fingerprint = Digests.Blake3Digest16(w.WrittenSpan);
-        if (fingerprint.IsZero)
-            throw new InvalidDataException("The reserved zero ChangeId ledger fingerprint was produced.");
-        return fingerprint;
-    }
-
+    /// <summary>Canonical semantic fingerprint, independent of transport aliases and Origin.</summary>
     public static Digest16 Fingerprint(int namespaceId, RecordId recordId, byte opKind,
         object operation, NodeId resolvedAuthor, IReadOnlyList<BatchId>? causalDeps = null)
+        => FingerprintCore(namespaceId, recordId, opKind, operation, resolvedAuthor,
+            includeOrigin: false, originAuthorEpoch: 0, originSequence: 0, causalDeps);
+
+    /// <summary>
+    /// Compact global-ledger identity fingerprint. The immutable original-author tuple
+    /// is written into the same BLAKE3 input as the semantic mutation, so this is one
+    /// hash pass rather than hashing a semantic fingerprint and then hashing it again.
+    /// </summary>
+    internal static Digest16 LedgerFingerprint(int namespaceId, RecordId recordId, byte opKind,
+        object operation, NodeId originAuthorNodeId, uint originAuthorEpoch, ulong originSequence,
+        IReadOnlyList<BatchId>? causalDeps = null)
+    {
+        if (originAuthorNodeId.IsZero || originAuthorEpoch == 0 || originSequence == 0)
+            throw new InvalidDataException("A known ChangeId identity requires a complete immutable Origin tuple.");
+        return FingerprintCore(namespaceId, recordId, opKind, operation, originAuthorNodeId,
+            includeOrigin: true, originAuthorEpoch, originSequence, causalDeps);
+    }
+
+    private static Digest16 FingerprintCore(int namespaceId, RecordId recordId, byte opKind,
+        object operation, NodeId resolvedAuthor, bool includeOrigin,
+        uint originAuthorEpoch, ulong originSequence, IReadOnlyList<BatchId>? causalDeps)
     {
         Node.ValidateNamespaceId(namespaceId);
         // Never mutate the decoded operation: ApplyBatch still needs to know whether
         // its original payload was compact or full-author when deciding relay encoding.
-        // Encode the canonical full-author operation directly into the fingerprint
-        // writer. The former path cloned the decoded operation (including Value.ToArray),
-        // allocated a second encoded byte[], then copied it into another Writer.
-        // A single writer preserves the exact canonical bytes without those intermediates.
+        // Encode the canonical full-author operation directly into one writer.
         int operationLength = operation switch
         {
             OpFieldWrite x => checked(17 + 16 + Codec.VarintLength((ulong)x.Value.Length) + x.Value.Length),
@@ -65,10 +63,14 @@ public static class ChangeIdentity
             _ => throw new InvalidDataException("Unsupported operation for ChangeId fingerprint.")
         };
 
-        var w = new Writer(Domain.Length + 2 + 16 + 1 +
+        byte[] domain = includeOrigin ? LedgerDomain : Domain;
+        int originLength = includeOrigin ? 16 + 4 + 8 : 0;
+        var w = new Writer(domain.Length + 2 + 16 + originLength + 1 +
             Codec.VarintLength((ulong)operationLength) + operationLength + 1);
-        w.Raw(Domain).U16((ushort)namespaceId).B128(recordId).U8(opKind)
-            .Varint((ulong)operationLength);
+        w.Raw(domain).U16((ushort)namespaceId);
+        if (includeOrigin)
+            w.B128(resolvedAuthor).U32(originAuthorEpoch).U64(originSequence);
+        w.B128(recordId).U8(opKind).Varint((ulong)operationLength);
 
         switch (operation)
         {
@@ -100,9 +102,6 @@ public static class ChangeIdentity
         }
         else
         {
-            // One compact array + in-place sort/dedup replaces HashSet + LINQ
-            // ordering + ToArray. Dependency sets are usually small, and the
-            // canonical order remains (Lo, Hi), exactly as before.
             var sorted = new BatchId[causalDeps.Count];
             for (int i = 0; i < causalDeps.Count; i++)
             {
@@ -212,10 +211,9 @@ public static class ChangeIdentity
             return false;
         }
 
-        var semanticFingerprint = Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind,
-            operation, entry.AuthorNodeId, entry.CausalDepsOrNull);
-        fingerprint = BindOrigin(semanticFingerprint, entry.AuthorNodeId,
-            entry.OriginAuthorEpoch, entry.OriginSequence);
+        fingerprint = LedgerFingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind,
+            operation, entry.AuthorNodeId, entry.OriginAuthorEpoch,
+            entry.OriginSequence, entry.CausalDepsOrNull);
         return true;
     }
 }
