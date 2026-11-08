@@ -963,3 +963,15 @@ At BIN-SYNC `feature/fld-external-storage` commit `d264d4a9c58998a6ff3baea9458b5
 The current Storage provider feed carries stable ChangeIds. Before cutover, the transition path mirrors selected Node.Outbox winners into Metadata Store. After cutover, Metadata Store owns local outbound payloads and sequence allocation; the duplicate local-author payload rows are removed from Node while the high-watermark and WAL/ChangeId replay markers remain. The Storage-backed transport overload reads the durable Metadata Store stream. Legacy Node transport and other-author relay Outbox rows remain separate migration concerns. Verified code/test head `0399e8f0dfda39b5e860eca50364406323c7b7fa`: 644/644 core, 100/100 Storage Integration, 31/31 Fuzz/Lab, 70.8% line coverage; real TCP array sync passes.
 
 **Deferred:** FLD Database's JournalSeq provenance mapping and its dedicated transaction adapter are not part of the current BIN-SYNC + Storage completion gate.
+
+
+## Latest continuation checkpoint — WAL writer-fence hang guard (2026-11-08)
+
+- Code/test HEAD: 532baa0010140b799f3759e1c88d0c722cdf6727.
+- The experimental file-share WAL lease was reverted after a cross-process lock/test stall. The current single-writer fence is again a named OS-managed Mutex, acquired/released on its dedicated process-wide manager thread.
+- The cross-process tests now target the actual testhost PID for abrupt termination and unconditionally release/kill child processes with bounded waits before deleting their temporary directories.
+- Storage Integration invokes dotnet test with --blame-hang-timeout 3m --blame-hang-dump-type mini, so a future hang yields diagnostics.
+- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 122/122 on Ubuntu and Windows; in-memory and real-TCP samples pass. macOS-15 Storage Integration remains queued and is not yet counted as a completed platform.
+- PR #16 remains Draft/open/unmerged.
+
+**Remaining:** coordinator-level process-kill/reopen coverage across PendingApply → Node checkpoint → provider apply → Metadata Store finalization → ACK; true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
