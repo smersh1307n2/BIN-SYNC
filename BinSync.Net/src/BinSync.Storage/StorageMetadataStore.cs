@@ -49,6 +49,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
+        ValidateIncomingTransportPeerEpoch(current, batch);
         _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
         if (current.HasLegacyEncoding)
         {
@@ -73,6 +74,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
+        ValidateIncomingTransportPeerEpoch(current, batch);
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
         bool hasPriorReceipt = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
@@ -398,7 +400,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         {
             current.Receipts.Add(receiptKey, new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
                 incoming.PreviousBatchDigest.ToArray(), incoming.BatchDigest.ToArray(),
-                receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray()));
+                receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch));
             current.Receives[new ReceiveKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
             current.ReceiveChains[new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch,
@@ -422,6 +424,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return receipt;
+    }
+
+    private static void ValidateIncomingTransportPeerEpoch(PartitionState state, MetadataIncomingBatch batch)
+    {
+        if (batch.TransportPeerEpoch != 0 &&
+            state.RetiredPeerEpochs.TryGetValue((batch.NamespaceId, batch.SenderPeer), out uint retiredThrough) &&
+            batch.TransportPeerEpoch <= retiredThrough)
+            throw new InvalidDataException("Incoming batch belongs to a retired transport peer epoch.");
     }
 
     private static IReadOnlyList<bool> BuildPendingApplyDecisions(
@@ -733,7 +743,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         current.Receipts.Add(receiptKey, new ReceiptValue(batch.CursorStart, batch.CursorEnd,
             batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded,
-            receipt.DurableAuthor, batch.HeaderFingerprint.ToArray()));
+            receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(), batch.TransportPeerEpoch));
         current.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
         current.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
         foreach (var pair in newLedger)
@@ -841,7 +851,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             batch.BatchDigest.ToArray(),
             relayAdded,
             ResolveAuthorStream(batch),
-            batch.HeaderFingerprint.ToArray()));
+            batch.HeaderFingerprint.ToArray(),
+            batch.TransportPeerEpoch));
 
         return new MetadataBatchReceipt(
             batch.CursorStart,
