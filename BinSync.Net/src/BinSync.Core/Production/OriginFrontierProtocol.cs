@@ -26,6 +26,7 @@ public sealed class AppliedOriginFrontierReport
     public NodeId MemberNodeId { get; init; }
     public uint MemberTransportEpoch { get; init; }
     public ulong ReportSequence { get; init; }
+    public bool FinalForAuthor { get; init; }
     public ulong UnpublishedDraftCount { get; init; }
     public ulong MaxUnpublishedDraftHlcWall { get; init; }
     public uint MaxUnpublishedDraftHlcLogical { get; init; }
@@ -80,7 +81,7 @@ public static class OriginFrontierProtocol
     {
         ArgumentNullException.ThrowIfNull(roster);
         NamespaceRosterProtocol.Validate(roster);
-        if (encoded.Length < 4 + 2 + 8 + 32 + 16 + 4 + 8 + 8 + 8 + 4 + 2 + 2 + 64)
+        if (encoded.Length < 4 + 2 + 8 + 32 + 16 + 4 + 8 + 1 + 8 + 8 + 4 + 2 + 2 + 64)
             throw new InvalidDataException("OFR2 frontier report is truncated.");
         int payloadLength = encoded.Length - BatchSignature.SignatureSize;
         byte[] payload = encoded[..payloadLength].ToArray();
@@ -182,6 +183,7 @@ public static class OriginFrontierProtocol
         writer.B128(report.MemberNodeId);
         writer.U32(report.MemberTransportEpoch);
         writer.U64(report.ReportSequence);
+        writer.U8(report.FinalForAuthor ? (byte)1 : (byte)0);
         writer.U64(report.UnpublishedDraftCount);
         writer.U64(report.MaxUnpublishedDraftHlcWall);
         writer.U32(report.MaxUnpublishedDraftHlcLogical);
