@@ -2343,6 +2343,8 @@ public sealed class StorageSyncCoordinatorTests
             node.WriteField(1, nodeOnlyRecord, 0x081F, "node-only"u8.ToArray(), new Hlc(6500, 0)));
         using var peer = NewNode(60);
         Assert.Throws<InvalidOperationException>(() => node.CreateDeltaBatch(peer.NodeId, 1));
+        Assert.Throws<InvalidOperationException>(() => node.PushOutbox(1, nodeOnlyRecord,
+            new OpFieldWrite { FieldId = 0x0821, Wall = 6501, Logical = 0, Value = "legacy"u8.ToArray() }));
 
         // The same logical write remains valid through the provider-owned path.
         provider.AppendLocalChange(new ProviderMutation
