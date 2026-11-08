@@ -371,3 +371,16 @@ The 81-byte canonical encoding is required; the earlier 53-byte layout is reject
 Receipt values persist the batch maximum `OriginSequence`. Canonical lengths are 76/80 bytes without a header fingerprint and 92/96 bytes with it; the 4-byte transport-peer epoch is present in the 80/96-byte variants. Earlier receipt layouts are rejected.
 
 All physical compaction gates are currently false. In addition to the signed origin frontier and retained receive cursor/digest-chain fence, receipt eligibility requires the issuer to be durably Retired and the stored transport-peer epoch to be at or below `RetiredThroughEpoch`. These are implemented guards, not permission to enable receipt GC before the T-pass lost-ACK/retirement proof.
+
+
+## 10.11. Member applied-origin frontier and authority checkpoint production
+
+`StorageSyncCoordinator.PublishAppliedOriginFrontier(memberSeed, pageSize)` produces the local Active member's signed OFR1 report. It combines (a) immutable origin identities in the durable Metadata Store ChangeId ledger and (b) still-unacknowledged local provider-feed mutations. The provider feed's own sequence is never substituted for `OriginSequence`. For each `(OriginAuthorNodeId, OriginAuthorEpoch)`, the report advances only through the contiguous prefix after the prior durable report; gaps stop advancement. The report is signed with the member key and persisted by `StorageNamespaceGcStore.AcceptOriginFrontier`.
+
+`StorageSyncCoordinator.PublishRetentionCheckpoint(authoritySeed, fullReplaceGeneration?, fullReplaceDigest?)` reads the latest durable reports and builds RCP1 using the minimum contiguous applied sequence across every Active member. A missing Active-member report conservatively prevents a safe frontier for that origin. Optional FULL_REPLACE binding is accepted only after every Active member's signed installed ACK is durable. The checkpoint is authority-signed and persisted with the existing monotonic sequence/digest-chain checks.
+
+## 10.12. FULL_REPLACE HLC floor must be installed before ACK
+
+`StorageFullReplaceReceiver.Commit` computes the maximum `(HlcWall,HlcLogical)` in the committed provider generation and invokes its mandatory refresh callback before creating/persisting the signed installed ACK. The intended callback is `StorageSyncCoordinator.RefreshAfterFullReplace(persistNode, wall, logical)`: it advances `Node` HLC to the floor, rehydrates the Node cache from the committed provider generation, replays durable PendingApply intents, and persists the refreshed Node state. `Node.AdvanceClockToFloor` is a restore operation and deliberately does not apply remote clock-skew rejection. The caller must provide this callback; ACK must not be emitted if refresh or persistence fails.
+
+These are C-pass production APIs. Exact-head tests for gaps, report/checkpoint rollback, crash/retry, callback ordering and all-member installation remain T-pass obligations. Physical receipt, ChangeId and tombstone/ghost GC remain disabled.
