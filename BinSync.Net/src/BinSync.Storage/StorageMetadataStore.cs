@@ -440,12 +440,24 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     private static void ValidateIncomingTransportPeerEpoch(PartitionState state, MetadataIncomingBatch batch)
     {
-        if (!state.RetiredPeerEpochs.TryGetValue(
-                (batch.NamespaceId, batch.SenderPeer), out uint retiredThrough))
+        bool hasRetiredFence = state.RetiredPeerEpochs.TryGetValue(
+            (batch.NamespaceId, batch.SenderPeer), out uint retiredThrough);
+        if (batch.TransportPeerEpoch == 0)
+        {
+            if (hasRetiredFence)
+                throw new InvalidDataException(
+                    "Incoming batch has no verifiable transport epoch after a peer retirement fence.");
             return;
-        if (batch.TransportPeerEpoch == 0 || batch.TransportPeerEpoch <= retiredThrough)
+        }
+
+        if (hasRetiredFence && batch.TransportPeerEpoch <= retiredThrough)
+            throw new InvalidDataException("Incoming batch belongs to a retired transport peer epoch.");
+
+        var registeredPeer = new InterestedPeerKey(
+            batch.NamespaceId, batch.SenderPeer, batch.TransportPeerEpoch);
+        if (!state.InterestedPeers.Contains(registeredPeer))
             throw new InvalidDataException(
-                "Incoming batch has no verifiable current transport epoch or belongs to a retired transport peer epoch.");
+                "Incoming batch transport epoch was not durably registered for this namespace.");
     }
 
     private static IReadOnlyList<bool> BuildPendingApplyDecisions(
