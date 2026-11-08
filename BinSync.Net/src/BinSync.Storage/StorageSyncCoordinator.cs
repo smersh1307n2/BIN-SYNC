@@ -62,7 +62,7 @@ public sealed class StorageSyncCoordinator
     /// pending provider drafts as a barrier; drafts never consume OriginSequence. Call after local freeze and remote apply.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
-        byte[] memberSeed, int pageSize = 1024)
+        byte[] memberSeed, int pageSize = 1024, bool finalForAuthor = false)
     {
         ArgumentNullException.ThrowIfNull(memberSeed);
         if (memberSeed.Length != 32)
@@ -109,9 +109,11 @@ public sealed class StorageSyncCoordinator
                 afterSequence = page.ScannedThroughSequence;
             }
 
+            if (finalForAuthor && unpublishedDraftCount != 0)
+                throw new InvalidOperationException("Cannot close a local author epoch while unpublished provider drafts remain.");
             return metadataStore.PublishAppliedOriginFrontier(
                 _scopeId, _node.NodeId, roster, unpublishedDraftCount,
-                maxDraftHlcWall, maxDraftHlcLogical, memberSeed);
+                maxDraftHlcWall, maxDraftHlcLogical, finalForAuthor, memberSeed);
         }
     }
 
