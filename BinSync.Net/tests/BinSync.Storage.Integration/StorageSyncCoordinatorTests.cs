@@ -813,7 +813,7 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
-    public void Unpublished_local_field_edits_are_coalesced_before_node_outbox_freeze()
+    public void Unpublished_local_field_edits_are_coalesced_before_metadata_store_freeze()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-coalesce"), 410);
         using var provider = new StorageDataProvider(storage);
@@ -848,7 +848,7 @@ public sealed class StorageSyncCoordinatorTests
         int consumed = coordinator.PublishLocalChanges(_ => { }, limit: 16);
 
         Assert.Equal(4, consumed);
-        Assert.Equal(2, node.GetOutboxCount(1));
+        Assert.Equal(0, node.GetOutboxCount(1));
         Assert.Equal(2UL, metadata.GetOutboundHighWatermark("pending-coalesce", node.NodeId, 1, node.NodeId));
         Assert.True(provider.TryReadCurrent(record, fieldA, out var providerA));
         Assert.Equal("final", Encoding.UTF8.GetString(providerA!.Value));
@@ -856,8 +856,11 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("independent", Encoding.UTF8.GetString(providerB!.Value));
         Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
 
-        var outbox = node.ReadOutboxEntries(1, node.NodeId, 0, 16);
-        var values = outbox.Select(entry => Ops.DecodeOp(entry.Payload).Op)
+        ulong lease = metadata.AcquireOutboundLease("pending-coalesce", node.NodeId, 1, node.NodeId,
+            Guid.Parse("17000000-0000-0000-0000-000000000001"));
+        var outbox = metadata.ReadOutbound("pending-coalesce", node.NodeId, 1, node.NodeId, lease, 0, 16).Items;
+        Assert.Equal(2, outbox.Count);
+        var values = outbox.Select(entry => Ops.DecodeOp(entry.Payload.AsSpan(16)).Op)
             .OfType<OpFieldWrite>()
             .Select(operation => Encoding.UTF8.GetString(operation.Value))
             .ToArray();
@@ -868,7 +871,7 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
-    public void Pending_local_edits_are_coalesced_across_provider_page_boundaries()
+    public void Pending_local_edits_are_coalesced_across_provider_page_boundaries_in_metadata_store()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-coalesce-pages"), 423);
         using var provider = new StorageDataProvider(storage);
@@ -893,7 +896,7 @@ public sealed class StorageSyncCoordinatorTests
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce-pages");
         Assert.Equal(5, coordinator.PublishLocalChanges(_ => { }, limit: 2));
 
-        Assert.Equal(2, node.GetOutboxCount(1));
+        Assert.Equal(0, node.GetOutboxCount(1));
         Assert.Equal(2UL, metadata.GetOutboundHighWatermark("pending-coalesce-pages", node.NodeId, 1, node.NodeId));
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
         Assert.True(provider.TryReadCurrent(record, fieldA, out var valueA));
@@ -901,8 +904,10 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(provider.TryReadCurrent(record, fieldB, out var valueB));
         Assert.Equal("b-final", Encoding.UTF8.GetString(valueB!.Value));
 
-        var values = node.ReadOutboxEntries(1, node.NodeId, 0, 10)
-            .Select(entry => Ops.DecodeOp(entry.Payload).Op)
+        ulong lease = metadata.AcquireOutboundLease("pending-coalesce-pages", node.NodeId, 1, node.NodeId,
+            Guid.Parse("24000000-0000-0000-0000-000000000001"));
+        var values = metadata.ReadOutbound("pending-coalesce-pages", node.NodeId, 1, node.NodeId, lease, 0, 10).Items
+            .Select(entry => Ops.DecodeOp(entry.Payload.AsSpan(16)).Op)
             .OfType<OpFieldWrite>()
             .Select(operation => Encoding.UTF8.GetString(operation.Value))
             .ToArray();
@@ -1362,8 +1367,12 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(node.TryGetField(1, staleRecord, 0x0817, out _));
         Assert.True(node.TryGetField(1, providerRecord, 0x0818, out var restored));
         Assert.Equal("provider-authoritative", Encoding.UTF8.GetString(restored!.Value));
-        Assert.Single(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
+        Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        BatchId changeId = metadata.ReadOutbound(scope, node.NodeId, 1, node.NodeId,
+            metadata.AcquireOutboundLease(scope, node.NodeId, 1, node.NodeId,
+                Guid.Parse("54000000-0000-0000-0000-000000000001")), 0, 10).Items.Single().ChangeId;
+        Assert.False(changeId.IsZero);
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
     }
 
