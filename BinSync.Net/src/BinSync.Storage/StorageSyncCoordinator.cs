@@ -92,6 +92,10 @@ public sealed class StorageSyncCoordinator
         try
         {
             nodeLease = _node.EnterAllGates();
+            if (_metadataStore is StorageMetadataStore metadataStore &&
+                _provider is StorageDataProvider storageProvider &&
+                !storageProvider.SharesStorageWith(metadataStore))
+                throw new InvalidOperationException("The durable Metadata Store and Data Provider must share the same StorageDatabase for the application commit barrier.");
             if (_provider is not IProviderCommitGuard providerGuard)
                 throw new NotSupportedException("The attached provider does not expose an exclusive commit guard.");
             return new ApplicationCommitLease(
