@@ -1384,6 +1384,9 @@ private static bool ValidateIncomingBatchForStaging(
                     throw new InvalidDataException("New outbound operation supplied a non-contiguous immutable OriginSequence.");
                 ulong maxIssuedHlcWall = issuedState.MaxHlcWall;
                 uint maxIssuedHlcLogical = issuedState.MaxHlcLogical;
+                if (operation.HlcWall < maxIssuedHlcWall ||
+                    (operation.HlcWall == maxIssuedHlcWall && operation.HlcLogical < maxIssuedHlcLogical))
+                    throw new InvalidDataException("Local HLC regressed within an immutable author epoch; publishing it could violate the signed HLC retention floor.");
                 if (operation.HlcWall > maxIssuedHlcWall ||
                     (operation.HlcWall == maxIssuedHlcWall && operation.HlcLogical > maxIssuedHlcLogical))
                 {
