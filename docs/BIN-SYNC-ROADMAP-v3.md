@@ -597,3 +597,11 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Provider record-tombstone cleanup plumbing is bounded and crash-repeatable, but it is intentionally disabled (`IsTombstoneGcProofEnabled == false`). The current v3.1 sequence-only proof cannot rule out a delayed pre-snapshot operation from another author with an older HLC. Do not enable physical tombstone deletion.
 - [~ T] No build or tests run; runtime and source-compatibility effects of requiring local provider `OriginAuthorEpoch` remain unverified.
 - [ ] C-pass remaining: implement the global causal-horizon protocol (per-author issued high-watermarks, every Active member's applied-through watermark, FULL_REPLACE-bound HLC floor, mandatory Node HLC advancement, and retired-origin closure); wire report/checkpoint production and the real application-wide commit/GC lease. Then proceed to T pass.
+
+
+### 2026-11-08 — Canonical v3 encoding correction
+
+- [x C] Removed the newly introduced legacy decode/fingerprint branches. Provider mutations now accept only the canonical 81-byte fixed header; local feed envelopes accept only that mutation encoding plus one 16-byte ChangeId; receipt values accept only the canonical origin-sequence-bearing lengths. No silent v2/v3 migration decoder is added.
+- [x C] Record tombstones now require complete ChangeId/origin provenance at codec validation. Zero provenance remains allowed only for ordinary field materialization from Node LWW state, which is not an immutable operation/tombstone.
+- [x C] Kept the explicit same-HLC provenance enrichment path for field materialization: a later authenticated immutable operation may attach its identity to an otherwise identical materialized field, without changing visible data. This is not a storage-format fallback.
+- [~ T] Existing persisted rows using earlier in-development layouts will be rejected by the canonical v3.1 decoder; tests and any deliberate data-reset/rebuild procedure must account for this. No compatibility migration is hidden in the code.
