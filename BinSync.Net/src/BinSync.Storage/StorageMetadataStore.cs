@@ -96,6 +96,24 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    public IReadOnlyList<uint> ReadLocalOriginEpochs(
+        string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState state))
+                return Array.Empty<uint>();
+            return state.OriginHighWatermarks.Keys
+                .Where(key => key.NamespaceId == namespaceId && key.Author == localAuthor)
+                .Select(key => key.AuthorEpoch)
+                .Distinct()
+                .OrderBy(epoch => epoch)
+                .ToArray();
+        }
+    }
+
     /// <summary>
     /// Build and durably publish this member's contiguous applied-origin frontier.
     /// Published ledger rows and still-unpublished local provider feed rows are both
