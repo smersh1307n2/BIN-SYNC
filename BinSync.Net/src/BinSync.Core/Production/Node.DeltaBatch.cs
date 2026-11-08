@@ -614,7 +614,7 @@ public sealed partial class Node
                 return Array.Empty<NodeId>();
             return entries.Select(entry => entry.AuthorNodeId)
                 .Distinct()
-                .OrderBy(author => author)
+                .OrderBy(author => author.ToString(), StringComparer.Ordinal)
                 .ToArray();
         }
     }
