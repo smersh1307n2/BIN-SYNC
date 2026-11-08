@@ -78,8 +78,19 @@ public sealed class WalManager : IDisposable
                 var w = faultInjector is null
                     ? WalWriter.Create(path, partitionId, firstCommitSeq: 1)
                     : WalWriter.CreateForTesting(path, partitionId, firstCommitSeq: 1, faultInjector);
-                return (new WalManager(walDir, partitionId, rotateAfterBytes, w, 0,
-                    writerFence, faultInjector), allRecords);
+                try
+                {
+                    // The segment file is flushed by WalWriter.Create; persist its
+                    // directory entry before exposing the new WAL manager.
+                    StorageDirectorySync.Flush(walDir);
+                    return (new WalManager(walDir, partitionId, rotateAfterBytes, w, 0,
+                        writerFence, faultInjector), allRecords);
+                }
+                catch
+                {
+                    w.Dispose();
+                    throw;
+                }
             }
 
         ulong? expectedNextSeq = null;
