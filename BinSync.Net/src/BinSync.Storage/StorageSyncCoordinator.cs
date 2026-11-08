@@ -164,8 +164,8 @@ public sealed class StorageSyncCoordinator
                     if (outboundIdentityStore!.TryGetOutboundChangeFingerprint(
                         _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out ReadOnlyMemory<byte> frozenFingerprint))
                     {
-                        byte[] actualFingerprint = ComputeMetadataFingerprint(change);
-                        if (!frozenFingerprint.Span.SequenceEqual(actualFingerprint))
+                        Digest16 actualFingerprint = ComputeMetadataFingerprint(change);
+                        if (Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
                         lastFrozenFeedSequence = change.Sequence;
                         // Any non-frozen rows before this frozen source sequence were
@@ -297,7 +297,7 @@ public sealed class StorageSyncCoordinator
         return totalChanges;
     }
 
-    private byte[] ComputeMetadataFingerprint(ProviderChange change)
+    private Digest16 ComputeMetadataFingerprint(ProviderChange change)
     {
         ProviderMutation mutation = change.Mutation;
         object op;
@@ -339,7 +339,7 @@ public sealed class StorageSyncCoordinator
             opKind = OpsConst.TagFieldWrite;
         }
         return ChangeIdentity.Fingerprint(
-            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<BatchId>()).ToArray();
+            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<BatchId>());
     }
 
     private MetadataFrozenOperation CreateMetadataFrozenOperation(ProviderChange change)
