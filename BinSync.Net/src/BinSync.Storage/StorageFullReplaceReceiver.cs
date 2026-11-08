@@ -102,6 +102,22 @@ public sealed class StorageFullReplaceReceiver
         }
     }
 
+    public FullReplaceTransferProtocol.Progress GetWireProgress()
+    {
+        lock (_gate)
+        {
+            FullReplaceTransferProtocol.Begin manifest = RequireManifest();
+            if (!_fullReplace.TryGetFullReplaceProgress(manifest.Generation, out ProviderFullReplaceProgress? progress) ||
+                progress is null)
+                throw new InvalidDataException("FULL_REPLACE staging state disappeared.");
+            ValidateProgress(manifest, progress);
+            return new FullReplaceTransferProtocol.Progress(
+                _namespaceId, manifest.Generation, progress.ExpectedEntryCount,
+                progress.NextIndex, progress.ExpectedDigest.ToArray(), progress.IsCommitted,
+                FullReplaceTransferProtocol.GetNextFrameSequence(progress.NextIndex));
+        }
+    }
+
     /// <summary>Persist the next contiguous, bounded page. Resume position is read from durable provider state.</summary>
     public ProviderFullReplaceProgress Stage(FullReplaceTransferProtocol.Chunk chunk)
     {
@@ -119,8 +135,10 @@ public sealed class StorageFullReplaceReceiver
                 throw new InvalidOperationException("Committed FULL_REPLACE cannot accept more chunks.");
             if (chunk.StartIndex != progress.NextIndex)
                 throw new InvalidDataException("FULL_REPLACE chunk is not the next durable page; resume from the stored cursor.");
-            if (chunk.Entries.Count > progress.ExpectedEntryCount - progress.NextIndex)
-                throw new InvalidDataException("FULL_REPLACE chunk exceeds the manifest entry count.");
+            int requiredCount = Math.Min(FullReplaceTransferProtocol.MaxChunkEntries,
+                progress.ExpectedEntryCount - progress.NextIndex);
+            if (chunk.Entries.Count != requiredCount)
+                throw new InvalidDataException("FULL_REPLACE chunks must use canonical full pages, except for the final page.");
 
             _fullReplace.StageFullReplacePage(manifest.Generation, chunk.StartIndex, chunk.Entries);
             if (!_fullReplace.TryGetFullReplaceProgress(manifest.Generation, out progress) || progress is null)
