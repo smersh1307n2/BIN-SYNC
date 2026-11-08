@@ -655,9 +655,9 @@ public sealed class StorageSyncCoordinator
 
         lock (_gate)
         {
-            // Publish pending provider-feed changes without first rebuilding the cache;
-            // the stable Metadata Store payloads are durable before the snapshot install.
-            PublishLocalChangesCore(persistNode, 1024, installProviderSnapshot: false);
+            // Drain pending provider-feed changes through the incremental cache path;
+            // the explicit full snapshot below remains the startup reconciliation.
+            PublishLocalChangesCore(persistNode, 1024);
             return InstallProviderSnapshot(persistNode);
         }
     }
