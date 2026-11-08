@@ -217,7 +217,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pending.Batch.BatchId == key.BatchId))
                     continue;
                 if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
-                        roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.CursorEnd))
+                        roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
                     continue;
                 candidates.Add(key);
                 if (candidates.Count == limit)
@@ -444,7 +444,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 refreshedReceipt = new ReceiptValue(priorReceipt.CursorStart, priorReceipt.CursorEnd,
                     priorReceipt.PreviousBatchDigest.ToArray(), priorReceipt.BatchDigest.ToArray(),
                     priorReceipt.NewRelayOperationCount, priorReceipt.DurableAuthor,
-                    priorReceipt.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch);
+                    priorReceipt.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch, priorReceipt.OriginSequence);
         }
         else
         {
@@ -534,7 +534,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var receiptValueState = refreshedReceipt ?? new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
                 incoming.PreviousBatchDigest.ToArray(), incoming.BatchDigest.ToArray(),
                 receipt.NewRelayOperationCount, receipt.DurableAuthor,
-                incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch);
+                incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch, GetMaxOriginSequence(incoming));
             writes.Add((StorageKey(root, 1, receiptSuffix), EncodeReceiptValue(receiptValueState)));
 
             if (isNewReceipt)
@@ -1080,7 +1080,7 @@ private static bool ValidateIncomingBatchForStaging(
 
     private static byte[] EncodeReceiptValue(ReceiptValue receipt)
     {
-        int baseLength = receipt.HeaderFingerprint.Length == 16 ? 84 : 68;
+        int baseLength = receipt.HeaderFingerprint.Length == 16 ? 92 : 76;
         byte[] value = new byte[baseLength + (receipt.TransportPeerEpoch == 0 ? 0 : 4)];
         BinaryPrimitives.WriteUInt64LittleEndian(value, receipt.CursorStart);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), receipt.CursorEnd);
@@ -1090,6 +1090,8 @@ private static bool ValidateIncomingBatchForStaging(
         receipt.DurableAuthor.WriteTo(value.AsSpan(52));
         if (receipt.HeaderFingerprint.Length == 16)
             receipt.HeaderFingerprint.CopyTo(value, 68);
+        int originSequenceOffset = receipt.HeaderFingerprint.Length == 16 ? 84 : 68;
+        BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(originSequenceOffset), receipt.OriginSequence);
         if (receipt.TransportPeerEpoch != 0)
             BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(baseLength), receipt.TransportPeerEpoch);
         return value;
@@ -2347,7 +2349,7 @@ private static bool ValidateIncomingBatchForStaging(
         var refreshed = new ReceiptValue(prior.CursorStart, prior.CursorEnd,
             prior.PreviousBatchDigest.ToArray(), prior.BatchDigest.ToArray(),
             prior.NewRelayOperationCount, prior.DurableAuthor,
-            prior.HeaderFingerprint.ToArray(), transportPeerEpoch);
+            prior.HeaderFingerprint.ToArray(), transportPeerEpoch, prior.OriginSequence);
         byte[] storageKey = EncodeReceiptKey(partitionKey, key);
         byte[] value = EncodeReceiptValue(refreshed);
         using var batch = _storage.BeginWriteBatch();
@@ -3074,7 +3076,7 @@ private static bool ValidateIncomingBatchForStaging(
                 case 1:
                 {
                     RequireLength(key, 38);
-                    if (row.Value.Length is not (68 or 72 or 84 or 88))
+                    if (row.Value.Length is not (68 or 72 or 76 or 80 or 84 or 88 or 92 or 96))
                         throw new InvalidDataException("Stored v3 inbox receipt value has an invalid length.");
                     var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
@@ -3087,9 +3089,13 @@ private static bool ValidateIncomingBatchForStaging(
                         row.Value.AsSpan(32, 16).ToArray(),
                         BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(48)),
                         NodeId.From(row.Value.AsSpan(52, 16)),
-                        row.Value.Length is 84 or 88 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>(),
-                        row.Value.Length is 72 or 88
+                        row.Value.Length is 84 or 88 or 92 or 96 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>(),
+                        row.Value.Length is 72 or 80 or 88 or 96
                             ? BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(row.Value.Length - 4))
+                            : 0,
+                        row.Value.Length is 76 or 80 or 92 or 96
+                            ? BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(
+                                row.Value.Length is 92 or 96 ? 84 : 68))
                             : 0));
                     break;
                 }
@@ -3582,6 +3588,9 @@ private static bool ValidateIncomingBatchForStaging(
     private static NodeId ResolveAuthorStream(MetadataIncomingBatch batch)
         => batch.AuthorStreamNodeId;
 
+    private static ulong GetMaxOriginSequence(MetadataIncomingBatch batch)
+        => batch.Operations.Count == 0 ? 0 : batch.Operations[^1].OriginSequence;
+
     private static void ValidateBatch(MetadataIncomingBatch batch)
     {
         if (string.IsNullOrWhiteSpace(batch.ScopeId))
@@ -3763,7 +3772,8 @@ private static bool ValidateIncomingBatchForStaging(
         int newRelayOperationCount,
         NodeId durableAuthor = default,
         byte[]? headerFingerprint = null,
-        uint transportPeerEpoch = 0)
+        uint transportPeerEpoch = 0,
+        ulong originSequence = 0)
     {
         public ulong CursorStart { get; } = cursorStart;
         public ulong CursorEnd { get; } = cursorEnd;
@@ -3773,6 +3783,7 @@ private static bool ValidateIncomingBatchForStaging(
         public NodeId DurableAuthor { get; } = durableAuthor;
         public byte[] HeaderFingerprint { get; } = headerFingerprint ?? Array.Empty<byte>();
         public uint TransportPeerEpoch { get; } = transportPeerEpoch;
+        public ulong OriginSequence { get; } = originSequence;
 
         public bool Matches(MetadataIncomingBatch batch)
             => CursorStart == batch.CursorStart
