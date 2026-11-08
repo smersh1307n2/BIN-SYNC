@@ -151,6 +151,7 @@ public static class OriginFrontierProtocol
         };
         Validate(report);
         ValidateRosterBinding(report, roster);
+        ValidateRetiredEpochClosures(report, roster);
 
         NamespaceRosterMember member = FindMember(roster, memberId);
         if (member.Status != NamespaceMemberStatus.Active ||
@@ -168,6 +169,7 @@ public static class OriginFrontierProtocol
             Validate(report);
             NamespaceRosterProtocol.Validate(roster);
             ValidateRosterBinding(report, roster);
+            ValidateRetiredEpochClosures(report, roster);
             NamespaceRosterMember member = FindMember(roster, report.MemberNodeId);
             if (member.Status != NamespaceMemberStatus.Active ||
                 member.TransportPeerEpoch != report.MemberTransportEpoch ||
@@ -289,6 +291,22 @@ public static class OriginFrontierProtocol
     internal static NamespaceRosterMember FindMember(NamespaceRosterCertificate roster, NodeId memberId)
         => roster.Members.FirstOrDefault(m => m.NodeId == memberId)
            ?? throw new InvalidDataException("Member is not present in the accepted namespace roster.");
+
+    private static void ValidateRetiredEpochClosures(
+        AppliedOriginFrontierReport report, NamespaceRosterCertificate roster)
+    {
+        foreach (NamespaceRetiredOriginEpoch closure in roster.RetiredOriginEpochs.Where(entry =>
+            entry.OriginAuthorNodeId == report.MemberNodeId))
+        {
+            IssuedOriginFrontierEntry? issued = report.IssuedOrigins.FirstOrDefault(entry =>
+                entry.OriginAuthorEpoch == closure.OriginAuthorEpoch);
+            if (issued is null ||
+                issued.IssuedOriginSequence != closure.FinalIssuedOriginSequence ||
+                issued.MaxIssuedHlcWall != closure.MaxIssuedHlcWall ||
+                issued.MaxIssuedHlcLogical != closure.MaxIssuedHlcLogical)
+                throw new InvalidDataException("An active/rejoined member cannot alter or omit an authority-closed author epoch in its OFR2 report.");
+        }
+    }
 
     private static void ValidateRosterBinding(AppliedOriginFrontierReport report, NamespaceRosterCertificate roster)
     {
