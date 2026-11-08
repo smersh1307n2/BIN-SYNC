@@ -937,6 +937,20 @@ Verified at BIN-SYNC code/test head `0399e8f0dfda39b5e860eca50364406323c7b7fa`: 
 
 **Boundary:** this is the provider-owned outbound publication slice, not complete Node/Transport replacement. Node session epoch fencing, alias resolution, runtime caches and the legacy path remain. Physical crash-cut injection, multi-process concurrency/fencing, large-partition benchmarks and independent retention/GC proofs remain open.
 
+
+## 7.29 Storage transaction serialization and single-writer fencing (2026-11-08)
+
+The Storage adapter now has two complementary serialization layers:
+
+- `StorageDatabaseTransactionGate` is a process-local shared gate keyed by the actual `StorageDatabase` instance. `StorageDataProvider`, `StorageMetadataStore` and `StorageNodePersistence.Save` use the same gate when attached to that instance, preventing stale-base WAL commit conflicts between adapters with previously independent locks.
+- `WalWriterFence` acquires one named OS-managed Mutex per normalized WAL directory and partition. A single process-wide owner thread acquires/releases named mutexes so a `StorageDatabase` may be disposed from any caller thread. On process termination the OS abandons/releases the mutex; the next opener acquires it before reading the snapshot or replaying/truncating WAL.
+- The fence rejects a second open of the same partition in one process and across processes. The design is BCL-only; no P/Invoke or native library dependency was added.
+- This is deliberately **single-writer per partition**, not multi-writer. Parallel adapter operations sharing one in-process `StorageDatabase` are serialized; separate processes cannot write the same partition concurrently.
+
+Verified at BIN-SYNC `833433a515e262417b10590c285576cc5441e69d`: 644/644 core tests, 102/102 Storage Integration tests, 31/31 Fuzz/Lab cases, 70.8% line coverage; both Storage array samples and the real-TCP restart/tombstone flow pass. Integration regressions cover concurrent provider+metadata commits through one shared database, second-writer rejection, and successful reopen after the first writer disposes.
+
+**Still to validate:** a separate-process integration test (including process termination while holding the fence) on each supported OS, symlink/alias path canonicalization, and physical power-loss cuts during WAL rotation/checkpoint. The current tests prove same-process rejection/reopen and the normal OS mutex path, not a complete hardware crash matrix.
+
 ## 12. Current Storage adapter representation
 
 At BIN-SYNC `feature/fld-external-storage` commit `d264d4a9c58998a6ff3baea9458b5f9fb61ab202`, the Storage adapter's durable representation is:
