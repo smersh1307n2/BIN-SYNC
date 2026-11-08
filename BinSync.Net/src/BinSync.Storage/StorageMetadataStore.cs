@@ -49,6 +49,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
+        ValidateIncomingSenderEpoch(current, batch);
         _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
         if (current.HasLegacyEncoding)
         {
@@ -73,6 +74,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
+        ValidateIncomingSenderEpoch(current, batch);
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
         bool hasPriorReceipt = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
@@ -427,6 +429,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return receipt;
+    }
+
+    private static void ValidateIncomingSenderEpoch(PartitionState state, MetadataIncomingBatch batch)
+    {
+        if (state.RetiredPeerEpochs.TryGetValue(
+                (batch.NamespaceId, batch.SenderPeer), out uint retiredThrough) &&
+            batch.SenderEpoch <= retiredThrough)
+            throw new InvalidDataException("Incoming batch belongs to a retired sender epoch.");
     }
 
     private static IReadOnlyList<bool> BuildPendingApplyDecisions(
