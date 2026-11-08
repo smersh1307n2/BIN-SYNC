@@ -1043,6 +1043,83 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Retired_epoch_receipt_gc_and_fence_survive_storage_restart()
+    {
+        string directory = Path.Combine(_root, "receipt-gc-restart");
+        Directory.CreateDirectory(directory);
+        const string scope = "receipt-gc-restart";
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        var oldBatch = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = sender,
+            SenderEpoch = 5,
+            TransportPeerEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(240),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)241, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)242, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch(243),
+                    Fingerprint = Enumerable.Repeat((byte)244, 16).ToArray(),
+                    Payload = new byte[] { 245 }
+                }
+            }
+        };
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 450))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                store.RegisterInterestedPeer(scope, local, sender, 1, 7);
+                Assert.False(store.AcceptIncomingBatch(oldBatch).IsDuplicate);
+                store.RegisterInterestedPeer(scope, local, sender, 2, 7);
+                store.CompletePeerInitialSync(scope, local, sender, 2, 7,
+                    new[] { new MetadataPeerStreamBaseline(author, 0, 5) });
+                store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
+            }
+
+            using var reopenedStorage = StorageDatabase.Open(directory, 450);
+            using var reopened = new StorageMetadataStore(reopenedStorage);
+            Assert.Equal(1U, reopened.GetRetiredPeerEpoch(scope, local, sender, 7));
+            Assert.Throws<InvalidDataException>(() => reopened.AcceptIncomingBatch(oldBatch));
+
+            var retryFromNewEpoch = new MetadataIncomingBatch
+            {
+                ScopeId = oldBatch.ScopeId,
+                LocalReplica = oldBatch.LocalReplica,
+                SenderPeer = oldBatch.SenderPeer,
+                SenderEpoch = oldBatch.SenderEpoch,
+                TransportPeerEpoch = 2,
+                AuthorStreamNodeId = oldBatch.AuthorStreamNodeId,
+                NamespaceId = oldBatch.NamespaceId,
+                BatchId = oldBatch.BatchId,
+                CursorStart = oldBatch.CursorStart,
+                CursorEnd = oldBatch.CursorEnd,
+                PreviousBatchDigest = oldBatch.PreviousBatchDigest,
+                BatchDigest = oldBatch.BatchDigest,
+                HeaderFingerprint = oldBatch.HeaderFingerprint,
+                Operations = oldBatch.Operations
+            };
+            Assert.Throws<InvalidDataException>(() => reopened.AcceptIncomingBatch(retryFromNewEpoch));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Duplicate_on_new_transport_epoch_refreshes_receipt_retention()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-refresh-epoch"), 449);
