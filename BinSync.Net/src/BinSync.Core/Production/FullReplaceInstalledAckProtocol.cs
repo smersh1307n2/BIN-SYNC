@@ -112,8 +112,8 @@ public static class FullReplaceInstalledAckProtocol
             throw new ArgumentException("FRA1 member identity and transport epoch must be non-zero.", nameof(acknowledgement));
         if (!acknowledgement.Installed)
             throw new ArgumentException("FRA1 is only an installed-success acknowledgement.", nameof(acknowledgement));
-        if (acknowledgement.Signature is not null && acknowledgement.Signature.Length != 0 &&
-            acknowledgement.Signature.Length != BatchSignature.SignatureSize)
+        if (acknowledgement.Signature is null || (acknowledgement.Signature.Length != 0 &&
+            acknowledgement.Signature.Length != BatchSignature.SignatureSize))
             throw new ArgumentException("FRA1 signature must be empty or 64 bytes.", nameof(acknowledgement));
     }
 
