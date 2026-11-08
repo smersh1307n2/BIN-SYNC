@@ -16,6 +16,30 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             partitionId: 77);
 
     [Fact]
+    public void Open_snapshot_authorizes_skipping_its_exact_feed_watermark_only_while_held()
+    {
+        string directory = Path.Combine(_root, "snapshot-feed-barrier");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 91, deleteOnDispose: true);
+            provider.AppendLocalChange(Mutation(1, 1, 100, 1));
+
+            var snapshot = provider.OpenSnapshot();
+            Assert.Equal(1UL, snapshot.ChangeFeedWatermark);
+            Assert.Empty(provider.ReadLocalChanges(snapshot.ChangeFeedWatermark, 10).Changes);
+
+            provider.ReleaseSnapshot(snapshot.Token);
+            Assert.Throws<InvalidDataException>(() =>
+                provider.ReadLocalChanges(snapshot.ChangeFeedWatermark, 10));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Local_feed_mappings_remote_receipts_and_current_state_survive_restart()
     {
         string directory = Path.Combine(_root, "restart");
