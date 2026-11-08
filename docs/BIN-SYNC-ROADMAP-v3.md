@@ -740,3 +740,11 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Updated v3.1 addendum wire layouts and domain strings from OFR1/NRS1 to OFR2/NRS2, including issued-origin entries and FRA2/RCP2 HLC-floor fields. Corrected the stale statement that author-issued/retired-origin closure remained open.
 - [~ T] The seven Core failures at `747ea0c` included OFR1/RCP1 fixtures, OFR2 decode misalignment, and a record-tombstone fixture rejected by the stricter canonical mutation contract. The OFR2 parser defect is fixed in C; the legacy test fixtures/assertions remain for T-pass migration.
 - [ ] C: finish remaining lifecycle wiring and storage snapshot memory audit; retain all physical GC feature flags as false.
+
+
+### 2026-11-09 — C-pass: durable v3.1 control-plane orchestration
+
+- [x C] Added `StorageSyncCoordinator` orchestration over negotiated `SyncSession` frames: send/receive accepted namespace rosters, publish-and-send OFR2, receive-and-persist member frontiers, publish-and-send RCP2, receive-and-persist checkpoints, and receive-and-persist FULL_REPLACE installed ACKs.
+- [x C] Incoming control messages are decoded/verified by the session against the accepted roster, then re-encoded with their original signature and passed through the durable `StorageNamespaceGcStore.Accept*` path. Roster changes during the await fail closed at the store's current-roster check.
+- [x C] Outgoing OFR2/RCP2 objects are durably accepted before network send; a lost send can be retried with a newer monotonic report/checkpoint rather than losing the local proof state.
+- [~ T] Validate authority/member role separation, capability negotiation, duplicate frames, stale roster during receive, failed send/retry and report/checkpoint monotonicity in the T-pass.
