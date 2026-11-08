@@ -130,12 +130,10 @@ public interface IProviderPublishedOriginStore
 /// </summary>
 public interface IApplicationGcReferenceScanner
 {
-    bool HasExternalChangeIdReference(
-        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId);
+    bool HasExternalChangeIdReference(int namespaceId, BatchId changeId);
 
     bool HasExternalRecordReference(
-        string scopeId, NodeId localReplica, int namespaceId,
-        RecordId recordId, BatchId tombstoneChangeId);
+        int namespaceId, RecordId recordId, BatchId tombstoneChangeId);
 }
 
 /// <summary>Durable provider capability for terminally closing one local author epoch.</summary>
