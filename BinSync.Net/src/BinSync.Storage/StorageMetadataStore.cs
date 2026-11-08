@@ -895,6 +895,8 @@ private static bool ValidateIncomingBatchForStaging(
         {
             if (operation.ChangeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(operations));
+            if (operation.OriginAuthorEpoch == 0)
+                throw new InvalidDataException("Outbound freeze requires a non-zero local author epoch.");
             ValidateDigest(operation.Fingerprint, nameof(operation.Fingerprint));
             ArgumentNullException.ThrowIfNull(operation.Payload);
             if (!seen.Add(operation.ChangeId))
