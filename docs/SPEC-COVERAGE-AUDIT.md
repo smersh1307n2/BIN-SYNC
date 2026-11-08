@@ -93,11 +93,11 @@ The named baseline scenarios 1–25 map directly to executable test methods. Ext
 | 24. Unknown alias atomic rollback | `ScenariosB.Scenario24_UnknownAliasAtomicRollback` |
 | 25. Concurrent delete by author | `ScenariosB.Scenario25_ConcurrentDeleteByAuthor` |
 
-Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 644 passing core tests, 92 passing durable Storage Integration tests and 31 passing Fuzz/Lab cases on the latest verified source/test head `d3364d310db36cdd84c6e01f379de3ab29f3a112` (coverage 70.9%).
+Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. Latest verified Core/Fuzz run at code/test head `aafff5c5e12c901c2da4bd49fbabc03158418794`: 648/648 Core, 31/31 Fuzz/Lab and 70.4% line coverage. Latest Storage Integration run at the same head: 122/122 on Ubuntu and Windows; macOS is queued after the FileShare.None WAL lease change.
 
 **Interpretation guard:** a scenario test proves only the assertions inside that method. In particular, scenario 10 proves fail-closed behavior, not that destructive tombstone GC is implemented; scenario 13 proves quarantine behavior, not that a complete safe-frontier GC engine exists.
 
-**Durable peer-lifecycle regression:** `StorageMetadataStoreConformanceTests.Peer_roster_baseline_and_epoch_retirement_commit_as_atomic_deltas` verifies that peer registration, initial-sync baseline publication and old-epoch retirement each commit as one Storage transaction, that repeated idempotent calls do not advance the commit sequence, and that roster/stream/retired-epoch state survives reopening. This is storage mutation evidence, not a substitute for the remaining process-crash matrix or protocol-authority cutover.
+**Durable peer-lifecycle and writer-fence regressions:** `StorageMetadataStoreConformanceTests.Peer_roster_baseline_and_epoch_retirement_commit_as_atomic_deltas` verifies that peer registration, initial-sync baseline publication and old-epoch retirement each commit as one Storage transaction, that repeated idempotent calls do not advance the commit sequence, and that roster/stream/retired-epoch state survives reopening. The WAL writer fence now uses a persistent `FileShare.None` lease and has same-process, cross-process, abrupt owner-process-kill, cross-thread disposal and path-alias regressions. This is not a substitute for the remaining coordinator crash matrix or protocol-authority cutover.
 
 ## 6. §16 invariant mapping status
 
