@@ -894,7 +894,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             Assert.Throws<InvalidOperationException>(() => provider.CommitFullReplace(staleGeneration));
             Assert.True(provider.TryReadCurrent(second.RecordId, second.FieldId, out _));
             Assert.False(provider.TryReadCurrent(first.RecordId, first.FieldId, out _));
-            provider.AbortFullReplace(staleGeneration);
+            Assert.True(provider.AbortFullReplace(staleGeneration, 10));
         }
         finally
         {
@@ -922,7 +922,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             provider.StageFullReplacePage(generation, 0, new[] { replacement });
             provider.CommitFullReplace(generation);
 
-            ProviderMutation latest = Mutation(109, 3, 300, 3);
+            ProviderMutation latest = Mutation(109, 3, 230, 3);
             Guid latestGeneration = Guid.Parse("98000000-0000-0000-0000-000000000002");
             byte[] latestDigest = StorageDataProvider.ComputeFullReplaceDigest(latestGeneration, 23, new[] { latest });
             provider.BeginFullReplace(latestGeneration, 23, 1, latestDigest);
