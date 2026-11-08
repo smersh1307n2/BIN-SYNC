@@ -507,7 +507,9 @@ public sealed class StorageSyncCoordinatorTests
             peer.NodeId, 2, 1, local.NodeId);
         Assert.Equal(0UL, newEpochState.AckedCursor);
         Assert.Equal(0UL, newEpochState.PushedCursor);
-        Assert.Equal(0UL, newEpochState.StreamOffset);
+        // The replacement baseline covers the one current local outbound item;
+        // this offset is a fresh snapshot baseline, not inherited old-epoch ACK.
+        Assert.Equal(1UL, newEpochState.StreamOffset);
         Assert.Equal(checked((uint)local.Epoch), newEpochState.IssuerEpoch);
         Assert.Equal(1U, metadata.GetRetiredPeerEpoch(scope, local.NodeId, peer.NodeId, 1));
         Assert.Equal(2U, Assert.Single(metadata.ReadInterestedPeers(scope, local.NodeId, 1)).PeerEpoch);
