@@ -132,3 +132,21 @@ This is a correctness and work-shaping improvement. **No separate before/after l
 **Interpretation:** across a 10× increase in unrelated ledger rows, measured managed allocation remains approximately flat (9.63 → 10.46 KB) and latency does not show linear growth. This is consistent with the current-format row-delta freeze path writing only the new operation/identity and stream watermark rather than cloning/re-encoding the full partition.
 
 **Limitations:** this is an initial scale check, not a production latency claim. The per-iteration operation is below BenchmarkDotNet's recommended 100 ms measurement window; the 10k case has a 13.45% relative confidence-interval margin and the 100k case 19.72%. The 100k run also removed one outlier. No 1,000,000-row case has been measured yet. Keep the broader metadata mutation-cost gate open until longer-duration or batched measurements cover 10k/100k/1m rows and report bytes written, allocations, p50/p95 latency and reopen cost.
+
+
+## 2026-11-08 one-million-row ChangeId ledger smoke benchmark
+
+**Workflow:** Durable Metadata Bench run `42458064591`  
+**Code head:** `95c62168928b1997d5289015f17a16614c53ab3b`  
+**Runtime:** .NET 10, GitHub-hosted Ubuntu x64, BenchmarkDotNet 0.14.0.  
+**Measured operation:** freeze one new local outbound operation with 1,000,000 unrelated existing ChangeId ledger rows. The million-row store is seeded in per-iteration setup; setup is excluded from the measured operation. One warmup and three measured iterations.
+
+| Existing ChangeId ledger rows | Mean freeze latency | Managed allocation |
+|---:|---:|---:|
+| 1,000,000 | 389.839 µs | 73.89 KB |
+
+**Interpretation:** the single-operation freeze completes against a million-row ledger without allocating or copying the million-row collection. The 73.89 KB allocation is materially above the 10k/100k cases, so this is not evidence of perfectly flat memory cost at one million rows. It does, however, rule out an obvious full-ledger clone on this measured path.
+
+**Limitations:** only three measured iterations were collected, with one invocation per iteration. BenchmarkDotNet reported a 382 µs minimum iteration and recommended at least 100 ms; its 99.9% confidence interval is consequently very wide. This is a smoke/scaling datapoint, not a stable latency estimate or production SLA. It does not measure bytes written, p50/p95, reopen time, concurrent peer fan-out, full provider retry scan or deployment hardware. Keep the broader mutation-cost gate open until batched/long-duration 1m-row measurements cover those dimensions.
+
+**Raw artifact:** `metadata-benchmarks` artifact from run `42458064591` contains CSV, Markdown and HTML reports.
