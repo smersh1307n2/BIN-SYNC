@@ -1236,13 +1236,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static IEnumerable<StorageEntry> EnumeratePrefix(
         StorageSnapshot snapshot, byte[] prefix, int pageSize = 1024)
     {
-        byte[] after = Array.Empty<byte>();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
         while (true)
         {
-            IReadOnlyList<StorageEntry> page = snapshot.ScanPrefix(prefix, after, pageSize);
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             if (page.Count == 0) yield break;
             foreach (var row in page) yield return row;
-            after = page[^1].Key;
             if (page.Count < pageSize) yield break;
         }
     }
