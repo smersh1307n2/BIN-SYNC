@@ -47,67 +47,190 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(persistNode);
         if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
         lock (_gate)
+            return PublishLocalChangesCore(persistNode, limit, installProviderSnapshot: true);
+    }
+
+    private int PublishLocalChangesCore(
+        Action<Node> persistNode, int limit, bool installProviderSnapshot)
+    {
+        var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+        ulong afterSequence = 0;
+        ulong scannedThroughSequence = 0;
+        int totalChanges = 0;
+        bool sawStableChangeId = false;
+        bool sawLegacyChangeId = false;
+
+        // Drain the complete currently-pending provider feed, not just one page.
+        // The winner map is bounded by distinct record/field identities rather than
+        // the number of historical edits, so repeated pre-sync writes across page
+        // boundaries collapse without creating intermediate Outbox records.
+        while (true)
         {
-            var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
-            ulong afterSequence = 0;
-            ulong scannedThroughSequence = 0;
-            int totalChanges = 0;
-
-            // Drain the complete currently-pending provider feed, not just one page.
-            // The winner map is bounded by distinct record/field identities rather than
-            // the number of historical edits, so repeated pre-sync writes across page
-            // boundaries collapse without creating intermediate Outbox records.
-            while (true)
+            var page = _provider.ReadLocalChanges(afterSequence, limit);
+            if (page.Changes.Count == 0)
             {
-                var page = _provider.ReadLocalChanges(afterSequence, limit);
-                if (page.Changes.Count == 0)
-                {
-                    scannedThroughSequence = Math.Max(scannedThroughSequence, page.ScannedThroughSequence);
-                    break;
-                }
-                if (page.ScannedThroughSequence <= afterSequence)
-                    throw new InvalidDataException("Provider local feed cursor did not advance.");
+                scannedThroughSequence = Math.Max(scannedThroughSequence, page.ScannedThroughSequence);
+                break;
+            }
+            if (page.ScannedThroughSequence <= afterSequence)
+                throw new InvalidDataException("Provider local feed cursor did not advance.");
 
-                foreach (var change in page.Changes)
-                {
-                    if (change.Mutation.AuthorNodeId != _node.NodeId)
-                        throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
-                    if (change.Mutation.KeyEpoch != 0)
-                        throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
-                    AddCoalescedPendingLocalChange(winners, change);
-                }
-
-                totalChanges = checked(totalChanges + page.Changes.Count);
-                scannedThroughSequence = page.ScannedThroughSequence;
-                afterSequence = page.ScannedThroughSequence;
-                if (page.Changes.Count < limit)
-                    break;
+            foreach (var change in page.Changes)
+            {
+                if (change.Mutation.AuthorNodeId != _node.NodeId)
+                    throw new InvalidOperationException("A local provider change must use the attached Node's author identity.");
+                if (change.Mutation.KeyEpoch != 0)
+                    throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
+                sawStableChangeId |= !change.ChangeId.IsZero;
+                sawLegacyChangeId |= change.ChangeId.IsZero;
+                AddCoalescedPendingLocalChange(winners, change);
             }
 
-            if (totalChanges == 0)
-                return 0;
-
-            // Publish only final winners after every source page has been validated.
-            foreach (var change in winners.Values.OrderBy(change => change.Sequence))
-            {
-                ProviderMutation mutation = change.Mutation;
-                var hlc = new Hlc(mutation.HlcWall, mutation.HlcLogical);
-                if (mutation.IsRecordTombstone)
-                    _node.DeleteRecord(_namespaceId, mutation.RecordId, hlc);
-                else if (mutation.IsTombstone)
-                    _node.TombField(_namespaceId, mutation.RecordId, mutation.FieldId, hlc);
-                else
-                    _node.WriteField(_namespaceId, mutation.RecordId, mutation.FieldId, mutation.Value, hlc);
-            }
-
-            // Do not ACK if persistence or metadata freeze fails. The provider feed
-            // remains the durable PendingLocal journal and is replayed/coalesced on restart.
-            persistNode(_node);
-            FreezeLocalOutboxToMetadata();
-            if (scannedThroughSequence > 0)
-                _provider.AcknowledgeLocalChanges(scannedThroughSequence);
-            return totalChanges;
+            totalChanges = checked(totalChanges + page.Changes.Count);
+            scannedThroughSequence = page.ScannedThroughSequence;
+            afterSequence = page.ScannedThroughSequence;
+            if (page.Changes.Count < limit)
+                break;
         }
+
+        if (totalChanges == 0)
+            return 0;
+
+        if (_metadataStore is not null && sawStableChangeId)
+        {
+            if (sawLegacyChangeId)
+                throw new InvalidDataException("A durable provider feed page cannot mix stable and zero ChangeIds.");
+            return PublishLocalChangesToMetadataStore(
+                winners, scannedThroughSequence, totalChanges, persistNode, installProviderSnapshot);
+        }
+
+        // Legacy/volatile providers without durable source identities retain the
+        // transition path through Node Outbox. Durable StorageDataProvider feeds use
+        // the Metadata-Store-owned path above and do not allocate duplicate Node rows.
+        foreach (var change in winners.Values.OrderBy(change => change.Sequence))
+        {
+            ProviderMutation mutation = change.Mutation;
+            var hlc = new Hlc(mutation.HlcWall, mutation.HlcLogical);
+            if (mutation.IsRecordTombstone)
+                _node.DeleteRecord(_namespaceId, mutation.RecordId, hlc);
+            else if (mutation.IsTombstone)
+                _node.TombField(_namespaceId, mutation.RecordId, mutation.FieldId, hlc);
+            else
+                _node.WriteField(_namespaceId, mutation.RecordId, mutation.FieldId, mutation.Value, hlc);
+        }
+
+        // Do not ACK if persistence or metadata freeze fails. The provider feed
+        // remains the durable PendingLocal journal and is replayed/coalesced on restart.
+        persistNode(_node);
+        FreezeLocalOutboxToMetadata();
+        if (scannedThroughSequence > 0)
+            _provider.AcknowledgeLocalChanges(scannedThroughSequence);
+        return totalChanges;
+    }
+
+    private int PublishLocalChangesToMetadataStore(
+        Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> winners,
+        ulong scannedThroughSequence,
+        int totalChanges,
+        Action<Node> persistNode,
+        bool installProviderSnapshot)
+    {
+        if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException("Stable provider ChangeIds require a durable Metadata Store scope.");
+
+        // Finish any pre-cutover Node Outbox suffix before allocating Metadata-Store
+        // sequences directly from the provider feed. Once Metadata Store is ahead of
+        // the Node counter, the Node mirror is no longer an allocator.
+        ulong metadataHigh = _metadataStore.GetOutboundHighWatermark(
+            _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+        long nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+        if (metadataHigh <= (ulong)nodeHigh)
+            FreezeLocalOutboxToMetadata();
+
+        var frozenOperations = new List<MetadataFrozenOperation>(winners.Count);
+        foreach (var change in winners.Values.OrderBy(change => change.Sequence))
+        {
+            if (change.ChangeId.IsZero)
+                throw new InvalidDataException("Metadata-Store-owned publication requires a stable provider ChangeId.");
+            frozenOperations.Add(CreateMetadataFrozenOperation(change));
+        }
+
+        var published = _metadataStore.FreezeOutbound(
+            _scopeId!, _node.NodeId, _namespaceId, _node.NodeId, frozenOperations);
+        if (published.Count != frozenOperations.Count)
+            throw new InvalidDataException("Metadata Store freeze returned an unexpected operation count.");
+        for (int i = 0; i < published.Count; i++)
+        {
+            if (published[i].ChangeId != frozenOperations[i].ChangeId)
+                throw new InvalidDataException("Metadata Store returned a different provider ChangeId.");
+            if (i > 0 && published[i].Sequence <= published[i - 1].Sequence)
+                throw new InvalidDataException("Metadata Store returned outbound sequences out of order.");
+        }
+
+        // The provider's current state is authoritative. The local feed can be
+        // acknowledged once immutable outbound payloads are durable; Node is only
+        // rebuilt as an application-data cache and can be rehydrated after a crash.
+        if (scannedThroughSequence > 0)
+            _provider.AcknowledgeLocalChanges(scannedThroughSequence);
+        if (installProviderSnapshot)
+            InstallProviderSnapshot(persistNode);
+        return totalChanges;
+    }
+
+    private MetadataFrozenOperation CreateMetadataFrozenOperation(ProviderChange change)
+    {
+        ProviderMutation mutation = change.Mutation;
+        object op;
+        byte opKind;
+        if (mutation.IsRecordTombstone)
+        {
+            op = new OpRecordTombstone
+            {
+                RecordId = mutation.RecordId,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1
+            };
+            opKind = OpsConst.TagRecordTomb;
+        }
+        else if (mutation.IsTombstone)
+        {
+            op = new OpFieldTomb
+            {
+                FieldId = mutation.FieldId,
+                KeyEpoch = mutation.KeyEpoch,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1
+            };
+            opKind = OpsConst.TagFieldTomb;
+        }
+        else
+        {
+            op = new OpFieldWrite
+            {
+                FieldId = mutation.FieldId,
+                KeyEpoch = mutation.KeyEpoch,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1,
+                Value = mutation.Value.ToArray()
+            };
+            opKind = OpsConst.TagFieldWrite;
+        }
+
+        byte[] encoded = Ops.EncodeOp(op, fullAuthor: false);
+        byte[] envelope = new byte[16 + encoded.Length];
+        mutation.RecordId.WriteTo(envelope);
+        encoded.CopyTo(envelope, 16);
+        Digest16 fingerprint = ChangeIdentity.Fingerprint(
+            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<CausalDependency>());
+        return new MetadataFrozenOperation
+        {
+            ChangeId = change.ChangeId,
+            Fingerprint = fingerprint.ToArray(),
+            Payload = envelope
+        };
     }
 
     private static void AddCoalescedPendingLocalChange(
