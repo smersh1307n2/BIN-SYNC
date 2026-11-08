@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: code head `f6f041bfc9b2841d33c2dbf4e39fff160fc6d4ee`; exact-head CI is green: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS. The docs-only follow-up is recorded separately; Durable Metadata Bench for the compact-row change is still running.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: code head `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda`; Core 662/662 and Fuzz/Lab 31/31 passed on the exact head. Storage Integration 156/156 passed on Ubuntu, Windows and macOS at code head `98b956d1cf021d32545968a64541739e54360465`; the later Core-only timeout adjustment does not alter Storage code. Durable Metadata Bench run `42487879970` passed.n: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS. The docs-only follow-up is recorded separately; Durable Metadata Bench for the compact-row change is still running.
 
 ## 1. Target architecture
 
@@ -324,8 +324,8 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Exact code head `69b3710bd4bb66d0b85c86b2ff8008af4754263a`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS; push and PR workflows both green.
 - [x] Audited Metadata-Store-owned publication: fresh provider changes supply author epoch but no OriginSequence; Metadata Store allocates the durable author stream sequence during atomic freeze, then the coordinator checkpoints Node cache and only then ACKs the provider feed.
 - [x] Confirmed coalescing across provider page boundaries and separation of field vs record-lifecycle coalescing keys.
-- [ ] Add explicit crash test for Metadata-Store-owned freeze succeeding while provider feed ACK fails, including a later suffix edit; assert retry reuses frozen ChangeId/Origin/payload and does not duplicate or renumber it.
-- [ ] Add explicit regression assertion that provider feed sequence/FLD JournalSeq is not copied into OriginSequence.
+- [x] Added crash/ACK-failure test for Metadata-Store-owned freeze: first operation remains immutable after provider ACK failure; a later same-field edit becomes a suffix operation; retry retains both ChangeIds/payloads and does not duplicate or renumber the frozen prefix.
+- [x] Regression test seeds/ACKs provider feed through sequence 5, then freezes feed entries 6/7; Metadata Store assigns OriginSequence 1/2, proving source feed sequence is not copied into OriginSequence.
 
 ### 2026-11-08 — durable metadata benchmark after compact-row reduction
 
@@ -335,3 +335,10 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Freeze 1,024 operations with 1,000,000 existing ChangeId rows: 196.9 µs / 7.77 KB (previous baseline: 232.8 µs / 7.84 KB).
 - [x] The compact stream row saves exactly 12 persisted bytes per retained relay/outbound operation; correctness and physical compaction tests pass. No benchmark evidence of a freeze-time/allocation regression; keep the optimization.
 - [~] Coordinator retry scan remains linear: 1.196 ms / 256 rows, 5.055 ms / 1,024, 13.823 ms / 4,096; allocations 744.59 KB, 2,997.63 KB, 12,097.38 KB. This is a measured future optimization candidate, but do not change without a better measured trade-off.
+
+### 2026-11-08 — metadata-owned ACK-failure retry proof
+
+- [x] Added a faulting IDataProvider wrapper that fails exactly the first feed ACK after Metadata Store freeze commits.
+- [x] Test seeds and acknowledges provider feed rows 1–5, freezes ChangeId at feed sequence 6, injects ACK failure, appends a later same-field edit at feed sequence 7, then retries.
+- [x] Verified feed sequences 6/7 map to immutable Metadata Store operations with OriginSequence 1/2; the first payload remains `first-frozen`, the suffix payload is `later-suffix`, both ChangeIds remain stable, and feed ACK completes only after the suffix freeze.
+- [x] Storage Integration exact test code head `98b956d`: 156/156 passed on Ubuntu, Windows and macOS. Core exact head `1dfb7d6`: 662/662 and Fuzz/Lab 31/31 passed. A transient 1-second FlowControl test timeout was made scheduler-tolerant (5 seconds); no production FlowControl code changed.
