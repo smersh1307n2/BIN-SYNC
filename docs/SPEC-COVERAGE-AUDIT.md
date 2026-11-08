@@ -92,7 +92,7 @@ The named baseline scenarios 1–25 map directly to executable test methods. Ext
 | 24. Unknown alias atomic rollback | `ScenariosB.Scenario24_UnknownAliasAtomicRollback` |
 | 25. Concurrent delete by author | `ScenariosB.Scenario25_ConcurrentDeleteByAuthor` |
 
-Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 644 passing core tests, 88 passing durable Storage Integration tests and 31 passing Fuzz/Lab cases on the latest verified PR head `c089bbed630edbdd8f3ecb0260b7a403239ba371` (coverage 70.9%).
+Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. The suite currently reports 644 passing core tests, 89 passing durable Storage Integration tests and 31 passing Fuzz/Lab cases on the latest verified code/test head `c71ec35480245f085c5aa76b337e275deb3e0c81` (coverage 70.9%).
 
 **Interpretation guard:** a scenario test proves only the assertions inside that method. In particular, scenario 10 proves fail-closed behavior, not that destructive tombstone GC is implemented; scenario 13 proves quarantine behavior, not that a complete safe-frontier GC engine exists.
 
@@ -137,5 +137,6 @@ The explicit `StorageSyncCoordinator.RehydrateNodeFromProviderSnapshot` path now
 
 - `StorageSyncCoordinatorTests.Provider_authoritative_rehydration_replaces_node_cache_and_freezes_local_feed` verifies that the provider snapshot replaces stale Node namespace data, while provider-originated local changes are first frozen into the durable outbound Metadata Store.
 - `StorageSyncCoordinatorTests.Pending_receive_intent_replays_wire_batch_into_node_and_provider_after_interruption` now enters through provider-authoritative rehydration and verifies that a durable PendingApply wire intent is replayed only after the provider-derived base is installed, then finalized in Metadata Store.
+- `StorageSyncCoordinatorTests.Provider_authoritative_recovery_processes_only_its_namespace_pending_intents` verifies that coordinators recover only their namespace from a shared Metadata Store scope, foreign namespace intents do not block rehydration, and a current-namespace legacy intent without wire payload causes fail-closed behavior until recovered through `RecoverPendingApplies`.
 
 These tests establish the ordering and idempotent recovery behavior at the coordinator API boundary. They do **not** prove a complete process-kill/reopen matrix for every NodePersistence/WAL boundary, nor do they authorize this mode when local Node writes bypass the provider feed. The default merge-based coordinator path remains distinct for mixed-origin workloads. Full Node/Transport authority cutover and legacy-path retirement remain release gates.
