@@ -175,8 +175,11 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                     var operation = batch.Operations[i];
                     if (operation.ChangeId != pendingOperation.ChangeId)
                         continue;
-                    if (!operation.Fingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint))
-                        throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                    if (!operation.Fingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint) ||
+                        operation.AuthorNodeId != pendingOperation.AuthorNodeId ||
+                        operation.OriginAuthorEpoch != pendingOperation.OriginAuthorEpoch ||
+                        operation.OriginSequence != pendingOperation.OriginSequence)
+                        throw new InvalidDataException("Pending ChangeId was reused with conflicting fingerprint or Origin.");
                     throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
                 }
             }
@@ -188,8 +191,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
             if (state.ChangeLedger.TryGetValue(key, out var priorFingerprint))
             {
-                if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                    throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
+                if (!IdentityMatches(priorFingerprint, operation))
+                    throw new InvalidDataException("ChangeId was reused with conflicting fingerprint or Origin.");
                 decisions[i] = false;
             }
             else
@@ -242,12 +245,13 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             var ledgerKey = new LedgerKey(batch.NamespaceId, operation.ChangeId);
             if (next.ChangeLedger.TryGetValue(ledgerKey, out var priorFingerprint))
             {
-                if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                    throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
+                if (!IdentityMatches(priorFingerprint, operation))
+                    throw new InvalidDataException("ChangeId was reused with conflicting fingerprint or Origin.");
                 continue;
             }
 
-            next.ChangeLedger.Add(ledgerKey, operation.Fingerprint.ToArray());
+            next.ChangeLedger.Add(ledgerKey, new ChangeIdentity(operation.Fingerprint.ToArray(),
+                operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence, IsLocalOutbound: false));
             if (!operation.RelayEligible)
                 continue;
 
@@ -392,8 +396,12 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             bool alreadyFrozen = current.OutboundChangeIds.Contains(changeKey);
             if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorFingerprint))
             {
-                if (!priorFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                    throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId ledger.");
+                if (!priorFingerprint.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint) ||
+                    priorFingerprint.AuthorNodeId != localAuthor ||
+                    priorFingerprint.OriginAuthorEpoch != operation.OriginAuthorEpoch ||
+                    (operation.OriginSequence != 0 && priorFingerprint.OriginSequence != operation.OriginSequence) ||
+                    !priorFingerprint.IsLocalOutbound)
+                    throw new InvalidDataException("Outbound ChangeId conflicts with the global ChangeId/Origin ledger.");
                 if (!alreadyFrozen)
                     throw new InvalidDataException("ChangeId is already known from an incoming route and cannot be published as a new local operation.");
             }
@@ -417,7 +425,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             var prior = priorEntries.FirstOrDefault(item => item.ChangeId == operation.ChangeId);
             if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload) ||
                 prior.OriginAuthorEpoch != operation.OriginAuthorEpoch ||
-                prior.OriginSequence != operation.OriginSequence)
+                (operation.OriginSequence != 0 && prior.OriginSequence != operation.OriginSequence))
                 throw new InvalidDataException("Outbound ChangeId was retried with conflicting author, Origin or payload.");
             if (prior.Sequence <= previousExistingSequence)
                 throw new InvalidDataException("Previously frozen outbound operations are not in author-sequence order.");
@@ -444,11 +452,14 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                     ? outboundHighWatermark
                     : 0;
                 ulong sequence = checked(previousHighWatermark + 1);
+                ulong originSequence = operation.OriginSequence != 0 ? operation.OriginSequence : sequence;
                 var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray())
-                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence };
+                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = originSequence };
                 entries.Add(item);
                 next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
-                next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId), operation.Fingerprint.ToArray());
+                next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
+                    new ChangeIdentity(operation.Fingerprint.ToArray(), localAuthor,
+                        operation.OriginAuthorEpoch, originSequence, IsLocalOutbound: true));
                 next.OutboundHighWatermarks[key] = sequence;
                 frozenByChangeId.Add(operation.ChangeId, item);
             }
@@ -481,7 +492,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         }
         if (!state.OutboundChangeIds.Contains(key))
             throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
-        fingerprint = priorFingerprint;
+        if (!priorFingerprint.IsLocalOutbound)
+            throw new InvalidDataException("Provider ChangeId is owned by an incoming route.");
+        fingerprint = priorFingerprint.Fingerprint;
         return true;
     }
 
@@ -886,6 +899,18 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
+    private sealed record ChangeIdentity(
+        byte[] Fingerprint,
+        NodeId AuthorNodeId,
+        uint OriginAuthorEpoch,
+        ulong OriginSequence,
+        bool IsLocalOutbound);
+
+    private static bool IdentityMatches(ChangeIdentity prior, MetadataOperation operation)
+        => prior.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint)
+            && prior.AuthorNodeId == operation.AuthorNodeId
+            && prior.OriginAuthorEpoch == operation.OriginAuthorEpoch
+            && prior.OriginSequence == operation.OriginSequence;
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundChangeKey(int NamespaceId, BatchId ChangeId);
@@ -926,7 +951,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
         public Dictionary<ReceiveKey, ReceiveState> Receives { get; } = new();
         public Dictionary<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; } = new();
-        public Dictionary<LedgerKey, byte[]> ChangeLedger { get; } = new();
+        public Dictionary<LedgerKey, ChangeIdentity> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
         public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
@@ -955,7 +980,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             foreach (var pair in ReceiveChains)
                 clone.ReceiveChains.Add(pair.Key, new ReceiveChainState(pair.Value.LastBatchDigest.ToArray()));
             foreach (var pair in ChangeLedger)
-                clone.ChangeLedger.Add(pair.Key, pair.Value.ToArray());
+                clone.ChangeLedger.Add(pair.Key, pair.Value with { Fingerprint = pair.Value.Fingerprint.ToArray() });
             foreach (var pair in Relay)
                 clone.Relay.Add(pair.Key, pair.Value.Select(CloneRelayItem).ToList());
             foreach (var pair in RelayAck)
