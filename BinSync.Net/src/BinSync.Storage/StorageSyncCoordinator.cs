@@ -753,16 +753,28 @@ public sealed class StorageSyncCoordinator
         if (string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("A stable Metadata Store scope is required for initial-sync baseline.");
 
-        ProviderSnapshotHandle providerSnapshot = _provider.OpenSnapshot();
-        try
+        bool providerAuthoritative = _provider is IProviderPublicationMode publicationMode &&
+            publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _);
+        if (providerAuthoritative)
         {
-            RecoverPendingApplies(persistNode);
-            PublishLocalChanges(persistNode);
-            MergeProviderSnapshotIntoNode(providerSnapshot, persistNode);
+            // The durable cutover marker proves that all local namespace mutations
+            // are captured by the provider feed. Rebuild rather than merge so stale
+            // Node checkpoint rows cannot survive provider-authoritative recovery.
+            RehydrateNodeFromProviderSnapshot(persistNode);
         }
-        finally
+        else
         {
-            _provider.ReleaseSnapshot(providerSnapshot.Token);
+            ProviderSnapshotHandle providerSnapshot = _provider.OpenSnapshot();
+            try
+            {
+                RecoverPendingApplies(persistNode);
+                PublishLocalChanges(persistNode);
+                MergeProviderSnapshotIntoNode(providerSnapshot, persistNode);
+            }
+            finally
+            {
+                _provider.ReleaseSnapshot(providerSnapshot.Token);
+            }
         }
 
         RegisterInterestedPeer(session, _namespaceId);
