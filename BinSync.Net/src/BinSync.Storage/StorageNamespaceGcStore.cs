@@ -432,6 +432,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         if (next.TransportPeerEpoch != oldMember.TransportPeerEpoch ||
                             !HasInstalledAckForMember(prior, oldMember, trustStore))
                             throw new InvalidDataException("Joining member cannot become Active before ACKing the current FULL_REPLACE generation.");
+                        ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
                     }
                     else if (next.Status == NamespaceMemberStatus.Joining &&
                         next.TransportPeerEpoch < oldMember.TransportPeerEpoch)
