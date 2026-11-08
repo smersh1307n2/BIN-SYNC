@@ -399,6 +399,10 @@ public sealed class StorageSyncCoordinator
     private MetadataFrozenOperation CreateMetadataFrozenOperation(ProviderChange change)
     {
         ProviderMutation mutation = change.Mutation;
+        if (change.ChangeId.IsZero || mutation.ChangeId != change.ChangeId ||
+            mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence != change.Sequence ||
+            mutation.AuthorNodeId != _node.NodeId)
+            throw new InvalidDataException("Provider local feed entry is missing or conflicts with its immutable origin identity.");
         object op;
         byte opKind;
         if (mutation.IsRecordTombstone)
