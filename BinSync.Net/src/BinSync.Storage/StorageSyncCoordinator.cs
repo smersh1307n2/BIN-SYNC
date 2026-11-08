@@ -65,7 +65,8 @@ public sealed class StorageSyncCoordinator
             if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
                 throw new InvalidOperationException("Attach the trusted namespace roster before activating a rejoined author epoch.");
             if (!_namespaceGcStore.TryReadNamespaceRoster(
-                    _namespaceId, _namespaceGcTrustStore, out NamespaceRosterCertificate roster))
+                    _namespaceId, _namespaceGcTrustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available.");
             NamespaceRosterMember? localMember = roster.Members.FirstOrDefault(member =>
                 member.NodeId == _node.NodeId);
