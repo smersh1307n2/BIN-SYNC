@@ -87,9 +87,14 @@ public sealed class StorageSyncCoordinator
             if (finalForAuthor)
             {
                 if (finalAuthorEpoch == 0 ||
-                    _provider is not IProviderAuthorEpochClosureStore closureStore ||
-                    !closureStore.TryCloseLocalAuthorEpoch(finalAuthorEpoch))
-                    throw new InvalidOperationException("Final author report requires a non-zero epoch with no remaining local feed drafts; the provider epoch is closed atomically before signing.");
+                    _provider is not IProviderAuthorEpochClosureStore closureStore)
+                    throw new InvalidOperationException("Final author report requires the durable provider author-epoch closure capability and a non-zero current epoch.");
+                foreach (uint epoch in metadataStore.ReadLocalOriginEpochs(
+                    _scopeId, _node.NodeId, _namespaceId, _node.NodeId).Append(finalAuthorEpoch).Distinct().OrderBy(value => value))
+                {
+                    if (!closureStore.TryCloseLocalAuthorEpoch(epoch))
+                        throw new InvalidOperationException("Final author report requires every issued epoch to have no remaining local feed drafts; the provider closes each epoch atomically before signing.");
+                }
             }
             else if (finalAuthorEpoch != 0)
             {
