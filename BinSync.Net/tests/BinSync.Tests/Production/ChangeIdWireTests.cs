@@ -450,6 +450,67 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void ChangeId_ledger_fingerprint_binds_the_immutable_origin_tuple()
+    {
+        var semantic = ChangeIdentity.Fingerprint(7, Rid(1), 1,
+            new OpFieldWrite(0x0100, Asc("same"), new Hlc(100, 0)), Node(10));
+
+        var original = ChangeIdentity.BindOrigin(semantic, Node(10), 3, 41);
+        Assert.Equal(original, ChangeIdentity.BindOrigin(semantic, Node(10), 3, 41));
+        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, Node(10), 3, 42));
+        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, Node(10), 4, 41));
+        Assert.NotEqual(original, ChangeIdentity.BindOrigin(semantic, Node(11), 3, 41));
+    }
+
+    [Fact]
+    public void Global_ChangeId_reuse_with_different_origin_is_rejected_atomically()
+    {
+        var a = Fix.MakeNode(21);
+        var b = Fix.MakeNode(22);
+        var c = Fix.MakeNode(23);
+
+        Assert.True(a.WriteField(NS, Rid(1), 0x0100, Asc("original"), new Hlc(100, 0)));
+        var original = a.CreateDeltaBatch(b.NodeId, NS)!;
+        Assert.NotNull(original);
+        Assert.Equal(1, original.Entries.Count);
+
+        Assert.Equal("OK", b.ApplyBatch(original, a.NodeId).CodeName);
+        var relay = b.CreateDeltaBatch(c.NodeId, NS)!;
+        Assert.NotNull(relay);
+        Assert.Equal("OK", c.ApplyBatch(relay, b.NodeId).CodeName);
+
+        Transport.MakeSession(a, c);
+        var conflict = new Batch(
+            original.BatchId,
+            original.NamespaceId,
+            original.SenderNodeId,
+            original.SenderEpoch,
+            original.CursorStart,
+            original.CursorEnd,
+            original.PreviousBatchDigest.ToArray(),
+            original.Entries.Select(Clone).ToList(),
+            Array.Empty<byte>(),
+            Array.Empty<byte>(),
+            original.AliasMap,
+            original.CausalBaseDigest.ToArray(),
+            original.CausalFrontier,
+            original.CausalFrontierDigest.ToArray())
+        {
+            CausalFrontierEntries = original.CausalFrontierEntries,
+            CausalFrontierAuthorEpochs = original.CausalFrontierAuthorEpochs,
+            AuthorStreamNodeId = original.AuthorStreamNodeId
+        };
+        conflict.Entries[0].OriginSequence = checked(conflict.Entries[0].OriginSequence + 1);
+        Rehash(conflict);
+
+        var error = Assert.Throws<SyncException>(() => c.ApplyBatch(conflict, a.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Equal(1, c.Storage[NS].Count);
+        Assert.Single(c.Outbox[NS]);
+        Assert.Equal(1UL, c.GetReceiveCursor(NS, a.NodeId, a.Epoch));
+    }
+
+    [Fact]
     public void Global_ChangeId_reuse_with_different_operation_is_rejected_atomically()
     {
         using var a = Fix.MakeNode(114);
