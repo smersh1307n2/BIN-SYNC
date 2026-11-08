@@ -382,6 +382,31 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         return result;
     }
 
+    public bool IsOutboundChangeFrozen(
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, byte[] fingerprint)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+        if (changeId.IsZero)
+            throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
+        ValidateDigest(fingerprint, nameof(fingerprint));
+        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+            return false;
+
+        var key = new OutboundChangeKey(namespaceId, changeId);
+        var ledgerKey = new LedgerKey(namespaceId, changeId);
+        if (!state.ChangeLedger.TryGetValue(ledgerKey, out var priorFingerprint))
+        {
+            if (state.OutboundChangeIds.Contains(key))
+                throw new InvalidDataException("Frozen outbound ChangeId is missing its global fingerprint.");
+            return false;
+        }
+        if (!priorFingerprint.AsSpan().SequenceEqual(fingerprint))
+            throw new InvalidDataException("Provider ChangeId conflicts with the durable global ChangeId fingerprint.");
+        if (!state.OutboundChangeIds.Contains(key))
+            throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
+        return true;
+    }
+
     public ulong AcquireOutboundLease(
         string scopeId,
         NodeId localReplica,
