@@ -509,16 +509,38 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (state.NextIndex != state.ExpectedCount)
                 throw new InvalidOperationException("Full-replace snapshot is incomplete.");
 
-            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
-            var tombstones = snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
-            StorageEntry[] ordered = MergeSnapshotEntries(fields, tombstones);
-            if (ordered.Length != state.ExpectedCount)
-                throw new InvalidDataException("Full-replace staged row count differs from the signed manifest.");
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark, ordered.Length);
+            AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark, state.ExpectedCount);
+            using var fields = EnumeratePrefix(snapshot, CurrentPrefix(CurrentField, generation)).GetEnumerator();
+            using var tombstones = EnumeratePrefix(snapshot, CurrentPrefix(CurrentRecordTombstone, generation)).GetEnumerator();
+            bool hasField = fields.MoveNext();
+            bool hasTombstone = tombstones.MoveNext();
             ProviderMutation? previousMutation = null;
-            foreach (var entry in ordered)
+            int stagedCount = 0;
+            while (hasField || hasTombstone)
             {
+                StorageEntry entry;
+                if (!hasField)
+                {
+                    entry = tombstones.Current;
+                    hasTombstone = tombstones.MoveNext();
+                }
+                else if (!hasTombstone)
+                {
+                    entry = fields.Current;
+                    hasField = fields.MoveNext();
+                }
+                else if (CompareSnapshotEntries(fields.Current, tombstones.Current) <= 0)
+                {
+                    entry = fields.Current;
+                    hasField = fields.MoveNext();
+                }
+                else
+                {
+                    entry = tombstones.Current;
+                    hasTombstone = tombstones.MoveNext();
+                }
+
                 ProviderMutation mutation = DecodeMutation(entry.Value);
                 ValidateGenerationEntry(generation, entry, mutation);
                 if (previousMutation is not null &&
@@ -526,7 +548,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     throw new InvalidDataException("Full-replace staged image is not in canonical unique order.");
                 previousMutation = mutation;
                 hash.AppendData(EncodeMutation(mutation));
+                stagedCount = checked(stagedCount + 1);
+                if (stagedCount > state.ExpectedCount)
+                    throw new InvalidDataException("Full-replace staged row count exceeds the signed manifest.");
             }
+            if (stagedCount != state.ExpectedCount)
+                throw new InvalidDataException("Full-replace staged row count differs from the signed manifest.");
             byte[] actualDigest = hash.GetHashAndReset();
             if (!CryptographicOperations.FixedTimeEquals(actualDigest, state.ExpectedDigest))
                 throw new InvalidDataException("Full-replace staged image digest does not match its manifest.");
@@ -953,6 +980,20 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         byte[] bytes = new byte[16];
         generation.TryWriteBytes(bytes);
         return bytes;
+    }
+
+    private static IEnumerable<StorageEntry> EnumeratePrefix(
+        StorageSnapshot snapshot, byte[] prefix, int pageSize = 1024)
+    {
+        byte[] after = Array.Empty<byte>();
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = snapshot.ScanPrefix(prefix, after, pageSize);
+            if (page.Count == 0) yield break;
+            foreach (var row in page) yield return row;
+            after = page[^1].Key;
+            if (page.Count < pageSize) yield break;
+        }
     }
 
     private static byte[] FullReplaceSessionKey(Guid generation)
