@@ -1551,7 +1551,18 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             bool alreadyRetired = current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint retiredThrough) &&
                 retiredThrough >= retiredPeerEpoch;
             var oldRosterKey = new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch);
-            bool hasOldRows = current.InterestedPeers.Contains(oldRosterKey) ||
+            if (current.PendingApplies.Values.Any(intent =>
+                    intent.Batch.SenderPeer == peer &&
+                    intent.Batch.TransportPeerEpoch == retiredPeerEpoch))
+                throw new InvalidOperationException(
+                    "Cannot retire a transport peer epoch while one of its PendingApply intents is unresolved; recover or finalize it first.");
+            ReceiptKey[] oldReceipts = current.Receipts
+                .Where(pair => pair.Key.Sender == peer &&
+                    pair.Value.TransportPeerEpoch == retiredPeerEpoch)
+                .Select(pair => pair.Key)
+                .ToArray();
+            bool hasOldRows = oldReceipts.Length != 0 ||
+                current.InterestedPeers.Contains(oldRosterKey) ||
                 current.PeerStreams.Keys.Any(key => key.NamespaceId == namespaceId &&
                     key.Peer == peer && key.PeerEpoch == retiredPeerEpoch) ||
                 current.RequiredPeerStreams.Any(key => key.NamespaceId == namespaceId &&
@@ -1565,6 +1576,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 var migrated = current.Clone();
                 migrated.InterestedPeers.Remove(oldRosterKey);
                 migrated.CompletedPeerBaselines.Remove(oldRosterKey);
+                foreach (ReceiptKey receipt in oldReceipts)
+                    migrated.Receipts.Remove(receipt);
                 foreach (var stream in migrated.PeerStreams.Keys
                     .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
                         key.PeerEpoch == retiredPeerEpoch).ToArray())
@@ -1584,13 +1597,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var oldRequired = current.RequiredPeerStreams
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
                     key.PeerEpoch == retiredPeerEpoch).ToArray();
-            var deletes = new List<byte[]>(oldStreams.Length + oldRequired.Length + 2)
+            var deletes = new List<byte[]>(oldStreams.Length + oldRequired.Length + oldReceipts.Length + 2)
             {
                 EncodeInterestedPeerKey(partitionKey, oldRosterKey),
                 EncodeCompletedPeerBaselineKey(partitionKey, oldRosterKey)
             };
             deletes.AddRange(oldStreams.Select(key => EncodePeerStreamKey(partitionKey, key)));
             deletes.AddRange(oldRequired.Select(key => EncodeRequiredPeerStreamKey(partitionKey, key)));
+            deletes.AddRange(oldReceipts.Select(key => EncodeReceiptKey(partitionKey, key)));
             uint nextRetiredThrough = Math.Max(
                 current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint priorEpoch) ? priorEpoch : 0,
                 retiredPeerEpoch);
@@ -1608,6 +1622,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     current.PeerStreams.Remove(key);
                 foreach (var key in oldRequired)
                     current.RequiredPeerStreams.Remove(key);
+                foreach (ReceiptKey receipt in oldReceipts)
+                    current.Receipts.Remove(receipt);
                 current.RetiredPeerEpochs[retiredKey] = nextRetiredThrough;
             });
         }
@@ -2542,6 +2558,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         current.HasLegacyEncoding = false;
+    }
+
+    private static byte[] EncodeReceiptKey(PartitionKey partitionKey, ReceiptKey receipt)
+    {
+        byte[] suffix = new byte[38];
+        receipt.Sender.WriteTo(suffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), receipt.Epoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)receipt.NamespaceId));
+        receipt.BatchId.WriteTo(suffix.AsSpan(22));
+        return StorageKey(PartitionRoot(partitionKey), 1, suffix);
     }
 
     private static byte[] EncodeInterestedPeerKey(PartitionKey partitionKey, InterestedPeerKey peer)
