@@ -724,7 +724,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
-    public void Legacy_pending_v4_and_v3_intents_do_not_claim_header_authority()
+    public void Older_pending_apply_encodings_are_rejected_by_v3()
     {
         var batch = new MetadataIncomingBatch
         {
@@ -747,28 +747,19 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             "EncodeIncomingBatch", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
         var decode = typeof(StorageMetadataStore).GetMethod(
             "DecodeIncomingBatch", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        byte[] version6 = (byte[])encode.Invoke(null, new object[] { batch })!;
-        var decoded6 = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version6 })!;
-        Assert.Equal(17U, decoded6.TransportPeerEpoch);
+        byte[] version7 = (byte[])encode.Invoke(null, new object[] { batch })!;
+        var decoded = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version7 })!;
+        Assert.Equal(17U, decoded.TransportPeerEpoch);
+        Assert.True(decoded.ReceiveStateOwnedByMetadataStore);
 
-        int scopeLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(version6.AsSpan(4));
-        int transportEpochOffset = checked(4 + 4 + scopeLength + 16 + 16 + 4);
-        byte[] version5 = new byte[version6.Length - 4];
-        version6.AsSpan(0, transportEpochOffset).CopyTo(version5);
-        version6.AsSpan(transportEpochOffset + 4).CopyTo(version5.AsSpan(transportEpochOffset));
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version5.AsSpan(0, 4), -5);
-
-        byte[] version4 = version5[..^1];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version4.AsSpan(0, 4), -4);
-        var decoded4 = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version4 })!;
-        Assert.False(decoded4.ReceiveStateOwnedByMetadataStore);
-        Assert.Empty(decoded4.HeaderFingerprint);
-
-        byte[] version3 = version5[..^2];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(version3.AsSpan(0, 4), -3);
-        var decoded3 = (MetadataIncomingBatch)decode.Invoke(null, new object[] { version3 })!;
-        Assert.False(decoded3.ReceiveStateOwnedByMetadataStore);
-        Assert.Empty(decoded3.HeaderFingerprint);
+        foreach (int oldVersion in new[] { -6, -5, -4, -3 })
+        {
+            byte[] legacy = version7.ToArray();
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(legacy, oldVersion);
+            var error = Assert.Throws<System.Reflection.TargetInvocationException>(
+                () => decode.Invoke(null, new object[] { legacy }));
+            Assert.IsType<InvalidDataException>(error.InnerException);
+        }
     }
 
     [Fact]
