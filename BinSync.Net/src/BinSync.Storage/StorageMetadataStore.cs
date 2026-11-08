@@ -454,7 +454,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         {
             return ProviderMutationCodec.Decode(payload).RecordId == recordId;
         }
-        catch
+        catch (Exception exception) when (exception is InvalidDataException or
+            ArgumentException or EndOfStreamException or IndexOutOfRangeException)
         {
             // Unknown/corrupt retained payloads are live until repaired or explicitly
             // acknowledged; never let a decoder failure authorize physical GC.
