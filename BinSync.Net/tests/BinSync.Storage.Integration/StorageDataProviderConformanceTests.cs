@@ -540,6 +540,75 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public async Task Wal_writer_fence_recovers_after_owner_process_is_killed()
+    {
+        string directory = Path.Combine(_root, "killed-wal-writer-process");
+        Directory.CreateDirectory(directory);
+        string readyPath = Path.Combine(directory, "child-ready");
+        string releasePath = Path.Combine(directory, "never-release");
+        string? projectDirectory = AppContext.BaseDirectory;
+        while (projectDirectory is not null &&
+               !File.Exists(Path.Combine(projectDirectory, "BinSync.Storage.Integration.csproj")))
+            projectDirectory = Directory.GetParent(projectDirectory)?.FullName;
+        Assert.NotNull(projectDirectory);
+
+        string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?.Name ?? "Release";
+        var start = new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = projectDirectory!,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("test");
+        start.ArgumentList.Add(Path.Combine(projectDirectory!, "BinSync.Storage.Integration.csproj"));
+        start.ArgumentList.Add("--no-build");
+        start.ArgumentList.Add("--no-restore");
+        start.ArgumentList.Add("--configuration");
+        start.ArgumentList.Add(configuration);
+        start.ArgumentList.Add("--filter");
+        start.ArgumentList.Add("FullyQualifiedName~Wal_writer_fence_child_process_probe");
+        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_DIR"] = directory;
+        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_READY"] = readyPath;
+        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
+
+        try
+        {
+            using var child = Process.Start(start);
+            Assert.NotNull(child);
+            Task<string> stdout = child!.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = child.StandardError.ReadToEndAsync();
+
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (!File.Exists(readyPath) && !child.HasExited && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            if (!File.Exists(readyPath))
+            {
+                if (!child.HasExited) child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(File.Exists(readyPath),
+                    $"Child process did not acquire WAL fence. stdout={await stdout} stderr={await stderr}");
+            }
+
+            Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 88));
+            child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            using var recovered = StorageDatabase.Open(directory, 88);
+            Assert.True(recovered.TryGet(new byte[] { 0x11 }, out var value));
+            Assert.Equal(new byte[] { 0x22 }, value);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void Wal_writer_fence_child_process_probe()
     {
