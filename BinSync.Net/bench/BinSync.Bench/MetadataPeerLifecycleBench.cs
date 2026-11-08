@@ -43,7 +43,7 @@ public abstract class MetadataPeerLifecycleBenchBase
 
     protected static NodeId Peer(long id) => NodeId.From(IdBytes(id));
 
-    private static byte[] IdBytes(long value)
+    protected static byte[] IdBytes(long value)
     {
         var bytes = new byte[16];
         BinaryPrimitives.WriteInt64BigEndian(bytes.AsSpan(8), value);
@@ -125,6 +125,43 @@ public class MetadataPeerRetirementBench : MetadataPeerLifecycleBenchBase
     {
         for (int i = 0; i < OperationsPerInvocation; i++)
             Store.RetireInterestedPeer(Scope, Local, Peer(1_000 + i), 1, 2, NamespaceId);
+        return OperationsPerInvocation;
+    }
+}
+
+
+[MemoryDiagnoser]
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
+public class MetadataPeerChangeIdentityLookupBench : MetadataPeerLifecycleBenchBase
+{
+    private IMetadataOutboundChangeIdentityStore _identityStore = null!;
+    private BatchId[] _changeIds = Array.Empty<BatchId>();
+
+    [IterationSetup]
+    public void Setup()
+    {
+        CreateStore();
+        _identityStore = Store;
+        _changeIds = new BatchId[UnrelatedOutboundItems];
+        for (int i = 0; i < _changeIds.Length; i++)
+            _changeIds[i] = BatchId.From(IdBytes(i + 100));
+    }
+
+    [IterationCleanup]
+    public void Cleanup() => DisposeStore();
+
+    [Benchmark(OperationsPerInvoke = OperationsPerInvocation,
+        Description = "Frozen ChangeId fingerprint lookup / ledger scale")]
+    public int LookupFrozenChangeIdFingerprints()
+    {
+        for (int i = 0; i < OperationsPerInvocation; i++)
+        {
+            BatchId changeId = _changeIds[i % _changeIds.Length];
+            if (!_identityStore.TryGetOutboundChangeFingerprint(
+                    Scope, Local, NamespaceId, Author, changeId, out ReadOnlyMemory<byte> fingerprint) ||
+                fingerprint.Length != 16)
+                throw new InvalidOperationException("Frozen ChangeId fingerprint lookup failed.");
+        }
         return OperationsPerInvocation;
     }
 }
