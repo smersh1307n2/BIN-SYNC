@@ -50,8 +50,8 @@ public sealed class NamespaceGcSessionTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
 
-        Assert.Equal(capabilities, initiator.NegotiatedCapabilities);
-        Assert.Equal(capabilities, acceptor.NegotiatedCapabilities);
+        Assert.Equal(capabilities | SessionCapabilities.IncrementalAliasMap, initiator.NegotiatedCapabilities);
+        Assert.Equal(capabilities | SessionCapabilities.IncrementalAliasMap, acceptor.NegotiatedCapabilities);
 
         var rosterReceive = acceptor.ReceiveNamespaceRosterAsync(trustB);
         await initiator.SendNamespaceRosterAsync(roster, authoritySeed, frameSequence: 1);
@@ -116,6 +116,6 @@ public sealed class NamespaceGcSessionTests
             initiator.SendOriginFrontierAsync(new AppliedOriginFrontierReport(), seed));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             initiator.SendFullReplaceInstalledAckAsync(new FullReplaceInstalledAck(), seed));
-        Assert.Equal(SessionCapabilities.NamespaceRosterV31, acceptor.NegotiatedCapabilities);
+        Assert.Equal(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.IncrementalAliasMap, acceptor.NegotiatedCapabilities);
     }
 }
