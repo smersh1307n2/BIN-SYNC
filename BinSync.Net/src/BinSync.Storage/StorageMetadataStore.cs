@@ -250,7 +250,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             return true;
         if (state.PendingApplies.Values.Any(pending =>
             pending.Batch.NamespaceId == namespaceId &&
-            pending.Batch.Operations.Any(operation => operation.ChangeId.EqualsBytes(changeId))))
+            pending.Batch.Operations.Any(operation => operation.ChangeId.Equals(changeId))))
             return true;
         // A pending immutable batch reservation may still contain the ChangeId even
         // after its source rows have been compacted. Conservatively retain this
