@@ -2204,7 +2204,7 @@ public sealed class StorageSyncCoordinatorTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
         Assert.True(sender.WriteField(1, record, 0x087a,
-            "crash-cut-" + crashCutu8.ToArray(), new Hlc(8700, 0)));
+            Encoding.UTF8.GetBytes("crash-cut-" + crashCut), new Hlc(8700, 0)));
 
         var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
         Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, node =>
