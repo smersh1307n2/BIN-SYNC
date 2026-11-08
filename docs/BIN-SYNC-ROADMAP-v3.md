@@ -564,7 +564,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 ### 2026-11-08 — C-pass: origin identity persistence and first safe GC implementations
 
-- [x C] Extended `ProviderMutation` and its canonical codec to persist `ChangeId`, `OriginAuthorEpoch` and `OriginSequence` alongside current field/record tombstone rows and FULL_REPLACE snapshots. Legacy 53-byte-header rows still decode with empty provenance; they are deliberately ineligible for physical tombstone GC until rewritten from authenticated source data.
+- [x C] Extended `ProviderMutation` and its canonical codec to persist `ChangeId`, `OriginAuthorEpoch` and `OriginSequence` alongside current field/record tombstone rows and FULL_REPLACE snapshots. The canonical 81-byte-header encoding is required; the prior 53-byte layout is rejected with no fallback decoder.
 - [x C] Local provider feed appends now allocate a stable ChangeId, persist the author epoch and provider-assigned monotonic origin sequence into both the current mutation and feed entry, and verify the duplicated feed identity on read. Outbound freeze rejects missing/mismatched source provenance.
 - [x C] Both direct Batch and durable PendingApply paths now carry exact per-operation ChangeId/origin tuple into provider mutations. Provider apply fingerprints include the tuple; legacy apply receipts remain replayable using the prior fingerprint encoding.
 - [x C] Receipt rows now persist the highest immutable origin sequence in each author-homogeneous batch. Batch validation binds operation origin epoch to the wire issuer epoch and requires strictly increasing origin sequence. Older receipt encodings decode with origin sequence zero and are retained fail-closed.
