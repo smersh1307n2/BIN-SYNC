@@ -338,9 +338,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             item.Key.ChangeId.WriteTo(suffix.AsSpan(2));
             byte[] value = new byte[45];
             item.Value.Fingerprint.CopyTo(value, 0);
-            item.Value.AuthorNodeId.WriteTo(value.AsSpan(16));
-            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), item.Value.OriginAuthorEpoch);
-            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), item.Value.OriginSequence);
+            var provenance = item.Value.Provenance.EnsureValid();
+            provenance.AuthorNodeId.WriteTo(value.AsSpan(16));
+            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), provenance.AuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), provenance.Sequence);
             value[44] = item.Value.IsLocalOutbound ? (byte)1 : (byte)0;
             writes.Add((StorageKey(root, 3, suffix), value));
         }
@@ -716,9 +717,10 @@ private static bool ValidateIncomingBatchForStaging(
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
             byte[] value = new byte[45];
             pair.Value.Fingerprint.CopyTo(value, 0);
-            pair.Value.AuthorNodeId.WriteTo(value.AsSpan(16));
-            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), pair.Value.OriginAuthorEpoch);
-            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), pair.Value.OriginSequence);
+            var provenance = pair.Value.Provenance.EnsureValid();
+            provenance.AuthorNodeId.WriteTo(value.AsSpan(16));
+            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), provenance.AuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), provenance.Sequence);
             value[44] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
             writes.Add((StorageKey(root, 3, suffix), value));
         }
@@ -3474,11 +3476,14 @@ private static bool ValidateIncomingBatchForStaging(
 
         private static bool LedgerMatches(ChangeLedgerValue ledger, MetadataOperation operation)
         => ledger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint)
-            && ledger.AuthorNodeId == operation.AuthorNodeId
-            && ledger.OriginAuthorEpoch == operation.OriginAuthorEpoch
-            && ledger.OriginSequence == operation.OriginSequence;
+            && ledger.Provenance == operation.Provenance;
 
-private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound, NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence);
+private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound,
+    NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence)
+{
+    public OperationOrigin Provenance => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
+        ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+}
 
     private sealed class PartitionState
     {
