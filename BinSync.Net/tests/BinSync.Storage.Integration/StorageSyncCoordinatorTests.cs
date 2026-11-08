@@ -1032,7 +1032,7 @@ public sealed class StorageSyncCoordinatorTests
             var entry = sender.Outbox[1][i];
             byte[] payload = new byte[16 + entry.Payload.Length];
             entry.RecordId.WriteTo(payload);
-            entry.Payload.CopyTo(payload, 16);
+            entry.Payload.Span.CopyTo(payload.AsSpan(16));
             localOperations.Add(new MetadataFrozenOperation
             {
                 ChangeId = entry.ChangeId,
@@ -1047,7 +1047,7 @@ public sealed class StorageSyncCoordinatorTests
         var originEntry = Assert.Single(origin.Outbox[1]);
         byte[] relayPayload = new byte[16 + originEntry.Payload.Length];
         originEntry.RecordId.WriteTo(relayPayload);
-        originEntry.Payload.CopyTo(relayPayload, 16);
+        originEntry.Payload.Span.CopyTo(relayPayload.AsSpan(16));
         metadata.AcceptIncomingBatch(new MetadataIncomingBatch
         {
             ScopeId = scope,
