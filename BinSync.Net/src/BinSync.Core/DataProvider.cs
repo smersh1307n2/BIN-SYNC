@@ -18,6 +18,14 @@ public interface IDataProvider : IDisposable
     ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit);
     void ReleaseSnapshot(Guid snapshotToken);
 
+    /// <summary>
+    /// Applies an immutable remote batch idempotently to the provider's current
+    /// application state. This operation MUST NOT append to, rewrite, or acknowledge
+    /// the provider's local unpublished-change feed. A remote LWW winner may replace
+    /// the visible current value while an older local intent remains pending; that
+    /// intent must stay independently readable until the publication coordinator
+    /// freezes it and explicitly acknowledges its source-feed sequence.
+    /// </summary>
     ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations);
     bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation);
 }
