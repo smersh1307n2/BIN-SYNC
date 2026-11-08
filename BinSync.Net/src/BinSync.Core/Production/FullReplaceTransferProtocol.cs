@@ -48,7 +48,7 @@ public static class FullReplaceTransferProtocol
         ArgumentNullException.ThrowIfNull(acceptedRoster);
         ArgumentNullException.ThrowIfNull(trustStore);
         ValidateBegin(value);
-        NamespaceRosterProtocol.Validate(acceptedRoster);
+        NamespaceRosterProtocol.VerifyOrThrow(acceptedRoster, trustStore);
         if (value.AuthoritySignature is null ||
             value.AuthoritySignature.Length != BatchSignature.SignatureSize)
             throw new CryptographicException("FULL_REPLACE manifest signature is missing.");
