@@ -305,4 +305,6 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Exact-head Core/Fuzz workflow succeeded on the implementation head; Storage Integration exposed one xUnit analyzer error (xUnit2031) in the new assertion, not a production-code or runtime failure.
 - [x] Fixed the analyzer violation by using Assert.Single(collection, predicate) in commit `95140bb`.
 - [ ] Re-run the full Storage Integration matrix and Core/Fuzz after the assertion fix; only then close the compact-row test gate.
+
+- [~] Tighten the compact-row corruption boundary with explicit tests that orphaned payload rows and ledger/stream author mismatches fail closed during hydration; add this before accepting the 12-byte reduction.
 - [ ] Continue with ChangeId/receipt/tombstone GC safe-frontier proof; GC remains disabled because a complete namespace membership roster, contiguous per-author applied-origin frontier, snapshot generation and stale-rejoin fence are not yet available.
