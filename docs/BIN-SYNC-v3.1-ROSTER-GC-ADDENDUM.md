@@ -290,3 +290,12 @@ The FULL_REPLACE transport foundation now includes a complete sender/receiver co
 This remains a C-pass implementation, not a T-pass proof. The commit guard is deliberately mandatory and supplied by the embedding application; it must serialize remote APPLY and local provider publication and prove there are no unresolved PendingApply intents, relay/outbound reservations, provider feed intents or reader pins that depend on the old generation. The receiver does not silently assume these cross-store facts. Old generations remain retained. No ChangeId, tombstone or ghost GC is enabled.
 
 Exact-head build, unit/integration tests, fault injection, reconnect/resume, multi-peer/rejoin and platform durability verification remain pending.
+
+
+## 10.3. C-pass update — READY/resume and current-roster commit fence (2026-11-08)
+
+`FULL_REPLACE_READY` is now assigned frame `0x1C` on the dedicated transfer stream. It reports generation, manifest digest, expected count, durable next index, committed state and the next expected transfer sequence. The sender resumes from this cursor using canonical 4096-entry pages; the receiver detects ABORT concurrently with CHUNK/COMMIT waits and rejects ambiguous same-sequence terminal/data frames. The receiver rechecks the current signed roster while holding the required commit lease, before changing the provider's active-generation pointer.
+
+The sender validates that the second snapshot pass still ends at the signed count. Provider progress reads use a direct single-row lookup instead of cloning a new Storage snapshot. The remaining snapshot memory issue is recorded in the roadmap: provider `OpenSnapshot` still materializes active rows into an additional array, and the Storage engine snapshot itself copies the partition. The digest builder alone does not make the whole source path memory-bounded.
+
+No exact-head CI, fault-injection, resume/reconnect, or multi-peer proof has yet been run for this C-pass slice. The mandatory commit lease remains an embedding-application contract and must cover pending applies, local provider intents, immutable relay/outbound reservations, active leases and reader pins. No destructive GC is enabled.
