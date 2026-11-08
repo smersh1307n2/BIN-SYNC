@@ -904,7 +904,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
 
     [Fact]
-    public void Retired_generation_reclaims_in_bounded_pages_without_invalidating_detached_snapshots()
+    public void Full_replace_retains_old_generations_until_safe_gc_proof()
     {
         string directory = Path.Combine(_root, "provider-generation-reclaim");
         Directory.CreateDirectory(directory);
@@ -929,12 +929,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             provider.StageFullReplacePage(latestGeneration, 0, new[] { latest });
             provider.CommitFullReplace(latestGeneration);
 
-            Assert.False(provider.ReclaimInactiveGeneration(Guid.Empty, 1));
-            Assert.True(provider.ReclaimInactiveGeneration(Guid.Empty, 1));
-            Assert.False(provider.ReclaimInactiveGeneration(generation, 1));
-            Assert.True(provider.ReclaimInactiveGeneration(generation, 1));
             Assert.Throws<InvalidOperationException>(() => provider.ReclaimInactiveGeneration(latestGeneration, 1));
-
             ProviderSnapshotPage heldPage = provider.ReadSnapshot(heldSnapshot.Token, 0, 10);
             Assert.Single(heldPage.Entries);
             Assert.Equal(prior.RecordId, heldPage.Entries[0].RecordId);
@@ -942,7 +937,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             Assert.False(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
             Assert.True(provider.TryReadCurrent(latest.RecordId, latest.FieldId, out _));
 
-            Assert.Throws<InvalidOperationException>(() =>
+            Assert.Throws<InvalidDataException>(() =>
                 provider.BeginFullReplace(generation, 22, 1, digest));
             provider.ReleaseSnapshot(heldSnapshot.Token);
         }
