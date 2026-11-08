@@ -87,7 +87,7 @@ public sealed class MetadataCoordinatorRetryScanBench
         try { Directory.Delete(_directory, recursive: true); } catch { }
     }
 
-    [Benchmark(Description = "Coordinator retry after durable freeze / pending feed row scale")]
+    [Benchmark(Description = "Metadata coordinator retry after durable freeze / pending feed row scale")]
     public int MetadataCoordinatorRetryFrozenPublication()
     {
         int published = _coordinator.PublishLocalChanges(static _ => { }, limit: PendingFeedRows + 1);
