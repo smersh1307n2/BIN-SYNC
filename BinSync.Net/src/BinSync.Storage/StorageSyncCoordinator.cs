@@ -56,6 +56,52 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>
+    /// Publish this member's signed contiguous applied-origin frontier. The scan
+    /// combines already-published ChangeId identities with the still-unpublished
+    /// provider feed, so a local write cannot disappear between feed ACK and frontier
+    /// production. Call periodically after local publication and remote apply.
+    /// </summary>
+    public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
+        byte[] memberSeed, int pageSize = 1024)
+    {
+        ArgumentNullException.ThrowIfNull(memberSeed);
+        if (memberSeed.Length != 32)
+            throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
+        if (pageSize <= 0 || pageSize > 4096)
+            throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+        lock (_gate)
+        {
+            if (_metadataStore is not StorageMetadataStore metadataStore ||
+                string.IsNullOrWhiteSpace(_scopeId))
+                throw new NotSupportedException("Applied-origin frontier publication requires the durable StorageMetadataStore.");
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the signed namespace-GC store before publishing frontiers.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            NamespaceRosterProtocol.VerifyOrThrow(roster);
+
+            var pendingLocal = new List<ProviderChange>();
+            ulong afterSequence = 0;
+            while (true)
+            {
+                ProviderChangePage page = _provider.ReadLocalChanges(afterSequence, pageSize);
+                pendingLocal.AddRange(page.Changes);
+                if (page.ScannedThroughSequence <= afterSequence ||
+                    page.Changes.Count < pageSize)
+                    break;
+                afterSequence = page.ScannedThroughSequence;
+            }
+
+            return metadataStore.PublishAppliedOriginFrontier(
+                _scopeId, _node.NodeId, roster, pendingLocal, memberSeed);
+        }
+    }
+
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
     public int CompactChangeLedger(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
     {
