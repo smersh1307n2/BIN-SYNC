@@ -509,3 +509,13 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [ ] C-pass remaining v3.1 protocol path: FULL_REPLACE BEGIN/CHUNK/COMMIT/ABORT transfer state machine, bounded streaming receive/stage, correlation and ordering, durable store wiring, authority/member lifecycle orchestration, periodic frontier publication/checkpoint production, forgotten-origin replay fence and live-reference GC gate.
 - [ ] Do not enable ChangeId or tombstone/ghost GC during the C pass. Their separate safe-horizon proofs and fail-closed behavior remain mandatory.
 - [ ] After all production code slices have C markers, run the dedicated T pass: targeted tests, crash/fault injection, multi-peer/rejoin/resurrection, fuzz/resource bounds, samples, benchmarks and exact-head CI.
+
+
+### 2026-11-08 — v3.1 FULL_REPLACE C-pass: wire envelopes and session transport
+
+- [~ C] Added canonical bounded codecs for FULL_REPLACE_BEGIN, FULL_REPLACE_CHUNK, FULL_REPLACE_COMMIT and FULL_REPLACE_ABORT in `FullReplaceTransferProtocol.cs`. BEGIN binds namespace, generation, accepted-roster generation/digest, provider feed watermark, expected entry count and digest. CHUNK carries a bounded page (≤4096 mutations, ≤16 MiB) with strict length/trailing-byte validation and canonical ProviderMutation decoding. Control frames carry only namespace + generation.
+- [~ C] Added capability-gated `SyncSession` send/receive adapters for the four transfer frames on a dedicated per-namespace transfer stream. Receiving frames returns validated envelopes only; it does NOT stage or commit provider state.
+- [x C] Corrected all established-session receive type guards to admit registered v3.1 frame IDs through `FULL_REPLACE_ABORT`. The earlier 640af0d change had widened only `ReceiveExpectedExclusiveAsync`; `ReceivePacketAsync` and the single-reader `ReceivePumpAsync` still rejected frame IDs above 0x13. This was a real dispatcher defect and is now fixed.
+- [~ T] No focused codec/transport tests or exact-head build have yet validated this package. The previous exact run on 640af0d built successfully but failed during the test step; do not infer that this package is green.
+- [ ] Continue C pass: connect received BEGIN/CHUNK/COMMIT/ABORT to roster validation, bounded provider staging, digest verification, durable abort/recovery and installed-ACK publication. Enforce one active transfer per namespace and frame sequence/page continuity; reject interleaving, gaps, overlaps, duplicate page identities and stale generations before provider mutation.
+- [ ] Keep FULL_REPLACE commit separate from GC: successful switch alone never authorizes old-generation deletion, ChangeId GC or tombstone/ghost GC.
