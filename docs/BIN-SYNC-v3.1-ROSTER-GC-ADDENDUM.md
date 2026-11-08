@@ -299,3 +299,16 @@ Exact-head build, unit/integration tests, fault injection, reconnect/resume, mul
 The sender validates that the second snapshot pass still ends at the signed count. Provider progress reads use a direct single-row lookup instead of cloning a new Storage snapshot. The remaining snapshot memory issue is recorded in the roadmap: provider `OpenSnapshot` still materializes active rows into an additional array, and the Storage engine snapshot itself copies the partition. The digest builder alone does not make the whole source path memory-bounded.
 
 No exact-head CI, fault-injection, resume/reconnect, or multi-peer proof has yet been run for this C-pass slice. The mandatory commit lease remains an embedding-application contract and must cover pending applies, local provider intents, immutable relay/outbound reservations, active leases and reader pins. No destructive GC is enabled.
+
+
+## 10.4. C-pass update — origin provenance and bounded GC (2026-11-08)
+
+Provider mutations now retain the immutable `ChangeId`, origin author epoch and origin sequence in the current provider state, local feed and FULL_REPLACE digest. This closes the prior gap where a record tombstone had no durable origin tuple to compare against the namespace retention frontier. Old provider mutation encodings remain readable but carry no provenance and cannot be physically collected until authenticated data rewrites them.
+
+Three bounded GC paths now exist in code:
+
+1. **Receipts:** each receipt persists the batch's maximum origin sequence. It is eligible only below the signed safe frontier for its durable author/issuer epoch, with no PendingApply reference. Receive cursors and digest chains are retained, so an old replay cannot be mistaken for a new cursor continuation.
+2. **ChangeId ledger:** rows are eligible only below the signed safe frontier, with no MetadataStore relay/outbound/pending reservation reference and with a mandatory external lease for provider/outbox/reader references. The retained checkpoint rejects any operation whose ChangeId row has been forgotten but whose origin is already covered.
+3. **Record tombstones:** collection requires the active provider generation to be the checkpoint's FULL_REPLACE generation, all Active members to have installed its exact digest, and the tombstone origin to be covered. Older hidden field rows are removed in bounded batches while the tombstone remains; only after no older field remains is the tombstone deleted. Interrupted cleanup is repeatable.
+
+The external GC/commit lease is mandatory and has no permissive default. It must exclude concurrent Node mutation, PendingApply, provider feed publication, relay/outbound reservations, FULL_REPLACE staging and reader pins. The coordinator exposes attachment and compaction APIs, but the embedding application still has to supply a real lease implementation. No GC should be enabled until T-pass tests prove these conditions and crash recovery.
