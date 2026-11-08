@@ -3036,7 +3036,8 @@ private static bool ValidateIncomingBatchForStaging(
                 case 1:
                 {
                     RequireLength(key, 38);
-                    RequireLength(row.Value, 88);
+                    if (row.Value.Length is not (68 or 72 or 84 or 88))
+                        throw new InvalidDataException("Stored v3 inbox receipt value has an invalid length.");
                     var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
@@ -3048,8 +3049,10 @@ private static bool ValidateIncomingBatchForStaging(
                         row.Value.AsSpan(32, 16).ToArray(),
                         BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(48)),
                         NodeId.From(row.Value.AsSpan(52, 16)),
-                        row.Value.AsSpan(68, 16).ToArray(),
-                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(84))));
+                        row.Value.Length is 84 or 88 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>(),
+                        row.Value.Length is 72 or 88
+                            ? BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(row.Value.Length - 4))
+                            : 0));
                     break;
                 }
                 case 2:
