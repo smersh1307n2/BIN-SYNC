@@ -60,6 +60,7 @@ Frame type assignments used by the initial v3.1 SyncSession adapters (still veri
 | `FULL_REPLACE_COMMIT` | `0x19` | dedicated transfer stream |
 | `FULL_REPLACE_ACK` | `0x1A` | control (stream 0) |
 | `FULL_REPLACE_ABORT` | `0x1B` | dedicated transfer stream |
+| `FULL_REPLACE_READY` | `0x1C` | dedicated transfer stream |
 
 The existing `MEMBERSHIP` frame remains advisory gossip. It is not a signed roster and cannot advance a GC frontier. A v3.0 peer without the new bits contributes zero to every required frontier and blocks GC; no compatibility downgrade is attempted for core sync.
 
