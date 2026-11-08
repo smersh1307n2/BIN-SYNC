@@ -109,3 +109,9 @@ The coordinator now applies the exact scanned provider-feed prefix incrementally
 **Decision:** retain incremental provider-feed application. On the matched runner it reduced mean latency at all three sizes and cut measured managed allocation by approximately 44–59%. The strongest stable result is the 4,096-row case: 40.997 → 17.522 ms and 33.92 MB → 14,147.82 KB. This comparison is materially stronger than the earlier cross-runner exploratory result in the previous section. Continue profiling feed materialization, operation encoding and changed-record copy-on-write; do not replace the full snapshot path used for initial cutover/startup recovery.
 
 **Raw artifact:** GitHub Actions artifact `metadata-retry-comparison` from run `42444167368` contains both CSV and Markdown reports.
+
+## 2026-11-08 HLC-coalesced Node-cache follow-up
+
+Code head `010742085147b582ba551e3d2df1a65b0b595394` adds a separate coalesced winner map for incremental Node-cache application. Repeated changes to the same canonical record/field are reduced to the maximum HLC winner across the scanned provider-feed prefix, while outbound publication retains the immutable frozen-prefix / unfrozen-suffix boundary. A regression verifies that a later feed row carrying an older HLC cannot overwrite the higher-HLC value in either provider state or Node cache.
+
+This is a correctness and work-shaping improvement. **No separate before/after latency or allocation benchmark has been run for this HLC-coalescing change**, so the matched-runner measurements above remain attributable to the incremental publication implementation at their recorded code revisions, not to this later refinement.
