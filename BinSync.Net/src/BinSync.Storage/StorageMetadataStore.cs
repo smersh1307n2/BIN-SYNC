@@ -1486,18 +1486,41 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new InvalidOperationException(
                     "Cannot retire a transport peer epoch while one of its PendingApply intents is unresolved; recover or finalize it first.");
 
-            // A replacement epoch's completed snapshot baseline does not resolve an
-            // outbound batch already reserved for the old incarnation. Its exact
-            // payload/digest may still be needed to finish the old send or recover a
-            // lost ACK. Keep both the reservation and old receipts until that stream
-            // is explicitly resolved; never let receipt GC erase its retry context.
-            if (current.PeerStreams.Any(pair =>
-                    pair.Key.NamespaceId == namespaceId &&
-                    pair.Key.Peer == peer &&
-                    pair.Key.PeerEpoch <= nextRetiredThrough &&
-                    pair.Value.PendingBatch is not null))
-                throw new InvalidOperationException(
-                    "Cannot retire a transport peer epoch while an outbound batch reservation is unresolved; finish or explicitly recover the reservation first.");
+            // An old immutable reservation is resolved either by its exact ACK or by
+            // the replacement incarnation's completed authoritative snapshot for the
+            // same author stream. The replacement baseline must cover the reservation's
+            // absolute end cursor (old StreamOffset + CursorEnd); a missing/short baseline
+            // keeps retirement fenced. Epoch-zero reservations have unknown provenance
+            // and can never be discharged by a newer baseline.
+            foreach (var pair in current.PeerStreams.Where(pair =>
+                         pair.Key.NamespaceId == namespaceId &&
+                         pair.Key.Peer == peer &&
+                         pair.Key.PeerEpoch <= nextRetiredThrough &&
+                         pair.Value.PendingBatch is not null))
+            {
+                if (pair.Key.PeerEpoch == 0)
+                    throw new InvalidOperationException(
+                        "Cannot retire a transport peer epoch while an epoch-unknown outbound reservation remains unresolved.");
+                var replacementStreamKey = new PeerStreamKey(
+                    peer, replacementPeerEpoch, namespaceId, pair.Key.AuthorStream);
+                if (!current.PeerStreams.TryGetValue(replacementStreamKey, out var replacementProgress))
+                    throw new InvalidOperationException(
+                        "Cannot retire a transport peer epoch while its replacement snapshot omits an author stream with a pending reservation.");
+                ulong oldAbsoluteEnd;
+                ulong replacementBaseline;
+                try
+                {
+                    oldAbsoluteEnd = checked(pair.Value.StreamOffset + pair.Value.PendingBatch!.CursorEnd);
+                    replacementBaseline = checked(replacementProgress.AckedCursor + replacementProgress.StreamOffset);
+                }
+                catch (OverflowException ex)
+                {
+                    throw new InvalidDataException("Peer stream retirement cursor overflowed.", ex);
+                }
+                if (replacementBaseline < oldAbsoluteEnd)
+                    throw new InvalidOperationException(
+                        "Cannot retire a transport peer epoch while its replacement snapshot baseline is behind an immutable outbound reservation.");
+            }
 
             ReceiptKey[] oldReceipts = current.Receipts
                 .Where(pair => pair.Key.Sender == peer && pair.Key.NamespaceId == namespaceId &&
@@ -1652,10 +1675,13 @@ private static bool ValidateIncomingBatchForStaging(
             ValidateReservation(reservation);
             var partitionKey = new PartitionKey(scopeId, localReplica);
             var current = GetOrCreatePartition(partitionKey);
-            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (current.PeerStreams.TryGetValue(key, out var existing) && existing.PendingBatch is not null)
+            {
+                ValidatePendingReservationEpoch(current, namespaceId, peer, peerEpoch);
                 return CloneReservation(existing.PendingBatch);
+            }
+            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             if (!current.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer, peerEpoch)))
                 throw new SyncException("SNAPSHOT_REQUIRED");
 
@@ -1692,11 +1718,11 @@ private static bool ValidateIncomingBatchForStaging(
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out var current))
                 throw new InvalidOperationException("No durable outbound reservation exists.");
-            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (!current.PeerStreams.TryGetValue(key, out var prior) ||
                 prior.PendingBatch is null || prior.PendingBatch.BatchId != batchId)
                 throw new InvalidOperationException("Outbound batch is not the active durable reservation.");
+            ValidatePendingReservationEpoch(current, namespaceId, peer, peerEpoch);
             if (prior.PushedCursor >= prior.PendingBatch.CursorEnd) return;
             PersistPeerStreamState(partitionKey, current, key,
                 prior with { PushedCursor = prior.PendingBatch.CursorEnd }, ensureRequired: true);
@@ -1715,10 +1741,10 @@ private static bool ValidateIncomingBatchForStaging(
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out var current))
                 throw new InvalidOperationException("No durable outbound reservation exists.");
-            ValidatePeerEpochForAccess(current, namespaceId, peer, peerEpoch);
             var key = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
             if (!current.PeerStreams.TryGetValue(key, out var prior) || prior.PendingBatch is null)
                 throw new InvalidOperationException("ACK has no matching durable outbound reservation.");
+            ValidatePendingReservationEpoch(current, namespaceId, peer, peerEpoch);
             var pending = prior.PendingBatch;
             if (pending.BatchId != batchId || pending.CursorEnd != cursorEnd ||
                 !pending.BatchDigest.AsSpan().SequenceEqual(batchDigest) || prior.PushedCursor < cursorEnd)
@@ -1757,6 +1783,14 @@ private static bool ValidateIncomingBatchForStaging(
             safe = Math.Min(safe, checked(progress.AckedCursor + progress.StreamOffset));
         }
         return safe == ulong.MaxValue ? 0 : safe;
+    }
+
+    private static void ValidatePendingReservationEpoch(
+        PartitionState state, int namespaceId, NodeId peer, uint peerEpoch)
+    {
+        if (state.RetiredPeerEpochs.TryGetValue((namespaceId, peer), out uint retiredThrough) &&
+            peerEpoch <= retiredThrough)
+            throw new InvalidDataException("Peer session epoch has been durably retired.");
     }
 
     private static void ValidatePeerEpochForAccess(
