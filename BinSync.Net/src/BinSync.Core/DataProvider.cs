@@ -129,6 +129,12 @@ public interface IProviderAuthorEpochClosureStore
     bool TryCloseLocalAuthorEpoch(uint authorEpoch);
 }
 
+/// <summary>Provider-wide exclusive lease used to serialize FULL_REPLACE commit and local GC.</summary>
+public interface IProviderCommitGuard
+{
+    IDisposable AcquireCommitGuard();
+}
+
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
 public sealed record ProviderApplyReceipt(Guid ApplyToken, byte[] BatchFingerprint, bool IsDuplicate);
