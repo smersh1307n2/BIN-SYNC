@@ -8,7 +8,7 @@ namespace BinSync.Storage;
 /// <summary>
 /// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
-public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore
+public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore, IProviderCommitGuard
 {
     private const byte ItemMap = 0x01;
     private const byte ItemReverse = 0x02;
@@ -299,6 +299,24 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             batch.Put(reverseKey, sourceFieldKey.Span);
             batch.Commit();
             return candidate;
+        }
+    }
+
+    /// <summary>Acquire the provider transaction gate exclusively; dispose on the acquiring thread.</summary>
+    public IDisposable AcquireCommitGuard()
+    {
+        Monitor.Enter(_gate);
+        return new ProviderCommitLease(_gate);
+    }
+
+    private sealed class ProviderCommitLease : IDisposable
+    {
+        private object? _gate;
+        public ProviderCommitLease(object gate) => _gate = gate;
+        public void Dispose()
+        {
+            object? gate = Interlocked.Exchange(ref _gate, null);
+            if (gate is not null) Monitor.Exit(gate);
         }
     }
 
