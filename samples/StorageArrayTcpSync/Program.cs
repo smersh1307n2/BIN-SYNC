@@ -45,6 +45,8 @@ try
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId, metadataB, "array-tcp-demo");
         coordinatorA.EnableMetadataStoreOwnedPublication(n => StorageNodePersistence.Save(storageA, n));
         coordinatorB.EnableMetadataStoreOwnedPublication(n => StorageNodePersistence.Save(storageB, n));
+        await InitializePeerBaselineOverTcpAsync(
+            nodeA, coordinatorA, metadataA, nodeB, coordinatorB, metadataB);
 
         providerA.AppendLocalChange(Mutation(recordA, nameA, nodeA.NodeId, 1000, "pump-A"u8));
         providerA.AppendLocalChange(Mutation(recordA, quantityA, nodeA.NodeId, 1001, "4"u8));
@@ -123,6 +125,25 @@ try
 finally
 {
     try { Directory.Delete(root, recursive: true); } catch { }
+}
+
+static async Task InitializePeerBaselineOverTcpAsync(
+    Node nodeA, StorageSyncCoordinator coordinatorA, IMetadataPeerStateStore metadataA,
+    Node nodeB, StorageSyncCoordinator coordinatorB, IMetadataPeerStateStore metadataB)
+{
+    // The replicas start with empty provider snapshots. Register both peers and
+    // persist that empty initial baseline before either side creates outbound deltas.
+    await using var listener = TcpSyncListener.Start();
+    var acceptTask = listener.AcceptAsync(nodeA);
+    await using var sessionB = await TcpSync.ConnectAsync(nodeB, "127.0.0.1", listener.Port);
+    await using var sessionA = await acceptTask;
+
+    coordinatorA.RegisterInterestedPeer(sessionA, NamespaceId);
+    coordinatorB.RegisterInterestedPeer(sessionB, NamespaceId);
+    metadataA.CompletePeerInitialSync("array-tcp-demo", nodeA.NodeId, nodeB.NodeId,
+        checked((uint)nodeB.Epoch), NamespaceId);
+    metadataB.CompletePeerInitialSync("array-tcp-demo", nodeB.NodeId, nodeA.NodeId,
+        checked((uint)nodeA.Epoch), NamespaceId);
 }
 
 static async Task<int> ExchangeOverTcpAsync(
