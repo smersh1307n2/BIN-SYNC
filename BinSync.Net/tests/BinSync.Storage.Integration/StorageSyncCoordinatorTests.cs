@@ -1367,6 +1367,82 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
     }
 
+    [Fact]
+    public void Provider_authoritative_recovery_processes_only_its_namespace_pending_intents()
+    {
+        using var metadataStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-metadata"), 454);
+        using var namespaceOneStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-provider-one"), 455);
+        using var namespaceTwoStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-provider-two"), 456);
+        using var metadata = new StorageMetadataStore(metadataStorage);
+        using var providerOne = new StorageDataProvider(namespaceOneStorage);
+        using var providerTwo = new StorageDataProvider(namespaceTwoStorage);
+        using var node = NewNode(56);
+        using var sender = NewNode(57);
+        const string scope = "multi-namespace-provider-recovery";
+
+        RecordId recordOne = RecordId.From(Guid.Parse("56000000-0000-0000-0000-000000000056").ToByteArray());
+        RecordId recordTwo = RecordId.From(Guid.Parse("57000000-0000-0000-0000-000000000057").ToByteArray());
+        MetadataIncomingBatch batchOne = CreatePendingProviderBatch(
+            scope, node, sender, 1, recordOne, 0x0819, "namespace-one", 0xA1);
+        MetadataIncomingBatch batchTwo = CreatePendingProviderBatch(
+            scope, node, sender, 2, recordTwo, 0x081A, "namespace-two", 0xA2);
+        metadata.BeginPendingApply(batchOne, Guid.NewGuid());
+        metadata.BeginPendingApply(batchTwo, Guid.NewGuid());
+
+        var coordinatorOne = new StorageSyncCoordinator(node, providerOne, 1, metadata, scope);
+        Assert.Equal(1, coordinatorOne.RehydrateNodeFromProviderSnapshot(_ => { }));
+        MetadataPendingApplyIntent remaining = Assert.Single(
+            metadata.ReadPendingApplyIntents(scope, node.NodeId));
+        Assert.Equal(2, remaining.Batch.NamespaceId);
+        Assert.True(providerOne.TryReadCurrent(recordOne, 0x0819, out var valueOne));
+        Assert.Equal("namespace-one", Encoding.UTF8.GetString(valueOne!.Value));
+        Assert.False(providerTwo.TryReadCurrent(recordTwo, 0x081A, out _));
+
+        var coordinatorTwo = new StorageSyncCoordinator(node, providerTwo, 2, metadata, scope);
+        Assert.Equal(1, coordinatorTwo.RehydrateNodeFromProviderSnapshot(_ => { }));
+        Assert.Empty(metadata.ReadPendingApplyIntents(scope, node.NodeId));
+        Assert.True(providerTwo.TryReadCurrent(recordTwo, 0x081A, out var valueTwo));
+        Assert.Equal("namespace-two", Encoding.UTF8.GetString(valueTwo!.Value));
+    }
+
+    private static MetadataIncomingBatch CreatePendingProviderBatch(
+        string scope, Node local, Node sender, int namespaceId, RecordId recordId,
+        ushort fieldId, string value, byte fingerprintSeed)
+    {
+        Assert.True(sender.WriteField(namespaceId, recordId, fieldId,
+            Encoding.UTF8.GetBytes(value), new Hlc(6000 + namespaceId, 0)));
+        OutboxEntry entry = Assert.Single(sender.ReadOutboxEntries(namespaceId, sender.NodeId, 0, 10));
+        byte[] envelope = new byte[16 + entry.Payload.Length];
+        recordId.WriteTo(envelope);
+        entry.Payload.Span.CopyTo(envelope.AsSpan(16));
+
+        return new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local.NodeId,
+            SenderPeer = sender.NodeId,
+            SenderEpoch = checked((uint)sender.Epoch),
+            AuthorStreamNodeId = sender.NodeId,
+            NamespaceId = namespaceId,
+            BatchId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)(fingerprintSeed + 1), 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = sender.NodeId,
+                    ChangeId = entry.ChangeId,
+                    Fingerprint = Enumerable.Repeat(fingerprintSeed, 16).ToArray(),
+                    Payload = envelope,
+                    RelayEligible = false
+                }
+            }
+        };
+    }
+
     private static Node NewNode(byte seed)
     {
         byte[] id = new byte[16];
