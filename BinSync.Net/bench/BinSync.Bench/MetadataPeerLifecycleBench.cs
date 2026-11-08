@@ -280,7 +280,6 @@ public class MetadataStoreCardinalityBench
 /// the measured method.
 /// </summary>
 [MemoryDiagnoser]
-[ShortRunJob]
 [InvocationCount(1)]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class MetadataStoreMillionRowBench
