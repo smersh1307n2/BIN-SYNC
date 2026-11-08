@@ -318,7 +318,7 @@ public class MetadataStoreMillionRowBench
             _store.FreezeOutbound(Scope, Local, NamespaceId, Author, operations);
         }
 
-        if (_store.GetOutboundHighWatermark(Scope, Local, NamespaceId, Author) != rowCount)
+        if (_store.GetOutboundHighWatermark(Scope, Local, NamespaceId, Author) != (ulong)rowCount)
             throw new InvalidOperationException("Million-row benchmark setup did not seed one million ledger rows.");
     }
 
