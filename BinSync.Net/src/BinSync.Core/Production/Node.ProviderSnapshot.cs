@@ -303,13 +303,16 @@ public sealed partial class Node
 
         if (mutation.IsTombstone)
         {
-            bool hadTomb = record.HasFieldTombs &&
-                record.FieldTombs.TryGetValue(mutation.FieldId, out var previousTomb);
+            FieldState? previousTomb = null;
+            if (record.HasFieldTombs &&
+                record.FieldTombs.TryGetValue(mutation.FieldId, out var existingTomb))
+                previousTomb = existingTomb;
+            bool hadTomb = previousTomb is not null;
             var incoming = new FieldState(Array.Empty<byte>(), timestamp,
                 mutation.AuthorNodeId, mutation.KeyEpoch);
             FieldState winner = incoming;
             bool tombChanged = !hadTomb;
-            if (hadTomb)
+            if (previousTomb is not null)
             {
                 var merged = Merge.MergeField(previousTomb, incoming);
                 winner = merged.Winner;
