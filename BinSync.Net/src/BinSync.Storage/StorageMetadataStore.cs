@@ -1367,6 +1367,20 @@ private static bool ValidateIncomingBatchForStaging(
                 : 0;
             var originHighWatermarks = new Dictionary<OriginStreamKey, OriginIssuedState>();
             var frozen = new List<MetadataOutboundItem>(newOperations.Count);
+            ulong authorMaxHlcWall = 0;
+            uint authorMaxHlcLogical = 0;
+            foreach (var issued in current.OriginHighWatermarks)
+            {
+                if (issued.Key.NamespaceId != namespaceId || issued.Key.Author != localAuthor)
+                    continue;
+                if (issued.Value.MaxHlcWall > authorMaxHlcWall ||
+                    (issued.Value.MaxHlcWall == authorMaxHlcWall &&
+                     issued.Value.MaxHlcLogical > authorMaxHlcLogical))
+                {
+                    authorMaxHlcWall = issued.Value.MaxHlcWall;
+                    authorMaxHlcLogical = issued.Value.MaxHlcLogical;
+                }
+            }
             foreach (var operation in newOperations)
             {
                 ulong sequence = checked(++highWatermark);
@@ -1384,9 +1398,15 @@ private static bool ValidateIncomingBatchForStaging(
                     throw new InvalidDataException("New outbound operation supplied a non-contiguous immutable OriginSequence.");
                 ulong maxIssuedHlcWall = issuedState.MaxHlcWall;
                 uint maxIssuedHlcLogical = issuedState.MaxHlcLogical;
-                if (operation.HlcWall < maxIssuedHlcWall ||
-                    (operation.HlcWall == maxIssuedHlcWall && operation.HlcLogical < maxIssuedHlcLogical))
-                    throw new InvalidDataException("Local HLC regressed within an immutable author epoch; publishing it could violate the signed HLC retention floor.");
+                if (operation.HlcWall < authorMaxHlcWall ||
+                    (operation.HlcWall == authorMaxHlcWall && operation.HlcLogical < authorMaxHlcLogical))
+                    throw new InvalidDataException("Local HLC regressed across immutable author epochs; publishing it could violate the signed HLC retention floor.");
+                if (operation.HlcWall > authorMaxHlcWall ||
+                    (operation.HlcWall == authorMaxHlcWall && operation.HlcLogical > authorMaxHlcLogical))
+                {
+                    authorMaxHlcWall = operation.HlcWall;
+                    authorMaxHlcLogical = operation.HlcLogical;
+                }
                 if (operation.HlcWall > maxIssuedHlcWall ||
                     (operation.HlcWall == maxIssuedHlcWall && operation.HlcLogical > maxIssuedHlcLogical))
                 {
