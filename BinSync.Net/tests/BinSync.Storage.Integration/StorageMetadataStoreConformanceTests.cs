@@ -740,6 +740,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             CursorEnd = 1,
             PreviousBatchDigest = new byte[16],
             BatchDigest = Enumerable.Repeat((byte)95, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)96, 16).ToArray(),
             ReceiveStateOwnedByMetadataStore = true,
             Operations = Array.Empty<MetadataOperation>()
         };
@@ -1627,7 +1628,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Directory.CreateDirectory(directory);
         var first = CreateBatch("durable-scope", 1, 2, 1, 7, 10, 1, 1, 0, 10,
             Operation(20, 30, 40, 50));
-        var pending = CreateBatch("durable-scope", 1, 2, 1, 7, 11, 2, 2, 10, 11,
+        var pending = CreateBatch("durable-scope", 1, 2, 1, 7, 11, 1, 1, 10, 11,
             Operation(21, 31, 41, 51));
         var token = Guid.Parse("00000000-0000-0000-0000-000000000901");
         var consumer = Guid.Parse("00000000-0000-0000-0000-000000000902");
@@ -1658,9 +1659,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 var finalized = reopened.FinalizePendingApply("durable-scope", Node(1),
                     new MetadataProviderApplyReceipt(token, pending.BatchDigest.ToArray()));
-                Assert.Equal(2UL, finalized.CursorEnd);
+                Assert.Equal(1UL, finalized.CursorEnd);
                 Assert.Empty(reopened.ReadPendingApplyIntents("durable-scope", Node(1)));
-                Assert.Equal(2UL, reopened.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
+                Assert.Equal(1UL, reopened.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
+                Assert.Equal(1UL, reopened.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(21)));
 
                 reopened.AcknowledgeRelay("durable-scope", Node(1), 7, Node(20), 1);
                 reopened.CompactRelayThrough("durable-scope", Node(1), 7, Node(20), 1);
@@ -1672,7 +1674,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
             using (var afterCompaction = new StorageMetadataStoreConformanceAdapter(directory, 302, deleteOnDispose: false))
             {
-                Assert.Equal(2UL, afterCompaction.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
+                Assert.Equal(1UL, afterCompaction.GetReceiveCursor("durable-scope", Node(1), Node(2), 1, 7));
+                Assert.Equal(1UL, afterCompaction.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(21)));
                 Assert.Equal(1UL, afterCompaction.GetRelayHighWatermark("durable-scope", Node(1), 7, Node(20)));
                 Assert.Equal(1UL, afterCompaction.GetOutboundHighWatermark("durable-scope", Node(1), 7, Node(1)));
                 Assert.Empty(afterCompaction.ReadRelay("durable-scope", Node(1), 7, Node(20), 0, 10).Items);
