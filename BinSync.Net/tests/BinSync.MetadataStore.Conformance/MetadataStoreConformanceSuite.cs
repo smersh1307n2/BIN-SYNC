@@ -536,6 +536,7 @@ public abstract class MetadataStoreConformanceSuite
             LocalReplica = Node(replica),
             SenderPeer = Node(sender),
             SenderEpoch = senderEpoch,
+            AuthorStreamNodeId = operations.Length == 0 ? Node(sender) : operations[0].AuthorNodeId,
             NamespaceId = namespaceId,
             BatchId = Batch(batchId),
             CursorStart = cursorStart,
@@ -550,7 +551,9 @@ public abstract class MetadataStoreConformanceSuite
         {
             ChangeId = Batch(change),
             Fingerprint = Bytes(fingerprint ?? payload),
-            Payload = new[] { payload }
+            Payload = new[] { payload },
+            OriginAuthorEpoch = 1,
+            OriginSequence = change
         };
 
     protected static MetadataOperation Operation(byte author, byte change, byte fingerprint, byte payload)
@@ -560,7 +563,9 @@ public abstract class MetadataStoreConformanceSuite
             ChangeId = Batch(change),
             Fingerprint = Bytes(fingerprint),
             Payload = new[] { payload },
-            RelayEligible = true
+            RelayEligible = true,
+            OriginAuthorEpoch = 1,
+            OriginSequence = change
         };
 
     protected static NodeId Node(byte seed) => NodeId.From(Bytes(seed));
