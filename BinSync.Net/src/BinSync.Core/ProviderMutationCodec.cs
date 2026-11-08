@@ -185,7 +185,7 @@ public static class ProviderFullReplaceDigest
         ArgumentNullException.ThrowIfNull(hash);
         if (generation == Guid.Empty)
             throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
-        hash.AppendData("BIN-SYNC/FULL-REPLACE/v1"u8);
+        hash.AppendData("BIN-SYNC/FULL-REPLACE/v2"u8);
         Span<byte> header = stackalloc byte[24];
         generation.TryWriteBytes(header[..16], true, out _);
         BinaryPrimitives.WriteUInt64LittleEndian(header[16..24], sourceChangeFeedWatermark);
