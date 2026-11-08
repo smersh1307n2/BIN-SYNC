@@ -56,18 +56,18 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 - [ ] Define one canonical Origin value type for local writes, Node Outbox, MetadataOperation, decoded inbound operation, PendingApply, relay, checkpoint and snapshot.
 - [~] Local outbound freeze assigns OriginSequence from the durable author stream sequence and preserves supplied Origin on replay; audit atomic allocator/retry behavior and provider freeze before closing.
 - [x] Removed the invalid equality between OriginSequence and peer-relative sender cursor; direct-author validation only rejects an Origin epoch from the future.
-- [ ] Make provenance mandatory in every v3 DELTA_BATCH; remove optional capability/flag and reject protocol major mismatch.
+- [x] Make provenance mandatory in every v3 DELTA_BATCH; remove optional ImmutableOriginProvenance capability and reject protocol-major mismatch. HELLO and HELLO_ACK both carry and validate ProtocolMajor=3.
 - [ ] Preserve Origin through preflight, PendingApply crash recovery, provider apply, relay, snapshot and restart.
-- [ ] Cover direct author, A→B→C→D relay, alternate routes, duplicates and equivocation.
-- [ ] Same ChangeId with changed fingerprint or Origin fails before mutation; same operation via another route creates no second relay payload.
-- [ ] Build, unit/integration tests, samples, Fuzz/Lab and coverage green on all configured platforms.
+- [x] Cover direct author, A→B→C→D relay, alternate-route deduplication, duplicate delivery and Origin equivocation in Core scenarios/tests; exact-head CI passed.
+- [x] Same ChangeId with changed semantic fingerprint or immutable Origin is rejected atomically; same operation via another route does not create a second relay payload (regression coverage green).
+- [x] Exact-head Core test + Fuzz/Lab workflows passed; Storage Integration passed on Ubuntu, Windows and macOS. Samples/build are included in the Core workflow. Keep release-wide coverage/threshold and golden-vector gates in Phase 6.
 
 ### Phase 2 — Canonical metadata layout and redundant-fact removal
 
 - [ ] Inventory every persisted row/key and byte cardinality in StorageMetadataStore, Node checkpoint, FLD Outbox, ApplyJournal and WAL.
 - [ ] Establish one canonical v3 format marker and row codec; reject absent/old/unknown markers.
 - [~] Stream payload rows now persist Origin epoch/sequence; global ChangeId identity rows now persist fingerprint + author NodeId + Origin epoch/sequence. One-row/no-payload-duplication audit remains.
-- [~] Global ChangeId ledger stores fingerprint + Origin tuple in a fixed 45-byte value; verify every dedup/equivocation path and benchmark whether the ledger can be merged with the operation identity row.
+- [x] Node global ChangeId ledger stores a fixed 16-byte BLAKE3 identity digest that binds semantic mutation + immutable Origin tuple in one hash pass; no separate 29-byte Origin suffix is stored in the ledger value. [~] Storage metadata identity-row cardinality and cross-store duplication still require a byte-level audit and benchmark.
 - [ ] Collapse repeated author IDs in ACK/pushed/offset maps into one sparse progress row only if benchmarks prove a win.
 - [ ] Remove acknowledged replay reservations atomically with contiguous ACK, preserving digest-chain anchor.
 - [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
@@ -231,9 +231,22 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Reconciled the Origin design's direct-author cursor wording with v3's independent OriginSequence/SenderCursor model; no arithmetic inference from peer-relative cursor is permitted.
 - [x] Marked older GC and staging analyses as historical/non-normative where they conflict with v3.0.0.
 - [ ] Exact-head CI for cleanup/docs commits `b105868` through `fb9fd67` is still required; do not treat 6969's green result as proof for later commits.
-- [ ] Phase 1 remains open: canonical Origin value type across Core/Storage/FLD boundaries, full multi-hop A→B→C→D and alternate-route equivocation tests, and crash/recovery proofs.
-- [ ] Phase 2 remains open: metadata row-cardinality/byte-cost benchmark at 500/10k/100k/1M and duplicate-Origin storage reduction review.
+- [~] Phase 1 remains open only for a shared canonical Origin value type across Core/Storage/FLD boundaries, provider freeze/replay atomicity, PendingApply/snapshot/restart preservation audit, and crash/recovery proofs. Multi-hop/alternate-route/equivocation regressions now pass.
+- [ ] Phase 2 remains open: inventory actual persisted row cardinality and byte cost; benchmark 500/10k/100k/1M; prove Storage metadata does not duplicate the compact Node ledger or operation payload.
 - [ ] Phase 3 remains open: FLD provider adapter and atomic cross-store crash matrix.
 - [ ] Phase 4 remains open: receipt retirement proof, ChangeId GC proof and tombstone/ghost GC proof.
 - [ ] Phase 5 remains open: final public API clean cut, removal of optional receive-authority fallbacks and docs/sample conformance.
 - [ ] Phase 6 remains open: release gate, reproducible benchmarks, package/license audit and final clean CI.
+
+### 2026-11-08 — Origin equivocation, v3 handshake and exact-head green verification
+
+- [x] Reconciled 59 commits after the previous reviewed anchor 56d5142c1a2f7050663a418d4882def50787c1e5; branch is ahead by 59 with no divergence.
+- [x] Added/verified four-node A→B→C→D relay plus alternate-route dedup scenario (Scenario43_FourNodeOriginRelayAndAlternateRouteDedup).
+- [x] Added atomic rejection coverage for reusing a global ChangeId with a different immutable Origin tuple; checks stored value, inbox/outbox and receive cursor remain unchanged.
+- [x] Removed optional ImmutableOriginProvenance capability negotiation. HELLO and HELLO_ACK now carry ProtocolMajor=3; v2 payload length and major 2/4 are rejected.
+- [x] Node checkpoint format is v17; v16 checkpoint payloads are rejected. WAL v3 rejection diagnostic corrected.
+- [x] Replaced two-stage Fingerprint + BindOrigin hashing on Outbox, inbound ApplyBatch and WAL replay with LedgerFingerprint: semantic mutation and immutable Origin are encoded into one canonical BLAKE3 input. This removes one hash pass and avoids a second 16-byte digest intermediate on these paths.
+- [x] Added direct tests for Origin author/epoch/sequence sensitivity of the single-pass ledger fingerprint.
+- [x] Exact-head CI for f91df0b4ef93f5a53f419420aa578dfe36bc293b: BinSync.Net test workflow succeeded; Fuzz/Lab (§17) succeeded; FLD Storage Integration succeeded on Ubuntu, Windows and macOS.
+- [~] Follow-up review still required: checkpoint test names/temp-file labels must consistently say v17; inspect WAL version tests and all stale v16 references. Do not infer test-count totals from successful workflow status alone.
+- [ ] Next: finish audit of canonical fingerprint equivalence for all operation types and causal dependencies; add provider-origin freeze/replay and PendingApply crash-recovery tests; then continue Phase 2 row-cardinality/byte-cost audit.
