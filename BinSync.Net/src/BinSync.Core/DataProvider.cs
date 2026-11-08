@@ -55,12 +55,6 @@ public interface IProviderFullReplace
         IReadOnlyList<ProviderMutation> entries);
     void CommitFullReplace(Guid generation);
     void AbortFullReplace(Guid generation);
-    /// <summary>
-    /// Reclaim at most <paramref name="limit"/> rows from a previously active,
-    /// durably retired generation. Returns true when no rows remain. Snapshot readers
-    /// are detached owned images, so they do not pin the old Storage generation.
-    /// </summary>
-    bool ReclaimInactiveGeneration(Guid generation, int limit);
 }
 
 public sealed class ProviderMutation
