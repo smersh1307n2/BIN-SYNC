@@ -73,7 +73,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(batch.ScopeId, batch.LocalReplica);
         var current = GetOrCreatePartition(partitionKey);
-        ValidateIncomingSenderEpoch(current, batch);
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
         bool hasPriorReceipt = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
