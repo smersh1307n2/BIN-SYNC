@@ -1455,6 +1455,7 @@ public sealed class StorageSyncCoordinatorTests
         var faultingProvider = new FailOnceAcknowledgeProvider(innerProvider);
         var coordinator = new StorageSyncCoordinator(node, faultingProvider, 1, metadata, scope);
         coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        int snapshotsAtCutover = faultingProvider.SnapshotOpenCount;
         RecordId firstRecord = RecordId.From(Guid.Parse("58000000-0000-0000-0000-000000000058").ToByteArray());
         RecordId secondRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000059").ToByteArray());
 
@@ -1469,6 +1470,7 @@ public sealed class StorageSyncCoordinatorTests
         BatchId firstChangeId = Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes).ChangeId;
 
         Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(snapshotsAtCutover, faultingProvider.SnapshotOpenCount);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
 
@@ -1485,6 +1487,7 @@ public sealed class StorageSyncCoordinatorTests
         BatchId secondChangeId = pending[1].ChangeId;
 
         Assert.Equal(2, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(snapshotsAtCutover, faultingProvider.SnapshotOpenCount);
         Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         Assert.Empty(innerProvider.ReadLocalChanges(0, 10).Changes);
         Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
@@ -1677,6 +1680,8 @@ public sealed class StorageSyncCoordinatorTests
 
         public FailOnceAcknowledgeProvider(IDataProvider inner) => _inner = inner;
 
+        public int SnapshotOpenCount { get; private set; }
+
         public RecordId ResolveRecordId(ReadOnlyMemory<byte> sourceItemKey) =>
             _inner.ResolveRecordId(sourceItemKey);
         public ushort ResolveFieldId(ReadOnlyMemory<byte> sourceFieldKey) =>
@@ -1700,7 +1705,11 @@ public sealed class StorageSyncCoordinatorTests
             _inner.AcknowledgeLocalChanges(safeThroughSequence);
         }
 
-        public ProviderSnapshotHandle OpenSnapshot() => _inner.OpenSnapshot();
+        public ProviderSnapshotHandle OpenSnapshot()
+        {
+            SnapshotOpenCount++;
+            return _inner.OpenSnapshot();
+        }
         public ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit) =>
             _inner.ReadSnapshot(snapshotToken, afterIndex, limit);
         public void ReleaseSnapshot(Guid snapshotToken) => _inner.ReleaseSnapshot(snapshotToken);
