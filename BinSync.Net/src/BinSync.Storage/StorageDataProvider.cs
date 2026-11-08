@@ -142,26 +142,36 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
     public void AppendLocalChange(ProviderMutation mutation)
     {
+        ArgumentNullException.ThrowIfNull(mutation);
         lock (_gate)
         {
             ThrowIfDisposed();
+            if (mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence != 0)
+                throw new ArgumentException("Local provider changes require the current non-zero author epoch; origin sequence is allocated by the provider.", nameof(mutation));
             using var batch = _storage.BeginWriteBatch();
             ulong current = batch.TryGet([LocalHighWatermark], out var currentBytes)
                 ? ReadUInt64(currentBytes!)
                 : 0;
             ulong sequence = checked(current + 1);
-            byte[] owned = EncodeMutation(mutation);
+            BatchId changeId = mutation.ChangeId.IsZero
+                ? BatchId.From(NewChangeIdentityBytes())
+                : mutation.ChangeId;
+            var ownedMutation = CloneMutation(mutation, changeId, mutation.OriginAuthorEpoch, sequence);
+            ValidateMutation(ownedMutation);
+            byte[] owned = EncodeMutation(ownedMutation);
             Guid activeGeneration = ReadActiveGeneration(_storage);
-            byte[] currentKey = mutation.IsRecordTombstone
-                ? CurrentRecordTombstoneKey(activeGeneration, mutation.RecordId)
-                : CurrentKey(activeGeneration, mutation.RecordId, mutation.FieldId);
+            byte[] currentKey = ownedMutation.IsRecordTombstone
+                ? CurrentRecordTombstoneKey(activeGeneration, ownedMutation.RecordId)
+                : CurrentKey(activeGeneration, ownedMutation.RecordId, ownedMutation.FieldId);
             if (batch.TryGet(currentKey, out var currentFieldBytes))
             {
                 ProviderMutation existing = DecodeMutation(currentFieldBytes!);
-                int comparison = Compare(mutation, existing);
+                int comparison = Compare(ownedMutation, existing);
                 if (comparison == 0)
                 {
-                    if (!SameMutation(mutation, existing))
+                    if (!SameMutationContent(ownedMutation, existing) ||
+                        existing.OriginAuthorEpoch != ownedMutation.OriginAuthorEpoch ||
+                        (!mutation.ChangeId.IsZero && existing.ChangeId != mutation.ChangeId))
                         throw new InvalidDataException("Local source feed equivocated at the same HLC and author.");
                     return;
                 }
@@ -173,7 +183,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 batch.Put(currentKey, owned);
             }
 
-            batch.Put(ChangeKey(sequence), EncodeLocalFeedChange(owned));
+            batch.Put(ChangeKey(sequence), EncodeLocalFeedChange(owned, changeId));
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
             batch.Commit();
         }
@@ -737,7 +747,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             new Hlc(left.HlcWall, left.HlcLogical), left.AuthorNodeId,
             new Hlc(right.HlcWall, right.HlcLogical), right.AuthorNodeId);
 
-    private static bool SameMutation(ProviderMutation left, ProviderMutation right)
+    private static bool SameMutationContent(ProviderMutation left, ProviderMutation right)
         => left.RecordId == right.RecordId
             && left.FieldId == right.FieldId
             && left.IsTombstone == right.IsTombstone
@@ -747,6 +757,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             && left.AuthorNodeId == right.AuthorNodeId
             && left.KeyEpoch == right.KeyEpoch
             && left.Value.AsSpan().SequenceEqual(right.Value);
+
+    private static bool SameMutation(ProviderMutation left, ProviderMutation right)
+        => SameMutationContent(left, right)
+            && left.ChangeId == right.ChangeId
+            && left.OriginAuthorEpoch == right.OriginAuthorEpoch
+            && left.OriginSequence == right.OriginSequence;
 
     private static byte[] Fingerprint(IReadOnlyList<ProviderMutation> mutations)
     {
@@ -758,7 +774,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         BinaryPrimitives.WriteInt32LittleEndian(count, ordered.Length);
         hash.AppendData(count);
 
-        Span<byte> fixedPart = stackalloc byte[53];
+        Span<byte> fixedPart = stackalloc byte[81];
         foreach (var mutation in ordered)
         {
             mutation.RecordId.WriteTo(fixedPart);
@@ -769,6 +785,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             mutation.AuthorNodeId.WriteTo(fixedPart.Slice(31));
             BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(47), mutation.KeyEpoch);
             BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(49), checked((uint)mutation.Value.Length));
+            mutation.ChangeId.WriteTo(fixedPart.Slice(53, 16));
+            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(69), mutation.OriginAuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(fixedPart.Slice(73), mutation.OriginSequence);
             hash.AppendData(fixedPart);
             hash.AppendData(mutation.Value);
         }
@@ -778,12 +797,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
 
 
-    private static byte[] EncodeLocalFeedChange(byte[] encodedMutation)
+    private static byte[] EncodeLocalFeedChange(byte[] encodedMutation, BatchId changeId)
     {
-        byte[] identity = NewChangeIdentityBytes();
-        byte[] result = new byte[checked(encodedMutation.Length + identity.Length)];
+        if (changeId.IsZero)
+            throw new ArgumentException("Local feed ChangeId must be non-zero.", nameof(changeId));
+        byte[] result = new byte[checked(encodedMutation.Length + 16)];
         encodedMutation.CopyTo(result, 0);
-        identity.CopyTo(result, encodedMutation.Length);
+        changeId.WriteTo(result.AsSpan(encodedMutation.Length));
         return result;
     }
 
@@ -795,13 +815,20 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49, 4));
         if (valueLength > int.MaxValue)
             throw new InvalidDataException("Stored provider local feed value length is invalid.");
-        int mutationLength = checked(53 + (int)valueLength);
-        if (bytes.Length - mutationLength != 16)
-            throw new InvalidDataException("Stored v3 provider local feed entry must contain exactly one ChangeId.");
+        int legacyMutationLength = checked(53 + (int)valueLength);
+        int currentMutationLength = checked(81 + (int)valueLength);
+        int mutationLength = bytes.Length - 16 == currentMutationLength
+            ? currentMutationLength
+            : bytes.Length - 16 == legacyMutationLength
+                ? legacyMutationLength
+                : throw new InvalidDataException("Stored provider local feed entry must contain one canonical mutation and one ChangeId.");
         BatchId changeId = BatchId.From(bytes.Slice(mutationLength, 16));
         if (changeId.IsZero)
             throw new InvalidDataException("Stored provider local feed identity must not be zero.");
-        return (DecodeMutation(bytes[..mutationLength]), changeId);
+        ProviderMutation mutation = DecodeMutation(bytes[..mutationLength]);
+        if (!mutation.ChangeId.IsZero && mutation.ChangeId != changeId)
+            throw new InvalidDataException("Provider local feed ChangeId does not match its mutation provenance.");
+        return (mutation, changeId);
     }
 
     private static byte[] NewChangeIdentityBytes()
@@ -830,7 +857,28 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             HlcLogical = mutation.HlcLogical,
             AuthorNodeId = mutation.AuthorNodeId,
             KeyEpoch = mutation.KeyEpoch,
-            Value = mutation.Value.ToArray()
+            Value = mutation.Value.ToArray(),
+            ChangeId = mutation.ChangeId,
+            OriginAuthorEpoch = mutation.OriginAuthorEpoch,
+            OriginSequence = mutation.OriginSequence
+        };
+
+    private static ProviderMutation CloneMutation(
+        ProviderMutation mutation, BatchId changeId, uint originEpoch, ulong originSequence)
+        => new()
+        {
+            RecordId = mutation.RecordId,
+            FieldId = mutation.FieldId,
+            IsTombstone = mutation.IsTombstone,
+            IsRecordTombstone = mutation.IsRecordTombstone,
+            HlcWall = mutation.HlcWall,
+            HlcLogical = mutation.HlcLogical,
+            AuthorNodeId = mutation.AuthorNodeId,
+            KeyEpoch = mutation.KeyEpoch,
+            Value = mutation.Value.ToArray(),
+            ChangeId = changeId,
+            OriginAuthorEpoch = originEpoch,
+            OriginSequence = originSequence
         };
 
     private static StorageEntry[] MergeSnapshotEntries(
