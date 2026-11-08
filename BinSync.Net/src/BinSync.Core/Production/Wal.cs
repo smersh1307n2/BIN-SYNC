@@ -18,11 +18,11 @@ public enum WalRecordType : byte
 public sealed class Wal : IDisposable
 {
     /// <summary>WAL format identifier string written at the start of a log segment.</summary>
-    public const string Tag = "BIN-SYNC/WAL/v2";
+    public const string Tag = "BIN-SYNC/WAL/v3";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
-    private const ushort Version = 2;
+    private const ushort Version = 3;
     private const int RecordDigestLen = 16;
-    private const string RecordDigestTag = "BIN-SYNC/WAL-RECORD/v1";
+    private const string RecordDigestTag = "BIN-SYNC/WAL-RECORD/v2";
 
     private readonly string _path;
     private FileStream? _fs;
@@ -69,7 +69,7 @@ public sealed class Wal : IDisposable
                     throw new InvalidDataException("Not a BinSync WAL (bad magic).");
                 var version = ReadBEU16(br);
                 if (version != Version)
-                    throw new InvalidDataException($"Unsupported WAL version {version}; WAL v2 is required.");
+                    throw new InvalidDataException($"Unsupported WAL version {version}; BIN-SYNC v3 requires WAL v3.");
             }
             long validEnd = 6;
             while (validEnd + 4 <= fs.Length)
@@ -124,6 +124,9 @@ public sealed class Wal : IDisposable
         w.Varint((ulong)entry.NamespaceId);
         w.U64((ulong)entry.Seq);
         w.B128(entry.ChangeId);
+        if (entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0)
+            throw new InvalidOperationException("WAL local mutation requires immutable Origin provenance.");
+        w.U32(entry.OriginAuthorEpoch).U64(entry.OriginSequence);
         w.B128(entry.RecordId);
         w.U8(entry.OpKind);
         w.Varint((ulong)entry.Payload.Length);
@@ -385,7 +388,7 @@ public sealed class Wal : IDisposable
             case WalRecordType.LocalMutation:
                 {
                     var (_, entry) = ReadLocalMutation(r);
-                    if (entry.Seq <= 0 || entry.ChangeId.IsZero || entry.AuthorNodeId.IsZero || entry.CreatedAt < 0)
+                    if (entry.Seq <= 0 || entry.ChangeId.IsZero || entry.AuthorNodeId.IsZero || entry.CreatedAt < 0 || entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0)
                         throw new InvalidDataException("Invalid WAL local-mutation metadata.");
                     var decoded = Ops.DecodeOp(entry.Payload, fullAuthor: false).Op;
                     byte expectedKind = decoded switch
@@ -511,10 +514,12 @@ public sealed class Wal : IDisposable
         ulong ns = r.Varint();
         ulong seq = r.U64();
         var changeId = BatchId.From(r.B128());
+        uint originAuthorEpoch = r.U32();
+        ulong originSequence = r.U64();
         var recordId = RecordId.From(r.B128());
         byte opKind = r.U8();
         ulong payloadLength = r.Varint();
-        if (ns > int.MaxValue || seq > long.MaxValue || payloadLength > int.MaxValue)
+        if (ns > int.MaxValue || seq > long.MaxValue || originAuthorEpoch == 0 || originSequence == 0 || payloadLength > int.MaxValue)
             throw new InvalidDataException("WAL local-mutation field is out of range.");
         var payload = r.Raw((int)payloadLength);
         var author = NodeId.From(r.B128());
@@ -529,6 +534,8 @@ public sealed class Wal : IDisposable
             NamespaceId = (int)ns,
             Seq = (long)seq,
             ChangeId = changeId,
+            OriginAuthorEpoch = originAuthorEpoch,
+            OriginSequence = originSequence,
             RecordId = recordId,
             OpKind = opKind,
             Payload = payload,
