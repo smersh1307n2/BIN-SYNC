@@ -334,7 +334,20 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (_storage.TryGet(ClosedAuthorIdentityKey(), out _)) return;
+            if (_storage.TryGet(ClosedAuthorIdentityKey(), out _))
+            {
+                if (_storage.TryGet(ActiveAuthorEpochKey(), out _))
+                    throw new InvalidDataException("Retired author identity unexpectedly retains an active epoch marker.");
+                return;
+            }
+            if (_storage.TryGet(ActiveAuthorEpochKey(), out byte[]? activeEpochBytes))
+            {
+                if (activeEpochBytes!.Length != 4)
+                    throw new InvalidDataException("Active author epoch marker is malformed.");
+                uint activeEpoch = BinaryPrimitives.ReadUInt32LittleEndian(activeEpochBytes);
+                if (!_storage.TryGet(ClosedAuthorEpochKey(activeEpoch), out _))
+                    throw new InvalidOperationException("The active author epoch must be durably closed before retiring the author identity.");
+            }
             using StorageSnapshot snapshot = _storage.OpenSnapshot();
             using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Prefixed(LocalChange, ReadOnlySpan<byte>.Empty));
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(1);
@@ -355,6 +368,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             ThrowIfDisposed();
             if (!_storage.TryGet(ClosedAuthorIdentityKey(), out _))
                 throw new InvalidOperationException("A new author epoch can be activated only after terminal author retirement.");
+            if (_storage.TryGet(ActiveAuthorEpochKey(), out _))
+                throw new InvalidDataException("Retired author identity unexpectedly retains an active epoch marker.");
             if (authorEpoch <= ReadMaxClosedAuthorEpoch())
                 throw new InvalidOperationException("A rejoined author must use a fresh epoch greater than every previously closed epoch.");
             using var batch = _storage.BeginWriteBatch();
