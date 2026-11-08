@@ -22,9 +22,6 @@ internal sealed class WalWriterFence : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(walDirectory);
         string fullPath = ResolvePhysicalDirectory(walDirectory);
-        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
-            fullPath = fullPath.ToUpperInvariant();
-
         string identity = fullPath + "|" + partitionId.ToString(System.Globalization.CultureInfo.InvariantCulture);
         string digest = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
         string name = OperatingSystem.IsWindows()
@@ -53,7 +50,23 @@ internal sealed class WalWriterFence : IDisposable
                      new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
                      StringSplitOptions.RemoveEmptyEntries))
         {
-            current = Path.Combine(current, segment);
+            string actualSegment = segment;
+            if (Directory.Exists(current))
+            {
+                string[] matches = Directory.EnumerateFileSystemEntries(current)
+                    .Select(Path.GetFileName)
+                    .Where(name => name is not null &&
+                        string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
+                    .Take(2)
+                    .ToArray()!;
+                if (matches.Length == 1)
+                    actualSegment = matches[0]!;
+                else if (matches.Length > 1 &&
+                         matches.Any(name => string.Equals(name, segment, StringComparison.Ordinal)))
+                    actualSegment = segment;
+            }
+
+            current = Path.Combine(current, actualSegment);
             var directory = new DirectoryInfo(current);
             FileSystemInfo? target = directory.ResolveLinkTarget(returnFinalTarget: true);
             if (target is not null)
