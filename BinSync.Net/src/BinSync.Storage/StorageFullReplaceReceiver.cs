@@ -42,6 +42,10 @@ public sealed class StorageFullReplaceReceiver
         _fullReplace = provider as IProviderFullReplace
             ?? throw new NotSupportedException("The provider does not support durable FULL_REPLACE staging.");
         _gcStore = gcStore ?? throw new ArgumentNullException(nameof(gcStore));
+        if (provider is StorageDataProvider storageProvider &&
+            gcStore is StorageNamespaceGcStore storageGcStore &&
+            !storageProvider.SharesStorageWith(storageGcStore))
+            throw new ArgumentException("FULL_REPLACE provider and namespace-GC store must share one StorageDatabase.", nameof(gcStore));
         _trustStore = trustStore ?? throw new ArgumentNullException(nameof(trustStore));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
