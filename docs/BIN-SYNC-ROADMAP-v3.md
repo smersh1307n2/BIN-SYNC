@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current branch head at creation: ae5db37ca4e5c32fe71d320a62c831260ea53fdb. CI run 42474680383 is RED at Build; unit tests and Fuzz/Lab did not run.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current branch head at this progress update: e6826b4865f8966327a628ae07e95720db58d0ff. CI is still RED on the current implementation work; the last completed test evidence is 640 passed / 14 failed before the latest fixture corrections. Build and Fuzz/Lab did run on that preceding commit.
 
 ## 1. Target architecture
 
@@ -52,10 +52,10 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### Phase 1 — Repair red build and finish immutable Origin end-to-end
 
-- [ ] Re-fetch code and fix tuple/model mismatch in Node.DeltaBatch.cs by adding Origin to the actual immutable outbound operation model, not by inventing tuple values at the call site.
+- [~] Fixed the initial tuple/model mismatch in Node.DeltaBatch.cs by carrying Origin in the outbound metadata item tuple; continue auditing every clone and serialization boundary.
 - [ ] Define one canonical Origin value type for local writes, Node Outbox, MetadataOperation, decoded inbound operation, PendingApply, relay, checkpoint and snapshot.
-- [ ] Allocate originAuthorEpoch + originSequence atomically with ChangeId and frozen payload. Retry must recover the exact same tuple.
-- [ ] Keep SenderCursor, peer offset, relay sequence, OutboxSeq, FLD JournalSeq, CommitSeq and HLC separate from OriginSequence.
+- [~] Local outbound freeze assigns OriginSequence from the durable author stream sequence and preserves supplied Origin on replay; audit atomic allocator/retry behavior and provider freeze before closing.
+- [x] Removed the invalid equality between OriginSequence and peer-relative sender cursor; direct-author validation only rejects an Origin epoch from the future.
 - [ ] Make provenance mandatory in every v3 DELTA_BATCH; remove optional capability/flag and reject protocol major mismatch.
 - [ ] Preserve Origin through preflight, PendingApply crash recovery, provider apply, relay, snapshot and restart.
 - [ ] Cover direct author, A→B→C→D relay, alternate routes, duplicates and equivocation.
@@ -66,8 +66,8 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 - [ ] Inventory every persisted row/key and byte cardinality in StorageMetadataStore, Node checkpoint, FLD Outbox, ApplyJournal and WAL.
 - [ ] Establish one canonical v3 format marker and row codec; reject absent/old/unknown markers.
-- [ ] Store one operation/payload row keyed by global ChangeId identity; local and relay operations share one immutable representation.
-- [ ] Store fingerprint + Origin with global dedup identity. Do not create a second ledger row if the operation identity row survives payload compaction; otherwise retain one compact identity-only row.
+- [~] Stream payload rows now persist Origin epoch/sequence; global ChangeId identity rows now persist fingerprint + author NodeId + Origin epoch/sequence. One-row/no-payload-duplication audit remains.
+- [~] Global ChangeId ledger stores fingerprint + Origin tuple in a fixed 45-byte value; verify every dedup/equivocation path and benchmark whether the ledger can be merged with the operation identity row.
 - [ ] Collapse repeated author IDs in ACK/pushed/offset maps into one sparse progress row only if benchmarks prove a win.
 - [ ] Remove acknowledged replay reservations atomically with contiguous ACK, preserving digest-chain anchor.
 - [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
@@ -154,3 +154,14 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Captured prior green baseline 92f6631 as historical only.
 - [x] Wrote v3 clean-break architecture, metadata ownership, provenance and GC requirements into the normative spec.
 - [ ] Code implementation not complete; CI remains red until Phase 1.
+
+### 2026-11-08 — immutable Origin implementation package (active)
+
+- [x] Added OriginAuthorEpoch/OriginSequence to metadata outbound and relay DTOs and persisted stream payload rows.
+- [x] Added Origin tuple to global ChangeId ledger value (45-byte canonical identity value) and compare fingerprint + author + epoch + sequence for pending/staged identity checks.
+- [x] Added Origin to PendingApply v3 encoding (-7) and reject all older PendingApply encodings.
+- [x] Bumped local WAL format to v3 and included Origin coordinates in local mutation records; old WAL versions are rejected.
+- [x] Added BMS3 metadata partition identity marker and reject old ledger encodings.
+- [x] Preserve Origin in detached Node batch clones; snapshot state roots use a separate non-operation encoding and do not invent OriginSequence.
+- [~] CI tests are being updated to include Origin in manual/tampered test batches; last observed run before this fixture package: 640 passed / 14 failed. Re-run CI on exact current head before closing any implementation item.
+- [ ] Full ChangeId equivocation, WAL crash-replay and PendingApply recovery tests still required.

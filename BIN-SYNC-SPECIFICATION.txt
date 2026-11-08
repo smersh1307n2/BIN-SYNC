@@ -9,12 +9,12 @@
 
 ## 0. Краткое содержание обязательных изменений v3
 
-1. Каждая опубликованная операция несёт неизменяемую Origin provenance: (originAuthorNodeId, originAuthorEpoch, originSequence). Она создаётся исходным автором при freeze и сохраняется без изменений через WAL recovery, receive, PendingApply, storage, relay, snapshot и повторную доставку.
+1. Каждая опубликованная операция несёт неизменяемую Origin provenance: (originAuthorNodeId, originAuthorEpoch, originSequence). Она создаётся исходным автором при freeze и сохраняется без изменений через WAL recovery, receive, PendingApply, storage, relay и повторную доставку. Текущая-state snapshot image не является набором PublishedOperation: она несёт собственную signed snapshot-generation provenance и сохраняет исходные field-author/HLC значения; ей запрещено синтезировать ChangeId/OriginSequence для исторических операций.
 2. ChangeId остаётся глобальной route-independent identity: (scope, namespaceId, ChangeId). Origin — provenance, а не замена ChangeId. Один ChangeId с отличающимся semantic fingerprint или Origin — equivocation и отклоняется до мутации.
 3. Одна логическая операция и один immutable payload обслуживают любое число получателей. Отдельно хранится компактный прогресс по (peer, namespace, author stream); per-peer копии payload и ACK bitmap внутри операции запрещены.
 4. Peer/session state, delivery progress, batch receipt, ChangeId identity, PendingApply, relay payload и tombstone — разные логические факты с независимыми retention horizons. Их можно физически группировать в транзакциях/сегментах, но нельзя смешивать в одну запись с общей максимальной жизнью.
 5. Коалесцирование разрешено только до публикации. После durable freeze operation, ChangeId, Origin, payload и sequence неизменяемы.
-6. WAL отвечает за crash recovery; provider feed/FLD Outbox — за ещё не опубликованные локальные изменения; BIN-SYNC Metadata Store — за опубликованные операции, receipts, delivery/ACK, dedup и relay. Не создавать второй PendingLocal/Pending journal с теми же фактами.
+6. WAL/v3 отвечает за crash recovery; provider feed/FLD Outbox — за ещё не опубликованные локальные изменения; BIN-SYNC Metadata Store — за опубликованные операции, receipts, delivery/ACK, dedup и relay. Не создавать второй PendingLocal/Pending journal с теми же фактами.
 7. Storage — универсальный opaque byte engine/контракт, не знает о полях, HLC, peers и ChangeId. FLD Database — отдельная семантическая надстройка над Storage. Целевая поставка — две DLL: Fld1.Storage.dll и Fld1.Database.dll.
 8. Старые wire/storage форматы не читаются, не мигрируются и не dual-write. Неизвестный/старый формат отклоняется fail-closed; требуется создание нового v3 store/namespace.
 9. GC разделён на три независимых доказательства: Inbox receipts, ChangeId ledger, tombstones/ghosts. Payload ACK/compaction не является доказательством безопасности ни для одного из этих доменов.
@@ -95,10 +95,12 @@ Progress одного author stream можно упаковать в sparse row 
 2. Global ChangeId identity/index — fingerprint + Origin + reference + relay/retention facts. Если PublishedOperation row переживает payload compaction и остаётся dedup authority, второй ledger row не создаётся. Если payload удаляется отдельно, остаётся одна компактная identity-only row.
 3. PeerAuthorProgress — компактные per-peer/per-author cursors и digest/reservation facts.
 4. InboxReceipt — issuer/epoch/ns/batch identity, complete header fingerprint, resolved author, sender cursor end, digest-chain checkpoint и данные для exact ACK. Payload операций не хранит.
-5. PendingApply — exact inbound v3 batch intent и stable apply token до durable provider effect и receipt/progress finalization. Может ссылаться на immutable operation rows, если доказана lifetime.
+5. PendingApply — exact inbound v3 batch intent и stable apply token до durable provider effect и receipt/progress finalization. Canonical PendingApply row encoding is format -7 and persists OriginAuthorEpoch/OriginSequence for every operation. Может ссылаться на immutable operation rows, если доказана lifetime.
 6. CompletedApply — компактный idempotency token/result mapping; отдельный lifetime.
 7. Membership/GC certificates and checkpoints — signed roster generation, member fences, per-member monotonic origin frontiers, forgotten frontier.
 8. Provider publication intent — только если нужен recoverable cross-store handoff; не второй local change journal, удаляется после freeze+feed ACK.
+
+Canonical BIN-SYNC Metadata partition identity begins with little-endian magic BMS3 plus exact scope length and UTF-8 scope. ChangeId identity values are fixed 45-byte v3 values (fingerprint[16], authorNodeId[16], authorEpoch[u32], originSequence[u64], localOutbound[u8]); stream payload values are ChangeId[16] + OriginEpoch[u32] + OriginSequence[u64] + payloadLength[i32] + payload. Node WAL format is WAL/v3 and local mutation records persist OriginEpoch/OriginSequence. Any prior marker, pending-apply row encoding or WAL version is rejected, not upgraded.
 
 Source feed/FLD Outbox — единственная authority для unpublished edits. Metadata Store не создаёт параллельную PendingLocal таблицу с теми же изменениями.
 
