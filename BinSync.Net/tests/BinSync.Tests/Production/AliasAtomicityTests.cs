@@ -119,7 +119,7 @@ public sealed class AliasAtomicityTests
         Assert.Equal(entry, request.Entry);
 
         var response = SessionWire.DecodeAliasMapUpdate(
-            SessionWire.EncodeAliasMapUpdateResponse(41, accepted: true, entry));
+            SessionWire.EncodeAliasMapUpdateResponse(41, accepted: true, entry: entry));
         Assert.Equal(41U, response.RequestId);
         Assert.True(response.IsResponse);
         Assert.True(response.Accepted);
