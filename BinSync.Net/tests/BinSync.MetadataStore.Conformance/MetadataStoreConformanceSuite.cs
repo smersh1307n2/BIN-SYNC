@@ -459,13 +459,13 @@ public abstract class MetadataStoreConformanceSuite
         var duplicateIntent = store.BeginPendingApply(duplicate, token);
         Assert.Equal(new[] { false }, duplicateIntent.ApplyOperations);
 
-        var newAuthor = CreateBatch("scope-a", 1, 3, 1, 7, 12, 1, 1, 11, 12,
+        var newAuthor = CreateBatch("scope-a", 1, 4, 1, 7, 12, 1, 1, 0, 12,
             Operation(21, 31, 41, 51));
         var newIntent = store.BeginPendingApply(newAuthor,
             Guid.Parse("00000000-0000-0000-0000-000000000127"));
         Assert.Equal(new[] { true }, newIntent.ApplyOperations);
 
-        var competing = CreateBatch("scope-a", 1, 4, 1, 7, 13, 1, 1, 0, 13,
+        var competing = CreateBatch("scope-a", 1, 5, 1, 7, 13, 1, 1, 0, 13,
             Operation(21, 31, 41, 51));
         Assert.Throws<InvalidOperationException>(() => store.BeginPendingApply(
             competing, Guid.Parse("00000000-0000-0000-0000-000000000128")));
@@ -479,7 +479,7 @@ public abstract class MetadataStoreConformanceSuite
         store.FinalizePendingApply("scope-a", Node(1),
             new MetadataProviderApplyReceipt(newIntent.ApplyToken, newAuthor.BatchDigest.ToArray()));
 
-        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 14, 1, 1, 0, 14,
+        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 14, 1, 1, 12, 14,
             Operation(22, 32, 42, 52));
         var nextIntent = store.BeginPendingApply(afterFinalize,
             Guid.Parse("00000000-0000-0000-0000-000000000129"));
