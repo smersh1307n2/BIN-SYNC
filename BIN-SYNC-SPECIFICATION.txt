@@ -2,8 +2,14 @@
 ## Полная спецификация универсального бинарного протокола синхронизации
 
 **Статус:** Ready for Production Implementation  
-**Версия:** 2.4.19 FINAL (fail-closed tombstone retention; route-independent ChangeId deduplication; canonical CRDT payloads)  
+**Версия:** 2.4.20 FINAL (receipt identity/header binding; per-author stream retention coordinates; fail-closed receipt and tombstone retention)  
 **Дата:** 2026-11-07  
+**Изменения v2.4.20 относительно v2.4.19:**
+- Зафиксирован receipt key `(senderNodeId, senderEpoch, namespaceId, batchId)`; resolved `authorNodeId` остаётся отдельной координатой author-stream и не может менять receipt identity.
+- Разделены peer/session membership и per-author stream progress; безопасный retention рассчитывается независимо для каждого author stream.
+- Inbox receipt GC отключён без отдельного двустороннего durable checkpoint/fencing contract; ACK, TTL и snapshot сами по себе не разрешают удаление.
+- Relay operation без alias у получателя отклоняет весь batch с `UNKNOWN_ALIAS`, не создавая дыру в author-stream cursor.
+
 **Изменения v2.4.19 относительно v2.4.18:**
 - Уточнено, что TOMBSTONE_MIN_TTL — лишь минимальный возраст-кандидат и не является доказательством безопасности GC; scalar HLC cutoff/GC_NOTICE сами по себе не разрешают удаление tombstone.
 - До реализации durable namespace safe-frontier, stale-peer fencing и обязательного full-resync gate tombstone/ghost GC отключён; полученный GC_NOTICE не даёт права удалять состояние.
@@ -2277,6 +2283,7 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 | **2.4.1** | **2026-11-05** | **Snapshot preserves field tombstones and explicit lifecycle state; applies both through LWW merge; takes a consistent node snapshot under ordered gates; supports complete multi-chunk transfer and atomic publication after all chunks validate.**
 | **2.4.2** | **2026-11-05** | **AutoReconcile exchanges snapshot baselines in both directions; InitialSyncComplete is set only after the peer confirms receipt; peer-relative Outbox offset initialization fails closed with SNAPSHOT_REQUIRED until the baseline is complete.** |
 | **2.4.3** | **2026-11-05** | **Public transport-independent SyncSession; TCP/TLS moved to a dedicated adapter; explicit reliable/ordered transport capability contract; raw UDP requires a reliability adapter. No wire-format change.** |
+| **2.4.20** | **2026-11-07** | **Receipt identity separated from resolved author; per-author retention coordinates; fail-closed receipt GC; relay alias failure is batch-atomic. No wire-layout change.** |
 
 ---
 
@@ -2298,7 +2305,7 @@ Wire payload: `count: varint | descriptor*`, где каждый descriptor им
 
 **Конец спецификации.**
 
-Документ самодостаточен и описывает текущую реализацию BIN-SYNC CORE v2.4.13. В версиях 2.3.6–2.4.0 последовательно закрыты критические проблемы, выявленные при практической реализации:
+Документ самодостаточен и описывает нормативный контракт BIN-SYNC CORE v2.4.20 FINAL. В версиях 2.3.6–2.4.0 последовательно закрыты критические проблемы, выявленные при практической реализации:
 
 1. **Порядок проверок** в применении батча предотвращает ложные отказы при потерянных подтверждениях.
 2. **Трансляция псевдонимов** гарантирует корректную идентификацию автора в ячеистых топологиях.
