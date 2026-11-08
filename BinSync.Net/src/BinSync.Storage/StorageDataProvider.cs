@@ -721,7 +721,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         break;
                     foreach (StorageEntry fieldRow in fieldRows)
                     {
+                        if (fieldRow.Key.Length != 35 || fieldRow.Key[0] != CurrentField ||
+                            !fieldRow.Key.AsSpan(17, 16).SequenceEqual(tombstone.RecordId.ToArray()))
+                            throw new InvalidDataException("Record field key does not match its tombstone record identity.");
                         ProviderMutation field = DecodeMutation(fieldRow.Value);
+                        if (field.RecordId != tombstone.RecordId || field.IsRecordTombstone)
+                            throw new InvalidDataException("Record field row contains an invalid mutation identity.");
                         if (Compare(field, tombstone) <= 0)
                             obsoleteFieldKeys.Add(fieldRow.Key);
                         afterFieldKey = fieldRow.Key;
