@@ -761,3 +761,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] OFR2 verification now compares every previously authority-closed epoch for the reporting member against the immutable NRS2 closure: epoch, final issued sequence and maximum HLC must all match, and a rejoined member cannot omit the old epoch from its report.
 - [x C] Applied the check in both decode/verify and object verification paths, so both wire receive and local checkpoint construction enforce the same invariant.
 - [~ T] Add tamper tests for omitted/changed old epochs after rejoin, unchanged closed epochs alongside a new epoch, and old-epoch attempts to advance issued sequence/HLC.
+
+
+### 2026-11-09 — C-pass: provider retirement requires closing the active epoch
+
+- [x C] `CloseLocalAuthorIdentity` now validates the persisted active-epoch marker and refuses terminal retirement unless that exact epoch already has a durable closure marker. It also rejects an impossible active marker on an already-retired identity.
+- [x C] `ActivateLocalAuthorEpoch` refuses to proceed if the retired identity still carries an active-epoch marker, then enforces a monotonically fresh epoch above all prior closures.
+- [~ T] Test wrong `finalAuthorEpoch`, missing closure marker, malformed active marker, crash/retry and valid rejoin.
