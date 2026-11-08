@@ -28,7 +28,16 @@ if (args.Contains("--coordinator-retry-only", StringComparer.Ordinal))
 else if (args.Contains("--metadata-cardinality-only", StringComparer.Ordinal))
     BenchmarkRunner.Run<BinSync.Bench.MetadataStoreCardinalityBench>(config);
 else if (args.Contains("--metadata-million-only", StringComparer.Ordinal))
-    BenchmarkRunner.Run<BinSync.Bench.MetadataStoreMillionRowBench>(config);
+{
+    var millionConfig = DefaultConfig.Instance
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .AddJob(Job.Default
+            .WithToolchain(InProcessEmitToolchain.Instance)
+            .WithWarmupCount(1)
+            .WithIterationCount(3)
+            .WithId("MillionRowShort"));
+    BenchmarkRunner.Run<BinSync.Bench.MetadataStoreMillionRowBench>(millionConfig);
+}
 else
     BenchmarkSwitcher.FromAssembly(typeof(BinSync.Bench.MetadataCoordinatorRetryScanBench).Assembly).Run(args, config);
 
