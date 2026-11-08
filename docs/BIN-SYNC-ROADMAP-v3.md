@@ -810,3 +810,5 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `StorageSnapshot.PrefixCursor` now computes the exclusive lexicographic upper bound of a byte prefix and uses `SortedDictionary.GetViewBetween` to seek directly to the matching key range. With `afterKey`, it starts at that cursor position instead of scanning unrelated keys from the partition beginning.
 - [x C] Empty/all-0xFF prefixes retain the safe fallback; the existing page/trailing-key checks remain in place.
 - [~ T] Verify prefix boundaries (`00`, `FF`, carry across suffix bytes), exact `afterKey`, empty pages, disposal and concurrent commits; benchmark scan cost for 1M rows with sparse prefixes.
+
+- [x C] Follow-up hardening: an `afterKey` at/above the prefix upper bound now retains a valid completed enumerator, so `ReadPage` returns an empty page rather than treating the cursor as disposed.
