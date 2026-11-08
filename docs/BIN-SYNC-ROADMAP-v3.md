@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` — BinSync.Net Core 662/662, Fuzz/Lab SUCCESS, Storage Integration 168/168 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, and field/record tombstone preservation. Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1`; status: GREEN.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` — BinSync.Net Core 662/662, Fuzz/Lab SUCCESS, Storage Integration 168/168 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, and field/record tombstone preservation. Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1`; status: GREEN. Latest documentation-only follow-up: `d28e3954c3bf5a663b79eb500f53719fb69253cc`.
 
 ## 1. Target architecture
 
@@ -96,21 +96,25 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 #### 4.2 ChangeId ledger
 
-- [ ] Implement authority-signed namespace roster generations with explicit member set and monotonic generation.
-- [ ] Implement signed monotonic per-member contiguous applied-OriginSequence checkpoints bound to roster and snapshot generation.
-- [ ] Compute per-author safe frontier as minimum across every roster member; missing/offline/stale/invalid member blocks reclamation.
-- [ ] Implement member removal fence and mandatory FULL_REPLACE before stale-peer rejoin.
-- [ ] Scan references from PendingApply, operation payload, relay/outbound reservation, provider intent, snapshot pin and apply token.
-- [ ] Commit deletion + monotonic forgotten checkpoint crash-safely; reject replay below frontier.
-- [ ] Keep ChangeId GC disabled until all adversarial tests pass.
+Design: [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md). The design is recorded; implementation and all GC remain disabled.
+
+- [x D] Specified authority-signed namespace roster generations, explicit member keys/status/epoch, monotonic generation and roster digest.
+- [x D] Specified signed monotonic per-member contiguous applied-OriginSequence vectors bound to roster generation/digest.
+- [x D] Specified per-author safe frontier as the minimum across every Active member; Joining/missing/offline/stale/invalid member contributes zero.
+- [x D] Specified durable member retirement fence and mandatory FULL_REPLACE before stale-peer rejoin.
+- [x D] Specified reference scan across PendingApply, operation payload, relay/outbound reservation, provider intent, snapshot pin, feed lease and apply token.
+- [x D] Specified crash-consistent deletion plus monotonic forgotten checkpoint and replay rejection below the frontier.
+- [ ] Implement the v3.1 codecs, capability negotiation, signed roster/frontier/checkpoint persistence and adversarial tests. Keep ChangeId GC disabled until all pass.
 
 #### 4.3 Tombstone / ghost
 
-- [ ] Define signed authoritative FULL_REPLACE generation and roster certificate distinct from merge SNAPSHOT_CHUNK (requires a separately negotiated protocol revision; v3.0 wire must not grow unversioned messages).
+- [x D] Defined the signed authoritative FULL_REPLACE manifest/ACK, roster binding and separate transfer frames in [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md); implementation requires negotiated v3.1 capabilities, not unversioned v3.0 messages.
 - [x C] Provider `OpenSnapshot` captures the stable image and source feed watermark in one Storage snapshot; the full-replace digest binds the generation and watermark. Signed wire certificate and all-member binding remain blocked on the roster protocol revision.
-- [ ] Require all roster members to install same or later generation/digest.
+- [x D] Specified that every Active member must provide a signed installed ACK for the same or newer generation/digest before tombstone/ghost reclamation.
+- [ ] Implement the all-member installed-generation tracker and enforce it at the provider/metadata GC boundary.
 - [x C] `IProviderFullReplace` and `StorageDataProvider` stage generation-scoped rows, verify the canonical SHA-256 manifest in bounded scans, fence commit to the captured base generation, and atomically switch the active-generation pointer. `FullReplaceDigestBuilder` streams canonical pages without full-image sorting/materialization; old generations are retained and physical reclamation remains blocked on cross-store safe-GC proof.
-- [ ] Persist forgotten deletion frontier before physical purge; fence old-generation deltas and force full rebootstrap.
+- [x D] Specified the forgotten deletion frontier, durable epoch fence and full-rebootstrap rule for retired members.
+- [ ] Implement durable frontier persistence, old-generation delta fencing and full rebootstrap enforcement.
 - [ ] Test field tombstone, record tombstone and ghost independently, including offline peers, alternate routes and crashes at every transition.
 - [ ] Keep tombstone/ghost GC disabled until complete proof passes.
 
@@ -444,3 +448,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Updated v3 spec, Public API and Data Provider Conformance docs with canonical RFC-4122 generation encoding, digest byte order, bounded page limits, caller safety obligations and old-generation retention.
 - [ ] Promote `FullReplaceDigestBuilder`/canonical ProviderMutation encoding to a Core-level shared codec before implementing the FLD-DB provider adapter; avoid coupling the FLD adapter to StorageDataProvider internals.
 - [ ] Implement signed namespace roster, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE installed ACKs in a separately negotiated v3.1 extension. Until then ChangeId and tombstone/ghost GC remain disabled.
+
+
+### 2026-11-08 — v3.1 signed roster / safe-GC design checkpoint
+
+- [x] Added `docs/BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md` defining the pinned Namespace Authority, signed full roster, per-member applied-origin vectors, authority-signed retention checkpoint, FULL_REPLACE installed ACK and separate ChangeId/tombstone/receipt/outbound GC horizons.
+- [x] Defined Joining/Active/Retired member states, missing-frontier=0, durable retired-through fencing and mandatory FULL_REPLACE on rejoin.
+- [x] Preserved compact metadata: one shared ChangeId row per operation plus O(members × authors) frontier state; no per-change/per-peer duplicate history and no PendingLocal journal.
+- [x] Defined v3.1 capability negotiation and proposed frame IDs; v3.0 Membership gossip remains advisory and cannot authorize GC.
+- [ ] No v3.1 code or GC enablement yet. ChangeId and tombstone/Ghost GC remain disabled until codec, signature, crash, multi-peer and resurrection tests pass.
