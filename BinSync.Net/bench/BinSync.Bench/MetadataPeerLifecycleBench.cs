@@ -195,3 +195,81 @@ public class MetadataPeerChangeIdentityLookupBench
         return bytes;
     }
 }
+
+
+/// <summary>
+/// Measures one current-format local outbound freeze against a large unrelated
+/// ChangeId/outbound ledger. Seeding is outside the measured operation.
+/// </summary>
+[MemoryDiagnoser]
+[InvocationCount(1)]
+[UnrollFactor(1)]
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
+public class MetadataStoreCardinalityBench
+{
+    private const string Scope = "metadata-store-cardinality-bench";
+    private const int NamespaceId = 1;
+    private static readonly NodeId Local = NodeId.From(IdBytes(1));
+    private static readonly NodeId Author = NodeId.From(IdBytes(2));
+    private StorageMetadataStore _store = null!;
+
+    [Params(10_000, 100_000)]
+    public int ExistingLedgerRows { get; set; }
+
+    [IterationSetup]
+    public void Setup()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-metadata-cardinality-bench-" + Guid.NewGuid().ToString("N"));
+        _store = new StorageMetadataStore(directory, 704, deleteOnDispose: true);
+
+        const int seedBatchSize = 2_048;
+        for (int start = 0; start < ExistingLedgerRows; start += seedBatchSize)
+        {
+            int count = Math.Min(seedBatchSize, ExistingLedgerRows - start);
+            var operations = new MetadataFrozenOperation[count];
+            for (int i = 0; i < count; i++)
+            {
+                byte[] identity = IdBytes(start + i + 100);
+                operations[i] = new MetadataFrozenOperation
+                {
+                    ChangeId = BatchId.From(identity),
+                    Fingerprint = identity,
+                    Payload = BitConverter.GetBytes(start + i)
+                };
+            }
+            _store.FreezeOutbound(Scope, Local, NamespaceId, Author, operations);
+        }
+
+        if (_store.GetOutboundHighWatermark(Scope, Local, NamespaceId, Author) !=
+            (ulong)ExistingLedgerRows)
+            throw new InvalidOperationException("Cardinality benchmark setup did not seed the requested ledger size.");
+    }
+
+    [IterationCleanup]
+    public void Cleanup() => _store.Dispose();
+
+    [Benchmark(Description = "Freeze one local operation / existing ChangeId ledger cardinality")]
+    public int FreezeOneOperationAtCardinality()
+    {
+        byte[] identity = IdBytes(2_000_000 + ExistingLedgerRows);
+        var operation = new MetadataFrozenOperation
+        {
+            ChangeId = BatchId.From(identity),
+            Fingerprint = identity,
+            Payload = new byte[] { 0xA5, 0x5A }
+        };
+        IReadOnlyList<MetadataOutboundItem> frozen = _store.FreezeOutbound(
+            Scope, Local, NamespaceId, Author, new[] { operation });
+        if (frozen.Count != 1 || frozen[0].Sequence != (ulong)ExistingLedgerRows + 1)
+            throw new InvalidOperationException("Cardinality benchmark freeze did not allocate exactly one next sequence.");
+        return frozen.Count;
+    }
+
+    private static byte[] IdBytes(long value)
+    {
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64BigEndian(bytes.AsSpan(8), value);
+        return bytes;
+    }
+}
