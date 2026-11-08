@@ -404,10 +404,11 @@ public sealed class StorageSyncCoordinator
             // Node Outbox identities before the provider snapshot replaces the data cache.
             PublishLocalChanges(persistNode);
 
-            var intents = _metadataStore.ReadPendingApplyIntents(_scopeId!, _node.NodeId);
-            foreach (var intent in intents)
-                if (intent.Batch.NamespaceId != _namespaceId)
-                    throw new InvalidDataException("Pending apply intent belongs to a different namespace.");
+            // One Metadata Store scope may contain multiple namespaces. This coordinator
+            // owns only its namespace; leave other coordinators' intents untouched.
+            var intents = _metadataStore.ReadPendingApplyIntents(_scopeId!, _node.NodeId)
+                .Where(intent => intent.Batch.NamespaceId == _namespaceId)
+                .ToArray();
 
             BatchId[] pendingRemoteChangeIds = intents
                 .SelectMany(intent => intent.Batch.Operations)
@@ -819,7 +820,7 @@ public sealed class StorageSyncCoordinator
             foreach (var intent in intents)
             {
                 if (intent.Batch.NamespaceId != _namespaceId)
-                    throw new InvalidDataException("Pending apply intent belongs to a different namespace.");
+                    continue;
 
                 if (intent.Batch.WirePayload.Length > 0)
                 {
