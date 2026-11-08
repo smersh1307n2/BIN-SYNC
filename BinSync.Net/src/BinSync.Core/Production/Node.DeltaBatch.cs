@@ -60,6 +60,8 @@ public sealed partial class Node
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             ThrowIfDisposed();
+            if (durableProgress is null)
+                EnsureNodeOwnedMutationAllowedInternal();
             ValidateNamespaceId(namespaceId);
             if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
             if ((uint)schemaVersion > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
@@ -312,6 +314,7 @@ public sealed partial class Node
                                        int schemaId = 0, int schemaVersion = 1,
                                        bool detachPublicBuffers = false)
     {
+        EnsureNodeOwnedMutationAllowedInternal();
         var pkey = (targetPeer, namespaceId);
         if (!PeerStates.TryGetValue(pkey, out var ps)) PeerStates[pkey] = ps = new PeerState(targetPeer, namespaceId);
         long wm;
