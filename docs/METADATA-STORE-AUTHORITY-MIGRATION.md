@@ -122,6 +122,20 @@ Outbound payload reclamation is based on the minimum durable peer ACK across all
 7. **Prove multi-peer behavior.** A real three-replica relay test now covers A→B→C, with D registered but offline: C's ACK cannot compact the shared relay payload; after D connects and ACKs, the minimum peer cursor advances and compaction succeeds. Lost-ACK replay across Metadata Store reopen and sender recreation is now covered. Still add process restart at every receive boundary, alternate-route duplicate delivery with equivocation, multiple author streams under relay, and concurrent same-peer sender/fencing tests.
 8. **Remove transitional mirroring.** Once conformance and recovery pass, remove the coordinator's Node-Outbox-to-Metadata mirror path and old duplicate durable protocol maps from the Storage-backed runtime. Keep volatile mode separately if it remains a supported configuration.
 
+### Local outbound identity groundwork (2026-11-08)
+
+`ProviderChange.ChangeId` is now an optional stable 128-bit source identity. `StorageDataProvider` persists it as a suffix in the existing local-feed row (not a second key/table), returns the same identity after reopen, removes it with the feed row on ACK, and upgrades legacy feed rows on first read by atomically appending an identity. A zero or malformed persisted identity fails closed.
+
+This is groundwork only: `StorageSyncCoordinator.PublishLocalChanges` still materializes provider changes through Node Outbox and then freezes those entries into Metadata Store. The next cutover slice must:
+
+1. require non-zero `ProviderChange.ChangeId` for the provider-authoritative publication mode;
+2. encode the exact provider mutation into `MetadataFrozenOperation` using that ChangeId and its semantic fingerprint;
+3. let Metadata Store allocate the per-author Outbox sequence and own the immutable payload directly;
+4. install/checkpoint the provider snapshot in Node only as an application-data cache, then ACK the provider feed after durable freeze/recovery;
+5. keep the Node-Outbox mirror only as an explicit transition path until all pre-cutover rows are frozen and the legacy transport path is fenced.
+
+The provider feed remains the sole unpublished-local-change staging source; no additional Pending journal is introduced. The ChangeId suffix is transient with that feed row and does not become a second long-term history record.
+
 ## 6. Acceptance criteria
 
 The migration is complete only when all of the following are true:
