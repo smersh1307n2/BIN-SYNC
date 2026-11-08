@@ -367,6 +367,81 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("provider-committed-metadata-pending", Encoding.UTF8.GetString(providerValue!.Value));
     }
 
+
+    [Fact]
+    public async Task Provider_commit_before_metadata_finalize_survives_database_reopen_and_duplicate_retry()
+    {
+        string directory = Path.Combine(_root, "provider-commit-metadata-finalize-reopen");
+        const ulong partitionId = 464;
+        const string scope = "provider-commit-metadata-finalize-reopen";
+        using var sender = NewNode(65);
+        byte[] receiverIdentity = new byte[16];
+        receiverIdentity[0] = 66;
+        receiverIdentity[15] = (byte)(66 ^ 0xA5);
+        NodeId receiverId = NodeId.From(receiverIdentity);
+        RecordId record = RecordId.From(Guid.Parse("65000000-0000-0000-0000-000000000065").ToByteArray());
+        Assert.True(sender.WriteField(1, record, 0x0824, "provider-commit-before-finalize"u8.ToArray(), new Hlc(7100, 0)));
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var receiver = NewNode(66))
+        {
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+            StorageNodePersistence.Save(storage, receiver);
+            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+            using var sendCts = new CancellationTokenSource();
+            Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, node =>
+            {
+                StorageNodePersistence.Save(storage, node);
+                // Provider Apply runs after this callback. Disposing the metadata
+                // adapter forces FinalizePendingApply to fail after provider commit.
+                metadata.Dispose();
+            });
+            Task<bool> send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+            await Assert.ThrowsAsync<ObjectDisposedException>(async () => await receive);
+            sendCts.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
+        }
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var receiver = StorageNodePersistence.Load(storage, receiverId))
+        {
+            Assert.Single(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            Assert.True(receiver.TryGetField(1, record, 0x0824, out var checkpointed));
+            Assert.Equal("provider-commit-before-finalize", Encoding.UTF8.GetString(checkpointed!.Value));
+            Assert.True(provider.TryReadCurrent(record, 0x0824, out var committed));
+            Assert.Equal("provider-commit-before-finalize", Encoding.UTF8.GetString(committed!.Value));
+
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+
+            Assert.Equal(1, coordinator.RecoverPendingApplies(node => StorageNodePersistence.Save(storage, node)));
+            Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            Task<BatchResult> retryReceive = coordinator.ReceiveBatchBeforeAckAsync(
+                acceptor, node => StorageNodePersistence.Save(storage, node));
+            Assert.True(await initiator.PushBatchAsync(sender, 1));
+            BatchResult duplicate = await retryReceive;
+            Assert.True(duplicate.Duplicate);
+            Assert.Equal(0, duplicate.Applied);
+            Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            Assert.True(provider.TryReadCurrent(record, 0x0824, out var afterRetry));
+            Assert.Equal("provider-commit-before-finalize", Encoding.UTF8.GetString(afterRetry!.Value));
+        }
+    }
+
     [Fact]
     public async Task New_peer_incarnation_retires_old_epoch_without_inheriting_its_ack_cursor()
     {
