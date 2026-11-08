@@ -326,7 +326,7 @@ public class MetadataStoreMillionRowBench
     [IterationCleanup]
     public void Cleanup() => _store.Dispose();
 
-    [Benchmark(OperationsPerInvoke = 256, Description = "Freeze local operation / 1,000,000 existing ledger rows")]
+    [Benchmark(OperationsPerInvoke = 256, Description = "Freeze 256 local operations / 1,000,000 existing ChangeId rows")]
     public int FreezeOperationsAtMillionRows()
     {
         const int operationsPerInvocation = 256;
