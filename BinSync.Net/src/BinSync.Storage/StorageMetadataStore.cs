@@ -169,6 +169,77 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    /// <summary>
+    /// Reclaim transport receipts only when the signed retention frontier covers the
+    /// entire author cursor range and no PendingApply still references the receipt.
+    /// Receive cursors and digest chains are retained as the replay fence.
+    /// </summary>
+    public int CompactReceipts(
+        string scopeId, NodeId localReplica, int namespaceId, int limit,
+        Func<IDisposable?> acquireGcLease)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
+        ArgumentNullException.ThrowIfNull(acquireGcLease);
+
+        IDisposable? lease = acquireGcLease();
+        if (lease is null)
+            throw new InvalidOperationException("Cross-store receipt GC proof is unavailable; no receipts were reclaimed.");
+        using (lease)
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before receipt GC.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out PartitionState? current))
+                return 0;
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
+
+            var candidates = new List<ReceiptKey>(Math.Min(limit, current.Receipts.Count));
+            foreach (var pair in current.Receipts)
+            {
+                ReceiptKey key = pair.Key;
+                ReceiptValue receipt = pair.Value;
+                if (key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
+                    key.Epoch == 0 || receipt.CursorEnd == 0)
+                    continue;
+                if (current.PendingApplies.Values.Any(pending =>
+                    pending.Batch.SenderPeer == key.Sender &&
+                    pending.Batch.SenderEpoch == key.Epoch &&
+                    pending.Batch.NamespaceId == key.NamespaceId &&
+                    pending.Batch.BatchId == key.BatchId))
+                    continue;
+                if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
+                        roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.CursorEnd))
+                    continue;
+                candidates.Add(key);
+                if (candidates.Count == limit)
+                    break;
+            }
+
+            if (candidates.Count == 0)
+                return 0;
+            byte[][] deletes = candidates
+                .Select(key => EncodeReceiptKey(partitionKey, key))
+                .ToArray();
+            CommitPeerMetadataDelta(partitionKey, current,
+                Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
+                () =>
+                {
+                    foreach (ReceiptKey key in candidates)
+                        current.Receipts.Remove(key);
+                });
+            return candidates.Count;
+        }
+    }
+
     private static bool HasLiveChangeIdReference(PartitionState state, int namespaceId, BatchId changeId)
     {
         if (state.Relay.Any(pair => pair.Key.NamespaceId == namespaceId &&
