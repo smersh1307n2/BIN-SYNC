@@ -466,6 +466,7 @@ public abstract class MetadataStoreConformanceSuite
             Operation(21, 31, 41, 51));
         Assert.Throws<InvalidOperationException>(() => store.BeginPendingApply(
             competing, Guid.Parse("00000000-0000-0000-0000-000000000127")));
+        Assert.Throws<InvalidOperationException>(() => store.AcceptIncomingBatch(competing));
 
         store.FinalizePendingApply("scope-a", Node(1),
             new MetadataProviderApplyReceipt(token, mixed.BatchDigest.ToArray()));
