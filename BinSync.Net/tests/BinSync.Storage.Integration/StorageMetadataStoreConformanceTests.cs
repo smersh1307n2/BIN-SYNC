@@ -1006,7 +1006,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             };
 
         var epochBound = MakeBatch(authorA, 5, 200, 201, 1);
-        var legacyUnbound = MakeBatch(authorB, 6, 202, 203, 0);
+        var legacyUnbound = MakeBatch(authorB, 5, 202, 203, 0);
         Assert.False(store.AcceptIncomingBatch(epochBound).IsDuplicate);
         Assert.False(store.AcceptIncomingBatch(legacyUnbound).IsDuplicate);
 
@@ -1015,7 +1015,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             new[]
             {
                 new MetadataPeerStreamBaseline(authorA, 0, 5),
-                new MetadataPeerStreamBaseline(authorB, 0, 6)
+                new MetadataPeerStreamBaseline(authorB, 0, 5)
             });
         store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
 
@@ -1038,7 +1038,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         // Legacy rows without a recorded transport epoch cannot be attributed to the
         // retired incarnation, so they remain retained rather than being guessed away.
-        var legacyReplay = MakeBatch(authorB, 6, 202, 203, 2);
+        var legacyReplay = MakeBatch(authorB, 5, 202, 203, 2);
         Assert.True(store.AcceptIncomingBatch(legacyReplay).IsDuplicate);
     }
 
