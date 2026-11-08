@@ -263,7 +263,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 : 0;
             ulong sequence = checked(previousHighWatermark + 1);
             entries.Add(new MetadataRelayItem(
-                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray()));
+                sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
+            { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence });
             next.RelayHighWatermarks[relayKey] = sequence;
             relayAdded++;
         }
@@ -329,7 +330,9 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 ChangeId = operation.ChangeId,
                 Fingerprint = operation.Fingerprint.ToArray(),
                 Payload = operation.Payload.ToArray(),
-                RelayEligible = operation.RelayEligible
+                RelayEligible = operation.RelayEligible,
+                OriginAuthorEpoch = operation.OriginAuthorEpoch,
+                OriginSequence = operation.OriginSequence
             }).ToArray()
         };
 
@@ -434,7 +437,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                     ? outboundHighWatermark
                     : 0;
                 ulong sequence = checked(previousHighWatermark + 1);
-                var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
+                var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray())
+                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence };
                 entries.Add(item);
                 next.OutboundChangeIds.Add(new OutboundChangeKey(namespaceId, operation.ChangeId));
                 next.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId), operation.Fingerprint.ToArray());
@@ -747,16 +751,22 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         if (batch.ReceiveStateOwnedByMetadataStore && batch.HeaderFingerprint.Length != 16)
             throw new ArgumentException("Metadata-authoritative receive requires a full header fingerprint.", nameof(batch));
         ArgumentNullException.ThrowIfNull(batch.Operations);
+        if (batch.AuthorStreamNodeId.IsZero)
+            throw new InvalidDataException("v3 batch has no resolved author stream.");
 
         var seen = new HashSet<BatchId>();
+        ulong previousOriginSequence = 0;
         foreach (var operation in batch.Operations)
         {
-            if (operation.AuthorNodeId.IsZero || operation.ChangeId.IsZero)
-                throw new ArgumentException("Operation author and ChangeId must be non-zero.", nameof(batch));
+            if (operation.AuthorNodeId.IsZero || operation.AuthorNodeId != batch.AuthorStreamNodeId ||
+                operation.ChangeId.IsZero || operation.OriginAuthorEpoch == 0 ||
+                operation.OriginSequence == 0 || operation.OriginSequence <= previousOriginSequence)
+                throw new InvalidDataException("v3 operation has invalid immutable Origin provenance.");
             ValidateDigest(operation.Fingerprint, nameof(operation.Fingerprint));
             ArgumentNullException.ThrowIfNull(operation.Payload);
             if (!seen.Add(operation.ChangeId))
                 throw new ArgumentException("ChangeId values must be unique within one incoming batch.", nameof(batch));
+            previousOriginSequence = operation.OriginSequence;
         }
     }
 
@@ -782,10 +792,12 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
     }
 
     private static MetadataRelayItem CloneRelayItem(MetadataRelayItem item)
-        => new(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray());
+        => new MetadataRelayItem(item.Sequence, item.OriginalAuthor, item.ChangeId, item.Payload.ToArray())
+        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence };
 
     private static MetadataOutboundItem CloneOutboundItem(MetadataOutboundItem item)
-        => new(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray());
+        => new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, item.Payload.ToArray())
+        { OriginAuthorEpoch = item.OriginAuthorEpoch, OriginSequence = item.OriginSequence };
 
     private static void ValidateOutboundLease(PartitionState state, OutboundKey key, ulong generation)
     {
