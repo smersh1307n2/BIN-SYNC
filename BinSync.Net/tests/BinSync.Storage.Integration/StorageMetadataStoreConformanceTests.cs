@@ -43,6 +43,132 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Compact_stream_payload_row_recovers_origin_from_global_change_id_ledger()
+    {
+        string directory = Path.Combine(_root, "compact-stream-payload");
+        Directory.CreateDirectory(directory);
+        NodeId local = Node(1);
+        const string scope = "compact-stream-payload-scope";
+        const int namespaceId = 7;
+        byte[] payload = { 0x11, 0x22, 0x33, 0x44 };
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 419))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                store.FreezeOutbound(scope, local, namespaceId, local, new[]
+                {
+                    new MetadataFrozenOperation
+                    {
+                        ChangeId = Batch(89),
+                        Fingerprint = Enumerable.Repeat((byte)9, 16).ToArray(),
+                        Payload = payload,
+                        OriginAuthorEpoch = 7
+                    }
+                });
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 419))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                ulong lease = store.AcquireOutboundLease(scope, local, namespaceId, local, Guid.NewGuid());
+                var item = Assert.Single(store.ReadOutbound(scope, local, namespaceId, local, lease, 0, 4).Items);
+                Assert.Equal(new OperationOrigin(local, 7, 1), item.Provenance);
+                Assert.Equal(payload, item.Payload);
+
+                using var snapshot = storage.OpenSnapshot();
+                var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
+                var payloadRow = Assert.Single(rows.Where(row => row.Key[root.Length] == 21));
+                Assert.Equal(20 + payload.Length, payloadRow.Value.Length);
+                Assert.Equal(Batch(89), BatchId.From(payloadRow.Value.AsSpan(0, 16)));
+                Assert.Equal(payload.Length, BinaryPrimitives.ReadInt32LittleEndian(payloadRow.Value.AsSpan(16)));
+                Assert.Equal(payload, payloadRow.Value.AsSpan(20).ToArray());
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Legacy_stream_payload_row_kinds_are_rejected_without_migration()
+    {
+        string directory = Path.Combine(_root, "legacy-stream-payload");
+        Directory.CreateDirectory(directory);
+        const string scope = "legacy-stream-payload-scope";
+        NodeId local = Node(1), author = Node(2);
+        const int namespaceId = 7;
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+        byte[] identity = new byte[8 + scopeBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(identity, 0x33534D42);
+        BinaryPrimitives.WriteInt32LittleEndian(identity.AsSpan(4), scopeBytes.Length);
+        scopeBytes.CopyTo(identity, 8);
+        byte[] ledgerKeySuffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(ledgerKeySuffix, namespaceId);
+        Batch(90).WriteTo(ledgerKeySuffix.AsSpan(2));
+        byte[] ledgerValue = new byte[45];
+        Enumerable.Repeat((byte)9, 16).ToArray().CopyTo(ledgerValue, 0);
+        author.WriteTo(ledgerValue.AsSpan(16));
+        BinaryPrimitives.WriteUInt32LittleEndian(ledgerValue.AsSpan(32), 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(36), 1);
+        ledgerValue[44] = 1;
+        byte[] payloadSuffix = new byte[26];
+        BinaryPrimitives.WriteUInt16LittleEndian(payloadSuffix, namespaceId);
+        author.WriteTo(payloadSuffix.AsSpan(2));
+        BinaryPrimitives.WriteUInt64BigEndian(payloadSuffix.AsSpan(18), 1);
+        byte[] legacyPayload = new byte[34];
+        Batch(90).WriteTo(legacyPayload);
+        BinaryPrimitives.WriteUInt32LittleEndian(legacyPayload.AsSpan(16), 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(legacyPayload.AsSpan(20), 1);
+        BinaryPrimitives.WriteInt32LittleEndian(legacyPayload.AsSpan(28), 2);
+        legacyPayload[32] = 0xAA;
+        legacyPayload[33] = 0xBB;
+
+        byte[] Suffix(byte kind, ReadOnlySpan<byte> suffix)
+        {
+            byte[] key = new byte[root.Length + 1 + suffix.Length];
+            root.CopyTo(key, 0);
+            key[root.Length] = kind;
+            suffix.CopyTo(key.AsSpan(root.Length + 1));
+            return key;
+        }
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 420);
+            using (var batch = storage.BeginWriteBatch())
+            {
+                batch.Put(Suffix(0, ReadOnlySpan<byte>.Empty), identity);
+                batch.Put(Suffix(3, ledgerKeySuffix), ledgerValue);
+                batch.Put(Suffix(4, payloadSuffix), legacyPayload);
+                batch.Put(Suffix(7, payloadSuffix), legacyPayload);
+                batch.Commit();
+            }
+
+            using var metadata = new StorageMetadataStore(storage);
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.GetOutboundHighWatermark(scope, local, namespaceId, author));
+            using var snapshot = storage.OpenSnapshot();
+            Assert.Equal(4, snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100).Count);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Legacy_metadata_partition_and_rows_are_rejected_without_migration()
     {
         string directory = Path.Combine(_root, "legacy-ledger");
