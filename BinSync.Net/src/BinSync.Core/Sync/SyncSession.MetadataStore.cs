@@ -53,9 +53,10 @@ public partial class SyncSession
                     .Distinct()
                     .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
                     .ToArray();
-                bool found = false;
-                reservation = null!;
-                authorStream = default;
+                NodeId? selectedAuthor = null;
+                MetadataPeerStreamState selectedState = default!;
+                ulong selectedSequence = ulong.MaxValue;
+                bool selectedIsContiguous = false;
 
                 foreach (NodeId candidateAuthor in authors)
                 {
@@ -78,45 +79,80 @@ public partial class SyncSession
                     }
                     if (saved.PendingBatch is null && saved.PushedCursor > saved.AckedCursor)
                         throw new InvalidDataException("Durable peer pushed cursor has no immutable replay reservation.");
-                    IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> pageItems;
+
+                    ulong firstSequence;
                     if (candidateAuthor == sender.NodeId)
                     {
-                        var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
-                            PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 256);
-                        pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray();
+                        var first = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
+                            PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 1);
+                        if (first.Items.Count == 0) continue;
+                        firstSequence = first.Items[0].Sequence;
                     }
                     else
                     {
-                        var page = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
-                            PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 256);
-                        pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray();
+                        var first = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
+                            PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 1);
+                        if (first.Items.Count == 0) continue;
+                        firstSequence = first.Items[0].Sequence;
                     }
 
-                    if (pageItems.Count == 0) continue;
-                    var created = sender.CreateDeltaBatchPayloadFromMetadata(
-                        PeerNodeId, namespaceId, candidateAuthor, pageItems, saved,
-                        schemaVersion: schemaVersion);
-                    if (created is null) continue;
-                    var createdBatch = created.Value;
-                    authorStream = candidateAuthor;
-                    var candidate = new MetadataOutboundBatchReservation
+                    ulong expectedSequence = checked(saved.AckedCursor + saved.StreamOffset + 1);
+                    bool contiguous = firstSequence == expectedSequence;
+                    if (contiguous)
                     {
-                        BatchId = createdBatch.BatchId,
-                        IssuerEpoch = checked((uint)createdBatch.IssuerEpoch),
-                        StreamOffset = createdBatch.StreamOffset,
-                        CursorStart = checked((ulong)createdBatch.CursorStart),
-                        CursorEnd = checked((ulong)createdBatch.CursorEnd),
-                        PreviousBatchDigest = createdBatch.PreviousBatchDigest.ToArray(),
-                        BatchDigest = createdBatch.BatchDigest.ToArray(),
-                        Payload = createdBatch.Payload
-                    };
-                    reservation = peerStateStore.ReserveOutboundBatch(
-                        scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, authorStream, candidate);
-                    found = true;
-                    break;
+                        if (!selectedIsContiguous || firstSequence < selectedSequence)
+                        {
+                            selectedAuthor = candidateAuthor;
+                            selectedState = saved;
+                            selectedSequence = firstSequence;
+                            selectedIsContiguous = true;
+                        }
+                    }
+                    else if (!selectedIsContiguous && firstSequence < selectedSequence)
+                    {
+                        // A gap is a fallback only. It must not block another author
+                        // stream whose next record is contiguous for this peer.
+                        selectedAuthor = candidateAuthor;
+                        selectedState = saved;
+                        selectedSequence = firstSequence;
+                    }
                 }
 
-                if (!found) return false;
+                if (selectedAuthor is null) return false;
+                authorStream = selectedAuthor.Value;
+                IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> pageItems;
+                if (authorStream == sender.NodeId)
+                {
+                    var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
+                        PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
+                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray();
+                }
+                else
+                {
+                    var page = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
+                        PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
+                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray();
+                }
+
+                if (pageItems.Count == 0) return false;
+                var created = sender.CreateDeltaBatchPayloadFromMetadata(
+                    PeerNodeId, namespaceId, authorStream, pageItems, selectedState,
+                    schemaVersion: schemaVersion);
+                if (created is null) return false;
+                var createdBatch = created.Value;
+                var candidate = new MetadataOutboundBatchReservation
+                {
+                    BatchId = createdBatch.BatchId,
+                    IssuerEpoch = checked((uint)createdBatch.IssuerEpoch),
+                    StreamOffset = createdBatch.StreamOffset,
+                    CursorStart = checked((ulong)createdBatch.CursorStart),
+                    CursorEnd = checked((ulong)createdBatch.CursorEnd),
+                    PreviousBatchDigest = createdBatch.PreviousBatchDigest.ToArray(),
+                    BatchDigest = createdBatch.BatchDigest.ToArray(),
+                    Payload = createdBatch.Payload
+                };
+                reservation = peerStateStore.ReserveOutboundBatch(
+                    scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, authorStream, candidate);
             }
 
             await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1,
