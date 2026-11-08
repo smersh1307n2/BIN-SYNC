@@ -14,6 +14,8 @@ public enum SessionCapabilities : uint
     FlowControl = 1 << 1,
     /// <summary>§4.3/§12.7 — peer supports correlated live ALIAS_MAP updates after HELLO.</summary>
     IncrementalAliasMap = 1 << 2,
+    /// <summary>Peer supports immutable per-operation origin provenance on DELTA_BATCH records.</summary>
+    ImmutableOriginProvenance = 1 << 3,
 }
 
 /// <summary>struct: struct.</summary>

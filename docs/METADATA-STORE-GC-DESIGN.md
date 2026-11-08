@@ -90,6 +90,19 @@ The next protocol/storage work must introduce a durable membership generation an
 
 The checkpoint must be authenticated, persisted before ACK, monotonic, and fail closed on roster mismatch, epoch regression, missing author frontier, or stale snapshot. A peer removed from the roster must be fenced before its frontier stops constraining GC.
 
+## 5.0.1. Immutable origin provenance capability negotiation
+
+HELLO already carries a 32-bit capability mask. Bit 3 is reserved as
+`SessionCapabilities.ImmutableOriginProvenance`; a session exposes the bitwise
+intersection as `NegotiatedCapabilities`. The bit is opt-in and is not added to
+the default capability set, so existing peers retain the current wire behavior.
+
+This negotiation bit alone does not authorize origin derivation or ChangeId GC.
+Until the per-record extension, canonical digest binding, Storage persistence,
+and relay-preservation path are implemented and tested, callers MUST NOT advertise
+the bit as evidence that provenance is operational. In particular, a local relay
+cursor must never be substituted for origin sequence.
+
 ## 5.1. Authoritative namespace roster and retention checkpoint contract
 
 The existing MEMBERSHIP frame is not an authoritative roster: it is built from locally learned durable authors, and its MembershipEpoch is currently a hint rather than a committed namespace generation. InterestedPeers is a transport-delivery roster, not the set of all replicas that may later replay old state. Neither may be used as the denominator for ChangeId or tombstone GC.

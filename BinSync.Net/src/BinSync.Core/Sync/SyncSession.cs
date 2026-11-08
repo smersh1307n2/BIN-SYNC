@@ -79,6 +79,8 @@ public partial class SyncSession : IAsyncDisposable
     public int PeerEpoch { get; }
     /// <summary>Capabilities advertised by the peer.</summary>
     public SessionCapabilities PeerCapabilities { get; }
+    /// <summary>Capabilities supported by both peers for this established session.</summary>
+    public SessionCapabilities NegotiatedCapabilities { get; }
 
     protected SyncSession(Node localNode, ISyncTransport transport, HelloPayload peer, SessionCapabilities localCapabilities, bool ownsTransport, IDisposable sessionLease)
     {
@@ -89,8 +91,9 @@ public partial class SyncSession : IAsyncDisposable
         PeerNodeId = peer.NodeId;
         PeerEpoch = peer.Epoch;
         PeerCapabilities = peer.Capabilities;
+        NegotiatedCapabilities = localCapabilities & peer.Capabilities;
         _aliasRequestParity = CompareNodeIds(localNode.NodeId, peer.NodeId) < 0 ? (byte)0 : (byte)1;
-        _flowControlEnabled = (localCapabilities & peer.Capabilities & SessionCapabilities.FlowControl) != 0;
+        _flowControlEnabled = (NegotiatedCapabilities & SessionCapabilities.FlowControl) != 0;
         if (transport is IPeerAwareSyncTransport aware) aware.PeerNodeId = peer.NodeId;
     }
 
