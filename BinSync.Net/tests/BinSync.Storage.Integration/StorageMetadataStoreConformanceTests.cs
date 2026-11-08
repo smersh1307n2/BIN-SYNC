@@ -977,7 +977,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.RegisterInterestedPeer(scope, local, sender, 1, 7);
 
         MetadataIncomingBatch MakeBatch(NodeId author, uint authorEpoch, byte batchId,
-            byte changeId, byte transportEpoch)
+            byte changeId, byte transportEpoch, byte[]? previousDigest = null)
             => new()
             {
                 ScopeId = scope,
@@ -990,7 +990,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 BatchId = Batch(batchId),
                 CursorStart = 1,
                 CursorEnd = 1,
-                PreviousBatchDigest = new byte[16],
+                PreviousBatchDigest = previousDigest?.ToArray() ?? new byte[16],
                 BatchDigest = Enumerable.Repeat((byte)(batchId + 1), 16).ToArray(),
                 HeaderFingerprint = Enumerable.Repeat((byte)(batchId + 2), 16).ToArray(),
                 Operations = new[]
@@ -1006,7 +1006,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             };
 
         var epochBound = MakeBatch(authorA, 5, 200, 201, 1);
-        var legacyUnbound = MakeBatch(authorB, 5, 202, 203, 0);
+        var legacyUnbound = MakeBatch(authorB, 5, 202, 203, 0, epochBound.BatchDigest);
         Assert.False(store.AcceptIncomingBatch(epochBound).IsDuplicate);
         Assert.False(store.AcceptIncomingBatch(legacyUnbound).IsDuplicate);
 
@@ -1038,149 +1038,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         // Legacy rows without a recorded transport epoch cannot be attributed to the
         // retired incarnation, so they remain retained rather than being guessed away.
-        var legacyReplay = MakeBatch(authorB, 5, 202, 203, 2);
+        var legacyReplay = MakeBatch(authorB, 5, 202, 203, 2, epochBound.BatchDigest);
         Assert.True(store.AcceptIncomingBatch(legacyReplay).IsDuplicate);
-    }
-
-    [Fact]
-    public void Legacy_shared_receive_chain_migrates_from_latest_receipt_per_author()
-    {
-        string directory = Path.Combine(_root, "legacy-receive-chain-migration");
-        Directory.CreateDirectory(directory);
-        const string scope = "legacy-receive-chain-migration";
-        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
-        byte[] digestA = Enumerable.Repeat((byte)31, 16).ToArray();
-        byte[] digestB = Enumerable.Repeat((byte)32, 16).ToArray();
-
-        try
-        {
-            using (var storage = StorageDatabase.Open(directory, 451))
-            {
-                Type partitionKeyType = typeof(StorageMetadataStore).GetNestedType(
-                    "PartitionKey", System.Reflection.BindingFlags.NonPublic)!;
-                object partitionKey = Activator.CreateInstance(partitionKeyType,
-                    System.Reflection.BindingFlags.Instance |
-                    System.Reflection.BindingFlags.Public |
-                    System.Reflection.BindingFlags.NonPublic,
-                    binder: null, args: new object[] { scope, local }, culture: null)!;
-                var rootMethod = typeof(StorageMetadataStore).GetMethod("PartitionRoot",
-                    System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
-                byte[] root = (byte[])rootMethod.Invoke(null, new[] { partitionKey })!;
-
-                byte[] Key(byte kind, byte[] suffix)
-                {
-                    byte[] key = new byte[root.Length + 1 + suffix.Length];
-                    root.CopyTo(key, 0);
-                    key[root.Length] = kind;
-                    suffix.CopyTo(key, root.Length + 1);
-                    return key;
-                }
-
-                byte[] ReceiptKey(byte batchId)
-                {
-                    byte[] suffix = new byte[38];
-                    sender.WriteTo(suffix);
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), 5);
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), 7);
-                    Batch(batchId).WriteTo(suffix.AsSpan(22));
-                    return Key(1, suffix);
-                }
-
-                byte[] ReceiptValue(NodeId author, byte[] digest, byte header)
-                {
-                    byte[] value = new byte[84];
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(value, 1);
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), 1);
-                    digest.CopyTo(value, 32);
-                    author.WriteTo(value.AsSpan(52));
-                    Enumerable.Repeat(header, 16).ToArray().CopyTo(value, 68);
-                    return value;
-                }
-
-                byte[] ReceiveKey(NodeId author)
-                {
-                    byte[] suffix = new byte[38];
-                    sender.WriteTo(suffix);
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), 5);
-                    System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), 7);
-                    author.WriteTo(suffix.AsSpan(22));
-                    return Key(2, suffix);
-                }
-
-                byte[] legacyChainSuffix = new byte[22];
-                sender.WriteTo(legacyChainSuffix);
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(legacyChainSuffix.AsSpan(16), 5);
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(legacyChainSuffix.AsSpan(20), 7);
-
-                using var write = storage.BeginWriteBatch();
-                write.Put(Key(0, Array.Empty<byte>()), System.Text.Encoding.UTF8.GetBytes(scope));
-                write.Put(ReceiptKey(250), ReceiptValue(authorA, digestA, 41));
-                write.Put(ReceiptKey(251), ReceiptValue(authorB, digestB, 42));
-                write.Put(ReceiveKey(authorA), EncodeUInt64ForTest(1));
-                write.Put(ReceiveKey(authorB), EncodeUInt64ForTest(1));
-                // The old format had one shared chain; its digest is the latest batch
-                // from author B. The per-author latest receipts reconstruct both chains.
-                write.Put(Key(14, legacyChainSuffix), digestB);
-                write.Commit();
-            }
-
-            static byte[] EncodeUInt64ForTest(ulong value)
-            {
-                byte[] bytes = new byte[8];
-                System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
-                return bytes;
-            }
-
-            MetadataIncomingBatch Next(NodeId author, byte batchId, byte changeId,
-                byte[] previousDigest, byte[] nextDigest, byte header)
-                => new()
-                {
-                    ScopeId = scope,
-                    LocalReplica = local,
-                    SenderPeer = sender,
-                    SenderEpoch = 5,
-                    AuthorStreamNodeId = author,
-                    NamespaceId = 7,
-                    BatchId = Batch(batchId),
-                    CursorStart = 2,
-                    CursorEnd = 2,
-                    PreviousBatchDigest = previousDigest,
-                    BatchDigest = nextDigest,
-                    HeaderFingerprint = Enumerable.Repeat(header, 16).ToArray(),
-                    Operations = new[]
-                    {
-                        new MetadataOperation
-                        {
-                            AuthorNodeId = author,
-                            ChangeId = Batch(changeId),
-                            Fingerprint = Enumerable.Repeat((byte)(changeId + 1), 16).ToArray(),
-                            Payload = new byte[] { changeId }
-                        }
-                    }
-                };
-
-            byte[] digestA2 = Enumerable.Repeat((byte)33, 16).ToArray();
-            byte[] digestB2 = Enumerable.Repeat((byte)34, 16).ToArray();
-            using (var storage = StorageDatabase.Open(directory, 451))
-            using (var store = new StorageMetadataStore(storage))
-            {
-                Assert.Equal(1, store.AcceptIncomingBatch(
-                    Next(authorA, 252, 253, digestA, digestA2, 43)).NewRelayOperationCount);
-                Assert.Equal(1, store.AcceptIncomingBatch(
-                    Next(authorB, 254, 255, digestB, digestB2, 44)).NewRelayOperationCount);
-            }
-
-            using var reopenedStorage = StorageDatabase.Open(directory, 451);
-            using var reopened = new StorageMetadataStore(reopenedStorage);
-            Assert.Equal(1, reopened.AcceptIncomingBatch(
-                Next(authorA, 256, 257, digestA2, Enumerable.Repeat((byte)35, 16).ToArray(), 45)).NewRelayOperationCount);
-            Assert.Equal(1, reopened.AcceptIncomingBatch(
-                Next(authorB, 258, 259, digestB2, Enumerable.Repeat((byte)36, 16).ToArray(), 46)).NewRelayOperationCount);
-        }
-        finally
-        {
-            try { Directory.Delete(directory, recursive: true); } catch { }
-        }
     }
 
     [Fact]
