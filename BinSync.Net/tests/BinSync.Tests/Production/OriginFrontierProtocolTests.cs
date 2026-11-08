@@ -87,7 +87,17 @@ public sealed class OriginFrontierProtocolTests
     {
         var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
         var roster = Roster(keys, new[] { NamespaceMemberStatus.Active, NamespaceMemberStatus.Joining });
-        var joiningReport = Report(roster, 1, keys[1].Seed, (1, 2, 10));
+        var joiningReport = new AppliedOriginFrontierReport
+        {
+            NamespaceId = roster.NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            MemberNodeId = roster.Members[1].NodeId,
+            MemberTransportEpoch = roster.Members[1].TransportPeerEpoch,
+            ReportSequence = 1,
+            Entries = new[] { new AppliedOriginFrontierEntry
+                { OriginAuthorNodeId = NodeId.From(Id(1)), OriginAuthorEpoch = 2, ContiguousAppliedOriginSequence = 10 } }
+        };
         byte[] joiningBytes = OriginFrontierProtocol.Sign(joiningReport, keys[1].Seed);
         Assert.Throws<InvalidDataException>(() => OriginFrontierProtocol.DecodeAndVerify(joiningBytes, roster));
 
