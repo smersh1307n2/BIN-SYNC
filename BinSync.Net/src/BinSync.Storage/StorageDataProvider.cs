@@ -331,7 +331,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             using var batch = _storage.BeginWriteBatch();
             if (batch.TryGet(receiptKey, out var prior))
             {
-                if (!prior!.AsSpan().SequenceEqual(fingerprint))
+                if (!prior!.AsSpan().SequenceEqual(fingerprint) &&
+                    !prior.AsSpan().SequenceEqual(FingerprintLegacy(mutations)))
                     throw new InvalidDataException("Apply token was reused with different canonical input.");
                 return new ProviderApplyReceipt(applyToken, prior!.ToArray(), IsDuplicate: true);
             }
@@ -936,6 +937,31 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
 
+
+    private static byte[] FingerprintLegacy(IReadOnlyList<ProviderMutation> mutations)
+    {
+        var ordered = mutations.ToArray();
+        Array.Sort(ordered, ProviderMutationCodec.CompareCanonical);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> count = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(count, ordered.Length);
+        hash.AppendData(count);
+        Span<byte> fixedPart = stackalloc byte[53];
+        foreach (var mutation in ordered)
+        {
+            mutation.RecordId.WriteTo(fixedPart);
+            BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(16), mutation.FieldId);
+            fixedPart[18] = (byte)((mutation.IsTombstone ? 1 : 0) | (mutation.IsRecordTombstone ? 2 : 0));
+            BinaryPrimitives.WriteUInt64LittleEndian(fixedPart.Slice(19), mutation.HlcWall);
+            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(27), mutation.HlcLogical);
+            mutation.AuthorNodeId.WriteTo(fixedPart.Slice(31));
+            BinaryPrimitives.WriteUInt16LittleEndian(fixedPart.Slice(47), mutation.KeyEpoch);
+            BinaryPrimitives.WriteUInt32LittleEndian(fixedPart.Slice(49), checked((uint)mutation.Value.Length));
+            hash.AppendData(fixedPart);
+            hash.AppendData(mutation.Value);
+        }
+        return hash.GetHashAndReset();
+    }
 
     private static byte[] EncodeLocalFeedChange(byte[] encodedMutation, BatchId changeId)
     {
