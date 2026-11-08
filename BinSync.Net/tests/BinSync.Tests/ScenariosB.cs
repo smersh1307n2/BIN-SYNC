@@ -392,7 +392,7 @@ public class ScenariosB
         Assert.NotNull(selected);
         Assert.NotEmpty(selected!.Entries);
         Assert.All(selected.Entries, entry => Assert.Equal(b.NodeId, entry.AuthorNodeId));
-        Assert.Equal(1L, selected.CursorStart);
+        Assert.Equal(1UL, selected.CursorStart);
     }
 
     [Fact]
