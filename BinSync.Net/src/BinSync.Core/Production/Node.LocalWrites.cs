@@ -125,6 +125,7 @@ public sealed partial class Node
     private OutboxEntry? PrepareOutboxEntryInternal(
         int ns, RecordId recordId, object op, byte[] author, bool suppressRestoredEcho)
     {
+        EnsureNodeOwnedMutationAllowedInternal(ns);
         if (!NodeId.EqualsBytes(author))
             throw new InvalidOperationException("local push only; relay path enqueues raw payloads");
 
