@@ -61,6 +61,36 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
+    public void Local_feed_change_identity_survives_reopen_and_is_removed_on_ack()
+    {
+        string directory = Path.Combine(_root, "feed-change-identity");
+        Directory.CreateDirectory(directory);
+        BatchId changeId;
+        try
+        {
+            using (var provider = new StorageDataProvider(directory, partitionId: 82, deleteOnDispose: false))
+            {
+                provider.AppendLocalChange(Mutation(9, 5, 600, 1));
+                ProviderChange change = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+                Assert.False(change.ChangeId.IsZero);
+                changeId = change.ChangeId;
+            }
+
+            using var reopened = new StorageDataProvider(directory, partitionId: 82, deleteOnDispose: false);
+            ProviderChange replayed = Assert.Single(reopened.ReadLocalChanges(0, 10).Changes);
+            Assert.Equal(changeId, replayed.ChangeId);
+            Assert.Equal(1UL, replayed.Sequence);
+
+            reopened.AcknowledgeLocalChanges(replayed.Sequence);
+            Assert.Empty(reopened.ReadLocalChanges(0, 10).Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Acknowledged_feed_cleanup_does_not_remove_current_array_state()
     {
         string directory = Path.Combine(_root, "ack");
