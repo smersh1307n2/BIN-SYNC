@@ -21,7 +21,7 @@ internal sealed class WalWriterFence : IDisposable
     public static WalWriterFence Acquire(string walDirectory, ulong partitionId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(walDirectory);
-        string fullPath = Path.GetFullPath(walDirectory);
+        string fullPath = ResolvePhysicalDirectory(walDirectory);
         if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
             fullPath = fullPath.ToUpperInvariant();
 
@@ -40,6 +40,27 @@ internal sealed class WalWriterFence : IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
         SharedManager.Value.Release(_token);
+    }
+
+    private static string ResolvePhysicalDirectory(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string root = Path.GetPathRoot(fullPath)
+            ?? throw new IOException("WAL directory path has no filesystem root.");
+        string current = root;
+        string remainder = fullPath[root.Length..];
+        foreach (string segment in remainder.Split(
+                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            var directory = new DirectoryInfo(current);
+            FileSystemInfo? target = directory.ResolveLinkTarget(returnFinalTarget: true);
+            if (target is not null)
+                current = Path.GetFullPath(target.FullName);
+        }
+
+        return Path.TrimEndingDirectorySeparator(current);
     }
 
     private sealed class Manager
