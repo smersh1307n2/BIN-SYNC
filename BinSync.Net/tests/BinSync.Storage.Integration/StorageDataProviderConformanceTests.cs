@@ -1006,4 +1006,55 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Assert.Throws<InvalidOperationException>(() => invalid.Complete());
     }
 
+
+    [Fact]
+    public void Full_replace_preserves_record_and_field_tombstones()
+    {
+        string directory = Path.Combine(_root, "provider-full-replace-tombstones");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 100, deleteOnDispose: false);
+            ProviderMutation hiddenField = Mutation(130, 1, 150, 1);
+            ProviderMutation recordTombstone = new()
+            {
+                RecordId = hiddenField.RecordId,
+                FieldId = Model.LifecycleFieldId,
+                IsRecordTombstone = true,
+                HlcWall = 200,
+                HlcLogical = 1,
+                AuthorNodeId = Node(1),
+                KeyEpoch = 0,
+                Value = Array.Empty<byte>()
+            };
+            ProviderMutation fieldTombstone = new()
+            {
+                RecordId = Mutation(131, 2, 160, 1).RecordId,
+                FieldId = 2,
+                IsTombstone = true,
+                HlcWall = 250,
+                HlcLogical = 1,
+                AuthorNodeId = Node(1),
+                KeyEpoch = 0,
+                Value = Array.Empty<byte>()
+            };
+            Guid generation = Guid.Parse("9b000000-0000-0000-0000-000000000001");
+            ProviderMutation[] image = { recordTombstone, hiddenField, fieldTombstone };
+            byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 26, image);
+
+            provider.BeginFullReplace(generation, 26, image.Length, digest);
+            provider.StageFullReplacePage(generation, 0, image);
+            provider.CommitFullReplace(generation);
+
+            Assert.False(provider.TryReadCurrent(hiddenField.RecordId, hiddenField.FieldId, out _));
+            Assert.True(provider.TryReadCurrent(fieldTombstone.RecordId, fieldTombstone.FieldId, out var current));
+            Assert.True(current!.IsTombstone);
+            Assert.False(current.IsRecordTombstone);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
