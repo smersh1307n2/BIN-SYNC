@@ -124,6 +124,8 @@ public class ChangeIdWireTests
             NamespaceId = 7,
             Seq = 1,
             ChangeId = changeId,
+            OriginAuthorEpoch = 1,
+            OriginSequence = 1,
             RecordId = RecordId.From(Id(0x22)),
             OpKind = 0x01,
             Payload = new byte[] { 0x10, 0x20, 0x30 },
@@ -148,6 +150,8 @@ public class ChangeIdWireTests
         {
             NamespaceId = entry.NamespaceId,
             ChangeId = BatchId.From(Id(0xA2)),
+            OriginAuthorEpoch = entry.OriginAuthorEpoch,
+            OriginSequence = entry.OriginSequence,
             RecordId = entry.RecordId,
             OpKind = entry.OpKind,
             Payload = entry.Payload,
@@ -175,6 +179,8 @@ public class ChangeIdWireTests
         var entry = new OutboxEntry
         {
             ChangeId = BatchId.From(Id(0xCC)),
+            OriginAuthorEpoch = 1,
+            OriginSequence = 1,
             RecordId = RecordId.From(Id(0x11)),
             OpKind = 3,
             Payload = new byte[] { 4, 5 },
