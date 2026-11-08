@@ -1,4 +1,5 @@
 using BinSync;
+using Fld1.Storage.Engine;
 using BinSync.DataProvider.Conformance;
 using Xunit;
 
@@ -83,6 +84,37 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
             reopened.AcknowledgeLocalChanges(replayed.Sequence);
             Assert.Empty(reopened.ReadLocalChanges(0, 10).Changes);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Legacy_local_feed_row_gets_stable_identity_on_first_read()
+    {
+        string directory = Path.Combine(_root, "legacy-feed-identity");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, partitionId: 83);
+            using var provider = new StorageDataProvider(storage);
+            provider.AppendLocalChange(Mutation(10, 6, 700, 1));
+
+            byte[] feedKey = [0x20, 0, 0, 0, 0, 0, 0, 0, 1];
+            Assert.True(storage.TryGet(feedKey, out var encoded));
+            byte[] legacyValue = encoded![..^16];
+            using (var batch = storage.BeginWriteBatch())
+            {
+                batch.Put(feedKey, legacyValue);
+                batch.Commit();
+            }
+
+            ProviderChange first = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+            Assert.False(first.ChangeId.IsZero);
+            ProviderChange replayed = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+            Assert.Equal(first.ChangeId, replayed.ChangeId);
         }
         finally
         {
