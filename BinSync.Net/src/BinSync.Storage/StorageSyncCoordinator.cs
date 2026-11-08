@@ -128,7 +128,7 @@ public sealed class StorageSyncCoordinator
         bool sawLegacyChangeId = false;
         bool metadataStoreOwnsOutbound = _provider is IProviderPublicationMode initialPublicationMode &&
             initialPublicationMode.TryGetMetadataStoreOwnedPublicationCutover(out cutoverNodeOutboxHigh);
-        var providerChanges = metadataStoreOwnsOutbound ? new List<ProviderChange>() : null;
+        Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>? nodeWinners = null;
         IMetadataOutboundChangeIdentityStore? outboundIdentityStore =
             _metadataStore as IMetadataOutboundChangeIdentityStore;
         if (metadataStoreOwnsOutbound && (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId)))
@@ -150,9 +150,6 @@ public sealed class StorageSyncCoordinator
             }
             if (page.ScannedThroughSequence <= afterSequence)
                 throw new InvalidDataException("Provider local feed cursor did not advance.");
-            if (providerChanges is not null)
-                providerChanges.AddRange(page.Changes);
-
             foreach (var change in page.Changes)
             {
                 _node.ValidateProviderMutation(change.Mutation);
@@ -160,10 +157,24 @@ public sealed class StorageSyncCoordinator
                     throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
                 sawStableChangeId |= !change.ChangeId.IsZero;
                 sawLegacyChangeId |= change.ChangeId.IsZero;
+                bool sharedNodeAndOutboundWinners = false;
                 if (metadataStoreOwnsOutbound)
                 {
                     if (change.ChangeId.IsZero)
                         throw new InvalidDataException("Metadata-Store-owned publication requires stable provider ChangeIds.");
+
+                    // The Node cache only needs the HLC winner per record/field. Keep
+                    // the same compact winner map for both purposes until a previously
+                    // frozen ChangeId is encountered; then fork it once so the Node
+                    // cache retains the full scanned prefix while outbound coalescing
+                    // starts at the unfrozen suffix.
+                    nodeWinners ??= winners;
+                    sharedNodeAndOutboundWinners = ReferenceEquals(nodeWinners, winners);
+                    if (sharedNodeAndOutboundWinners)
+                        AddCoalescedPendingLocalChange(winners, change);
+                    else
+                        AddCoalescedPendingLocalChange(nodeWinners, change);
+
                     if (outboundIdentityStore!.TryGetOutboundChangeFingerprint(
                         _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out ReadOnlyMemory<byte> frozenFingerprint))
                     {
@@ -171,15 +182,22 @@ public sealed class StorageSyncCoordinator
                         if (frozenFingerprint.Length != 16 || Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
                         lastFrozenFeedSequence = change.Sequence;
-                        // Any non-frozen rows before this frozen source sequence were
-                        // already coalesced away by the earlier successful freeze.
+                        // Preserve all scanned winners for Node recovery, but discard
+                        // the outbound suffix because it was frozen by an earlier pass.
+                        if (sharedNodeAndOutboundWinners)
+                            nodeWinners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>(winners);
                         winners.Clear();
                         continue;
                     }
                     if (change.Sequence <= lastFrozenFeedSequence)
                         throw new InvalidDataException("Provider local feed is not in strictly increasing source-sequence order.");
+                    if (!sharedNodeAndOutboundWinners)
+                        AddCoalescedPendingLocalChange(winners, change);
                 }
-                AddCoalescedPendingLocalChange(winners, change);
+                else
+                {
+                    AddCoalescedPendingLocalChange(winners, change);
+                }
             }
 
             totalChanges = checked(totalChanges + page.Changes.Count);
@@ -221,8 +239,10 @@ public sealed class StorageSyncCoordinator
         {
             if (_metadataStore is null || !sawStableChangeId || sawLegacyChangeId)
                 throw new InvalidDataException("Metadata-Store-owned publication requires non-zero stable ChangeIds for every provider feed entry.");
+            var nodeChanges = (nodeWinners ?? winners).Values
+                .OrderBy(change => change.Sequence).ToArray();
             return PublishLocalChangesToMetadataStore(
-                winners, providerChanges!, scannedThroughSequence, totalChanges, persistNode);
+                winners, nodeChanges, scannedThroughSequence, totalChanges, persistNode);
         }
 
         // Legacy/volatile providers without durable source identities retain the
@@ -251,14 +271,14 @@ public sealed class StorageSyncCoordinator
 
     private int PublishLocalChangesToMetadataStore(
         Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> winners,
-        IReadOnlyList<ProviderChange> providerChanges,
+        IReadOnlyList<ProviderChange> nodeChanges,
         ulong scannedThroughSequence,
         int totalChanges,
         Action<Node> persistNode)
     {
-        if (providerChanges.Count != totalChanges)
-            throw new InvalidDataException("Provider feed prefix changed while preparing the Node cache update.");
-        if (providerChanges.Count != 0 && providerChanges[providerChanges.Count - 1].Sequence > scannedThroughSequence)
+        if (nodeChanges.Count > totalChanges)
+            throw new InvalidDataException("Coalesced Node cache winners exceed the scanned provider feed prefix.");
+        if (nodeChanges.Count != 0 && nodeChanges[nodeChanges.Count - 1].Sequence > scannedThroughSequence)
             throw new InvalidDataException("Provider cache update extends beyond the scanned ACK prefix.");
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Stable provider ChangeIds require a durable Metadata Store scope.");
@@ -299,7 +319,7 @@ public sealed class StorageSyncCoordinator
         // Persist the cache before ACK: a checkpoint failure leaves the feed replayable.
         // If ACK fails, reapplying the same HLC mutations is idempotent and the
         // immutable Metadata Store freeze remains available for retry.
-        _node.ApplyProviderChanges(_namespaceId, providerChanges);
+        _node.ApplyProviderChanges(_namespaceId, nodeChanges);
         persistNode(_node);
         if (scannedThroughSequence > 0)
             _provider.AcknowledgeLocalChanges(scannedThroughSequence);
