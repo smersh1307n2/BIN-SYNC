@@ -130,6 +130,10 @@ public interface IProviderPublishedOriginStore
 /// </summary>
 public interface IApplicationGcReferenceScanner
 {
+    bool HasExternalReceiptReference(
+        int namespaceId, NodeId senderPeer, uint authorEpoch,
+        uint transportPeerEpoch, BatchId batchId);
+
     bool HasExternalChangeIdReference(int namespaceId, BatchId changeId);
 
     bool HasExternalRecordReference(
