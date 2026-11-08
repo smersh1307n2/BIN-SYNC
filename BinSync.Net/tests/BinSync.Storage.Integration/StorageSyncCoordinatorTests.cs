@@ -517,15 +517,25 @@ public sealed class StorageSyncCoordinatorTests
         const string scopeB = "auto-rehydrate-b";
 
         RecordId staleRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000001").ToByteArray());
+        RecordId providerRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000002").ToByteArray());
         staleRemote.WriteField(1, staleRecord, 0x0822, "stale-node-checkpoint"u8.ToArray(), new Hlc(6900, 0));
         Transport.MakeSession(staleRemote, originalNodeA);
         Assert.NotNull(Transport.DeliverBatch(staleRemote, originalNodeA, 1));
-        byte[] staleCheckpoint = NodePersistence.SerializeToBytes(originalNodeA);
 
         var initialCoordinatorA = new StorageSyncCoordinator(originalNodeA, providerA, 1, metadataA, scopeA);
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, scopeB);
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = providerRecord, FieldId = 0x0823, AuthorNodeId = originalNodeA.NodeId,
+            HlcWall = 7000, Value = "provider-owned-before-cutover"u8.ToArray()
+        });
+        Assert.Equal(1, initialCoordinatorA.PublishLocalChanges(_ => { }));
+        byte[] staleCheckpoint = NodePersistence.SerializeToBytes(originalNodeA);
+        Assert.Single(originalNodeA.ReadOutboxEntries(1, originalNodeA.NodeId, 0, 10));
+
         initialCoordinatorA.EnableMetadataStoreOwnedPublication(_ => { });
         coordinatorB.EnableMetadataStoreOwnedPublication(_ => { });
+        Assert.Empty(originalNodeA.ReadOutboxEntries(1, originalNodeA.NodeId, 0, 10));
 
         // Simulate restart from a pre-rehydration Node checkpoint while the provider's
         // durable cutover marker and empty authoritative snapshot remain current.
@@ -546,6 +556,13 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         Assert.False(nodeB.TryGetField(1, staleRecord, 0x0822, out _));
         Assert.False(providerB.TryReadCurrent(staleRecord, 0x0822, out _));
+        Assert.True(restartedNodeA.TryGetField(1, providerRecord, 0x0823, out var providerValue));
+        Assert.Equal("provider-owned-before-cutover", Encoding.UTF8.GetString(providerValue!.Value));
+        Assert.True(providerB.TryReadCurrent(providerRecord, 0x0823, out var peerProviderValue));
+        Assert.Equal("provider-owned-before-cutover", Encoding.UTF8.GetString(peerProviderValue!.Value));
+        Assert.Empty(restartedNodeA.ReadOutboxEntries(1, restartedNodeA.NodeId, 0, 10));
+        Assert.Equal(0, restartedNodeA.GetOutboxCount(1));
+        Assert.Equal(1L, restartedNodeA.GetOutboxHighWatermark(1, restartedNodeA.NodeId));
         Assert.True(metadataA.IsPeerInitialSyncComplete(scopeA, restartedNodeA.NodeId,
             nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
     }
@@ -1761,6 +1778,9 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
+        Assert.Equal(0, node.GetOutboxCount(1));
+        Assert.Equal(1L, node.GetOutboxHighWatermark(1, node.NodeId));
 
         provider.AppendLocalChange(new ProviderMutation
         {
@@ -1770,6 +1790,8 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
         Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         Assert.Equal(1L, node.GetOutboxHighWatermark(1, node.NodeId));
+        Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
+        Assert.Equal(0, node.GetOutboxCount(1));
 
         // Direct Node writes are forbidden after cutover; the next coordinator
         // pass fails closed without consuming the provider feed.
