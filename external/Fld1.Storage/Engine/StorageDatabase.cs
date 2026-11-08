@@ -161,8 +161,13 @@ public sealed class StorageDatabase : IDisposable
         {
             EnsureUsable();
             var copy = new SortedDictionary<StorageKey, byte[]>(StorageKeyComparer.Instance);
+            // Stored value arrays are immutable after publication: Commit copies
+            // caller-owned buffers before assigning them and later commits replace
+            // references rather than mutating arrays. A snapshot therefore needs
+            // its own sorted index, but can safely share the immutable key/value
+            // objects instead of cloning every payload byte.
             foreach (var pair in _values)
-                copy.Add(pair.Key, pair.Value.ToArray());
+                copy.Add(pair.Key, pair.Value);
             return new StorageSnapshot(copy, _lastCommitSeq);
         }
     }
