@@ -66,7 +66,7 @@ public sealed class StorageSyncCoordinator
             _node.NodeId, namespaceId, limit, acquireGcLease);
     }
 
-    /// <summary>Compact record tombstones only after the active generation is installed by every Active member.</summary>
+    /// <summary>v3.1 tombstone compaction is fail-closed and returns zero until the global causal horizon protocol is complete.</summary>
     public int CompactRecordTombstones(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
     {
         if (_provider is not StorageDataProvider storageProvider)
