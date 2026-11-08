@@ -41,7 +41,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
     private sealed record ProviderSnapshotState(ulong LocalHighWatermark, StorageEntry[] Entries);
     private sealed record FullReplaceState(int ExpectedCount, ulong SourceFeedWatermark,
-        byte[] ExpectedDigest, int NextIndex, bool IsCommitted, byte[] LastSortKey);
+        byte[] ExpectedDigest, int NextIndex, bool IsCommitted, Guid BaseGeneration, byte[] LastSortKey);
 
     public StorageDataProvider(string directory, ulong partitionId = 1, bool deleteOnDispose = false)
     {
@@ -400,10 +400,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     existing.SourceFeedWatermark != sourceChangeFeedWatermark ||
                     !existing.ExpectedDigest.AsSpan().SequenceEqual(expectedDigest.Span))
                     throw new InvalidDataException("Full-replace generation was reused with conflicting manifest data.");
-                if (existing.IsCommitted && activeGeneration == generation)
-                    return;
-                if (activeGeneration == generation)
-                    throw new InvalidDataException("Active full-replace generation has an uncommitted manifest.");
+                if (existing.IsCommitted)
+                {
+                    if (activeGeneration == generation) return;
+                    throw new InvalidDataException("Committed full-replace manifest is not the active generation.");
+                }
+                if (activeGeneration != existing.BaseGeneration)
+                    throw new InvalidOperationException("Full-replace staging is stale relative to the active provider generation.");
                 return;
             }
             if (activeGeneration == generation)
@@ -418,7 +421,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
             batch.Put(sessionKey, EncodeFullReplaceState(new FullReplaceState(
                 expectedEntryCount, sourceChangeFeedWatermark, expectedDigest.ToArray(),
-                0, false, new byte[19])));
+                0, false, activeGeneration, new byte[19])));
             batch.Commit();
         }
     }
@@ -441,6 +444,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new InvalidOperationException("Full-replace generation has not been begun.");
             FullReplaceState state = DecodeFullReplaceState(stateBytes!);
             if (state.IsCommitted) throw new InvalidOperationException("Committed full-replace generation cannot accept more pages.");
+            if (ReadActiveGeneration(snapshot) != state.BaseGeneration)
+                throw new InvalidOperationException("Full-replace staging is stale relative to the active provider generation.");
             if (startIndex != state.NextIndex)
                 throw new InvalidDataException("Full-replace page is not contiguous with the durable staging cursor.");
             if (entries.Count > state.ExpectedCount - state.NextIndex)
@@ -499,6 +504,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     throw new InvalidDataException("Committed full-replace manifest does not match the active generation.");
                 return;
             }
+            if (active != state.BaseGeneration)
+                throw new InvalidOperationException("Full-replace staging is stale; active provider generation changed before commit.");
             if (state.NextIndex != state.ExpectedCount)
                 throw new InvalidOperationException("Full-replace snapshot is incomplete.");
 
@@ -980,20 +987,21 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         if (state.ExpectedDigest.Length != 32 || state.LastSortKey.Length != 19)
             throw new InvalidDataException("Full-replace state has an invalid fixed-width field.");
-        byte[] bytes = new byte[69];
+        byte[] bytes = new byte[85];
         bytes[0] = 1;
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(1), state.ExpectedCount);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(5), state.SourceFeedWatermark);
         state.ExpectedDigest.CopyTo(bytes, 13);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(45), state.NextIndex);
         bytes[49] = state.IsCommitted ? (byte)1 : (byte)0;
-        state.LastSortKey.CopyTo(bytes, 50);
+        state.BaseGeneration.TryWriteBytes(bytes.AsSpan(50, 16));
+        state.LastSortKey.CopyTo(bytes, 66);
         return bytes;
     }
 
     private static FullReplaceState DecodeFullReplaceState(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length != 69 || bytes[0] != 1 || bytes[49] > 1)
+        if (bytes.Length != 85 || bytes[0] != 1 || bytes[49] > 1)
             throw new InvalidDataException("Stored full-replace session manifest is malformed.");
         int expected = BinaryPrimitives.ReadInt32LittleEndian(bytes[1..]);
         int next = BinaryPrimitives.ReadInt32LittleEndian(bytes[45..]);
@@ -1002,7 +1010,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         return new FullReplaceState(expected,
             BinaryPrimitives.ReadUInt64LittleEndian(bytes[5..]),
             bytes.Slice(13, 32).ToArray(), next, bytes[49] != 0,
-            bytes.Slice(50, 19).ToArray());
+            new Guid(bytes.Slice(50, 16)), bytes.Slice(66, 19).ToArray());
     }
 
     private static byte[] CurrentKey(Guid generation, RecordId recordId, ushort fieldId)
