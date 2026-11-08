@@ -28,10 +28,12 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             var snapshot = provider.OpenSnapshot();
             Assert.Equal(1UL, snapshot.ChangeFeedWatermark);
             Assert.Empty(provider.ReadLocalChanges(snapshot.ChangeFeedWatermark, 10).Changes);
+            Assert.Throws<InvalidDataException>(() =>
+                provider.ReadLocalChanges(snapshot.ChangeFeedWatermark + 1, 10));
 
             provider.ReleaseSnapshot(snapshot.Token);
             Assert.Throws<InvalidDataException>(() =>
-                provider.ReadLocalChanges(snapshot.ChangeFeedWatermark, 10));
+                provider.ReadLocalChanges(snapshot.ChangeFeedWatermark + 1, 10));
         }
         finally
         {
