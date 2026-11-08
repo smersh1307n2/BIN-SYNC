@@ -344,6 +344,80 @@ public sealed class StorageCrashConsistencyTests
         }
     }
 
+    [Fact]
+    public void Partial_wal_write_fails_closed_and_recovery_discards_the_torn_record()
+    {
+        const ulong partitionId = 922;
+        string directory = Path.Combine(_root, "wal-partial-write");
+
+        try
+        {
+            using (var database = StorageDatabase.OpenForTesting(directory, partitionId, point =>
+            {
+                if (point == StorageFaultPoint.AfterWalPartialWrite)
+                    throw new IOException("Injected partial WAL write.");
+            }, walRotateAfterBytes: long.MaxValue))
+            {
+                using var batch = database.BeginWriteBatch();
+                batch.Put("partial-write-key"u8, "must-not-commit"u8);
+                Assert.Throws<IOException>(() => batch.Commit());
+                Assert.Throws<InvalidOperationException>(() => database.TryGet("partial-write-key"u8, out _));
+            }
+
+            using (var recovered = StorageDatabase.Open(directory, partitionId))
+            {
+                Assert.Equal(0UL, recovered.LastCommitSeq);
+                Assert.False(recovered.TryGet("partial-write-key"u8, out _));
+                using var batch = recovered.BeginWriteBatch();
+                batch.Put("after-recovery"u8, "usable"u8);
+                Assert.Equal(1UL, batch.Commit());
+            }
+
+            using var reopened = StorageDatabase.Open(directory, partitionId);
+            Assert.Equal(1UL, reopened.LastCommitSeq);
+            Assert.True(reopened.TryGet("after-recovery"u8, out var value));
+            Assert.Equal("usable"u8.ToArray(), value);
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public void Wal_fsync_failure_fails_closed_and_reopen_resolves_the_complete_record()
+    {
+        const ulong partitionId = 923;
+        string directory = Path.Combine(_root, "wal-fsync-failure");
+
+        try
+        {
+            using (var database = StorageDatabase.OpenForTesting(directory, partitionId, point =>
+            {
+                if (point == StorageFaultPoint.BeforeWalFsync)
+                    throw new IOException("Injected WAL fsync failure.");
+            }, walRotateAfterBytes: long.MaxValue))
+            {
+                using var batch = database.BeginWriteBatch();
+                batch.Put("fsync-key"u8, "durable-boundary"u8);
+                Assert.Throws<IOException>(() => batch.Commit());
+                Assert.Throws<InvalidOperationException>(() => database.TryGet("fsync-key"u8, out _));
+            }
+
+            // The test simulates the fsync error while leaving the just-written bytes
+            // visible to reopen. A real device/power-loss outcome is intentionally not
+            // inferred from this process-level fault injection.
+            using var recovered = StorageDatabase.Open(directory, partitionId);
+            Assert.Equal(1UL, recovered.LastCommitSeq);
+            Assert.True(recovered.TryGet("fsync-key"u8, out var value));
+            Assert.Equal("durable-boundary"u8.ToArray(), value);
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
     [Theory]
     [InlineData((int)StorageFaultPoint.AfterWalAppendBeforeFlush)]
     [InlineData((int)StorageFaultPoint.AfterWalFlushBeforePublish)]
