@@ -1299,6 +1299,61 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Retiring_peer_epoch_reclaims_receipts_only_in_the_target_namespace()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-gc-namespace-scope"), 453);
+        const string scope = "receipt-gc-namespace-scope";
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+        store.RegisterInterestedPeer(scope, local, sender, 1, 7);
+        store.RegisterInterestedPeer(scope, local, sender, 1, 8);
+
+        MetadataIncomingBatch Make(int namespaceId, NodeId author, uint authorEpoch, byte batchId)
+            => new()
+            {
+                ScopeId = scope,
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = authorEpoch,
+                TransportPeerEpoch = 1,
+                AuthorStreamNodeId = author,
+                NamespaceId = namespaceId,
+                BatchId = Batch(batchId),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)(batchId + 1), 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)(batchId + 2), 16).ToArray(),
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = author,
+                        ChangeId = Batch((byte)(batchId + 10)),
+                        Fingerprint = Enumerable.Repeat((byte)(batchId + 11), 16).ToArray(),
+                        Payload = new byte[] { batchId }
+                    }
+                }
+            };
+
+        var namespace7 = Make(7, authorA, 5, 270);
+        var namespace8 = Make(8, authorB, 6, 271);
+        Assert.False(store.AcceptIncomingBatch(namespace7).IsDuplicate);
+        Assert.False(store.AcceptIncomingBatch(namespace8).IsDuplicate);
+
+        store.RegisterInterestedPeer(scope, local, sender, 2, 7);
+        store.CompletePeerInitialSync(scope, local, sender, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(authorA, 0, 5) });
+        store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
+
+        // Namespace 7 is fenced and its old receipt is gone.
+        var staleNamespace7 = Make(7, authorA, 5, 270);
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(staleNamespace7));
+
+        // Namespace 8 has an independent roster and must retain the same peer epoch's receipt.
+        Assert.True(store.AcceptIncomingBatch(namespace8).IsDuplicate);
+    }
+
+    [Fact]
     public void Relay_compaction_waits_for_all_namespace_interested_peers()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-safe-relay-compaction"), 429);
