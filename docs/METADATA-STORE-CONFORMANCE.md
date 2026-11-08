@@ -292,7 +292,7 @@ The durable adapter currently persists:
 
 ## 12. Provider-authoritative outbound publication capability (2026-11-08)
 
-The base `IMetadataStore` contract remains source-compatible for third-party implementations. Durable provider-feed replay uses a separate optional `IMetadataOutboundChangeIdentityStore` capability, implemented by `StorageMetadataStore` and the volatile conformance adapter. It returns the durable global fingerprint for an already-frozen local outbound ChangeId, including after the payload row has been compacted; the caller recomputes and compares the canonical provider-operation fingerprint before treating the feed row as already published.
+The base `IMetadataStore` contract remains source-compatible for third-party implementations. Durable provider-feed replay uses a separate optional `IMetadataOutboundChangeIdentityStore` capability, implemented by `StorageMetadataStore` and the volatile conformance adapter. It returns a `ReadOnlyMemory<byte>` view of the durable global fingerprint for an already-frozen local outbound ChangeId, including after the payload row has been compacted; the caller recomputes and compares the canonical provider-operation fingerprint before treating the feed row as already published.
 
 The Storage coordinator requires this optional capability before enabling provider-authoritative cutover. It does not add a mandatory per-change table or duplicate payload. Existing local feed ChangeIds and the global ChangeId ledger are the identity link.
 
