@@ -836,3 +836,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Replaced the unsupported `SortedDictionary.GetViewBetween` attempt with a `SortedList` snapshot index and a bounded lower-bound binary search over its sorted keys. Prefix and `afterKey` cursors now seek in O(log n) and read only matching pages; the cursor does not allocate a view or enumerate unrelated rows.
 - [x C] Snapshot payload arrays remain shared immutable references; each `StorageEntry` page returns owned key/value arrays. Empty/all-0xFF prefixes and afterKey beyond the range naturally return empty pages.
 - [~ T] Exact-head build and prefix-boundary/stability tests required; the prior CI failure was a compile-time API mismatch, now removed.
+
+
+### 2026-11-09 — C-pass: make host live-reference scans mandatory for physical GC
+
+- [x C] Added `IApplicationGcReferenceScanner`, a host-owned contract for external ChangeId and record references in WAL/FLD outbox, pending application state and other durable stores. GC calls fail closed if the scanner is absent.
+- [x C] `CompactChangeLedger` now checks both BIN-SYNC-owned live references and the host scanner before deleting a ChangeId ledger row.
+- [x C] `StorageMetadataStore.HasLiveRecordReference` checks pending apply payloads, relay payloads, outbound payloads and conservatively blocks on any pending immutable peer reservation in the namespace. Malformed retained payloads count as live.
+- [x C] `CompactRecordTombstones` now requires the durable Metadata Store and external scanner, verifies all three durable adapters share one StorageDatabase, and checks both internal and host record/ChangeId references under the supplied composed lease.
+- [~ C] The FLD/WAL scanner implementation and host lock composition remain cross-repository integration work. All physical GC feature flags remain false until that adapter and T-pass proof exist.
