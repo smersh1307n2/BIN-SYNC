@@ -2040,4 +2040,34 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
     }
 
+
+    [Fact]
+    public void Replacement_baseline_from_different_author_epoch_cannot_discharge_old_reservation()
+    {
+        using var store = new StorageMetadataStore(Path.Combine(_root, "replacement-baseline-author-epoch"), 453);
+        NodeId local = Node(1), peer = Node(2), author = Node(1);
+        const string scope = "replacement-baseline-author-epoch";
+        store.FreezeOutbound(scope, local, 7, author, new[] { FrozenOperation(221, 222) });
+        store.RegisterInterestedPeer(scope, local, peer, 1, 7);
+        store.CompletePeerInitialSync(scope, local, peer, 1, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = Batch(223), IssuerEpoch = 1, StreamOffset = 0,
+            CursorStart = 1, CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)224, 16).ToArray(),
+            Payload = new byte[] { 225 }
+        };
+        store.ReserveOutboundBatch(scope, local, peer, 1, 7, author, reservation);
+
+        store.RegisterInterestedPeer(scope, local, peer, 2, 7);
+        store.CompletePeerInitialSync(scope, local, peer, 2, 7,
+            new[] { new MetadataPeerStreamBaseline(author, 1, 2) });
+
+        Assert.Throws<InvalidOperationException>(() =>
+            store.RetireInterestedPeer(scope, local, peer, 1, 2, 7));
+        Assert.NotNull(store.GetPendingOutboundBatch(scope, local, peer, 1, 7, author));
+    }
+
 }
