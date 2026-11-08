@@ -39,6 +39,8 @@ public sealed class NamespaceRetentionCheckpoint
     public IReadOnlyList<RetentionFrontierEntry> SafeFrontier { get; init; } = Array.Empty<RetentionFrontierEntry>();
     public Guid? FullReplaceGeneration { get; init; }
     public byte[] FullReplaceDigest { get; init; } = Array.Empty<byte>();
+    public ulong FullReplaceHlcWallFloor { get; init; }
+    public uint FullReplaceHlcLogicalFloor { get; init; }
     public byte[] Signature { get; init; } = Array.Empty<byte>();
 }
 
@@ -225,14 +227,14 @@ public static class OriginFrontierProtocol
 }
 
 /// <summary>
-/// Canonical RCP1 authority-signed namespace minimum. A missing member/report/author
+/// Canonical RCP2 authority-signed namespace minimum. A missing member/report/author
 /// contributes zero; callers must compute the checkpoint from verified reports.
 /// </summary>
 public static class NamespaceRetentionCheckpointProtocol
 {
     public const int MaxEntries = 4096;
-    public const string SignDomain = "BIN-SYNC/RETENTION-CHECKPOINT/v1";
-    private static ReadOnlySpan<byte> Magic => "RCP1"u8;
+    public const string SignDomain = "BIN-SYNC/RETENTION-CHECKPOINT/v2";
+    private static ReadOnlySpan<byte> Magic => "RCP2"u8;
 
     public static NamespaceRetentionCheckpoint CreateFromReports(
         NamespaceRosterCertificate roster,
@@ -240,7 +242,9 @@ public static class NamespaceRetentionCheckpointProtocol
         ReadOnlySpan<byte> previousCheckpointDigest,
         IReadOnlyList<AppliedOriginFrontierReport> reports,
         Guid? fullReplaceGeneration = null,
-        ReadOnlySpan<byte> fullReplaceDigest = default)
+        ReadOnlySpan<byte> fullReplaceDigest = default,
+        ulong fullReplaceHlcWallFloor = 0,
+        uint fullReplaceHlcLogicalFloor = 0)
     {
         ArgumentNullException.ThrowIfNull(roster);
         ArgumentNullException.ThrowIfNull(reports);
@@ -304,7 +308,9 @@ public static class NamespaceRetentionCheckpointProtocol
             PreviousCheckpointDigest = previousCheckpointDigest.ToArray(),
             SafeFrontier = safe,
             FullReplaceGeneration = fullReplaceGeneration,
-            FullReplaceDigest = fullReplaceGeneration.HasValue ? fullReplaceDigest.ToArray() : Array.Empty<byte>()
+            FullReplaceDigest = fullReplaceGeneration.HasValue ? fullReplaceDigest.ToArray() : Array.Empty<byte>(),
+            FullReplaceHlcWallFloor = fullReplaceHlcWallFloor,
+            FullReplaceHlcLogicalFloor = fullReplaceHlcLogicalFloor
         };
         Validate(checkpoint);
         return checkpoint;
@@ -327,7 +333,7 @@ public static class NamespaceRetentionCheckpointProtocol
         ArgumentNullException.ThrowIfNull(roster);
         ArgumentNullException.ThrowIfNull(trustStore);
         NamespaceRosterProtocol.Validate(roster);
-        if (encoded.Length < 4 + 2 + 8 + 32 + 8 + 32 + 2 + 1 + 64)
+        if (encoded.Length < 4 + 2 + 8 + 32 + 8 + 32 + 2 + 1 + 16 + 32 + 12 + 64)
             throw new InvalidDataException("RCP1 checkpoint is truncated.");
         int payloadLength = encoded.Length - BatchSignature.SignatureSize;
         byte[] payload = encoded[..payloadLength].ToArray();
@@ -359,10 +365,14 @@ public static class NamespaceRetentionCheckpointProtocol
             throw new InvalidDataException("RCP1 FULL_REPLACE generation flag is invalid.");
         Guid? generation = null;
         byte[] fullReplaceDigest = Array.Empty<byte>();
+        ulong fullReplaceHlcWallFloor = 0;
+        uint fullReplaceHlcLogicalFloor = 0;
         if (hasGeneration == 1)
         {
             generation = new Guid(reader.Raw(16), bigEndian: true);
             fullReplaceDigest = reader.Raw(NamespaceRosterProtocol.DigestSize);
+            fullReplaceHlcWallFloor = reader.U64();
+            fullReplaceHlcLogicalFloor = reader.U32();
         }
         if (!reader.Eof())
             throw new InvalidDataException("RCP1 contains trailing payload bytes.");
@@ -377,6 +387,8 @@ public static class NamespaceRetentionCheckpointProtocol
             SafeFrontier = frontier,
             FullReplaceGeneration = generation,
             FullReplaceDigest = fullReplaceDigest,
+            FullReplaceHlcWallFloor = fullReplaceHlcWallFloor,
+            FullReplaceHlcLogicalFloor = fullReplaceHlcLogicalFloor,
             Signature = signature
         };
         Validate(checkpoint);
@@ -418,6 +430,8 @@ public static class NamespaceRetentionCheckpointProtocol
             checkpoint.FullReplaceGeneration.Value.TryWriteBytes(guid, bigEndian: true, out _);
             writer.Raw(guid);
             writer.Raw(checkpoint.FullReplaceDigest);
+            writer.U64(checkpoint.FullReplaceHlcWallFloor);
+            writer.U32(checkpoint.FullReplaceHlcLogicalFloor);
         }
         return writer.Value();
     }
@@ -463,9 +477,10 @@ public static class NamespaceRetentionCheckpointProtocol
                 checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
                 throw new ArgumentException("RCP1 FULL_REPLACE binding requires a non-empty generation and 32-byte digest.", nameof(checkpoint));
         }
-        else if (checkpoint.FullReplaceDigest is { Length: > 0 })
+        else if (checkpoint.FullReplaceDigest is { Length: > 0 } ||
+            checkpoint.FullReplaceHlcWallFloor != 0 || checkpoint.FullReplaceHlcLogicalFloor != 0)
         {
-            throw new ArgumentException("RCP1 digest cannot be present without a FULL_REPLACE generation.", nameof(checkpoint));
+            throw new ArgumentException("RCP2 digest/HLC floor cannot be present without a FULL_REPLACE generation.", nameof(checkpoint));
         }
         if (checkpoint.Signature is null || (checkpoint.Signature.Length != 0 &&
             checkpoint.Signature.Length != BatchSignature.SignatureSize))
