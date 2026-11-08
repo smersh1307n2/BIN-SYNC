@@ -61,7 +61,7 @@ public sealed partial class Node
         {
             ThrowIfDisposed();
             if (durableProgress is null)
-                EnsureNodeOwnedMutationAllowedInternal();
+                EnsureNodeOwnedMutationAllowedInternal(namespaceId);
             ValidateNamespaceId(namespaceId);
             if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
             if ((uint)schemaVersion > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaVersion));
