@@ -9,6 +9,7 @@ internal enum StorageFaultPoint
     AfterWalPartialWrite,
     AfterWalAppendBeforeFlush,
     BeforeWalFsync,
+    BeforeWalDirectoryFsync,
     AfterWalFlushBeforePublish,
     AfterSnapshotFileFlushBeforeRename,
     AfterSnapshotRenameBeforeManifest,
