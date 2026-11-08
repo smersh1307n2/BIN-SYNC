@@ -200,7 +200,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 MemberNodeId = localMember,
                 MemberTransportEpoch = member.TransportPeerEpoch,
                 ReportSequence = reportSequence,
-                Entries = entries
+                Entries = entries,
+                IssuedOrigins = current is null
+                    ? Array.Empty<IssuedOriginFrontierEntry>()
+                    : current.OriginHighWatermarks
+                        .Where(pair => pair.Key.NamespaceId == acceptedRoster.NamespaceId &&
+                            pair.Key.Author == localMember && pair.Value != 0)
+                        .OrderBy(pair => pair.Key.AuthorEpoch)
+                        .Select(pair => new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = pair.Key.AuthorEpoch,
+                            IssuedOriginSequence = pair.Value
+                        })
+                        .ToArray()
             };
             byte[] signed = OriginFrontierProtocol.Sign(report, memberSeed);
             return gcStore.AcceptOriginFrontier(signed, acceptedRoster);
