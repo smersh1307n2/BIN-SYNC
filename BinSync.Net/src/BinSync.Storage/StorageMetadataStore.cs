@@ -3391,7 +3391,7 @@ private static bool ValidateIncomingBatchForStaging(
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         byte[] scope = Encoding.UTF8.GetBytes(batch.ScopeId);
-        writer.Write(-6); // version 6: persist authenticated transport peer epoch
+        writer.Write(-7); // v3: mandatory immutable Origin on every PendingApply operation
         writer.Write(scope.Length); writer.Write(scope);
         writer.Write(batch.LocalReplica.ToArray());
         writer.Write(batch.SenderPeer.ToArray());
@@ -3408,6 +3408,8 @@ private static bool ValidateIncomingBatchForStaging(
         {
             writer.Write(operation.AuthorNodeId.ToArray());
             writer.Write(operation.ChangeId.ToArray());
+            writer.Write(operation.OriginAuthorEpoch);
+            writer.Write(operation.OriginSequence);
             writer.Write(operation.Fingerprint);
             writer.Write(operation.RelayEligible);
             writer.Write(operation.Payload.Length);
@@ -3426,17 +3428,18 @@ private static bool ValidateIncomingBatchForStaging(
         using var stream = new MemoryStream(bytes, writable: false);
         using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: false);
         int versionOrScopeLength = reader.ReadInt32();
-        bool hasTransportPeerEpoch = versionOrScopeLength == -6;
-        bool hasAuthorStream = versionOrScopeLength is -2 or -3 or -4 or -5 or -6;
-        bool hasWirePayload = versionOrScopeLength is -3 or -4 or -5 or -6;
-        bool hasReceiveStateAuthority = versionOrScopeLength is -4 or -5 or -6;
-        bool hasHeaderFingerprint = versionOrScopeLength is -5 or -6;
-        int scopeLength = hasAuthorStream ? reader.ReadInt32() : versionOrScopeLength;
+        if (versionOrScopeLength != -7)
+            throw new InvalidDataException("Unsupported PendingApply encoding; BIN-SYNC v3 requires format 7.");
+        const bool hasAuthorStream = true;
+        const bool hasWirePayload = true;
+        const bool hasReceiveStateAuthority = true;
+        const bool hasHeaderFingerprint = true;
+        int scopeLength = reader.ReadInt32();
         string scope = Encoding.UTF8.GetString(ReadExactly(reader, scopeLength));
         NodeId local = NodeId.From(ReadExactly(reader, 16));
         NodeId sender = NodeId.From(ReadExactly(reader, 16));
         uint epoch = reader.ReadUInt32();
-        uint transportPeerEpoch = hasTransportPeerEpoch ? reader.ReadUInt32() : 0;
+        uint transportPeerEpoch = reader.ReadUInt32();
         NodeId authorStream = hasAuthorStream ? NodeId.From(ReadExactly(reader, 16)) : default;
         int ns = reader.ReadUInt16();
         BatchId batchId = BatchId.From(ReadExactly(reader, 16));
@@ -3452,6 +3455,10 @@ private static bool ValidateIncomingBatchForStaging(
         {
             var author = NodeId.From(ReadExactly(reader, 16));
             var changeId = BatchId.From(ReadExactly(reader, 16));
+            uint originAuthorEpoch = reader.ReadUInt32();
+            ulong originSequence = reader.ReadUInt64();
+            if (originAuthorEpoch == 0 || originSequence == 0)
+                throw new InvalidDataException("PendingApply operation has invalid immutable Origin provenance.");
             byte[] fingerprint = ReadExactly(reader, 16);
             bool relay = reader.ReadBoolean();
             int payloadLength = reader.ReadInt32();
@@ -3459,6 +3466,8 @@ private static bool ValidateIncomingBatchForStaging(
             {
                 AuthorNodeId = author,
                 ChangeId = changeId,
+                OriginAuthorEpoch = originAuthorEpoch,
+                OriginSequence = originSequence,
                 Fingerprint = fingerprint,
                 RelayEligible = relay,
                 Payload = ReadExactly(reader, payloadLength)
