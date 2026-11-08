@@ -116,6 +116,20 @@ public static class NamespaceRosterProtocol
         return roster;
     }
 
+    public static void VerifyOrThrow(NamespaceRosterCertificate roster, TrustStore trustStore)
+    {
+        ArgumentNullException.ThrowIfNull(trustStore);
+        Validate(roster);
+        if (!trustStore.TryGet(roster.AuthorityNodeId, out TrustedPeer? trusted) ||
+            trusted is null || trusted.Revoked || trusted.Mode != TrustMode.PreShared ||
+            trusted.PublicKey.Length != BatchSignature.PublicKeySize)
+            throw new CryptographicException("Namespace authority is not pinned with active PreShared trust.");
+        byte[] payload = EncodePayload(roster);
+        if (roster.Signature is null || roster.Signature.Length != BatchSignature.SignatureSize ||
+            !BatchSignature.Verify(trusted.PublicKey, BuildSigningPayload(payload), roster.Signature))
+            throw new CryptographicException("NRS1 namespace roster signature is invalid.");
+    }
+
     public static byte[] ComputeDigest(NamespaceRosterCertificate roster)
     {
         Validate(roster);
