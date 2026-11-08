@@ -297,3 +297,12 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Kept ChangeId GC and tombstone/ghost GC disabled. Origin is now available, but the authoritative signed namespace roster, per-member/per-author contiguous applied-origin frontier, FULL_REPLACE snapshot generation and stale-rejoin fence are not implemented.
 - [x] Explicitly documented that Origin gaps are allowed and that a safe frontier must be contiguous; relay/receive/Outbox cursors cannot substitute for it.
 - [ ] Next Phase 2 optimization: remove the duplicated 12-byte OriginEpoch/OriginSequence suffix from each relay/outbound payload row by hydrating from the global ChangeId ledger at load; validate no extra I/O and compare benchmark throughput/allocations before keeping it.
+
+### 2026-11-08 — compact stream-row regression and CI correction
+
+- [x] Implemented the 12-byte-per-operation reduction: relay/outbound payload rows now store only ChangeId (16 B) + payload length (4 B) + payload; immutable Origin is resolved from the global ChangeId ledger instead of duplicated in each stream row.
+- [x] Updated remaining compact payload writers and added durable integration coverage for the exact 20-byte fixed overhead, payload round-trip, and rejection of legacy stream-row layouts.
+- [x] Exact-head Core/Fuzz workflow succeeded on the implementation head; Storage Integration exposed one xUnit analyzer error (xUnit2031) in the new assertion, not a production-code or runtime failure.
+- [x] Fixed the analyzer violation by using Assert.Single(collection, predicate) in commit `95140bb`.
+- [ ] Re-run the full Storage Integration matrix and Core/Fuzz after the assertion fix; only then close the compact-row test gate.
+- [ ] Continue with ChangeId/receipt/tombstone GC safe-frontier proof; GC remains disabled because a complete namespace membership roster, contiguous per-author applied-origin frontier, snapshot generation and stale-rejoin fence are not yet available.
