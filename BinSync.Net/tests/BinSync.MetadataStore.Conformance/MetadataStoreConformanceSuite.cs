@@ -67,6 +67,32 @@ public abstract class MetadataStoreConformanceSuite
 
 
     [Fact]
+    public void Same_change_id_and_fingerprint_with_different_origin_is_rejected_before_receipt_or_relay_mutation()
+    {
+        using var store = CreateStore();
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
+            Operation(20, 30, 40, 50)));
+
+        var changedOrigin = new MetadataOperation
+        {
+            AuthorNodeId = Node(20),
+            ChangeId = Batch(30),
+            Fingerprint = Bytes(40),
+            Payload = new[] { (byte)50 },
+            RelayEligible = true,
+            OriginAuthorEpoch = 1,
+            OriginSequence = 31
+        };
+        var alternateRoute = CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 1, 0, 11,
+            changedOrigin);
+
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(alternateRoute));
+        Assert.Equal(0UL, store.GetReceiveCursor("scope-a", Node(1), Node(3), 1, 7));
+        Assert.Equal(1UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
+        Assert.Single(store.ReadRelay("scope-a", Node(1), 7, Node(20), 0, 10).Items);
+    }
+
+    [Fact]
     public void Locally_frozen_change_is_in_global_ledger_and_not_relayed_again_on_another_route()
     {
         using var store = CreateStore();
