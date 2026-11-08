@@ -1289,4 +1289,41 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+    [Fact]
+    public void Partial_outbound_freeze_retry_after_reopen_preserves_existing_sequences()
+    {
+        string directory = Path.Combine(_root, "partial-freeze-reopen");
+        Directory.CreateDirectory(directory);
+        const string scope = "partial-freeze-reopen";
+        var first = FrozenOperation(91, 101);
+        var second = FrozenOperation(92, 102);
+        var appended = FrozenOperation(93, 103);
+        try
+        {
+            using (var store = new StorageMetadataStoreConformanceAdapter(directory, 303, deleteOnDispose: false))
+            {
+                var frozen = store.FreezeOutbound(scope, Node(1), 7, Node(1), new[] { first, second });
+                Assert.Equal(new ulong[] { 1, 2 }, frozen.Select(item => item.Sequence));
+            }
+
+            using (var reopened = new StorageMetadataStoreConformanceAdapter(directory, 303, deleteOnDispose: false))
+            {
+                var mixed = reopened.FreezeOutbound(scope, Node(1), 7, Node(1), new[] { first, appended });
+                Assert.Equal(new ulong[] { 1, 3 }, mixed.Select(item => item.Sequence));
+                Assert.Equal(3UL, reopened.GetOutboundHighWatermark(scope, Node(1), 7, Node(1)));
+            }
+
+            using (var retried = new StorageMetadataStoreConformanceAdapter(directory, 303, deleteOnDispose: false))
+            {
+                var mixedRetry = retried.FreezeOutbound(scope, Node(1), 7, Node(1), new[] { first, appended });
+                Assert.Equal(new ulong[] { 1, 3 }, mixedRetry.Select(item => item.Sequence));
+                Assert.Equal(3UL, retried.GetOutboundHighWatermark(scope, Node(1), 7, Node(1)));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
