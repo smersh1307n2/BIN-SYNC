@@ -21,7 +21,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private const byte LocalAckWatermark = 0x22;
     private const byte LocalReadWatermark = 0x23;
     private const byte ProviderPublicationMode = 0x24;
-    private const int MaxFullReplacePageEntries = 4096;
+    private const int MaxFullReplacePageEntries = ProviderFullReplaceDigestBuilder.MaxPageEntries;
     private const byte ProviderFormatMarker = 0x25;
     private const byte ActiveGeneration = 0x26;
     private const byte FullReplaceSession = 0x41;
@@ -363,83 +363,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     public static byte[] ComputeFullReplaceDigest(
         Guid generation, ulong sourceChangeFeedWatermark,
         IEnumerable<ProviderMutation> mutations)
-    {
-        if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
-        ArgumentNullException.ThrowIfNull(mutations);
-        var ordered = mutations.ToArray();
-        foreach (var mutation in ordered) ValidateMutation(mutation);
-        Array.Sort(ordered, CompareSnapshotOrder);
-        using var builder = new FullReplaceDigestBuilder(generation, sourceChangeFeedWatermark);
-        for (int offset = 0; offset < ordered.Length; offset += MaxFullReplacePageEntries)
-        {
-            int count = Math.Min(MaxFullReplacePageEntries, ordered.Length - offset);
-            builder.AppendPage(new ArraySegment<ProviderMutation>(ordered, offset, count));
-        }
-        return builder.Complete();
-    }
-
-    /// <summary>
-    /// Incremental digest builder for a stable provider snapshot. Append pages in
-    /// canonical order as returned by ReadSnapshot; no full-image materialization or
-    /// sort is required. Entry count is appended at completion so the builder can
-    /// stream before the total is known.
-    /// </summary>
-    public sealed class FullReplaceDigestBuilder : IDisposable
-    {
-        private readonly IncrementalHash _hash;
-        private readonly byte[] _lastSortKey = new byte[19];
-        private int _entryCount;
-        private bool _completed;
-        private bool _faulted;
-
-        public FullReplaceDigestBuilder(Guid generation, ulong sourceChangeFeedWatermark)
-        {
-            if (generation == Guid.Empty)
-                throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
-            _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            AppendFullReplaceHeader(_hash, generation, sourceChangeFeedWatermark);
-        }
-
-        public int EntryCount => _entryCount;
-
-        public void AppendPage(IReadOnlyList<ProviderMutation> entries)
-        {
-            if (_completed) throw new InvalidOperationException("Full-replace digest builder is already completed.");
-            if (_faulted) throw new InvalidOperationException("Full-replace digest builder is faulted.");
-            ArgumentNullException.ThrowIfNull(entries);
-            if (entries.Count > MaxFullReplacePageEntries)
-                throw new ArgumentOutOfRangeException(nameof(entries), "Digest page exceeds the bounded provider page size.");
-            try
-            {
-                foreach (var mutation in entries)
-                {
-                    ValidateMutation(mutation);
-                    byte[] sortKey = FullReplaceSortKey(mutation);
-                    if (_entryCount > 0 && _lastSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
-                        throw new InvalidDataException("Full-replace digest pages must be strictly ordered and contain no duplicate identities.");
-                    _hash.AppendData(EncodeMutation(mutation));
-                    sortKey.CopyTo(_lastSortKey, 0);
-                    _entryCount = checked(_entryCount + 1);
-                }
-            }
-            catch
-            {
-                _faulted = true;
-                throw;
-            }
-        }
-
-        public byte[] Complete()
-        {
-            if (_completed) throw new InvalidOperationException("Full-replace digest builder is already completed.");
-            if (_faulted) throw new InvalidOperationException("Full-replace digest builder is faulted.");
-            AppendFullReplaceCount(_hash, _entryCount);
-            _completed = true;
-            return _hash.GetHashAndReset();
-        }
-
-        public void Dispose() => _hash.Dispose();
-    }
+        => ProviderFullReplaceDigest.Compute(generation, sourceChangeFeedWatermark, mutations);
 
     /// <summary>Start or idempotently resume staging one authoritative replacement generation.</summary>
     public void BeginFullReplace(Guid generation, ulong sourceChangeFeedWatermark,
@@ -573,7 +497,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new InvalidOperationException("Full-replace snapshot is incomplete.");
 
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark);
+            ProviderFullReplaceDigest.AppendHeader(hash, generation, state.SourceFeedWatermark);
             using var fields = EnumeratePrefix(snapshot, CurrentPrefix(CurrentField, generation)).GetEnumerator();
             using var tombstones = EnumeratePrefix(snapshot, CurrentPrefix(CurrentRecordTombstone, generation)).GetEnumerator();
             bool hasField = fields.MoveNext();
@@ -617,7 +541,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             }
             if (stagedCount != state.ExpectedCount)
                 throw new InvalidDataException("Full-replace staged row count differs from the signed manifest.");
-            AppendFullReplaceCount(hash, stagedCount);
+            ProviderFullReplaceDigest.AppendEntryCount(hash, stagedCount);
             byte[] actualDigest = hash.GetHashAndReset();
             if (!CryptographicOperations.FixedTimeEquals(actualDigest, state.ExpectedDigest))
                 throw new InvalidDataException("Full-replace staged image digest does not match its manifest.");
@@ -787,22 +711,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
     private static void ValidateMutation(ProviderMutation mutation)
-    {
-        ArgumentNullException.ThrowIfNull(mutation);
-        if (mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero)
-            throw new ArgumentException("RecordId and original AuthorNodeId must be non-zero.", nameof(mutation));
-        ArgumentNullException.ThrowIfNull(mutation.Value);
-        if (mutation.IsRecordTombstone)
-        {
-            if (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
-                mutation.KeyEpoch != 0 || mutation.Value.Length != 0)
-                throw new ArgumentException("Record tombstone must use the lifecycle field, key epoch zero and no value.", nameof(mutation));
-        }
-        else if (mutation.IsTombstone && mutation.Value.Length != 0)
-        {
-            throw new ArgumentException("Field tombstone mutation must not carry a value payload.", nameof(mutation));
-        }
-    }
+        => ProviderMutationCodec.Validate(mutation);
 
     private static int Compare(ProviderMutation left, ProviderMutation right)
         => HlcOps.CompareHlc(
@@ -912,46 +821,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
     private static byte[] EncodeMutation(ProviderMutation mutation)
-    {
-        byte[] result = new byte[53 + mutation.Value.Length];
-        mutation.RecordId.WriteTo(result);
-        BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(16), mutation.FieldId);
-        result[18] = (byte)((mutation.IsTombstone ? 1 : 0) | (mutation.IsRecordTombstone ? 2 : 0));
-        BinaryPrimitives.WriteUInt64LittleEndian(result.AsSpan(19), mutation.HlcWall);
-        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(27), mutation.HlcLogical);
-        mutation.AuthorNodeId.WriteTo(result.AsSpan(31));
-        BinaryPrimitives.WriteUInt16LittleEndian(result.AsSpan(47), mutation.KeyEpoch);
-        BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(49), checked((uint)mutation.Value.Length));
-        mutation.Value.CopyTo(result.AsSpan(53));
-        return result;
-    }
+        => ProviderMutationCodec.Encode(mutation);
 
     private static ProviderMutation DecodeMutation(ReadOnlySpan<byte> bytes)
-    {
-        if (bytes.Length < 53) throw new InvalidDataException("Stored provider mutation is truncated.");
-        uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
-        if (valueLength > int.MaxValue || bytes.Length != 53 + (int)valueLength ||
-            bytes[18] > 3 || bytes[18] == 3)
-            throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
-        var mutation = new ProviderMutation
-        {
-            RecordId = RecordId.From(bytes.Slice(0, 16)),
-            FieldId = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(16)),
-            IsTombstone = (bytes[18] & 1) != 0,
-            IsRecordTombstone = (bytes[18] & 2) != 0,
-            HlcWall = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(19)),
-            HlcLogical = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(27)),
-            AuthorNodeId = NodeId.From(bytes.Slice(31, 16)),
-            KeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(47)),
-            Value = bytes.Slice(53).ToArray()
-        };
-        try { ValidateMutation(mutation); }
-        catch (ArgumentException exception)
-        {
-            throw new InvalidDataException("Stored provider mutation violates its canonical contract.", exception);
-        }
-        return mutation;
-    }
+        => ProviderMutationCodec.Decode(bytes);
 
     private static ProviderMutation CloneMutation(ProviderMutation mutation)
         => new()
@@ -1022,13 +895,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
     private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
-    {
-        int order = CompareRecordIds(left.RecordId, right.RecordId);
-        if (order != 0) return order;
-        if (left.IsRecordTombstone != right.IsRecordTombstone)
-            return left.IsRecordTombstone ? -1 : 1;
-        return left.FieldId.CompareTo(right.FieldId);
-    }
+        => ProviderMutationCodec.CompareCanonical(left, right);
 
     private static void ValidateGenerationEntry(Guid generation, StorageEntry entry, ProviderMutation mutation)
     {
@@ -1078,27 +945,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static byte[] FullReplaceSortKey(ProviderMutation mutation)
     {
         byte[] key = new byte[19];
-        mutation.RecordId.WriteTo(key);
-        key[16] = mutation.IsRecordTombstone ? (byte)0 : (byte)1;
-        BinaryPrimitives.WriteUInt16BigEndian(key.AsSpan(17), mutation.IsRecordTombstone ? (ushort)0 : mutation.FieldId);
+        ProviderMutationCodec.WriteSortKey(mutation, key);
         return key;
-    }
-
-    private static void AppendFullReplaceHeader(IncrementalHash hash, Guid generation,
-        ulong sourceChangeFeedWatermark)
-    {
-        hash.AppendData("BIN-SYNC/FULL-REPLACE/v1"u8);
-        Span<byte> header = stackalloc byte[24];
-        generation.TryWriteBytes(header[..16], true, out _);
-        BinaryPrimitives.WriteUInt64LittleEndian(header[16..24], sourceChangeFeedWatermark);
-        hash.AppendData(header);
-    }
-
-    private static void AppendFullReplaceCount(IncrementalHash hash, int count)
-    {
-        Span<byte> bytes = stackalloc byte[4];
-        BinaryPrimitives.WriteInt32LittleEndian(bytes, count);
-        hash.AppendData(bytes);
     }
 
     private static byte[] EncodeFullReplaceState(FullReplaceState state)
