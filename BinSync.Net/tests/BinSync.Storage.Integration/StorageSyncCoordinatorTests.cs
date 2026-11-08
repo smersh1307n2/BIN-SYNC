@@ -860,7 +860,7 @@ public sealed class StorageSyncCoordinatorTests
             Guid.Parse("17000000-0000-0000-0000-000000000001"));
         var outbox = metadata.ReadOutbound("pending-coalesce", node.NodeId, 1, node.NodeId, lease, 0, 16).Items;
         Assert.Equal(2, outbox.Count);
-        var values = outbox.Select(entry => Ops.DecodeOp(entry.Payload.AsSpan(16)).Op)
+        var values = outbox.Select(entry => Ops.DecodeOp(entry.Payload.AsSpan(16).ToArray()).Op)
             .OfType<OpFieldWrite>()
             .Select(operation => Encoding.UTF8.GetString(operation.Value))
             .ToArray();
