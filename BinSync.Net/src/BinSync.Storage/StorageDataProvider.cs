@@ -366,7 +366,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
         ArgumentNullException.ThrowIfNull(mutations);
         var ordered = mutations.ToArray();
-        if (ordered.Length > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(mutations));
         foreach (var mutation in ordered) ValidateMutation(mutation);
         Array.Sort(ordered, CompareSnapshotOrder);
         for (int i = 1; i < ordered.Length; i++)
