@@ -51,13 +51,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var current = GetOrCreatePartition(partitionKey);
         ValidateIncomingTransportPeerEpoch(current, batch);
         _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
-        if (current.HasLegacyEncoding)
-        {
-            var migrated = current.Clone();
-            var legacyReceipt = ApplyIncomingBatch(migrated, batch);
-            PersistPartition(partitionKey, current, migrated);
-            return legacyReceipt;
-        }
         return AcceptIncomingBatchDelta(partitionKey, current, batch);
     
         }
@@ -811,7 +804,6 @@ private static bool ValidateIncomingBatchForStaging(
             current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        current.HasLegacyEncoding = false;
         return receipt;
     }
 
@@ -1389,18 +1381,6 @@ private static bool ValidateIncomingBatchForStaging(
             var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
             if (current.InterestedPeers.Contains(rosterKey)) return;
 
-            if (current.HasLegacyEncoding)
-            {
-                var migrated = current.Clone();
-                migrated.InterestedPeers.Add(rosterKey);
-                foreach (var outbound in migrated.OutboundHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
-                    EnsurePeerStream(migrated, new PeerStreamKey(peer, peerEpoch, namespaceId, outbound.Author), 0);
-                foreach (var relay in migrated.RelayHighWatermarks.Keys.Where(key => key.NamespaceId == namespaceId && key.Author != peer))
-                    EnsurePeerStream(migrated, new PeerStreamKey(peer, peerEpoch, namespaceId, relay.Author), 0);
-                PersistPartition(partitionKey, current, migrated);
-                return;
-            }
-
             var candidateStreams = current.OutboundHighWatermarks.Keys
                 .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
                 .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author))
@@ -1519,24 +1499,6 @@ private static bool ValidateIncomingBatchForStaging(
                 return;
             }
 
-            if (current.HasLegacyEncoding)
-            {
-                var migrated = current.Clone();
-                foreach (var baseline in streamBaselines)
-                {
-                    var key = new PeerStreamKey(peer, peerEpoch, namespaceId, baseline.AuthorStream);
-                    if (migrated.PeerStreams.TryGetValue(key, out var saved) &&
-                        (saved.AckedCursor != 0 || saved.PushedCursor != 0 || saved.PendingBatch is not null))
-                        throw new InvalidOperationException("Initial snapshot baseline cannot reset an active peer author stream.");
-                    migrated.PeerStreams[key] = new PeerStreamStateValue(
-                        0, 0, baseline.StreamOffset, baseline.IssuerEpoch, new byte[16], null);
-                    migrated.RequiredPeerStreams.Add(key);
-                }
-                migrated.CompletedPeerBaselines.Add(rosterKey);
-                PersistPartition(partitionKey, current, migrated);
-                return;
-            }
-
             var baselineWrites = new List<(byte[] Key, byte[] Value)>(streamBaselines.Count * 2 + 1);
             var baselineStates = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>(streamBaselines.Count);
             var newRequired = new List<PeerStreamKey>(streamBaselines.Count);
@@ -1634,26 +1596,6 @@ private static bool ValidateIncomingBatchForStaging(
                 current.CompletedPeerBaselines.Contains(oldRosterKey);
             if (alreadyRetired && !hasOldRows)
                 return;
-
-            if (current.HasLegacyEncoding)
-            {
-                var migrated = current.Clone();
-                migrated.InterestedPeers.Remove(oldRosterKey);
-                migrated.CompletedPeerBaselines.Remove(oldRosterKey);
-                foreach (ReceiptKey receipt in oldReceipts)
-                    migrated.Receipts.Remove(receipt);
-                foreach (var stream in migrated.PeerStreams.Keys
-                    .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
-                        key.PeerEpoch == retiredPeerEpoch).ToArray())
-                    migrated.PeerStreams.Remove(stream);
-                migrated.RequiredPeerStreams.RemoveWhere(key =>
-                    key.NamespaceId == namespaceId && key.Peer == peer && key.PeerEpoch == retiredPeerEpoch);
-                migrated.RetiredPeerEpochs[retiredKey] = Math.Max(
-                    migrated.RetiredPeerEpochs.TryGetValue(retiredKey, out uint prior) ? prior : 0,
-                    retiredPeerEpoch);
-                PersistPartition(partitionKey, current, migrated);
-                return;
-            }
 
             var oldStreams = current.PeerStreams.Keys
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
@@ -2367,7 +2309,6 @@ private static bool ValidateIncomingBatchForStaging(
         if (changed) batch.Commit();
         next.StorageCommitSeq = _storage.LastCommitSeq;
         next.IsPersisted = true;
-        next.HasLegacyEncoding = false;
         next.PersistedEntries = newEntries;
         _partitions[key] = next;
     }
@@ -2383,29 +2324,6 @@ private static bool ValidateIncomingBatchForStaging(
         ulong highWatermark)
     {
         byte[] root = PartitionRoot(partitionKey);
-        bool requiresLegacyRewrite = current.HasLegacyEncoding;
-        if (requiresLegacyRewrite)
-        {
-            var migrated = current.Clone();
-            if (!migrated.Outbound.TryGetValue(outboundKey, out var migratedEntries))
-            {
-                migratedEntries = new List<MetadataOutboundItem>();
-                migrated.Outbound.Add(outboundKey, migratedEntries);
-            }
-            migratedEntries.AddRange(frozen);
-            for (int i = 0; i < operations.Count; i++)
-            {
-                var operation = operations[i];
-                var frozenItem = frozen[i];
-                migrated.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
-                    new ChangeLedgerValue(operation.Fingerprint.ToArray(), true, localAuthor, frozenItem.OriginAuthorEpoch, frozenItem.OriginSequence));
-            }
-            migrated.OutboundHighWatermarks[outboundKey] = highWatermark;
-            EnsureRegisteredPeerStreams(migrated, namespaceId, localAuthor, issuerEpoch: 0);
-            PersistPartition(partitionKey, current, migrated);
-            return;
-        }
-
         var newPeerStreams = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>();
         var newRequiredStreams = new List<PeerStreamKey>();
         var peers = current.InterestedPeers.Where(peer => peer.NamespaceId == namespaceId)
@@ -2513,24 +2431,12 @@ private static bool ValidateIncomingBatchForStaging(
             current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        current.HasLegacyEncoding = false;
     }
 
     private void PersistOutboundLease(
         PartitionKey partitionKey, PartitionState current, OutboundKey key, LeaseState lease)
     {
         byte[] root = PartitionRoot(partitionKey);
-        bool requiresLegacyRewrite = current.HasLegacyEncoding;
-        if (requiresLegacyRewrite)
-        {
-            // Preserve all legacy row/key migrations on the first write to an old
-            // partition. Modern partitions take the single-row fast path below.
-            var migrated = current.Clone();
-            migrated.OutboundLeases[key] = lease;
-            PersistPartition(partitionKey, current, migrated);
-            return;
-        }
-
         byte[] storageKey = StorageKey(root, 10, KeyNamespaceAuthor(key.NamespaceId, key.Author));
         byte[] value = new byte[24];
         BinaryPrimitives.WriteUInt64LittleEndian(value, lease.Generation);
@@ -2559,7 +2465,6 @@ private static bool ValidateIncomingBatchForStaging(
         current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        current.HasLegacyEncoding = false;
     }
 
     private void PersistPeerBaselineMarker(
@@ -2590,14 +2495,6 @@ private static bool ValidateIncomingBatchForStaging(
     private void PersistPendingApply(
         PartitionKey partitionKey, PartitionState current, Guid applyToken, PendingApplyValue value)
     {
-        if (current.HasLegacyEncoding)
-        {
-            var migrated = current.Clone();
-            migrated.PendingApplies.Add(applyToken, value);
-            PersistPartition(partitionKey, current, migrated);
-            return;
-        }
-
         byte[] root = PartitionRoot(partitionKey);
         byte[] key = StorageKey(root, 12, applyToken.ToByteArray());
         byte[] encoded = EncodeIncomingBatch(value.Batch);
@@ -2663,7 +2560,6 @@ private static bool ValidateIncomingBatchForStaging(
             current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        current.HasLegacyEncoding = false;
     }
 
     private static byte[] EncodeReceiptKey(PartitionKey partitionKey, ReceiptKey receipt)
@@ -3758,7 +3654,6 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
 
         public ulong StorageCommitSeq { get; set; }
         public bool IsPersisted { get; set; }
-        public bool HasLegacyEncoding { get; set; }
         public Dictionary<string, (byte[] Key, byte[] Value)> PersistedEntries { get; set; } = new(StringComparer.Ordinal);
 
         public PartitionState Clone()
@@ -3770,7 +3665,6 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
             {
                 StorageCommitSeq = StorageCommitSeq,
                 IsPersisted = IsPersisted,
-                HasLegacyEncoding = HasLegacyEncoding,
                 PersistedEntries = PersistedEntries
             };
             foreach (var pair in Receipts) clone.Receipts.Add(pair.Key, pair.Value);
