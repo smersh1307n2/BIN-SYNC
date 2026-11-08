@@ -41,7 +41,7 @@ public interface IMetadataOutboundChangeIdentityStore
 {
     /// <summary>Returns the durable fingerprint when the ChangeId is already frozen as a local outbound operation.</summary>
     bool TryGetOutboundChangeFingerprint(string scopeId, NodeId localReplica, int namespaceId,
-        BatchId changeId, out byte[] fingerprint);
+        BatchId changeId, out ReadOnlyMemory<byte> fingerprint);
 }
 
 public interface IMetadataStoreSnapshot : IDisposable
