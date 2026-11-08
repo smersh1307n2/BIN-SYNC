@@ -233,7 +233,8 @@ public partial class SyncSession : IAsyncDisposable
         Action<Batch, ReadOnlyMemory<byte>, NodeId>? beforeApply,
         Action<Batch, BatchResult>? beforeAck,
         CancellationToken ct = default,
-        bool receiveStateOwnedByMetadataStore = false)
+        bool receiveStateOwnedByMetadataStore = false,
+        Func<Batch, ReadOnlyMemory<byte>, NodeId, IReadOnlyList<bool>>? beforeApplyWithOperationDecisions = null)
     {
         ArgumentNullException.ThrowIfNull(receiver);
         await _batchReceiveGate.WaitAsync(ct).ConfigureAwait(false);
@@ -249,15 +250,26 @@ public partial class SyncSession : IAsyncDisposable
             // Decode without mutation so a host can persist the exact wire payload as
             // a PendingApply intent before Node's record state advances. In the
             // durable path, the Metadata Store—not Node—validates cursor and digest continuity.
-            if (receiveStateOwnedByMetadataStore && beforeApply is null)
+            if (receiveStateOwnedByMetadataStore &&
+                beforeApply is null && beforeApplyWithOperationDecisions is null)
                 throw new InvalidOperationException("Metadata-owned receive state requires a durable before-apply callback.");
+            if (beforeApply is not null && beforeApplyWithOperationDecisions is not null)
+                throw new InvalidOperationException("Specify either the legacy before-apply callback or the metadata decision callback, not both.");
+            if (!receiveStateOwnedByMetadataStore && beforeApplyWithOperationDecisions is not null)
+                throw new InvalidOperationException("Metadata apply decisions require Metadata-Store-authoritative receive mode.");
+
             var decoded = receiveStateOwnedByMetadataStore
                 ? receiver.DecodeBatchPayloadForMetadataAuthority(frame.Payload, PeerNodeId)
                 : receiver.PrepareBatchPayloadForMetadata(frame.Payload, PeerNodeId);
-            beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId);
+            IReadOnlyList<bool>? applyOperations = null;
+            if (beforeApplyWithOperationDecisions is not null)
+                applyOperations = beforeApplyWithOperationDecisions(decoded, frame.Payload, PeerNodeId);
+            else
+                beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId);
 
             var (batch, result) = receiveStateOwnedByMetadataStore
-                ? receiver.ApplyBatchPayloadWithMetadataAuthority(frame.Payload, PeerNodeId)
+                ? receiver.ApplyBatchPayloadWithMetadataAuthority(frame.Payload, PeerNodeId,
+                    applyOperations ?? throw new InvalidOperationException("Metadata apply decisions were not supplied."))
                 : receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
             beforeAck?.Invoke(batch, result);
             var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
