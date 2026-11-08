@@ -124,15 +124,15 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 **Remaining:** complete runtime-wide Node/Transport authority removal (legacy Node-backed transport and other-author relay Outbox state remain), deterministic physical Storage crash injection/power-loss cuts, controlled large-partition and end-to-end retry-scan benchmarks, independent receipt/ChangeId/tombstone GC horizons, and normative cross-implementation conformance. FLD Database and its JournalSeq provenance adapter remain deferred. The direct frozen-ChangeId lookup now has a zero-allocation scaling benchmark; this does not yet measure the complete retry scan.
 
 
-## Latest continuation checkpoint — three coordinator process-kill receive cuts (2026-11-08)
+## Latest continuation checkpoint — complete coordinator receive process-kill sequence (2026-11-08)
 
-- Code/test HEAD: b47c86a02998b3d9aa6a8dcbfc991d9c0245ea1e.
+- Code/test HEAD: 354eab38dc859e2f26838efb332c14310aa17022.
 - The experimental file-share WAL lease was reverted after a cross-process lock/test stall. The current single-writer fence is a named OS-managed Mutex, acquired/released on its dedicated process-wide manager thread.
 - Cross-process tests target the actual testhost PID and have unconditional child-process cleanup with bounded waits. Storage Integration uses --blame-hang-timeout 3m --blame-hang-dump-type mini to capture diagnostics for any future hang.
-- Added actual process-kill/reopen coverage at three receive boundaries: after PendingApply staging but before Node apply; after Node checkpoint but before provider apply; and after provider commit but before Metadata Store finalization. Recovery replays the immutable intent and uses the provider ApplyToken idempotently.
-- Recovery requires the negotiated alias table and peer epoch in the Node checkpoint. StorageNodePersistence.Save is now explicitly documented and demonstrated in both Storage samples immediately after each successful SyncSession handshake and before the first inbound durable batch.
+- Added actual process-kill/reopen coverage at all four receive durability boundaries: after PendingApply staging before Node apply; after Node checkpoint before provider apply; after provider commit before Metadata Store finalization; and after Metadata Store finalization before network ACK. The final cut verifies the durable receive cursor/receipt remains committed and no PendingApply remains even though ACK was not sent.
+- Recovery requires the negotiated alias table and peer epoch in the Node checkpoint. StorageNodePersistence.Save is explicitly documented and demonstrated in both Storage samples immediately after each successful SyncSession handshake and before the first inbound durable batch.
 - Windows process-kill recovery retries WAL reopen for up to ten seconds to accommodate delayed OS release of the killed process's file handle.
-- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 126/126 independently on Ubuntu, Windows and macOS-15; in-memory and real-TCP samples pass on all three platforms.
+- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 127/127 independently on Ubuntu, Windows and macOS-15; in-memory and real-TCP samples pass on all three platforms.
 - PR #16 remains Draft/open/unmerged.
 
-**Remaining:** process-kill after Metadata Store finalization but before network ACK; true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
+**Remaining:** true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
