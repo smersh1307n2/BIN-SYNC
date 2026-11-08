@@ -212,6 +212,7 @@ public static class SessionWire
             entry.NodeId.WriteTo(payload.AsSpan(offset));
             offset += 16;
             BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(offset), checked((uint)entry.Epoch));
+            offset += 4;
         }
         return FrameCodec.BuildFrame(TypeAliasMap, ControlStreamId, 3, payload);
     }
