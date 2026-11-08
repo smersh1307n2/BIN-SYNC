@@ -63,9 +63,9 @@ The fixture uses the real `StorageDataProvider` and `StorageMetadataStore`. Setu
 
 | Pending provider-feed rows | Mean / retry | Allocated / retry |
 |---:|---:|---:|
-| 256 | 2.112 ms | 1.52 MB |
-| 1,024 | 12.768 ms | 6.47 MB |
-| 4,096 | 35.213 ms | 33.92 MB |
+| 256 | 2.055 ms | 1.52 MB |
+| 1,024 | 14.324 ms | 6.47 MB |
+| 4,096 | 34.651 ms | 33.92 MB |
 
 **Important scope:** this is the complete `PublishLocalChanges` retry path, including provider snapshot rehydration and Node cache replacement. It is not a scan-only benchmark. `RestoreProviderSnapshot` rebuilds the namespace and copies field values, so its allocations are included. The 1,024-row case had high run-to-run variance (24.9% relative standard deviation); treat that mean as directional. The 4,096-row case was more stable (1.02%).
 
