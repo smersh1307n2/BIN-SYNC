@@ -360,6 +360,38 @@ public sealed class StorageCrashConsistencyTests
     }
 
     [Fact]
+    public void Wal_directory_fsync_failure_after_segment_reclamation_requires_reopen()
+    {
+        const ulong partitionId = 924;
+        string directory = Path.Combine(_root, "wal-directory-fsync-failure");
+        int directorySyncCount = 0;
+
+        try
+        {
+            using (var database = StorageDatabase.OpenForTesting(directory, partitionId, point =>
+            {
+                if (point == StorageFaultPoint.BeforeWalDirectoryFsync &&
+                    Interlocked.Increment(ref directorySyncCount) == 2)
+                    throw new IOException("Injected WAL directory fsync failure after reclamation.");
+            }))
+            {
+                Put(database, 0x42, 0x24);
+                Assert.Throws<IOException>(() => database.Checkpoint());
+                Assert.Throws<InvalidOperationException>(() => database.TryGet(new byte[] { 0x42 }, out _));
+            }
+
+            using var recovered = StorageDatabase.Open(directory, partitionId);
+            Assert.Equal(1UL, recovered.LastCommitSeq);
+            Assert.True(recovered.TryGet(new byte[] { 0x42 }, out var value));
+            Assert.Equal(new byte[] { 0x24 }, value);
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    [Fact]
     public void Partial_wal_write_fails_closed_and_recovery_discards_the_torn_record()
     {
         const ulong partitionId = 922;
