@@ -754,3 +754,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x C] Added `SendDurableFullReplaceInstalledAckAsync`: it requires the ACK to belong to the local node/namespace, finds the exact ACK already durably accepted for that generation, compares transport epoch, roster generation, digest and HLC floor, verifies the member seed against the accepted roster, and only then sends it.
 - [~ T] Exercise ACK lost-send/retry, wrong local member, stale roster, mismatched digest/floor and missing durable ACK cases.
+
+
+### 2026-11-09 — C-pass: immutable retired-origin closure on rejoin
+
+- [x C] OFR2 verification now compares every previously authority-closed epoch for the reporting member against the immutable NRS2 closure: epoch, final issued sequence and maximum HLC must all match, and a rejoined member cannot omit the old epoch from its report.
+- [x C] Applied the check in both decode/verify and object verification paths, so both wire receive and local checkpoint construction enforce the same invariant.
+- [~ T] Add tamper tests for omitted/changed old epochs after rejoin, unchanged closed epochs alongside a new epoch, and old-epoch attempts to advance issued sequence/HLC.
