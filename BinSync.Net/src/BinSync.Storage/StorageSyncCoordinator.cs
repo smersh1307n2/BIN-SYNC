@@ -343,7 +343,7 @@ public sealed class StorageSyncCoordinator
             if (highWatermark < 0)
                 throw new InvalidDataException("Node Outbox author watermark is invalid during provider cutover.");
             _node.DiscardOutboxPayloadsThrough(_namespaceId, author, highWatermark);
-            if (_node.ReadOutboxEntries(_namespaceId, author, afterSequence: 0, maxCount: 1).Count != 0)
+            if (_node.ReadOutboxEntries(_namespaceId, author, 0, 1).Count != 0)
                 throw new InvalidDataException("Node Outbox payload rows remain after provider-authoritative cutover cleanup.");
         }
     }
