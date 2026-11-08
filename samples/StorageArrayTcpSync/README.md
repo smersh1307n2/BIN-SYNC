@@ -6,11 +6,11 @@ It covers:
 - two independent Storage databases, each containing its provider, metadata store and complete Node checkpoint;
 - stable array-item RecordIds derived from GUIDs and stable field IDs;
 - bidirectional synchronization of multi-field array items over `TcpSyncListener` and `TcpSync.ConnectAsync`;
-- receiver-side Node checkpoint, provider apply and Metadata Store PendingApply finalization before the TCP session sends ACK;
+- receiver-side Metadata Store PendingApply staging and validation before Node mutation, followed by Node checkpoint, provider apply and receipt finalization before the TCP session sends ACK;
 - closing and reopening both databases, restoring both Nodes and continuing the same author streams;
 - a later field update and a record lifecycle tombstone over TCP.
 
-The sample intentionally opens a fresh TCP session for each exchange. It validates the actual `SyncSession` framing, handshake, batch receive and ACK path rather than the in-process `Transport.SyncRound` helper.
+The sample intentionally opens a fresh TCP session for each exchange. It validates the actual `SyncSession` framing, handshake, Metadata-Store-authoritative batch receive and ACK path rather than the in-process `Transport.SyncRound` helper. Receive is routed through `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync`; the legacy Node-owned receive overload is intentionally not used after provider cutover.
 
 Run from the repository root:
 
