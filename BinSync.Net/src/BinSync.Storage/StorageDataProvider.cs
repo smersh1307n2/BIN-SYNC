@@ -8,7 +8,7 @@ namespace BinSync.Storage;
 /// <summary>
 /// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
-public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore
+public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore
 {
     private const byte ItemMap = 0x01;
     private const byte ItemReverse = 0x02;
@@ -23,6 +23,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private const byte ProviderPublicationMode = 0x24;
     private const int MaxFullReplacePageEntries = ProviderFullReplaceDigestBuilder.MaxPageEntries;
     private const byte ProviderFormatMarker = 0x25;
+    private const byte ClosedAuthorEpoch = 0x27;
     private const byte ActiveGeneration = 0x26;
     private const byte FullReplaceSession = 0x41;
     private const byte ApplyReceipt = 0x30;
@@ -30,7 +31,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static readonly byte[] ProviderOwnedPrefixes =
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
          LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
-         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt];
+         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt, ClosedAuthorEpoch];
 
     private readonly object _gate;
     private readonly StorageDatabase _storage;
@@ -301,6 +302,37 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         }
     }
 
+    public bool TryCloseLocalAuthorEpoch(uint authorEpoch)
+    {
+        if (authorEpoch == 0) throw new ArgumentOutOfRangeException(nameof(authorEpoch));
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            byte[] closureKey = ClosedAuthorEpochKey(authorEpoch);
+            if (_storage.TryGet(closureKey, out _)) return true;
+
+            using StorageSnapshot snapshot = _storage.OpenSnapshot();
+            using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Prefixed(LocalChange, ReadOnlySpan<byte>.Empty));
+            const int scanPageSize = 1024;
+            while (true)
+            {
+                IReadOnlyList<StorageEntry> page = cursor.ReadPage(scanPageSize);
+                foreach (StorageEntry row in page)
+                {
+                    var (mutation, _) = DecodeLocalFeedChange(row.Value);
+                    if (mutation.OriginAuthorEpoch == authorEpoch)
+                        return false;
+                }
+                if (page.Count < scanPageSize) break;
+            }
+
+            using var batch = _storage.BeginWriteBatch();
+            batch.Put(closureKey, Array.Empty<byte>());
+            batch.Commit();
+            return true;
+        }
+    }
+
     public void AppendLocalChange(ProviderMutation mutation)
     {
         ArgumentNullException.ThrowIfNull(mutation);
@@ -308,7 +340,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         {
             ThrowIfDisposed();
             if (mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence != 0)
-                throw new ArgumentException("Local provider changes require the current non-zero author epoch; origin sequence is allocated by the provider.", nameof(mutation));
+                throw new ArgumentException("Local provider drafts require a non-zero author epoch and deferred origin sequence.", nameof(mutation));
+            if (_storage.TryGet(ClosedAuthorEpochKey(mutation.OriginAuthorEpoch), out _))
+                throw new InvalidOperationException("The local author epoch has been terminally closed and cannot issue new changes.");
             using var batch = _storage.BeginWriteBatch();
             ulong current = batch.TryGet([LocalHighWatermark], out var currentBytes)
                 ? ReadUInt64(currentBytes!)
@@ -1447,6 +1481,14 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         if (!snapshot.TryGet([ActiveGeneration], out var value) || value!.Length != 16)
             throw new InvalidDataException("Storage Data Provider active generation marker is missing or malformed.");
         return new Guid(value!, true);
+    }
+
+    private static byte[] ClosedAuthorEpochKey(uint authorEpoch)
+    {
+        byte[] key = new byte[5];
+        key[0] = ClosedAuthorEpoch;
+        BinaryPrimitives.WriteUInt32LittleEndian(key.AsSpan(1), authorEpoch);
+        return key;
     }
 
     private static byte[] ChangeKey(ulong sequence)
