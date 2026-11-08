@@ -312,4 +312,36 @@ public sealed class StorageCrashConsistencyTests
             // Best-effort cleanup keeps the primary assertion failure visible.
         }
     }
+    [Fact]
+    public void Checkpoint_failure_requires_reopen_and_recovers_from_wal()
+    {
+        const ulong partitionId = 907;
+        string directory = Path.Combine(_root, "checkpoint-publication-failure");
+        Directory.CreateDirectory(directory);
+        string snapshots = Path.Combine(directory, "snapshots");
+
+        try
+        {
+            using (var database = StorageDatabase.Open(directory, partitionId))
+            {
+                Put(database, 0x12, 0x34);
+                Directory.CreateDirectory(snapshots);
+                File.WriteAllBytes(Path.Combine(snapshots, $"p_{partitionId}.1.snap"),
+                    new byte[] { 0xFA, 0xFB });
+                Assert.Throws<IOException>(() => database.Checkpoint());
+                Assert.Throws<InvalidOperationException>(() => database.TryGet(new byte[] { 0x12 }, out _));
+            }
+
+            using var recovered = StorageDatabase.Open(directory, partitionId);
+            Assert.Equal(1UL, recovered.LastCommitSeq);
+            Assert.True(recovered.TryGet(new byte[] { 0x12 }, out var value));
+            Assert.Equal(new byte[] { 0x34 }, value);
+            Assert.False(File.Exists(Path.Combine(snapshots, $"p_{partitionId}.1.snap")));
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
 }
