@@ -174,6 +174,6 @@ The durable `StorageDataProvider` implementation passes the inherited provider c
 
 The cutover requires an empty/acknowledged provider feed and aligned Node/Metadata Store outbound high-watermarks. The provider persists the immutable cutover watermark. The coordinator consults the global ChangeId fingerprint ledger on replay: if a metadata freeze committed but provider ACK failed, already-frozen ChangeIds are retained and only the later unfrozen suffix is coalesced. This preserves the immutability boundary when newer local edits arrive before retry.
 
-Verified BIN-SYNC source/test head `4c4789f06150dd07457adb207dc84879fdea4bd4`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases and 70.9% line coverage; in-process and real-TCP Storage samples pass.
+Verified BIN-SYNC code/test head `77e7f9e648111671fa200a19bf2a1508b6b993bb`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases and 70.9% line coverage; in-process and real-TCP Storage samples pass.
 
 This remains a **provider-feed publication slice**, not the final FLD Database PendingLocal implementation. The source feed is a durable provider journal; it does not yet implement FLD's atomic StageSeq snapshot/freeze-intent promotion protocol from the cross-repository roadmap §7.22. Physical Storage crash-cut tests, multi-process provider feed concurrency, FLD JournalSeq→ChangeId→OutboxSeq provenance, and independent receipt/dedup/tombstone GC horizons remain open.
