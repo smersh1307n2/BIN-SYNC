@@ -462,3 +462,8 @@ OFR2 validation indexes local applied sequences and issued epochs once per repor
 ## 10.21. Storage snapshot payload sharing (2026-11-09)
 
 `StorageDatabase.OpenSnapshot` still copies the sorted key index for point-in-time isolation, but it now shares the immutable stored value arrays rather than cloning every payload. This is safe because commits copy caller-owned buffers on publication and replace value references instead of mutating arrays; snapshot APIs return owned copies to callers. Total snapshot index memory remains O(number of keys), not O(page), until the engine adopts a persistent immutable index/MVCC root.
+
+
+## 10.22. Snapshot prefix cursors seek by sorted range (2026-11-09)
+
+`StorageSnapshot.PrefixCursor` computes the lexicographic exclusive upper bound for a non-empty prefix and opens a `SortedDictionary.GetViewBetween` range. Cursor startup and `afterKey` continuation now seek into the matching range rather than scanning unrelated partition keys. Empty/all-`0xFF` prefixes retain the safe full-enumeration fallback. Page boundaries and owned `StorageEntry` copies are unchanged.
