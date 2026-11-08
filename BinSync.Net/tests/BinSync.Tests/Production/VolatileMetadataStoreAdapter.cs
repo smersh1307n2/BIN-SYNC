@@ -23,6 +23,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var current = _partitions.TryGetValue(partitionKey, out var stored)
             ? stored
             : new PartitionState();
+        _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
         var next = current.Clone();
         var receipt = ApplyIncomingBatch(next, batch);
         _partitions[partitionKey] = next;
