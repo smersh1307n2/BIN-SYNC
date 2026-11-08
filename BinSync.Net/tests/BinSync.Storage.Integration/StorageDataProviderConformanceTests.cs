@@ -392,4 +392,26 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+    [Fact]
+    public void Storage_database_rejects_a_second_writer_for_the_same_partition()
+    {
+        string directory = Path.Combine(_root, "single-writer-fence");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var first = StorageDatabase.Open(directory, 86);
+            Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 86));
+
+            using var batch = first.BeginWriteBatch();
+            batch.Put(new byte[] { 1 }, new byte[] { 2 });
+            batch.Commit();
+            Assert.True(first.TryGet(new byte[] { 1 }, out var value));
+            Assert.Equal(new byte[] { 2 }, value);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
