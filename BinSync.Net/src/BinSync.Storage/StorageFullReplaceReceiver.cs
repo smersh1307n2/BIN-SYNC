@@ -208,6 +208,8 @@ public sealed class StorageFullReplaceReceiver
                     Digest = manifest.ExpectedDigest.ToArray(),
                     MemberNodeId = _localMember,
                     MemberTransportEpoch = _localMemberEpoch,
+                    HlcWallFloor = hlcWall,
+                    HlcLogicalFloor = hlcLogical,
                     Installed = true
                 };
                 byte[] signed = FullReplaceInstalledAckProtocol.Sign(acknowledgement, _localMemberSeed);
