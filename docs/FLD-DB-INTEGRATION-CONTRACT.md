@@ -1,3 +1,5 @@
+> **v3.0.0 integration override (2026-11-08):** The current normative contract is BIN-SYNC-SPECIFICATION.txt v3.0.0. This document retains the earlier Node-Outbox/FLD-ApplyJournal bridge design for migration traceability; §§3.1.1–3.1.2 are transition-only and are not the final v3 ownership model. In v3, FLD OutboxSeq, FLD JournalSeq and FLD CommitSeq are source-local coordinates, never OriginSequence. BIN-SYNC Metadata Store allocates and persists OriginSequence at durable publication freeze. The Metadata Store is the sole owner of published ChangeId/Origin identity, receipts, peer delivery state and relay payload; FLD APPLY/WAL owns field-state recovery and tombstones, not a second authoritative relay history. No duplicate PendingLocal journal is permitted. Storage remains opaque and domain-neutral; Database remains the field-semantic overlay. The two-DLL target remains Fld1.Storage.dll and Fld1.Database.dll.
+
 # Контракт интеграции BIN-SYNC ↔ FLD-DB
 
 **Статус:** специализированный проект контракта интеграции FLD-DB как синхронизируемой базы.  
@@ -34,10 +36,10 @@ BIN-SYNC не должен держать вторую копию durable field 
 
 1. `FldDatabase.LocalAuthor` обязан побайтно совпадать с `BinSync.NodeId`. Один FLD database instance обслуживает один namespace; несколько namespace используют один и тот же local author.
 2. `FldDatabase.NamespaceId` соответствует BIN-SYNC `namespaceId`; допустимый диапазон — `0..65535`.
-3. FLD `OutboxSeq` — durable монотонный cursor локального Outbox внутри namespace. Он напрямую отображается на BIN-SYNC stream `(LocalAuthor, namespaceId)`.
-4. Не добавлять второй author sequence в FLD: при одном local author на database его глобальный namespace OutboxSeq уже является sequence этого author stream.
-5. FLD `CommitSeq` — WAL durability/commit sequence, **не** BIN-SYNC stream cursor.
-6. FLD `MaterializedThroughCommitSeq`, `LastSealedCommitSeq`, `CertifiedWatermark` и BIN-SYNC `SafeOutboxSeq` — разные шкалы. Их нельзя подменять друг другом.
+3. FLD `OutboxSeq` — durable cursor локального provider feed/Outbox. Он нужен для чтения и ACK source changes, но не является BIN-SYNC OriginSequence и не переносится как origin в wire.
+4. `OriginSequence` выделяется BIN-SYNC Metadata Store атомарно при freeze опубликованной операции, монотонно в пределах `(scope, namespaceId, originAuthorNodeId)`. Он не выводится из FLD `OutboxSeq`, `JournalSeq` или `CommitSeq`. Повторный freeze того же ChangeId возвращает ранее сохранённый Origin.
+5. FLD `CommitSeq` — WAL durability/commit sequence, **не** BIN-SYNC stream cursor и не OriginSequence.
+6. FLD `MaterializedThroughCommitSeq`, `LastSealedCommitSeq`, `CertifiedWatermark`, `OutboxSeq`, `JournalSeq`, BIN-SYNC `SenderCursor` и `OriginSequence` — разные шкалы. Их нельзя подменять друг другом.
 7. `ChangeId` — стабильный 16-byte идентификатор mutation. Он не генерируется заново при remote apply, replay, retry или relay.
 8. Author tie-break использует порядок BIN-SYNC `NodeId`: `Lo = UInt64LE(bytes[0..7])`, затем `Hi = UInt64LE(bytes[8..15])`. RecordId sort остаётся unsigned BE memcmp. HLC wall — микросекунды UTC; `KeyEpoch` — u16.
 
