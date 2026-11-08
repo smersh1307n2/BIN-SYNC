@@ -406,18 +406,78 @@ public sealed class StorageSnapshot : IDisposable
 
     public IReadOnlyList<StorageEntry> ScanPrefix(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> afterKey, int limit)
     {
-        if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
-        var values = GetValues();
-        var result = new List<StorageEntry>(Math.Min(limit, values.Count));
-        foreach (var pair in values)
+        using PrefixCursor cursor = OpenPrefixCursor(prefix, afterKey);
+        return cursor.ReadPage(limit);
+    }
+
+    /// <summary>Creates a forward-only, bounded-memory cursor over one sorted key prefix.</summary>
+    public PrefixCursor OpenPrefixCursor(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> afterKey = default)
+    {
+        if (prefix.IsEmpty) throw new ArgumentException("Storage prefix is required.", nameof(prefix));
+        return new PrefixCursor(this, prefix.ToArray(), afterKey.ToArray());
+    }
+
+    public sealed class PrefixCursor : IDisposable
+    {
+        private readonly byte[] _prefix;
+        private readonly byte[] _afterKey;
+        private IEnumerator<KeyValuePair<StorageDatabase.StorageKey, byte[]>>? _enumerator;
+        private bool _finished;
+
+        internal PrefixCursor(StorageSnapshot owner, byte[] prefix, byte[] afterKey)
         {
-            if (!pair.Key.Span.StartsWith(prefix)) continue;
-            if (!afterKey.IsEmpty && pair.Key.Span.SequenceCompareTo(afterKey) <= 0) continue;
-            result.Add(new StorageEntry(pair.Key.Span.ToArray(), pair.Value.ToArray()));
-            if (result.Count == limit) break;
+            _prefix = prefix;
+            _afterKey = afterKey;
+            _enumerator = owner.GetValues().GetEnumerator();
         }
 
-        return result;
+        public IReadOnlyList<StorageEntry> ReadPage(int limit)
+        {
+            if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            var enumerator = _enumerator
+                ?? throw new ObjectDisposedException(nameof(PrefixCursor));
+            if (_finished) return Array.Empty<StorageEntry>();
+
+            var result = new List<StorageEntry>(limit);
+            while (enumerator.MoveNext())
+            {
+                var pair = enumerator.Current;
+                ReadOnlySpan<byte> key = pair.Key.Span;
+                int prefixOrder = CompareToPrefix(key, _prefix);
+                if (prefixOrder < 0) continue;
+                if (prefixOrder > 0)
+                {
+                    _finished = true;
+                    break;
+                }
+                if (_afterKey.Length != 0 && key.SequenceCompareTo(_afterKey) <= 0)
+                    continue;
+
+                result.Add(new StorageEntry(key.ToArray(), pair.Value.ToArray()));
+                if (result.Count == limit) break;
+            }
+
+            if (result.Count < limit && !enumerator.MoveNext())
+                _finished = true;
+            else if (result.Count < limit && enumerator.Current.Key.Span.SequenceCompareTo(_prefix) > 0)
+                _finished = true;
+            return result;
+        }
+
+        public void Dispose()
+        {
+            _enumerator?.Dispose();
+            _enumerator = null;
+            _finished = true;
+        }
+
+        private static int CompareToPrefix(ReadOnlySpan<byte> key, ReadOnlySpan<byte> prefix)
+        {
+            int common = Math.Min(key.Length, prefix.Length);
+            int order = key[..common].SequenceCompareTo(prefix[..common]);
+            if (order != 0) return order;
+            return key.Length < prefix.Length ? -1 : 0;
+        }
     }
 
     private SortedDictionary<StorageDatabase.StorageKey, byte[]> GetValues()
