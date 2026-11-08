@@ -1957,14 +1957,17 @@ public sealed class StorageSyncCoordinatorTests
     {
         private readonly IDataProvider _inner;
         private readonly Func<ProviderChange, ProviderChange>? _changeTransform;
+        private readonly Action? _afterRemoteApply;
         private bool _failNextAcknowledge = true;
 
         public FailOnceAcknowledgeProvider(
             IDataProvider inner,
-            Func<ProviderChange, ProviderChange>? changeTransform = null)
+            Func<ProviderChange, ProviderChange>? changeTransform = null,
+            Action? afterRemoteApply = null)
         {
             _inner = inner;
             _changeTransform = changeTransform;
+            _afterRemoteApply = afterRemoteApply;
         }
 
         public int SnapshotOpenCount { get; private set; }
@@ -2005,8 +2008,12 @@ public sealed class StorageSyncCoordinatorTests
         public ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit) =>
             _inner.ReadSnapshot(snapshotToken, afterIndex, limit);
         public void ReleaseSnapshot(Guid snapshotToken) => _inner.ReleaseSnapshot(snapshotToken);
-        public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations) =>
-            _inner.ApplyRemoteBatch(applyToken, mutations);
+        public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations)
+        {
+            ProviderApplyReceipt receipt = _inner.ApplyRemoteBatch(applyToken, mutations);
+            _afterRemoteApply?.Invoke();
+            return receipt;
+        }
         public bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation) =>
             _inner.TryReadCurrent(recordId, fieldId, out mutation);
         public void Dispose() { }
@@ -2051,12 +2058,14 @@ public sealed class StorageSyncCoordinatorTests
     }
 
 
-    [Fact]
-    public async Task Process_kill_after_node_checkpoint_recovers_pending_apply_and_provider_state()
+    [Theory]
+    [InlineData("after-node-checkpoint")]
+    [InlineData("after-provider-commit")]
+    public async Task Process_kill_at_receive_durability_cut_recovers_pending_apply_and_provider_state(string crashCut)
     {
-        string directory = Path.Combine(_root, "process-kill-after-node-checkpoint");
+        string directory = Path.Combine(_root, "process-kill-" + crashCut);
         const ulong partitionId = 468;
-        const string scope = "process-kill-after-node-checkpoint";
+        string scope = "process-kill-" + crashCut;
         string readyPath = Path.Combine(_root, "coordinator-child-ready");
         string ownerPidPath = Path.Combine(_root, "coordinator-child-pid");
         string? projectDirectory = AppContext.BaseDirectory;
@@ -2087,6 +2096,7 @@ public sealed class StorageSyncCoordinatorTests
         start.Environment["BIN_SYNC_COORDINATOR_CRASH_DIR"] = directory;
         start.Environment["BIN_SYNC_COORDINATOR_CRASH_READY"] = readyPath;
         start.Environment["BIN_SYNC_COORDINATOR_CRASH_PID"] = ownerPidPath;
+        start.Environment["BIN_SYNC_COORDINATOR_CRASH_CUT"] = crashCut;
 
         System.Diagnostics.Process? child = null;
         try
@@ -2130,17 +2140,20 @@ public sealed class StorageSyncCoordinatorTests
             Assert.Single(metadata.ReadPendingApplyIntents(scope, receiverId));
             RecordId record = RecordId.From(Guid.Parse("7a000000-0000-0000-0000-00000000007a").ToByteArray());
             Assert.True(receiver.TryGetField(1, record, 0x087a, out var checkpointed));
-            Assert.Equal("crash-cut-after-node-checkpoint", Encoding.UTF8.GetString(checkpointed!.Value));
-            Assert.False(provider.TryReadCurrent(record, 0x087a, out _));
+            Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(checkpointed!.Value));
+            bool providerAlreadyCommitted = provider.TryReadCurrent(record, 0x087a, out var providerBeforeRecovery);
+            Assert.Equal(crashCut == "after-provider-commit", providerAlreadyCommitted);
+            if (providerAlreadyCommitted)
+                Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(providerBeforeRecovery!.Value));
 
             var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
             Assert.Equal(1, coordinator.RecoverPendingApplies(
                 node => StorageNodePersistence.Save(storage, node)));
             Assert.Empty(metadata.ReadPendingApplyIntents(scope, receiverId));
             Assert.True(provider.TryReadCurrent(record, 0x087a, out var recovered));
-            Assert.Equal("crash-cut-after-node-checkpoint", Encoding.UTF8.GetString(recovered!.Value));
+            Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(recovered!.Value));
             Assert.True(receiver.TryGetField(1, record, 0x087a, out var recoveredNode));
-            Assert.Equal("crash-cut-after-node-checkpoint", Encoding.UTF8.GetString(recoveredNode!.Value));
+            Assert.Equal("crash-cut-" + crashCut, Encoding.UTF8.GetString(recoveredNode!.Value));
         }
         finally
         {
@@ -2160,15 +2173,26 @@ public sealed class StorageSyncCoordinatorTests
         string? directory = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_DIR");
         string? readyPath = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_READY");
         string? ownerPidPath = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_PID");
+        string? crashCut = Environment.GetEnvironmentVariable("BIN_SYNC_COORDINATOR_CRASH_CUT");
         if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(readyPath) ||
-            string.IsNullOrWhiteSpace(ownerPidPath))
+            string.IsNullOrWhiteSpace(ownerPidPath) || string.IsNullOrWhiteSpace(crashCut))
             return;
 
         const ulong partitionId = 468;
-        const string scope = "process-kill-after-node-checkpoint";
+        string scope = "process-kill-" + crashCut;
         RecordId record = RecordId.From(Guid.Parse("7a000000-0000-0000-0000-00000000007a").ToByteArray());
         using var storage = StorageDatabase.Open(directory, partitionId);
-        using var provider = new StorageDataProvider(storage);
+        using var innerProvider = new StorageDataProvider(storage);
+        Action signalAndBlock = () =>
+        {
+            File.WriteAllText(ownerPidPath, Environment.ProcessId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+            File.WriteAllText(readyPath, crashCut);
+            Thread.Sleep(Timeout.Infinite);
+        };
+        using IDataProvider provider = crashCut == "after-provider-commit"
+            ? new FailOnceAcknowledgeProvider(innerProvider, afterRemoteApply: signalAndBlock)
+            : innerProvider;
         using var metadata = new StorageMetadataStore(storage);
         using var sender = NewNode(121);
         using var receiver = NewNode(122);
@@ -2180,16 +2204,14 @@ public sealed class StorageSyncCoordinatorTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
         Assert.True(sender.WriteField(1, record, 0x087a,
-            "crash-cut-after-node-checkpoint"u8.ToArray(), new Hlc(8700, 0)));
+            "crash-cut-" + crashCutu8.ToArray(), new Hlc(8700, 0)));
 
         var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
         Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, node =>
         {
             StorageNodePersistence.Save(storage, node);
-            File.WriteAllText(ownerPidPath, Environment.ProcessId.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
-            File.WriteAllText(readyPath, "node-checkpoint-durable");
-            Thread.Sleep(Timeout.Infinite);
+            if (crashCut == "after-node-checkpoint")
+                signalAndBlock();
         });
         Task<bool> send = initiator.PushBatchAsync(sender, 1);
         await Task.WhenAll(receive, send);
