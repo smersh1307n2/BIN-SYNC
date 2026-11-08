@@ -33,4 +33,21 @@ The raw BenchmarkDotNet CSV, Markdown and HTML reports are attached to the succe
 
 ## 2026-11-08 retry-scan allocation note
 
-The optional `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeFingerprint` lookup now returns a `ReadOnlyMemory<byte>` view over the immutable 16-byte ChangeId ledger fingerprint instead of allocating a new 16-byte array for each already-frozen provider-feed row. The coordinator compares the view directly and computes the canonical provider-operation fingerprint only when the ledger contains that ChangeId. This removes one per-frozen-row copy from the ACK-retry scan by construction; it is **not** a measured latency/allocation claim yet. Add the lookup/retry path to the next controlled BenchmarkDotNet run and report allocations at 256, 1K and 4K pending feed rows before considering further optimization.
+The optional `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeFingerprint` lookup returns a `ReadOnlyMemory<byte>` view over the immutable 16-byte ChangeId ledger fingerprint instead of allocating a new 16-byte array for each already-frozen provider-feed row. The coordinator compares the view directly and computes the canonical provider-operation fingerprint only when the ledger contains that ChangeId. The following direct-lookup benchmark measures the lookup itself; it does not measure the complete coordinator retry scan.
+
+
+## 2026-11-08 frozen ChangeId lookup scaling
+
+**Run:** GitHub Actions Durable Metadata Bench, commit `ed5d38f731c981362fc28b02ba5e5c3d07b7382e`  
+**BenchmarkDotNet:** 0.14.0 · **Runtime:** .NET 10.0.14 · **OS:** Ubuntu 26.04.1 LTS · **Architecture:** x64 RyuJIT · **GC:** Server, concurrent  
+**Job:** InProcessEmitToolchain, 3 warmup iterations and 10 measurement iterations. Each invocation performs 2,097,152 lookups; setup and durable ledger population are excluded from the measured method.
+
+The fixture freezes 256, 1,024 or 4,096 unique outbound ChangeIds into the durable Metadata Store, then repeatedly looks up their immutable 16-byte fingerprints through the optional identity-store capability.
+
+| Pending feed / ledger rows | Mean / lookup | Allocated / lookup |
+|---:|---:|---:|
+| 256 | 57.02 ns | 0 B |
+| 1,024 | 57.85 ns | 0 B |
+| 4,096 | 59.57 ns | 0 B |
+
+**Interpretation:** lookup allocation remained zero at all three ledger sizes. Mean lookup latency remained approximately 57–60 ns in this CI environment. This supports the structural no-copy implementation for the direct lookup. It is not a before/after comparison, not a production SLA, and not evidence that the complete ACK-retry scan is allocation-free; coordinator-level retry benchmarks and deployment-hardware measurements remain open.
