@@ -189,6 +189,10 @@ public sealed class StorageFullReplaceReceiver
                 throw new InvalidOperationException("Cross-store FULL_REPLACE commit proof is unavailable; provider state was not switched.");
             using (commitGuard)
             {
+                ProviderChangePage pendingLocal = _provider.ReadLocalChanges(0, 1);
+                if (pendingLocal.Changes.Count != 0)
+                    throw new InvalidOperationException("Drain and acknowledge local provider drafts before committing FULL_REPLACE; the application commit guard prevents new drafts during the switch.");
+
                 if (!_gcStore.TryReadNamespaceRoster(_namespaceId, _trustStore,
                         out NamespaceRosterCertificate? currentRoster) || currentRoster is null ||
                     currentRoster.RosterGeneration != roster.RosterGeneration ||
