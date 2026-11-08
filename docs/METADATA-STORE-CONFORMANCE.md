@@ -298,7 +298,10 @@ The Storage coordinator requires this optional capability before enabling provid
 
 Conformance/recovery edge now covered: metadata freeze commits, provider feed ACK is interrupted, a newer edit to the same field arrives, and retry must retain the earlier frozen ChangeId while appending only the later unfrozen suffix. The regression verifies the exact two ChangeIds, outbound sequence order, provider feed ACK and unchanged Node Outbox watermark.
 
-Latest verified BIN-SYNC code/test head `2667fb81f41f726d2c286b98f34acd7857c2a7eb`: 648 core tests, 119 Storage Integration tests on Ubuntu/Windows/macOS, 31 Fuzz/Lab cases, 70.4% line coverage; in-process and real-TCP Storage samples pass. The optional-capability refactor preserves the base `IMetadataStore` contract and is included in these passing checks.
+Latest verified BIN-SYNC code/test head `18430c949b268caa512325320bb134587c722422`: 648 core tests, 134 Storage Integration tests independently on Ubuntu/Windows/macOS, 31 Fuzz/Lab cases, 70.4% line coverage; in-process and real-TCP Storage samples pass. The optional-capability refactor preserves the base `IMetadataStore` contract and is included in these passing checks.
 
 
 Storage adapters attached to one `StorageDatabase` share a process-local transaction gate, covering provider feed writes, Metadata Store mutations and Node checkpoint saves. The underlying WAL partition is single-writer: `StorageDatabase.Open` acquires a named OS-managed Mutex before snapshot/WAL recovery. A second process is rejected; the owner process may terminate abruptly and the next opener recovers abandoned ownership; a dedicated manager thread releases the Mutex so disposal may occur from another thread. This is not multi-writer support; actual power-loss/I/O fault injection remains open.
+
+
+The generic Storage crash suite now injects deterministic exceptions after WAL append/before flush, after WAL flush/before in-memory publication, after snapshot temp-file flush/rename, and after manifest temp-file flush/rename. Each case requires reopen, verifies committed state, and repeats checkpointing. Recovery also removes orphan snapshot generations and abandoned temp files after validating the authoritative manifest. These are deterministic boundary-failure tests, not a claim of simulated device-level partial writes or power loss.
