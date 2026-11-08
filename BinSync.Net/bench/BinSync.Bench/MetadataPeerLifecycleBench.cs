@@ -132,29 +132,52 @@ public class MetadataPeerRetirementBench : MetadataPeerLifecycleBenchBase
 
 [MemoryDiagnoser]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
-public class MetadataPeerChangeIdentityLookupBench : MetadataPeerLifecycleBenchBase
+public class MetadataPeerChangeIdentityLookupBench
 {
+    private const string Scope = "metadata-change-identity-bench";
+    private const int NamespaceId = 1;
+    private const int LookupOperationsPerInvocation = 1_048_576;
+    private static readonly NodeId Local = NodeId.From(IdBytes(1));
+    private static readonly NodeId Author = NodeId.From(IdBytes(2));
+    private StorageMetadataStore _store = null!;
     private IMetadataOutboundChangeIdentityStore _identityStore = null!;
     private BatchId[] _changeIds = Array.Empty<BatchId>();
+
+    [Params(256, 1_024, 4_096)]
+    public int PendingFeedRows { get; set; }
 
     [IterationSetup]
     public void Setup()
     {
-        CreateStore();
-        _identityStore = Store;
-        _changeIds = new BatchId[UnrelatedOutboundItems];
-        for (int i = 0; i < _changeIds.Length; i++)
-            _changeIds[i] = BatchId.From(IdBytes(i + 100));
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-change-identity-bench-" + Guid.NewGuid().ToString("N"));
+        _store = new StorageMetadataStore(directory, 702, deleteOnDispose: true);
+        _identityStore = _store;
+        var operations = new MetadataFrozenOperation[PendingFeedRows];
+        _changeIds = new BatchId[PendingFeedRows];
+        for (int i = 0; i < PendingFeedRows; i++)
+        {
+            byte[] identity = IdBytes(i + 100);
+            BatchId changeId = BatchId.From(identity);
+            _changeIds[i] = changeId;
+            operations[i] = new MetadataFrozenOperation
+            {
+                ChangeId = changeId,
+                Fingerprint = identity,
+                Payload = BitConverter.GetBytes(i)
+            };
+        }
+        _store.FreezeOutbound(Scope, Local, NamespaceId, Author, operations);
     }
 
     [IterationCleanup]
-    public void Cleanup() => DisposeStore();
+    public void Cleanup() => _store.Dispose();
 
-    [Benchmark(OperationsPerInvoke = OperationsPerInvocation,
-        Description = "Frozen ChangeId fingerprint lookup / ledger scale")]
+    [Benchmark(OperationsPerInvoke = LookupOperationsPerInvocation,
+        Description = "Frozen ChangeId fingerprint lookup / pending feed row scale")]
     public int LookupFrozenChangeIdFingerprints()
     {
-        for (int i = 0; i < OperationsPerInvocation; i++)
+        for (int i = 0; i < LookupOperationsPerInvocation; i++)
         {
             BatchId changeId = _changeIds[i % _changeIds.Length];
             if (!_identityStore.TryGetOutboundChangeFingerprint(
@@ -162,6 +185,13 @@ public class MetadataPeerChangeIdentityLookupBench : MetadataPeerLifecycleBenchB
                 fingerprint.Length != 16)
                 throw new InvalidOperationException("Frozen ChangeId fingerprint lookup failed.");
         }
-        return OperationsPerInvocation;
+        return LookupOperationsPerInvocation;
+    }
+
+    private static byte[] IdBytes(long value)
+    {
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64BigEndian(bytes.AsSpan(8), value);
+        return bytes;
     }
 }
