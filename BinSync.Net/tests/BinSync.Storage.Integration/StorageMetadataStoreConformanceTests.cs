@@ -1269,20 +1269,20 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             TransportPeerEpoch = 0,
             AuthorStreamNodeId = author,
             NamespaceId = 7,
-            BatchId = Batch(260),
+            BatchId = Batch(160),
             CursorStart = 1,
             CursorEnd = 1,
             PreviousBatchDigest = new byte[16],
-            BatchDigest = Enumerable.Repeat((byte)261, 16).ToArray(),
-            HeaderFingerprint = Enumerable.Repeat((byte)262, 16).ToArray(),
+            BatchDigest = Enumerable.Repeat((byte)161, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)162, 16).ToArray(),
             Operations = new[]
             {
                 new MetadataOperation
                 {
                     AuthorNodeId = author,
-                    ChangeId = Batch(263),
-                    Fingerprint = Enumerable.Repeat((byte)264, 16).ToArray(),
-                    Payload = new byte[] { 265 }
+                    ChangeId = Batch(163),
+                    Fingerprint = Enumerable.Repeat((byte)164, 16).ToArray(),
+                    Payload = new byte[] { 165 }
                 }
             }
         };
@@ -1335,8 +1335,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 }
             };
 
-        var namespace7 = Make(7, authorA, 5, 270);
-        var namespace8 = Make(8, authorB, 6, 271);
+        var namespace7 = Make(7, authorA, 5, 170);
+        var namespace8 = Make(8, authorB, 6, 171);
         Assert.False(store.AcceptIncomingBatch(namespace7).IsDuplicate);
         Assert.False(store.AcceptIncomingBatch(namespace8).IsDuplicate);
 
@@ -1346,7 +1346,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
 
         // Namespace 7 is fenced and its old receipt is gone.
-        var staleNamespace7 = Make(7, authorA, 5, 270);
+        var staleNamespace7 = Make(7, authorA, 5, 170);
         Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(staleNamespace7));
 
         // Namespace 8 has an independent roster and must retain the same peer epoch's receipt.
