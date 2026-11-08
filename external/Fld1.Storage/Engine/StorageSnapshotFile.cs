@@ -255,15 +255,5 @@ internal static class StorageSnapshotFile
     }
 
     private static void TryFsyncDirectory(string path)
-    {
-        // On Unix, a failed directory fsync means the rename/unlink durability
-        // boundary was not established. Never turn that I/O failure into success:
-        // the caller must fault the database and require recovery/reopen.
-        // Windows directory-entry durability is not claimed by this implementation.
-        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
-            return;
-
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        stream.Flush(flushToDisk: true);
-    }
+        => StorageDirectorySync.Flush(path);
 }
