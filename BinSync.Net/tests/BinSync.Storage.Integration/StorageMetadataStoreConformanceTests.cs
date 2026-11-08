@@ -16,13 +16,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         => new StorageMetadataStoreConformanceAdapter(Path.Combine(_root, Guid.NewGuid().ToString("N")));
 
     [Fact]
-    public void Legacy_outbound_origin_marker_migrates_into_compact_change_ledger_value()
+    public void Legacy_metadata_partition_and_rows_are_rejected_without_migration()
     {
         string directory = Path.Combine(_root, "legacy-ledger");
         Directory.CreateDirectory(directory);
         const string scope = "legacy-ledger-scope";
         NodeId local = Node(1);
-        MetadataFrozenOperation frozen = FrozenOperation(61, 71);
         byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
         byte[] root = new byte[49];
         root[0] = 0x70;
@@ -38,66 +37,33 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             return key;
         }
 
+        byte[] identity = new byte[8 + scopeBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(identity, 0x33534D42); // BMS3
+        BinaryPrimitives.WriteInt32LittleEndian(identity.AsSpan(4), scopeBytes.Length);
+        scopeBytes.CopyTo(identity, 8);
         byte[] ledgerSuffix = new byte[18];
         BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, 7);
-        frozen.ChangeId.WriteTo(ledgerSuffix.AsSpan(2));
-        byte[] streamSuffix = new byte[18];
-        BinaryPrimitives.WriteUInt16LittleEndian(streamSuffix, 7);
-        local.WriteTo(streamSuffix.AsSpan(2));
-        byte[] relaySuffix = new byte[18];
-        BinaryPrimitives.WriteUInt16LittleEndian(relaySuffix, 7);
-        Node(20).WriteTo(relaySuffix.AsSpan(2));
-        byte[] outboundSuffix = new byte[26];
-        streamSuffix.CopyTo(outboundSuffix, 0);
-        BinaryPrimitives.WriteUInt64BigEndian(outboundSuffix.AsSpan(18), 1);
-        byte[] outboundValue = new byte[20 + frozen.Payload.Length];
-        frozen.ChangeId.WriteTo(outboundValue);
-        BinaryPrimitives.WriteInt32LittleEndian(outboundValue.AsSpan(16), frozen.Payload.Length);
-        frozen.Payload.CopyTo(outboundValue, 20);
+        Batch(71).WriteTo(ledgerSuffix.AsSpan(2));
 
         try
         {
             using var storage = StorageDatabase.Open(directory, 411);
             using (var batch = storage.BeginWriteBatch())
             {
-                batch.Put(Suffix(0, ReadOnlySpan<byte>.Empty), scopeBytes);
-                batch.Put(Suffix(3, ledgerSuffix), frozen.Fingerprint.ToArray());
-                batch.Put(Suffix(7, outboundSuffix), outboundValue);
-                batch.Put(Suffix(5, relaySuffix), EncodeUInt64(1));
-                batch.Put(Suffix(6, relaySuffix), EncodeUInt64(3));
-                batch.Put(Suffix(8, streamSuffix), EncodeUInt64(1));
-                batch.Put(Suffix(9, streamSuffix), EncodeUInt64(1));
-                batch.Put(Suffix(11, ledgerSuffix), Array.Empty<byte>());
+                batch.Put(Suffix(0, ReadOnlySpan<byte>.Empty), identity);
+                // A 16-byte pre-v3 fingerprint row must not be migrated or accepted.
+                batch.Put(Suffix(3, ledgerSuffix), new byte[16]);
                 batch.Commit();
             }
 
-            using (var metadata = new StorageMetadataStore(storage))
-            {
-                var retry = Assert.Single(metadata.FreezeOutbound(scope, local, 7, local, new[] { frozen }));
-                Assert.Equal(1UL, retry.Sequence);
-                metadata.AcquireOutboundLease(scope, local, 7, local,
-                    Guid.Parse("61000000-0000-0000-0000-000000000001"));
-            }
+            using var metadata = new StorageMetadataStore(storage);
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.GetOutboundHighWatermark(scope, local, 7, local));
 
-            byte[] compactLedgerKey = Suffix(3, ledgerSuffix);
             using var snapshot = storage.OpenSnapshot();
             var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
-            Assert.DoesNotContain(rows, row => row.Key.Length > root.Length && row.Key[root.Length] is 6 or 9 or 11);
-            var compactLedger = Assert.Single(rows, row => row.Key.AsSpan().SequenceEqual(compactLedgerKey));
-            Assert.Equal(17, compactLedger.Value.Length);
-            Assert.Equal((byte)1, compactLedger.Value[16]);
-
-            var compactRelayWatermark = Assert.Single(rows, row =>
-                row.Key.AsSpan().SequenceEqual(Suffix(5, relaySuffix)));
-            Assert.Equal(16, compactRelayWatermark.Value.Length);
-            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(compactRelayWatermark.Value));
-            Assert.Equal(3UL, BinaryPrimitives.ReadUInt64LittleEndian(compactRelayWatermark.Value.AsSpan(8)));
-
-            var compactOutboundWatermark = Assert.Single(rows, row =>
-                row.Key.AsSpan().SequenceEqual(Suffix(8, streamSuffix)));
-            Assert.Equal(16, compactOutboundWatermark.Value.Length);
-            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(compactOutboundWatermark.Value));
-            Assert.Equal(1UL, BinaryPrimitives.ReadUInt64LittleEndian(compactOutboundWatermark.Value.AsSpan(8)));
+            Assert.Equal(2, rows.Count);
+            Assert.Contains(rows, row => row.Key.AsSpan().SequenceEqual(Suffix(3, ledgerSuffix)));
         }
         finally
         {
