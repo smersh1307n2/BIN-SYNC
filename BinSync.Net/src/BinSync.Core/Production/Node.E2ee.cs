@@ -31,6 +31,7 @@ public sealed partial class Node
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
             ThrowIfDisposed();
+            EnsureNodeOwnedMutationAllowedInternal(namespaceId);
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out var epoch))
