@@ -85,6 +85,8 @@ public sealed partial class Node
             ThrowIfDisposed();
             Batch batch = DecodeBatchPayloadInternal((ReadOnlyMemory<byte>)data);
             ValidateBatchForWire(batch);
+            if (batch.IssuerNodeId != senderPeer)
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             if (batch.MergePolicy != 0 && batch.MergePolicy != 0x02)
                 throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
             if (ForbiddenNamespaces.Contains(batch.NamespaceId))
@@ -184,6 +186,7 @@ public sealed partial class Node
             if (streamAuthor.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             ValidateAuthorStreamCursorSpan(batch, streamAuthor, batch.Entries.Count);
+            ValidateOriginProvenance(batch, streamAuthor);
             batch.AuthorStreamNodeId = streamAuthor;
 
             if (ComputeRecordsRoot(batch.Entries) != batch.RecordsRoot ||
@@ -237,6 +240,8 @@ public sealed partial class Node
     {
         ThrowIfDisposed();
         ValidateBatchForWire(batch);
+        if (batch.IssuerNodeId != senderPeer)
+            throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
         if (receiveStateOwnedByMetadataStore)
         {
             if (metadataApplyOperations is null || metadataApplyOperations.Count != batch.Entries.Count)

@@ -460,6 +460,8 @@ public sealed partial class Node
                 NamespaceId = e.NamespaceId,
                 Seq = checked(e.Seq - streamOffset),
                 ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
                 Payload = shared ? e.Payload : newPayload,
@@ -476,25 +478,8 @@ public sealed partial class Node
         // BUGFIX (scenario 23): stamp with the epoch LEARNED for the author in the target
         // session (ALIAS_MAP entry / per-session watermark), not self.epoch.
         // BUGFIX (errata E-6 follow-up): stream key is `stream`, not a stale loop variable.
+        // The header epoch belongs to this immediate sender. The original author's epoch is per record.
         int ep = Epoch;
-        NodeId author = stream;
-        if (author != NodeId)
-        {
-            // streamAlias was resolved against the reverse map above. Use that alias
-            // for the forward lookup instead of scanning every session binding again.
-            if (AliasToNode.TryGetValue(targetPeer, out var m) &&
-                m.TryGetValue(streamAlias.Value, out var binding) &&
-                binding.Id == author)
-            {
-                ep = binding.Epoch;
-            }
-            else
-            {
-                foreach (var kv in KnownEpochs)
-                    if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
-                        ep = Math.Max(ep, kv.Value);
-            }
-        }
         var batch = new Batch(namespaceId, schemaId, schemaVersion, 0x02, 0,   // 0x02 = LWW_FIELD
                               NodeId, ep, start, end, default, default, recordsRoot, default, entries);
         ps.LastPushedSeq = Math.Max(ps.LastPushedSeq, end);
@@ -598,6 +583,8 @@ public sealed partial class Node
                     NamespaceId = entry.NamespaceId,
                     Seq = entry.Seq,
                     ChangeId = entry.ChangeId,
+                    OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                    OriginSequence = entry.OriginSequence,
                     RecordId = entry.RecordId,
                     OpKind = entry.OpKind,
                     Payload = entry.Payload.ToArray(),
@@ -871,6 +858,8 @@ public sealed partial class Node
                     NamespaceId = namespaceId,
                     Seq = checked((long)item.Sequence),
                     ChangeId = item.ChangeId,
+                    OriginAuthorEpoch = item.OriginAuthorEpoch,
+                    OriginSequence = item.OriginSequence,
                     RecordId = recordId,
                     OpKind = TagOf(decoded.Op),
                     Payload = operationPayload,

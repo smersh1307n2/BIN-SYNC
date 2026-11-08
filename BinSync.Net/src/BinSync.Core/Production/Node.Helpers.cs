@@ -113,7 +113,7 @@ public sealed partial class Node
     }
 
     /// Canonical records array: count varint, then per entry:
-    /// recordId b128 | changeId b128 | opKind u8 | payloadLen varint | payload.
+    /// recordId b128 | changeId b128 | originEpoch u32 | originSequence u64 | opKind u8 | payloadLen varint | payload.
     /// <summary>Write canonical records array into an existing Writer (no intermediate buffer).</summary>
     public static void WriteRecordsArray(Writer w, List<OutboxEntry> entries)
     {
@@ -123,7 +123,10 @@ public sealed partial class Node
             var e = entries[i];
             if (e.ChangeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
-            w.B128(e.RecordId).B128(e.ChangeId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
+            if (e.OriginAuthorEpoch == 0 || e.OriginSequence == 0)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
+            w.B128(e.RecordId).B128(e.ChangeId).U32(e.OriginAuthorEpoch).U64(e.OriginSequence)
+                .U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload.Span);
         }
     }
 
@@ -132,7 +135,7 @@ public sealed partial class Node
     {
         int est = 8;
         for (int i = 0; i < entries.Count; i++)
-            est += 40 + entries[i].Payload.Length;
+            est += 52 + entries[i].Payload.Length;
         var dest = new byte[Math.Max(est, 16)];
         var w = new Writer(dest);
         WriteRecordsArray(w, entries);
@@ -141,23 +144,27 @@ public sealed partial class Node
     }
 
     /// <summary>Decode records array from canonical wire bytes into typed, owned identities.</summary>
-    public static List<(RecordId Rid, BatchId ChangeId, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
+    public static List<(RecordId Rid, BatchId ChangeId, uint OriginAuthorEpoch, ulong OriginSequence, byte Kind, byte[] Payload)> DecodeRecordsArray(byte[] data)
     {
         ArgumentNullException.ThrowIfNull(data);
         var r = new Reader(data);
         ulong count = r.Varint();
         if (count > (ulong)(data.Length / 4))
             throw new InvalidDataException("Records array count exceeds the available payload.");
-        var outp = new List<(RecordId, BatchId, byte, byte[])>((int)count);
+        var outp = new List<(RecordId, BatchId, uint, ulong, byte, byte[])>((int)count);
         for (int i = 0; i < (int)count; i++)
         {
             var rid = r.ReadRecordId();
             var changeId = r.ReadBatchId();
             if (changeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
+            uint originEpoch = r.U32();
+            ulong originSequence = r.U64();
+            if (originEpoch == 0 || originSequence == 0)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
             byte kind = r.U8();
             byte[] payload = r.Bytes();
-            outp.Add((rid, changeId, kind, payload));
+            outp.Add((rid, changeId, originEpoch, originSequence, kind, payload));
         }
         if (!r.Eof())
             throw new InvalidDataException("Records array contains trailing bytes.");
@@ -188,7 +195,7 @@ public sealed partial class Node
     {
         int est = Domains.DomainRecordsBytes.Length + Codec.VarintLength((ulong)entries.Count);
         for (int i = 0; i < entries.Count; i++)
-            est += 33 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
+            est += 45 + Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length;
         var buf = System.Buffers.ArrayPool<byte>.Shared.Rent(est);
         try
         {
