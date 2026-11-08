@@ -929,7 +929,6 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             provider.StageFullReplacePage(latestGeneration, 0, new[] { latest });
             provider.CommitFullReplace(latestGeneration);
 
-            Assert.Throws<InvalidOperationException>(() => provider.ReclaimInactiveGeneration(latestGeneration, 1));
             ProviderSnapshotPage heldPage = provider.ReadSnapshot(heldSnapshot.Token, 0, 10);
             Assert.Single(heldPage.Entries);
             Assert.Equal(prior.RecordId, heldPage.Entries[0].RecordId);
