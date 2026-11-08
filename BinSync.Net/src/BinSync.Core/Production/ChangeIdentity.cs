@@ -24,6 +24,28 @@ internal readonly struct ChangeLedgerValue
 public static class ChangeIdentity
 {
     private static readonly byte[] Domain = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-ID/v1");
+    private static readonly byte[] LedgerDomain = System.Text.Encoding.ASCII.GetBytes("BIN-SYNC/CHANGE-LEDGER/v1");
+
+    /// <summary>
+    /// Bind the canonical semantic mutation fingerprint to its immutable original
+    /// author tuple. This compact 16-byte value is what the Node ChangeId ledger
+    /// persists; sender/relay cursors are deliberately absent.
+    /// </summary>
+    internal static Digest16 BindOrigin(Digest16 semanticFingerprint,
+        NodeId originAuthorNodeId, uint originAuthorEpoch, ulong originSequence)
+    {
+        if (semanticFingerprint.IsZero || originAuthorNodeId.IsZero ||
+            originAuthorEpoch == 0 || originSequence == 0)
+            throw new InvalidDataException("A known ChangeId identity requires a complete immutable Origin tuple.");
+
+        var w = new Writer(LedgerDomain.Length + 16 + 4 + 8 + 16);
+        w.Raw(LedgerDomain).B128(originAuthorNodeId).U32(originAuthorEpoch)
+            .U64(originSequence).B128(semanticFingerprint);
+        var fingerprint = Digests.Blake3Digest16(w.WrittenSpan);
+        if (fingerprint.IsZero)
+            throw new InvalidDataException("The reserved zero ChangeId ledger fingerprint was produced.");
+        return fingerprint;
+    }
 
     public static Digest16 Fingerprint(int namespaceId, RecordId recordId, byte opKind,
         object operation, NodeId resolvedAuthor, IReadOnlyList<BatchId>? causalDeps = null)
@@ -190,8 +212,10 @@ public static class ChangeIdentity
             return false;
         }
 
-        fingerprint = Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind,
+        var semanticFingerprint = Fingerprint(entry.NamespaceId, entry.RecordId, entry.OpKind,
             operation, entry.AuthorNodeId, entry.CausalDepsOrNull);
+        fingerprint = BindOrigin(semanticFingerprint, entry.AuthorNodeId,
+            entry.OriginAuthorEpoch, entry.OriginSequence);
         return true;
     }
 }
