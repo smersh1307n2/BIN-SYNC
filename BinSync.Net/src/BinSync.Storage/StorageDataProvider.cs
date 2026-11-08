@@ -237,6 +237,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         return metadataStore.IsBoundTo(_storage);
     }
 
+    internal bool SharesStorageWith(StorageNamespaceGcStore gcStore)
+    {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        return gcStore.IsBoundTo(_storage);
+    }
+
     public bool SupportsRestartDurability => true;
 
     public ulong LocalChangeHighWatermark
