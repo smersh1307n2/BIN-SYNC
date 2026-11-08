@@ -53,7 +53,13 @@ jobs:
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net
         run: |
-          if grep -R -E '\|[[:space:]]*NA[[:space:]]*\|' BenchmarkDotNet.Artifacts/results/*.md BenchmarkDotNet.RetryArtifacts/results/*.md; then
+          shopt -s nullglob
+          reports=(BenchmarkDotNet.Artifacts/results/*.md)
+          if (("${#reports[@]}" == 0)); then
+            echo "No BenchmarkDotNet result reports were produced."
+            exit 1
+          fi
+          if grep -nE '\\|[[:space:]]*NA[[:space:]]*\\|' "${reports[@]}"; then
             echo "One or more metadata benchmark cases failed."
             exit 1
           fi
