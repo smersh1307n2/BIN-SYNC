@@ -307,8 +307,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
                     continue;
                 if (HasLiveChangeIdReference(current, namespaceId, pair.Key.ChangeId) ||
-                    externalReferences.HasExternalChangeIdReference(
-                        scopeId, localReplica, namespaceId, pair.Key.ChangeId))
+                    externalReferences.HasExternalChangeIdReference(namespaceId, pair.Key.ChangeId))
                     continue;
 
                 byte[] suffix = new byte[18];
