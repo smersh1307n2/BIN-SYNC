@@ -297,50 +297,8 @@ public sealed class StorageSyncCoordinator
         return totalChanges;
     }
 
-    private Digest16 ComputeMetadataFingerprint(ProviderChange change)
-    {
-        ProviderMutation mutation = change.Mutation;
-        object op;
-        byte opKind;
-        if (mutation.IsRecordTombstone)
-        {
-            op = new OpRecordTombstone
-            {
-                RecordId = mutation.RecordId,
-                Wall = mutation.HlcWall,
-                Logical = mutation.HlcLogical,
-                Origin = 1
-            };
-            opKind = OpsConst.TagRecordTomb;
-        }
-        else if (mutation.IsTombstone)
-        {
-            op = new OpFieldTomb
-            {
-                FieldId = mutation.FieldId,
-                KeyEpoch = mutation.KeyEpoch,
-                Wall = mutation.HlcWall,
-                Logical = mutation.HlcLogical,
-                Origin = 1
-            };
-            opKind = OpsConst.TagFieldTomb;
-        }
-        else
-        {
-            op = new OpFieldWrite
-            {
-                FieldId = mutation.FieldId,
-                KeyEpoch = mutation.KeyEpoch,
-                Wall = mutation.HlcWall,
-                Logical = mutation.HlcLogical,
-                Origin = 1,
-                Value = mutation.Value
-            };
-            opKind = OpsConst.TagFieldWrite;
-        }
-        return ChangeIdentity.Fingerprint(
-            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<BatchId>());
-    }
+    private Digest16 ComputeMetadataFingerprint(ProviderChange change) =>
+        ChangeIdentity.Fingerprint(_namespaceId, change.Mutation, _node.NodeId);
 
     private MetadataFrozenOperation CreateMetadataFrozenOperation(ProviderChange change)
     {
