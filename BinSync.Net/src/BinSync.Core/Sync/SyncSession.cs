@@ -100,6 +100,7 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
+        caps |= SessionCapabilities.IncrementalAliasMap;
         IDisposable? lease = null;
         try
         {
@@ -124,6 +125,7 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
+        caps |= SessionCapabilities.IncrementalAliasMap;
         IDisposable? lease = null;
         try
         {
@@ -152,6 +154,7 @@ public partial class SyncSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(local);
         ArgumentNullException.ThrowIfNull(transport);
+        caps |= SessionCapabilities.IncrementalAliasMap;
         IDisposable? lease = null;
         try
         {
@@ -487,6 +490,8 @@ public partial class SyncSession : IAsyncDisposable
         {
             AliasMapEntry? proposal = _localNode.CreateAliasMapProposal(PeerNodeId, author, epoch);
             if (proposal is null) return;
+            if ((PeerCapabilities & SessionCapabilities.IncrementalAliasMap) == 0)
+                throw new SyncException("UNKNOWN_ALIAS");
 
             uint requestId = unchecked((uint)Interlocked.Add(ref _aliasUpdateRequestId, 2));
             requestId = (requestId & ~1U) | _aliasRequestParity;
