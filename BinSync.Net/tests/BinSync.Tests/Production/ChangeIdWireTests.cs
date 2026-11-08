@@ -459,15 +459,15 @@ public class ChangeIdWireTests
             Origin = 1, Value = new byte[] { 0x73, 0x61, 0x6D, 0x65 }
         };
         var original = ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
-            operation, author, 3, 41);
+            operation, new OperationOrigin(author, 3, 41));
         Assert.Equal(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
             operation, author, 3, 41));
         Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
-            operation, author, 3, 42));
+            operation, new OperationOrigin(author, 3, 42)));
         Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
-            operation, author, 4, 41));
+            operation, new OperationOrigin(author, 4, 41)));
         Assert.NotEqual(original, ChangeIdentity.LedgerFingerprint(7, RecordId.From(Fix.Rid(1)), 1,
-            operation, NodeId.From(Fix.Rid(11)), 3, 41));
+            operation, new OperationOrigin(NodeId.From(Fix.Rid(11)), 3, 41)));
     }
 
     [Fact]
