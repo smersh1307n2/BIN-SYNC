@@ -298,7 +298,7 @@ The Storage coordinator requires this optional capability before enabling provid
 
 Conformance/recovery edge now covered: metadata freeze commits, provider feed ACK is interrupted, a newer edit to the same field arrives, and retry must retain the earlier frozen ChangeId while appending only the later unfrozen suffix. The regression verifies the exact two ChangeIds, outbound sequence order, provider feed ACK and unchanged Node Outbox watermark.
 
-Verified at BIN-SYNC code/test head `016ddb553a6d2c84abe2027145dfdbd92f229d35`: 644 core tests, 103 Storage Integration tests, 31 Fuzz/Lab cases, 70.8% line coverage; in-process and real-TCP Storage samples pass. The optional-capability refactor preserves the base `IMetadataStore` contract and is included in these passing checks.
+Latest verified BIN-SYNC branch head `010742085147b582ba551e3d2df1a65b0b595394`: 648 core tests, 111 Storage Integration tests on Ubuntu/Windows/macOS, 31 Fuzz/Lab cases, 70.4% line coverage; in-process and real-TCP Storage samples pass. The optional-capability refactor preserves the base `IMetadataStore` contract and is included in these passing checks.
 
 
 Storage adapters attached to one `StorageDatabase` share a process-local transaction gate, covering provider feed writes, Metadata Store mutations and Node checkpoint saves. The underlying WAL partition is single-writer: `StorageDatabase.Open` acquires a named OS-managed mutex before snapshot/WAL recovery. A second open is rejected and a later open succeeds after disposal. This is not multi-writer support; separate-process abandoned-mutex and power-loss tests remain open.
