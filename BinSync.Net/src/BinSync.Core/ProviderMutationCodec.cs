@@ -32,9 +32,9 @@ public static class ProviderMutationCodec
         if (bytes.Length < LegacyFixedEncodedLength)
             throw new InvalidDataException("Stored provider mutation is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
-        if (valueLength > int.MaxValue || bytes[18] > 3 || bytes[18] == 3)
+        if (valueLength > int.MaxValue - FixedEncodedLength || bytes[18] > 3 || bytes[18] == 3)
             throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
-        int encodedLength = checked(LegacyFixedEncodedLength + (int)valueLength);
+        int encodedLength = LegacyFixedEncodedLength + (int)valueLength;
         bool hasProvenance = bytes.Length == FixedEncodedLength + (int)valueLength;
         if (!hasProvenance && bytes.Length != encodedLength)
             throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
