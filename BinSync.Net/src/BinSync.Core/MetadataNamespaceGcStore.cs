@@ -7,7 +7,7 @@ namespace BinSync;
 public interface IMetadataNamespaceGcStore
 {
     NamespaceRosterCertificate AcceptNamespaceRoster(ReadOnlySpan<byte> encoded, TrustStore trustStore);
-    bool TryReadNamespaceRoster(TrustStore trustStore, out NamespaceRosterCertificate? roster);
+    bool TryReadNamespaceRoster(int namespaceId, TrustStore trustStore, out NamespaceRosterCertificate? roster);
 
     AppliedOriginFrontierReport AcceptOriginFrontier(
         ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster);
