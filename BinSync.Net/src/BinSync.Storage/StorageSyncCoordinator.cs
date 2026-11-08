@@ -76,14 +76,13 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidDataException("Node Outbox high watermark is invalid.");
             ulong metadataHigh = _metadataStore.GetOutboundHighWatermark(
                 _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
-            if (metadataHigh > (ulong)nodeHigh)
+            if (metadataHigh != (ulong)nodeHigh)
                 throw new InvalidOperationException(
-                    "Metadata Store is already ahead of the Node Outbox; a fresh, verified cutover checkpoint is required.");
+                    "Node and Metadata Store outbound watermarks must already match. Drain the legacy provider feed and freeze every Node Outbox row before cutover; Node-only writes must first be migrated into the provider.");
 
-            // Freeze any remaining pre-cutover Node rows, then rebuild the Node cache
-            // from the provider snapshot. The Node sequence watermark itself is kept
-            // as a fixed fence; all future outbound sequences come from Metadata Store.
-            FreezeLocalOutboxToMetadata();
+            // Rebuild the Node cache from the provider snapshot only after the
+            // existing Node Outbox range is known to be fully frozen. The Node
+            // sequence watermark then becomes an immutable fence.
             InstallProviderSnapshot(persistNode);
 
             nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
