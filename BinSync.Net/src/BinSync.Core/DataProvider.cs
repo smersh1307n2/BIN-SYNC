@@ -57,7 +57,11 @@ public interface IProviderFullReplace
         IReadOnlyList<ProviderMutation> entries);
     void CommitFullReplace(Guid generation);
     bool AbortFullReplace(Guid generation, int limit);
-    bool TryGetFullReplaceProgress(Guid generation, out ProviderFullReplaceProgress? progress);
+    bool TryGetFullReplaceProgress(Guid generation, out ProviderFullReplaceProgress? progress)
+    {
+        progress = null;
+        return false;
+    }
 }
 
 public sealed record ProviderFullReplaceProgress(
