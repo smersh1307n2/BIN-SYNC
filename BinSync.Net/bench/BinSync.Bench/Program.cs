@@ -23,6 +23,6 @@ var config = DefaultConfig.Instance
         .WithWarmupCount(3)
         .WithIterationCount(10));
 
-BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args, config);
+BenchmarkSwitcher.FromAssembly(typeof(MetadataCoordinatorRetryScanBench).Assembly).Run(args, config);
 
 public partial class Program { }
