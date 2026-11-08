@@ -260,7 +260,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     continue;
                 }
                 newLedger.Add((ledgerKey,
-                    new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: false)));
+                    new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence)));
                 if (!operation.RelayEligible) continue;
 
                 var relayKey = new RelayKey(incoming.NamespaceId, operation.AuthorNodeId);
@@ -343,9 +343,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)item.Key.NamespaceId));
             item.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            byte[] value = new byte[17];
+            byte[] value = new byte[45];
             item.Value.Fingerprint.CopyTo(value, 0);
-            value[16] = item.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            item.Value.AuthorNodeId.WriteTo(value.AsSpan(16));
+            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), item.Value.OriginAuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), item.Value.OriginSequence);
+            value[44] = item.Value.IsLocalOutbound ? (byte)1 : (byte)0;
             writes.Add((StorageKey(root, 3, suffix), value));
         }
 
@@ -636,7 +639,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 continue;
             }
 
-            newLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: false));
+            newLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence));
             if (!operation.RelayEligible)
                 continue;
 
@@ -712,9 +715,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            byte[] value = new byte[17];
+            byte[] value = new byte[45];
             pair.Value.Fingerprint.CopyTo(value, 0);
-            value[16] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            pair.Value.AuthorNodeId.WriteTo(value.AsSpan(16));
+            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), pair.Value.OriginAuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), pair.Value.OriginSequence);
+            value[44] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
             writes.Add((StorageKey(root, 3, suffix), value));
         }
         foreach (var pair in newRelay)
@@ -856,7 +862,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 continue;
             }
 
-            next.ChangeLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: false));
+            next.ChangeLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence));
             if (!operation.RelayEligible)
                 continue;
 
@@ -941,7 +947,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ChangeId = operation.ChangeId,
                 Fingerprint = operation.Fingerprint.ToArray(),
                 Payload = operation.Payload.ToArray(),
-                RelayEligible = operation.RelayEligible
+                RelayEligible = operation.RelayEligible,
+                OriginAuthorEpoch = operation.OriginAuthorEpoch,
+                OriginSequence = operation.OriginSequence
             }).ToArray()
         };
 
@@ -2376,9 +2384,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 migrated.Outbound.Add(outboundKey, migratedEntries);
             }
             migratedEntries.AddRange(frozen);
-            foreach (var operation in operations)
+            for (int i = 0; i < operations.Count; i++)
+            {
+                var operation = operations[i];
+                var frozenItem = frozen[i];
                 migrated.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
-                    new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
+                    new ChangeLedgerValue(operation.Fingerprint.ToArray(), true, localAuthor, frozenItem.OriginAuthorEpoch, frozenItem.OriginSequence));
+            }
             migrated.OutboundHighWatermarks[outboundKey] = highWatermark;
             EnsureRegisteredPeerStreams(migrated, namespaceId, localAuthor, issuerEpoch: 0);
             PersistPartition(partitionKey, current, migrated);
@@ -2415,9 +2427,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] ledgerSuffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, checked((ushort)namespaceId));
             operation.ChangeId.WriteTo(ledgerSuffix.AsSpan(2));
-            byte[] ledgerValue = new byte[17];
+            byte[] ledgerValue = new byte[45];
             operation.Fingerprint.CopyTo(ledgerValue, 0);
-            ledgerValue[16] = 1;
+            localAuthor.WriteTo(ledgerValue.AsSpan(16));
+            BinaryPrimitives.WriteUInt32LittleEndian(ledgerValue.AsSpan(32), item.OriginAuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(36), item.OriginSequence);
+            ledgerValue[44] = 1;
             writes.Add((StorageKey(root, 3, ledgerSuffix), ledgerValue));
         }
 
@@ -2468,9 +2483,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             current.Outbound.Add(outboundKey, entries);
         }
         entries.AddRange(frozen);
-        foreach (var operation in operations)
+        for (int i = 0; i < operations.Count; i++)
+        {
+            var operation = operations[i];
+            var frozenItem = frozen[i];
             current.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
-                new ChangeLedgerValue(operation.Fingerprint.ToArray(), IsLocalOutbound: true));
+                new ChangeLedgerValue(operation.Fingerprint.ToArray(), true, localAuthor, frozenItem.OriginAuthorEpoch, frozenItem.OriginSequence));
+        }
         current.OutboundHighWatermarks[outboundKey] = highWatermark;
         foreach (var peerStream in newPeerStreams)
             current.PeerStreams.Add(peerStream.Key, peerStream.Value);
@@ -2836,9 +2855,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            byte[] value = new byte[17];
+            byte[] value = new byte[45];
             pair.Value.Fingerprint.CopyTo(value, 0);
-            value[16] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            pair.Value.AuthorNodeId.WriteTo(value.AsSpan(16));
+            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), pair.Value.OriginAuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), pair.Value.OriginSequence);
+            value[44] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
             Add(StorageKey(root, 3, suffix), value);
         }
 
@@ -3039,14 +3061,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 case 3:
                 {
                     RequireLength(key, 18);
-                    if (row.Value.Length is not (16 or 17) ||
-                        (row.Value.Length == 17 && row.Value[16] > 1))
-                        throw new InvalidDataException("Stored ChangeId ledger value has an invalid length or origin flag.");
+                    if (row.Value.Length != 45 || row.Value[44] > 1)
+                        throw new InvalidDataException("Stored v3 ChangeId ledger value has an invalid length or origin flag.");
                     state.ChangeLedger.Add(new LedgerKey(
                         BinaryPrimitives.ReadUInt16LittleEndian(key),
                         BatchId.From(key.Slice(2, 16))),
-                        new ChangeLedgerValue(row.Value.AsSpan(0, 16).ToArray(),
-                            row.Value.Length == 17 && row.Value[16] == 1));
+                        new ChangeLedgerValue(row.Value.AsSpan(0, 16).ToArray(), row.Value[44] == 1,
+                            NodeId.From(row.Value.AsSpan(16, 16)),
+                            BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(32)),
+                            BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(36))));
                     break;
                 }
                 case 4:
@@ -3506,6 +3529,17 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!seen.Add(operation.ChangeId))
                 throw new ArgumentException("ChangeId values must be unique within one incoming batch.", nameof(batch));
         }
+        if (batch.AuthorStreamNodeId.IsZero)
+            throw new InvalidDataException("v3 batch has no resolved author stream.");
+        ulong previousOriginSequence = 0;
+        foreach (var operation in batch.Operations)
+        {
+            if (operation.AuthorNodeId != batch.AuthorStreamNodeId ||
+                operation.OriginAuthorEpoch == 0 || operation.OriginSequence == 0 ||
+                operation.OriginSequence <= previousOriginSequence)
+                throw new InvalidDataException("v3 operation has missing, mismatched or non-monotonic immutable Origin provenance.");
+            previousOriginSequence = operation.OriginSequence;
+        }
     }
 
     private static void ValidateDigest(byte[]? value, string name)
@@ -3665,7 +3699,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private sealed record PendingApplyValue(MetadataIncomingBatch Batch);
     private sealed record CompletedPendingApplyValue(byte[] BatchDigest, MetadataBatchReceipt Receipt);
 
-    private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound);
+    private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound, NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence);
 
     private sealed class PartitionState
     {
