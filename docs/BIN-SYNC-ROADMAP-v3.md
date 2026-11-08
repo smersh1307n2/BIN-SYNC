@@ -649,7 +649,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 ### 2026-11-08 — C-pass: applied-origin and retention checkpoint production
 
-- [x C] Added durable member frontier production. It combines ChangeLedger identities already committed by the Metadata Store with still-unacknowledged local provider feed entries; it uses each mutation's immutable OriginSequence and never substitutes provider feed sequence. Reports are signed by the Active member and persisted through the accepted roster guard. A previous report is retained as the baseline after safe compaction, and each author/epoch advances only through a contiguous sequence prefix.
+- [x C] Added durable member frontier production. OFR2 applied entries derive only from immutable ChangeLedger identities already committed by the Metadata Store; unpublished provider feed drafts are reported separately as a count/max-HLC barrier and never treated as applied origins. Reports are signed by the Active member and persisted through the accepted roster guard. A previous report is retained as the baseline after safe compaction, and each author/epoch advances only through a contiguous sequence prefix.
 - [x C] Added authority checkpoint production from durable member reports. Missing Active-member reports conservatively produce no safe frontier for the affected author; optional FULL_REPLACE binding is accepted only when all Active members' installed ACKs are already durable.
 - [~ T] Add exact tests for gaps, duplicate/replayed feed rows, post-ACK frontier continuity, report rollback/fork, missing Active member, roster rollover, checkpoint digest chain, and FULL_REPLACE ACK gating. Exact-head CI for this slice is pending.
 
@@ -695,7 +695,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] RCP2 safe frontiers now advance only through each author's final issued high-watermark and only when every Active member reports application through that full range. A FULL_REPLACE-bound checkpoint requires zero unpublished drafts on every Active member and an HLC floor covering the maximum issued HLC across all epochs.
 - [x C] Added `IProviderCommitGuard` and `StorageSyncCoordinator.AcquireApplicationCommitGuard` (coordinator→provider lock order). FULL_REPLACE commit refuses to switch while local feed drafts remain; the same lease can be supplied to GC entry points.
 - [~ T] Exact-head CI is queued for this code slice. Golden vectors, report terminality, closure/rejoin, issued-HLC max, pending-draft race, all-member frontier and commit-guard fault tests remain in T.
-- [~ C] Physical GC remains disabled pending the final cross-store live-reference scan, including provider state and the application Node/WAL/FLD commit boundary.
+- [~ C] Physical GC remains disabled pending the final cross-store live-reference scan, including provider state and host WAL/FLD references under the composed application commit lease.
 
 
 ### 2026-11-08 — C-pass: enforce terminal author identity and safe rejoin
@@ -712,7 +712,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Frontier projection now reads `OriginIssuedState.Sequence` and carries the persisted maximum HLC fields into OFR2.
 - [x C] Fixed nullable roster handling in the explicit author-epoch reactivation path.
 - [~ T] Exact-head CI must confirm compilation and then expose remaining behavioral/test failures. The last completed CI at `d8db149` failed at compile time on these type mismatches and nullable warnings; the repair commits are `ef75ea3` and `bcece5c`.
-- [ ] C/T: continue auditing every call site and persistence/recovery path for the 20-byte key-kind 22 record, then finish the remaining production code before the dedicated T-pass.
+- [x C] Audited key-kind 22 call sites, durable 20-byte encoding/decoding, in-memory state, frontier projection and freeze-time retry path. Persistence/restart/fault proof remains in T-pass.
 
 
 ### 2026-11-09 — C-pass: widen application commit barrier to Node mutation gates
@@ -721,7 +721,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] The receiver continues to require an explicit non-null commit lease before generation switch; the caller must still compose the host WAL/FLD transaction gate if it is distinct from the BIN-SYNC Storage database.
 - [x C] Updated the Storage integration call sites for the new tombstone-HLC proof contract (compile/API alignment only; no new behavioral assertions were added in this C slice).
 - [~ T] CI at `747ea0c` compiled production code and Fuzz/Lab passed, but Core tests had 7 failures in OFR1/RCP1 expectations and record-tombstone mutation validation. Storage Integration failed to compile on the changed tombstone-HLC signature; call sites are now aligned. Re-run exact-head CI and then migrate the obsolete v1 test fixtures to OFR2/RCP2 during T-pass.
-- [ ] C: finish concrete lifecycle wiring (authority roster transitions, periodic frontier publication/exchange, checkpoint production and receiver callbacks), and verify all stores use the shared StorageDatabase/transaction gate before claiming a complete app-wide barrier. Physical GC stays disabled.
+- [x C] Concrete lifecycle/control-plane wiring now exists for accepted roster exchange, OFR2 publication/receipt, RCP2 publication/receipt, FRA2 ACK receipt/send and receiver HLC-refresh callbacks. Host peer scheduling/retry remains host-owned; all durable Metadata Store/Data Provider/GC adapters are required to share one StorageDatabase for the internal barrier. Physical GC stays disabled.
 
 
 ### 2026-11-09 — C-pass: shared-storage proof and lock-order correction
@@ -730,7 +730,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Added internal shared-database identity checks without exposing storage handles through the public provider API.
 - [x C] Audited `StorageNodePersistence.Save` against the new lock order and changed it to acquire Node `Storage→Outbox→Meta` gates before the shared Storage transaction gate. This prevents the inverse Storage→Node order from deadlocking against FULL_REPLACE/GC commit guards.
 - [~ T] Verify parallel Node writes, Node checkpoint saves, provider appends, metadata commits and FULL_REPLACE commit under contention; add deterministic deadlock/race tests during T-pass.
-- [ ] C: continue lifecycle orchestration and snapshot-memory audit; physical GC remains disabled until host WAL/FLD and PendingApply/relay/reservation/snapshot references are proven under the composed lease.
+- [~ C] Snapshot-memory audit remains open: StorageDataProvider pages through StorageSnapshot cursors, but StorageDatabase.OpenSnapshot still clones its partition. Physical GC remains disabled until host WAL/FLD and PendingApply/relay/reservation/snapshot references are proven under the composed lease.
 
 
 ### 2026-11-09 — C-pass: repair OFR2 decoder and align canonical documents
@@ -739,7 +739,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Added canonical validation: final-author reports cannot contain unpublished drafts; an empty draft set must carry a zero maximum HLC.
 - [x C] Updated v3.1 addendum wire layouts and domain strings from OFR1/NRS1 to OFR2/NRS2, including issued-origin entries and FRA2/RCP2 HLC-floor fields. Corrected the stale statement that author-issued/retired-origin closure remained open.
 - [~ T] The seven Core failures at `747ea0c` included OFR1/RCP1 fixtures, OFR2 decode misalignment, and a record-tombstone fixture rejected by the stricter canonical mutation contract. The OFR2 parser defect is fixed in C; the legacy test fixtures/assertions remain for T-pass migration.
-- [ ] C: finish remaining lifecycle wiring and storage snapshot memory audit; retain all physical GC feature flags as false.
+- [x C] Remaining lifecycle wiring was completed in the subsequent coordinator control-plane entries below. [~ C] Storage snapshot-memory audit remains open; retain all physical GC feature flags as false.
 
 
 ### 2026-11-09 — C-pass: durable v3.1 control-plane orchestration
