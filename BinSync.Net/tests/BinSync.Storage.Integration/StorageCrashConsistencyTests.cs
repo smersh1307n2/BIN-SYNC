@@ -287,13 +287,7 @@ public sealed class StorageCrashConsistencyTests
     {
         Directory.CreateDirectory(destination);
         foreach (string file in Directory.EnumerateFiles(source))
-        {
-            // The writer lease is an OS lock, not WAL state. Never copy its
-            // open/locked inode into reconstructed crash layouts.
-            if (Path.GetFileName(file).EndsWith(".writer.lock", StringComparison.Ordinal))
-                continue;
             File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
-        }
     }
 
     private static void TryDeleteDirectory(string path)
