@@ -57,13 +57,15 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         private ProviderMutation? _recordTombstoneMutation;
         private bool _disposed;
 
+        public ulong LocalHighWatermark { get; }
         public int NextIndex { get; private set; }
 
         public ProviderSnapshotState(
-            StorageSnapshot snapshot, Guid activeGeneration,
+            StorageSnapshot snapshot, ulong localHighWatermark, Guid activeGeneration,
             byte[] fieldPrefix, byte[] recordTombstonePrefix)
         {
             _snapshot = snapshot;
+            LocalHighWatermark = localHighWatermark;
             _activeGeneration = activeGeneration;
             _fieldPrefix = fieldPrefix;
             _recordTombstonePrefix = recordTombstonePrefix;
@@ -446,7 +448,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 Guid activeGeneration = ReadActiveGeneration(snapshot);
                 Guid token = Guid.NewGuid();
                 _snapshots.Add(token, new ProviderSnapshotState(
-                    snapshot, activeGeneration,
+                    snapshot, watermark, activeGeneration,
                     CurrentPrefix(CurrentField, activeGeneration),
                     CurrentPrefix(CurrentRecordTombstone, activeGeneration)));
                 return new ProviderSnapshotHandle(token, watermark);
@@ -1220,6 +1222,30 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             OriginAuthorEpoch = originEpoch,
             OriginSequence = originSequence
         };
+
+    private static int CompareSnapshotEntries(StorageEntry left, StorageEntry right)
+    {
+        if (left.Key.Length < 33 || right.Key.Length < 33)
+            throw new InvalidDataException("Provider snapshot contains a truncated generation-scoped storage key.");
+        if (!left.Key.AsSpan(1, 16).SequenceEqual(right.Key.AsSpan(1, 16)))
+            throw new InvalidDataException("Provider snapshot mixes active generations.");
+
+        int recordOrder = left.Key.AsSpan(17, 16).SequenceCompareTo(right.Key.AsSpan(17, 16));
+        if (recordOrder != 0) return recordOrder;
+
+        bool leftTombstone = left.Key[0] == CurrentRecordTombstone;
+        bool rightTombstone = right.Key[0] == CurrentRecordTombstone;
+        if (leftTombstone != rightTombstone) return leftTombstone ? -1 : 1;
+        if (leftTombstone)
+            return left.Key.Length == 33 && right.Key.Length == 33 ? 0 :
+                throw new InvalidDataException("Provider snapshot contains an invalid record tombstone key.");
+
+        if (left.Key[0] != CurrentField || right.Key[0] != CurrentField ||
+            left.Key.Length != 35 || right.Key.Length != 35)
+            throw new InvalidDataException("Provider snapshot contains an invalid current-field key.");
+
+        return left.Key.AsSpan(33, 2).SequenceCompareTo(right.Key.AsSpan(33, 2));
+    }
 
     private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
         => ProviderMutationCodec.CompareCanonical(left, right);
