@@ -52,9 +52,11 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         NamespaceRosterCertificate candidate = NamespaceRosterProtocol.DecodeAndVerify(owned, trustStore);
         lock (_gate)
         {
-            if (TryReadCurrentRosterCore(trustStore, out NamespaceRosterCertificate? prior) && prior is not null)
+            if (TryReadCurrentRosterCore(trustStore, candidate.NamespaceId, out NamespaceRosterCertificate? prior) && prior is not null)
             {
                 byte[] priorDigest = NamespaceRosterProtocol.ComputeDigest(prior);
+                if (candidate.AuthorityNodeId != prior.AuthorityNodeId)
+                    throw new InvalidDataException("Namespace authority identity cannot change inside an existing namespace.");
                 byte[] candidateDigest = NamespaceRosterProtocol.ComputeDigest(candidate);
                 if (candidate.RosterGeneration < prior.RosterGeneration)
                     throw new InvalidDataException("Namespace roster rollback is not allowed.");
@@ -81,10 +83,12 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         }
     }
 
-    public bool TryReadNamespaceRoster(TrustStore trustStore, out NamespaceRosterCertificate? roster)
+    public bool TryReadNamespaceRoster(int namespaceId, TrustStore trustStore, out NamespaceRosterCertificate? roster)
     {
         ArgumentNullException.ThrowIfNull(trustStore);
-        lock (_gate) return TryReadCurrentRosterCore(trustStore, out roster);
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        lock (_gate) return TryReadCurrentRosterCore(trustStore, namespaceId, out roster);
     }
 
     public AppliedOriginFrontierReport AcceptOriginFrontier(
@@ -271,24 +275,6 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             return safe is not null && originSequence <= safe.SafeAppliedOriginSequence &&
                 AreAllActiveMembersInstalledCore(acceptedRoster, fullReplaceGeneration, fullReplaceDigest);
         }
-    }
-
-    private bool TryReadCurrentRosterCore(TrustStore trustStore, out NamespaceRosterCertificate? roster)
-    {
-        roster = null;
-        byte[]? pointer = ReadValue(CurrentRosterKeyBytes());
-        if (pointer is null) return false;
-        if (pointer.Length != 8 + NamespaceRosterProtocol.DigestSize)
-            throw new InvalidDataException("Current namespace roster pointer is corrupt.");
-        ulong generation = BinaryPrimitives.ReadUInt64LittleEndian(pointer);
-        byte[]? encoded = ReadValue(RosterKeyBytes(0, generation));
-        if (encoded is null)
-            throw new InvalidDataException("Current namespace roster certificate is missing.");
-        roster = NamespaceRosterProtocol.DecodeAndVerify(encoded, trustStore);
-        if (roster.RosterGeneration != generation ||
-            !NamespaceRosterProtocol.ComputeDigest(roster).AsSpan().SequenceEqual(pointer.AsSpan(8)))
-            throw new InvalidDataException("Current namespace roster pointer/certificate mismatch.");
-        return true;
     }
 
     private bool TryReadCurrentRosterCore(TrustStore trustStore, int namespaceId, out NamespaceRosterCertificate? roster)
@@ -511,9 +497,6 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         batch.Commit();
     }
 
-    private byte[] CurrentRosterKeyBytes()
-        => Key(CurrentRosterKind, ReadOnlySpan<byte>.Empty);
-
     private byte[] CurrentRosterKey(int namespaceId)
     {
         Span<byte> suffix = stackalloc byte[2];
@@ -523,9 +506,6 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
     private byte[] RosterKey(int namespaceId, ulong generation)
         => Key(RosterKind, NamespaceGenerationSuffix(namespaceId, generation));
-
-    private byte[] RosterKeyBytes(int namespaceId, ulong generation)
-        => RosterKey(namespaceId, generation);
 
     private byte[] FrontierKey(int namespaceId, ulong generation, NodeId member)
     {
