@@ -472,3 +472,8 @@ OFR2 validation indexes local applied sequences and issued epochs once per repor
 ## 10.23. Immutable freeze rejects author-epoch HLC regression (2026-11-09)
 
 For each `(NamespaceId, AuthorNodeId)`, newly frozen operations must have HLC greater than or equal to the persisted maximum HLC across all of that author's epochs, including previously retired/rejoined epochs. A lower wall value or a lower logical value at the same wall is rejected before allocating the next OriginSequence. Equal HLC is permitted for operations from the same transaction; the stored maximum advances only when the new HLC is greater. This ensures the signed issued-HLC floor cannot be bypassed by publishing an older operation after a tombstone has been proven reclaimable.
+
+
+## 10.24. Tombstone HLC must belong to its issued author epoch (2026-11-09)
+
+The protocol tombstone proof rejects a candidate whose HLC exceeds the signed maximum HLC for its exact `(author, epoch)`, even if the global FULL_REPLACE floor is higher. It separately requires both the candidate tombstone HLC and the entire epoch's maximum issued HLC to be covered by the common installed FULL_REPLACE floor. This prevents a corrupted or mismatched row from borrowing another epoch's higher HLC floor.
