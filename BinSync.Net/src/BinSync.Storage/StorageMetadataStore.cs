@@ -299,7 +299,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         byte[] completedValue = EncodeCompleted(new CompletedPendingApplyValue(
             providerDigest.ToArray(), CloneReceipt(receipt, receipt.IsDuplicate)));
         byte[]? identityKey = current.IsPersisted ? null : StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
-        byte[]? identityValue = identityKey is null ? null : Encoding.UTF8.GetBytes(partitionKey.ScopeId);
+        byte[]? identityValue = identityKey is null ? null : EncodePartitionIdentity(partitionKey);
 
         var writes = new List<(byte[] Key, byte[] Value)>();
         var deletes = new List<byte[]> { pendingKey };
@@ -2797,6 +2797,29 @@ private static bool ValidateIncomingBatchForStaging(
 
     private static readonly Dictionary<string, (byte[] Key, byte[] Value)> EmptyEntries = new(StringComparer.Ordinal);
 
+    private const uint MetadataPartitionMagicV3 = 0x33534D42; // "BMS3" little-endian
+
+    private static byte[] EncodePartitionIdentity(PartitionKey partition)
+    {
+        byte[] scope = Encoding.UTF8.GetBytes(partition.ScopeId);
+        byte[] value = new byte[8 + scope.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(value, MetadataPartitionMagicV3);
+        BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(4), scope.Length);
+        scope.CopyTo(value, 8);
+        return value;
+    }
+
+    private static void ValidatePartitionIdentity(PartitionKey partition, byte[] value)
+    {
+        if (value.Length < 8 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(value) != MetadataPartitionMagicV3)
+            throw new InvalidDataException("Metadata partition is not in canonical BIN-SYNC v3 format.");
+        int length = BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(4));
+        if (length < 0 || value.Length != 8 + length ||
+            !Encoding.UTF8.GetString(value, 8, length).Equals(partition.ScopeId, StringComparison.Ordinal))
+            throw new InvalidDataException("Metadata partition identity is invalid or its scope hash collides.");
+    }
+
     private static byte[] PartitionRoot(PartitionKey key)
     {
         byte[] scope = Encoding.UTF8.GetBytes(key.ScopeId);
@@ -2824,7 +2847,7 @@ private static bool ValidateIncomingBatchForStaging(
         byte[] root = PartitionRoot(partition);
         var entries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         void Add(byte[] key, byte[] value) => entries.Add(Convert.ToHexString(key), (key, value));
-        Add(StorageKey(root, 0, ReadOnlySpan<byte>.Empty), Encoding.UTF8.GetBytes(partition.ScopeId));
+        Add(StorageKey(root, 0, ReadOnlySpan<byte>.Empty), EncodePartitionIdentity(partition));
 
         foreach (var pair in state.Receipts)
         {
@@ -3000,15 +3023,14 @@ private static bool ValidateIncomingBatchForStaging(
             if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
             byte kind = suffix[0];
             if (kind is 6 or 9 or 11 ||
-                (kind == 3 && row.Value.Length == 16) ||
+                (kind == 3 && row.Value.Length != 45) ||
                 ((kind is 5 or 8) && row.Value.Length == 8))
-                state.HasLegacyEncoding = true;
+                throw new InvalidDataException("Legacy metadata row encoding is not supported by BIN-SYNC v3.");
             ReadOnlySpan<byte> key = suffix.Slice(1);
             switch (kind)
             {
                 case 0:
-                    if (!Encoding.UTF8.GetString(row.Value).Equals(partition.ScopeId, StringComparison.Ordinal))
-                        throw new InvalidDataException("Metadata partition scope hash collision.");
+                    ValidatePartitionIdentity(partition, row.Value);
                     identitySeen = true;
                     break;
                 case 1:
