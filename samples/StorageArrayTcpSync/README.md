@@ -17,3 +17,6 @@ Run from the repository root:
 ```bash
 dotnet run --project samples/StorageArrayTcpSync/StorageArrayTcpSync.csproj -c Release
 ```
+
+
+This sample enables the durable Metadata-Store-owned outbound mode before the first local edit. The one-time cutover requires an empty provider local feed and aligned Node/Metadata Store outbound high watermarks; `StorageDataProvider` persists the cutover watermark. After cutover, each stable provider `ChangeId` is frozen directly into Metadata Store, which allocates the author Outbox sequence. The Node Outbox watermark is fenced and does not advance for new provider-backed local edits. The TCP sender uses `SyncSession.PushBatchAsync` with the Metadata Store and scope, so transport reads the immutable durable outbound stream rather than the Node Outbox mirror. The cutover marker survives the full database close/reopen exercised by the sample.
