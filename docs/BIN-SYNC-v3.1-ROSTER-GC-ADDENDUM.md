@@ -345,3 +345,29 @@ The v3.1 implementation uses canonical encodings only: provider mutations requir
 `StorageDataProvider.OpenSnapshot` now retains a pinned storage snapshot and streams the two current-state prefixes in canonical merged order using persistent sorted-prefix cursors with 1024-row internal scan pages. This removes the extra full provider-row array and preserves a stable two-pass FULL_REPLACE view. The underlying `StorageDatabase.OpenSnapshot` still clones the partition, so total snapshot memory is not yet O(page).
 
 Physical receipt, ChangeId and tombstone collection are all explicitly disabled in v3.1 (`IsReceiptGcProofEnabled`, `IsChangeIdGcProofEnabled`, `IsTombstoneGcProofEnabled` are false). Receipt eligibility code additionally requires the sender's durable retired-transport-epoch fence, retained receive cursor/digest chain, safe origin frontier and no PendingApply. These compaction methods are plumbing only until exact-head proof tests and the remaining causal-horizon/application-lease work are complete.
+
+
+## 10.10. Canonical provider mutation v2 wire/storage layout
+
+The v3.1 FULL_REPLACE provider mutation encoding has an 81-byte fixed header followed by `Value[ValueLength]`:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 16 | RecordId |
+| 16 | 2 | FieldId (LE) |
+| 18 | 1 | flags (`IsTombstone`, `IsRecordTombstone`) |
+| 19 | 8 | HlcWall (LE) |
+| 27 | 4 | HlcLogical (LE) |
+| 31 | 16 | original AuthorNodeId |
+| 47 | 2 | KeyEpoch (LE) |
+| 49 | 4 | ValueLength (LE) |
+| 53 | 16 | ChangeId |
+| 69 | 4 | OriginAuthorEpoch (LE) |
+| 73 | 8 | OriginSequence (LE) |
+| 81 | ValueLength | Value |
+
+The 81-byte canonical encoding is required; the earlier 53-byte layout is rejected. A local provider feed envelope is exactly this canonical mutation followed by one additional `ChangeId[16]`, which MUST equal the embedded ChangeId. Record tombstones and immutable local/remote operations require complete ChangeId/origin identity. Ordinary Node LWW field materialization may have no operation identity, but it does not create a record tombstone or an immutable PublishedOperation. FULL_REPLACE digest domain is `BIN-SYNC/FULL-REPLACE/v2` and hashes the canonical mutation encoding, including provenance.
+
+Receipt values persist the batch maximum `OriginSequence`. Canonical lengths are 76/80 bytes without a header fingerprint and 92/96 bytes with it; the 4-byte transport-peer epoch is present in the 80/96-byte variants. Earlier receipt layouts are rejected.
+
+All physical compaction gates are currently false. In addition to the signed origin frontier and retained receive cursor/digest-chain fence, receipt eligibility requires the issuer to be durably Retired and the stored transport-peer epoch to be at or below `RetiredThroughEpoch`. These are implemented guards, not permission to enable receipt GC before the T-pass lost-ACK/retirement proof.
