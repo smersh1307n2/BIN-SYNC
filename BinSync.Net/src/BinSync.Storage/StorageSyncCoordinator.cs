@@ -127,6 +127,7 @@ public sealed class StorageSyncCoordinator
         bool sawLegacyChangeId = false;
         bool metadataStoreOwnsOutbound = _provider is IProviderPublicationMode initialPublicationMode &&
             initialPublicationMode.TryGetMetadataStoreOwnedPublicationCutover(out cutoverNodeOutboxHigh);
+        var providerChanges = metadataStoreOwnsOutbound ? new List<ProviderChange>() : null;
         IMetadataOutboundChangeIdentityStore? outboundIdentityStore =
             _metadataStore as IMetadataOutboundChangeIdentityStore;
         if (metadataStoreOwnsOutbound && (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId)))
@@ -148,6 +149,8 @@ public sealed class StorageSyncCoordinator
             }
             if (page.ScannedThroughSequence <= afterSequence)
                 throw new InvalidDataException("Provider local feed cursor did not advance.");
+            if (providerChanges is not null)
+                providerChanges.AddRange(page.Changes);
 
             foreach (var change in page.Changes)
             {
@@ -219,7 +222,7 @@ public sealed class StorageSyncCoordinator
             if (_metadataStore is null || !sawStableChangeId || sawLegacyChangeId)
                 throw new InvalidDataException("Metadata-Store-owned publication requires non-zero stable ChangeIds for every provider feed entry.");
             return PublishLocalChangesToMetadataStore(
-                winners, scannedThroughSequence, totalChanges, persistNode, installProviderSnapshot);
+                winners, providerChanges!, scannedThroughSequence, totalChanges, persistNode);
         }
 
         // Legacy/volatile providers without durable source identities retain the
@@ -248,10 +251,10 @@ public sealed class StorageSyncCoordinator
 
     private int PublishLocalChangesToMetadataStore(
         Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> winners,
+        IReadOnlyList<ProviderChange> providerChanges,
         ulong scannedThroughSequence,
         int totalChanges,
-        Action<Node> persistNode,
-        bool installProviderSnapshot)
+        Action<Node> persistNode)
     {
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Stable provider ChangeIds require a durable Metadata Store scope.");
@@ -287,13 +290,15 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidDataException("Metadata Store returned outbound sequences out of order.");
         }
 
-        // The provider's current state is authoritative. The local feed can be
-        // acknowledged once immutable outbound payloads are durable; Node is only
-        // rebuilt as an application-data cache and can be rehydrated after a crash.
+        // Keep Node as an application-data cache, but update it from the exact feed
+        // prefix instead of scanning and rebuilding the entire provider snapshot.
+        // Persist the cache before ACK: a checkpoint failure leaves the feed replayable.
+        // If ACK fails, reapplying the same HLC mutations is idempotent and the
+        // immutable Metadata Store freeze remains available for retry.
+        _node.ApplyProviderChanges(_namespaceId, providerChanges);
+        persistNode(_node);
         if (scannedThroughSequence > 0)
             _provider.AcknowledgeLocalChanges(scannedThroughSequence);
-        if (installProviderSnapshot)
-            InstallProviderSnapshot(persistNode);
         return totalChanges;
     }
 
