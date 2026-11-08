@@ -317,7 +317,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             BatchId changeId = mutation.ChangeId.IsZero
                 ? BatchId.From(NewChangeIdentityBytes())
                 : mutation.ChangeId;
-            var ownedMutation = CloneMutation(mutation, changeId, mutation.OriginAuthorEpoch, sequence);
+            var ownedMutation = CloneMutation(mutation, changeId, mutation.OriginAuthorEpoch, originSequence: 0);
             ValidateMutation(ownedMutation);
             byte[] owned = EncodeMutation(ownedMutation);
             Guid activeGeneration = ReadActiveGeneration(_storage);
@@ -515,7 +515,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             // Keep all operations in the receipt fingerprint; the LWW comparison below
             // folds them into one current value without losing batch identity.
             foreach (var mutation in mutations)
-                ValidateMutation(mutation);
+                ProviderMutationCodec.ValidatePublished(mutation);
 
             byte[] fingerprint = Fingerprint(mutations);
             byte[] receiptKey = Prefixed(ApplyReceipt, applyToken.ToByteArray());
