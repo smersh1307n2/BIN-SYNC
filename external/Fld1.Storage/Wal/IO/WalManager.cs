@@ -313,18 +313,14 @@ public sealed class WalManager : IDisposable
 
     private static void TryFsyncDirectory(string directory)
     {
-        try
-        {
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
-            {
-                using var fs = new FileStream(directory, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                fs.Flush(flushToDisk: true);
-            }
-        }
-        catch
-        {
-            // Best-effort; directory handles are not flushable on every supported filesystem.
-        }
+        // A directory fsync failure on Unix is a failed rotation/deletion durability
+        // boundary, not a condition that may be silently downgraded to success.
+        // Windows directory-entry durability is not claimed by this implementation.
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        using var fs = new FileStream(directory, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        fs.Flush(flushToDisk: true);
     }
 
     public void Dispose()
