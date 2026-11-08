@@ -2341,6 +2341,11 @@ public sealed class StorageSyncCoordinatorTests
         // batch builder before either can create an untracked outbound operation.
         Assert.Throws<InvalidOperationException>(() =>
             node.WriteField(1, nodeOnlyRecord, 0x081F, "node-only"u8.ToArray(), new Hlc(6500, 0)));
+        // The authority fence is namespace-scoped; unrelated namespaces retain
+        // the ordinary Node-owned path.
+        RecordId otherNamespaceRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000004").ToByteArray());
+        Assert.True(node.WriteField(2, otherNamespaceRecord, 0x0822, "other-namespace"u8.ToArray(), new Hlc(6501, 0)));
+        Assert.Equal(1L, node.GetOutboxHighWatermark(2, node.NodeId));
         using var peer = NewNode(60);
         Assert.Throws<InvalidOperationException>(() => node.CreateDeltaBatch(peer.NodeId, 1));
         Assert.Throws<InvalidOperationException>(() => node.PushOutbox(1, nodeOnlyRecord,
