@@ -97,6 +97,17 @@ public sealed class OutboxEntry
     public ReadOnlyMemory<byte> Payload { get; set; } = Array.Empty<byte>();
     /// <summary>Durable author node id when full-author mode is used.</summary>
     public NodeId AuthorNodeId { get; set; }
+    /// <summary>Canonical immutable origin tuple; Seq remains a separate local relay coordinate.</summary>
+    public OperationOrigin Provenance
+    {
+        get => new(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+        set
+        {
+            AuthorNodeId = value.AuthorNodeId;
+            OriginAuthorEpoch = value.AuthorEpoch;
+            OriginSequence = value.Sequence;
+        }
+    }
     /// <summary>Local creation time (HLC wall) if recorded.</summary>
     public long CreatedAt { get; set; }
     /// <summary>Change ids this entry causally depends on (optional trailer).</summary>
