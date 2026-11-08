@@ -96,6 +96,12 @@ public static class OriginFrontierProtocol
         NodeId memberId = NodeId.From(reader.B128());
         uint memberEpoch = reader.U32();
         ulong reportSequence = reader.U64();
+        byte finalFlag = reader.U8();
+        if (finalFlag > 1)
+            throw new InvalidDataException("OFR2 final-author flag is invalid.");
+        ulong unpublishedDraftCount = reader.U64();
+        ulong maxUnpublishedDraftHlcWall = reader.U64();
+        uint maxUnpublishedDraftHlcLogical = reader.U32();
         int count = reader.U16();
         if (count > MaxEntries || reader.Remaining < 2 || count > (reader.Remaining - 2) / 28)
             throw new InvalidDataException("OFR2 entry count exceeds the bounded payload.");
@@ -135,6 +141,10 @@ public static class OriginFrontierProtocol
             MemberNodeId = memberId,
             MemberTransportEpoch = memberEpoch,
             ReportSequence = reportSequence,
+            FinalForAuthor = finalFlag == 1,
+            UnpublishedDraftCount = unpublishedDraftCount,
+            MaxUnpublishedDraftHlcWall = maxUnpublishedDraftHlcWall,
+            MaxUnpublishedDraftHlcLogical = maxUnpublishedDraftHlcLogical,
             Entries = entries,
             IssuedOrigins = issuedOrigins,
             Signature = signature
@@ -215,6 +225,11 @@ public static class OriginFrontierProtocol
             throw new ArgumentException("OFR2 requires a roster generation and 32-byte roster digest.", nameof(report));
         if (report.MemberNodeId.IsZero || report.MemberTransportEpoch == 0 || report.ReportSequence == 0)
             throw new ArgumentException("OFR2 member identity, transport epoch and report sequence must be non-zero.", nameof(report));
+        if (report.FinalForAuthor && report.UnpublishedDraftCount != 0)
+            throw new ArgumentException("A final author report cannot contain unpublished provider drafts.", nameof(report));
+        if (report.UnpublishedDraftCount == 0 &&
+            (report.MaxUnpublishedDraftHlcWall != 0 || report.MaxUnpublishedDraftHlcLogical != 0))
+            throw new ArgumentException("An empty unpublished-draft set must have a zero HLC maximum.", nameof(report));
         ArgumentNullException.ThrowIfNull(report.Entries);
         if (report.Entries.Count > MaxEntries)
             throw new ArgumentOutOfRangeException(nameof(report), $"OFR2 entry count exceeds {MaxEntries}.");
