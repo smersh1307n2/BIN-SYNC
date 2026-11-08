@@ -761,7 +761,7 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceiveExpectedExclusiveAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (expectedType < 0x04 || expectedType > 0x13)
+        if (expectedType < 0x04 || expectedType > NamespaceGcFrames.FullReplaceAbort)
             throw new ArgumentOutOfRangeException(nameof(expectedType));
         var gate = _receiveTypeGates.GetOrAdd(expectedType, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct).ConfigureAwait(false);
