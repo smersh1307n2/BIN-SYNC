@@ -56,6 +56,27 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>Activate a fresh author epoch after this member has rejoined as Active.</summary>
+    public void ActivateLocalAuthorEpoch(uint authorEpoch)
+    {
+        if (authorEpoch == 0) throw new ArgumentOutOfRangeException(nameof(authorEpoch));
+        lock (_gate)
+        {
+            if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
+                throw new InvalidOperationException("Attach the trusted namespace roster before activating a rejoined author epoch.");
+            if (!_namespaceGcStore.TryReadNamespaceRoster(
+                    _namespaceId, _namespaceGcTrustStore, out NamespaceRosterCertificate roster))
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            NamespaceRosterMember? localMember = roster.Members.FirstOrDefault(member =>
+                member.NodeId == _node.NodeId);
+            if (localMember is null || localMember.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("A local author epoch can be reactivated only after the member is Active in the accepted roster.");
+            if (_provider is not IProviderAuthorEpochClosureStore closureStore)
+                throw new NotSupportedException("The attached provider does not support durable author-epoch activation.");
+            closureStore.ActivateLocalAuthorEpoch(authorEpoch);
+        }
+    }
+
     /// <summary>
     /// Acquire the application commit barrier in lock order (coordinator, provider).
     /// Use this lease for FULL_REPLACE commit, author retirement and local GC.
@@ -171,6 +192,8 @@ public sealed class StorageSyncCoordinator
 
             if (finalForAuthor && unpublishedDraftCount != 0)
                 throw new InvalidOperationException("Cannot close a local author epoch while unpublished provider drafts remain.");
+            if (finalForAuthor)
+                ((IProviderAuthorEpochClosureStore)_provider).CloseLocalAuthorIdentity();
             return metadataStore.PublishAppliedOriginFrontier(
                 _scopeId, _node.NodeId, roster, unpublishedDraftCount,
                 maxDraftHlcWall, maxDraftHlcLogical, finalForAuthor, memberSeed);
