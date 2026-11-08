@@ -713,3 +713,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Fixed nullable roster handling in the explicit author-epoch reactivation path.
 - [~ T] Exact-head CI must confirm compilation and then expose remaining behavioral/test failures. The last completed CI at `d8db149` failed at compile time on these type mismatches and nullable warnings; the repair commits are `ef75ea3` and `bcece5c`.
 - [ ] C/T: continue auditing every call site and persistence/recovery path for the 20-byte key-kind 22 record, then finish the remaining production code before the dedicated T-pass.
+
+
+### 2026-11-09 — C-pass: widen application commit barrier to Node mutation gates
+
+- [x C] `StorageSyncCoordinator.AcquireApplicationCommitGuard()` now acquires coordinator → Node `Storage→Outbox→Meta` gates → provider/shared-Storage transaction gate, and releases in reverse order. This closes the direct-Node-write race during FULL_REPLACE, author retirement and local GC when the provider/metadata share the Storage transaction gate.
+- [x C] The receiver continues to require an explicit non-null commit lease before generation switch; the caller must still compose the host WAL/FLD transaction gate if it is distinct from the BIN-SYNC Storage database.
+- [x C] Updated the Storage integration call sites for the new tombstone-HLC proof contract (compile/API alignment only; no new behavioral assertions were added in this C slice).
+- [~ T] CI at `747ea0c` compiled production code and Fuzz/Lab passed, but Core tests had 7 failures in OFR1/RCP1 expectations and record-tombstone mutation validation. Storage Integration failed to compile on the changed tombstone-HLC signature; call sites are now aligned. Re-run exact-head CI and then migrate the obsolete v1 test fixtures to OFR2/RCP2 during T-pass.
+- [ ] C: finish concrete lifecycle wiring (authority roster transitions, periodic frontier publication/exchange, checkpoint production and receiver callbacks), and verify all stores use the shared StorageDatabase/transaction gate before claiming a complete app-wide barrier. Physical GC stays disabled.
