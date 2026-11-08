@@ -58,18 +58,15 @@ public sealed class StorageSyncCoordinator
 
     /// <summary>
     /// Publish this member's signed contiguous applied-origin frontier. The scan
-    /// combines already-published ChangeId identities with the still-unpublished
-    /// provider feed, so a local write cannot disappear between feed ACK and frontier
-    /// production. Call periodically after local publication and remote apply.
+    /// scans only the durable ChangeId ledger, so coalesced, unpublished local drafts
+    /// cannot create phantom origin sequence gaps. Call after local freeze and remote apply.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
-        byte[] memberSeed, int pageSize = 1024)
+        byte[] memberSeed)
     {
         ArgumentNullException.ThrowIfNull(memberSeed);
         if (memberSeed.Length != 32)
             throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
-        if (pageSize <= 0 || pageSize > 4096)
-            throw new ArgumentOutOfRangeException(nameof(pageSize));
 
         lock (_gate)
         {
@@ -85,20 +82,8 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidOperationException("No accepted namespace roster is available.");
             NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
 
-            var pendingLocal = new List<ProviderChange>();
-            ulong afterSequence = 0;
-            while (true)
-            {
-                ProviderChangePage page = _provider.ReadLocalChanges(afterSequence, pageSize);
-                pendingLocal.AddRange(page.Changes);
-                if (page.ScannedThroughSequence <= afterSequence ||
-                    page.Changes.Count < pageSize)
-                    break;
-                afterSequence = page.ScannedThroughSequence;
-            }
-
             return metadataStore.PublishAppliedOriginFrontier(
-                _scopeId, _node.NodeId, roster, pendingLocal, memberSeed);
+                _scopeId, _node.NodeId, roster, memberSeed);
         }
     }
 
