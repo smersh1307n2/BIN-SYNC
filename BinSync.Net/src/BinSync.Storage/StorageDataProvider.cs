@@ -647,9 +647,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     }
 
     /// <summary>
-    /// Physically reclaims record tombstones only after the signed checkpoint proves
-    /// every Active member installed the exact active generation and covered the
-    /// tombstone's immutable origin. The caller must hold a cross-store lease that
+    /// Tombstone cleanup implementation. v3.1 deliberately returns zero until the signed checkpoint proves
+    /// every Active member installed the exact active generation and the global
+    /// causal horizon is closed. The caller must hold a cross-store lease that
     /// excludes PendingApply, relay/outbound reservations and external reader pins.
     /// </summary>
     public int CompactRecordTombstones(
