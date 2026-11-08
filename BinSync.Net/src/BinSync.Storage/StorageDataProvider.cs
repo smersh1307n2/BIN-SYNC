@@ -1207,60 +1207,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             OriginSequence = originSequence
         };
 
-    private static StorageEntry[] MergeSnapshotEntries(
-        IReadOnlyList<StorageEntry> fields,
-        IReadOnlyList<StorageEntry> recordTombstones)
-    {
-        var merged = new StorageEntry[checked(fields.Count + recordTombstones.Count)];
-        int fieldIndex = 0;
-        int tombstoneIndex = 0;
-        int outputIndex = 0;
-
-        while (fieldIndex < fields.Count || tombstoneIndex < recordTombstones.Count)
-        {
-            if (fieldIndex >= fields.Count)
-            {
-                merged[outputIndex++] = recordTombstones[tombstoneIndex++];
-                continue;
-            }
-            if (tombstoneIndex >= recordTombstones.Count)
-            {
-                merged[outputIndex++] = fields[fieldIndex++];
-                continue;
-            }
-
-            if (CompareSnapshotEntries(fields[fieldIndex], recordTombstones[tombstoneIndex]) <= 0)
-                merged[outputIndex++] = fields[fieldIndex++];
-            else
-                merged[outputIndex++] = recordTombstones[tombstoneIndex++];
-        }
-
-        return merged;
-    }
-
-    private static int CompareSnapshotEntries(StorageEntry left, StorageEntry right)
-    {
-        if (left.Key.Length < 33 || right.Key.Length < 33)
-            throw new InvalidDataException("Provider snapshot contains a truncated generation-scoped storage key.");
-        if (!left.Key.AsSpan(1, 16).SequenceEqual(right.Key.AsSpan(1, 16)))
-            throw new InvalidDataException("Provider snapshot mixes active generations.");
-
-        int recordOrder = left.Key.AsSpan(17, 16).SequenceCompareTo(right.Key.AsSpan(17, 16));
-        if (recordOrder != 0) return recordOrder;
-
-        bool leftTombstone = left.Key[0] == CurrentRecordTombstone;
-        bool rightTombstone = right.Key[0] == CurrentRecordTombstone;
-        if (leftTombstone != rightTombstone) return leftTombstone ? -1 : 1;
-        if (leftTombstone) return left.Key.Length == 33 && right.Key.Length == 33 ? 0 :
-            throw new InvalidDataException("Provider snapshot contains an invalid record tombstone key.");
-
-        if (left.Key[0] != CurrentField || right.Key[0] != CurrentField ||
-            left.Key.Length != 35 || right.Key.Length != 35)
-            throw new InvalidDataException("Provider snapshot contains an invalid current-field key.");
-
-        return left.Key.AsSpan(33, 2).SequenceCompareTo(right.Key.AsSpan(33, 2));
-    }
-
     private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
         => ProviderMutationCodec.CompareCanonical(left, right);
 
