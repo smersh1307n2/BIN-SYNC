@@ -1,3 +1,5 @@
+> **v3 normative override (2026-11-08):** BIN-SYNC-SPECIFICATION.txt v3.0.0 is the sole normative contract. Any v2.x row layouts, compatibility readers, migration paths or TTL-based deletion suggestions in this historical design note are non-normative and must not be implemented. The v3 receipt, ChangeId and tombstone GC proofs in §§0.11–0.13 control.
+
 # BIN-SYNC Metadata GC: safe horizons and implementation plan
 
 **Status:** partial implementation. Inbox receipt reclamation is enabled only behind a durable retired transport-peer epoch fence. Global ChangeId-ledger GC and tombstone/ghost GC remain disabled. No time-based deletion is authorized.
