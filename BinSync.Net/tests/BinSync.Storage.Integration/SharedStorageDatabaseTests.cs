@@ -13,7 +13,8 @@ public sealed class SharedStorageDatabaseTests
         string root = Path.Combine(Path.GetTempPath(), "binsync-shared-storage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         string path = Path.Combine(root, "db");
-        using var database = StorageDatabase.Open(path, 501);
+        using (var database = StorageDatabase.Open(path, 501))
+        {
         NodeId replica = NodeId.From(Identity(1));
         NodeId author = NodeId.From(Identity(2));
         RecordId record = RecordId.From(Identity(3));
@@ -68,6 +69,8 @@ public sealed class SharedStorageDatabaseTests
         {
             Assert.Equal(2UL, reopenedProvider.LocalChangeHighWatermark);
             Assert.Equal(1UL, reopenedMetadata.GetOutboundHighWatermark("array-demo", replica, 1, author));
+        }
+
         }
 
         Directory.Delete(root, recursive: true);
