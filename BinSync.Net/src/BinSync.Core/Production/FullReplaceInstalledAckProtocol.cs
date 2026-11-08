@@ -78,6 +78,18 @@ public static class FullReplaceInstalledAckProtocol
         return acknowledgement;
     }
 
+    public static byte[] EncodeSigned(FullReplaceInstalledAck acknowledgement)
+    {
+        Validate(acknowledgement);
+        if (acknowledgement.Signature.Length != BatchSignature.SignatureSize)
+            throw new ArgumentException("A signed FRA1 acknowledgement is required.", nameof(acknowledgement));
+        byte[] payload = EncodePayload(acknowledgement);
+        byte[] encoded = new byte[payload.Length + BatchSignature.SignatureSize];
+        payload.CopyTo(encoded, 0);
+        acknowledgement.Signature.CopyTo(encoded, payload.Length);
+        return encoded;
+    }
+
     public static byte[] EncodePayload(FullReplaceInstalledAck acknowledgement)
     {
         Validate(acknowledgement);
