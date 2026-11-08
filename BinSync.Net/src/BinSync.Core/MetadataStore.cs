@@ -93,6 +93,7 @@ public sealed class MetadataIncomingBatch
     public required string ScopeId { get; init; }
     public required NodeId LocalReplica { get; init; }
     public required NodeId SenderPeer { get; init; }
+    /// <summary>Wire issuer/author epoch; distinct from the authenticated transport peer epoch.</summary>
     public required uint SenderEpoch { get; init; }
     /// <summary>Authenticated transport peer session epoch; zero only for legacy callers without session context.</summary>
     public uint TransportPeerEpoch { get; init; }
