@@ -112,6 +112,17 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         throw new InvalidDataException("Applied-origin frontier report sequence fork detected.");
                     return prior;
                 }
+
+                var nextEntries = report.Entries.ToDictionary(
+                    entry => (entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
+                    entry => entry.ContiguousAppliedOriginSequence);
+                foreach (AppliedOriginFrontierEntry oldEntry in prior.Entries)
+                {
+                    if (!nextEntries.TryGetValue(
+                            (oldEntry.OriginAuthorNodeId, oldEntry.OriginAuthorEpoch), out ulong nextSequence) ||
+                        nextSequence < oldEntry.ContiguousAppliedOriginSequence)
+                        throw new InvalidDataException("Applied-origin frontier regressed or dropped a previously reported author epoch.");
+                }
             }
             WriteRows((key, owned));
             return report;
@@ -156,6 +167,16 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         .AsSpan().SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(prior)))
                         throw new InvalidDataException("Retention checkpoint sequence fork detected.");
                     return prior;
+                }
+                var nextFrontier = checkpoint.SafeFrontier.ToDictionary(
+                    entry => (entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
+                    entry => entry.SafeAppliedOriginSequence);
+                foreach (RetentionFrontierEntry oldEntry in prior.SafeFrontier)
+                {
+                    if (!nextFrontier.TryGetValue(
+                            (oldEntry.OriginAuthorNodeId, oldEntry.OriginAuthorEpoch), out ulong nextSequence) ||
+                        nextSequence < oldEntry.SafeAppliedOriginSequence)
+                        throw new InvalidDataException("Retention checkpoint safe frontier regressed.");
                 }
                 if (checkpoint.CheckpointSequence == prior.CheckpointSequence + 1 &&
                     !checkpoint.PreviousCheckpointDigest.AsSpan()
