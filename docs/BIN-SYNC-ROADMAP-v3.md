@@ -519,3 +519,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ T] No focused codec/transport tests or exact-head build have yet validated this package. The previous exact run on 640af0d built successfully but failed during the test step; do not infer that this package is green.
 - [ ] Continue C pass: connect received BEGIN/CHUNK/COMMIT/ABORT to roster validation, bounded provider staging, digest verification, durable abort/recovery and installed-ACK publication. Enforce one active transfer per namespace and frame sequence/page continuity; reject interleaving, gaps, overlaps, duplicate page identities and stale generations before provider mutation.
 - [ ] Keep FULL_REPLACE commit separate from GC: successful switch alone never authorizes old-generation deletion, ChangeId GC or tombstone/ghost GC.
+
+
+### 2026-11-08 — dispatcher failure diagnosed and corrected
+
+- [x] Retrieved the failed test job log for run `42498381290` (commit `640af0d`). The sole failure was `NamespaceGcSessionTests.Negotiated_v31_session_exchanges_signed_roster_frontier_checkpoint_and_install_ack`: `ReceivePacketAsync` still rejected established-session frame IDs above `0x13`.
+- [x] Confirmed the earlier frame-range change had widened `ReceiveExpectedExclusiveAsync` only. Updated both `ReceivePacketAsync` and `ReceivePumpAsync` to use `NamespaceGcFrames.FullReplaceAbort` as the upper bound. The correction is committed as `e012460a6e3722979b4f136b6237091732ded692`.
+- [~ T] The failing test has not yet been rerun on the corrected head. Keep the test gate open; no green status is claimed.
