@@ -1,9 +1,41 @@
-# BIN-SYNC CORE v2.4.22 FINAL
+# BIN-SYNC CORE v3.0.0 DRAFT
 ## Полная спецификация универсального бинарного протокола синхронизации
 
-**Статус:** Ready for Production Implementation  
-**Версия:** 2.4.22 FINAL (durable retired-epoch receipt GC; authoritative retention-roster prerequisites; fail-closed ChangeId/tombstone GC)  
+**Статус:** Breaking protocol revision — implementation in progress  
+**Версия:** 3.0.0 DRAFT (mandatory immutable per-operation origin provenance; clean-break wire and metadata formats)  
 **Дата:** 2026-11-08  
+
+## v3.0.0 binding overrides
+
+This is a clean-break protocol revision. The v2.4.22 text below is retained only as historical design context; the following rules supersede conflicting v2 layouts and compatibility statements.
+
+### Outbox and origin identity
+
+Every published operation carries immutable Origin = (resolved authorNodeId, originAuthorEpoch, originSequence). originSequence is allocated once at original publication freeze, is monotonic per (namespaceId, authorNodeId) across author epoch changes, and never changes through relay/restart. A relay's local delivery sequence is a separate coordinate. ChangeId remains route-independent; the same ChangeId with a different semantic fingerprint or Origin tuple is equivocation.
+
+### Inbox and PendingApply
+
+The v3 InboxReceipt key is (issuerNodeId, issuerEpoch, namespaceId, batchId), where issuer is the immediate sender/relay. Authenticated transport-peer epoch is stored separately for retirement fencing. Every v3 receipt has a complete header fingerprint, durable author and transport epoch; there are no legacy-unknown receipts. PendingApply stores the exact v3 wire payload and each operation's Origin tuple. Old receipt/PendingApply formats are rejected, not migrated.
+
+### Mandatory v3 DELTA_BATCH record
+
+The v3 header issuerNodeId/issuerEpoch identify the immediate sender/relay incarnation. cursorStart/cursorEnd are that sender's local contiguous cursor for the resolved author stream. Each canonical record is:
+
+~~~
+recordId          : b128
+changeId          : b128
+originAuthorEpoch : u32 LE
+originSequence    : u64 LE
+opKind            : u8
+payloadLen        : canonical ULEB128
+payload           : bytes
+~~~
+
+The durable author NodeId is resolved from the operation alias in the authenticated ALIAS_MAP. Origin fields are mandatory, nonzero and committed by RecordsRoot, BatchDigest and signature. Every batch contains one resolved author stream. For a direct-author batch (issuerNodeId == authorNodeId), originSequence == cursorStart + recordIndex and originAuthorEpoch <= issuerEpoch. For a relay batch, the cursor is relay-local and MUST NOT be compared with originSequence; origin tuple is copied unchanged, and originSequence values are strictly increasing but may have gaps after duplicate suppression. No optional provenance flag, legacy/unflagged record, v2 parser or downgrade path exists.
+
+### Clean-break storage policy
+
+BIN-SYNC Core persistence and StorageMetadataStore use one explicit v3 format marker and one canonical row layout. Old/unknown versions fail closed and require store recreation. No legacy readers, dual-write paths, migration fallback or compatibility-only public APIs are retained. Corrupt v3 state also fails closed.
 
 **Изменения v2.4.22 относительно v2.4.21:**
 - Нормативно определён узкий Inbox receipt GC: receipt удаляется только после durable registration и complete initial-sync baseline replacement transport epoch, атомарно с retired-through fence старой эпохи; unresolved PendingApply блокирует retirement; epoch-unknown legacy receipt сохраняется.
