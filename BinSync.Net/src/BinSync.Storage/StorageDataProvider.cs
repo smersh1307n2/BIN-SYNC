@@ -708,6 +708,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 fieldPrefix[0] = CurrentField;
                 activeGeneration.TryWriteBytes(fieldPrefix.AsSpan(1, 16), true, out _);
                 tombstone.RecordId.WriteTo(fieldPrefix.AsSpan(17, 16));
+                byte[] expectedRecordId = new byte[16];
+                tombstone.RecordId.WriteTo(expectedRecordId);
                 var obsoleteFieldKeys = new List<byte[]>(4096);
                 byte[]? afterFieldKey = null;
                 bool moreFields = true;
@@ -722,7 +724,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     foreach (StorageEntry fieldRow in fieldRows)
                     {
                         if (fieldRow.Key.Length != 35 || fieldRow.Key[0] != CurrentField ||
-                            !fieldRow.Key.AsSpan(17, 16).SequenceEqual(tombstone.RecordId.ToArray()))
+                            !fieldRow.Key.AsSpan(17, 16).SequenceEqual(expectedRecordId))
                             throw new InvalidDataException("Record field key does not match its tombstone record identity.");
                         ProviderMutation field = DecodeMutation(fieldRow.Value);
                         if (field.RecordId != tombstone.RecordId || field.IsRecordTombstone)
