@@ -169,14 +169,27 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 int comparison = Compare(ownedMutation, existing);
                 if (comparison == 0)
                 {
-                    if (!SameMutationContent(ownedMutation, existing) ||
-                        existing.OriginAuthorEpoch != ownedMutation.OriginAuthorEpoch ||
-                        (!mutation.ChangeId.IsZero && existing.ChangeId != mutation.ChangeId))
+                    if (!SameMutationContent(ownedMutation, existing))
                         throw new InvalidDataException("Local source feed equivocated at the same HLC and author.");
-                    return;
+                    if (existing.ChangeId.IsZero && existing.OriginAuthorEpoch == 0 &&
+                        existing.OriginSequence == 0)
+                    {
+                        // Upgrade a legacy current row with the first durable source
+                        // identity; the new feed entry below makes that identity replayable.
+                        batch.Put(currentKey, owned);
+                    }
+                    else
+                    {
+                        if (existing.OriginAuthorEpoch != ownedMutation.OriginAuthorEpoch ||
+                            (!mutation.ChangeId.IsZero && existing.ChangeId != mutation.ChangeId))
+                            throw new InvalidDataException("Local source feed identity conflicts at the same HLC and author.");
+                        return;
+                    }
                 }
-
-                if (comparison > 0) batch.Put(currentKey, owned);
+                else if (comparison > 0)
+                {
+                    batch.Put(currentKey, owned);
+                }
             }
             else
             {
