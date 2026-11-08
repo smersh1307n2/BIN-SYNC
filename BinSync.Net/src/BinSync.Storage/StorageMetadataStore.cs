@@ -234,7 +234,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 incoming.NamespaceId, ResolveAuthorStream(incoming));
             var receive = current.Receives.TryGetValue(receiveKey, out var priorReceive)
                 ? priorReceive : new ReceiveState(0);
-            var chainKey = new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch, incoming.NamespaceId);
+            var chainKey = new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch, incoming.NamespaceId, ResolveAuthorStream(incoming));
             var chain = current.ReceiveChains.TryGetValue(chainKey, out var priorChain)
                 ? priorChain : new ReceiveChainState(new byte[16]);
             if (incoming.CursorStart != checked(receive.CursorEnd + 1) ||
@@ -329,10 +329,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt64LittleEndian(receiveValue, incoming.CursorEnd);
             writes.Add((StorageKey(root, 2, receiveSuffix), receiveValue));
 
-            byte[] chainSuffix = new byte[22];
+            byte[] chainSuffix = new byte[38];
             incoming.SenderPeer.WriteTo(chainSuffix);
             BinaryPrimitives.WriteUInt32LittleEndian(chainSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(chainSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
+            ResolveAuthorStream(incoming).WriteTo(chainSuffix.AsSpan(22));
             writes.Add((StorageKey(root, 14, chainSuffix), incoming.BatchDigest.ToArray()));
             }
         }
@@ -522,7 +523,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receive = state.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
         var chain = state.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -683,10 +684,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         byte[] receiveValue = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(receiveValue, batch.CursorEnd);
 
-        byte[] chainSuffix = new byte[22];
+        byte[] chainSuffix = new byte[38];
         batch.SenderPeer.WriteTo(chainSuffix);
         BinaryPrimitives.WriteUInt32LittleEndian(chainSuffix.AsSpan(16), batch.SenderEpoch);
         BinaryPrimitives.WriteUInt16LittleEndian(chainSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
+        ResolveAuthorStream(batch).WriteTo(chainSuffix.AsSpan(22));
 
         var writes = new List<(byte[] Key, byte[] Value)>(
             3 + newLedger.Count + newRelay.Values.Sum(items => items.Count) + relayHigh.Count + peerStreamStates.Count + requiredStreams.Count);
@@ -2796,10 +2798,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         foreach (var pair in state.ReceiveChains)
         {
-            byte[] suffix = new byte[22];
+            byte[] suffix = new byte[38];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
             Add(StorageKey(root, 14, suffix), pair.Value.LastBatchDigest.ToArray());
         }
 
@@ -3584,7 +3587,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
     private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
-    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
+    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
