@@ -3024,7 +3024,7 @@ private static bool ValidateIncomingBatchForStaging(
             byte kind = suffix[0];
             if (kind is 6 or 9 or 11 ||
                 (kind == 3 && row.Value.Length != 45) ||
-                ((kind is 5 or 8) && row.Value.Length == 8))
+                ((kind is 5 or 8) && row.Value.Length != 16))
                 throw new InvalidDataException("Legacy metadata row encoding is not supported by BIN-SYNC v3.");
             ReadOnlySpan<byte> key = suffix.Slice(1);
             switch (kind)
@@ -3035,10 +3035,8 @@ private static bool ValidateIncomingBatchForStaging(
                     break;
                 case 1:
                 {
-                    if (key.Length is not (38 or 54))
-                        throw new InvalidDataException("Metadata receipt key has an invalid length.");
-                    if (row.Value.Length is not (52 or 56 or 68 or 72 or 84 or 88))
-                        throw new InvalidDataException("Stored inbox receipt value has an invalid length.");
+                    RequireLength(key, 38);
+                    RequireLength(row.Value, 88);
                     var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
@@ -3049,34 +3047,21 @@ private static bool ValidateIncomingBatchForStaging(
                         row.Value.AsSpan(16, 16).ToArray(),
                         row.Value.AsSpan(32, 16).ToArray(),
                         BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(48)),
-                        row.Value.Length >= 68 ? NodeId.From(row.Value.AsSpan(52, 16)) : default,
-                        row.Value.Length is 84 or 88 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>(),
-                        row.Value.Length is 56 or 72 or 88
-                            ? BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(row.Value.Length - 4))
-                            : 0));
+                        NodeId.From(row.Value.AsSpan(52, 16)),
+                        row.Value.AsSpan(68, 16).ToArray(),
+                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(84))));
                     break;
                 }
                 case 2:
                 {
+                    RequireLength(key, 38);
+                    RequireLength(row.Value, 8);
                     var sender = NodeId.From(key.Slice(0, 16));
                     uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16));
                     int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20));
-                    if (key.Length == 22 && row.Value.Length == 24)
-                    {
-                        // Legacy v1 combined receive cursor + digest-chain checkpoint.
-                        state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId, default),
-                            new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
-                        state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId),
-                            new ReceiveChainState(row.Value.AsSpan(8, 16).ToArray()));
-                    }
-                    else
-                    {
-                        RequireLength(key, 38);
-                        RequireLength(row.Value, 8);
-                        state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId,
-                            NodeId.From(key.Slice(22, 16))),
-                            new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
-                    }
+                    state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId,
+                        NodeId.From(key.Slice(22, 16))),
+                        new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
                     break;
                 }
                 case 14:
