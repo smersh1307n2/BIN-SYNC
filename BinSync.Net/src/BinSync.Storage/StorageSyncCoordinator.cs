@@ -584,7 +584,10 @@ public sealed class StorageSyncCoordinator
                         HlcLogical = write.Logical,
                         AuthorNodeId = batch.DurableAuthor,
                         KeyEpoch = write.KeyEpoch,
-                        Value = write.Value.ToArray()
+                        Value = write.Value.ToArray(),
+                        ChangeId = entry.ChangeId,
+                        OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                        OriginSequence = entry.OriginSequence
                     });
                     break;
                 case OpFieldTomb tomb:
@@ -597,7 +600,10 @@ public sealed class StorageSyncCoordinator
                         HlcLogical = tomb.Logical,
                         AuthorNodeId = batch.DurableAuthor,
                         KeyEpoch = tomb.KeyEpoch,
-                        Value = Array.Empty<byte>()
+                        Value = Array.Empty<byte>(),
+                        ChangeId = entry.ChangeId,
+                        OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                        OriginSequence = entry.OriginSequence
                     });
                     break;
                 case OpRecordTombstone recordTombstone:
@@ -610,7 +616,10 @@ public sealed class StorageSyncCoordinator
                         HlcLogical = recordTombstone.Logical,
                         AuthorNodeId = batch.DurableAuthor,
                         KeyEpoch = 0,
-                        Value = Array.Empty<byte>()
+                        Value = Array.Empty<byte>(),
+                        ChangeId = entry.ChangeId,
+                        OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                        OriginSequence = entry.OriginSequence
                     });
                     break;
                 default:
@@ -1304,7 +1313,10 @@ public sealed class StorageSyncCoordinator
                         HlcLogical = write.Logical,
                         AuthorNodeId = operation.AuthorNodeId,
                         KeyEpoch = write.KeyEpoch,
-                        Value = write.Value.ToArray()
+                        Value = write.Value.ToArray(),
+                        ChangeId = operation.ChangeId,
+                        OriginAuthorEpoch = operation.OriginAuthorEpoch,
+                        OriginSequence = operation.OriginSequence
                     });
                     break;
                 case OpFieldTomb tomb:
@@ -1317,7 +1329,10 @@ public sealed class StorageSyncCoordinator
                         HlcLogical = tomb.Logical,
                         AuthorNodeId = operation.AuthorNodeId,
                         KeyEpoch = tomb.KeyEpoch,
-                        Value = Array.Empty<byte>()
+                        Value = Array.Empty<byte>(),
+                        ChangeId = operation.ChangeId,
+                        OriginAuthorEpoch = operation.OriginAuthorEpoch,
+                        OriginSequence = operation.OriginSequence
                     });
                     break;
                 case OpRecordTombstone recordTombstone:
@@ -1330,7 +1345,10 @@ public sealed class StorageSyncCoordinator
                         HlcLogical = recordTombstone.Logical,
                         AuthorNodeId = operation.AuthorNodeId,
                         KeyEpoch = 0,
-                        Value = Array.Empty<byte>()
+                        Value = Array.Empty<byte>(),
+                        ChangeId = operation.ChangeId,
+                        OriginAuthorEpoch = operation.OriginAuthorEpoch,
+                        OriginSequence = operation.OriginSequence
                     });
                     break;
                 default:
