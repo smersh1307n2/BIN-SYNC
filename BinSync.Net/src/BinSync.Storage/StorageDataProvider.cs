@@ -28,8 +28,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private readonly string? _directory;
     private readonly bool _deleteOnDispose;
     private readonly bool _ownsStorage;
-    private readonly Dictionary<Guid, StorageEntry[]> _snapshots = new();
+    private readonly Dictionary<Guid, ProviderSnapshotState> _snapshots = new();
     private bool _disposed;
+
+    private sealed record ProviderSnapshotState(ulong LocalHighWatermark, StorageEntry[] Entries);
 
     public StorageDataProvider(string directory, ulong partitionId = 1, bool deleteOnDispose = false)
     {
@@ -174,7 +176,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             ulong acked = ReadUInt64(snapshot, [LocalAckWatermark]);
             ulong highestRead = ReadUInt64(snapshot, [LocalReadWatermark]);
             bool snapshotBarrier = _snapshots.Values.Any(sourceSnapshot =>
-                ReadUInt64(sourceSnapshot, [LocalHighWatermark]) == afterSequence);
+                sourceSnapshot.LocalHighWatermark == afterSequence);
             if (afterSequence > highestRead && !snapshotBarrier)
                 throw new InvalidDataException("Requested local change cursor skips changes that have not been scanned or covered by a source snapshot.");
 
@@ -261,7 +263,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             var recordTombstones = snapshot.ScanPrefix([CurrentRecordTombstone], ReadOnlySpan<byte>.Empty, int.MaxValue);
             StorageEntry[] entries = MergeSnapshotEntries(fields, recordTombstones);
             Guid token = Guid.NewGuid();
-            _snapshots.Add(token, entries);
+            _snapshots.Add(token, new ProviderSnapshotState(watermark, entries));
             return new ProviderSnapshotHandle(token, watermark);
         }
     }
@@ -271,10 +273,11 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (!_snapshots.TryGetValue(snapshotToken, out var all))
+            if (!_snapshots.TryGetValue(snapshotToken, out var state))
                 throw new ObjectDisposedException(nameof(snapshotToken));
             if (afterIndex < 0) throw new ArgumentOutOfRangeException(nameof(afterIndex));
             if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            StorageEntry[] all = state.Entries;
             if (afterIndex > all.Length) throw new ArgumentOutOfRangeException(nameof(afterIndex));
 
             int end = Math.Min(all.Length, checked(afterIndex + limit));
