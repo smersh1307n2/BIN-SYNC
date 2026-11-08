@@ -14,7 +14,7 @@ jobs:
   metadata-peer-lifecycle:
     name: metadata peer lifecycle benchmarks (.NET 10)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -58,6 +58,14 @@ jobs:
           --
           --metadata-cardinality-only
           --artifacts BenchmarkDotNet.Artifacts/cardinality
+
+      - name: Run one-million-row metadata freeze benchmark
+        working-directory: BinSync.Net
+        run: >
+          dotnet run --configuration Release
+          --project bench/BinSync.Bench
+          --
+          --metadata-million-only
 
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net
