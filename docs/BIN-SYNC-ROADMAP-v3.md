@@ -165,3 +165,14 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Preserve Origin in detached Node batch clones; snapshot state roots use a separate non-operation encoding and do not invent OriginSequence.
 - [~] CI tests are being updated to include Origin in manual/tampered test batches; last observed run before this fixture package: 640 passed / 14 failed. Re-run CI on exact current head before closing any implementation item.
 - [ ] Full ChangeId equivocation, WAL crash-replay and PendingApply recovery tests still required.
+
+
+### 2026-11-08 — continuation audit after ae5db37
+
+- [x] Located the roadmap at `docs/BIN-SYNC-ROADMAP-v3.md` (not repository root) and re-read its execution checklist and progress history.
+- [x] Compared `ae5db37ca4e5c32fe71d320a62c831260ea53fdb` with the current branch: 23 commits ahead, no divergence. The current roadmap identifies `e6826b4865f8966327a628ae07e95720db58d0ff` as the reviewed head.
+- [x] Re-read the v3 normative specification, immutable-Origin/safe-GC design, metadata architecture, Metadata Store and Data Provider conformance contracts, change-staging/retention policy, Metadata GC design, public API contract, spec coverage audit and FLD integration contract.
+- [x] Confirmed the old tuple compiler error was real on the PR merge snapshot `a852206fc245c2a0f7469d0e18d19415a2b2c528`: the method accepted a 3-field metadata tuple but dereferenced Origin fields. The current branch version has the 5-field tuple, and the `e6826b4` CI attempt completed Build successfully.
+- [x] Confirmed that the CI attempt for `e6826b4` was cancelled during Test, Fuzz/Lab and Storage Integration; this is not a green result and does not supersede the earlier 640 passed / 14 failed evidence.
+- [ ] Re-run complete CI on the exact current branch head and capture the 14 test failures individually before changing behavior.
+- [ ] Do not mark Phase 1 complete based on the compile fix: end-to-end Origin, PendingApply/recovery, multi-hop relay, equivocation and safe-GC proof gates remain open.
