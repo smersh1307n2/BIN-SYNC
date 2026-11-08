@@ -663,6 +663,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         ArgumentNullException.ThrowIfNull(acquireGcLease);
         if (!gcStore.IsBoundTo(_storage))
             throw new ArgumentException("Tombstone GC store must share the provider StorageDatabase.", nameof(gcStore));
+        if (!gcStore.IsTombstoneGcProofEnabled)
+            return 0;
 
         IDisposable? lease = acquireGcLease();
         if (lease is null)
