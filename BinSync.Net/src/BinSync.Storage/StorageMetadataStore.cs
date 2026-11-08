@@ -3631,6 +3631,7 @@ private static bool ValidateIncomingBatchForStaging(
         {
             var provenance = operation.Provenance;
             if (!provenance.IsValid || provenance.AuthorNodeId != batch.AuthorStreamNodeId ||
+                provenance.AuthorEpoch != batch.SenderEpoch ||
                 provenance.Sequence <= previousOriginSequence)
                 throw new InvalidDataException("v3 operation has missing, mismatched or non-monotonic immutable Origin provenance.");
             previousOriginSequence = provenance.Sequence;
