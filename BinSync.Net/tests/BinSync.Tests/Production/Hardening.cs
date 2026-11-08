@@ -242,20 +242,24 @@ public class Production : IDisposable
     }
 
     [Fact]
-    public void Persistence_V16TagAndAuthorProgressAndAliasIndexesRoundTrip()
+    public void Persistence_V17TagAndAuthorProgressAndAliasIndexesRoundTrip()
     {
         var (a, _) = BuildHistory();
         var peer = a.PeerStates.Values.First();
         var author = a.NodeId;
         peer.SetStreamOffset(author, 17);
-        var path = Path.Combine(_dir, "tag-v16.state");
+        var path = Path.Combine(_dir, "tag-v17.state");
         NodePersistence.Save(a, path);
         var bytes = File.ReadAllBytes(path);
-        Assert.Equal((ushort)16, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+        Assert.Equal((ushort)17, BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
         var bodyLen = checked((int)BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(6, 8)));
         var body = bytes.AsSpan(4 + 2 + 8 + 32, bodyLen).ToArray();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v16", body);
+        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v17", body);
         Assert.Equal(digest, bytes.AsSpan(14, 32).ToArray());
+        var oldVersion = bytes.ToArray();
+        BinaryPrimitives.WriteUInt16BigEndian(oldVersion.AsSpan(4, 2), 16);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(oldVersion));
+
         var restored = NodePersistence.LoadFromBytes(bytes);
         Assert.True(StateEqual(a, restored));
     }
