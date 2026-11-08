@@ -526,3 +526,13 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Retrieved the failed test job log for run `42498381290` (commit `640af0d`). The sole failure was `NamespaceGcSessionTests.Negotiated_v31_session_exchanges_signed_roster_frontier_checkpoint_and_install_ack`: `ReceivePacketAsync` still rejected established-session frame IDs above `0x13`.
 - [x] Confirmed the earlier frame-range change had widened `ReceiveExpectedExclusiveAsync` only. Updated both `ReceivePacketAsync` and `ReceivePumpAsync` to use `NamespaceGcFrames.FullReplaceAbort` as the upper bound. The correction is committed as `e012460a6e3722979b4f136b6237091732ded692`.
 - [~ T] The failing test has not yet been rerun on the corrected head. Keep the test gate open; no green status is claimed.
+
+
+### 2026-11-08 — FULL_REPLACE manifest authenticity and ordered receive C-pass
+
+- [x C] BEGIN now requires an Ed25519 authority signature over a domain-separated canonical manifest binding namespace, generation, roster generation/digest, source feed watermark, expected entry count and digest. Unsigned BEGIN payloads are rejected by the encoder/decoder path.
+- [x C] Receiver verifies the manifest signature against the pinned, non-revoked PreShared Namespace Authority and independently verifies the supplied roster certificate before accepting BEGIN.
+- [x C] FULL_REPLACE receive APIs now require an explicit expected frame sequence; stream identity and exact frame sequence are checked before payload use. This avoids silently defaulting every later transfer frame to sequence 1.
+- [x C] Capped CHUNK bytes to `Frames.MAX_PAYLOAD_SIZE` (rather than the full 16 MiB frame size), leaving room for the frame header.
+- [~ T] These new codec/authentication/sequence paths have not yet been covered by a fresh exact-head CI run. Do not mark transfer conformance complete.
+- [ ] Next C slice: durable receiver orchestration over `IProviderFullReplace`, persisted staging progress/resume, authority/member transport binding, duplicate/replay handling, atomic commit guard, signed installed-ACK persistence and Node cache rehydration. Keep the old generation and all tombstones until the independent GC proof is complete.
