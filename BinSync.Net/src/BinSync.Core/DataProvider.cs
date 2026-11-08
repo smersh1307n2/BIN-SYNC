@@ -22,6 +22,17 @@ public interface IDataProvider : IDisposable
     bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation);
 }
 
+/// <summary>
+/// Optional durable capability for a provider-authoritative outbound cutover.
+/// The stored watermark fences later direct Node writes after Metadata Store
+/// becomes the sole allocator for new local outbound sequences.
+/// </summary>
+public interface IProviderPublicationMode
+{
+    bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark);
+    void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark);
+}
+
 public sealed class ProviderMutation
 {
     public required RecordId RecordId { get; init; }
