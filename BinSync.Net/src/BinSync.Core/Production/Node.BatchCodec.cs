@@ -212,13 +212,16 @@ public sealed partial class Node
     /// publish a second receive-state authority or relay mirror.
     /// </summary>
     internal (Batch Batch, BatchResult Result) ApplyBatchPayloadWithMetadataAuthority(
-        byte[] data, NodeId senderPeer)
+        byte[] data, NodeId senderPeer, IReadOnlyList<bool> applyOperations)
     {
+        ArgumentNullException.ThrowIfNull(applyOperations);
         Batch batch = DecodeBatchPayloadForMetadataAuthority(data, senderPeer);
+        if (applyOperations.Count != batch.Entries.Count)
+            throw new InvalidDataException("Metadata apply-decision count does not match the incoming batch.");
         BatchResult result;
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
             result = ApplyBatchInternal(batch, senderPeer, durablePayload: data,
-                receiveStateOwnedByMetadataStore: true);
+                receiveStateOwnedByMetadataStore: true, metadataApplyOperations: applyOperations);
         if (!result.Duplicate || result.Applied > 0)
             RaiseBatchApplied(result, senderPeer);
         return (batch, result);
