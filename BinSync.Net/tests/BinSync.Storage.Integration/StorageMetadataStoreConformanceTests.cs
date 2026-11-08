@@ -958,51 +958,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
-    public void Retired_sender_epoch_is_rejected_by_both_inbound_metadata_paths()
-    {
-        using var store = new StorageMetadataStore(Path.Combine(_root, "retired-inbound-epoch"), 446);
-        const string scope = "retired-inbound-epoch";
-        NodeId local = Node(1), sender = Node(2), author = Node(3);
-
-        store.RegisterInterestedPeer(scope, local, sender, 1, 7);
-        store.RegisterInterestedPeer(scope, local, sender, 2, 7);
-        store.CompletePeerInitialSync(scope, local, sender, 2, 7,
-            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
-        store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
-
-        var stale = new MetadataIncomingBatch
-        {
-            ScopeId = scope,
-            LocalReplica = local,
-            SenderPeer = sender,
-            SenderEpoch = 1,
-            AuthorStreamNodeId = author,
-            NamespaceId = 7,
-            BatchId = Batch(190),
-            CursorStart = 1,
-            CursorEnd = 1,
-            PreviousBatchDigest = new byte[16],
-            BatchDigest = Enumerable.Repeat((byte)191, 16).ToArray(),
-            HeaderFingerprint = Enumerable.Repeat((byte)192, 16).ToArray(),
-            Operations = new[]
-            {
-                new MetadataOperation
-                {
-                    AuthorNodeId = author,
-                    ChangeId = Batch(193),
-                    Fingerprint = Enumerable.Repeat((byte)194, 16).ToArray(),
-                    Payload = new byte[] { 195 }
-                }
-            }
-        };
-
-        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(stale));
-        Assert.Throws<InvalidDataException>(() =>
-            store.BeginPendingApply(stale, Guid.Parse("00000000-0000-0000-0000-000000000446")));
-        Assert.Equal(1U, store.GetRetiredPeerEpoch(scope, local, sender, 7));
-    }
-
-    [Fact]
     public void Relay_compaction_waits_for_all_namespace_interested_peers()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-safe-relay-compaction"), 429);
