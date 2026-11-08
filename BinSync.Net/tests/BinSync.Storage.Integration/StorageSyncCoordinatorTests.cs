@@ -47,7 +47,7 @@ public sealed class StorageSyncCoordinatorTests
 
         Assert.Single(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
         Assert.False(receiver.TryGetField(1, record, 0x0812, out _));
-        Assert.Equal(1, coordinator.RecoverPendingApplies(_ => { }));
+        Assert.Equal(1, coordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
         Assert.Empty(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
         Assert.True(receiver.TryGetField(1, record, 0x0812, out var nodeValue));
         Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(nodeValue!.Value));
@@ -1317,6 +1317,43 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
         Assert.Equal(0UL, metadata.GetOutboundHighWatermark(
             "freeze-conflict", node.NodeId, 1, node.NodeId));
+    }
+
+    [Fact]
+    public void Provider_authoritative_rehydration_replaces_node_cache_and_freezes_local_feed()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-authoritative-rehydration"), 453);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(54);
+        using var remote = NewNode(55);
+        const string scope = "provider-authoritative-rehydration";
+
+        RecordId staleRecord = RecordId.From(Guid.Parse("54000000-0000-0000-0000-000000000054").ToByteArray());
+        RecordId providerRecord = RecordId.From(Guid.Parse("55000000-0000-0000-0000-000000000055").ToByteArray());
+        remote.WriteField(1, staleRecord, 0x0817, "node-cache-only"u8.ToArray(), new Hlc(5800, 0));
+        Transport.MakeSession(remote, node);
+        Assert.NotNull(Transport.DeliverBatch(remote, node, 1));
+        Assert.True(node.TryGetField(1, staleRecord, 0x0817, out _));
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = providerRecord,
+            FieldId = 0x0818,
+            AuthorNodeId = node.NodeId,
+            HlcWall = 5900,
+            Value = "provider-authoritative"u8.ToArray()
+        });
+
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        Assert.Equal(0, coordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
+
+        Assert.False(node.TryGetField(1, staleRecord, 0x0817, out _));
+        Assert.True(node.TryGetField(1, providerRecord, 0x0818, out var restored));
+        Assert.Equal("provider-authoritative", Encoding.UTF8.GetString(restored!.Value));
+        Assert.Single(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
     }
 
     private static Node NewNode(byte seed)
