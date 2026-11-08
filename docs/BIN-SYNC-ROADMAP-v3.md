@@ -548,3 +548,15 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Added signed ACK re-encoding so the authority can persist the exact verified member signature received over the session.
 - [~ T] None of these new FULL_REPLACE sender/receiver, READY, resume, ABORT, signature or commit-guard paths has yet been run through exact-head CI. The earlier 640af0d failure was diagnosed and the dispatcher guards fixed, but the current C-pass package remains unverified.
 - [ ] Remaining C work: connect sender/receiver to the actual namespace authority/member lifecycle and `StorageSyncCoordinator` public orchestration; implement periodic origin-frontier publication/checkpoint generation, forgotten-origin replay fencing and a concrete cross-store live-reference GC scan. ChangeId and tombstone/ghost GC remain disabled.
+
+
+### 2026-11-08 — FULL_REPLACE READY/resume and receiver hardening
+
+- [x C] Registered `FULL_REPLACE_READY` as frame `0x1C`; all three established-session dispatch guards now accept it. Updated the v3.1 addendum frame registry.
+- [x C] Receiver and sender now negotiate durable resume state. Fixed-size 4096-entry pages (except final) make `NextIndex` and the next frame sequence deterministic; receiver rejects misaligned progress, short non-final pages and conflicting same-sequence CHUNK/ABORT or COMMIT/ABORT frames.
+- [x C] `StorageFullReplaceReceiver` verifies the roster is still current under the mandatory commit lease before switching the active provider generation. The receiver preflights its local signing key against the roster before staging/commit, and persists its signed installed ACK only after provider switch and Node-cache refresh.
+- [x C] `StorageFullReplaceSender` verifies the authority seed against the pinned roster before sending and checks the second snapshot pass still exactly matches the signed entry count.
+- [x C] Optimized provider progress reads to use the single-row Storage lookup rather than cloning a full Storage snapshot on every resume/page check.
+- [~ T] No exact-head build or tests have run for this implementation slice. Build/test correctness remains explicitly unproven.
+- [ ] Remaining C-pass optimization: audit the provider snapshot memory path. `StorageDataProvider.OpenSnapshot` currently materializes active provider rows into a second `StorageEntry[]`, while `StorageDatabase.OpenSnapshot` itself copies the partition. The digest builder is streaming, but source snapshot memory is not yet truly bounded; remove redundant materialization or redesign snapshot iteration without weakening point-in-time semantics.
+- [ ] Remaining C work: connect the receiver's mandatory commit lease to concrete StorageSyncCoordinator/MetadataStore/peer-reservation checks; wire authority/member lifecycle and periodic frontier/checkpoint production; implement forgotten-origin replay fence and cross-store live-reference GC scan. ChangeId and tombstone/ghost GC remain disabled.
