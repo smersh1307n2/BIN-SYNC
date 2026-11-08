@@ -209,3 +209,6 @@ The earlier 2026-11-08 audit below is superseded. Immutable Origin is now implem
 - A missing/unknown frontier contributes zero. A roster member cannot disappear from the denominator without a durable epoch fence.
 - No TTL, HLC age, wall-clock cutoff, size cap or payload compaction may reclaim receipts, ChangeId rows, tombstones or ghosts without the corresponding proof.
 - Physical deletion must not race PendingApply, outbound/relay reservations, provider publication intents or pinned snapshot generations.
+
+
+The missing ChangeId and tombstone/Ghost horizon is now specified as a proposed negotiated extension in [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md). Until its signed roster/frontier/checkpoint implementation and adversarial tests exist, both GC domains remain disabled.
