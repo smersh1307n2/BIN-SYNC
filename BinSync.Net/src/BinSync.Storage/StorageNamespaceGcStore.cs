@@ -47,6 +47,9 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
     internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
 
+    /// <summary>v3.1 lacks the global author-issued/HLC horizon; physical tombstone GC is intentionally disabled.</summary>
+    public bool IsTombstoneGcProofEnabled => false;
+
     public NamespaceRosterCertificate AcceptNamespaceRoster(ReadOnlySpan<byte> encoded, TrustStore trustStore)
     {
         ArgumentNullException.ThrowIfNull(trustStore);
