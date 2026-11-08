@@ -768,3 +768,11 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `CloseLocalAuthorIdentity` now validates the persisted active-epoch marker and refuses terminal retirement unless that exact epoch already has a durable closure marker. It also rejects an impossible active marker on an already-retired identity.
 - [x C] `ActivateLocalAuthorEpoch` refuses to proceed if the retired identity still carries an active-epoch marker, then enforces a monotonically fresh epoch above all prior closures.
 - [~ T] Test wrong `finalAuthorEpoch`, missing closure marker, malformed active marker, crash/retry and valid rejoin.
+
+
+### 2026-11-09 — C-pass: bound OFR2/RCP2 validation cost
+
+- [x C] Replaced repeated linear lookups in OFR2 own-applied/issued epoch validation with one per-report epoch map; retired-epoch closure checks use an indexed issued-epoch map.
+- [x C] RCP2 safe-frontier derivation now builds each member's `(author, epoch) → applied sequence` map once and checks every origin/member pair in O(1) average time instead of rescanning each report vector.
+- [x C] This removes the avoidable O(origins × active-members × entries) scan from checkpoint creation while retaining bounded 4096-entry report limits and identical fail-closed conditions.
+- [~ T] Add equivalence/property tests and benchmark 1/16/256/4096 entries × 1/2/64/4096 members; confirm allocations and CPU before accepting the optimization.
