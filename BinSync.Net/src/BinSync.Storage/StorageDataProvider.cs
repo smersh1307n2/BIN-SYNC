@@ -399,11 +399,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         {
             ThrowIfDisposed();
             using var snapshot = _storage.OpenSnapshot();
-            ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
-            ulong acknowledged = ReadUInt64(snapshot, [LocalAckWatermark]);
-            if (high != acknowledged)
-                throw new InvalidOperationException("Provider local feed must be fully acknowledged before Metadata-Store-owned publication is enabled.");
-
             if (snapshot.TryGet([ProviderPublicationMode], out var existing))
             {
                 ulong priorCutover = ReadUInt64(existing!);
@@ -411,6 +406,11 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
                     throw new InvalidOperationException("Provider publication cutover watermark is immutable.");
                 return;
             }
+
+            ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
+            ulong acknowledged = ReadUInt64(snapshot, [LocalAckWatermark]);
+            if (high != acknowledged)
+                throw new InvalidOperationException("Provider local feed must be fully acknowledged before Metadata-Store-owned publication is enabled.");
 
             using var batch = _storage.BeginWriteBatch();
             ulong actualBaseCommitSeq = _storage.LastCommitSeq;
