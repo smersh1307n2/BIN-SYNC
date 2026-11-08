@@ -77,7 +77,7 @@ public static class NodePersistence
 
     /// <summary>
     /// Serialize the complete Node checkpoint into an owned, integrity-protected image.
-    /// This is the same v15 image written by Save and can be stored atomically in a
+    /// This is the same v17 image written by Save and can be stored atomically in a
     /// caller-owned StorageDatabase or another durable byte store.
     /// </summary>
     public static byte[] SerializeToBytes(Node node)
