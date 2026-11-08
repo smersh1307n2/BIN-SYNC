@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `4aac39bfcff12aaaf9e589fa06c8726c34eb32f8`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `d501785af099ff3127c7dd5bda9dc31ebe685162`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
 
 ## 1. Target architecture
 
@@ -117,7 +117,8 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### Phase 5 — Public API and clean cutover
 
-- [ ] Remove old public TcpSyncSession and compatibility-only APIs; migrate examples/tests to canonical session/provider API.
+- [x C] The public `TcpSyncSession` surface is already removed by the v3 clean cut; `docs/PUBLIC-API.md` explicitly records the removal and generic `SyncSession` as the transport-independent API. No compatibility wrapper is to be restored.
+- [~ C] Audit all examples/tests and remaining public API for legacy TCP-specific/compatibility-only references; migrate any remaining call sites to canonical `SyncSession`/`ISyncTransport`/provider API during the C pass, then verify in Phase T.
 - [ ] Remove optional provenance capability and downgrade negotiation.
 - [ ] Remove Node-owned duplicate metadata paths where Metadata Store authority is selected; no fallback after durable cutover.
 - [ ] Make v3 format marker mandatory on first durable write and validate on every open/recovery path.
@@ -385,3 +386,11 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Updated `METADATA-STORE-GC-DESIGN.md` to make unresolved outbound PendingBatch reservations an explicit receipt/peer-epoch retirement blocker, matching the new StorageMetadataStore guard and v3 §0.11.
 - [x] Clarified that a replacement epoch's completed initial-sync baseline cannot discard the old epoch's unresolved send/lost-ACK retry context.
 - [~] Current branch head is `4aac39b`; exact-head CI remains pending for C-pass code commits `aab64ad` and `f0c2bd8`.
+
+
+### 2026-11-08 — C pass: public session clean-cut audit
+
+- [x] Confirmed the v3 public API contract explicitly states that `TcpSyncSession` was removed and the TCP listener now returns the generic `SyncSession`; no legacy public session wrapper is to be preserved.
+- [x] Updated `docs/PUBLIC-API.md` normative reference from the historical v2.4.17 text to BIN-SYNC-SPECIFICATION.txt v3.0.0 clean-break contract.
+- [~] Remaining C work: scan and migrate every sample/test/API call site still using TCP-specific or compatibility-only entry points. The complete build/reference audit is deferred to Phase T.
+- [~] Current branch head at this log entry: `d501785`; exact-head CI remains pending for the C-pass code changes `aab64ad` and `f0c2bd8`.
