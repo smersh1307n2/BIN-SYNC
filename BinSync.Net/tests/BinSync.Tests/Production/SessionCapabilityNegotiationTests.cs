@@ -1,6 +1,6 @@
 using Xunit;
 
-namespace BinSync.Tests.Production;
+namespace BinSync.Tests;
 
 public sealed class SessionProtocolMajorTests
 {
