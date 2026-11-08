@@ -486,6 +486,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_DIR"] = directory;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_READY"] = readyPath;
         start.Environment["BIN_SYNC_WAL_FENCE_PROBE_RELEASE"] = releasePath;
+        start.Environment["BIN_SYNC_WAL_FENCE_PROBE_PID"] = ownerPidPath;
 
         try
         {
@@ -533,6 +534,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         string directory = Path.Combine(_root, "killed-wal-writer-process");
         Directory.CreateDirectory(directory);
         string readyPath = Path.Combine(directory, "child-ready");
+        string ownerPidPath = Path.Combine(directory, "child-owner-pid");
         string releasePath = Path.Combine(directory, "never-release");
         string? projectDirectory = AppContext.BaseDirectory;
         while (projectDirectory is not null &&
@@ -582,12 +584,44 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             }
 
             Assert.Throws<IOException>(() => StorageDatabase.Open(directory, 88));
-            child.Kill(entireProcessTree: true);
+
+            // dotnet test launches a separate testhost. Kill the actual process
+            // that owns StorageDatabase first, then reap the dotnet test parent.
+            int ownerPid = int.Parse(File.ReadAllText(ownerPidPath));
+            try
+            {
+                using var owner = Process.GetProcessById(ownerPid);
+                owner.Kill(entireProcessTree: true);
+                await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (ArgumentException)
+            {
+                // The testhost may have exited between reading the PID and opening it.
+            }
+
+            if (!child.HasExited)
+                child.Kill(entireProcessTree: true);
             await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
-            using var recovered = StorageDatabase.Open(directory, 88);
-            Assert.True(recovered.TryGet(new byte[] { 0x11 }, out var value));
-            Assert.Equal(new byte[] { 0x22 }, value);
+            StorageDatabase? recovered = null;
+            Exception? lastError = null;
+            DateTime recoveryDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (recovered is null && DateTime.UtcNow < recoveryDeadline)
+            {
+                try { recovered = StorageDatabase.Open(directory, 88); }
+                catch (IOException ex)
+                {
+                    lastError = ex;
+                    await Task.Delay(50);
+                }
+            }
+
+            Assert.NotNull(recovered, $"WAL fence was not released after owner PID {ownerPid} exited. {lastError}");
+            using (recovered!)
+            {
+                Assert.True(recovered!.TryGet(new byte[] { 0x11 }, out var value));
+                Assert.Equal(new byte[] { 0x22 }, value);
+            }
         }
         finally
         {
@@ -601,6 +635,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         string? directory = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_DIR");
         string? readyPath = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_READY");
         string? releasePath = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_RELEASE");
+        string? ownerPidPath = Environment.GetEnvironmentVariable("BIN_SYNC_WAL_FENCE_PROBE_PID");
         if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(readyPath) ||
             string.IsNullOrWhiteSpace(releasePath))
             return;
@@ -611,6 +646,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             batch.Put(new byte[] { 0x11 }, new byte[] { 0x22 });
             batch.Commit();
         }
+        if (!string.IsNullOrWhiteSpace(ownerPidPath))
+            File.WriteAllText(ownerPidPath, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
         File.WriteAllText(readyPath, "ready");
         while (!File.Exists(releasePath))
             Thread.Sleep(10);
