@@ -1550,18 +1550,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new InvalidOperationException("Only the newest registered peer epoch can retire an older incarnation.");
 
             var retiredKey = (NamespaceId: namespaceId, Peer: peer);
-            bool alreadyRetired = current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint retiredThrough) &&
-                retiredThrough >= retiredPeerEpoch;
+            bool hasRetiredMarker = current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint retiredThrough);
+            bool alreadyRetired = hasRetiredMarker && retiredThrough >= retiredPeerEpoch;
+            uint nextRetiredThrough = Math.Max(hasRetiredMarker ? retiredThrough : 0, retiredPeerEpoch);
             var oldRosterKey = new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch);
             if (current.PendingApplies.Values.Any(intent =>
                     intent.Batch.SenderPeer == peer && intent.Batch.NamespaceId == namespaceId &&
                     (intent.Batch.TransportPeerEpoch == 0 ||
-                     intent.Batch.TransportPeerEpoch == retiredPeerEpoch)))
+                     intent.Batch.TransportPeerEpoch <= nextRetiredThrough)))
                 throw new InvalidOperationException(
                     "Cannot retire a transport peer epoch while one of its PendingApply intents is unresolved; recover or finalize it first.");
             ReceiptKey[] oldReceipts = current.Receipts
                 .Where(pair => pair.Key.Sender == peer && pair.Key.NamespaceId == namespaceId &&
-                    pair.Value.TransportPeerEpoch == retiredPeerEpoch)
+                    pair.Value.TransportPeerEpoch != 0 &&
+                    pair.Value.TransportPeerEpoch <= nextRetiredThrough)
                 .Select(pair => pair.Key)
                 .ToArray();
             bool hasOldRows = oldReceipts.Length != 0 ||
@@ -1608,9 +1610,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             deletes.AddRange(oldStreams.Select(key => EncodePeerStreamKey(partitionKey, key)));
             deletes.AddRange(oldRequired.Select(key => EncodeRequiredPeerStreamKey(partitionKey, key)));
             deletes.AddRange(oldReceipts.Select(key => EncodeReceiptKey(partitionKey, key)));
-            uint nextRetiredThrough = Math.Max(
-                current.RetiredPeerEpochs.TryGetValue(retiredKey, out uint priorEpoch) ? priorEpoch : 0,
-                retiredPeerEpoch);
             byte[] retiredValue = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(retiredValue, nextRetiredThrough);
             var writes = new[]
