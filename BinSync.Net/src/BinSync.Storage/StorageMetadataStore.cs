@@ -948,7 +948,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     public bool TryGetOutboundChangeFingerprint(
-        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, out byte[] fingerprint)
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, out ReadOnlyMemory<byte> fingerprint)
     {
         lock (_gate)
         {
@@ -956,7 +956,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
             if (changeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
-            fingerprint = Array.Empty<byte>();
+            fingerprint = ReadOnlyMemory<byte>.Empty;
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return false;
 
@@ -965,7 +965,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return false;
             if (!prior.IsLocalOutbound)
                 throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
-            fingerprint = prior.Fingerprint.ToArray();
+            fingerprint = prior.Fingerprint;
             return true;
         }
     }
