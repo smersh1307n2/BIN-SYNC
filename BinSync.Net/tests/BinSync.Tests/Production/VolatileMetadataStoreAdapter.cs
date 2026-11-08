@@ -367,10 +367,11 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         {
             if (operation.ChangeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(operations));
-            if (operation.OriginAuthorEpoch == 0 || operation.OriginSequence == 0 ||
-                operation.OriginSequence <= previousOriginSequence)
+            if (operation.OriginAuthorEpoch == 0 ||
+                (operation.OriginSequence != 0 && operation.OriginSequence <= previousOriginSequence))
                 throw new InvalidDataException("Published operation has invalid immutable Origin provenance.");
-            previousOriginSequence = operation.OriginSequence;
+            if (operation.OriginSequence != 0)
+                previousOriginSequence = operation.OriginSequence;
             ValidateDigest(operation.Fingerprint, nameof(operation.Fingerprint));
             ArgumentNullException.ThrowIfNull(operation.Payload);
             if (!seen.Add(operation.ChangeId))
@@ -465,10 +466,16 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             }
         }
 
-        _partitions[partitionKey] = next;
         var result = new MetadataOutboundItem[operations.Count];
+        ulong previousFrozenOriginSequence = 0;
         for (int i = 0; i < operations.Count; i++)
+        {
             result[i] = CloneOutboundItem(frozenByChangeId[operations[i].ChangeId]);
+            if (result[i].OriginSequence <= previousFrozenOriginSequence)
+                throw new InvalidDataException("Frozen outbound Origin sequence is not strictly increasing.");
+            previousFrozenOriginSequence = result[i].OriginSequence;
+        }
+        _partitions[partitionKey] = next;
         return result;
     }
 
