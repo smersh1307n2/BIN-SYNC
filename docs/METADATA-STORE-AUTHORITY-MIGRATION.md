@@ -126,6 +126,8 @@ Outbound payload reclamation is based on the minimum durable peer ACK across all
 
 `ProviderChange.ChangeId` is now an optional stable 128-bit source identity. `StorageDataProvider` persists it as a suffix in the existing local-feed row (not a second key/table), returns the same identity after reopen, removes it with the feed row on ACK, and upgrades legacy feed rows on first read by atomically appending an identity. A zero or malformed persisted identity fails closed.
 
+`FreezeOutbound` now supports per-ChangeId incremental idempotency: a replay containing previously frozen feed entries plus newly appended entries preserves existing sequences and allocates only the new ones, while conflicting reuse still fails atomically. This is required because a provider feed can grow between a durable freeze and a failed provider ACK.
+
 This is groundwork only: `StorageSyncCoordinator.PublishLocalChanges` still materializes provider changes through Node Outbox and then freezes those entries into Metadata Store. The next cutover slice must:
 
 1. require non-zero `ProviderChange.ChangeId` for the provider-authoritative publication mode;
