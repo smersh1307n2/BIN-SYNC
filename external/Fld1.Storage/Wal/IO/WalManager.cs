@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Fld1.Storage.Wal.Format;
 using Fld1.Storage.Wal.Recovery;
 
@@ -8,7 +10,7 @@ namespace Fld1.Storage.Wal.IO;
 /// Multi-segment WAL for one partition. Rotation: fsync active → new segment file.
 /// Segment names: p_{partitionId}.{seg}.log
 /// </summary>
-public sealed class WalManager : IDisposable
+public sealed partial class WalManager : IDisposable
 {
     private static readonly ConcurrentDictionary<string, byte> ActiveWriters =
         new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -76,7 +78,7 @@ public sealed class WalManager : IDisposable
             }
             // FileShare is not an inter-process writer fence on every supported OS.
             // The byte-range lock is released by the OS if the process terminates.
-            writerLock.Lock(0, 1);
+            AcquireWriterFence(writerLock);
 
             var segs = ListSegments(walDir, partitionId);
             var allRecords = new List<WalRecoveredRecord>();
@@ -169,6 +171,58 @@ public sealed class WalManager : IDisposable
             ActiveWriters.TryRemove(writerLockPath, out _);
             throw;
         }
+    }
+
+    private const int LockExclusive = 2;
+    private const int LockNonBlocking = 4;
+    private const int LockUnlock = 8;
+
+    [LibraryImport("libc", EntryPoint = "flock", SetLastError = true)]
+    private static partial int Flock(int fileDescriptor, int operation);
+
+    private static void AcquireWriterFence(FileStream stream)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            stream.Lock(0, 1);
+            return;
+        }
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            int descriptor = stream.SafeFileHandle.DangerousGetHandle().ToInt32();
+            if (Flock(descriptor, LockExclusive | LockNonBlocking) != 0)
+            {
+                int error = Marshal.GetLastPInvokeError();
+                throw new IOException("WAL partition is already open by another process.",
+                    new Win32Exception(error));
+            }
+            return;
+        }
+
+        throw new PlatformNotSupportedException("Exclusive WAL writer fencing is not implemented on this platform.");
+    }
+
+    private static void ReleaseWriterFence(FileStream stream)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            stream.Unlock(0, 1);
+            return;
+        }
+
+        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
+        {
+            int descriptor = stream.SafeFileHandle.DangerousGetHandle().ToInt32();
+            if (Flock(descriptor, LockUnlock) != 0)
+            {
+                int error = Marshal.GetLastPInvokeError();
+                throw new IOException("Failed to release WAL partition writer fence.", new Win32Exception(error));
+            }
+            return;
+        }
+
+        throw new PlatformNotSupportedException("Exclusive WAL writer fencing is not implemented on this platform.");
     }
 
     private static List<int> ListSegments(string walDir, ulong partitionId)
@@ -357,7 +411,7 @@ public sealed class WalManager : IDisposable
             try { _active.Dispose(); }
             finally
             {
-                try { _writerLock.Unlock(0, 1); } catch (IOException) { }
+                try { ReleaseWriterFence(_writerLock); } catch (IOException) { }
                 _writerLock.Dispose();
                 ActiveWriters.TryRemove(_writerLockPath, out _);
             }
