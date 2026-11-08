@@ -632,7 +632,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         {
             current.Receipts.Add(receiptKey, new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
                 incoming.PreviousBatchDigest.ToArray(), incoming.BatchDigest.ToArray(),
-                receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch));
+                receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch, GetMaxOriginSequence(incoming)));
             current.Receives[new ReceiveKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
             current.ReceiveChains[new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch, incoming.NamespaceId)] = new ReceiveChainState(incoming.BatchDigest.ToArray());
@@ -911,7 +911,7 @@ private static bool ValidateIncomingBatchForStaging(
         var receiptValueState = new ReceiptValue(batch.CursorStart, batch.CursorEnd,
             batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(),
             relayAdded, receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(),
-            batch.TransportPeerEpoch);
+            batch.TransportPeerEpoch, GetMaxOriginSequence(batch));
         byte[] receiptValue = EncodeReceiptValue(receiptValueState);
 
         byte[] receiveSuffix = new byte[38];
@@ -1003,7 +1003,7 @@ private static bool ValidateIncomingBatchForStaging(
 
         current.Receipts.Add(receiptKey, new ReceiptValue(batch.CursorStart, batch.CursorEnd,
             batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded,
-            receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(), batch.TransportPeerEpoch));
+            receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(), batch.TransportPeerEpoch, GetMaxOriginSequence(batch)));
         current.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
         current.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
         foreach (var pair in newLedger)
