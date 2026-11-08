@@ -532,6 +532,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     outbound.OriginSequence == 0)
                     throw new InvalidDataException("Published Metadata Store identity does not match the provisional provider feed entry.");
 
+                if (!batch.TryGet(ChangeKey(change.Sequence), out byte[]? feedBytes))
+                    throw new InvalidDataException("Provider local feed entry disappeared before its publication identity was committed.");
+                var (feedMutation, feedChangeId) = DecodeLocalFeedChange(feedBytes!);
+                if (feedChangeId != change.ChangeId || !SameMutation(feedMutation, draft))
+                    throw new InvalidDataException("Provider local feed row changed before its publication identity was committed.");
+
                 byte[] currentKey = draft.IsRecordTombstone
                     ? CurrentRecordTombstoneKey(activeGeneration, draft.RecordId)
                     : CurrentKey(activeGeneration, draft.RecordId, draft.FieldId);
