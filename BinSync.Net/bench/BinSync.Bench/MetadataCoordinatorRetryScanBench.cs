@@ -13,7 +13,6 @@ namespace BinSync.Bench;
 /// </summary>
 [MemoryDiagnoser]
 [InvocationCount(1)]
-[UnrollFactor(1)]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public sealed class MetadataCoordinatorRetryScanBench
 {
