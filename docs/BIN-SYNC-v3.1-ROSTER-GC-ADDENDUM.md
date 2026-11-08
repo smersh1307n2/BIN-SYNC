@@ -1,7 +1,7 @@
 # BIN-SYNC v3.1 Addendum — Signed Namespace Roster and Safe GC
 
-**Status:** Proposed protocol extension; design checkpoint only. Not implemented and not part of v3.0 wire conformance.  
-**Baseline:** BIN-SYNC v3.0.0 clean cut. Exact verified implementation checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` (Core 662/662, Fuzz/Lab 31/31, Storage Integration 168/168 on Ubuntu/Windows/macOS).
+**Status:** v3.1 implementation in progress; not part of v3.0 wire conformance and not production-complete. Durable roster/frontier/checkpoint/installed-ACK storage contracts and initial SyncSession frame adapters are present; end-to-end orchestration, FULL_REPLACE transfer, crash proof and GC integration remain incomplete.  
+**Last green pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). Exact-head CI after the first v3.1 adapters had two test assertion failures, fixed in `43efda1`; its CI is pending.
 
 This addendum closes the missing proof needed before enabling global ChangeId GC and tombstone/Ghost GC. It deliberately does not weaken the current fail-closed behavior.
 
@@ -48,7 +48,7 @@ Proposed additions to `SessionCapabilities`:
 | `OriginFrontierV31` | 4 | Signed member applied-origin frontiers and retention checkpoints |
 | `FullReplaceV31` | 5 | Authoritative FULL_REPLACE transfer and installed ACK |
 
-Proposed currently-unused frame type assignments (confirm against the final frame registry before implementation):
+Frame type assignments used by the initial v3.1 SyncSession adapters (still verify against the complete frame registry before freezing wire vectors):
 
 | Frame | Type | Stream |
 |---|---:|---|
@@ -242,3 +242,20 @@ GC remains disabled until these tests pass on the exact release commit and crash
 ## 10. Open design decision
 
 This proposal uses one pinned Namespace Authority. It is simple, compact and fail-closed, but membership changes and GC stop if that authority is unavailable. A threshold/quorum authority could remove this single-authority dependency, but it increases metadata, protocol complexity and test surface. Do not add quorum until there is a concrete requirement; the crash-fault model is the initial target.
+
+## 10. Implementation status (2026-11-08)
+
+The first implementation slice has landed, but this addendum is not yet fully implemented:
+
+- `IMetadataNamespaceGcStore` defines the durable roster/frontier/checkpoint/installed-ACK contract.
+- `StorageNamespaceGcStore` persists those signed objects under a separate Storage key prefix and enforces initial monotonicity, roster-transition and safe-frontier checks.
+- `NamespaceGcFrames` and `SyncSession.NamespaceGc` provide capability-gated send/receive adapters for roster, Origin frontier, retention checkpoint and installed ACK.
+- Storage restart/fence tests and SyncSession frame-exchange/capability tests have been added. The first CI exposed only two assertions that omitted the automatically negotiated `IncrementalAliasMap`; fixed in `43efda1`, exact-head CI pending.
+
+Still required before v3.1 conformance or any GC enablement:
+
+1. Complete the FULL_REPLACE BEGIN/CHUNK/COMMIT/ABORT transfer protocol and durable receiver state machine.
+2. Wire received signed messages to the durable namespace-GC store and implement authority/member lifecycle, periodic frontier publication and checkpoint generation.
+3. Integrate forgotten-origin replay rejection with the ChangeId ledger and prove safe deletion against all live references across provider, PendingApply, reservations, relay/outbound payloads, snapshots and leases.
+4. Add crash/fault injection at every persistence and generation-switch boundary, multi-peer/rejoin/resurrection and adversarial signature/rollback/fork tests.
+5. Verify exact wire compatibility, frame registry uniqueness, bounded memory/CPU and exact-head CI before enabling ChangeId or tombstone/Ghost GC. Both remain disabled.
