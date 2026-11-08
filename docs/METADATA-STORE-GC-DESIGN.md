@@ -153,3 +153,34 @@ Implementation order is mandatory: (A) add origin provenance to operation envelo
 - No GC of provenance-less legacy records.
 - No reclamation while PendingApply or an immutable outbound reservation references the state.
 - No claim of bounded metadata growth until all three GC domains have proven horizons and measured storage/CPU costs.
+
+## 8. Implementation audit — 2026-11-08 (origin provenance blocker)
+
+The current Storage implementation has **not** implemented the origin coordinates required by ChangeId GC. This is an explicit implementation blocker, not a documentation-only prerequisite.
+
+### 8.1 Current code facts
+
+- `MetadataOperation` currently carries `AuthorNodeId`, `ChangeId`, `Fingerprint`, `Payload` and `RelayEligible`; it has no immutable origin-author epoch or origin sequence.
+- `MetadataIncomingBatch` carries sender/issuer epoch, optional transport-peer epoch, author-stream identity and a batch cursor range. These are not sufficient to assign an origin sequence to every operation when a batch contains operations from different authors or a relay repackages operations.
+- `StorageMetadataStore` persists a ChangeId ledger value containing only the 16-byte fingerprint and local-outbound flag (legacy values may contain only the fingerprint). It cannot calculate a per-origin safe frontier from this ledger.
+- The relay sequence allocated by a receiving node is a **local relay-delivery sequence**. It is not the immutable origin sequence and MUST NOT be used as ChangeId GC provenance.
+- Existing rows lacking authenticated origin coordinates are permanently unknown for destructive GC unless a future, independently verifiable migration proof can recover their exact origin. Do not infer coordinates from current relay high-watermarks, sender identity, receipt cursors, or wall-clock order.
+
+### 8.2 Required implementation sequence
+
+1. Define a negotiated protocol revision/capability for immutable operation provenance. Each operation must carry `originAuthorNodeId`, `originAuthorEpoch`, and a strictly positive `originSequence`. The tuple is created at the original author and preserved byte-for-byte by every relay.
+2. Validate that the tuple agrees with the authenticated batch/author-stream context where the protocol requires it; reject missing, regressive, conflicting, or ambiguous provenance. Legacy peers may continue exchanging legacy operations, but those operations remain non-collectable.
+3. Extend outbound creation so the original author epoch and sequence are committed atomically with the immutable ChangeId and outbound payload. A retry must return the exact same tuple.
+4. Extend inbound decode, PendingApply persistence/recovery, relay storage, and relay encoding to preserve the tuple. A relay must never replace origin sequence with its own relay sequence.
+5. Version the ChangeId ledger encoding. New rows store fingerprint, origin tuple, and origin-known state. Keep backward decoding for existing 16/17-byte values; decode those as provenance-unknown and retain indefinitely. Migrate only through the existing crash-consistent Storage transaction.
+6. Add conformance tests for multi-hop byte-for-byte provenance preservation, mixed-author batches, duplicate ChangeId through a new route, conflicting origin tuple, legacy replay, process restart between PendingApply and finalization, and codec migration.
+7. Only after signed authoritative namespace roster generations and signed monotonic all-member retention checkpoints are implemented may a pure safe-frontier calculator be added. Test the calculator independently before wiring physical deletion.
+8. Keep ChangeId GC disabled until the complete proof and all reference checks are durable. Keep tombstone/ghost GC disabled until the same frontier proof plus authoritative FULL_REPLACE generation switching and rejoin fencing are implemented.
+
+### 8.3 Non-negotiable invariants
+
+- `(namespaceId, ChangeId)` remains the global deduplication identity; the origin tuple is immutable provenance, not a replacement dedup key.
+- Same ChangeId with a different fingerprint or a different known origin tuple is equivocation and fails closed.
+- A duplicate received through another route must not create a second relay operation or overwrite the original origin tuple.
+- Missing provenance is unknown, never guessed. Unknown rows block GC.
+- Physical deletion must not race PendingApply, outbound/relay reservations, provider publication intents, or pinned snapshot generations.
