@@ -38,7 +38,7 @@ public sealed class StorageSyncCoordinator
         _scopeId = scopeId;
         if (_metadataStore is not null && _provider is IProviderPublicationMode publicationMode &&
             publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _))
-            _node.EnableMetadataStoreOwnedPublicationFence();
+            _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
     }
 
     /// <summary>
@@ -61,7 +61,7 @@ public sealed class StorageSyncCoordinator
         {
             if (publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong existingCutover))
             {
-                _node.EnableMetadataStoreOwnedPublicationFence();
+                _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
                 long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
                 if (currentNodeHigh < 0 || (ulong)currentNodeHigh != existingCutover)
                     throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
@@ -89,7 +89,7 @@ public sealed class StorageSyncCoordinator
             // Fence direct Node local writes before replacing the cache. The durable
             // provider marker is the restart authority; a failed cutover remains
             // fail-closed in this live Node instance.
-            _node.EnableMetadataStoreOwnedPublicationFence();
+            _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
             // Rebuild the Node cache from the provider snapshot only after the
             // existing Node Outbox range is known to be fully frozen. The Node
             // sequence watermark then becomes an immutable fence.
