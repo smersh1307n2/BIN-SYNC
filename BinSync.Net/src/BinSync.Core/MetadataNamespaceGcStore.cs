@@ -32,13 +32,14 @@ public interface IMetadataNamespaceGcStore
         NodeId originAuthor, uint originEpoch, ulong originSequence);
 
     /// <summary>
-    /// Protocol proof component only. v3.1 currently fails closed because frontiers
-    /// do not yet bind every author's issued high-watermark and the post-FULL_REPLACE
-    /// HLC floor. Callers must additionally prove that no PendingApply, relay/provider
-    /// intent, reservation or snapshot pin references the tombstone before reclamation.
+    /// Protocol proof component. This proves the signed author-issued/retirement horizon,
+    /// all-member applied frontier and FULL_REPLACE HLC floor. Callers must additionally
+    /// prove that no PendingApply, relay/provider intent, reservation or snapshot pin
+    /// references the tombstone before reclamation.
     /// </summary>
     bool HasProtocolTombstoneGcProof(
         NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
         NodeId originAuthor, uint originEpoch, ulong originSequence,
+        ulong tombstoneHlcWall, uint tombstoneHlcLogical,
         Guid fullReplaceGeneration, ReadOnlySpan<byte> fullReplaceDigest);
 }
