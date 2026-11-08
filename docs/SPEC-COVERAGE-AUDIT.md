@@ -1,8 +1,7 @@
 # BIN-SYNC CORE normative coverage audit
 
-**Baseline:** BIN-SYNC CORE v2.4.20 FINAL  
-**Status:** first-pass section and contradiction audit, refreshed against code/test head `22a89cdd7dd1538e5a4088bda03bebb25060dc09`: 649/649 Core, 31/31 Fuzz/Lab; Storage Integration 142/142 independently on Ubuntu, Windows and macOS. Linux/macOS directory-entry changes and newly-created directory parents use native directory fsync with fail-closed error propagation; WAL partial-write/fsync and post-reclamation directory-fsync failure are covered by deterministic crash regressions. Windows directory-entry durability and real power-loss behavior are not claimed. This is not a claim that every normative sentence has a one-to-one executable test. The remaining scenario-level mapping is an explicit release gate.
-**Status:** first-pass section and contradiction audit, refreshed against code/test head `92f6631871072799087ee1732f4d65bdaeeff523`: 648/648 Core, 31/31 Fuzz/Lab, 70.4% line coverage; Storage Integration 136/136 independently on Ubuntu, Windows and macOS-15; both in-memory and real-TCP Storage samples pass. This is not a claim that every normative sentence has a one-to-one executable test. The remaining scenario-level mapping is an explicit release gate.
+**Baseline:** BIN-SYNC CORE v2.4.21 FINAL  
+**Status:** refreshed against code/test head `fc8e421f11c51bf02eb85e95709c92e202d79a52`: 651/651 Core, 31/31 Fuzz/Lab; Storage Integration 142/142 independently on Ubuntu, Windows and macOS. Direct coverage now includes Node-owned and durable author-stream fairness, first-seen relay after LWW loss, and live correlated ALIAS_MAP propagation over TCP after the initial handshake. The latest code/test head is green on all three operating systems. Linux/macOS directory-entry changes and newly-created directory parents use native directory fsync with fail-closed error propagation; WAL partial-write/fsync and post-reclamation directory-fsync failure are covered by deterministic crash regressions. Windows directory-entry durability and real power-loss behavior are not claimed. This is not a claim that every normative sentence has a one-to-one executable test; the remaining release gates are safe retention/GC horizons, additional physical I/O fault coverage and repeatable large-cardinality performance evidence.
 
 ## 1. Section coverage matrix
 
@@ -97,7 +96,7 @@ The named baseline scenarios 1–25 map directly to executable test methods. Ext
 | 24. Unknown alias atomic rollback | `ScenariosB.Scenario24_UnknownAliasAtomicRollback` |
 | 25. Concurrent delete by author | `ScenariosB.Scenario25_ConcurrentDeleteByAuthor` |
 
-Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. Latest verified Core/Fuzz run at code/test head `aafff5c5e12c901c2da4bd49fbabc03158418794`: 648/648 Core, 31/31 Fuzz/Lab and 70.4% line coverage. Latest Storage Integration run at the same head: 122/122 on Ubuntu and Windows; macOS is queued after the FileShare.None WAL lease change.
+Extended scenario methods: `ScenariosB.Scenario26_CorruptedFrameRecovery` through `Scenario42_ThreeNodeChaos`, with the individual names retained in the source test file. Latest verified Core/Fuzz run at code/test head `fc8e421f11c51bf02eb85e95709c92e202d79a52`: 651/651 Core and 31/31 Fuzz/Lab. Latest Storage Integration run at the same head: 142/142 independently on Ubuntu, Windows and macOS.
 
 **Interpretation guard:** a scenario test proves only the assertions inside that method. In particular, scenario 10 proves fail-closed behavior, not that destructive tombstone GC is implemented; scenario 13 proves quarantine behavior, not that a complete safe-frontier GC engine exists.
 
