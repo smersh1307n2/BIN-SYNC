@@ -871,4 +871,38 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public void Full_replace_staging_cannot_overwrite_a_newer_active_generation()
+    {
+        string directory = Path.Combine(_root, "provider-full-replace-stale-base");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 97, deleteOnDispose: false);
+            ProviderMutation first = Mutation(105, 1, 100, 1);
+            ProviderMutation second = Mutation(106, 2, 200, 2);
+            Guid staleGeneration = Guid.Parse("97000000-0000-0000-0000-000000000001");
+            Guid currentGeneration = Guid.Parse("97000000-0000-0000-0000-000000000002");
+
+            byte[] staleDigest = StorageDataProvider.ComputeFullReplaceDigest(staleGeneration, 20, new[] { first });
+            provider.BeginFullReplace(staleGeneration, 20, 1, staleDigest);
+            provider.StageFullReplacePage(staleGeneration, 0, new[] { first });
+
+            byte[] currentDigest = StorageDataProvider.ComputeFullReplaceDigest(currentGeneration, 21, new[] { second });
+            provider.BeginFullReplace(currentGeneration, 21, 1, currentDigest);
+            provider.StageFullReplacePage(currentGeneration, 0, new[] { second });
+            provider.CommitFullReplace(currentGeneration);
+
+            Assert.Throws<InvalidOperationException>(() => provider.CommitFullReplace(staleGeneration));
+            Assert.True(provider.TryReadCurrent(second.RecordId, second.FieldId, out _));
+            Assert.False(provider.TryReadCurrent(first.RecordId, first.FieldId, out _));
+            provider.AbortFullReplace(staleGeneration);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
