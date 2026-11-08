@@ -801,4 +801,74 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+
+    [Fact]
+    public void Full_replace_stages_inactive_generation_and_switches_atomically()
+    {
+        string directory = Path.Combine(_root, "provider-full-replace");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 95, deleteOnDispose: false);
+            ProviderMutation prior = Mutation(101, 1, 100, 1);
+            ProviderMutation replacement = Mutation(102, 2, 200, 2);
+            provider.AppendLocalChange(prior);
+            ProviderSnapshotHandle heldSnapshot = provider.OpenSnapshot();
+
+            Guid generation = Guid.Parse("95000000-0000-0000-0000-000000000001");
+            byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 17, new[] { replacement });
+            provider.BeginFullReplace(generation, 17, 1, digest);
+            provider.StageFullReplacePage(generation, 0, new[] { replacement });
+
+            Assert.True(provider.TryReadCurrent(prior.RecordId, prior.FieldId, out _));
+            Assert.False(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
+
+            provider.CommitFullReplace(generation);
+            Assert.False(provider.TryReadCurrent(prior.RecordId, prior.FieldId, out _));
+            Assert.True(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out var current));
+            Assert.Equal(replacement.Value, current!.Value);
+
+            ProviderSnapshotPage heldPage = provider.ReadSnapshot(heldSnapshot.Token, 0, 10);
+            Assert.Single(heldPage.Entries);
+            Assert.Equal(prior.RecordId, heldPage.Entries[0].RecordId);
+
+            provider.BeginFullReplace(generation, 17, 1, digest);
+            provider.CommitFullReplace(generation);
+            provider.ReleaseSnapshot(heldSnapshot.Token);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Full_replace_digest_mismatch_never_changes_active_generation()
+    {
+        string directory = Path.Combine(_root, "provider-full-replace-mismatch");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 96, deleteOnDispose: false);
+            ProviderMutation prior = Mutation(103, 1, 100, 1);
+            ProviderMutation replacement = Mutation(104, 2, 200, 2);
+            provider.AppendLocalChange(prior);
+
+            Guid generation = Guid.Parse("96000000-0000-0000-0000-000000000001");
+            byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 19, new[] { replacement });
+            digest[0] ^= 0x80;
+            provider.BeginFullReplace(generation, 19, 1, digest);
+            provider.StageFullReplacePage(generation, 0, new[] { replacement });
+
+            Assert.Throws<InvalidDataException>(() => provider.CommitFullReplace(generation));
+            Assert.True(provider.TryReadCurrent(prior.RecordId, prior.FieldId, out _));
+            Assert.False(provider.TryReadCurrent(replacement.RecordId, replacement.FieldId, out _));
+            provider.AbortFullReplace(generation);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
