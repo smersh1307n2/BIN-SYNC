@@ -434,7 +434,42 @@ public sealed class StorageSnapshot : IDisposable
             _owner = owner;
             _prefix = prefix;
             _afterKey = afterKey;
-            _enumerator = owner.GetValues().GetEnumerator();
+            SortedDictionary<StorageDatabase.StorageKey, byte[]> values = owner.GetValues();
+            byte[]? upperBytes = PrefixUpperBound(prefix);
+            if (upperBytes is null)
+            {
+                _enumerator = values.GetEnumerator();
+                return;
+            }
+
+            StorageDatabase.StorageKey lower = new(prefix);
+            if (afterKey.Length != 0 && afterKey.AsSpan().SequenceCompareTo(prefix) > 0)
+            {
+                if (afterKey.AsSpan().SequenceCompareTo(upperBytes) >= 0)
+                {
+                    _finished = true;
+                    return;
+                }
+                lower = new StorageDatabase.StorageKey(afterKey);
+            }
+
+            // SortedDictionary range views seek to the first key in O(log n);
+            // a prefix cursor no longer walks unrelated keys from the partition root.
+            _enumerator = values.GetViewBetween(
+                lower, new StorageDatabase.StorageKey(upperBytes)).GetEnumerator();
+        }
+
+        private static byte[]? PrefixUpperBound(ReadOnlySpan<byte> prefix)
+        {
+            if (prefix.IsEmpty) return null;
+            byte[] upper = prefix.ToArray();
+            for (int i = upper.Length - 1; i >= 0; i--)
+            {
+                if (upper[i] == byte.MaxValue) continue;
+                upper[i]++;
+                return upper.AsSpan(0, i + 1).ToArray();
+            }
+            return null;
         }
 
         public IReadOnlyList<StorageEntry> ReadPage(int limit)
