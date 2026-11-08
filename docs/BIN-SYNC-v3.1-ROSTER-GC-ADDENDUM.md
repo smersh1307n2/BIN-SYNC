@@ -442,3 +442,8 @@ The application commit barrier now holds the coordinator gate, all Node gates in
 - `SendDurableFullReplaceInstalledAckAsync`, which refuses to send unless the exact local member ACK is already persisted and its roster epoch, generation, digest and HLC floor match.
 
 Receive helpers first decode and authenticate through the session against the accepted roster, then preserve the original signature while submitting the object to `StorageNamespaceGcStore.Accept*` for monotonicity, current-roster and durable-persistence checks. Outgoing OFR2/RCP2 state is persisted before network send. A lost send is recoverable by sending the next monotonic report/checkpoint. The APIs exchange one control object per session; the host remains responsible for peer selection, periodic scheduling and retry policy.
+
+
+## 10.18. Rejoined author reports preserve prior closed epochs (2026-11-09)
+
+OFR2 verification is roster-aware: when the accepted NRS2 roster contains retired-origin closures for the reporting member, its report must include each closed epoch and reproduce the exact final issued sequence and maximum HLC. A rejoined member may report a fresh epoch, but cannot omit, advance or rewrite any previously closed epoch. This check runs for both wire decoding and in-memory report verification.
