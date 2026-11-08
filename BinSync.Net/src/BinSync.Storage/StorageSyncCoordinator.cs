@@ -1026,7 +1026,7 @@ public sealed class StorageSyncCoordinator
             beforeApply: null,
             beforeApplyWithOperationDecisions: (batch, payload, senderPeer) =>
             {
-                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer);
+                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer, checked((uint)session.PeerEpoch));
                 return plan.ApplyOperations;
             },
             beforeAck: (batch, _) =>
@@ -1047,7 +1047,7 @@ public sealed class StorageSyncCoordinator
     /// wire payload into Node and the provider before the sender is acknowledged.
     /// </summary>
     public StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApply(Batch batch, byte[] wirePayload,
-        NodeId senderPeer)
+        NodeId senderPeer, uint transportPeerEpoch = 0)
     {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(wirePayload);
@@ -1060,7 +1060,7 @@ public sealed class StorageSyncCoordinator
 
         lock (_gate)
         {
-            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload, senderPeer);
+            MetadataIncomingBatch metadataBatch = CreateMetadataBatch(batch, wirePayload, senderPeer, transportPeerEpoch);
             Guid token = CreateBatchApplyToken(batch);
             bool finalizeMetadata = true;
             bool isDuplicate;
@@ -1192,7 +1192,7 @@ public sealed class StorageSyncCoordinator
     }
 
     private MetadataIncomingBatch CreateMetadataBatch(Batch batch, byte[]? wirePayload = null,
-        NodeId? senderPeer = null)
+        NodeId? senderPeer = null, uint transportPeerEpoch = 0)
     {
         var operations = new List<MetadataOperation>(batch.Entries.Count);
         foreach (var entry in batch.Entries)
@@ -1223,6 +1223,7 @@ public sealed class StorageSyncCoordinator
             LocalReplica = _node.NodeId,
             SenderPeer = senderPeer ?? batch.IssuerNodeId,
             SenderEpoch = checked((uint)batch.IssuerEpoch),
+            TransportPeerEpoch = transportPeerEpoch,
             AuthorStreamNodeId = batch.DurableAuthor,
             NamespaceId = batch.NamespaceId,
             BatchId = batch.BatchId,
