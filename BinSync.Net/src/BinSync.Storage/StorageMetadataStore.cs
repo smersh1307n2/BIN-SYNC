@@ -210,7 +210,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         .Select(pair => new IssuedOriginFrontierEntry
                         {
                             OriginAuthorEpoch = pair.Key.AuthorEpoch,
-                            IssuedOriginSequence = pair.Value
+                            IssuedOriginSequence = pair.Value.Sequence,
+                            MaxIssuedHlcWall = pair.Value.MaxHlcWall,
+                            MaxIssuedHlcLogical = pair.Value.MaxHlcLogical
                         })
                         .ToArray()
             };
@@ -1341,18 +1343,27 @@ private static bool ValidateIncomingBatchForStaging(
             {
                 ulong sequence = checked(++highWatermark);
                 var originKey = new OriginStreamKey(namespaceId, localAuthor, operation.OriginAuthorEpoch);
-                if (!originHighWatermarks.TryGetValue(originKey, out ulong originHigh))
+                if (!originHighWatermarks.TryGetValue(originKey, out OriginIssuedState issuedState))
                 {
-                    if (!current.OriginHighWatermarks.TryGetValue(originKey, out originHigh) &&
+                    if (!current.OriginHighWatermarks.TryGetValue(originKey, out issuedState) &&
                         current.ChangeLedger.Any(pair => pair.Key.NamespaceId == namespaceId &&
                             pair.Value.AuthorNodeId == localAuthor &&
                             pair.Value.OriginAuthorEpoch == operation.OriginAuthorEpoch))
                         throw new InvalidDataException("Durable origin-sequence allocator row is missing for an existing local author epoch.");
                 }
-                ulong originSequence = checked(originHigh + 1);
+                ulong originSequence = checked(issuedState.Sequence + 1);
                 if (operation.OriginSequence != 0 && operation.OriginSequence != originSequence)
                     throw new InvalidDataException("New outbound operation supplied a non-contiguous immutable OriginSequence.");
-                originHighWatermarks[originKey] = originSequence;
+                ulong maxIssuedHlcWall = issuedState.MaxHlcWall;
+                uint maxIssuedHlcLogical = issuedState.MaxHlcLogical;
+                if (operation.HlcWall > maxIssuedHlcWall ||
+                    (operation.HlcWall == maxIssuedHlcWall && operation.HlcLogical > maxIssuedHlcLogical))
+                {
+                    maxIssuedHlcWall = operation.HlcWall;
+                    maxIssuedHlcLogical = operation.HlcLogical;
+                }
+                originHighWatermarks[originKey] = new OriginIssuedState(
+                    originSequence, maxIssuedHlcWall, maxIssuedHlcLogical);
                 var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray())
                 {
                     Provenance = new OperationOrigin(localAuthor, operation.OriginAuthorEpoch, originSequence)
@@ -2625,7 +2636,7 @@ private static bool ValidateIncomingBatchForStaging(
         IReadOnlyList<MetadataFrozenOperation> operations,
         IReadOnlyList<MetadataOutboundItem> frozen,
         ulong highWatermark,
-        IReadOnlyDictionary<OriginStreamKey, ulong> originHighWatermarks)
+        IReadOnlyDictionary<OriginStreamKey, OriginIssuedState> originHighWatermarks)
     {
         byte[] root = PartitionRoot(partitionKey);
         var newPeerStreams = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>();
@@ -2673,7 +2684,11 @@ private static bool ValidateIncomingBatchForStaging(
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)originWatermark.Key.NamespaceId));
             originWatermark.Key.Author.WriteTo(suffix.AsSpan(2));
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), originWatermark.Key.AuthorEpoch);
-            writes.Add((StorageKey(root, 22, suffix), EncodeUInt64(originWatermark.Value)));
+            byte[] originValue = new byte[20];
+            BinaryPrimitives.WriteUInt64LittleEndian(originValue, originWatermark.Value.Sequence);
+            BinaryPrimitives.WriteUInt64LittleEndian(originValue.AsSpan(8), originWatermark.Value.MaxHlcWall);
+            BinaryPrimitives.WriteUInt32LittleEndian(originValue.AsSpan(16), originWatermark.Value.MaxHlcLogical);
+            writes.Add((StorageKey(root, 22, suffix), originValue));
         }
 
         byte[] watermarkValue = new byte[16];
@@ -3402,14 +3417,17 @@ private static bool ValidateIncomingBatchForStaging(
                 case 22:
                 {
                     RequireLength(key, 22);
-                    RequireLength(row.Value, 8);
+                    RequireLength(row.Value, 20);
                     var originKey = new OriginStreamKey(
                         BinaryPrimitives.ReadUInt16LittleEndian(key),
                         NodeId.From(key.Slice(2, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18)));
                     if (originKey.Author.IsZero || originKey.AuthorEpoch == 0)
                         throw new InvalidDataException("Stored origin-sequence allocator identity is invalid.");
-                    state.OriginHighWatermarks.Add(originKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
+                    state.OriginHighWatermarks.Add(originKey, new OriginIssuedState(
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
+                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(16))));
                     break;
                 }
                 case 17:
@@ -3942,6 +3960,7 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
     private readonly record struct OriginStreamKey(int NamespaceId, NodeId Author, uint AuthorEpoch);
+    private readonly record struct OriginIssuedState(ulong Sequence, ulong MaxHlcWall, uint MaxHlcLogical);
     private readonly record struct LeaseState(ulong Generation, Guid ConsumerId);
     private readonly record struct PeerStreamKey(NodeId Peer, uint PeerEpoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct InterestedPeerKey(int NamespaceId, NodeId Peer, uint PeerEpoch);
@@ -4004,7 +4023,7 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
         public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, List<MetadataOutboundItem>> Outbound { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundHighWatermarks { get; } = new();
-        public Dictionary<OriginStreamKey, ulong> OriginHighWatermarks { get; } = new();
+        public Dictionary<OriginStreamKey, OriginIssuedState> OriginHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
         public Dictionary<Guid, PendingApplyValue> PendingApplies { get; } = new();
