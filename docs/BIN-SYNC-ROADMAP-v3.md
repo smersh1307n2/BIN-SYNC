@@ -634,3 +634,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x C] The streaming provider snapshot cursor now validates every decoded row against its active-generation key, record id, field id and row kind before returning it. Corrupt/mixed-generation rows fail closed instead of entering the FULL_REPLACE digest stream.
 - [~ T] Add malformed-key/value, mixed-generation, cursor disposal, exact page-boundary and two-pass snapshot digest tests in the later T pass.
+
+
+### 2026-11-08 — C-pass build repair from exact-head CI
+
+- [x C] Inspected exact failing Core/Fuzz and Storage Integration job logs for pre-repair HEAD `ebb33a3ef4380cb6b289e21fb8603bee1abcefcb`. All five jobs failed at Build (tests never started) with the same four compiler errors: missing `ProviderSnapshotState.LocalHighWatermark`; removed `CompareSnapshotEntries`; nullable `ReceiveState?` incorrectly used as a non-nullable value-type out parameter and then dereferenced.
+- [x C] Restored the snapshot watermark on the pinned snapshot state because `ReadLocalChanges` uses it as the source-snapshot barrier; restored the canonical storage-key comparator used by FULL_REPLACE generation digest verification; corrected the value-type `TryGetValue` out variable.
+- [~ T] These are compile-only repairs. No tests have run on the repaired HEAD yet. Next: continue C implementation, then build/test the complete C-pass on exact HEAD; do not count prior green checkpoint as current validation.
+- **Pre-repair CI:** Core run `42502401957`, Storage Integration run `42502401982`; both failed at Build on Linux/macOS/Windows before their test steps.
+- **Current branch HEAD at this roadmap update:** `561a51b7cdbf1c3207e975b22c56ec8c94281357` (roadmap commit follows).
