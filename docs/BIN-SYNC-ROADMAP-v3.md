@@ -496,3 +496,16 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [ ] The v3.1 implementation is NOT complete: no end-to-end FULL_REPLACE transfer state machine (BEGIN/CHUNK/COMMIT/ABORT), no automatic wiring from SyncSession messages into the durable store, no member-frontier production/periodic exchange orchestration, no signed authority roster lifecycle API, no forgotten-deletion/replay fence integrated into ChangeId ledger, no cross-store live-reference scan at physical GC boundary, and no enablement of ChangeId/tombstone GC.
 - [ ] Review the new StorageNamespaceGcStore implementation against the exact Storage transaction/snapshot semantics and add fault-injection/crash-boundary tests before treating persistence as production-ready.
 - [ ] Update v3.1 addendum status and wire/storage vectors after implementation and adversarial tests; do not claim v3.1 conformance from the current adapter tests alone.
+
+
+### 2026-11-08 — workflow reset: C-pass first, T-pass after code sweep
+
+- [x] Adopted the execution rule: `C` means implementation pass completed for the named code slice; it does not certify behavior. `T` is reserved for focused correctness/conformance work and exact-head verification.
+- [x] Reconciled the commits after the previous roadmap refresh: `d58e2e5`, `1d6878d`, `eff6e6d`, `43efda1`, `640af0d` (with `c56d2e2` as the prior green checkpoint). The v3.1 work now has durable roster/frontier/checkpoint/installed-ACK storage, signed message codecs, capability-gated SyncSession send/receive adapters, and a typed receive-frame range extended through `FULL_REPLACE_ABORT`.
+- [x] Fixed the two initial SyncSession test expectation failures in `43efda1`: `IncrementalAliasMap` is automatically negotiated and must be included in expected capabilities.
+- [x] On `640af0d610c7a3ee20d001210360d555c1f60c1f`, the BinSync.Net workflow Build and benchmark build succeeded; Fuzz/Lab succeeded; the test step failed; public samples were skipped as a consequence. Coverage threshold step reported success but does not make the failed test job green.
+- [~ C] Code slice: accept registered v3.1 GC frame IDs in `ReceiveExpectedExclusiveAsync`; the upper bound is now `NamespaceGcFrames.FullReplaceAbort` rather than hard-coded v3.0 frame `0x13`.
+- [~ T] Exact-head test failure on `640af0d` is not yet diagnosed. Retrieve the test failure details / TRX before changing production behavior. FLD Storage Integration run `42498381271` was still in progress when this roadmap entry was written.
+- [ ] C-pass remaining v3.1 protocol path: FULL_REPLACE BEGIN/CHUNK/COMMIT/ABORT transfer state machine, bounded streaming receive/stage, correlation and ordering, durable store wiring, authority/member lifecycle orchestration, periodic frontier publication/checkpoint production, forgotten-origin replay fence and live-reference GC gate.
+- [ ] Do not enable ChangeId or tombstone/ghost GC during the C pass. Their separate safe-horizon proofs and fail-closed behavior remain mandatory.
+- [ ] After all production code slices have C markers, run the dedicated T pass: targeted tests, crash/fault injection, multi-peer/rejoin/resurrection, fuzz/resource bounds, samples, benchmarks and exact-head CI.
