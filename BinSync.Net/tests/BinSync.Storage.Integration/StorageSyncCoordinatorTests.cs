@@ -1888,6 +1888,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
         Assert.True(node.TryGetField(1, firstRecord, 0x081B, out var firstAfterAckFailure));
         Assert.Equal("first", Encoding.UTF8.GetString(firstAfterAckFailure!.Value));
+        Record firstRecordCache = node.Storage[1][firstRecord];
 
         innerProvider.AppendLocalChange(new ProviderMutation
         {
@@ -1908,6 +1909,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
         Assert.True(node.TryGetField(1, firstRecord, 0x081B, out var firstValue));
         Assert.Equal("first", Encoding.UTF8.GetString(firstValue!.Value));
+        Assert.Same(firstRecordCache, node.Storage[1][firstRecord]);
         Assert.True(node.TryGetField(1, secondRecord, 0x081C, out var secondValue));
         Assert.Equal("second", Encoding.UTF8.GetString(secondValue!.Value));
 
