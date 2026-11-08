@@ -224,7 +224,7 @@ public sealed class StorageSyncCoordinator
         mutation.RecordId.WriteTo(envelope);
         encoded.CopyTo(envelope, 16);
         Digest16 fingerprint = ChangeIdentity.Fingerprint(
-            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<CausalDependency>());
+            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<BatchId>());
         return new MetadataFrozenOperation
         {
             ChangeId = change.ChangeId,
