@@ -307,4 +307,5 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [ ] Re-run the full Storage Integration matrix and Core/Fuzz after the assertion fix; only then close the compact-row test gate.
 
 - [~] Tighten the compact-row corruption boundary with explicit tests that orphaned payload rows and ledger/stream author mismatches fail closed during hydration; add this before accepting the 12-byte reduction.
+- [~] CI exposed a second compact-row issue: compaction still targeted legacy row kinds 4/7 after writers moved to 20/21. Fix deletion keys and assert physical removal after reopen before accepting the storage reduction.
 - [ ] Continue with ChangeId/receipt/tombstone GC safe-frontier proof; GC remains disabled because a complete namespace membership roster, contiguous per-author applied-origin frontier, snapshot generation and stale-rejoin fence are not yet available.
