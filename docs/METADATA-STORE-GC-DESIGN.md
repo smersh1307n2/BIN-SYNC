@@ -90,6 +90,35 @@ The next protocol/storage work must introduce a durable membership generation an
 
 The checkpoint must be authenticated, persisted before ACK, monotonic, and fail closed on roster mismatch, epoch regression, missing author frontier, or stale snapshot. A peer removed from the roster must be fenced before its frontier stops constraining GC.
 
+## 5.1. Authoritative namespace roster and retention checkpoint contract
+
+The existing MEMBERSHIP frame is not an authoritative roster: it is built from locally learned durable authors, and its MembershipEpoch is currently a hint rather than a committed namespace generation. InterestedPeers is a transport-delivery roster, not the set of all replicas that may later replay old state. Neither may be used as the denominator for ChangeId or tombstone GC.
+
+Use an administrative namespace roster certificate as the membership authority. This is a control-plane authority only; it does not own field writes, choose LWW winners, or route data. The namespace administrator's public key is provisioned out-of-band in the namespace trust configuration. If no valid certificate is available, membership changes and destructive GC fail closed.
+
+A roster certificate binds:
+- namespace ID;
+- strictly increasing membership generation and previous roster digest;
+- canonical sorted member list (NodeId plus current author epoch and member status);
+- the new roster digest;
+- whether each added/rejoining member is FULL_RESYNC_REQUIRED;
+- the admin-key signature over the complete canonical body.
+
+A node accepts only a valid signature, the exact previous generation/digest it currently trusts, and a strictly increasing generation. A peer cannot promote its locally learned DurableAuthors list into an authoritative roster. A member omitted from a committed roster is fenced for incremental traffic; if it later rejoins, it must install a full authoritative replacement snapshot before sending or accepting deltas for that namespace. A node that has not installed the latest roster certificate cannot advance a retention checkpoint for that generation and therefore cannot participate in GC. This prevents an old roster view from silently authorizing deletion.
+
+Each roster member periodically publishes a signed RetentionCheckpoint bound to (namespace, membershipGeneration, rosterDigest, memberNodeId, memberAuthorEpoch, snapshotGeneration, snapshotDigest), plus a sorted map of contiguous applied origin frontiers keyed by (originAuthorNodeId, originAuthorEpoch). The checkpoint is persisted before it is acknowledged. Regressive frontiers, missing roster members, a roster digest mismatch, or a checkpoint from a retired epoch fail closed. A new roster generation invalidates old-generation checkpoints for GC calculations until members attest the new generation.
+
+For every origin stream, the safe applied frontier is the minimum contiguous frontier reported by every member in the committed roster. Missing/unknown reports contribute zero. ChangeId GC may remove only a ledger row whose immutable origin sequence is at or below that frontier and which is not referenced by any PendingApply, outbound/relay payload, immutable reservation, or provider publication intent. Provenance-less legacy rows remain non-collectable.
+
+Tombstone GC additionally requires that every roster member has installed the same authoritative full-snapshot generation/digest that contains the tombstone's deletion (or a later state proving it). A FULL_REPLACE snapshot is not the current merge snapshot: it must stage a complete namespace image, validate its root and all per-author frontiers, then atomically switch the provider's active namespace generation. Absence from a merge snapshot is never deletion evidence. The old generation is reclaimed only after the switch is durable and no reader/apply is pinned to it. Any rejoining or removed member must complete FULL_REPLACE before incremental deltas are accepted.
+
+This design intentionally separates:
+1. origin provenance — immutable (author, authorEpoch, originSequence) carried through every relay;
+2. membership authority — the signed committed roster generation;
+3. progress evidence — signed per-member contiguous applied frontiers and snapshot generation;
+4. physical reclamation — one crash-consistent Storage transaction/checkpoint after all logical proofs exist.
+
+Implementation order is mandatory: (A) add origin provenance to operation envelope, relay payload and ChangeId ledger while treating legacy provenance as unknown; (B) add signed roster certificates and durable membership generations; (C) add signed monotonic retention checkpoints and all-member frontier calculation; (D) enable ChangeId ledger GC behind those proofs; (E) add provider FULL_REPLACE generation switching and rejoin fencing; (F) enable tombstone/ghost GC behind the same frontier plus full-replacement proof. Do not enable C/D/E/F early or use transport InterestedPeers as a substitute.
 ## 6. Required acceptance tests before enabling each domain
 
 ### Receipt GC
