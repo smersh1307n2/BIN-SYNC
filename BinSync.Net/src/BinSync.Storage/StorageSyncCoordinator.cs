@@ -102,10 +102,11 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidOperationException("Node and Metadata Store outbound watermarks are not aligned at cutover.");
 
             publicationMode.EnableMetadataStoreOwnedPublication((ulong)nodeHigh);
-            // Metadata Store now owns the immutable outbound payloads. Retain the
-            // Node sequence fence and replay identities, but remove duplicate local
-            // payload rows from the Node checkpoint.
-            _node.DiscardOutboxPayloadsThrough(_namespaceId, _node.NodeId, nodeHigh);
+            // The provider snapshot is the authoritative namespace state and the
+            // Metadata Store is the only delivery source after cutover. Remove every
+            // retained Node payload projection (local Outbox and legacy relay rows),
+            // while preserving each author stream's sequence watermark and replay IDs.
+            DiscardNodeOutboxPayloadsAfterProviderCutover();
             persistNode(_node);
         }
     }
@@ -332,6 +333,17 @@ public sealed class StorageSyncCoordinator
         if (scannedThroughSequence > 0)
             _provider.AcknowledgeLocalChanges(scannedThroughSequence);
         return totalChanges;
+    }
+
+    private void DiscardNodeOutboxPayloadsAfterProviderCutover()
+    {
+        foreach (NodeId author in _node.ReadOutboxAuthors(_namespaceId))
+        {
+            long highWatermark = _node.GetOutboxHighWatermark(_namespaceId, author);
+            if (highWatermark < 0)
+                throw new InvalidDataException("Node Outbox author watermark is invalid during provider cutover.");
+            _node.DiscardOutboxPayloadsThrough(_namespaceId, author, highWatermark);
+        }
     }
 
     private Digest16 ComputeMetadataFingerprint(ProviderChange change) =>
@@ -733,10 +745,10 @@ public sealed class StorageSyncCoordinator
                 long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
                 if (currentNodeHigh < 0 || (ulong)currentNodeHigh != cutoverNodeHigh)
                     throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
-                // The provider snapshot is authoritative after cutover. The Node's
-                // old local Outbox payload rows are redundant and must not be revived
-                // by a stale checkpoint; keep only the monotonic sequence fence.
-                _node.DiscardOutboxPayloadsThrough(_namespaceId, _node.NodeId, currentNodeHigh);
+                // The provider snapshot is authoritative after cutover. No Node
+                // Outbox payload (local or legacy relay) may be revived from a stale
+                // checkpoint; Metadata Store owns every retained delivery stream.
+                DiscardNodeOutboxPayloadsAfterProviderCutover();
             }
             // Persist the clean provider-derived base before replaying pending intents.
             // If recovery is interrupted, the same durable intents can safely replay.
