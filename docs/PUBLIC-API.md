@@ -171,14 +171,15 @@ The `NodePersistence` / `Wal` surface remains Node-owned persistence. The option
 
 ### Metadata Store / durable Storage integration (opt-in)
 
-- `StorageMetadataStore` is the durable `IMetadataStore` / `IMetadataPeerStateStore` implementation. Current-format metadata mutations use row-level transactions; legacy physical row formats remain readable and migrate through the one-time fallback.
-- `StorageDataProvider` stores provider values and idempotent apply receipts. `StorageSyncCoordinator` orders PendingApply staging, Node checkpoint, provider apply, metadata finalization and ACK.
+- `StorageMetadataStore` is the durable `IMetadataStore` / `IMetadataPeerStateStore` implementation. BMS3 is mandatory; legacy/unknown row formats fail closed. Metadata mutations use row-level atomic transactions.
+- `StorageDataProvider` stores generation-scoped provider values, a mandatory BSP3 format marker, stable local-feed ChangeIds and idempotent apply receipts. `StorageSyncCoordinator` orders PendingApply staging, Node checkpoint, provider apply, metadata finalization and ACK.
 - `MetadataIncomingBatch.ReceiveStateOwnedByMetadataStore` marks a PendingApply intent whose receive cursor/digest/inbox authority belongs to the Metadata Store. StorageSyncCoordinator sets it; callers must not set it without a durable Metadata Store acceptance callback.
 - `MetadataIncomingBatch.HeaderFingerprint` carries the 16-byte canonical full-wire-header fingerprint. New metadata-authoritative intents require it; the durable receipt and completed PendingApply retain it with `MetadataBatchReceipt.DurableAuthor`. A duplicate BatchId with a different full header is rejected, even if BatchDigest alone would not distinguish the header fields.
 - `MetadataPendingApplyIntent.IsDuplicate` reports whether the batch identity already has a matching durable receipt. `MetadataBatchReceipt.HeaderFingerprint` returns the committed fingerprint.
-- PendingApply v5 persists authority mode and optional header fingerprint. v4 intents from the pre-fingerprint transition recover through the legacy Node validator; v2/v3 formats remain readable. Old receipt rows without a full fingerprint remain readable but cannot prove full-header identity for a new metadata-authoritative duplicate replay, which fails closed.
+- `IProviderFullReplace` is an optional provider capability for authenticated authoritative FULL_REPLACE. `StorageDataProvider` stages generation-scoped pages, validates a canonical SHA-256 manifest, fences commit to the captured base generation and atomically switches the active generation. Old generations are retained; this API does not authorize ChangeId/tombstone GC. The caller must validate roster authority and ensure no PendingApply, relay reservation, provider intent or reader pin depends on the old generation.
+- PendingApply uses the normative v3 encoding only. Older PendingApply and receipt encodings are rejected; a v3 receipt without authenticated transport-epoch provenance is retained but never assigned guessed provenance. Metadata-authoritative duplicate replay requires the full canonical header fingerprint.
 
-`NodePersistence` stores the complete Node snapshot. `Wal` is a v2-only append log. Hosts use `Checkpoint(Node, snapshotPath)` for the atomic snapshot-and-reset transition; raw truncate and checkpoint-marker append are internal. The sequence is read-only and synchronized:
+`NodePersistence` stores the complete Node snapshot. `Wal` is a v3-only append log; older WAL markers and records are rejected. Hosts use `Checkpoint(Node, snapshotPath)` for the atomic snapshot-and-reset transition; raw truncate and checkpoint-marker append are internal. The sequence is read-only and synchronized:
 each local mutation is one integrity-protected frame containing both the operation
 and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time and
 causal dependencies). There is no field-only WAL record or v1 writer/reader.
@@ -197,6 +198,9 @@ receive an ACK for data that the receiver had not yet made recoverable.
 Snapshot transfers remain atomic in memory but are not WAL records: they have no
 acceptance ACK, do not advance the sender's Outbox acknowledgement cursor, and can
 be transferred again from the sender's retained state after a receiver restart.
+Node WAL/checkpoint state is a recoverable application-cache projection; after
+Metadata-Store-owned cutover the Node `GlobalChangeLedger` is cleared for that
+namespace and the Metadata Store remains the sole durable ChangeId authority.
 
 Startup order (before exposing the Node to application work):
 
