@@ -3476,12 +3476,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (batch.ReceiveStateOwnedByMetadataStore && batch.HeaderFingerprint.Length != 16)
             throw new ArgumentException("Metadata-authoritative receive requires a full header fingerprint.", nameof(batch));
         ArgumentNullException.ThrowIfNull(batch.Operations);
-        // The cursor is a per-author operation sequence, not an arbitrary batch range.
-        // Provenance may be derived from cursorStart + operation index only when every
-        // sequence in the range is represented exactly once in this batch.
-        ulong cursorSpan = batch.CursorEnd - batch.CursorStart + 1;
-        if (cursorSpan != (ulong)batch.Operations.Count)
-            throw new ArgumentException("Incoming batch cursor span must equal its operation count.", nameof(batch));
         if (!batch.AuthorStreamNodeId.IsZero &&
             batch.Operations.Any(operation => operation.AuthorNodeId != batch.AuthorStreamNodeId))
             throw new ArgumentException("Incoming batch operations must belong to one author stream.", nameof(batch));
