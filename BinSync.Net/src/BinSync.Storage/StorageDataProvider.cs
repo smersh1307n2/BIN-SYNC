@@ -20,6 +20,7 @@ public class StorageDataProvider : IDataProvider
     private const byte LocalHighWatermark = 0x21;
     private const byte LocalAckWatermark = 0x22;
     private const byte LocalReadWatermark = 0x23;
+    private const byte LocalChangeIdentity = 0x24;
     private const byte ApplyReceipt = 0x30;
 
     private readonly object _gate = new();
@@ -155,6 +156,10 @@ public class StorageDataProvider : IDataProvider
             }
 
             batch.Put(ChangeKey(sequence), owned);
+            Guid changeId = Guid.NewGuid();
+            if (changeId == Guid.Empty)
+                changeId = Guid.NewGuid();
+            batch.Put(ChangeIdentityKey(sequence), changeId.ToByteArray());
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
             batch.Commit();
         }
@@ -181,7 +186,17 @@ public class StorageDataProvider : IDataProvider
             foreach (var row in rows)
             {
                 ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
-                changes.Add(new ProviderChange(sequence, DecodeMutation(row.Value)));
+                BatchId changeId = default;
+                if (snapshot.TryGet(ChangeIdentityKey(sequence), out var identityBytes))
+                {
+                    if (identityBytes!.Length != 16)
+                        throw new InvalidDataException("Stored provider change identity has an invalid length.");
+                    changeId = BatchId.From(identityBytes);
+                }
+                changes.Add(new ProviderChange(sequence, DecodeMutation(row.Value))
+                {
+                    ChangeId = changeId
+                });
             }
 
             ulong scanned = changes.Count == limit ? changes[^1].Sequence : high;
@@ -222,6 +237,7 @@ public class StorageDataProvider : IDataProvider
                 ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
                 if (sequence > safeThroughSequence) break;
                 batch.Delete(row.Key);
+                batch.Delete(ChangeIdentityKey(sequence));
             }
 
             batch.Put([LocalAckWatermark], EncodeUInt64(safeThroughSequence));
@@ -552,6 +568,14 @@ public class StorageDataProvider : IDataProvider
     {
         byte[] key = new byte[9];
         key[0] = LocalChange;
+        BinaryPrimitives.WriteUInt64BigEndian(key.AsSpan(1), sequence);
+        return key;
+    }
+
+    private static byte[] ChangeIdentityKey(ulong sequence)
+    {
+        byte[] key = new byte[9];
+        key[0] = LocalChangeIdentity;
         BinaryPrimitives.WriteUInt64BigEndian(key.AsSpan(1), sequence);
         return key;
     }
