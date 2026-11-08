@@ -194,6 +194,103 @@ public sealed class StorageFullReplaceReceiver
         }
     }
 
+    /// <summary>Run the ordered receive loop, including concurrent ABORT detection.</summary>
+    public async Task<FullReplaceInstalledAck?> ReceiveTransferAsync(
+        SyncSession session, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (session.PeerNodeId != _authorityPeer ||
+            session.PeerEpoch <= 0 || checked((uint)session.PeerEpoch) != _authorityPeerEpoch)
+            throw new InvalidDataException("FULL_REPLACE session does not match the configured authority peer incarnation.");
+
+        if (!_gcStore.TryReadNamespaceRoster(_namespaceId, _trustStore, out NamespaceRosterCertificate? roster) ||
+            roster is null)
+            throw new InvalidOperationException("No accepted authoritative namespace roster is available.");
+        FullReplaceTransferProtocol.Begin manifest =
+            await session.ReceiveFullReplaceBeginAsync(_namespaceId, roster, _trustStore,
+                expectedFrameSequence: 1, ct).ConfigureAwait(false);
+        ProviderFullReplaceProgress progress = Begin(manifest);
+        await session.SendFullReplaceReadyAsync(GetWireProgress(), frameSequence: 1, ct)
+            .ConfigureAwait(false);
+
+        ulong expectedSequence = FullReplaceTransferProtocol.GetNextFrameSequence(progress.NextIndex);
+        while (progress.NextIndex < progress.ExpectedEntryCount)
+        {
+            var next = await ReceiveChunkOrAbortAsync(
+                session, expectedSequence, ct).ConfigureAwait(false);
+            if (next.Abort is not null)
+            {
+                Abort(next.Abort);
+                return null;
+            }
+            progress = Stage(next.Chunk!);
+            expectedSequence = checked(expectedSequence + 1);
+        }
+
+        var terminal = await ReceiveCommitOrAbortAsync(
+            session, expectedSequence, ct).ConfigureAwait(false);
+        if (terminal.Abort is not null)
+        {
+            Abort(terminal.Abort);
+            return null;
+        }
+
+        FullReplaceInstalledAck acknowledgement = Commit(terminal.Commit!);
+        await session.SendFullReplaceInstalledAckAsync(
+            acknowledgement, _localMemberSeed, frameSequence: 1, ct).ConfigureAwait(false);
+        return acknowledgement;
+    }
+
+    private async Task<(FullReplaceTransferProtocol.Chunk? Chunk, FullReplaceTransferProtocol.TransferId? Abort)>
+        ReceiveChunkOrAbortAsync(SyncSession session, ulong sequence, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task<FullReplaceTransferProtocol.Chunk> chunkTask =
+            session.ReceiveFullReplaceChunkAsync(_namespaceId, sequence, linked.Token);
+        Task<FullReplaceTransferProtocol.TransferId> abortTask =
+            session.ReceiveFullReplaceAbortAsync(_namespaceId, sequence, linked.Token);
+        Task completed = await Task.WhenAny(chunkTask, abortTask).ConfigureAwait(false);
+        if (completed == abortTask)
+        {
+            FullReplaceTransferProtocol.TransferId abort = await abortTask.ConfigureAwait(false);
+            linked.Cancel();
+            await ObserveCancelledAsync(chunkTask).ConfigureAwait(false);
+            return (null, abort);
+        }
+        FullReplaceTransferProtocol.Chunk chunk = await chunkTask.ConfigureAwait(false);
+        linked.Cancel();
+        await ObserveCancelledAsync(abortTask).ConfigureAwait(false);
+        return (chunk, null);
+    }
+
+    private async Task<(FullReplaceTransferProtocol.TransferId? Commit, FullReplaceTransferProtocol.TransferId? Abort)>
+        ReceiveCommitOrAbortAsync(SyncSession session, ulong sequence, CancellationToken ct)
+    {
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task<FullReplaceTransferProtocol.TransferId> commitTask =
+            session.ReceiveFullReplaceCommitAsync(_namespaceId, sequence, linked.Token);
+        Task<FullReplaceTransferProtocol.TransferId> abortTask =
+            session.ReceiveFullReplaceAbortAsync(_namespaceId, sequence, linked.Token);
+        Task completed = await Task.WhenAny(commitTask, abortTask).ConfigureAwait(false);
+        if (completed == abortTask)
+        {
+            FullReplaceTransferProtocol.TransferId abort = await abortTask.ConfigureAwait(false);
+            linked.Cancel();
+            await ObserveCancelledAsync(commitTask).ConfigureAwait(false);
+            return (null, abort);
+        }
+        FullReplaceTransferProtocol.TransferId commit = await commitTask.ConfigureAwait(false);
+        linked.Cancel();
+        await ObserveCancelledAsync(abortTask).ConfigureAwait(false);
+        return (commit, null);
+    }
+
+    private static async Task ObserveCancelledAsync(Task task)
+    {
+        try { await task.ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+    }
+
     /// <summary>Abort uncommitted staged rows in bounded durable batches.</summary>
     public void Abort(FullReplaceTransferProtocol.TransferId transfer)
     {
