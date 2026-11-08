@@ -250,9 +250,8 @@ public partial class SyncSession : IAsyncDisposable
             // Decode without mutation so a host can persist the exact wire payload as
             // a PendingApply intent before Node's record state advances. In the
             // durable path, the Metadata Store—not Node—validates cursor and digest continuity.
-            if (receiveStateOwnedByMetadataStore &&
-                beforeApply is null && beforeApplyWithOperationDecisions is null)
-                throw new InvalidOperationException("Metadata-owned receive state requires a durable before-apply callback.");
+            if (receiveStateOwnedByMetadataStore && beforeApplyWithOperationDecisions is null)
+                throw new InvalidOperationException("Metadata-owned receive requires per-operation decisions from the durable Metadata Store.");
             if (beforeApply is not null && beforeApplyWithOperationDecisions is not null)
                 throw new InvalidOperationException("Specify either the legacy before-apply callback or the metadata decision callback, not both.");
             if (!receiveStateOwnedByMetadataStore && beforeApplyWithOperationDecisions is not null)
@@ -261,10 +260,10 @@ public partial class SyncSession : IAsyncDisposable
             var decoded = receiveStateOwnedByMetadataStore
                 ? receiver.DecodeBatchPayloadForMetadataAuthority(frame.Payload, PeerNodeId)
                 : receiver.PrepareBatchPayloadForMetadata(frame.Payload, PeerNodeId);
-            IReadOnlyList<bool>? applyOperations = null;
-            if (beforeApplyWithOperationDecisions is not null)
-                applyOperations = beforeApplyWithOperationDecisions(decoded, frame.Payload, PeerNodeId);
-            else
+            IReadOnlyList<bool>? applyOperations = receiveStateOwnedByMetadataStore
+                ? beforeApplyWithOperationDecisions!(decoded, frame.Payload, PeerNodeId)
+                : null;
+            if (!receiveStateOwnedByMetadataStore)
                 beforeApply?.Invoke(decoded, frame.Payload, PeerNodeId);
 
             var (batch, result) = receiveStateOwnedByMetadataStore
