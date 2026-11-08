@@ -695,6 +695,7 @@ public sealed class StorageSyncCoordinatorTests
         initialCoordinatorA.EnableMetadataStoreOwnedPublication(_ => { });
         coordinatorB.EnableMetadataStoreOwnedPublication(_ => { });
         Assert.Empty(originalNodeA.ReadOutboxEntries(1, originalNodeA.NodeId, 0, 10));
+        Assert.Empty(originalNodeA.ReadOutboxEntries(1, staleRemote.NodeId, 0, 10));
 
         // Simulate restart from a pre-rehydration Node checkpoint while the provider's
         // durable cutover marker and empty authoritative snapshot remain current.
@@ -715,6 +716,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         Assert.False(nodeB.TryGetField(1, staleRecord, 0x0822, out _));
         Assert.False(providerB.TryReadCurrent(staleRecord, 0x0822, out _));
+        Assert.Empty(restartedNodeA.ReadOutboxEntries(1, staleRemote.NodeId, 0, 10));
         Assert.True(restartedNodeA.TryGetField(1, providerRecord, 0x0823, out var providerValue));
         Assert.Equal("provider-owned-before-cutover", Encoding.UTF8.GetString(providerValue!.Value));
         Assert.True(providerB.TryReadCurrent(providerRecord, 0x0823, out var peerProviderValue));
@@ -1315,6 +1317,16 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(recordId, RecordId.From(relay.Items[0].Payload.AsSpan(0, 16)));
         Assert.Empty(metadata.ReadPendingApplyIntents("metadata-integration", receiver.NodeId));
         Assert.Equal(0, coordinator.RecoverPendingApplies());
+
+        // The legacy Node receive path created a duplicate relay Outbox projection.
+        // Provider cutover must remove that cache copy while retaining the durable
+        // Metadata Store relay payload as the sole delivery source.
+        Assert.Single(receiver.ReadOutboxEntries(1, sender.NodeId, 0, 10));
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        Assert.Empty(receiver.ReadOutboxEntries(1, sender.NodeId, 0, 10));
+        Assert.Equal(1L, receiver.GetOutboxHighWatermark(1, sender.NodeId));
+        Assert.Single(metadata.ReadRelay("metadata-integration", receiver.NodeId, 1,
+            sender.NodeId, 0, 10).Items);
     }
 
 
