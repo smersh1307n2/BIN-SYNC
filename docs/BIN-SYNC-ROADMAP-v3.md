@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 4e2ba079678ce3fcaa0058ae43ef652faa33975a. Last completed CI evidence is for b60c4a0: Core Build/benchmarks passed, Fuzz/Lab 31/31 passed, and Core had one remaining conformance failure in the test-only Volatile adapter; Storage test run for b60c4a0 is pending. The latest adapter correction is not yet verified by CI.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: e7e1eb4f0cb1ac5dcb7178bd6dc0ffce04c27439. Latest full green CI evidence is for code head f91df0b4ef93f5a53f419420aa578dfe36bc293b: Core tests and Fuzz/Lab succeeded; Storage Integration succeeded on Ubuntu, Windows and macOS. Follow-up commits 24d22b0 and e7e1eb4 only corrected v17 fixture labels and an XML comment; exact-head CI for these follow-ups is running. The earlier 4e2ba079 checkpoint is not resolvable; comparison anchor used was 56d5142c1a2f7050663a418d4882def50787c1e5.
 
 ## 1. Target architecture
 
@@ -230,7 +230,7 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Removed the unreachable legacy local-origin marker decoder branch and rejected completed PendingApply receipts that omit the durable author.
 - [x] Reconciled the Origin design's direct-author cursor wording with v3's independent OriginSequence/SenderCursor model; no arithmetic inference from peer-relative cursor is permitted.
 - [x] Marked older GC and staging analyses as historical/non-normative where they conflict with v3.0.0.
-- [ ] Exact-head CI for cleanup/docs commits `b105868` through `fb9fd67` is still required; do not treat 6969's green result as proof for later commits.
+- [x] Exact-head CI on f91df0b4ef93f5a53f419420aa578dfe36bc293b is green: Core tests and Fuzz/Lab succeeded; Storage Integration succeeded on all three configured OS platforms.
 - [~] Phase 1 remains open only for a shared canonical Origin value type across Core/Storage/FLD boundaries, provider freeze/replay atomicity, PendingApply/snapshot/restart preservation audit, and crash/recovery proofs. Multi-hop/alternate-route/equivocation regressions now pass.
 - [ ] Phase 2 remains open: inventory actual persisted row cardinality and byte cost; benchmark 500/10k/100k/1M; prove Storage metadata does not duplicate the compact Node ledger or operation payload.
 - [ ] Phase 3 remains open: FLD provider adapter and atomic cross-store crash matrix.
