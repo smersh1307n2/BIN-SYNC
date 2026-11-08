@@ -1506,6 +1506,10 @@ private static bool ValidateIncomingBatchForStaging(
                 if (!current.PeerStreams.TryGetValue(replacementStreamKey, out var replacementProgress))
                     throw new InvalidOperationException(
                         "Cannot retire a transport peer epoch while its replacement snapshot omits an author stream with a pending reservation.");
+                if (replacementProgress.IssuerEpoch != pair.Value.PendingBatch!.IssuerEpoch ||
+                    pair.Value.IssuerEpoch != pair.Value.PendingBatch.IssuerEpoch)
+                    throw new InvalidOperationException(
+                        "Cannot compare a pending reservation cursor with a replacement baseline from a different author epoch.");
                 ulong oldAbsoluteEnd;
                 ulong replacementBaseline;
                 try
