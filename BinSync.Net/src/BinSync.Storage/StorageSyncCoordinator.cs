@@ -162,10 +162,10 @@ public sealed class StorageSyncCoordinator
                     if (change.ChangeId.IsZero)
                         throw new InvalidDataException("Metadata-Store-owned publication requires stable provider ChangeIds.");
                     if (outboundIdentityStore!.TryGetOutboundChangeFingerprint(
-                        _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out byte[] frozenFingerprint))
+                        _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out ReadOnlyMemory<byte> frozenFingerprint))
                     {
                         byte[] actualFingerprint = ComputeMetadataFingerprint(change);
-                        if (!frozenFingerprint.AsSpan().SequenceEqual(actualFingerprint))
+                        if (!frozenFingerprint.Span.SequenceEqual(actualFingerprint))
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
                         lastFrozenFeedSequence = change.Sequence;
                         // Any non-frozen rows before this frozen source sequence were
