@@ -172,7 +172,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private static bool HasLiveChangeIdReference(PartitionState state, int namespaceId, BatchId changeId)
     {
         if (state.Relay.Any(pair => pair.Key.NamespaceId == namespaceId &&
-            pair.Value.Any(item => item.ChangeId.EqualsBytes(changeId))))
+            pair.Value.Any(item => item.ChangeId.Equals(changeId))))
             return true;
         if (state.Outbound.Any(pair => pair.Key.NamespaceId == namespaceId &&
             pair.Value.Any(item => item.ChangeId.EqualsBytes(changeId))))
