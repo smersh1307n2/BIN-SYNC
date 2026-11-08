@@ -90,13 +90,21 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!SamePendingBatch(pending.Batch, batch))
                 throw new InvalidDataException("Pending apply token was reused for different input.");
             return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch))
-            { IsDuplicate = hasPriorReceipt };
+            {
+                IsDuplicate = hasPriorReceipt,
+                ApplyOperations = BuildPendingApplyDecisions(current, pending.Batch, applyToken)
+            };
         }
 
         bool isDuplicate = ValidateIncomingBatchForStaging(current, batch, applyToken);
+        IReadOnlyList<bool> applyOperations = BuildPendingApplyDecisions(current, batch, applyToken);
         var pendingValue = new PendingApplyValue(CloneBatch(batch));
         PersistPendingApply(partitionKey, current, applyToken, pendingValue);
-        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch)) { IsDuplicate = isDuplicate };
+        return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch))
+        {
+            IsDuplicate = isDuplicate,
+            ApplyOperations = applyOperations
+        };
     
         }
     }
@@ -116,7 +124,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             return Array.Empty<MetadataPendingApplyIntent>();
 
         return state.PendingApplies
-            .Select(pair => new MetadataPendingApplyIntent(pair.Key, CloneBatch(pair.Value.Batch)))
+            .Select(pair => new MetadataPendingApplyIntent(pair.Key, CloneBatch(pair.Value.Batch))
+            {
+                IsDuplicate = state.Receipts.ContainsKey(new ReceiptKey(
+                    pair.Value.Batch.SenderPeer, pair.Value.Batch.SenderEpoch,
+                    pair.Value.Batch.NamespaceId, pair.Value.Batch.BatchId)),
+                ApplyOperations = BuildPendingApplyDecisions(state, pair.Value.Batch, pair.Key)
+            })
             .ToArray();
     
         }
@@ -414,6 +428,52 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return receipt;
     }
 
+    private static IReadOnlyList<bool> BuildPendingApplyDecisions(
+        PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
+    {
+        var decisions = new bool[batch.Operations.Count];
+        var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, batch.BatchId);
+        if (state.Receipts.ContainsKey(receiptKey))
+            return decisions;
+
+        foreach (var otherPending in state.PendingApplies)
+        {
+            if (otherPending.Key == applyToken ||
+                otherPending.Value.Batch.NamespaceId != batch.NamespaceId)
+                continue;
+            foreach (var pendingOperation in otherPending.Value.Batch.Operations)
+            {
+                for (int i = 0; i < batch.Operations.Count; i++)
+                {
+                    var operation = batch.Operations[i];
+                    if (operation.ChangeId != pendingOperation.ChangeId)
+                        continue;
+                    if (!operation.Fingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint))
+                        throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                    throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
+                }
+            }
+        }
+
+        for (int i = 0; i < batch.Operations.Count; i++)
+        {
+            var operation = batch.Operations[i];
+            var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
+            if (state.ChangeLedger.TryGetValue(key, out var prior))
+            {
+                if (!prior.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                    throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
+                decisions[i] = false;
+            }
+            else
+            {
+                decisions[i] = true;
+            }
+        }
+        return decisions;
+    }
+
     private static bool ValidateIncomingBatchForStaging(
         PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
     {
@@ -478,9 +538,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 !priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
 
-            if (pendingIdentities.TryGetValue(key, out var pendingFingerprint) &&
-                !pendingFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
-                throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+            if (pendingIdentities.TryGetValue(key, out var pendingFingerprint))
+            {
+                if (!pendingFingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                    throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
+            }
         }
         return false;
     }
