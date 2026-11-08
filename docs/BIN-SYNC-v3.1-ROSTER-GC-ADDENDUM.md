@@ -447,3 +447,8 @@ Receive helpers first decode and authenticate through the session against the ac
 ## 10.18. Rejoined author reports preserve prior closed epochs (2026-11-09)
 
 OFR2 verification is roster-aware: when the accepted NRS2 roster contains retired-origin closures for the reporting member, its report must include each closed epoch and reproduce the exact final issued sequence and maximum HLC. A rejoined member may report a fresh epoch, but cannot omit, advance or rewrite any previously closed epoch. This check runs for both wire decoding and in-memory report verification.
+
+
+## 10.19. Provider terminal retirement validates the active epoch (2026-11-09)
+
+The provider refuses to set the terminal author-identity marker while its persisted active epoch lacks the corresponding durable per-epoch closure marker. Rejoin also fails closed if a retired identity still contains an active-epoch marker. This prevents a mismatched `finalAuthorEpoch` from silently retiring the identity while leaving the real active epoch reusable.
