@@ -44,6 +44,8 @@ internal sealed class WalWriterFence : IDisposable
         string fullPath = Path.GetFullPath(path);
         string root = Path.GetPathRoot(fullPath)
             ?? throw new IOException("WAL directory path has no filesystem root.");
+        if (OperatingSystem.IsWindows())
+            root = root.ToUpperInvariant();
         string current = root;
         string remainder = fullPath[root.Length..];
         foreach (string segment in remainder.Split(
