@@ -1445,6 +1445,51 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Malformed_provider_feed_is_rejected_before_metadata_freeze()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "malformed-provider-feed"), 465);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(66);
+        const string scope = "malformed-provider-feed";
+        var provider = new FailOnceAcknowledgeProvider(innerProvider, change =>
+        {
+            ProviderMutation source = change.Mutation;
+            return change with
+            {
+                Mutation = new ProviderMutation
+                {
+                    RecordId = source.RecordId,
+                    FieldId = 0,
+                    IsTombstone = false,
+                    IsRecordTombstone = false,
+                    HlcWall = source.HlcWall,
+                    HlcLogical = source.HlcLogical,
+                    AuthorNodeId = source.AuthorNodeId,
+                    KeyEpoch = source.KeyEpoch,
+                    Value = source.Value
+                }
+            };
+        });
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+        RecordId record = RecordId.From(Guid.Parse("66000000-0000-0000-0000-000000000001").ToByteArray());
+        innerProvider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record,
+            FieldId = 0x0830,
+            AuthorNodeId = node.NodeId,
+            HlcWall = 7100,
+            Value = "must-not-freeze"u8.ToArray()
+        });
+
+        Assert.Throws<InvalidDataException>(() => coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(0UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.False(node.TryGetField(1, record, 0x0830, out _));
+    }
+
+    [Fact]
     public void Metadata_owned_freeze_retries_after_provider_ack_failure_with_new_feed_entries()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-owned-ack-retry"), 457);
@@ -1675,9 +1720,16 @@ public sealed class StorageSyncCoordinatorTests
     private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode
     {
         private readonly IDataProvider _inner;
+        private readonly Func<ProviderChange, ProviderChange>? _changeTransform;
         private bool _failNextAcknowledge = true;
 
-        public FailOnceAcknowledgeProvider(IDataProvider inner) => _inner = inner;
+        public FailOnceAcknowledgeProvider(
+            IDataProvider inner,
+            Func<ProviderChange, ProviderChange>? changeTransform = null)
+        {
+            _inner = inner;
+            _changeTransform = changeTransform;
+        }
 
         public int SnapshotOpenCount { get; private set; }
 
@@ -1686,8 +1738,13 @@ public sealed class StorageSyncCoordinatorTests
         public ushort ResolveFieldId(ReadOnlyMemory<byte> sourceFieldKey) =>
             _inner.ResolveFieldId(sourceFieldKey);
         public void AppendLocalChange(ProviderMutation mutation) => _inner.AppendLocalChange(mutation);
-        public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit) =>
-            _inner.ReadLocalChanges(afterSequence, limit);
+        public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit)
+        {
+            ProviderChangePage page = _inner.ReadLocalChanges(afterSequence, limit);
+            return _changeTransform is null
+                ? page
+                : new ProviderChangePage(page.Changes.Select(_changeTransform).ToArray(), page.ScannedThroughSequence);
+        }
         public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
         public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark) =>
             ((IProviderPublicationMode)_inner).TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
