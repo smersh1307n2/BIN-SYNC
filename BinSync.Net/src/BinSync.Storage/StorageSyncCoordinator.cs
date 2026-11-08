@@ -198,6 +198,7 @@ public sealed class StorageSyncCoordinator
         if (!fullReplaceGeneration.HasValue && fullReplaceDigest is { Length: > 0 })
             throw new ArgumentException("FULL_REPLACE digest cannot be supplied without a generation.", nameof(fullReplaceDigest));
 
+        using IDisposable commitGuard = AcquireApplicationCommitGuard();
         lock (_gate)
         {
             StorageNamespaceGcStore gcStore = _namespaceGcStore
