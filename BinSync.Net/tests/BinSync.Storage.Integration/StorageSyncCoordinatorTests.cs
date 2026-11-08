@@ -1489,7 +1489,9 @@ public sealed class StorageSyncCoordinatorTests
                         AuthorNodeId = author,
                         ChangeId = BatchId.From(Guid.Parse($"10000000-0000-0000-0000-{batchSeed:x12}").ToByteArray()),
                         Fingerprint = Enumerable.Repeat(batchSeed, 16).ToArray(),
-                        Payload = new[] { batchSeed }
+                        Payload = new[] { batchSeed },
+                        OriginAuthorEpoch = 1,
+                        OriginSequence = cursor
                     }
                 }
             };
