@@ -193,4 +193,43 @@ public sealed class OriginFrontierProtocolTests
             NamespaceRetentionCheckpointProtocol.DecodeAndVerify(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), wrongRoster, trust));
     }
+    [Fact]
+    public void FRA1_accepts_joining_member_installation_and_rejects_retired_member()
+    {
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var roster = Roster(keys, new[] { NamespaceMemberStatus.Active, NamespaceMemberStatus.Joining });
+        var ack = new FullReplaceInstalledAck
+        {
+            NamespaceId = roster.NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            Generation = Guid.Parse("10213243-5465-7687-98a9-bacbdcedfe0f"),
+            Digest = Enumerable.Range(33, 32).Select(x => (byte)x).ToArray(),
+            MemberNodeId = roster.Members[1].NodeId,
+            MemberTransportEpoch = roster.Members[1].TransportPeerEpoch,
+            Installed = true
+        };
+        byte[] encoded = FullReplaceInstalledAckProtocol.Sign(ack, keys[1].Seed);
+        var decoded = FullReplaceInstalledAckProtocol.DecodeAndVerify(encoded, roster);
+        Assert.Equal(ack.Generation, decoded.Generation);
+        Assert.Equal(ack.Digest, decoded.Digest);
+        Assert.Equal(ack.MemberNodeId, decoded.MemberNodeId);
+
+        var retiredRoster = Roster(keys, new[] { NamespaceMemberStatus.Active, NamespaceMemberStatus.Retired });
+        var retiredAck = new FullReplaceInstalledAck
+        {
+            NamespaceId = retiredRoster.NamespaceId,
+            RosterGeneration = retiredRoster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(retiredRoster),
+            Generation = ack.Generation,
+            Digest = ack.Digest,
+            MemberNodeId = retiredRoster.Members[1].NodeId,
+            MemberTransportEpoch = retiredRoster.Members[1].TransportPeerEpoch,
+            Installed = true
+        };
+        byte[] retiredEncoded = FullReplaceInstalledAckProtocol.Sign(retiredAck, keys[1].Seed);
+        Assert.Throws<InvalidDataException>(() =>
+            FullReplaceInstalledAckProtocol.DecodeAndVerify(retiredEncoded, retiredRoster));
+    }
+
 }
