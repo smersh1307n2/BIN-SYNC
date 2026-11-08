@@ -1378,6 +1378,62 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Metadata_owned_freeze_retries_after_provider_ack_failure_with_new_feed_entries()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-owned-ack-retry"), 457);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(58);
+        const string scope = "metadata-owned-ack-retry";
+        RecordId firstRecord = RecordId.From(Guid.Parse("58000000-0000-0000-0000-000000000058").ToByteArray());
+        RecordId secondRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000059").ToByteArray());
+
+        innerProvider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = firstRecord,
+            FieldId = 0x081B,
+            AuthorNodeId = node.NodeId,
+            HlcWall = 6100,
+            Value = "first"u8.ToArray()
+        });
+        BatchId firstChangeId = Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes).ChangeId;
+
+        var faultingProvider = new FailOnceAcknowledgeProvider(innerProvider);
+        var coordinator = new StorageSyncCoordinator(node, faultingProvider, 1, metadata, scope);
+        Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
+
+        innerProvider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = secondRecord,
+            FieldId = 0x081C,
+            AuthorNodeId = node.NodeId,
+            HlcWall = 6200,
+            Value = "second"u8.ToArray()
+        });
+        ProviderChange[] pending = innerProvider.ReadLocalChanges(0, 10).Changes.ToArray();
+        Assert.Equal(2, pending.Length);
+        BatchId secondChangeId = pending[1].ChangeId;
+
+        Assert.Equal(2, coordinator.PublishLocalChanges(_ => { }));
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Empty(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
+        Assert.True(node.TryGetField(1, firstRecord, 0x081B, out var firstValue));
+        Assert.Equal("first", Encoding.UTF8.GetString(firstValue!.Value));
+        Assert.True(node.TryGetField(1, secondRecord, 0x081C, out var secondValue));
+        Assert.Equal("second", Encoding.UTF8.GetString(secondValue!.Value));
+
+        ulong lease = metadata.AcquireOutboundLease(scope, node.NodeId, 1, node.NodeId,
+            Guid.Parse("58000000-0000-0000-0000-000000000001"));
+        var outbound = metadata.ReadOutbound(scope, node.NodeId, 1, node.NodeId, lease, 0, 10).Items;
+        Assert.Equal(new ulong[] { 1, 2 }, outbound.Select(item => item.Sequence));
+        Assert.Equal(firstChangeId, outbound[0].ChangeId);
+        Assert.Equal(secondChangeId, outbound[1].ChangeId);
+    }
+
+    [Fact]
     public void Provider_authoritative_recovery_processes_only_its_namespace_pending_intents()
     {
         using var metadataStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-metadata"), 454);
@@ -1421,6 +1477,43 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(metadata.ReadPendingApplyIntents(scope, node.NodeId));
         Assert.True(providerTwo.TryReadCurrent(recordTwo, 0x081A, out var valueTwo));
         Assert.Equal("namespace-two", Encoding.UTF8.GetString(valueTwo!.Value));
+    }
+
+    private sealed class FailOnceAcknowledgeProvider : IDataProvider
+    {
+        private readonly IDataProvider _inner;
+        private bool _failNextAcknowledge = true;
+
+        public FailOnceAcknowledgeProvider(IDataProvider inner) => _inner = inner;
+
+        public RecordId ResolveRecordId(ReadOnlyMemory<byte> sourceItemKey) =>
+            _inner.ResolveRecordId(sourceItemKey);
+        public ushort ResolveFieldId(ReadOnlyMemory<byte> sourceFieldKey) =>
+            _inner.ResolveFieldId(sourceFieldKey);
+        public void AppendLocalChange(ProviderMutation mutation) => _inner.AppendLocalChange(mutation);
+        public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit) =>
+            _inner.ReadLocalChanges(afterSequence, limit);
+        public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
+
+        public void AcknowledgeLocalChanges(ulong safeThroughSequence)
+        {
+            if (_failNextAcknowledge)
+            {
+                _failNextAcknowledge = false;
+                throw new IOException("Injected provider feed ACK interruption.");
+            }
+            _inner.AcknowledgeLocalChanges(safeThroughSequence);
+        }
+
+        public ProviderSnapshotHandle OpenSnapshot() => _inner.OpenSnapshot();
+        public ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit) =>
+            _inner.ReadSnapshot(snapshotToken, afterIndex, limit);
+        public void ReleaseSnapshot(Guid snapshotToken) => _inner.ReleaseSnapshot(snapshotToken);
+        public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations) =>
+            _inner.ApplyRemoteBatch(applyToken, mutations);
+        public bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation) =>
+            _inner.TryReadCurrent(recordId, fieldId, out mutation);
+        public void Dispose() { }
     }
 
     private static MetadataIncomingBatch CreatePendingProviderBatch(
