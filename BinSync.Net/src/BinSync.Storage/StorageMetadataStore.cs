@@ -945,8 +945,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
         }
     }
 
-    public bool IsOutboundChangeFrozen(
-        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, byte[] fingerprint)
+    public bool TryGetOutboundChangeFingerprint(
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId, out byte[] fingerprint)
     {
         lock (_gate)
         {
@@ -954,17 +954,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
             if (changeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
-            ValidateDigest(fingerprint, nameof(fingerprint));
+            fingerprint = Array.Empty<byte>();
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
                 return false;
 
             var key = new LedgerKey(namespaceId, changeId);
             if (!state.ChangeLedger.TryGetValue(key, out var prior))
                 return false;
-            if (!prior.Fingerprint.AsSpan().SequenceEqual(fingerprint))
-                throw new InvalidDataException("Provider ChangeId conflicts with the durable global ChangeId fingerprint.");
             if (!prior.IsLocalOutbound)
                 throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
+            fingerprint = prior.Fingerprint.ToArray();
             return true;
         }
     }
