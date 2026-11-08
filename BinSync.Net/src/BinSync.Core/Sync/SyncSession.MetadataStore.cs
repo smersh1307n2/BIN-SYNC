@@ -121,7 +121,7 @@ public partial class SyncSession
 
                 if (selectedAuthor is null) return false;
                 authorStream = selectedAuthor.Value;
-                IReadOnlyList<(ulong Sequence, BatchId ChangeId, byte[] Payload)> pageItems;
+                IReadOnlyList<(ulong Sequence, BatchId ChangeId, uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)> pageItems;
                 if (authorStream == sender.NodeId)
                 {
                     var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
@@ -132,7 +132,7 @@ public partial class SyncSession
                 {
                     var page = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
-                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.Payload)).ToArray();
+                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload)).ToArray();
                 }
 
                 if (pageItems.Count == 0) return false;
