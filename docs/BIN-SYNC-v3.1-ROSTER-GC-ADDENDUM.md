@@ -333,3 +333,8 @@ The ChangeId and receipt compaction entry points are wired through `StorageSyncC
 ## 10.7. Canonical encoding policy
 
 The v3.1 implementation uses canonical encodings only: provider mutations require the 81-byte fixed header, local feed envelopes require the canonical mutation plus exactly one ChangeId, and receipt values require the origin-sequence-bearing format. Earlier in-development layouts are rejected; no hidden compatibility decoder or automatic migration path is provided. Ordinary field materialization from Node LWW state may carry zero operation provenance, but record tombstones and immutable remote/local operations must carry complete ChangeId/origin identity.
+
+
+## 10.8. Receipt deletion retains the transport replay fence
+
+`CompactReceipts` requires the corresponding durable receive cursor to cover the receipt's `CursorEnd` and the sender digest-chain row to remain present, in addition to the signed origin frontier and no PendingApply reference. It deletes only the receipt row; receive cursor and digest-chain rows are deliberately retained. This makes an old cursor continuation fail after receipt pruning rather than appearing to be a fresh batch. Exact lost-ACK and reconnect behavior remains a T-pass obligation.
