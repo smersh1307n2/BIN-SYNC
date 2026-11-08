@@ -446,7 +446,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Added field-tombstone and record-tombstone preservation coverage; fixed the fixture HLC so the record tombstone actually dominates the field write.
 - [x] Added author-epoch equality to replacement-baseline retirement proof; a higher cursor from a different author epoch cannot discharge an old reservation.
 - [x] Updated v3 spec, Public API and Data Provider Conformance docs with canonical RFC-4122 generation encoding, digest byte order, bounded page limits, caller safety obligations and old-generation retention.
-- [ ] Promote `FullReplaceDigestBuilder`/canonical ProviderMutation encoding to a Core-level shared codec before implementing the FLD-DB provider adapter; avoid coupling the FLD adapter to StorageDataProvider internals.
+- [x C] Promoted canonical ProviderMutation encode/decode/validation/order and `ProviderFullReplaceDigestBuilder` into `BinSync.Core/ProviderMutationCodec.cs`; `StorageDataProvider` delegates to the shared Core codec, so the FLD adapter can reuse it without depending on StorageDataProvider internals.
 - [ ] Implement signed namespace roster, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE installed ACKs in a separately negotiated v3.1 extension. Until then ChangeId and tombstone/ghost GC remain disabled.
 
 
