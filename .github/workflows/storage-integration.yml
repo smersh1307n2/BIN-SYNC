@@ -23,6 +23,10 @@ on:
       - "samples/StorageArrayTcpSync/**"
   workflow_dispatch:
 
+concurrency:
+  group: storage-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
