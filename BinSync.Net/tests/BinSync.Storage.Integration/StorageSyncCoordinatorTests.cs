@@ -27,6 +27,8 @@ public sealed class StorageSyncCoordinatorTests
 
         RecordId record = RecordId.From(Guid.Parse("28000000-0000-0000-0000-000000000028").ToByteArray());
         sender.WriteField(1, record, 0x0812, "replay-after-crash"u8.ToArray(), new Hlc(5000, 0));
+        var sourceEntry = Assert.Single(sender.ReadOutboxEntries(1, sender.NodeId, 0, 10));
+        OperationOrigin expectedOrigin = sourceEntry.Provenance;
 
         using var sendCts = new CancellationTokenSource();
         using var receiveCts = new CancellationTokenSource();
@@ -46,7 +48,8 @@ public sealed class StorageSyncCoordinatorTests
         sendCts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
 
-        Assert.Single(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
+        var pendingIntent = Assert.Single(metadata.ReadPendingApplyIntents("pending-receive-recovery", receiver.NodeId));
+        Assert.Equal(expectedOrigin, Assert.Single(pendingIntent.Batch.Operations).Provenance);
         Assert.False(receiver.TryGetField(1, record, 0x0812, out _));
         Assert.Throws<InvalidOperationException>(() =>
             coordinator.RehydrateNodeFromProviderSnapshot(_ =>
@@ -61,6 +64,9 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(nodeValue!.Value));
         Assert.True(provider.TryReadCurrent(record, 0x0812, out var providerValue));
         Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(providerValue!.Value));
+        var relayed = Assert.Single(metadata.ReadRelay("pending-receive-recovery", receiver.NodeId,
+            1, sender.NodeId, 0, 10).Items);
+        Assert.Equal(expectedOrigin, relayed.Provenance);
         Assert.Equal(0, receiver.GlobalChangeLedgerCount);
     }
 
@@ -78,6 +84,8 @@ public sealed class StorageSyncCoordinatorTests
         NodeId receiverId = NodeId.From(receiverIdentity);
         RecordId record = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000063").ToByteArray());
         Assert.True(sender.WriteField(1, record, 0x0823, "checkpoint-crash"u8.ToArray(), new Hlc(7000, 0)));
+        var checkpointSourceEntry = Assert.Single(sender.ReadOutboxEntries(1, sender.NodeId, 0, 10));
+        OperationOrigin checkpointExpectedOrigin = checkpointSourceEntry.Provenance;
 
         using (var storage = StorageDatabase.Open(directory, partitionId))
         using (var provider = new StorageDataProvider(storage))
@@ -104,7 +112,8 @@ public sealed class StorageSyncCoordinatorTests
             sendCts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await send);
 
-            Assert.Single(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            var staged = Assert.Single(metadata.ReadPendingApplyIntents(scope, receiver.NodeId));
+            Assert.Equal(checkpointExpectedOrigin, Assert.Single(staged.Batch.Operations).Provenance);
             Assert.True(receiver.TryGetField(1, record, 0x0823, out _));
             Assert.False(provider.TryReadCurrent(record, 0x0823, out _));
         }
@@ -128,6 +137,9 @@ public sealed class StorageSyncCoordinatorTests
             Assert.Equal("checkpoint-crash", Encoding.UTF8.GetString(restored!.Value));
             Assert.True(provider.TryReadCurrent(record, 0x0823, out var providerValue));
             Assert.Equal("checkpoint-crash", Encoding.UTF8.GetString(providerValue!.Value));
+            var recoveredRelay = Assert.Single(metadata.ReadRelay(scope, receiver.NodeId,
+                1, sender.NodeId, 0, 10).Items);
+            Assert.Equal(checkpointExpectedOrigin, recoveredRelay.Provenance);
 
             var retryCoordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
 
