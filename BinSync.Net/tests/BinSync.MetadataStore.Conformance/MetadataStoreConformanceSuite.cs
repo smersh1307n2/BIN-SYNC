@@ -274,7 +274,7 @@ public abstract class MetadataStoreConformanceSuite
     }
 
     [Fact]
-    public void Outbound_freeze_exact_retry_returns_original_sequences_without_appending()
+    public void Outbound_freeze_exact_and_partial_retries_preserve_existing_sequences()
     {
         using var store = CreateStore();
         var batch = new[] { FrozenOperation(30, 50), FrozenOperation(31, 51) };
@@ -287,10 +287,22 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Equal(first.Select(item => item.ChangeId), retry.Select(item => item.ChangeId));
         Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
 
+        // A replay can include an already-frozen feed entry and a newer entry
+        // appended before the source feed ACK completed. Keep the old sequence.
+        var incremental = store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+            new[] { FrozenOperation(30, 50), FrozenOperation(32, 52) });
+        Assert.Equal(new ulong[] { 1, 3 }, incremental.Select(item => item.Sequence));
+        Assert.Equal(3UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+
+        var incrementalRetry = store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
+            new[] { FrozenOperation(30, 50), FrozenOperation(32, 52) });
+        Assert.Equal(new ulong[] { 1, 3 }, incrementalRetry.Select(item => item.Sequence));
+        Assert.Equal(3UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+
         Assert.Throws<InvalidDataException>(() =>
             store.FreezeOutbound("scope-a", Node(1), 7, Node(20),
-                new[] { FrozenOperation(30, 50), FrozenOperation(32, 52) }));
-        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+                new[] { FrozenOperation(30, 50), FrozenOperation(32, 53) }));
+        Assert.Equal(3UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
     }
 
     [Fact]
