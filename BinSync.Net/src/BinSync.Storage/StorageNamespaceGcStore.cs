@@ -362,9 +362,12 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     if (next.Status == NamespaceMemberStatus.Active &&
                         next.TransportPeerEpoch < oldMember.TransportPeerEpoch)
                         throw new InvalidDataException("Active member transport epoch regressed.");
-                    if (next.Status == NamespaceMemberStatus.Retired &&
-                        next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
-                        throw new InvalidDataException("RetiredThroughEpoch does not cover the previous Active epoch.");
+                    if (next.Status == NamespaceMemberStatus.Retired)
+                    {
+                        if (next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
+                            throw new InvalidDataException("RetiredThroughEpoch does not cover the previous Active epoch.");
+                        ValidateRetiredOriginClosure(prior, candidate, oldMember.NodeId);
+                    }
                     break;
 
                 case NamespaceMemberStatus.Joining:
@@ -379,10 +382,12 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     {
                         throw new InvalidDataException("Joining member transport epoch regressed.");
                     }
-                    else if (next.Status == NamespaceMemberStatus.Retired &&
-                        next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
+                    else if (next.Status == NamespaceMemberStatus.Retired)
                     {
-                        throw new InvalidDataException("RetiredThroughEpoch does not cover the previous Joining epoch.");
+                        if (next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
+                            throw new InvalidDataException("RetiredThroughEpoch does not cover the previous Joining epoch.");
+                        if (candidate.RetiredOriginEpochs.Any(entry => entry.OriginAuthorNodeId == oldMember.NodeId))
+                            throw new InvalidDataException("A Joining member cannot close author epochs before it was Active.");
                     }
                     break;
 
@@ -395,6 +400,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     if (next.Status == NamespaceMemberStatus.Retired &&
                         next.RetiredThroughEpoch < oldMember.RetiredThroughEpoch)
                         throw new InvalidDataException("Retired transport epoch fence regressed.");
+                    ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
                     break;
             }
         }
@@ -404,6 +410,56 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             if (!prior.Members.Any(old => old.NodeId == member.NodeId) &&
                 member.Status != NamespaceMemberStatus.Joining)
                 throw new InvalidDataException("A new namespace member must enter as Joining, never directly as Active.");
+        }
+    }
+
+    private void ValidateRetiredOriginClosure(
+        NamespaceRosterCertificate prior, NamespaceRosterCertificate candidate, NodeId author)
+    {
+        AppliedOriginFrontierReport report = ReadOriginFrontiersCore(prior)
+            .FirstOrDefault(item => item.MemberNodeId == author)
+            ?? throw new InvalidDataException("An Active author must publish a signed issued-origin report before retirement.");
+
+        NamespaceRetiredOriginEpoch[] expected = report.IssuedOrigins
+            .Select(entry => new NamespaceRetiredOriginEpoch
+            {
+                OriginAuthorNodeId = author,
+                OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                FinalIssuedOriginSequence = entry.IssuedOriginSequence,
+                MaxIssuedHlcWall = entry.MaxIssuedHlcWall,
+                MaxIssuedHlcLogical = entry.MaxIssuedHlcLogical
+            }).ToArray();
+        NamespaceRetiredOriginEpoch[] actual = candidate.RetiredOriginEpochs
+            .Where(entry => entry.OriginAuthorNodeId == author)
+            .ToArray();
+        if (actual.Length != expected.Length)
+            throw new InvalidDataException("Retiring an author requires a roster closure for every signed issued author epoch.");
+        for (int i = 0; i < expected.Length; i++)
+        {
+            if (actual[i].OriginAuthorEpoch != expected[i].OriginAuthorEpoch ||
+                actual[i].FinalIssuedOriginSequence != expected[i].FinalIssuedOriginSequence ||
+                actual[i].MaxIssuedHlcWall != expected[i].MaxIssuedHlcWall ||
+                actual[i].MaxIssuedHlcLogical != expected[i].MaxIssuedHlcLogical)
+                throw new InvalidDataException("Retired-origin closure does not match the author's latest signed issued-origin report.");
+        }
+    }
+
+    private static void ValidatePreservedRetiredOriginClosure(
+        NamespaceRosterCertificate prior, NamespaceRosterCertificate candidate, NodeId author)
+    {
+        NamespaceRetiredOriginEpoch[] oldEntries = prior.RetiredOriginEpochs
+            .Where(entry => entry.OriginAuthorNodeId == author).ToArray();
+        NamespaceRetiredOriginEpoch[] newEntries = candidate.RetiredOriginEpochs
+            .Where(entry => entry.OriginAuthorNodeId == author).ToArray();
+        if (oldEntries.Length != newEntries.Length)
+            throw new InvalidDataException("A retired author's closed epochs cannot be removed or added after retirement.");
+        for (int i = 0; i < oldEntries.Length; i++)
+        {
+            if (oldEntries[i].OriginAuthorEpoch != newEntries[i].OriginAuthorEpoch ||
+                oldEntries[i].FinalIssuedOriginSequence != newEntries[i].FinalIssuedOriginSequence ||
+                oldEntries[i].MaxIssuedHlcWall != newEntries[i].MaxIssuedHlcWall ||
+                oldEntries[i].MaxIssuedHlcLogical != newEntries[i].MaxIssuedHlcLogical)
+                throw new InvalidDataException("A retired author's closure is immutable across roster generations.");
         }
     }
 
