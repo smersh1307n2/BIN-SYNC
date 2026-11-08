@@ -234,7 +234,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 incoming.NamespaceId, ResolveAuthorStream(incoming));
             var receive = current.Receives.TryGetValue(receiveKey, out var priorReceive)
                 ? priorReceive : new ReceiveState(0);
-            var chainKey = new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch, incoming.NamespaceId, ResolveAuthorStream(incoming));
+            var chainKey = new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch, incoming.NamespaceId);
             var chain = current.ReceiveChains.TryGetValue(chainKey, out var priorChain)
                 ? priorChain : new ReceiveChainState(new byte[16]);
             if (incoming.CursorStart != checked(receive.CursorEnd + 1) ||
@@ -329,11 +329,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt64LittleEndian(receiveValue, incoming.CursorEnd);
             writes.Add((StorageKey(root, 2, receiveSuffix), receiveValue));
 
-            byte[] chainSuffix = new byte[38];
+            byte[] chainSuffix = new byte[22];
             incoming.SenderPeer.WriteTo(chainSuffix);
             BinaryPrimitives.WriteUInt32LittleEndian(chainSuffix.AsSpan(16), incoming.SenderEpoch);
             BinaryPrimitives.WriteUInt16LittleEndian(chainSuffix.AsSpan(20), checked((ushort)incoming.NamespaceId));
-            ResolveAuthorStream(incoming).WriteTo(chainSuffix.AsSpan(22));
             writes.Add((StorageKey(root, 14, chainSuffix), incoming.BatchDigest.ToArray()));
             }
         }
@@ -413,8 +412,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch));
             current.Receives[new ReceiveKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
-            current.ReceiveChains[new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch,
-                incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveChainState(incoming.BatchDigest.ToArray());
+            current.ReceiveChains[new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch, incoming.NamespaceId)] = new ReceiveChainState(incoming.BatchDigest.ToArray());
         }
         else if (refreshedReceipt is not null)
         {
@@ -523,7 +521,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receive = state.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
         var chain = state.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -593,7 +591,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receive = current.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
         var chain = current.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -684,11 +682,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         byte[] receiveValue = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(receiveValue, batch.CursorEnd);
 
-        byte[] chainSuffix = new byte[38];
+        byte[] chainSuffix = new byte[22];
         batch.SenderPeer.WriteTo(chainSuffix);
         BinaryPrimitives.WriteUInt32LittleEndian(chainSuffix.AsSpan(16), batch.SenderEpoch);
         BinaryPrimitives.WriteUInt16LittleEndian(chainSuffix.AsSpan(20), checked((ushort)batch.NamespaceId));
-        ResolveAuthorStream(batch).WriteTo(chainSuffix.AsSpan(22));
 
         var writes = new List<(byte[] Key, byte[] Value)>(
             3 + newLedger.Count + newRelay.Values.Sum(items => items.Count) + relayHigh.Count + peerStreamStates.Count + requiredStreams.Count);
@@ -824,7 +821,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receive = next.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, ResolveAuthorStream(batch));
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
         var chain = next.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -2794,11 +2791,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         foreach (var pair in state.Receives)
         {
-            byte[] suffix = new byte[38];
+            byte[] suffix = new byte[22];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
-            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
             byte[] value = new byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorEnd);
             Add(StorageKey(root, 2, suffix), value);
@@ -2806,11 +2802,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         foreach (var pair in state.ReceiveChains)
         {
-            byte[] suffix = new byte[38];
+            byte[] suffix = new byte[22];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
-            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
             Add(StorageKey(root, 14, suffix), pair.Value.LastBatchDigest.ToArray());
         }
 
@@ -2996,9 +2991,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         // Legacy v1 combined receive cursor + digest-chain checkpoint.
                         state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId, default),
                             new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
-                        state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId, default),
+                        state.ReceiveChains.Add(new ReceiveChainKey(sender, epoch, namespaceId),
                             new ReceiveChainState(row.Value.AsSpan(8, 16).ToArray()));
-                        state.HasLegacyEncoding = true;
                     }
                     else
                     {
@@ -3012,15 +3006,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 }
                 case 14:
                 {
-                    if (key.Length is not (22 or 38))
-                        throw new InvalidDataException("Stored receive digest-chain key has an invalid length.");
+                    RequireLength(key, 22);
                     RequireLength(row.Value, 16);
                     var chainKey = new ReceiveChainKey(NodeId.From(key.Slice(0, 16)),
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                        key.Length == 38 ? NodeId.From(key.Slice(22, 16)) : default);
-                    if (key.Length == 22)
-                        state.HasLegacyEncoding = true;
+                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
                     state.ReceiveChains.Add(chainKey, new ReceiveChainState(row.Value.ToArray()));
                     break;
                 }
@@ -3187,54 +3177,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 default:
                     throw new InvalidDataException($"Unknown metadata storage key kind {kind}.");
             }
-        }
-
-        // Older stores kept one digest chain per sender/epoch/namespace while
-        // receive cursors were already author-scoped. Reconstruct the independent
-        // author chains from the latest durable receipt for each receive cursor.
-        // Without those receipts the prior digest cannot be assigned safely, so fail
-        // closed rather than letting one author's chain validate another author's data.
-        foreach (var legacyChain in state.ReceiveChains
-                     .Where(pair => pair.Key.AuthorStream.IsZero).ToArray())
-        {
-            var streams = state.Receives
-                .Where(pair => pair.Key.Sender == legacyChain.Key.Sender &&
-                    pair.Key.Epoch == legacyChain.Key.Epoch &&
-                    pair.Key.NamespaceId == legacyChain.Key.NamespaceId &&
-                    !pair.Key.AuthorStream.IsZero && pair.Value.CursorEnd != 0)
-                .ToArray();
-            if (streams.Length == 0)
-                continue;
-
-            var latestDigests = new List<byte[]>();
-            foreach (var stream in streams)
-            {
-                var receipts = state.Receipts
-                    .Where(pair => pair.Key.Sender == legacyChain.Key.Sender &&
-                        pair.Key.Epoch == legacyChain.Key.Epoch &&
-                        pair.Key.NamespaceId == legacyChain.Key.NamespaceId &&
-                        pair.Value.DurableAuthor == stream.Key.AuthorStream &&
-                        pair.Value.CursorEnd == stream.Value.CursorEnd)
-                    .Select(pair => pair.Value)
-                    .ToArray();
-                if (receipts.Length == 0)
-                    throw new InvalidDataException(
-                        "Legacy shared receive digest chain cannot be migrated: latest author receipt is missing.");
-                byte[] digest = receipts[0].BatchDigest;
-                if (receipts.Any(receipt => !receipt.BatchDigest.AsSpan().SequenceEqual(digest)))
-                    throw new InvalidDataException(
-                        "Legacy shared receive digest chain has conflicting latest receipts for one author stream.");
-                var authorChainKey = new ReceiveChainKey(legacyChain.Key.Sender,
-                    legacyChain.Key.Epoch, legacyChain.Key.NamespaceId, stream.Key.AuthorStream);
-                state.ReceiveChains[authorChainKey] = new ReceiveChainState(digest.ToArray());
-                latestDigests.Add(digest);
-            }
-
-            if (!latestDigests.Any(digest => digest.AsSpan().SequenceEqual(legacyChain.Value.LastBatchDigest)))
-                throw new InvalidDataException(
-                    "Legacy shared receive digest chain does not match any author's latest durable receipt.");
-            state.ReceiveChains.Remove(legacyChain.Key);
-            state.HasLegacyEncoding = true;
         }
 
         if (!identitySeen)
@@ -3648,7 +3590,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
     private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
-    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
+    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
