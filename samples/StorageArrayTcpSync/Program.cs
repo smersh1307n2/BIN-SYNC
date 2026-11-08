@@ -160,10 +160,10 @@ static async Task<int> ExchangeOverTcpAsync(
     StorageNodePersistence.Save(storageA, nodeA);
     StorageNodePersistence.Save(storageB, nodeB);
 
-    int aToB = await PushUntilIdleAsync(sessionA, nodeA, metadataA, "array-tcp-demo", sessionB, nodeB,
-        (batch, _) => coordinatorB.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageB, nodeB)));
-    int bToA = await PushUntilIdleAsync(sessionB, nodeB, metadataB, "array-tcp-demo", sessionA, nodeA,
-        (batch, _) => coordinatorA.ApplyRemoteBatchBeforeAck(batch, _ => StorageNodePersistence.Save(storageA, nodeA)));
+    int aToB = await PushUntilIdleAsync(sessionA, nodeA, metadataA, "array-tcp-demo",
+        sessionB, coordinatorB, n => StorageNodePersistence.Save(storageB, n));
+    int bToA = await PushUntilIdleAsync(sessionB, nodeB, metadataB, "array-tcp-demo",
+        sessionA, coordinatorA, n => StorageNodePersistence.Save(storageA, n));
     Console.WriteLine($"TCP batches: A→B={aToB}, B→A={bToA}");
     return aToB + bToA;
 }
@@ -174,14 +174,15 @@ static async Task<int> PushUntilIdleAsync(
     IMetadataPeerStateStore senderMetadata,
     string scope,
     SyncSession receiverSession,
-    Node receiver,
-    Action<Batch, BatchResult> beforeAck)
+    StorageSyncCoordinator receiverCoordinator,
+    Action<Node> persistReceiver)
 {
     int sentCount = 0;
     while (true)
     {
         using var receiveCts = new CancellationTokenSource();
-        Task<BatchResult> receiveTask = receiverSession.ReceiveBatchAsync(receiver, receiveCts.Token, beforeAck);
+        Task<BatchResult> receiveTask = receiverCoordinator.ReceiveBatchBeforeAckAsync(
+            receiverSession, persistReceiver, receiveCts.Token);
         Task<bool> pushTask = senderSession.PushBatchAsync(sender, NamespaceId, senderMetadata, scope);
 
         Task first = await Task.WhenAny(pushTask, receiveTask);
