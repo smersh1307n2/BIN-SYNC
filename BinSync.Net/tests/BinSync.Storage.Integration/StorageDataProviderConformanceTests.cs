@@ -337,4 +337,59 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         }
     }
 
+    [Fact]
+    public async Task Provider_and_metadata_adapters_share_one_storage_transaction_gate()
+    {
+        string directory = Path.Combine(_root, "shared-storage-transaction-gate");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 85);
+            using var provider = new StorageDataProvider(storage);
+            using var metadata = new StorageMetadataStore(storage);
+            NodeId local = Node(85);
+            const string scope = "shared-storage-transaction-gate";
+
+            Task providerWrites = Task.Run(() => Parallel.For(0, 64, i =>
+            {
+                byte[] identity = new byte[16];
+                identity[14] = (byte)(i >> 8);
+                identity[15] = (byte)(i + 1);
+                provider.AppendLocalChange(new ProviderMutation
+                {
+                    RecordId = RecordId.From(identity),
+                    FieldId = 0x0830,
+                    AuthorNodeId = local,
+                    HlcWall = checked((ulong)(10_000 + i)),
+                    Value = new[] { checked((byte)i) }
+                });
+            }));
+
+            Task metadataWrites = Task.Run(() => Parallel.For(0, 64, i =>
+            {
+                byte[] identity = new byte[16];
+                identity[14] = 0x80;
+                identity[15] = (byte)(i + 1);
+                metadata.FreezeOutbound(scope, local, 1, local, new[]
+                {
+                    new MetadataFrozenOperation
+                    {
+                        ChangeId = BatchId.From(identity),
+                        Fingerprint = identity.ToArray(),
+                        Payload = new[] { checked((byte)i) }
+                    }
+                });
+            }));
+
+            await Task.WhenAll(providerWrites, metadataWrites);
+            Assert.Equal(64UL, provider.LocalChangeHighWatermark);
+            Assert.Equal(64UL, metadata.GetOutboundHighWatermark(scope, local, 1, local));
+            Assert.Equal(128UL, storage.LastCommitSeq);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
