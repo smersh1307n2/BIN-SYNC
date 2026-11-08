@@ -154,7 +154,7 @@ public sealed class OriginFrontierProtocolTests
             roster, 1, new byte[32], reports, generation, fullReplaceDigest);
         byte[] encoded = NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed);
         var trust = new TrustStore();
-        trust.Allow(roster.AuthorityNodeId, keys[0].Key, TrustMode.PreShared);
+        trust.Allow(roster.AuthorityNodeId, keys[0].PublicKey, TrustMode.PreShared);
 
         var decoded = NamespaceRetentionCheckpointProtocol.DecodeAndVerify(encoded, roster, trust);
 
@@ -175,7 +175,7 @@ public sealed class OriginFrontierProtocolTests
             roster, 1, new byte[32], new[] { report });
         byte[] encoded = NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed);
         var trust = new TrustStore();
-        trust.Allow(roster.AuthorityNodeId, keys[0].Key, TrustMode.PreShared);
+        trust.Allow(roster.AuthorityNodeId, keys[0].PublicKey, TrustMode.PreShared);
 
         encoded[^1] ^= 0x40;
         Assert.ThrowsAny<System.Security.Cryptography.CryptographicException>(
