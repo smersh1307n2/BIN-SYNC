@@ -20,6 +20,7 @@ public class StorageDataProvider : IDataProvider
     private const byte LocalHighWatermark = 0x21;
     private const byte LocalAckWatermark = 0x22;
     private const byte LocalReadWatermark = 0x23;
+    private const byte ProviderPublicationMode = 0x24;
     private const byte ApplyReceipt = 0x30;
 
     private readonly object _gate = new();
@@ -374,6 +375,49 @@ public class StorageDataProvider : IDataProvider
 
             mutation = null;
             return false;
+        }
+    }
+
+    public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!_storage.TryGet([ProviderPublicationMode], out var value))
+            {
+                nodeOutboxHighWatermark = 0;
+                return false;
+            }
+            nodeOutboxHighWatermark = ReadUInt64(value!);
+            return true;
+        }
+    }
+
+    public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            using var snapshot = _storage.OpenSnapshot();
+            ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
+            ulong acknowledged = ReadUInt64(snapshot, [LocalAckWatermark]);
+            if (high != acknowledged)
+                throw new InvalidOperationException("Provider local feed must be fully acknowledged before Metadata-Store-owned publication is enabled.");
+
+            if (snapshot.TryGet([ProviderPublicationMode], out var existing))
+            {
+                ulong priorCutover = ReadUInt64(existing!);
+                if (priorCutover != nodeOutboxHighWatermark)
+                    throw new InvalidOperationException("Provider publication cutover watermark is immutable.");
+                return;
+            }
+
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            batch.Put([ProviderPublicationMode], EncodeUInt64(nodeOutboxHighWatermark));
+            batch.Commit();
         }
     }
 
