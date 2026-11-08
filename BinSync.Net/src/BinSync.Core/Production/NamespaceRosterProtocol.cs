@@ -19,6 +19,15 @@ public sealed class NamespaceRosterMember
     public uint RetiredThroughEpoch { get; init; }
 }
 
+public sealed class NamespaceRetiredOriginEpoch
+{
+    public NodeId OriginAuthorNodeId { get; init; }
+    public uint OriginAuthorEpoch { get; init; }
+    public ulong FinalIssuedOriginSequence { get; init; }
+    public ulong MaxIssuedHlcWall { get; init; }
+    public uint MaxIssuedHlcLogical { get; init; }
+}
+
 public sealed class NamespaceRosterCertificate
 {
     public int NamespaceId { get; init; }
@@ -26,19 +35,21 @@ public sealed class NamespaceRosterCertificate
     public byte[] PreviousRosterDigest { get; init; } = Array.Empty<byte>();
     public NodeId AuthorityNodeId { get; init; }
     public IReadOnlyList<NamespaceRosterMember> Members { get; init; } = Array.Empty<NamespaceRosterMember>();
+    public IReadOnlyList<NamespaceRetiredOriginEpoch> RetiredOriginEpochs { get; init; } = Array.Empty<NamespaceRetiredOriginEpoch>();
     public byte[] Signature { get; init; } = Array.Empty<byte>();
 }
 
 /// <summary>
-/// Canonical NRS1 signed namespace roster. Only a pinned PreShared authority key
+/// Canonical NRS2 signed namespace roster. Only a pinned PreShared authority key
 /// can authorize a roster; TOFU, CA-only and revoked keys are deliberately rejected.
 /// </summary>
 public static class NamespaceRosterProtocol
 {
     public const int DigestSize = 32;
     public const int MaxMembers = 4096;
-    public const string SignDomain = "BIN-SYNC/NAMESPACE-ROSTER/v1";
-    private static ReadOnlySpan<byte> Magic => "NRS1"u8;
+    public const int MaxRetiredOriginEpochs = 16384;
+    public const string SignDomain = "BIN-SYNC/NAMESPACE-ROSTER/v2";
+    private static ReadOnlySpan<byte> Magic => "NRS2"u8;
 
     public static byte[] Sign(NamespaceRosterCertificate roster, ReadOnlySpan<byte> authoritySeed)
     {
@@ -56,22 +67,22 @@ public static class NamespaceRosterProtocol
     {
         ArgumentNullException.ThrowIfNull(trustStore);
         if (encoded.Length < 4 + 2 + 8 + DigestSize + 16 + 2 + BatchSignature.SignatureSize)
-            throw new InvalidDataException("NRS1 roster is truncated.");
+            throw new InvalidDataException("NRS2 roster is truncated.");
 
         int payloadLength = encoded.Length - BatchSignature.SignatureSize;
         byte[] payload = encoded[..payloadLength].ToArray();
         byte[] signature = encoded[payloadLength..].ToArray();
         var reader = new Reader(payload);
         if (!reader.Raw(4).AsSpan().SequenceEqual(Magic))
-            throw new InvalidDataException("NRS1 roster magic is invalid.");
+            throw new InvalidDataException("NRS2 roster magic is invalid.");
 
         int namespaceId = reader.U16();
         ulong generation = reader.U64();
         byte[] previousDigest = reader.Raw(DigestSize);
         NodeId authority = NodeId.From(reader.B128());
         int count = reader.U16();
-        if (count > MaxMembers || count > reader.Remaining / 57)
-            throw new InvalidDataException("NRS1 member count exceeds the bounded payload.");
+        if (count > MaxMembers || reader.Remaining < 2 || count > (reader.Remaining - 2) / 57)
+            throw new InvalidDataException("NRS2 member count exceeds the bounded payload.");
 
         var members = new List<NamespaceRosterMember>(count);
         for (int i = 0; i < count; i++)
@@ -91,8 +102,23 @@ public static class NamespaceRosterProtocol
             });
         }
 
+        int retiredOriginCount = reader.U16();
+        if (retiredOriginCount > MaxRetiredOriginEpochs || retiredOriginCount > reader.Remaining / 40)
+            throw new InvalidDataException("NRS2 retired-origin count exceeds the bounded payload.");
+        var retiredOrigins = new List<NamespaceRetiredOriginEpoch>(retiredOriginCount);
+        for (int i = 0; i < retiredOriginCount; i++)
+        {
+            retiredOrigins.Add(new NamespaceRetiredOriginEpoch
+            {
+                OriginAuthorNodeId = NodeId.From(reader.B128()),
+                OriginAuthorEpoch = reader.U32(),
+                FinalIssuedOriginSequence = reader.U64(),
+                MaxIssuedHlcWall = reader.U64(),
+                MaxIssuedHlcLogical = reader.U32()
+            });
+        }
         if (!reader.Eof())
-            throw new InvalidDataException("NRS1 roster contains trailing payload bytes.");
+            throw new InvalidDataException("NRS2 roster contains trailing payload bytes.");
 
         var roster = new NamespaceRosterCertificate
         {
@@ -101,6 +127,7 @@ public static class NamespaceRosterProtocol
             PreviousRosterDigest = previousDigest,
             AuthorityNodeId = authority,
             Members = members,
+            RetiredOriginEpochs = retiredOrigins,
             Signature = signature
         };
         Validate(roster);
@@ -111,7 +138,7 @@ public static class NamespaceRosterProtocol
             throw new CryptographicException("Namespace authority is not pinned with active PreShared trust.");
 
         if (!BatchSignature.Verify(trusted.PublicKey, BuildSigningPayload(payload), signature))
-            throw new CryptographicException("NRS1 namespace roster signature is invalid.");
+            throw new CryptographicException("NRS2 namespace roster signature is invalid.");
 
         return roster;
     }
@@ -127,7 +154,7 @@ public static class NamespaceRosterProtocol
         byte[] payload = EncodePayload(roster);
         if (roster.Signature is null || roster.Signature.Length != BatchSignature.SignatureSize ||
             !BatchSignature.Verify(trusted.PublicKey, BuildSigningPayload(payload), roster.Signature))
-            throw new CryptographicException("NRS1 namespace roster signature is invalid.");
+            throw new CryptographicException("NRS2 namespace roster signature is invalid.");
     }
 
     public static byte[] ComputeDigest(NamespaceRosterCertificate roster)
@@ -153,6 +180,15 @@ public static class NamespaceRosterProtocol
             writer.U32(member.TransportPeerEpoch);
             writer.U8((byte)member.Status);
             writer.U32(member.RetiredThroughEpoch);
+        }
+        writer.U16(checked((ushort)roster.RetiredOriginEpochs.Count));
+        foreach (NamespaceRetiredOriginEpoch retired in roster.RetiredOriginEpochs)
+        {
+            writer.B128(retired.OriginAuthorNodeId);
+            writer.U32(retired.OriginAuthorEpoch);
+            writer.U64(retired.FinalIssuedOriginSequence);
+            writer.U64(retired.MaxIssuedHlcWall);
+            writer.U32(retired.MaxIssuedHlcLogical);
         }
         return writer.Value();
     }
@@ -200,6 +236,30 @@ public static class NamespaceRosterProtocol
             if (previous is not null && CompareNodeIds(previous.NodeId, member.NodeId) >= 0)
                 throw new ArgumentException("Roster members must be strictly sorted by NodeId with no duplicates.", nameof(roster));
             previous = member;
+        }
+
+        ArgumentNullException.ThrowIfNull(roster.RetiredOriginEpochs);
+        if (roster.RetiredOriginEpochs.Count > MaxRetiredOriginEpochs)
+            throw new ArgumentOutOfRangeException(nameof(roster), $"Retired-origin count exceeds {MaxRetiredOriginEpochs}.");
+        NamespaceRetiredOriginEpoch? previousRetired = null;
+        foreach (NamespaceRetiredOriginEpoch retired in roster.RetiredOriginEpochs)
+        {
+            ArgumentNullException.ThrowIfNull(retired);
+            if (retired.OriginAuthorNodeId.IsZero || retired.OriginAuthorEpoch == 0 ||
+                retired.FinalIssuedOriginSequence == 0)
+                throw new ArgumentException("Retired-origin closure requires author, epoch and final issued sequence.", nameof(roster));
+            NamespaceRosterMember? authorMember = roster.Members.FirstOrDefault(member =>
+                member.NodeId == retired.OriginAuthorNodeId);
+            if (authorMember is null || authorMember.Status != NamespaceMemberStatus.Retired)
+                throw new ArgumentException("Retired-origin closure must reference an explicitly Retired roster member.", nameof(roster));
+            if (previousRetired is not null)
+            {
+                int authorOrder = CompareNodeIds(previousRetired.OriginAuthorNodeId, retired.OriginAuthorNodeId);
+                if (authorOrder > 0 || (authorOrder == 0 &&
+                    previousRetired.OriginAuthorEpoch >= retired.OriginAuthorEpoch))
+                    throw new ArgumentException("Retired-origin closures must be strictly sorted and unique by author/epoch.", nameof(roster));
+            }
+            previousRetired = retired;
         }
 
         if (roster.Signature is null || (roster.Signature.Length != 0 &&
