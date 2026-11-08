@@ -1076,7 +1076,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     return key;
                 }
 
-                byte[] ReceiptKey(NodeId author, byte batchId)
+                byte[] ReceiptKey(byte batchId)
                 {
                     byte[] suffix = new byte[38];
                     sender.WriteTo(suffix);
@@ -1114,8 +1114,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 using var write = storage.BeginWriteBatch();
                 write.Put(Key(0, Array.Empty<byte>()), System.Text.Encoding.UTF8.GetBytes(scope));
-                write.Put(ReceiptKey(authorA, 250), ReceiptValue(authorA, digestA, 41));
-                write.Put(ReceiptKey(authorB, 251), ReceiptValue(authorB, digestB, 42));
+                write.Put(ReceiptKey(250), ReceiptValue(authorA, digestA, 41));
+                write.Put(ReceiptKey(251), ReceiptValue(authorB, digestB, 42));
                 write.Put(ReceiveKey(authorA), EncodeUInt64ForTest(1));
                 write.Put(ReceiveKey(authorB), EncodeUInt64ForTest(1));
                 // The old format had one shared chain; its digest is the latest batch
