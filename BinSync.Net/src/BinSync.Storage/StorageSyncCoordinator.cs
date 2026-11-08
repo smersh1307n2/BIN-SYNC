@@ -109,9 +109,15 @@ public sealed class StorageSyncCoordinator
         var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
         ulong afterSequence = 0;
         ulong scannedThroughSequence = 0;
+        ulong lastFrozenFeedSequence = 0;
+        ulong cutoverNodeOutboxHigh = 0;
         int totalChanges = 0;
         bool sawStableChangeId = false;
         bool sawLegacyChangeId = false;
+        bool metadataStoreOwnsOutbound = _provider is IProviderPublicationMode initialPublicationMode &&
+            initialPublicationMode.TryGetMetadataStoreOwnedPublicationCutover(out cutoverNodeOutboxHigh);
+        if (metadataStoreOwnsOutbound && (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId)))
+            throw new InvalidOperationException("Provider publication cutover exists but the durable Metadata Store scope is not attached.");
 
         // Drain the complete currently-pending provider feed, not just one page.
         // The winner map is bounded by distinct record/field identities rather than
@@ -136,6 +142,25 @@ public sealed class StorageSyncCoordinator
                     throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
                 sawStableChangeId |= !change.ChangeId.IsZero;
                 sawLegacyChangeId |= change.ChangeId.IsZero;
+                if (metadataStoreOwnsOutbound)
+                {
+                    if (change.ChangeId.IsZero)
+                        throw new InvalidDataException("Metadata-Store-owned publication requires stable provider ChangeIds.");
+                    if (_metadataStore!.TryGetOutboundChangeFingerprint(
+                        _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out byte[] frozenFingerprint))
+                    {
+                        byte[] actualFingerprint = ComputeMetadataFingerprint(change);
+                        if (!frozenFingerprint.AsSpan().SequenceEqual(actualFingerprint))
+                            throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
+                        lastFrozenFeedSequence = change.Sequence;
+                        // Any non-frozen rows before this frozen source sequence were
+                        // already coalesced away by the earlier successful freeze.
+                        winners.Clear();
+                        continue;
+                    }
+                    if (change.Sequence <= lastFrozenFeedSequence)
+                        throw new InvalidDataException("Provider local feed is not in strictly increasing source-sequence order.");
+                }
                 AddCoalescedPendingLocalChange(winners, change);
             }
 
@@ -146,20 +171,15 @@ public sealed class StorageSyncCoordinator
                 break;
         }
 
-        bool metadataStoreOwnsOutbound = false;
-        if (_provider is IProviderPublicationMode publicationMode &&
-            publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutoverNodeOutboxHigh))
+        if (metadataStoreOwnsOutbound)
         {
             long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
             if (currentNodeHigh < 0 || (ulong)currentNodeHigh != cutoverNodeOutboxHigh)
                 throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
-            if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
-                throw new InvalidOperationException("Provider publication cutover exists but the durable Metadata Store scope is not attached.");
-            ulong currentMetadataHigh = _metadataStore.GetOutboundHighWatermark(
+            ulong currentMetadataHigh = _metadataStore!.GetOutboundHighWatermark(
                 _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
             if (currentMetadataHigh < cutoverNodeOutboxHigh)
                 throw new InvalidDataException("Metadata Store outbound watermark regressed below the provider cutover fence.");
-            metadataStoreOwnsOutbound = true;
         }
         else if (_metadataStore is not null && !string.IsNullOrWhiteSpace(_scopeId))
         {
@@ -260,6 +280,51 @@ public sealed class StorageSyncCoordinator
         if (installProviderSnapshot)
             InstallProviderSnapshot(persistNode);
         return totalChanges;
+    }
+
+    private byte[] ComputeMetadataFingerprint(ProviderChange change)
+    {
+        ProviderMutation mutation = change.Mutation;
+        object op;
+        byte opKind;
+        if (mutation.IsRecordTombstone)
+        {
+            op = new OpRecordTombstone
+            {
+                RecordId = mutation.RecordId,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1
+            };
+            opKind = OpsConst.TagRecordTomb;
+        }
+        else if (mutation.IsTombstone)
+        {
+            op = new OpFieldTomb
+            {
+                FieldId = mutation.FieldId,
+                KeyEpoch = mutation.KeyEpoch,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1
+            };
+            opKind = OpsConst.TagFieldTomb;
+        }
+        else
+        {
+            op = new OpFieldWrite
+            {
+                FieldId = mutation.FieldId,
+                KeyEpoch = mutation.KeyEpoch,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1,
+                Value = mutation.Value
+            };
+            opKind = OpsConst.TagFieldWrite;
+        }
+        return ChangeIdentity.Fingerprint(
+            _namespaceId, mutation.RecordId, opKind, op, _node.NodeId, Array.Empty<BatchId>()).ToArray();
     }
 
     private MetadataFrozenOperation CreateMetadataFrozenOperation(ProviderChange change)
