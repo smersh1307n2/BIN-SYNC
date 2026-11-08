@@ -734,4 +734,71 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Assert.Throws<IOException>(() => StorageDatabase.Open(alias, 90));
     }
 
+
+    [Fact]
+    public void Provider_v3_marker_is_written_and_legacy_unmarked_rows_fail_closed()
+    {
+        string directory = Path.Combine(_root, "provider-v3-marker");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using (var provider = new StorageDataProvider(directory, partitionId: 92, deleteOnDispose: false))
+            {
+                provider.AppendLocalChange(Mutation(1, 1, 100, 1));
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 92))
+            {
+                Assert.True(storage.TryGet(new byte[] { 0x25 }, out var marker));
+                Assert.Equal(new byte[] { 0x42, 0x53, 0x50, 0x33 }, marker);
+            }
+
+            string legacyDirectory = Path.Combine(_root, "provider-unmarked-legacy");
+            Directory.CreateDirectory(legacyDirectory);
+            using (var storage = StorageDatabase.Open(legacyDirectory, 93))
+            {
+                using var batch = storage.BeginWriteBatch();
+                batch.Put(new byte[] { 0x21 }, new byte[8]);
+                batch.Commit();
+            }
+            Assert.Throws<InvalidDataException>(() =>
+                new StorageDataProvider(legacyDirectory, partitionId: 93, deleteOnDispose: true));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+            try { Directory.Delete(Path.Combine(_root, "provider-unmarked-legacy"), recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Provider_v3_feed_rejects_mutation_rows_without_stable_change_id()
+    {
+        string directory = Path.Combine(_root, "provider-v3-feed-identity");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using (var provider = new StorageDataProvider(directory, partitionId: 94, deleteOnDispose: false))
+                provider.AppendLocalChange(Mutation(1, 1, 100, 1));
+
+            using (var storage = StorageDatabase.Open(directory, 94))
+            {
+                byte[] key = new byte[] { 0x20, 0, 0, 0, 0, 0, 0, 0, 1 };
+                Assert.True(storage.TryGet(key, out var value));
+                Assert.NotNull(value);
+                Assert.True(value!.Length >= 69);
+                using var batch = storage.BeginWriteBatch();
+                batch.Put(key, value.AsSpan(0, value.Length - 16));
+                batch.Commit();
+            }
+
+            using var reopened = new StorageDataProvider(directory, partitionId: 94, deleteOnDispose: false);
+            Assert.Throws<InvalidDataException>(() => reopened.ReadLocalChanges(0, 10));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
