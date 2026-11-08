@@ -1,0 +1,107 @@
+name: Metadata Retry Comparison
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feature/fld-external-storage"]
+    paths:
+      - ".github/workflows/metadata-retry-comparison.yml"
+      - "BinSync.Net/bench/BinSync.Bench/MetadataCoordinatorRetryScanBench.cs"
+      - "BinSync.Net/src/BinSync.Storage/StorageSyncCoordinator.cs"
+      - "BinSync.Net/src/BinSync.Core/Production/Node.ProviderSnapshot.cs"
+      - "scripts/vendor-ed25519-from-ztsharp.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  compare-retry-paths:
+    name: Full-snapshot baseline vs incremental provider cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      BASELINE_SHA: 8e6833e5aa5fe7086dbd72b18cf71e45f30169c9
+    steps:
+      - name: Checkout current branch with history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Create baseline worktree
+        run: git worktree add --detach "$RUNNER_TEMP/baseline" "$BASELINE_SHA"
+
+      - name: Run full-snapshot baseline
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/baseline"
+          bash scripts/vendor-ed25519-from-ztsharp.sh
+          cd BinSync.Net
+          rm -rf BenchmarkDotNet.Artifacts
+          dotnet restore bench/BinSync.Bench/BinSync.Bench.csproj
+          dotnet run --configuration Release --project bench/BinSync.Bench -- --coordinator-retry-only
+          mkdir -p "$GITHUB_WORKSPACE/comparison-results/baseline"
+          cp -a BenchmarkDotNet.Artifacts/. "$GITHUB_WORKSPACE/comparison-results/baseline/"
+
+      - name: Run incremental implementation
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          bash scripts/vendor-ed25519-from-ztsharp.sh
+          cd BinSync.Net
+          rm -rf BenchmarkDotNet.Artifacts
+          dotnet restore bench/BinSync.Bench/BinSync.Bench.csproj
+          dotnet run --configuration Release --project bench/BinSync.Bench -- --coordinator-retry-only
+          mkdir -p "$GITHUB_WORKSPACE/comparison-results/incremental"
+          cp -a BenchmarkDotNet.Artifacts/. "$GITHUB_WORKSPACE/comparison-results/incremental/"
+
+      - name: Summarize matched-runner comparison
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import csv, re
+          from pathlib import Path
+          report = "results/BinSync.Bench.MetadataCoordinatorRetryScanBench-report.csv"
+          def load(kind):
+              path = Path("comparison-results") / kind / report
+              with path.open(newline="") as stream:
+                  return {int(row["PendingFeedRows"]): row for row in csv.DictReader(stream)}
+          baseline = load("baseline")
+          incremental = load("incremental")
+          def number(value):
+              match = re.fullmatch(r"\s*([0-9.]+)\s*(ns|us|µs|ms)\s*", value)
+              if not match: raise ValueError(value)
+              factor = {"ns": 1e-6, "us": 1e-3, "µs": 1e-3, "ms": 1.0}[match.group(2)]
+              return float(match.group(1)) * factor
+          def kib(value):
+              match = re.fullmatch(r"\s*([0-9.]+)\s*(B|KB|MB)\s*", value)
+              if not match: raise ValueError(value)
+              factor = {"B": 1/1024, "KB": 1.0, "MB": 1024.0}[match.group(2)]
+              return float(match.group(1)) * factor
+          print("## Same-runner coordinator retry comparison")
+          print("Baseline: full provider snapshot rehydration at " + __import__("os").environ["BASELINE_SHA"])
+          print("Both versions ran sequentially on this workflow job with the same Ubuntu runner and .NET 10 SDK.")
+          print("| Feed rows | Baseline ms | Incremental ms | Latency reduction | Baseline KB | Incremental KB | Allocation reduction |")
+          print("|---:|---:|---:|---:|---:|---:|---:|")
+          for size in (256, 1024, 4096):
+              old, new = baseline[size], incremental[size]
+              old_ms, new_ms = number(old["Mean"]), number(new["Mean"])
+              old_kb, new_kb = kib(old["Allocated"]), kib(new["Allocated"])
+              print(f"| {size} | {old_ms:.3f} | {new_ms:.3f} | {(old_ms-new_ms)/old_ms*100:.1f}% | {old_kb:.1f} | {new_kb:.1f} | {(old_kb-new_kb)/old_kb*100:.1f}% |")
+          PY
+
+      - name: Upload raw comparison reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-retry-comparison
+          path: comparison-results
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Remove baseline worktree
+        if: always()
+        run: git worktree remove --force "$RUNNER_TEMP/baseline" || true
