@@ -58,11 +58,11 @@ public sealed class StorageSyncCoordinator
 
     /// <summary>
     /// Publish this member's signed contiguous applied-origin frontier. The scan
-    /// scans only the durable ChangeId ledger, so coalesced, unpublished local drafts
-    /// cannot create phantom origin sequence gaps. Call after local freeze and remote apply.
+    /// scans the durable ChangeId ledger for applied origins and separately reports
+    /// pending provider drafts as a barrier; drafts never consume OriginSequence. Call after local freeze and remote apply.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
-        byte[] memberSeed)
+        byte[] memberSeed, int pageSize = 1024)
     {
         ArgumentNullException.ThrowIfNull(memberSeed);
         if (memberSeed.Length != 32)
@@ -82,8 +82,36 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidOperationException("No accepted namespace roster is available.");
             NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
 
+            if (pageSize <= 0 || pageSize > 4096)
+                throw new ArgumentOutOfRangeException(nameof(pageSize));
+            ulong unpublishedDraftCount = 0;
+            ulong maxDraftHlcWall = 0;
+            uint maxDraftHlcLogical = 0;
+            ulong afterSequence = 0;
+            while (true)
+            {
+                ProviderChangePage page = _provider.ReadLocalChanges(afterSequence, pageSize);
+                foreach (ProviderChange change in page.Changes)
+                {
+                    ProviderMutation mutation = change.Mutation
+                        ?? throw new InvalidDataException("Provider feed contains a null draft mutation.");
+                    unpublishedDraftCount = checked(unpublishedDraftCount + 1);
+                    if (mutation.HlcWall > maxDraftHlcWall ||
+                        (mutation.HlcWall == maxDraftHlcWall && mutation.HlcLogical > maxDraftHlcLogical))
+                    {
+                        maxDraftHlcWall = mutation.HlcWall;
+                        maxDraftHlcLogical = mutation.HlcLogical;
+                    }
+                }
+                if (page.ScannedThroughSequence <= afterSequence ||
+                    page.Changes.Count < pageSize)
+                    break;
+                afterSequence = page.ScannedThroughSequence;
+            }
+
             return metadataStore.PublishAppliedOriginFrontier(
-                _scopeId, _node.NodeId, roster, memberSeed);
+                _scopeId, _node.NodeId, roster, unpublishedDraftCount,
+                maxDraftHlcWall, maxDraftHlcLogical, memberSeed);
         }
     }
 
