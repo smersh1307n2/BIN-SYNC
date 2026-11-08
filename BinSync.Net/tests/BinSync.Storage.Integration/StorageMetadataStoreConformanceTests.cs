@@ -84,7 +84,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 using var snapshot = storage.OpenSnapshot();
                 var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
-                var payloadRow = Assert.Single(rows.Where(row => row.Key[root.Length] == 21));
+                var payloadRow = Assert.Single(rows, row => row.Key[root.Length] == 21);
                 Assert.Equal(20 + payload.Length, payloadRow.Value.Length);
                 Assert.Equal(Batch(89), BatchId.From(payloadRow.Value.AsSpan(0, 16)));
                 Assert.Equal(payload.Length, BinaryPrimitives.ReadInt32LittleEndian(payloadRow.Value.AsSpan(16)));
