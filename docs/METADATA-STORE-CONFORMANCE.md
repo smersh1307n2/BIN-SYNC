@@ -298,4 +298,4 @@ The Storage coordinator requires this optional capability before enabling provid
 
 Conformance/recovery edge now covered: metadata freeze commits, provider feed ACK is interrupted, a newer edit to the same field arrives, and retry must retain the earlier frozen ChangeId while appending only the later unfrozen suffix. The regression verifies the exact two ChangeIds, outbound sequence order, provider feed ACK and unchanged Node Outbox watermark.
 
-Verified at BIN-SYNC source/test head `4c4789f06150dd07457adb207dc84879fdea4bd4`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases, 70.9% line coverage; in-process and real-TCP Storage samples pass. Later optional-capability refactoring preserves the base `IMetadataStore` contract and is being revalidated by the current PR checks.
+Verified at BIN-SYNC code/test head `77e7f9e648111671fa200a19bf2a1508b6b993bb`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases, 70.9% line coverage; in-process and real-TCP Storage samples pass. The optional-capability refactor preserves the base `IMetadataStore` contract and is included in these passing checks.
