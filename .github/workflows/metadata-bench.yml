@@ -75,6 +75,10 @@ jobs:
             echo "No BenchmarkDotNet result reports were produced."
             exit 1
           fi
+          if ! grep -q "MetadataStoreMillionRowBench" "${reports[@]}"; then
+            echo "The one-million-row metadata benchmark did not produce a report."
+            exit 1
+          fi
           if grep -F -n '| NA |' "${reports[@]}"; then
             echo "One or more metadata benchmark cases failed."
             exit 1
