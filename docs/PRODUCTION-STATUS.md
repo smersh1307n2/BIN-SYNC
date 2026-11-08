@@ -124,13 +124,13 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 **Remaining:** complete runtime-wide Node/Transport authority removal (legacy Node-backed transport and other-author relay Outbox state remain), deterministic physical Storage crash injection/power-loss cuts, controlled large-partition and end-to-end retry-scan benchmarks, independent receipt/ChangeId/tombstone GC horizons, and normative cross-implementation conformance. FLD Database and its JournalSeq provenance adapter remain deferred. The direct frozen-ChangeId lookup now has a zero-allocation scaling benchmark; this does not yet measure the complete retry scan.
 
 
-## Latest continuation checkpoint — WAL writer-fence hang guard (2026-11-08)
+## Latest continuation checkpoint — coordinator process-kill crash cuts (2026-11-08)
 
-- Code/test HEAD: 532baa0010140b799f3759e1c88d0c722cdf6727.
-- The experimental file-share WAL lease was reverted after a cross-process lock/test stall. The current single-writer fence is again a named OS-managed Mutex, acquired/released on its dedicated process-wide manager thread.
-- The cross-process tests now target the actual testhost PID for abrupt termination and unconditionally release/kill child processes with bounded waits before deleting their temporary directories.
-- Storage Integration invokes dotnet test with --blame-hang-timeout 3m --blame-hang-dump-type mini, so a future hang yields diagnostics.
-- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 122/122 on Ubuntu and Windows; in-memory and real-TCP samples pass. macOS-15 Storage Integration remains queued and is not yet counted as a completed platform.
+- Code/test HEAD: ea8642e729dbc487f0b6f727d897e81a9d280278.
+- The experimental file-share WAL lease was reverted after a cross-process lock/test stall. The current single-writer fence is a named OS-managed Mutex, acquired/released on its dedicated process-wide manager thread.
+- Cross-process tests target the actual testhost PID and have unconditional child-process cleanup with bounded waits. Storage Integration uses --blame-hang-timeout 3m --blame-hang-dump-type mini to capture diagnostics for any future hang.
+- Added actual process-kill/reopen coverage at two receive boundaries: after durable Node checkpoint but before provider apply, and after provider commit but before Metadata Store finalization. Recovery replays the PendingApply intent and uses the provider ApplyToken idempotently.
+- Verified: BIN-SYNC Core Release 648/648; Fuzz + Lab 31/31; line coverage 70.4%; Storage Integration 125/125 independently on Ubuntu, Windows and macOS-15; in-memory and real-TCP samples pass on all three platforms.
 - PR #16 remains Draft/open/unmerged.
 
-**Remaining:** coordinator-level process-kill/reopen coverage across PendingApply → Node checkpoint → provider apply → Metadata Store finalization → ACK; true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
+**Remaining:** process-kill cuts immediately after PendingApply staging but before Node apply, and after Metadata Store finalization but before network ACK; true physical power-loss/I/O fault injection; retirement of legacy Node-owned receive/transport and other-author relay state; receipt/dedup/tombstone GC horizons; and FLD JournalSeq provenance/atomic staging integration. The two-DLL decision remains Fld1.Storage.dll plus Fld1.Database.dll.
