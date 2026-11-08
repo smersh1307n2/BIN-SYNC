@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current branch head at this progress update: e6826b4865f8966327a628ae07e95720db58d0ff. CI is still RED on the current implementation work; the last completed test evidence is 640 passed / 14 failed before the latest fixture corrections. Build and Fuzz/Lab did run on that preceding commit.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Current implementation checkpoint: 0d873a17344a4cda9e976dfe37670274352eb1cb. CI for this checkpoint is running; Build has passed in Core and on the Linux/macOS Storage jobs, but tests and remaining jobs are not complete. Do not infer a green result yet.
 
 ## 1. Target architecture
 
@@ -23,7 +23,7 @@ Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] m
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Reviewed head: 56d5142c1a2f7050663a418d4882def50787c1e5 (continuation docs + strict Storage decoder package); branch is 28 commits ahead of ae5db37ca4e5c32fe71d320a62c831260ea53fdb.
+- Reviewed head before the current persistence fix: 56d5142c1a2f7050663a418d4882def50787c1e5; current code fix: 0d873a17344a4cda9e976dfe37670274352eb1cb.
 - The PR merge snapshot a852206fc245c2a0f7469d0e18d19415a2b2c528 failed Build because Node.DeltaBatch.cs:861-862 read Origin fields from a 3-field tuple.
 - The later e6826b4865f8966327a628ae07e95720db58d0ff snapshot completed Build, but Test, Fuzz/Lab and Storage Integration workflows were cancelled before completion.
 - The latest strict-decoder commits have no reported workflow result yet. CI is therefore UNVERIFIED, not green.
@@ -192,3 +192,13 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Updated the baseline to reviewed head `56d5142c1a2f7050663a418d4882def50787c1e5`; 28 commits ahead of `ae5db37`, no divergence.
 - [x] Corrected the distinction between the old merge-build failure, the later successful compile, cancelled test workflows, and the unverified decoder package.
 - [ ] Obtain a complete, non-cancelled CI result for this exact head before treating any tests as passed.
+
+
+### 2026-11-08 — BMS3 first-write identity consistency
+
+- [x] Audited every StorageKey(root, 0, ...) partition-identity write in StorageMetadataStore.
+- [x] Found six first-write paths still persisting raw UTF-8 ScopeId while the v3 decoder requires the canonical BMS3 marker + exact scope length + scope bytes.
+- [x] Replaced all six with the single EncodePartitionIdentity(partitionKey) encoder. This covers first writes via incoming receipt/batch finalization, outbound freeze, outbound lease, PendingApply, peer metadata delta, and peer stream baseline.
+- [x] Existing PendingApply restart conformance test exercises the first-write/reopen path; broader storage integration tests are running.
+- [ ] Close this gate only after Storage Integration passes on Windows/Linux/macOS and Core tests remain green on the same source commit.
+- [ ] Continue auditing all persistence paths for first-write identity, marker validation and crash/reopen consistency.
