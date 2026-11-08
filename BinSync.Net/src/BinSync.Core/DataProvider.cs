@@ -43,9 +43,11 @@ public interface IProviderPublicationMode
 
 /// <summary>
 /// Optional provider capability for an authenticated authoritative FULL_REPLACE.
-/// The caller validates the roster certificate and snapshot generation before
-/// invoking this API. Staging is invisible until CommitFullReplace atomically
-/// switches the provider's active generation.
+/// The caller validates the roster/snapshot certificate, serializes the switch against
+/// remote APPLY, and proves no unresolved PendingApply, relay reservation, provider
+/// intent or reader pin depends on the old generation before invoking this API.
+/// Staging is invisible until CommitFullReplace atomically switches the active
+/// generation. Old generations are retained; this API does not authorize GC.
 /// </summary>
 public interface IProviderFullReplace
 {
