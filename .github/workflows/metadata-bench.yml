@@ -40,6 +40,15 @@ jobs:
           --filter '*Metadata*'
           --artifacts BenchmarkDotNet.Artifacts
 
+      - name: Run coordinator retry-scan benchmark
+        working-directory: BinSync.Net
+        run: >
+          dotnet run --configuration Release
+          --project bench/BinSync.Bench
+          --
+          --filter '*MetadataCoordinatorRetryScanBench*'
+          --artifacts BenchmarkDotNet.RetryArtifacts
+
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net
         run: |
@@ -53,6 +62,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: durable-metadata-benchmarks
-          path: BinSync.Net/BenchmarkDotNet.Artifacts
+          path: |
+            BinSync.Net/BenchmarkDotNet.Artifacts
+            BinSync.Net/BenchmarkDotNet.RetryArtifacts
           retention-days: 30
           if-no-files-found: warn
