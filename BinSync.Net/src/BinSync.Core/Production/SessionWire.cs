@@ -122,7 +122,7 @@ public static class SessionWire
         try
         {
             var w = new Writer(rented);
-            w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
+            w.B128(h.NodeId).U32((uint)h.Epoch).U16(ProtocolMajor).U32((uint)h.Capabilities);
             return FrameCodec.BuildFrame(TypeHelloAck, ControlStreamId, 2, w.WrittenSpan);
         }
         finally
