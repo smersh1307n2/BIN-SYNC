@@ -8,7 +8,7 @@ namespace BinSync.Storage;
 /// <summary>
 /// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
-public class StorageDataProvider : IDataProvider, IProviderPublicationMode
+public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace
 {
     private const byte ItemMap = 0x01;
     private const byte ItemReverse = 0x02;
@@ -23,12 +23,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private const byte ProviderPublicationMode = 0x24;
     private const byte ProviderFormatMarker = 0x25;
     private const byte ActiveGeneration = 0x26;
+    private const byte FullReplaceSession = 0x41;
     private const byte ApplyReceipt = 0x30;
     private static ReadOnlySpan<byte> ProviderFormatV3 => [0x42, 0x53, 0x50, 0x33];
     private static readonly byte[] ProviderOwnedPrefixes =
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
          LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
-         ProviderPublicationMode, ActiveGeneration, ApplyReceipt];
+         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt];
 
     private readonly object _gate;
     private readonly StorageDatabase _storage;
@@ -39,6 +40,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private bool _disposed;
 
     private sealed record ProviderSnapshotState(ulong LocalHighWatermark, StorageEntry[] Entries);
+    private sealed record FullReplaceState(int ExpectedCount, ulong SourceFeedWatermark,
+        byte[] ExpectedDigest, int NextIndex, bool IsCommitted, byte[] LastSortKey);
 
     public StorageDataProvider(string directory, ulong partitionId = 1, bool deleteOnDispose = false)
     {
@@ -348,6 +351,203 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             batch.Put(receiptKey, fingerprint);
             batch.Commit();
             return new ProviderApplyReceipt(applyToken, fingerprint, IsDuplicate: false);
+        }
+    }
+
+    /// <summary>
+    /// Compute the canonical digest expected by BeginFullReplace. Mutations are sorted
+    /// by RecordId, then record tombstone before fields, then FieldId. Duplicate
+    /// snapshot identities are rejected instead of being silently collapsed.
+    /// </summary>
+    public static byte[] ComputeFullReplaceDigest(
+        Guid generation, ulong sourceChangeFeedWatermark,
+        IEnumerable<ProviderMutation> mutations)
+    {
+        if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+        ArgumentNullException.ThrowIfNull(mutations);
+        var ordered = mutations.ToArray();
+        if (ordered.Length > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(mutations));
+        foreach (var mutation in ordered) ValidateMutation(mutation);
+        Array.Sort(ordered, CompareSnapshotOrder);
+        for (int i = 1; i < ordered.Length; i++)
+            if (CompareSnapshotOrder(ordered[i - 1], ordered[i]) == 0)
+                throw new InvalidDataException("Full-replace snapshot contains duplicate record/field identities.");
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        AppendFullReplaceHeader(hash, generation, sourceChangeFeedWatermark, ordered.Length);
+        foreach (var mutation in ordered)
+            hash.AppendData(EncodeMutation(mutation));
+        return hash.GetHashAndReset();
+    }
+
+    /// <summary>Start or idempotently resume staging one authoritative replacement generation.</summary>
+    public void BeginFullReplace(Guid generation, ulong sourceChangeFeedWatermark,
+        int expectedEntryCount, ReadOnlyMemory<byte> expectedDigest)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            if (expectedEntryCount < 0) throw new ArgumentOutOfRangeException(nameof(expectedEntryCount));
+            if (expectedDigest.Length != 32) throw new ArgumentException("Full-replace digest must be SHA-256.", nameof(expectedDigest));
+            if (ReadActiveGeneration(_storage) == generation)
+                throw new InvalidOperationException("Full-replace generation is already active.");
+
+            byte[] sessionKey = FullReplaceSessionKey(generation);
+            using var snapshot = _storage.OpenSnapshot();
+            if (snapshot.TryGet(sessionKey, out var existingBytes))
+            {
+                FullReplaceState existing = DecodeFullReplaceState(existingBytes!);
+                if (existing.ExpectedCount != expectedEntryCount ||
+                    existing.SourceFeedWatermark != sourceChangeFeedWatermark ||
+                    !existing.ExpectedDigest.AsSpan().SequenceEqual(expectedDigest.Span))
+                    throw new InvalidDataException("Full-replace generation was reused with conflicting manifest data.");
+                return;
+            }
+
+            if (snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, 1).Count != 0 ||
+                snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, 1).Count != 0)
+                throw new InvalidDataException("Full-replace generation has orphaned staged rows without a session manifest.");
+
+            using var batch = _storage.BeginWriteBatch();
+            if (_storage.LastCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
+            batch.Put(sessionKey, EncodeFullReplaceState(new FullReplaceState(
+                expectedEntryCount, sourceChangeFeedWatermark, expectedDigest.ToArray(),
+                0, false, new byte[19])));
+            batch.Commit();
+        }
+    }
+
+    /// <summary>Stage one contiguous, canonically ordered page; staged rows remain invisible until commit.</summary>
+    public void StageFullReplacePage(Guid generation, int startIndex,
+        IReadOnlyList<ProviderMutation> entries)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ArgumentNullException.ThrowIfNull(entries);
+            if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            if (startIndex < 0) throw new ArgumentOutOfRangeException(nameof(startIndex));
+            if (entries.Count == 0) throw new ArgumentException("Full-replace page must not be empty.", nameof(entries));
+
+            using var snapshot = _storage.OpenSnapshot();
+            byte[] sessionKey = FullReplaceSessionKey(generation);
+            if (!snapshot.TryGet(sessionKey, out var stateBytes))
+                throw new InvalidOperationException("Full-replace generation has not been begun.");
+            FullReplaceState state = DecodeFullReplaceState(stateBytes!);
+            if (state.IsCommitted) throw new InvalidOperationException("Committed full-replace generation cannot accept more pages.");
+            if (startIndex != state.NextIndex)
+                throw new InvalidDataException("Full-replace page is not contiguous with the durable staging cursor.");
+            if (entries.Count > state.ExpectedCount - state.NextIndex)
+                throw new InvalidDataException("Full-replace page exceeds the declared snapshot entry count.");
+
+            using var batch = _storage.BeginWriteBatch();
+            byte[] lastSortKey = state.LastSortKey;
+            for (int i = 0; i < entries.Count; i++)
+            {
+                ProviderMutation mutation = entries[i];
+                ValidateMutation(mutation);
+                byte[] sortKey = FullReplaceSortKey(mutation);
+                if (state.NextIndex + i > 0 &&
+                    lastSortKey.AsSpan().SequenceCompareTo(sortKey) >= 0)
+                    throw new InvalidDataException("Full-replace pages must be strictly ordered and contain no duplicate identities.");
+                byte[] rowKey = mutation.IsRecordTombstone
+                    ? CurrentRecordTombstoneKey(generation, mutation.RecordId)
+                    : CurrentKey(generation, mutation.RecordId, mutation.FieldId);
+                if (batch.TryGet(rowKey, out _))
+                    throw new InvalidDataException("Full-replace snapshot contains a duplicate record/field row.");
+                batch.Put(rowKey, EncodeMutation(mutation));
+                lastSortKey = sortKey;
+            }
+
+            FullReplaceState updated = state with
+            {
+                NextIndex = checked(state.NextIndex + entries.Count),
+                LastSortKey = lastSortKey
+            };
+            batch.Put(sessionKey, EncodeFullReplaceState(updated));
+            if (_storage.LastCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
+            batch.Commit();
+        }
+    }
+
+    /// <summary>
+    /// Verify the complete staged image and atomically switch the active generation.
+    /// The old generation is retained; reclamation is a separate, explicit operation.
+    /// </summary>
+    public void CommitFullReplace(Guid generation)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            using var snapshot = _storage.OpenSnapshot();
+            byte[] sessionKey = FullReplaceSessionKey(generation);
+            if (!snapshot.TryGet(sessionKey, out var stateBytes))
+                throw new InvalidOperationException("Full-replace generation has not been begun.");
+            FullReplaceState state = DecodeFullReplaceState(stateBytes!);
+            Guid active = ReadActiveGeneration(snapshot);
+            if (state.IsCommitted)
+            {
+                if (active != generation)
+                    throw new InvalidDataException("Committed full-replace manifest does not match the active generation.");
+                return;
+            }
+            if (state.NextIndex != state.ExpectedCount)
+                throw new InvalidOperationException("Full-replace snapshot is incomplete.");
+
+            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
+            var tombstones = snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
+            StorageEntry[] ordered = MergeSnapshotEntries(fields, tombstones);
+            if (ordered.Length != state.ExpectedCount)
+                throw new InvalidDataException("Full-replace staged row count differs from the signed manifest.");
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            AppendFullReplaceHeader(hash, generation, state.SourceFeedWatermark, ordered.Length);
+            foreach (var entry in ordered)
+            {
+                ProviderMutation mutation = DecodeMutation(entry.Value);
+                hash.AppendData(EncodeMutation(mutation));
+            }
+            byte[] actualDigest = hash.GetHashAndReset();
+            if (!CryptographicOperations.FixedTimeEquals(actualDigest, state.ExpectedDigest))
+                throw new InvalidDataException("Full-replace staged image digest does not match its manifest.");
+
+            using var batch = _storage.BeginWriteBatch();
+            if (_storage.LastCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
+            byte[] generationBytes = new byte[16];
+            generation.TryWriteBytes(generationBytes);
+            batch.Put([ActiveGeneration], generationBytes);
+            batch.Put(sessionKey, EncodeFullReplaceState(state with { IsCommitted = true }));
+            batch.Commit();
+        }
+    }
+
+    /// <summary>Discard an uncommitted staged generation without changing active application state.</summary>
+    public void AbortFullReplace(Guid generation)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (generation == Guid.Empty) throw new ArgumentException("Full-replace generation must be non-empty.", nameof(generation));
+            if (ReadActiveGeneration(_storage) == generation)
+                throw new InvalidOperationException("The active full-replace generation cannot be aborted.");
+            using var snapshot = _storage.OpenSnapshot();
+            byte[] sessionKey = FullReplaceSessionKey(generation);
+            if (!snapshot.TryGet(sessionKey, out var stateBytes)) return;
+            if (DecodeFullReplaceState(stateBytes!).IsCommitted)
+                throw new InvalidOperationException("Committed full-replace generation cannot be aborted.");
+            var fields = snapshot.ScanPrefix(CurrentPrefix(CurrentField, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
+            var tombstones = snapshot.ScanPrefix(CurrentPrefix(CurrentRecordTombstone, generation), ReadOnlySpan<byte>.Empty, int.MaxValue);
+            using var batch = _storage.BeginWriteBatch();
+            foreach (var row in fields) batch.Delete(row.Key);
+            foreach (var row in tombstones) batch.Delete(row.Key);
+            batch.Delete(sessionKey);
+            if (_storage.LastCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
+            batch.Commit();
         }
     }
 
@@ -711,6 +911,63 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         if (left.IsRecordTombstone != right.IsRecordTombstone)
             return left.IsRecordTombstone ? -1 : 1;
         return left.FieldId.CompareTo(right.FieldId);
+    }
+
+    private static byte[] FullReplaceSessionKey(Guid generation)
+    {
+        byte[] key = new byte[17];
+        key[0] = FullReplaceSession;
+        generation.TryWriteBytes(key.AsSpan(1));
+        return key;
+    }
+
+    private static byte[] FullReplaceSortKey(ProviderMutation mutation)
+    {
+        byte[] key = new byte[19];
+        mutation.RecordId.WriteTo(key);
+        key[16] = mutation.IsRecordTombstone ? (byte)0 : (byte)1;
+        BinaryPrimitives.WriteUInt16BigEndian(key.AsSpan(17), mutation.IsRecordTombstone ? (ushort)0 : mutation.FieldId);
+        return key;
+    }
+
+    private static void AppendFullReplaceHeader(IncrementalHash hash, Guid generation,
+        ulong sourceChangeFeedWatermark, int count)
+    {
+        hash.AppendData("BIN-SYNC/FULL-REPLACE/v1"u8);
+        Span<byte> header = stackalloc byte[28];
+        generation.TryWriteBytes(header[..16]);
+        BinaryPrimitives.WriteUInt64LittleEndian(header[16..24], sourceChangeFeedWatermark);
+        BinaryPrimitives.WriteInt32LittleEndian(header[24..28], count);
+        hash.AppendData(header);
+    }
+
+    private static byte[] EncodeFullReplaceState(FullReplaceState state)
+    {
+        if (state.ExpectedDigest.Length != 32 || state.LastSortKey.Length != 19)
+            throw new InvalidDataException("Full-replace state has an invalid fixed-width field.");
+        byte[] bytes = new byte[69];
+        bytes[0] = 1;
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(1), state.ExpectedCount);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(5), state.SourceFeedWatermark);
+        state.ExpectedDigest.CopyTo(bytes, 13);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(45), state.NextIndex);
+        bytes[49] = state.IsCommitted ? (byte)1 : (byte)0;
+        state.LastSortKey.CopyTo(bytes, 50);
+        return bytes;
+    }
+
+    private static FullReplaceState DecodeFullReplaceState(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length != 69 || bytes[0] != 1 || bytes[49] > 1)
+            throw new InvalidDataException("Stored full-replace session manifest is malformed.");
+        int expected = BinaryPrimitives.ReadInt32LittleEndian(bytes[1..]);
+        int next = BinaryPrimitives.ReadInt32LittleEndian(bytes[45..]);
+        if (expected < 0 || next < 0 || next > expected)
+            throw new InvalidDataException("Stored full-replace staging cursor is invalid.");
+        return new FullReplaceState(expected,
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes[5..]),
+            bytes.Slice(13, 32).ToArray(), next, bytes[49] != 0,
+            bytes.Slice(50, 19).ToArray());
     }
 
     private static byte[] CurrentKey(Guid generation, RecordId recordId, ushort fieldId)
