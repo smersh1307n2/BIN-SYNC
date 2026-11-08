@@ -904,6 +904,15 @@ public class ChangeIdWireTests
             batch.RecordsRoot, batch.PrevBatchDigest);
     }
 
+    private static void RehashSnapshot(Batch batch)
+    {
+        // Snapshot state roots deliberately omit operation Origin coordinates.
+        batch.RecordsRoot = Node.ComputeRecordsRoot(batch.Entries, includeOrigin: false);
+        batch.BatchDigest = Node.ComputeBatchDigest(batch.BatchId, batch.NamespaceId,
+            batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+            batch.RecordsRoot, batch.PrevBatchDigest);
+    }
+
     [Fact]
     public void ApplySnapshot_rejects_op_kind_that_disagrees_with_payload()
     {
@@ -912,7 +921,7 @@ public class ChangeIdWireTests
         Assert.True(source.WriteField(1, Fix.Rid(0x65), 0x100, new byte[] { 1 }));
         var batch = Assert.Single(source.BuildSnapshot(1));
         batch.Entries[0].OpKind = OpsConst.TagFieldTomb;
-        Rehash(batch);
+        RehashSnapshot(batch);
 
         Assert.Throws<SyncException>(() => target.ApplySnapshot(batch));
         Assert.Empty(target.Storage);
@@ -930,7 +939,7 @@ public class ChangeIdWireTests
         var tombstone = Assert.Single(batch.Entries, e =>
             Ops.DecodeOp(e.Payload).Op is OpRecordTombstone);
         tombstone.RecordId = RecordId.From(Id(0xFE));
-        Rehash(batch);
+        RehashSnapshot(batch);
 
         Assert.Throws<SyncException>(() => target.ApplySnapshot(batch));
         Assert.Empty(target.Storage);
