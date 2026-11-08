@@ -1015,7 +1015,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         try
         {
             using var provider = new StorageDataProvider(directory, partitionId: 100, deleteOnDispose: false);
-            ProviderMutation hiddenField = Mutation(130, 1, 150, 1);
+            ProviderMutation hiddenField = Mutation(130, 1, 50, 1);
             ProviderMutation recordTombstone = new()
             {
                 RecordId = hiddenField.RecordId,
