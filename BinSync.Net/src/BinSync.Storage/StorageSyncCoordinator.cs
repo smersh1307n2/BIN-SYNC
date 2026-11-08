@@ -523,56 +523,60 @@ public sealed class StorageSyncCoordinator
 
         lock (_gate)
         {
-            // Freeze provider-originated local changes first. This preserves their original
-            // Node Outbox identities before the provider snapshot replaces the data cache.
-            PublishLocalChanges(persistNode);
-
-            // One Metadata Store scope may contain multiple namespaces. This coordinator
-            // owns only its namespace; leave other coordinators' intents untouched.
-            var intents = _metadataStore.ReadPendingApplyIntents(_scopeId!, _node.NodeId)
-                .Where(intent => intent.Batch.NamespaceId == _namespaceId)
-                .ToArray();
-            if (intents.Any(intent => intent.Batch.WirePayload.Length == 0))
-                throw new InvalidOperationException(
-                    "Provider-authoritative rehydration requires replayable PendingApply wire payloads; recover legacy intents before replacing the Node cache.");
-
-            BatchId[] pendingRemoteChangeIds = intents
-                .SelectMany(intent => intent.Batch.Operations)
-                .Select(operation => operation.ChangeId)
-                .Where(changeId => !changeId.IsZero)
-                .Distinct()
-                .ToArray();
-
-            ProviderSnapshotHandle snapshot = _provider.OpenSnapshot();
-            try
-            {
-                var mutations = new List<ProviderMutation>();
-                int afterIndex = 0;
-                while (true)
-                {
-                    ProviderSnapshotPage page = _provider.ReadSnapshot(snapshot.Token, afterIndex, 512);
-                    if (page.Entries.Count > 512)
-                        throw new InvalidDataException("Provider snapshot exceeded the requested page size.");
-                    mutations.AddRange(page.Entries);
-
-                    if (page.IsComplete) break;
-                    if (page.NextIndex <= afterIndex)
-                        throw new InvalidDataException("Provider snapshot page did not advance.");
-                    afterIndex = page.NextIndex;
-                }
-
-                _node.RestoreProviderSnapshot(_namespaceId, mutations, pendingRemoteChangeIds);
-                // Persist the clean provider-derived base before replaying pending intents.
-                // If recovery is interrupted, the same durable intents can safely replay.
-                persistNode(_node);
-            }
-            finally
-            {
-                _provider.ReleaseSnapshot(snapshot.Token);
-            }
-
-            return RecoverPendingApplies(persistNode);
+            // Publish pending provider-feed changes without first rebuilding the cache;
+            // the stable Metadata Store payloads are durable before the snapshot install.
+            PublishLocalChangesCore(persistNode, 1024, installProviderSnapshot: false);
+            return InstallProviderSnapshot(persistNode);
         }
+    }
+
+    private int InstallProviderSnapshot(Action<Node> persistNode)
+    {
+        // One Metadata Store scope may contain multiple namespaces. This coordinator
+        // owns only its namespace; leave other coordinators' intents untouched.
+        var intents = _metadataStore!.ReadPendingApplyIntents(_scopeId!, _node.NodeId)
+            .Where(intent => intent.Batch.NamespaceId == _namespaceId)
+            .ToArray();
+        if (intents.Any(intent => intent.Batch.WirePayload.Length == 0))
+            throw new InvalidOperationException(
+                "Provider-authoritative rehydration requires replayable PendingApply wire payloads; recover legacy intents before replacing the Node cache.");
+
+        BatchId[] pendingRemoteChangeIds = intents
+            .SelectMany(intent => intent.Batch.Operations)
+            .Select(operation => operation.ChangeId)
+            .Where(changeId => !changeId.IsZero)
+            .Distinct()
+            .ToArray();
+
+        ProviderSnapshotHandle snapshot = _provider.OpenSnapshot();
+        try
+        {
+            var mutations = new List<ProviderMutation>();
+            int afterIndex = 0;
+            while (true)
+            {
+                ProviderSnapshotPage page = _provider.ReadSnapshot(snapshot.Token, afterIndex, 512);
+                if (page.Entries.Count > 512)
+                    throw new InvalidDataException("Provider snapshot exceeded the requested page size.");
+                mutations.AddRange(page.Entries);
+
+                if (page.IsComplete) break;
+                if (page.NextIndex <= afterIndex)
+                    throw new InvalidDataException("Provider snapshot page did not advance.");
+                afterIndex = page.NextIndex;
+            }
+
+            _node.RestoreProviderSnapshot(_namespaceId, mutations, pendingRemoteChangeIds);
+            // Persist the clean provider-derived base before replaying pending intents.
+            // If recovery is interrupted, the same durable intents can safely replay.
+            persistNode(_node);
+        }
+        finally
+        {
+            _provider.ReleaseSnapshot(snapshot.Token);
+        }
+
+        return RecoverPendingApplies(persistNode);
     }
 
     /// <summary>
