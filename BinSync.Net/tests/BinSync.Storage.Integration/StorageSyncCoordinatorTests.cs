@@ -31,7 +31,7 @@ public sealed class StorageSyncCoordinatorTests
         using var sendCts = new CancellationTokenSource();
         using var receiveCts = new CancellationTokenSource();
         var receive = acceptor.ReceiveBatchAsync(receiver,
-            beforeApply: (batch, payload, peer) =>
+            beforeApplyWithOperationDecisions: (batch, payload, peer) =>
             {
                 coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
                 throw new InvalidOperationException("simulated interruption after durable intent");
@@ -60,6 +60,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(nodeValue!.Value));
         Assert.True(provider.TryReadCurrent(record, 0x0812, out var providerValue));
         Assert.Equal("replay-after-crash", Encoding.UTF8.GetString(providerValue!.Value));
+        Assert.Equal(0, receiver.GlobalChangeLedgerCount);
     }
 
     [Fact]
@@ -91,6 +92,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("received-durably", Encoding.UTF8.GetString(providerValue!.Value));
         Assert.Empty(metadata.ReadPendingApplyIntents("durable-receive-intent", receiver.NodeId));
         Assert.Equal(new[] { sender.NodeId }, metadata.ReadRelayAuthors("durable-receive-intent", receiver.NodeId, 1));
+        Assert.Equal(0, receiver.GlobalChangeLedgerCount);
     }
 
     [Fact]
