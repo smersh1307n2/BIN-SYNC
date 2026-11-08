@@ -358,10 +358,15 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         ArgumentNullException.ThrowIfNull(operations);
 
         var seen = new HashSet<BatchId>();
+        ulong previousOriginSequence = 0;
         foreach (var operation in operations)
         {
             if (operation.ChangeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(operations));
+            if (operation.OriginAuthorEpoch == 0 || operation.OriginSequence == 0 ||
+                operation.OriginSequence <= previousOriginSequence)
+                throw new InvalidDataException("Published operation has invalid immutable Origin provenance.");
+            previousOriginSequence = operation.OriginSequence;
             ValidateDigest(operation.Fingerprint, nameof(operation.Fingerprint));
             ArgumentNullException.ThrowIfNull(operation.Payload);
             if (!seen.Add(operation.ChangeId))
@@ -410,8 +415,10 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
 
             var prior = priorEntries.FirstOrDefault(item => item.ChangeId == operation.ChangeId);
-            if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload))
-                throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
+            if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload) ||
+                prior.OriginAuthorEpoch != operation.OriginAuthorEpoch ||
+                prior.OriginSequence != operation.OriginSequence)
+                throw new InvalidDataException("Outbound ChangeId was retried with conflicting author, Origin or payload.");
             if (prior.Sequence <= previousExistingSequence)
                 throw new InvalidDataException("Previously frozen outbound operations are not in author-sequence order.");
             previousExistingSequence = prior.Sequence;
