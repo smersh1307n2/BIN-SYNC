@@ -931,8 +931,9 @@ The Storage-backed outbound source now supports a durable, explicit authority tr
 - Node is rehydrated from a stable provider snapshot and remains an application-data cache. This does not remove NodePersistence or the legacy Node-backed transport path.
 - The coordinator checks the durable global ChangeId fingerprint ledger when replaying an unacknowledged provider feed. It retains already-frozen operations and coalesces only the later unfrozen suffix. This handles the crash/interruption window where freeze commits, provider ACK fails, and a newer edit arrives before retry.
 - `StorageArrayTcpSync` enables the cutover, completes an explicit empty initial peer baseline, sends through the Metadata Store durable transport overload and verifies a post-reopen update without advancing Node Outbox.
+- `AutoReconcileWithMetadataAsync` detects the persisted cutover marker and runs provider-authoritative rehydration before anti-entropy, so a stale Node checkpoint cannot reintroduce provider-external rows.
 
-Verified at BIN-SYNC code/test head `77e7f9e648111671fa200a19bf2a1508b6b993bb`: 644 core tests, 97 Storage Integration tests, 31 Fuzz/Lab cases, 70.9% line coverage and both Storage array samples pass.
+Verified at BIN-SYNC code/test head `36463c24fc86e0d74ea9d26949798095fc2cd313`: 644 core tests, 100 Storage Integration tests, 31 Fuzz/Lab cases, 70.9% line coverage and both Storage array samples pass.
 
 **Boundary:** this is the provider-owned outbound publication slice, not complete Node/Transport replacement. Node session epoch fencing, alias resolution, runtime caches and the legacy path remain. Physical crash-cut injection, multi-process concurrency/fencing, large-partition benchmarks and independent retention/GC proofs remain open.
 
