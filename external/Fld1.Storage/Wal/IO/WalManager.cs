@@ -65,7 +65,7 @@ public sealed class WalManager : IDisposable
         string walDir, ulong partitionId, long rotateAfterBytes, Action<StorageFaultPoint>? faultInjector)
     {
         walDir = Path.GetFullPath(walDir);
-        Directory.CreateDirectory(walDir);
+        StorageDirectorySync.CreateDirectoryDurable(walDir);
         WalWriterFence writerFence = WalWriterFence.Acquire(walDir, partitionId);
         try
         {
