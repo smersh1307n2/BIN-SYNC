@@ -211,8 +211,6 @@ public sealed partial class Node
     {
         ThrowIfDisposed();
         ValidateBatchForWire(batch);
-        if (!receiveStateOwnedByMetadataStore)
-            EnsureNodeOwnedMutationAllowedInternal(batch.NamespaceId);
         if (receiveStateOwnedByMetadataStore)
         {
             if (metadataApplyOperations is null || metadataApplyOperations.Count != batch.Entries.Count)
@@ -235,6 +233,8 @@ public sealed partial class Node
         // STEP 0: namespace isolation (§3.7) — forbidden ns kills only that stream
         if (ForbiddenNamespaces.Contains(batch.NamespaceId))
             throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
+        if (!receiveStateOwnedByMetadataStore)
+            EnsureNodeOwnedMutationAllowedInternal(batch.NamespaceId);
         // STEP 0.5: epoch regression (§4.4) — SPEC CORRECTIONS (errata E-2/E-3):
         // the watermark is keyed by the RECEIVING SESSION ((sender_peer, ns)) and compares
         // against the sender's CURRENT session incarnation epoch learned from HELLO/ALIAS_MAP.
