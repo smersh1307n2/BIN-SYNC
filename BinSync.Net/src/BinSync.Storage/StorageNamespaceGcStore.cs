@@ -45,6 +45,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         localReplica.WriteTo(_identityValue.AsSpan(8 + scope.Length));
     }
 
+    internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
+
     public NamespaceRosterCertificate AcceptNamespaceRoster(ReadOnlySpan<byte> encoded, TrustStore trustStore)
     {
         ArgumentNullException.ThrowIfNull(trustStore);
