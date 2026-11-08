@@ -704,3 +704,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Added explicit `StorageSyncCoordinator.ActivateLocalAuthorEpoch(newEpoch)`. It requires the local member to be Active in the accepted roster, clears the terminal marker, installs a fresh epoch, and never permits reuse of a previously closed epoch.
 - [x C] The final-report path holds the ordered coordinator/provider commit guard while closing known epochs, checking that the feed is empty, closing the author identity and signing the final report.
 - [~ T] Verify crash/restart after provider retirement but before report persistence, report persistence before roster retirement, rejoin with a fresh epoch, and rejection of writes on every old epoch.
+
+
+### 2026-11-09 — C-pass: repair issued-origin state integration and compile blockers
+
+- [x C] Reconciled the key-kind 22 durable allocator representation: the in-memory map now consistently stores `(OriginSequence, MaxHlcWall, MaxHlcLogical)` rather than mixing the new record with the old `ulong` value type. Freeze-time increments preserve all three fields and serialize the 20-byte value.
+- [x C] Frontier projection now reads `OriginIssuedState.Sequence` and carries the persisted maximum HLC fields into OFR2.
+- [x C] Fixed nullable roster handling in the explicit author-epoch reactivation path.
+- [~ T] Exact-head CI must confirm compilation and then expose remaining behavioral/test failures. The last completed CI at `d8db149` failed at compile time on these type mismatches and nullable warnings; the repair commits are `ef75ea3` and `bcece5c`.
+- [ ] C/T: continue auditing every call site and persistence/recovery path for the 20-byte key-kind 22 record, then finish the remaining production code before the dedicated T-pass.
