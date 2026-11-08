@@ -1209,6 +1209,12 @@ public class ChangeIdWireTests
         batch.CursorEnd++;
         Rehash(batch);
 
+        byte[] malformedPayload = source.EncodeBatchPayload(batch);
+        Assert.Throws<SyncException>(() =>
+            target.DecodeBatchPayloadForMetadataAuthority(malformedPayload, source.NodeId));
+        Assert.Throws<SyncException>(() =>
+            target.PrepareBatchPayloadForMetadata(malformedPayload, source.NodeId));
+
         var error = Assert.Throws<SyncException>(() => target.ApplyBatch(batch, source.NodeId));
         Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
         Assert.Empty(target.Storage);
