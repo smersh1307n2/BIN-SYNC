@@ -104,16 +104,9 @@ public sealed partial class Node
                     }
                 }
 
-                bool found = false;
-                stream = default;
-                foreach (var kv in firstPending)
-                {
-                    long offset = ps!.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
-                    long localAck = checked(ps!.AckedFor(kv.Key) + offset);
-                    if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
-                }
-                if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
-                if (!found) return null;
+                NodeId? selectedStream = SelectNextAuthorStream(firstPending, ps!);
+                if (selectedStream is null) return null;
+                stream = selectedStream.Value;
                 wm = ps!.AckedFor(stream);
             }
 
@@ -309,6 +302,39 @@ public sealed partial class Node
         }
     }
 
+    // Select the eligible author stream with the smallest next unacknowledged
+    // sequence. A gap on one stream is only a fallback when no other stream has a
+    // contiguous next record; it must never starve a lower-cursor eligible stream.
+    private static NodeId? SelectNextAuthorStream(
+        Dictionary<NodeId, long> firstPending, PeerState peerState)
+    {
+        NodeId? bestContiguous = null;
+        long bestContiguousSequence = long.MaxValue;
+        NodeId? fallback = null;
+        long fallbackSequence = long.MaxValue;
+
+        foreach (var candidate in firstPending)
+        {
+            if (candidate.Value < fallbackSequence)
+            {
+                fallback = candidate.Key;
+                fallbackSequence = candidate.Value;
+            }
+
+            long offset = peerState.TryGetStreamOffset(candidate.Key, out var savedOffset)
+                ? savedOffset : 0;
+            long localAck = checked(peerState.AckedFor(candidate.Key) + offset);
+            if (candidate.Value == checked(localAck + 1) &&
+                candidate.Value < bestContiguousSequence)
+            {
+                bestContiguous = candidate.Key;
+                bestContiguousSequence = candidate.Value;
+            }
+        }
+
+        return bestContiguous ?? fallback;
+    }
+
     internal Batch? CreateDeltaBatchInternal(NodeId targetPeer, int namespaceId,
                                        NodeId? filterAuthorNodeId = null,
                                        int schemaId = 0, int schemaVersion = 1,
@@ -336,16 +362,9 @@ public sealed partial class Node
                     (!firstPending.TryGetValue(e.AuthorNodeId, out var cur) || e.Seq < cur))
                     firstPending[e.AuthorNodeId] = e.Seq;
             }
-            bool found = false;
-            stream = default;
-            foreach (var kv in firstPending)
-            {
-                long offset = ps.TryGetStreamOffset(kv.Key, out var savedOffset) ? savedOffset : 0;
-                long localAck = checked(ps.AckedFor(kv.Key) + offset);
-                if (kv.Value == localAck + 1) { stream = kv.Key; found = true; break; }
-            }
-            if (!found && firstPending.Count > 0) { stream = firstPending.Keys.First(); found = true; }
-            if (!found) return null;
+            NodeId? selectedStream = SelectNextAuthorStream(firstPending, ps);
+            if (selectedStream is null) return null;
+            stream = selectedStream.Value;
             wm = ps.AckedFor(stream);
         }
 
