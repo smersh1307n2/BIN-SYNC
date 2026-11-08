@@ -113,9 +113,9 @@ public sealed class MetadataIncomingBatch
     /// <summary>Exact accepted DELTA_BATCH payload, retained for Node replay during PendingApply recovery.</summary>
     public byte[] WirePayload { get; init; } = Array.Empty<byte>();
     /// <summary>
-    /// True when the durable Metadata Store owns receive cursor, digest-chain and
-    /// inbox-receipt decisions for this intent. Legacy intents retain Node-owned
-    /// receive validation during recovery.
+    /// True when this v3 intent carries an authenticated full-header fingerprint and
+    /// the Metadata Store is authoritative for receive cursor, digest-chain and receipt
+    /// decisions. False is reserved for direct conformance calls without wire-session context.
     /// </summary>
     public bool ReceiveStateOwnedByMetadataStore { get; init; }
 }
