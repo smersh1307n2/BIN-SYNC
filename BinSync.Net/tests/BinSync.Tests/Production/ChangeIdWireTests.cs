@@ -691,7 +691,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v16_outbox_preserves_origin_and_record_tombstone_id()
+    public void Persistence_v17_outbox_preserves_origin_and_record_tombstone_id()
     {
         using var node = Fix.MakeNode(127);
         const int ns = 7;
@@ -707,7 +707,7 @@ public class ChangeIdWireTests
             new() { NamespaceId = ns, Seq = 4, ChangeId = BatchId.From(Id(0xC2)), OriginAuthorEpoch = 1, OriginSequence = 1, RecordId = tombRecord, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOp(tombOp, fullAuthor: false), AuthorNodeId = relayAuthor, CreatedAt = 1_700_000_000_000_001 },
             new() { NamespaceId = ns, Seq = 2, ChangeId = BatchId.From(Id(0xC3)), OriginAuthorEpoch = checked((uint)node.Epoch), OriginSequence = 2, RecordId = Fix.Rid(131), OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOp(new OpFieldTomb { FieldId = 0x0102, KeyEpoch = 0, Wall = 1002, Logical = 0, Origin = 1 }, fullAuthor: false), AuthorNodeId = localAuthor, CreatedAt = 1_700_000_000_000_002 }
         };
-        var path = Path.Combine(Path.GetTempPath(), $"binsync-v16-outbox-{Guid.NewGuid():N}.bin");
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v17-outbox-{Guid.NewGuid():N}.bin");
         try
         {
             NodePersistence.Save(node, path);
