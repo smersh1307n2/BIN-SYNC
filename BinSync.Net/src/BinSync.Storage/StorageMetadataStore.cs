@@ -271,7 +271,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 relayHigh[relayKey] = sequence;
                 newRelay.Add((relayKey, new MetadataRelayItem(
                     sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
-                { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }
                 { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }));
                 relayAdded++;
 
@@ -650,7 +649,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 newRelay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
             relayItems.Add(new MetadataRelayItem(
                 sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
-            { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence }
             { OriginAuthorEpoch = operation.OriginAuthorEpoch, OriginSequence = operation.OriginSequence });
             relayHigh[relayKey] = sequence;
             relayAdded++;
