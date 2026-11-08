@@ -67,7 +67,8 @@ public partial class SyncSession : IAsyncDisposable
     private Exception? _receiveFailure;
     private readonly Node _localNode;
     private readonly SemaphoreSlim _aliasUpdateGate = new(1, 1);
-    private readonly ConcurrentDictionary<uint, TaskCompletionSource<SessionWire.AliasMapUpdate>> _pendingAliasUpdates = new();
+    private sealed record PendingAliasUpdate(AliasMapEntry Expected, TaskCompletionSource<SessionWire.AliasMapUpdate> Completion);
+    private readonly ConcurrentDictionary<uint, PendingAliasUpdate> _pendingAliasUpdates = new();
     private readonly object _aliasUpdateSync = new();
     private Task? _aliasUpdatePump;
     private int _aliasUpdateRequestId;
@@ -496,7 +497,7 @@ public partial class SyncSession : IAsyncDisposable
             }
             var completion = new TaskCompletionSource<SessionWire.AliasMapUpdate>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            if (!_pendingAliasUpdates.TryAdd(requestId, completion))
+            if (!_pendingAliasUpdates.TryAdd(requestId, new PendingAliasUpdate(proposal.Value, completion)))
                 throw new InvalidOperationException("Alias update request id collision.");
 
             try
@@ -565,13 +566,16 @@ public partial class SyncSession : IAsyncDisposable
                     throw new FrameException("FRAME_REJECTED");
                 if (update.IsResponse)
                 {
+                    if (!_pendingAliasUpdates.TryGetValue(update.RequestId, out var pending))
+                        continue; // late response after caller cancellation; retry is idempotent
                     if (update.Accepted)
                     {
+                        if (update.Entry != pending.Expected)
+                            throw new FrameException("FRAME_REJECTED");
                         ValidateAliasUpdateEntry(update.Entry);
                         _localNode.ApplyAliasMapAtomic(PeerNodeId, new[] { update.Entry });
                     }
-                    if (_pendingAliasUpdates.TryGetValue(update.RequestId, out var completion))
-                        completion.TrySetResult(update);
+                    pending.Completion.TrySetResult(update);
                     continue;
                 }
 
@@ -590,7 +594,7 @@ public partial class SyncSession : IAsyncDisposable
                         ct).ConfigureAwait(false);
                     var failure = new SyncException("UNKNOWN_ALIAS");
                     foreach (var pending in _pendingAliasUpdates.Values)
-                        pending.TrySetException(failure);
+                        pending.Completion.TrySetException(failure);
                     _sendFlowControl.Fail(failure);
                     _receiveCts.Cancel();
                     return;
@@ -601,12 +605,12 @@ public partial class SyncSession : IAsyncDisposable
         {
             var stopped = new ObjectDisposedException(nameof(SyncSession));
             foreach (var pending in _pendingAliasUpdates.Values)
-                pending.TrySetException(stopped);
+                pending.Completion.TrySetException(stopped);
         }
         catch (Exception ex)
         {
             foreach (var pending in _pendingAliasUpdates.Values)
-                pending.TrySetException(ex);
+                pending.Completion.TrySetException(ex);
             _sendFlowControl.Fail(ex);
             _receiveCts.Cancel();
         }
