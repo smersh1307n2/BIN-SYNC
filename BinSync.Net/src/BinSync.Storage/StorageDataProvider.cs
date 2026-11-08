@@ -323,9 +323,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
                 return new ProviderApplyReceipt(applyToken, prior!.ToArray(), IsDuplicate: true);
             }
 
+            Guid activeGeneration = ReadActiveGeneration(_storage);
             foreach (var mutation in mutations)
             {
-                Guid activeGeneration = ReadActiveGeneration(_storage);
                 byte[] key = mutation.IsRecordTombstone
                     ? CurrentRecordTombstoneKey(activeGeneration, mutation.RecordId)
                     : CurrentKey(activeGeneration, mutation.RecordId, mutation.FieldId);
