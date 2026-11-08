@@ -819,6 +819,8 @@ public sealed class StorageSyncCoordinatorTests
         using var provider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
         Node node = NewNode(17);
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce");
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
         RecordId record = RecordId.From(Guid.Parse("17000000-0000-0000-0000-000000000017").ToByteArray());
         const ushort fieldA = 0x0701;
         const ushort fieldB = 0x0702;
@@ -877,6 +879,8 @@ public sealed class StorageSyncCoordinatorTests
         using var provider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
         using var node = NewNode(24);
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce-pages");
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
         RecordId record = RecordId.From(Guid.Parse("24000000-0000-0000-0000-000000000024").ToByteArray());
         const ushort fieldA = 0x0711;
         const ushort fieldB = 0x0712;
@@ -1344,6 +1348,8 @@ public sealed class StorageSyncCoordinatorTests
         using var node = NewNode(54);
         using var remote = NewNode(55);
         const string scope = "provider-authoritative-rehydration";
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
 
         RecordId staleRecord = RecordId.From(Guid.Parse("54000000-0000-0000-0000-000000000054").ToByteArray());
         RecordId providerRecord = RecordId.From(Guid.Parse("55000000-0000-0000-0000-000000000055").ToByteArray());
@@ -1362,7 +1368,6 @@ public sealed class StorageSyncCoordinatorTests
         });
         BatchId expectedChangeId = Assert.Single(provider.ReadLocalChanges(0, 10).Changes).ChangeId;
 
-        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
         Assert.Equal(0, coordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
 
         Assert.False(node.TryGetField(1, staleRecord, 0x0817, out _));
@@ -1385,6 +1390,9 @@ public sealed class StorageSyncCoordinatorTests
         using var metadata = new StorageMetadataStore(storage);
         using var node = NewNode(58);
         const string scope = "metadata-owned-ack-retry";
+        var faultingProvider = new FailOnceAcknowledgeProvider(innerProvider);
+        var coordinator = new StorageSyncCoordinator(node, faultingProvider, 1, metadata, scope);
+        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
         RecordId firstRecord = RecordId.From(Guid.Parse("58000000-0000-0000-0000-000000000058").ToByteArray());
         RecordId secondRecord = RecordId.From(Guid.Parse("59000000-0000-0000-0000-000000000059").ToByteArray());
 
@@ -1398,8 +1406,6 @@ public sealed class StorageSyncCoordinatorTests
         });
         BatchId firstChangeId = Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes).ChangeId;
 
-        var faultingProvider = new FailOnceAcknowledgeProvider(innerProvider);
-        var coordinator = new StorageSyncCoordinator(node, faultingProvider, 1, metadata, scope);
         Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }));
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
