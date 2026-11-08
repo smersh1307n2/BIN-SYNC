@@ -696,7 +696,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
             .Where(pair => pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
                 pair.Key.NamespaceId == namespaceId)
             .Select(pair => pair.Value.CursorEnd)
-            .DefaultIfEmpty(0)
+            .DefaultIfEmpty(0UL)
             .Max();
     }
 
@@ -825,7 +825,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
                 .Where(pair => pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
                     pair.Key.NamespaceId == namespaceId)
                 .Select(pair => pair.Value.CursorEnd)
-                .DefaultIfEmpty(0)
+                .DefaultIfEmpty(0UL)
                 .Max();
         }
 
