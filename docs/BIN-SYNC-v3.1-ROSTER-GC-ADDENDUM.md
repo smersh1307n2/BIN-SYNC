@@ -400,3 +400,20 @@ FRA2 extends the signed installed ACK with `HlcWallFloor[LE u64]` and `HlcLogica
 RCP2 binds `FullReplaceGeneration`, `FullReplaceDigest`, `FullReplaceHlcWallFloor` and `FullReplaceHlcLogicalFloor` in the authority-signed checkpoint payload. `StorageSyncCoordinator.PublishRetentionCheckpoint` requires every Active member's durable installed ACK for that exact generation/digest and requires all ACKs to report the same HLC floor before creating the checkpoint. Checkpoints without a FULL_REPLACE binding must carry zero floor fields. RCP1/FRA1 are not accepted as fallback encodings.
 
 This closes the FULL_REPLACE HLC-floor transport/persistence gap, but it does not complete the global tombstone horizon: author-issued high-watermarks and retired-origin closure remain open. Tombstone/ghost physical GC remains disabled.
+
+
+## 10.15. OFR2/NRS2 author closure and complete-issued horizon
+
+OFR2 now carries, in the member-signed report:
+
+- `IssuedOrigins[]`: each local author epoch's durable final issued OriginSequence plus the maximum HLC among all operations frozen in that epoch;
+- `UnpublishedDraftCount` and maximum draft HLC, computed from the provider feed without treating feed cursors as origin sequences;
+- `FinalForAuthor`, a terminal declaration that the member has stopped issuing local changes.
+
+The origin allocator row (storage key kind 22) persists `(IssuedOriginSequence, MaxIssuedHlcWall, MaxIssuedHlcLogical)` per namespace/author/epoch. Coalesced drafts do not advance it. `StorageSyncCoordinator.PublishAppliedOriginFrontier(..., finalForAuthor:true, finalAuthorEpoch:...)` holds the application commit guard, closes every known local epoch plus the supplied current epoch in the provider, rejects any remaining feed drafts, and publishes the final signed report. The provider persists epoch-closure markers and rejects later local appends under a closed epoch. The authority rejects reports after a final report.
+
+NRS2 carries `RetiredOriginEpochs[]`, each with author, epoch, final issued sequence and maximum issued HLC. The authority may retire an Active member only after receiving its final signed OFR2 report and copying every issued epoch exactly into the new roster. Closed epochs are immutable and survive member rejoin; a rejoined member uses a new author epoch.
+
+Retention checkpoint derivation is conservative: for an Active author it uses that author's signed issued high-watermark; for a Retired author it uses the NRS2 closure. An origin enters the safe frontier only when every Active member's signed applied frontier covers the entire final issued sequence. A FULL_REPLACE-bound RCP2 checkpoint additionally requires a report from every Active member with zero unpublished drafts and an installed FRA2 ACK from every Active member. The shared HLC floor must cover the maximum HLC of every issued author epoch. This closes the author-issued/retired-origin and pending-draft gaps in the causal horizon.
+
+`StorageSyncCoordinator.AcquireApplicationCommitGuard()` acquires locks in coordinator→provider order. Pass it as the receiver's commit-guard factory and use the same lease for local GC calls. The receiver refuses to switch generations while local provider feed drafts remain. The physical GC feature flags remain false until the remaining cross-store live-reference scan and adversarial T-pass proof are complete.
