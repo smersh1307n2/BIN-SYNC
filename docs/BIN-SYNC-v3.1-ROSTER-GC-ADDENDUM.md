@@ -467,3 +467,8 @@ OFR2 validation indexes local applied sequences and issued epochs once per repor
 ## 10.22. Snapshot prefix cursors seek by sorted range (2026-11-09)
 
 `StorageSnapshot.PrefixCursor` computes the lexicographic exclusive upper bound for a non-empty prefix and opens a `SortedDictionary.GetViewBetween` range. Cursor startup and `afterKey` continuation now seek into the matching range rather than scanning unrelated partition keys. Empty/all-`0xFF` prefixes retain the safe full-enumeration fallback. Page boundaries and owned `StorageEntry` copies are unchanged.
+
+
+## 10.23. Immutable freeze rejects author-epoch HLC regression (2026-11-09)
+
+For each `(NamespaceId, AuthorNodeId, OriginAuthorEpoch)`, newly frozen operations must have HLC greater than or equal to the persisted maximum HLC for that epoch. A lower wall value or a lower logical value at the same wall is rejected before allocating the next OriginSequence. Equal HLC is permitted for operations from the same transaction; the stored maximum advances only when the new HLC is greater. This ensures the signed issued-HLC floor cannot be bypassed by publishing an older operation after a tombstone has been proven reclaimable.
