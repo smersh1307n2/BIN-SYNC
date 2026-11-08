@@ -485,8 +485,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     var operation = batch.Operations[i];
                     if (operation.ChangeId != pendingOperation.ChangeId)
                         continue;
-                    if (!operation.Fingerprint.AsSpan().SequenceEqual(pendingOperation.Fingerprint))
-                        throw new InvalidDataException("Pending ChangeId was reused with a different canonical fingerprint.");
+                    if (!SameOperationIdentity(operation, pendingOperation))
+                        throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
                     throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
                 }
             }
@@ -577,7 +577,7 @@ private static bool ValidateIncomingBatchForStaging(
             batchIdentities[key] = operation;
 
             if (state.ChangeLedger.TryGetValue(key, out var priorLedger) &&
-                !priorLedger.Fingerprint.AsSpan().SequenceEqual(operation.Fingerprint))
+                !LedgerMatches(priorLedger, operation))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
 
             if (pendingIdentities.TryGetValue(key, out var pendingOperation))
