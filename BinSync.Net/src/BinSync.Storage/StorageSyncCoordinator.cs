@@ -334,6 +334,8 @@ public sealed class StorageSyncCoordinator
             throw new InvalidOperationException("No accepted namespace roster is available to send.");
         if (roster.AuthorityNodeId != _node.NodeId)
             throw new InvalidOperationException("Only the namespace authority may send the accepted roster.");
+        byte[] signed = NamespaceRosterProtocol.Sign(roster, authoritySeed);
+        _ = NamespaceRosterProtocol.DecodeAndVerify(signed, trustStore);
         await session.SendNamespaceRosterAsync(roster, authoritySeed, frameSequence, ct).ConfigureAwait(false);
     }
 
