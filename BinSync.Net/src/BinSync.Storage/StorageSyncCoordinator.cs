@@ -126,10 +126,52 @@ public sealed class StorageSyncCoordinator
             byte[] previousDigest = prior is null
                 ? new byte[NamespaceRosterProtocol.DigestSize]
                 : NamespaceRetentionCheckpointProtocol.ComputeDigest(prior);
+            ulong hlcWallFloor = 0;
+            uint hlcLogicalFloor = 0;
+            if (fullReplaceGeneration.HasValue)
+            {
+                if (!gcStore.AreAllActiveMembersInstalled(
+                        roster, fullReplaceGeneration.Value, fullReplaceDigest!))
+                    throw new InvalidOperationException("Cannot bind a retention checkpoint before every Active member has durably installed the FULL_REPLACE generation.");
+
+                IReadOnlyList<FullReplaceInstalledAck> acknowledgements =
+                    gcStore.ReadFullReplaceInstalledAcks(roster, fullReplaceGeneration.Value);
+                NamespaceRosterMember[] activeMembers = roster.Members
+                    .Where(member => member.Status == NamespaceMemberStatus.Active)
+                    .ToArray();
+                if (activeMembers.Length == 0)
+                    throw new InvalidOperationException("A FULL_REPLACE retention checkpoint requires at least one Active member.");
+
+                bool firstFloor = true;
+                foreach (NamespaceRosterMember member in activeMembers)
+                {
+                    FullReplaceInstalledAck acknowledgement = acknowledgements.FirstOrDefault(item =>
+                        item.MemberNodeId == member.NodeId)
+                        ?? throw new InvalidDataException("An Active member's installed ACK is missing.");
+                    if (!acknowledgement.Installed ||
+                        acknowledgement.Generation != fullReplaceGeneration.Value ||
+                        !acknowledgement.Digest.AsSpan().SequenceEqual(fullReplaceDigest))
+                        throw new InvalidDataException("An installed ACK does not match the checkpoint FULL_REPLACE generation/digest.");
+
+                    if (firstFloor)
+                    {
+                        hlcWallFloor = acknowledgement.HlcWallFloor;
+                        hlcLogicalFloor = acknowledgement.HlcLogicalFloor;
+                        firstFloor = false;
+                    }
+                    else if (acknowledgement.HlcWallFloor != hlcWallFloor ||
+                        acknowledgement.HlcLogicalFloor != hlcLogicalFloor)
+                    {
+                        throw new InvalidDataException("Active members reported different HLC floors for the same FULL_REPLACE digest.");
+                    }
+                }
+            }
+
             IReadOnlyList<AppliedOriginFrontierReport> reports = gcStore.ReadOriginFrontiers(roster);
             NamespaceRetentionCheckpoint checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
                 roster, sequence, previousDigest, reports,
-                fullReplaceGeneration, fullReplaceDigest ?? Array.Empty<byte>());
+                fullReplaceGeneration, fullReplaceDigest ?? Array.Empty<byte>(),
+                hlcWallFloor, hlcLogicalFloor);
             byte[] signed = NamespaceRetentionCheckpointProtocol.Sign(checkpoint, authoritySeed);
             return gcStore.AcceptRetentionCheckpoint(signed, roster, trustStore);
         }
