@@ -355,7 +355,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)item.Key.NamespaceId));
             item.Key.Author.WriteTo(suffix.AsSpan(2));
             BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Item.Sequence);
-            writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.Item.ChangeId, item.Item.Payload)));
+            writes.Add((StorageKey(root, 4, suffix), EncodePayloadItem(item.Item.ChangeId, item.Item.OriginAuthorEpoch, item.Item.OriginSequence, item.Item.Payload)));
         }
 
         foreach (var pair in relayHigh)
@@ -2410,7 +2410,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.WriteUInt16LittleEndian(outboundSuffix, checked((ushort)namespaceId));
             localAuthor.WriteTo(outboundSuffix.AsSpan(2));
             BinaryPrimitives.WriteUInt64BigEndian(outboundSuffix.AsSpan(18), item.Sequence);
-            writes.Add((StorageKey(root, 7, outboundSuffix), EncodePayloadItem(item.ChangeId, item.Payload)));
+            writes.Add((StorageKey(root, 7, outboundSuffix), EncodePayloadItem(item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload)));
 
             byte[] ledgerSuffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, checked((ushort)namespaceId));
@@ -2850,7 +2850,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
                 pair.Key.Author.WriteTo(suffix.AsSpan(2));
                 BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                byte[] value = EncodePayloadItem(item.ChangeId, item.Payload);
+                byte[] value = EncodePayloadItem(item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload);
                 Add(StorageKey(root, 4, suffix), value);
             }
         }
@@ -2875,7 +2875,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
                 pair.Key.Author.WriteTo(suffix.AsSpan(2));
                 BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                Add(StorageKey(root, 7, suffix), EncodePayloadItem(item.ChangeId, item.Payload));
+                Add(StorageKey(root, 7, suffix), EncodePayloadItem(item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload));
             }
         }
 
