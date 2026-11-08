@@ -87,9 +87,9 @@ The coordinator now applies the exact scanned provider-feed prefix incrementally
 
 **Comparison caveat:** the previous full-snapshot baseline ran on an AMD EPYC 7763 runner; this incremental run used an AMD EPYC 9V74 runner. Treat latency differences as directional, not as a controlled before/after claim. The 1,024-row previous baseline also had high variance (24.9% relative standard deviation). Current-run relative standard deviations were approximately 29.3%, 6.45% and 2.93% for 256/1,024/4,096 rows; the 256-row case is noisy. BenchmarkDotNet also warned that these single-invocation stateful iterations are shorter than its recommended 100 ms measurement window.
 
-**Interpretation:** the current retry path reduced measured managed allocation substantially at all sizes, with the largest case falling from 33.92 MB to 14,148 KB. A same-runner baseline comparison is still required before claiming a precise latency speedup. The direct ChangeId lookup remains allocation-free; the remaining incremental-path allocations include feed materialization, metadata operation encoding and changed-record copy-on-write.
+**Interpretation:** the current retry path reduced measured managed allocation substantially at all sizes, with the largest case falling from 33.92 MB to 14,148 KB. That cross-runner comparison is exploratory only and has been superseded by the matched-runner comparison in the following section. The direct ChangeId lookup remains allocation-free; the remaining incremental-path allocations include feed materialization, metadata operation encoding and changed-record copy-on-write.
 
-**Next:** retain this result as the incremental checkpoint, add a controlled same-runner old-vs-new comparison, and profile allocations in the feed list / operation encoding / changed-record staging before further changes. Do not replace the full snapshot used for initial cutover and startup recovery.
+**Next:** use the matched-runner result below as the performance checkpoint, and profile allocations in the feed list / operation encoding / changed-record staging before further changes. Do not replace the full snapshot used for initial cutover and startup recovery.
 
 ## 2026-11-08 matched-runner full-snapshot vs incremental comparison
 
