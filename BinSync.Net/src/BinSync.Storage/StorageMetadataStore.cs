@@ -2927,20 +2927,6 @@ private static bool ValidateIncomingBatchForStaging(
                         new Guid(row.Value.AsSpan(8, 16))));
                     break;
                 }
-                case 11:
-                {
-                    // Legacy local-origin marker. vNext folds this bit into the
-                    // ChangeId ledger value and omits the redundant marker key.
-                    RequireLength(key, 18);
-                    RequireLength(row.Value, 0);
-                    var ledgerKey = new LedgerKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        BatchId.From(key.Slice(2, 16)));
-                    if (!state.ChangeLedger.TryGetValue(ledgerKey, out var ledger))
-                        throw new InvalidDataException("Legacy outbound-origin marker has no ChangeId ledger entry.");
-                    state.ChangeLedger[ledgerKey] = ledger with { IsLocalOutbound = true };
-                    break;
-                }
                 case 18:
                 {
                     RequireLength(key, 18);
@@ -3139,8 +3125,8 @@ private static bool ValidateIncomingBatchForStaging(
 
     private static CompletedPendingApplyValue DecodeCompleted(byte[] bytes)
     {
-        if (bytes.Length is not (53 or 69 or 85))
-            throw new InvalidDataException("Completed apply receipt has an invalid length.");
+        if (bytes.Length is not (69 or 85))
+            throw new InvalidDataException("Completed v3 apply receipt has an invalid length.");
         if (bytes[52] > 1) throw new InvalidDataException("Completed apply receipt flags are invalid.");
         byte[] digest = bytes.AsSpan(0, 16).ToArray();
         var receipt = new MetadataBatchReceipt(
@@ -3150,7 +3136,7 @@ private static bool ValidateIncomingBatchForStaging(
             BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(48)),
             bytes[52] != 0)
         {
-            DurableAuthor = bytes.Length >= 69 ? NodeId.From(bytes.AsSpan(53, 16)) : default,
+            DurableAuthor = NodeId.From(bytes.AsSpan(53, 16)),
             HeaderFingerprint = bytes.Length == 85 ? bytes.AsSpan(69, 16).ToArray() : Array.Empty<byte>()
         };
         return new CompletedPendingApplyValue(digest, receipt);
@@ -3248,9 +3234,8 @@ private static bool ValidateIncomingBatchForStaging(
         byte[] headerFingerprint = headerFingerprintPresent ? reader.ReadBytes(16) : Array.Empty<byte>();
         if (headerFingerprintPresent && headerFingerprint.Length != 16)
             throw new InvalidDataException("Pending batch header fingerprint is truncated.");
-        // v4 authority intents predate durable header fingerprints. Recover them
-        // through Node's legacy receipt validator rather than trusting an incomplete receipt.
-        receiveStateOwnedByMetadataStore &= headerFingerprint.Length == 16;
+        if (receiveStateOwnedByMetadataStore && headerFingerprint.Length != 16)
+            throw new InvalidDataException("Metadata-authoritative PendingApply requires a full v3 header fingerprint.");
         if (stream.Position != stream.Length) throw new InvalidDataException("Pending batch has trailing bytes.");
         return new MetadataIncomingBatch
         {
