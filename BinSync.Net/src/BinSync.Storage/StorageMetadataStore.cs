@@ -875,8 +875,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
             return Array.Empty<MetadataOutboundItem>();
 
         var key = new OutboundKey(namespaceId, localAuthor);
-        var existing = new List<MetadataOutboundItem>(operations.Count);
-        int existingCount = 0;
+        var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
+        var newOperations = new List<MetadataFrozenOperation>(operations.Count);
         foreach (var operation in operations)
         {
             var ledgerKey = new LedgerKey(namespaceId, operation.ChangeId);
@@ -890,40 +890,50 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore
                     throw new InvalidDataException("ChangeId is already known from an incoming route and cannot be published as a new local operation.");
             }
 
-            if (!alreadyFrozen) continue;
+            if (!alreadyFrozen)
+            {
+                newOperations.Add(operation);
+                continue;
+            }
+
             if (!current.Outbound.TryGetValue(key, out var priorEntries))
                 throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
 
             var prior = priorEntries.FirstOrDefault(item => item.ChangeId == operation.ChangeId);
             if (prior is null || !prior.Payload.AsSpan().SequenceEqual(operation.Payload))
                 throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
-            existing.Add(CloneOutboundItem(prior));
-            existingCount++;
+            existingByChangeId.Add(operation.ChangeId, CloneOutboundItem(prior));
         }
 
-        // A freeze retry is idempotent only when the complete original batch is
-        // present. A mixed old/new batch is ambiguous and must be retried as a whole.
-        if (existingCount != 0)
+        // Each ChangeId is an independent immutable operation. A replay may contain
+        // already-frozen feed entries plus newer entries appended before the provider
+        // ACK completed; preserve the old sequences and allocate only the new ones.
+        var frozenByChangeId = new Dictionary<BatchId, MetadataOutboundItem>(operations.Count);
+        foreach (var existing in existingByChangeId)
+            frozenByChangeId.Add(existing.Key, existing.Value);
+
+        if (newOperations.Count > 0)
         {
-            if (existingCount != operations.Count)
-                throw new InvalidDataException("Outbound freeze retry partially overlaps an earlier freeze.");
-            return existing;
+            ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var priorHighWatermark)
+                ? priorHighWatermark
+                : 0;
+            var frozen = new List<MetadataOutboundItem>(newOperations.Count);
+            foreach (var operation in newOperations)
+            {
+                ulong sequence = checked(++highWatermark);
+                var item = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray());
+                frozen.Add(item);
+                frozenByChangeId.Add(operation.ChangeId, item);
+            }
+
+            PersistFrozenOutboundDelta(partitionKey, current, key, namespaceId, localAuthor,
+                newOperations, frozen, highWatermark);
         }
 
-        ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var priorHighWatermark)
-            ? priorHighWatermark
-            : 0;
-        var frozen = new List<MetadataOutboundItem>(operations.Count);
-        foreach (var operation in operations)
-        {
-            ulong sequence = checked(++highWatermark);
-            frozen.Add(new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload.ToArray()));
-        }
-
-        PersistFrozenOutboundDelta(partitionKey, current, key, namespaceId, localAuthor,
-            operations, frozen, highWatermark);
-        return frozen.Select(CloneOutboundItem).ToArray();
-    
+        var result = new MetadataOutboundItem[operations.Count];
+        for (int i = 0; i < operations.Count; i++)
+            result[i] = CloneOutboundItem(frozenByChangeId[operations[i].ChangeId]);
+        return result;
         }
     }
 
