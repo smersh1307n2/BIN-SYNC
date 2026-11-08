@@ -425,13 +425,19 @@ public partial class SyncSession : IAsyncDisposable
         {
             Task? pump;
             lock (_receiveSync) pump = _receivePump;
-            if (pump is not null)
+            try
             {
-                try { await pump.ConfigureAwait(false); }
+                if (pump is not null)
+                {
+                    try { await pump.ConfigureAwait(false); }
+                    catch (OperationCanceledException) { }
+                }
+            }
+            finally
+            {
+                try { await _aliasUpdatePump.ConfigureAwait(false); }
                 catch (OperationCanceledException) { }
             }
-            try { await _aliasUpdatePump.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
             if (_ownsTransport) await _transport.DisposeAsync().ConfigureAwait(false);
         }
         finally
@@ -561,6 +567,8 @@ public partial class SyncSession : IAsyncDisposable
                         SessionWire.EncodeAliasMapUpdateResponse(update.RequestId, accepted: false),
                         ct).ConfigureAwait(false);
                     var failure = new SyncException("UNKNOWN_ALIAS");
+                    foreach (var pending in _pendingAliasUpdates.Values)
+                        pending.TrySetException(failure);
                     _sendFlowControl.Fail(failure);
                     _receiveCts.Cancel();
                     return;
