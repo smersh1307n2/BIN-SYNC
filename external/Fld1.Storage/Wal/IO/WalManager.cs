@@ -316,7 +316,17 @@ public sealed class WalManager : IDisposable
             }
 
             if (removed > 0)
-                TryFsyncDirectory(_walDir);
+            {
+                try
+                {
+                    TryFsyncDirectory(_walDir);
+                }
+                catch
+                {
+                    _faulted = true; // directory-entry durability is uncertain; reopen the WAL set.
+                    throw;
+                }
+            }
 
             return removed;
         }
@@ -329,8 +339,11 @@ public sealed class WalManager : IDisposable
             throw new InvalidOperationException("WAL manager requires reopen after a failed rotation.");
     }
 
-    private static void TryFsyncDirectory(string directory)
-        => StorageDirectorySync.Flush(directory);
+    private void TryFsyncDirectory(string directory)
+    {
+        _faultInjector?.Invoke(StorageFaultPoint.BeforeWalDirectoryFsync);
+        StorageDirectorySync.Flush(directory);
+    }
 
     public void Dispose()
     {
