@@ -1175,6 +1175,24 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             HeaderFingerprint = original.HeaderFingerprint,
             Operations = original.Operations
         };
+        var unregisteredEpoch = new MetadataIncomingBatch
+        {
+            ScopeId = original.ScopeId,
+            LocalReplica = original.LocalReplica,
+            SenderPeer = original.SenderPeer,
+            SenderEpoch = original.SenderEpoch,
+            TransportPeerEpoch = 3,
+            AuthorStreamNodeId = original.AuthorStreamNodeId,
+            NamespaceId = original.NamespaceId,
+            BatchId = original.BatchId,
+            CursorStart = original.CursorStart,
+            CursorEnd = original.CursorEnd,
+            PreviousBatchDigest = original.PreviousBatchDigest,
+            BatchDigest = original.BatchDigest,
+            HeaderFingerprint = original.HeaderFingerprint,
+            Operations = original.Operations
+        };
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(unregisteredEpoch));
         Assert.True(store.AcceptIncomingBatch(retryOnNewEpoch).IsDuplicate);
 
         store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
