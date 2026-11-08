@@ -127,6 +127,8 @@ public interface IProviderAuthorEpochClosureStore
 {
     /// <summary>Closes the epoch only when no unpublished feed entries for it remain.</summary>
     bool TryCloseLocalAuthorEpoch(uint authorEpoch);
+    void CloseLocalAuthorIdentity();
+    void ActivateLocalAuthorEpoch(uint authorEpoch);
 }
 
 /// <summary>Provider-wide exclusive lease used to serialize FULL_REPLACE commit and local GC.</summary>
