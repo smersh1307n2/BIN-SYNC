@@ -9,6 +9,7 @@ Compact binary sync protocol (BIN-SYNC CORE) and a .NET 10 reference implementat
 | Production status | [docs/PRODUCTION-STATUS.md](docs/PRODUCTION-STATUS.md) |
 | Metadata storage / external provider architecture | [docs/METADATA-STORAGE-ARCHITECTURE.md](docs/METADATA-STORAGE-ARCHITECTURE.md) |
 | Metadata Store semantic contract / conformance | [docs/METADATA-STORE-CONFORMANCE.md](docs/METADATA-STORE-CONFORMANCE.md) |
+| v3 immutable origin provenance and safe GC design | [docs/ORIGIN-PROVENANCE-V3-DESIGN.md](docs/ORIGIN-PROVENANCE-V3-DESIGN.md) |
 | Data Provider semantic contract / conformance | [docs/DATA-PROVIDER-CONFORMANCE.md](docs/DATA-PROVIDER-CONFORMANCE.md) |
 | FLD Storage Core extraction boundary | [FLD Storage Core architecture](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-STORAGE-CORE-ARCHITECTURE.md) |
 | Change staging / coalescing / retention policy | [docs/CHANGE-STAGING-AND-RETENTION.md](docs/CHANGE-STAGING-AND-RETENTION.md) |

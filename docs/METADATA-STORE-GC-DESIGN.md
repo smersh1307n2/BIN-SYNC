@@ -51,7 +51,7 @@ Required implementation before enabling ledger GC:
 
 1. Extend each operation's immutable provenance with origin author, origin author epoch, and origin sequence. Preserve those fields unchanged across every relay hop; do not infer origin sequence from a relay-local cursor.
 2. Include provenance in the canonical operation identity/fingerprint or otherwise reject a ChangeId that is presented with conflicting origin coordinates.
-3. Persist origin coordinates in ChangeLedger and relay payload metadata. Legacy rows without provenance remain non-collectable.
+3. Persist origin coordinates in ChangeLedger and relay payload metadata. No legacy rows are accepted; an old metadata partition fails closed.
 4. Track a contiguous applied-origin frontier per peer and author. A snapshot baseline may advance that frontier only when it is an authoritative snapshot of that author at a recorded origin high-watermark.
 5. Maintain a durable namespace membership generation/roster. Every active member contributes a frontier; an unknown, disconnected, or lagging member contributes zero. A peer may be excluded only after a durable epoch fence and a mandatory authoritative full resync on rejoin.
 6. Compute the safe frontier per origin author as the minimum across all members in the committed roster generation. Delete only ledger rows at or below that frontier, in the same crash-consistent transaction that persists the GC checkpoint.
@@ -90,59 +90,19 @@ The next protocol/storage work must introduce a durable membership generation an
 
 The checkpoint must be authenticated, persisted before ACK, monotonic, and fail closed on roster mismatch, epoch regression, missing author frontier, or stale snapshot. A peer removed from the roster must be fenced before its frontier stops constraining GC.
 
-## 5.0.1. Immutable origin provenance capability negotiation
+## 5.0.1. v3 mandatory immutable origin provenance
 
-HELLO already carries a 32-bit capability mask. Bit 3 is reserved as
-`SessionCapabilities.ImmutableOriginProvenance`; a session exposes the bitwise
-intersection as `NegotiatedCapabilities`. The bit is opt-in and is not added to
-the default capability set, so existing peers retain the current wire behavior.
+The optional capability proposal below is superseded. BIN-SYNC is moving to protocol major v3 with mandatory per-record origin epoch and sequence. There is no optional provenance flag, capability negotiation, unknown-origin record, legacy decoder or downgrade path. The binding layout, ChangeId semantics, storage row ownership and safe-GC prerequisites are defined in [ORIGIN-PROVENANCE-V3-DESIGN.md](ORIGIN-PROVENANCE-V3-DESIGN.md).
 
-This negotiation bit alone does not authorize origin derivation or ChangeId GC.
-Until the per-record extension, canonical digest binding, Storage persistence,
-and relay-preservation path are implemented and tested, callers MUST NOT advertise
-the bit as evidence that provenance is operational. In particular, a local relay
-cursor must never be substituted for origin sequence.
+Every accepted operation has an immutable origin tuple (resolved author NodeId, author epoch, origin sequence). The origin sequence is assigned once by the original author at publication freeze and never changes. A relay's local sequence remains a separate delivery coordinate. Direct-author batches validate origin epoch and sequence against issuer epoch and cursor span; relay batches preserve the tuple and never compare it with the relay cursor.
 
-## 5.0.2. Draft DELTA_BATCH record extension
+A same ChangeId with a different canonical fingerprint or origin tuple is equivocation. Missing or zero provenance is malformed v3 input and is rejected before PendingApply or provider mutation. New Storage partitions carry one explicit format marker; old or unknown row layouts fail closed and are recreated rather than migrated.
 
-The capability bit is only a negotiation hook. The following record extension is
-the proposed interoperable encoding and remains **disabled / not yet implemented**:
+## 5.0.2. Clean-break format policy
 
-- Reserve one Batch.Flags bit, ORIGIN_PROVENANCE_RECORDS, to indicate that every
-  record has the extension trailer. The flag is valid only when
-  ImmutableOriginProvenance was negotiated by both peers.
-- Keep the existing record prefix byte-for-byte unchanged:
-  RecordId[16] || ChangeId[16] || OpKind[1] || PayloadLength[varint] || Payload.
-- When the flag is set, append one provenance-presence byte after each payload.
-  0 means origin is unknown (legacy/imported row); 1 is followed by
-  OriginAuthorNodeId[16] || OriginAuthorEpoch[u32 LE] || OriginSequence[u64 LE].
-  Other presence values are invalid. A present tuple requires a non-zero author and
-  a non-zero sequence; epoch zero is allowed if it is the author's actual epoch.
-- The trailer is part of the ordered records array, RecordsRoot, and therefore
-  the existing BatchDigest chain. Re-encoding, fragmentation, signing, replay
-  reservation, and durable retry must preserve the exact trailer bytes.
-- A receiver rejects the flag unless the session negotiated the capability. It
-  validates that the tuple author equals the operation's resolved durable author.
-  For a direct-author batch (IssuerNodeId == resolved author), it additionally
-  checks author epoch equality and OriginSequence == CursorStart + record index.
-  For a relay batch, the batch cursor is a relay-local coordinate and is never
-  compared with the immutable origin sequence.
-- For an unflagged legacy direct-author batch, a receiver may derive provenance only
-  after the single-author and exact cursor-span checks. For an unflagged relay batch,
-  provenance remains unknown and non-collectable; it must not be guessed.
-- If a ChangeId already has known provenance, a later known tuple must match exactly.
-  Unknown provenance never overwrites known provenance. A conflicting known tuple
-  is equivocation and fails closed. A legacy unknown ledger row may remain unknown;
-  it is never eligible for GC merely because a later route has a matching payload.
-- A relay preserves the tuple in its durable relay row and emits it unchanged on
-  every subsequent hop. The relay's own stream sequence remains separate metadata.
+This library is used only by the Storage and FLD-DB work in this development. The implementation will use one canonical v3 wire and metadata format. Remove old wire/persistence readers, dual-write paths, legacy API overloads and migration-only branches. Do not retain compatibility code for hypothetical external consumers.
 
-The implementation sequence is: (1) operation and pending-intent model; (2) versioned
-ChangeId-ledger and relay/outbound codecs with legacy decoding; (3) origin propagation
-through StorageSyncCoordinator and metadata-backed batch construction; (4) flagged wire
-encode/decode and session capability enforcement; (5) multi-hop, mixed-route,
-restart, equivocation, and legacy replay conformance tests. Only after all five stages
-may the safe-frontier work consume these coordinates.
+The clean break does not relax correctness: corrupt, unknown or partially written new-format state fails closed. Format version markers identify the one supported layout; they are not a migration selector.
 
 ## 5.1. Authoritative namespace roster and retention checkpoint contract
 
