@@ -59,7 +59,7 @@ jobs:
             echo "No BenchmarkDotNet result reports were produced."
             exit 1
           fi
-          if grep -nE '\|[[:space:]]*NA[[:space:]]*\|' "${reports[@]}"; then
+          if grep -F -n '| NA |' "${reports[@]}"; then
             echo "One or more metadata benchmark cases failed."
             exit 1
           fi
