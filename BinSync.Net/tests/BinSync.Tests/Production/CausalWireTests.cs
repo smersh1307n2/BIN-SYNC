@@ -137,6 +137,8 @@ public class CausalWireTests
             NamespaceId = 1,
             Seq = 1,
             ChangeId = child,
+            OriginAuthorEpoch = 1,
+            OriginSequence = 1,
             RecordId = Rid(1),
             OpKind = 0x01,
             Payload = new byte[] { 0x11, 0x43, 0x43, 0x44, 0x31, 0x22 },
