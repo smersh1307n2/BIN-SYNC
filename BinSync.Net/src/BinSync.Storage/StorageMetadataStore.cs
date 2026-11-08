@@ -339,13 +339,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// </summary>
     public int CompactReceipts(
         string scopeId, NodeId localReplica, int namespaceId, int limit,
-        Func<IDisposable?> acquireGcLease)
+        Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
         if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
         ArgumentNullException.ThrowIfNull(acquireGcLease);
+        ArgumentNullException.ThrowIfNull(externalReferences);
 
         IDisposable? lease = acquireGcLease();
         if (lease is null)
@@ -393,6 +394,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pending.Batch.SenderEpoch == key.Epoch &&
                     pending.Batch.NamespaceId == key.NamespaceId &&
                     pending.Batch.BatchId == key.BatchId))
+                    continue;
+                if (externalReferences.HasExternalReceiptReference(
+                    namespaceId, key.Sender, key.Epoch, receipt.TransportPeerEpoch, key.BatchId))
                     continue;
                 if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
                         roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
