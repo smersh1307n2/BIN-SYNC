@@ -5,7 +5,7 @@ This executable demonstrates the public `BinSync.Storage` assembly with two BIN-
 It covers:
 - stable record IDs derived from array item GUIDs and stable field IDs derived from field names;
 - multiple fields per array item;
-- durable local change feeds and acknowledgement only after the Node checkpoint and Metadata Store outbound freeze both succeed;
+- the explicit Node-Outbox transition path: durable local change feeds are acknowledged only after the Node checkpoint and Metadata Store outbound freeze both succeed;
 - exact Node Outbox ChangeIds/fingerprints/payloads frozen into Storage metadata with original per-author sequence numbers;
 - reading frozen outbound pages under a durable lease;
 - replay-safe publication using the original HLC and local author identity;
@@ -23,4 +23,4 @@ Run from the repository root:
 dotnet run --project samples/StorageArraySync/StorageArraySync.csproj -c Release
 ```
 
-The sample uses the public `IDataProvider`, `IMetadataStore`, `StorageDataProvider`, `StorageMetadataStore` and `StorageSyncCoordinator` APIs. The adapters share one Storage database per replica. The coordinator freezes local Outbox entries into metadata before provider-feed ACK and applies received immutable field batches through a durable PendingApply transaction before network ACK. `RecoverPendingApplies()` handles intents left by a crash. NodePersistence v15 remains the authoritative Node state image, but it is now stored atomically inside the same StorageDatabase as provider and metadata state. Replacing Node's internal Outbox/peer-state authority with `IMetadataStore` remains the next integration gate. Field-level and record-level tombstones are preserved separately; the provider applies BIN-SYNC ghost visibility so a record tombstone hides older fields while newer ghost fields remain visible.
+The sample uses the public `IDataProvider`, `IMetadataStore`, `StorageDataProvider`, `StorageMetadataStore` and `StorageSyncCoordinator` APIs. The adapters share one Storage database per replica. This in-process `Transport.SyncRound` helper is intentionally Node-Outbox-based, so the sample exercises the explicit transition path: the coordinator freezes local Node Outbox entries into Metadata Store before provider-feed ACK and applies received immutable field batches through a durable PendingApply transaction before ACK. `RecoverPendingApplies()` handles intents left by a crash. NodePersistence v15 remains the authoritative Node state image, stored in the same StorageDatabase as provider and metadata state. The provider-authoritative, Metadata-Store-owned outbound path is demonstrated by `StorageArrayTcpSync`, which uses the durable `SyncSession.PushBatchAsync` overload rather than the Node Outbox transport helper. Field-level and record-level tombstones are preserved separately; the provider applies BIN-SYNC ghost visibility so a record tombstone hides older fields while newer ghost fields remain visible.
