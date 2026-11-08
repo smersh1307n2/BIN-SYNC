@@ -84,7 +84,7 @@ jobs:
             echo "The one-million-row metadata benchmark did not produce its expected report."
             exit 1
           fi
-          if grep -E -n '\\|[[:space:]]*NA[[:space:]]*\\|' "${reports[@]}"; then
+          if grep -E -n '[|][[:space:]]*NA[[:space:]]*[|]' "${reports[@]}"; then
             echo "One or more metadata benchmark cases failed."
             exit 1
           fi
