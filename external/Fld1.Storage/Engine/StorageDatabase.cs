@@ -447,6 +447,7 @@ public sealed class StorageSnapshot : IDisposable
             {
                 if (afterKey.AsSpan().SequenceCompareTo(upperBytes) >= 0)
                 {
+                    _enumerator = values.GetEnumerator();
                     _finished = true;
                     return;
                 }
