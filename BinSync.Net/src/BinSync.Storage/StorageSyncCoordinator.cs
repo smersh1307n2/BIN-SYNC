@@ -199,6 +199,13 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>Create the mandatory receiver callback that installs HLC floor and refreshes this Node.</summary>
+    public Action<ulong, uint> CreateFullReplaceRefreshCallback(Action<Node> persistNode)
+    {
+        ArgumentNullException.ThrowIfNull(persistNode);
+        return (wall, logical) => RefreshAfterFullReplace(persistNode, wall, logical);
+    }
+
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
     public int CompactChangeLedger(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
     {
