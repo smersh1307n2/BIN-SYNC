@@ -312,3 +312,12 @@ Three bounded GC paths now exist in code:
 3. **Record tombstones:** collection requires the active provider generation to be the checkpoint's FULL_REPLACE generation, all Active members to have installed its exact digest, and the tombstone origin to be covered. Older hidden field rows are removed in bounded batches while the tombstone remains; only after no older field remains is the tombstone deleted. Interrupted cleanup is repeatable.
 
 The external GC/commit lease is mandatory and has no permissive default. It must exclude concurrent Node mutation, PendingApply, provider feed publication, relay/outbound reservations, FULL_REPLACE staging and reader pins. The coordinator exposes attachment and compaction APIs, but the embedding application still has to supply a real lease implementation. No GC should be enabled until T-pass tests prove these conditions and crash recovery.
+
+
+## 10.5. Tombstone horizon proof correction — physical GC disabled
+
+A safety review found that the v3.1 tombstone proof is not sufficient to authorize deletion. `SafeAppliedOriginSequence` for the tombstone's own author plus all-member installation of a FULL_REPLACE snapshot does not rule out a delayed operation from another author: that operation may be above the common sequence frontier, absent from the snapshot, and still carry an HLC older than the tombstone. If the tombstone is removed, that delayed operation could resurrect the record.
+
+Accordingly, `StorageNamespaceGcStore.HasProtocolTombstoneGcProof` now fails closed even when its existing sequence and installed-ACK checks pass. `StorageDataProvider.CompactRecordTombstones` retains its bounded crash-repeatable cleanup code but cannot physically reclaim any tombstone under v3.1. This is intentional, not an unfinished test condition.
+
+Before enabling tombstone GC, the protocol must bind (a) each origin author's signed issued high-watermark, (b) every Active member's applied-through value reaching that watermark, (c) a global HLC floor bound to the exact FULL_REPLACE generation/digest, and (d) advancement of each installing Node's HLC before activation. Retired-origin epochs need an explicit closure proof. Until then, tombstones remain retained.
