@@ -56,8 +56,8 @@ public abstract class MetadataStoreConformanceSuite
         store.AcceptIncomingBatch(first);
 
         var conflicting = CreateBatch("scope-a", 1, 2, 1, 7, 11, 2, 2, 10, 11,
-            Operation(20, 31, 41, 51),
-            Operation(20, 30, 99, 52));
+            Operation(20, 30, 99, 52),
+            Operation(20, 31, 41, 51));
 
         Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(conflicting));
         Assert.Equal(1UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
@@ -106,7 +106,8 @@ public abstract class MetadataStoreConformanceSuite
     {
         using var store = CreateStore();
         store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
-            Operation(20, 30, 40, 50),
+            Operation(20, 30, 40, 50)));
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 11, 1, 1, 10, 11,
             Operation(21, 31, 41, 51)));
 
         store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 1);
@@ -452,32 +453,37 @@ public abstract class MetadataStoreConformanceSuite
             Operation(20, 30, 40, 50));
         store.AcceptIncomingBatch(accepted);
 
-        var mixed = CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 2, 0, 11,
-            Operation(20, 30, 40, 50),
-            Operation(21, 31, 41, 51));
+        var duplicate = CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 1, 0, 11,
+            Operation(20, 30, 40, 50));
         var token = Guid.Parse("00000000-0000-0000-0000-000000000126");
-        var intent = store.BeginPendingApply(mixed, token);
+        var duplicateIntent = store.BeginPendingApply(duplicate, token);
+        Assert.Equal(new[] { false }, duplicateIntent.ApplyOperations);
 
-        Assert.Equal(new[] { false, true }, intent.ApplyOperations);
-        var recovered = Assert.Single(store.ReadPendingApplyIntents("scope-a", Node(1)));
-        Assert.Equal(new[] { false, true }, recovered.ApplyOperations);
+        var newAuthor = CreateBatch("scope-a", 1, 3, 1, 7, 12, 1, 1, 11, 12,
+            Operation(21, 31, 41, 51));
+        var newIntent = store.BeginPendingApply(newAuthor,
+            Guid.Parse("00000000-0000-0000-0000-000000000127"));
+        Assert.Equal(new[] { true }, newIntent.ApplyOperations);
 
-        var competing = CreateBatch("scope-a", 1, 4, 1, 7, 12, 1, 1, 0, 12,
+        var competing = CreateBatch("scope-a", 1, 4, 1, 7, 13, 1, 1, 0, 13,
             Operation(21, 31, 41, 51));
         Assert.Throws<InvalidOperationException>(() => store.BeginPendingApply(
-            competing, Guid.Parse("00000000-0000-0000-0000-000000000127")));
+            competing, Guid.Parse("00000000-0000-0000-0000-000000000128")));
         Assert.Throws<InvalidOperationException>(() => store.AcceptIncomingBatch(competing));
 
-        store.FinalizePendingApply("scope-a", Node(1),
-            new MetadataProviderApplyReceipt(token, mixed.BatchDigest.ToArray()));
+        var recovered = store.ReadPendingApplyIntents("scope-a", Node(1));
+        Assert.Equal(2, recovered.Count);
+        Assert.Contains(recovered, intent => intent.ApplyOperations.SequenceEqual(new[] { false }));
+        Assert.Contains(recovered, intent => intent.ApplyOperations.SequenceEqual(new[] { true }));
 
-        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 13, 1, 3, 0, 13,
-            Operation(20, 30, 40, 50),
-            Operation(21, 31, 41, 51),
+        store.FinalizePendingApply("scope-a", Node(1),
+            new MetadataProviderApplyReceipt(newIntent.ApplyToken, newAuthor.BatchDigest.ToArray()));
+
+        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 14, 1, 1, 0, 14,
             Operation(22, 32, 42, 52));
         var nextIntent = store.BeginPendingApply(afterFinalize,
-            Guid.Parse("00000000-0000-0000-0000-000000000128"));
-        Assert.Equal(new[] { false, false, true }, nextIntent.ApplyOperations);
+            Guid.Parse("00000000-0000-0000-0000-000000000129"));
+        Assert.Equal(new[] { true }, nextIntent.ApplyOperations);
     }
 
     [Fact]
