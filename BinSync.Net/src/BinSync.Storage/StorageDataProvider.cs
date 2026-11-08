@@ -154,7 +154,7 @@ public class StorageDataProvider : IDataProvider
                 batch.Put(currentKey, owned);
             }
 
-            batch.Put(ChangeKey(sequence), EncodeLocalFeedChange(mutation));
+            batch.Put(ChangeKey(sequence), EncodeLocalFeedChange(owned));
             batch.Put([LocalHighWatermark], EncodeUInt64(sequence));
             batch.Commit();
         }
@@ -484,9 +484,8 @@ public class StorageDataProvider : IDataProvider
         return 0;
     }
 
-    private static byte[] EncodeLocalFeedChange(ProviderMutation mutation)
+    private static byte[] EncodeLocalFeedChange(byte[] encodedMutation)
     {
-        byte[] encodedMutation = EncodeMutation(mutation);
         byte[] identity = NewChangeIdentityBytes();
         byte[] result = new byte[encodedMutation.Length + identity.Length];
         encodedMutation.CopyTo(result, 0);
