@@ -41,7 +41,8 @@ public sealed class OriginFrontierProtocolTests
     private static AppliedOriginFrontierReport Report(
         NamespaceRosterCertificate roster, int memberIndex, byte[] seed,
         params (byte Author, uint Epoch, ulong Sequence)[] entries)
-        => new()
+    {
+        var report = new AppliedOriginFrontierReport
         {
             NamespaceId = roster.NamespaceId,
             RosterGeneration = roster.RosterGeneration,
@@ -57,6 +58,9 @@ public sealed class OriginFrontierProtocolTests
                     ContiguousAppliedOriginSequence = e.Sequence
                 }).ToArray()
         };
+        return OriginFrontierProtocol.DecodeAndVerify(
+            OriginFrontierProtocol.Sign(report, seed), roster);
+    }
 
     [Fact]
     public void OFR1_member_signature_roundtrips_and_binds_the_roster()
