@@ -55,17 +55,17 @@ The fixture freezes 256, 1,024 or 4,096 unique outbound ChangeIds into the durab
 
 ## 2026-11-08 full coordinator retry after freeze / ACK interruption
 
-**Run:** GitHub Actions Durable Metadata Bench, commit `8e6833e5aa5fe7086dbd72b18cf71e45f30169c9`  
-**Runtime:** .NET 10.0.14 · **OS:** Ubuntu 26.04.1 LTS · **CPU:** AMD EPYC 7763 (GitHub-hosted runner)  
+**Run:** GitHub Actions Durable Metadata Bench, run `42439312729`, code head `8e6833e5aa5fe7086dbd72b18cf71e45f30169c9`  
+**Runtime:** .NET 10.0.14 · **OS:** Ubuntu 26.04.1 LTS · **CPU:** Intel Xeon Platinum 8573C (GitHub-hosted runner)  
 **Job:** InProcessEmitToolchain, 3 warmup iterations and 10 measurement iterations, one publication retry per invocation.
 
 The fixture uses the real `StorageDataProvider` and `StorageMetadataStore`. Setup first publishes a feed so the immutable Metadata Store freeze succeeds, then injects a provider ACK failure. The measured invocation retries the same still-pending feed, verifies the frozen ChangeId fingerprints, ACKs the provider feed and rehydrates the Node cache from a provider snapshot.
 
 | Pending provider-feed rows | Mean / retry | Allocated / retry |
 |---:|---:|---:|
-| 256 | 2.055 ms | 1.52 MB |
-| 1,024 | 14.324 ms | 6.47 MB |
-| 4,096 | 34.651 ms | 33.92 MB |
+| 256 | 2.112 ms | 1.52 MB |
+| 1,024 | 12.768 ms | 6.47 MB |
+| 4,096 | 35.213 ms | 33.92 MB |
 
 **Important scope:** this is the complete `PublishLocalChanges` retry path, including provider snapshot rehydration and Node cache replacement. It is not a scan-only benchmark. `RestoreProviderSnapshot` rebuilds the namespace and copies field values, so its allocations are included. The 1,024-row case had high run-to-run variance (24.9% relative standard deviation); treat that mean as directional. The 4,096-row case was more stable (1.02%).
 
@@ -81,11 +81,11 @@ The coordinator now applies the exact scanned provider-feed prefix incrementally
 
 | Pending provider-feed rows | Incremental retry mean | Allocated / retry | Previous full-snapshot retry mean | Previous allocation |
 |---:|---:|---:|---:|---:|
-| 256 | 1.523 ms | 875.93 KB | 2.055 ms | 1.52 MB |
-| 1,024 | 3.829 ms | 3,516.38 KB | 14.324 ms | 6.47 MB |
-| 4,096 | 15.869 ms | 14,148.12 KB | 34.651 ms | 33.92 MB |
+| 256 | 1.523 ms | 875.93 KB | 2.112 ms | 1.52 MB |
+| 1,024 | 3.829 ms | 3,516.38 KB | 12.768 ms | 6.47 MB |
+| 4,096 | 15.869 ms | 14,148.12 KB | 35.213 ms | 33.92 MB |
 
-**Comparison caveat:** the previous full-snapshot baseline ran on an AMD EPYC 7763 runner; this incremental run used an AMD EPYC 9V74 runner. Treat latency differences as directional, not as a controlled before/after claim. The 1,024-row previous baseline also had high variance (24.9% relative standard deviation). Current-run relative standard deviations were approximately 29.3%, 6.45% and 2.93% for 256/1,024/4,096 rows; the 256-row case is noisy. BenchmarkDotNet also warned that these single-invocation stateful iterations are shorter than its recommended 100 ms measurement window.
+**Comparison caveat:** the previous full-snapshot baseline ran on an AMD EPYC 7763 runner; this incremental run used an AMD EPYC 9V74 runner. Treat latency differences as directional, not as a controlled before/after claim. The 1,024-row previous baseline had very high variance (about 78.8% relative standard deviation). Current-run relative standard deviations were approximately 29.3%, 6.45% and 2.93% for 256/1,024/4,096 rows; the 256-row case is noisy. BenchmarkDotNet also warned that these single-invocation stateful iterations are shorter than its recommended 100 ms measurement window.
 
 **Interpretation:** the current retry path reduced measured managed allocation substantially at all sizes, with the largest case falling from 33.92 MB to 14,148 KB. That cross-runner comparison is exploratory only and has been superseded by the matched-runner comparison in the following section. The direct ChangeId lookup remains allocation-free; the remaining incremental-path allocations include feed materialization, metadata operation encoding and changed-record copy-on-write.
 
