@@ -188,8 +188,8 @@ public static class NamespaceRosterProtocol
             previous = member;
         }
 
-        if (roster.Signature is not null && roster.Signature.Length != 0 &&
-            roster.Signature.Length != BatchSignature.SignatureSize)
+        if (roster.Signature is null || (roster.Signature.Length != 0 &&
+            roster.Signature.Length != BatchSignature.SignatureSize))
             throw new ArgumentException("Roster signature must be empty or 64 bytes.", nameof(roster));
     }
 
