@@ -21,7 +21,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
     private const byte LocalAckWatermark = 0x22;
     private const byte LocalReadWatermark = 0x23;
     private const byte ProviderPublicationMode = 0x24;
+    private const byte ProviderFormatMarker = 0x25;
     private const byte ApplyReceipt = 0x30;
+    private static ReadOnlySpan<byte> ProviderFormatV3 => [0x42, 0x53, 0x50, 0x33];
+    private static readonly byte[] ProviderOwnedPrefixes =
+        [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
+         LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
+         ProviderPublicationMode, ApplyReceipt];
 
     private readonly object _gate;
     private readonly StorageDatabase _storage;
@@ -41,6 +47,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         _ownsStorage = true;
         _storage = StorageDatabase.Open(directory, partitionId);
         _gate = StorageDatabaseTransactionGate.For(_storage);
+        try { EnsureFormatMarker(); }
+        catch { _storage.Dispose(); throw; }
     }
 
     /// <summary>Attach to a caller-owned shared Storage database.</summary>
@@ -50,6 +58,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         _gate = StorageDatabaseTransactionGate.For(_storage);
         _ownsStorage = false;
         _deleteOnDispose = false;
+        EnsureFormatMarker();
     }
 
     public bool SupportsRestartDurability => true;
@@ -183,38 +192,24 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
             ulong start = Math.Max(afterSequence, acked);
             var rows = snapshot.ScanPrefix([LocalChange], ChangeKey(start), limit);
             var changes = new List<ProviderChange>(rows.Count);
-            var legacyRows = new List<(byte[] Key, byte[] Value)>();
             foreach (var row in rows)
             {
                 ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
                 var decoded = DecodeLocalFeedChange(row.Value);
-                BatchId changeId = decoded.ChangeId;
-                if (decoded.NeedsIdentityMigration)
-                {
-                    byte[] identityBytes = NewChangeIdentityBytes();
-                    changeId = BatchId.From(identityBytes);
-                    byte[] upgradedValue = new byte[row.Value.Length + identityBytes.Length];
-                    row.Value.CopyTo(upgradedValue, 0);
-                    identityBytes.CopyTo(upgradedValue, row.Value.Length);
-                    legacyRows.Add((row.Key, upgradedValue));
-                }
                 changes.Add(new ProviderChange(sequence, decoded.Mutation)
                 {
-                    ChangeId = changeId
+                    ChangeId = decoded.ChangeId
                 });
             }
 
             ulong scanned = changes.Count == limit ? changes[^1].Sequence : high;
-            if (scanned > highestRead || legacyRows.Count > 0)
+            if (scanned > highestRead)
             {
                 using var cursorBatch = _storage.BeginWriteBatch();
                 ulong actualBaseCommitSeq = _storage.LastCommitSeq;
                 if (actualBaseCommitSeq != snapshot.CommitSeq)
                     throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
-                foreach (var legacyRow in legacyRows)
-                    cursorBatch.Put(legacyRow.Key, legacyRow.Value);
-                if (scanned > highestRead)
-                    cursorBatch.Put([LocalReadWatermark], EncodeUInt64(scanned));
+                cursorBatch.Put([LocalReadWatermark], EncodeUInt64(scanned));
                 cursorBatch.Commit();
             }
 
@@ -438,6 +433,35 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         }
     }
 
+    private void EnsureFormatMarker()
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            using var snapshot = _storage.OpenSnapshot();
+            if (snapshot.TryGet([ProviderFormatMarker], out var existing))
+            {
+                if (!existing!.AsSpan().SequenceEqual(ProviderFormatV3))
+                    throw new InvalidDataException("Storage Data Provider format marker is not v3.");
+                return;
+            }
+
+            foreach (byte prefix in ProviderOwnedPrefixes)
+            {
+                if (snapshot.ScanPrefix([prefix], ReadOnlySpan<byte>.Empty, 1).Count != 0)
+                    throw new InvalidDataException(
+                        "Storage Data Provider partition has durable rows but no v3 format marker; refusing legacy/ambiguous state.");
+            }
+
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            batch.Put([ProviderFormatMarker], ProviderFormatV3);
+            batch.Commit();
+        }
+    }
+
     private static void ValidateMutation(ProviderMutation mutation)
     {
         ArgumentNullException.ThrowIfNull(mutation);
@@ -537,23 +561,21 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode
         return result;
     }
 
-    private static (ProviderMutation Mutation, BatchId ChangeId, bool NeedsIdentityMigration)
+    private static (ProviderMutation Mutation, BatchId ChangeId)
         DecodeLocalFeedChange(ReadOnlySpan<byte> bytes)
     {
-        if (bytes.Length < 53)
-            throw new InvalidDataException("Stored provider local feed mutation is truncated.");
+        if (bytes.Length < 69)
+            throw new InvalidDataException("Stored v3 provider local feed mutation or ChangeId is truncated.");
         uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49, 4));
         if (valueLength > int.MaxValue)
             throw new InvalidDataException("Stored provider local feed value length is invalid.");
         int mutationLength = checked(53 + (int)valueLength);
-        if (bytes.Length == mutationLength)
-            return (DecodeMutation(bytes), default, true);
         if (bytes.Length - mutationLength != 16)
-            throw new InvalidDataException("Stored provider local feed identity length is invalid.");
+            throw new InvalidDataException("Stored v3 provider local feed entry must contain exactly one ChangeId.");
         BatchId changeId = BatchId.From(bytes.Slice(mutationLength, 16));
         if (changeId.IsZero)
             throw new InvalidDataException("Stored provider local feed identity must not be zero.");
-        return (DecodeMutation(bytes[..mutationLength]), changeId, false);
+        return (DecodeMutation(bytes[..mutationLength]), changeId);
     }
 
     private static byte[] NewChangeIdentityBytes()
