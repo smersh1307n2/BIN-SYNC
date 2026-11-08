@@ -1484,6 +1484,33 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Missing_provider_cutover_marker_refuses_legacy_publication_when_metadata_is_ahead()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "missing-provider-cutover-marker"), 462);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(62);
+        const string scope = "missing-provider-cutover-marker";
+
+        metadata.FreezeOutbound(scope, node.NodeId, 1, node.NodeId, new[]
+        {
+            new MetadataFrozenOperation
+            {
+                ChangeId = BatchId.From(Guid.Parse("62000000-0000-0000-0000-000000000062").ToByteArray()),
+                Fingerprint = new byte[16],
+                Payload = new byte[] { 1, 2, 3 }
+            }
+        });
+
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        Assert.Throws<InvalidOperationException>(() => coordinator.PublishLocalChanges(_ => { }));
+        Assert.False(((IProviderPublicationMode)provider)
+            .TryGetMetadataStoreOwnedPublicationCutover(out _));
+        Assert.Equal(0L, node.GetOutboxHighWatermark(1, node.NodeId));
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+    }
+
+    [Fact]
     public void Provider_authoritative_rehydration_recovers_checkpoint_failure_after_feed_ack()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-rehydrate-after-ack"), 461);
