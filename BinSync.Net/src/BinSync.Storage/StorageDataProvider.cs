@@ -349,8 +349,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             ThrowIfDisposed();
             if (!_storage.TryGet(ClosedAuthorIdentityKey(), out _))
                 throw new InvalidOperationException("A new author epoch can be activated only after terminal author retirement.");
-            if (_storage.TryGet(ClosedAuthorEpochKey(authorEpoch), out _))
-                throw new InvalidOperationException("A previously closed author epoch cannot be reused.");
+            if (authorEpoch <= ReadMaxClosedAuthorEpoch())
+                throw new InvalidOperationException("A rejoined author must use a fresh epoch greater than every previously closed epoch.");
             using var batch = _storage.BeginWriteBatch();
             batch.Delete(ClosedAuthorIdentityKey());
             batch.Put(ActiveAuthorEpochKey(), EncodeUInt32(authorEpoch));
@@ -409,6 +409,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             }
             else
             {
+                if (ReadMaxClosedAuthorEpoch() != 0)
+                    throw new InvalidOperationException("A provider with retired author epochs requires explicit roster-backed epoch activation.");
                 using var activate = _storage.BeginWriteBatch();
                 activate.Put(ActiveAuthorEpochKey(), EncodeUInt32(mutation.OriginAuthorEpoch));
                 activate.Commit();
@@ -1551,6 +1553,25 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         if (!snapshot.TryGet([ActiveGeneration], out var value) || value!.Length != 16)
             throw new InvalidDataException("Storage Data Provider active generation marker is missing or malformed.");
         return new Guid(value!, true);
+    }
+
+    private uint ReadMaxClosedAuthorEpoch()
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Prefixed(ClosedAuthorEpoch, ReadOnlySpan<byte>.Empty));
+        uint maximum = 0;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(256);
+            foreach (StorageEntry row in page)
+            {
+                if (row.Key.Length != 5 || row.Value.Length != 0)
+                    throw new InvalidDataException("Stored author-epoch closure marker is malformed.");
+                maximum = Math.Max(maximum, BinaryPrimitives.ReadUInt32LittleEndian(row.Key.AsSpan(1)));
+            }
+            if (page.Count < 256) break;
+        }
+        return maximum;
     }
 
     private static byte[] ClosedAuthorIdentityKey() => [ClosedAuthorIdentity];
