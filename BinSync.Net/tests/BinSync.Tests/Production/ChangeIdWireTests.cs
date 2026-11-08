@@ -1199,6 +1199,23 @@ public class ChangeIdWireTests
     }
 
     [Fact]
+    public void ApplyBatch_rejects_original_author_cursor_span_that_does_not_match_operation_count()
+    {
+        using var source = Fix.MakeNode(109);
+        using var target = Fix.MakeNode(110);
+        Transport.MakeSession(source, target);
+        Assert.True(source.WriteField(1, Fix.Rid(0x69), 0x100, new byte[] { 1 }));
+        var batch = source.CreateDeltaBatch(target.NodeId, 1)!;
+        batch.CursorEnd++;
+        Rehash(batch);
+
+        var error = Assert.Throws<SyncException>(() => target.ApplyBatch(batch, source.NodeId));
+        Assert.Equal("BATCH_TRANSACTION_FAILED", error.CodeName);
+        Assert.Empty(target.Storage);
+        Assert.Equal(0, target.GetRecordCount(1));
+    }
+
+    [Fact]
     public void ApplyBatch_rejects_record_tombstone_with_different_envelope_record_id_before_mutation()
     {
         using var source = Fix.MakeNode(107);
