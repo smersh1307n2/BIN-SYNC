@@ -326,21 +326,25 @@ public class MetadataStoreMillionRowBench
     [IterationCleanup]
     public void Cleanup() => _store.Dispose();
 
-    [Benchmark(Description = "Freeze one local operation / 1,000,000 existing ledger rows")]
-    public int FreezeOneOperationAtMillionRows()
+    [Benchmark(OperationsPerInvoke = 256, Description = "Freeze local operation / 1,000,000 existing ledger rows")]
+    public int FreezeOperationsAtMillionRows()
     {
-        byte[] identity = IdBytes(Interlocked.Increment(ref _nextId));
-        var operation = new MetadataFrozenOperation
+        const int operationsPerInvocation = 256;
+        for (int i = 0; i < operationsPerInvocation; i++)
         {
-            ChangeId = BatchId.From(identity),
-            Fingerprint = identity,
-            Payload = new byte[] { 0xA5, 0x5A }
-        };
-        IReadOnlyList<MetadataOutboundItem> frozen = _store.FreezeOutbound(
-            Scope, Local, NamespaceId, Author, new[] { operation });
-        if (frozen.Count != 1 || frozen[0].Sequence != 1_000_000UL + (ulong)(_nextId - 3_000_000))
-            throw new InvalidOperationException("Million-row benchmark did not allocate the expected next sequence.");
-        return frozen.Count;
+            byte[] identity = IdBytes(Interlocked.Increment(ref _nextId));
+            var operation = new MetadataFrozenOperation
+            {
+                ChangeId = BatchId.From(identity),
+                Fingerprint = identity,
+                Payload = new byte[] { 0xA5, 0x5A }
+            };
+            IReadOnlyList<MetadataOutboundItem> frozen = _store.FreezeOutbound(
+                Scope, Local, NamespaceId, Author, new[] { operation });
+            if (frozen.Count != 1 || frozen[0].Sequence != 1_000_000UL + (ulong)(_nextId - 3_000_000))
+                throw new InvalidOperationException("Million-row benchmark did not allocate the expected next sequence.");
+        }
+        return operationsPerInvocation;
     }
 
     private static byte[] IdBytes(long value)
