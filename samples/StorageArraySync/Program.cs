@@ -109,6 +109,8 @@ try
             throw new InvalidOperationException("Post-restart update was not frozen into the existing outbound stream.");
 
         Transport.MakeSession(nodeA, nodeB);
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
         int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
         {
             if (ReferenceEquals(receiver, nodeA))
