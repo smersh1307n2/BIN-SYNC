@@ -1,6 +1,3 @@
-using System.Collections.Concurrent;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
 using Fld1.Storage.Wal.Format;
 using Fld1.Storage.Wal.Recovery;
 
@@ -10,14 +7,11 @@ namespace Fld1.Storage.Wal.IO;
 /// Multi-segment WAL for one partition. Rotation: fsync active → new segment file.
 /// Segment names: p_{partitionId}.{seg}.log
 /// </summary>
-public sealed partial class WalManager : IDisposable
+public sealed class WalManager : IDisposable
 {
-    private static readonly ConcurrentDictionary<string, byte> ActiveWriters =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private readonly string _walDir;
     private readonly ulong _partitionId;
-    private readonly FileStream _writerLock;
-    private readonly string _writerLockPath;
+    private readonly WalWriterFence _writerFence;
     private readonly long _rotateAfterBytes;
     private readonly object _lock = new();
     private WalWriter _active;
@@ -37,15 +31,14 @@ public sealed partial class WalManager : IDisposable
     }
 
     private WalManager(string walDir, ulong partitionId, long rotateAfterBytes, WalWriter active, int activeSeg,
-        FileStream writerLock, string writerLockPath)
+        WalWriterFence writerFence)
     {
         _walDir = walDir;
         _partitionId = partitionId;
         _rotateAfterBytes = rotateAfterBytes;
         _active = active;
         _activeSeg = activeSeg;
-        _writerLock = writerLock;
-        _writerLockPath = writerLockPath;
+        _writerFence = writerFence;
     }
 
     public static string SegmentPath(string walDir, ulong partitionId, int seg)
@@ -62,24 +55,9 @@ public sealed partial class WalManager : IDisposable
     {
         walDir = Path.GetFullPath(walDir);
         Directory.CreateDirectory(walDir);
-        string writerLockPath = Path.Combine(walDir, $"p_{partitionId}.writer.lock");
-        if (!ActiveWriters.TryAdd(writerLockPath, 0))
-            throw new IOException($"WAL partition {partitionId} is already open for writing in this process.");
-
-        FileStream? writerLock = null;
+        WalWriterFence writerFence = WalWriterFence.Acquire(walDir, partitionId);
         try
         {
-            writerLock = new FileStream(writerLockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite,
-                FileShare.ReadWrite, bufferSize: 1, FileOptions.WriteThrough);
-            if (writerLock.Length == 0)
-            {
-                writerLock.WriteByte(0);
-                writerLock.Flush(flushToDisk: true);
-            }
-            // FileShare is not an inter-process writer fence on every supported OS.
-            // The byte-range lock is released by the OS if the process terminates.
-            AcquireWriterFence(writerLock);
-
             var segs = ListSegments(walDir, partitionId);
             var allRecords = new List<WalRecoveredRecord>();
 
@@ -88,7 +66,7 @@ public sealed partial class WalManager : IDisposable
                 string path = SegmentPath(walDir, partitionId, 0);
                 var w = WalWriter.Create(path, partitionId, firstCommitSeq: 1);
                 return (new WalManager(walDir, partitionId, rotateAfterBytes, w, 0,
-                    writerLock, writerLockPath), allRecords);
+                    writerFence), allRecords);
             }
 
         ulong? expectedNextSeq = null;
@@ -163,66 +141,13 @@ public sealed partial class WalManager : IDisposable
         ulong nextSeq = expectedNextSeq!.Value;
             var writer = WalWriter.OpenForAppend(lastPath, partitionId, (ulong)lastValidEnd, nextSeq);
             return (new WalManager(walDir, partitionId, rotateAfterBytes, writer, lastSeg,
-                writerLock, writerLockPath), allRecords);
+                writerFence), allRecords);
         }
         catch
         {
-            writerLock?.Dispose();
-            ActiveWriters.TryRemove(writerLockPath, out _);
+            writerFence.Dispose();
             throw;
         }
-    }
-
-    private const int LockExclusive = 2;
-    private const int LockNonBlocking = 4;
-    private const int LockUnlock = 8;
-
-    [LibraryImport("libc", EntryPoint = "flock", SetLastError = true)]
-    private static partial int Flock(int fileDescriptor, int operation);
-
-    private static void AcquireWriterFence(FileStream stream)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            stream.Lock(0, 1);
-            return;
-        }
-
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
-        {
-            int descriptor = stream.SafeFileHandle.DangerousGetHandle().ToInt32();
-            if (Flock(descriptor, LockExclusive | LockNonBlocking) != 0)
-            {
-                int error = Marshal.GetLastPInvokeError();
-                throw new IOException("WAL partition is already open by another process.",
-                    new Win32Exception(error));
-            }
-            return;
-        }
-
-        throw new PlatformNotSupportedException("Exclusive WAL writer fencing is not implemented on this platform.");
-    }
-
-    private static void ReleaseWriterFence(FileStream stream)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            stream.Unlock(0, 1);
-            return;
-        }
-
-        if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD())
-        {
-            int descriptor = stream.SafeFileHandle.DangerousGetHandle().ToInt32();
-            if (Flock(descriptor, LockUnlock) != 0)
-            {
-                int error = Marshal.GetLastPInvokeError();
-                throw new IOException("Failed to release WAL partition writer fence.", new Win32Exception(error));
-            }
-            return;
-        }
-
-        throw new PlatformNotSupportedException("Exclusive WAL writer fencing is not implemented on this platform.");
     }
 
     private static List<int> ListSegments(string walDir, ulong partitionId)
@@ -409,12 +334,7 @@ public sealed partial class WalManager : IDisposable
             if (_disposed) return;
             _disposed = true;
             try { _active.Dispose(); }
-            finally
-            {
-                try { ReleaseWriterFence(_writerLock); } catch (IOException) { }
-                _writerLock.Dispose();
-                ActiveWriters.TryRemove(_writerLockPath, out _);
-            }
+            finally { _writerFence.Dispose(); }
         }
     }
 }
