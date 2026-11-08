@@ -231,7 +231,7 @@ public sealed class StorageCrashConsistencyTests
 
             Assert.Throws<InvalidDataException>(() => StorageDatabase.Open(directory, partitionId));
             Assert.True(File.Exists(manifestPath));
-            Assert.Equal(corruptManifest, File.Exists(snapshotPath) == false);
+            Assert.Equal(corruptManifest, File.Exists(snapshotPath));
         }
         finally
         {
