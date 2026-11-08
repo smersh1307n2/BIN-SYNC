@@ -546,7 +546,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     CompareSnapshotOrder(previousMutation, mutation) >= 0)
                     throw new InvalidDataException("Full-replace staged image is not in canonical unique order.");
                 previousMutation = mutation;
-                hash.AppendData(EncodeMutation(mutation));
+                hash.AppendData(entry.Value);
                 stagedCount = checked(stagedCount + 1);
                 if (stagedCount > state.ExpectedCount)
                     throw new InvalidDataException("Full-replace staged row count exceeds the signed manifest.");
@@ -966,27 +966,25 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
     private static void ValidateGenerationEntry(Guid generation, StorageEntry entry, ProviderMutation mutation)
     {
-        if (entry.Key.Length < 17 || !entry.Key.AsSpan(1, 16).SequenceEqual(GenerationBytes(generation)))
+        Span<byte> generationBytes = stackalloc byte[16];
+        generation.TryWriteBytes(generationBytes);
+        if (entry.Key.Length < 17 || !entry.Key.AsSpan(1, 16).SequenceEqual(generationBytes))
             throw new InvalidDataException("Full-replace row belongs to a different generation.");
+
+        Span<byte> recordBytes = stackalloc byte[16];
+        mutation.RecordId.WriteTo(recordBytes);
         if (mutation.IsRecordTombstone)
         {
             if (entry.Key[0] != CurrentRecordTombstone || entry.Key.Length != 33 ||
-                !entry.Key.AsSpan(17, 16).SequenceEqual(mutation.RecordId.ToArray()))
+                !entry.Key.AsSpan(17, 16).SequenceEqual(recordBytes))
                 throw new InvalidDataException("Full-replace record tombstone key does not match its value.");
             return;
         }
 
         if (entry.Key[0] != CurrentField || entry.Key.Length != 35 ||
-            !entry.Key.AsSpan(17, 16).SequenceEqual(mutation.RecordId.ToArray()) ||
+            !entry.Key.AsSpan(17, 16).SequenceEqual(recordBytes) ||
             BinaryPrimitives.ReadUInt16BigEndian(entry.Key.AsSpan(33, 2)) != mutation.FieldId)
             throw new InvalidDataException("Full-replace field key does not match its value.");
-    }
-
-    private static byte[] GenerationBytes(Guid generation)
-    {
-        byte[] bytes = new byte[16];
-        generation.TryWriteBytes(bytes);
-        return bytes;
     }
 
     private static IEnumerable<StorageEntry> EnumeratePrefix(
