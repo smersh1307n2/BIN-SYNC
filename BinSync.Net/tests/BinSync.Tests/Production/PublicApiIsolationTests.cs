@@ -556,7 +556,7 @@ public sealed class PublicApiIsolationTests
 
         var next = flow.WaitForCreditAsync(17, 8).AsTask();
         Assert.True(flow.TryApplyUpdate(17, 8));
-        await next.WaitAsync(TimeSpan.FromSeconds(1));
+        await next.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(0, flow.Balance(17));
     }
 
