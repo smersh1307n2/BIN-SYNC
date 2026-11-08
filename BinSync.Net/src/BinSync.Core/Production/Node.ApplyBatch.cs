@@ -49,6 +49,7 @@ public sealed partial class Node
 
         if (ForbiddenNamespaces.Contains(batch.NamespaceId))
             throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
+        EnsureNodeOwnedMutationAllowedInternal(batch.NamespaceId);
 
         var currentEpoch = SessionEpoch(senderPeer, batch.NamespaceId);
         if (currentEpoch is not null && batch.IssuerEpoch < currentEpoch.Value)
@@ -88,6 +89,7 @@ public sealed partial class Node
                 throw new SyncException("SCHEMA_MISMATCH", batch.BatchId);
             if (ForbiddenNamespaces.Contains(batch.NamespaceId))
                 throw new SyncException("NAMESPACE_FORBIDDEN", batch.BatchId);
+            EnsureNodeOwnedMutationAllowedInternal(batch.NamespaceId);
             int supported = SchemaVersions.TryGetValue(batch.NamespaceId, out var version) ? version : 1;
             if (batch.SchemaVersion > supported)
                 throw new SyncException("SCHEMA_PENDING", batch.BatchId);
@@ -209,6 +211,8 @@ public sealed partial class Node
     {
         ThrowIfDisposed();
         ValidateBatchForWire(batch);
+        if (!receiveStateOwnedByMetadataStore)
+            EnsureNodeOwnedMutationAllowedInternal(batch.NamespaceId);
         if (receiveStateOwnedByMetadataStore)
         {
             if (metadataApplyOperations is null || metadataApplyOperations.Count != batch.Entries.Count)
