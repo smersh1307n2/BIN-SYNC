@@ -107,6 +107,34 @@ public sealed partial class Node
             return restored.Count;
         }
     }
+    /// <summary>Validate provider mutations before they can be frozen into outbound metadata.</summary>
+    internal void ValidateProviderMutation(ProviderMutation mutation)
+    {
+        ArgumentNullException.ThrowIfNull(mutation);
+        if (mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero || mutation.AuthorNodeId != NodeId)
+            throw new InvalidDataException("Provider mutation identity does not match the local Node.");
+        ArgumentNullException.ThrowIfNull(mutation.Value);
+
+        if (mutation.IsRecordTombstone)
+        {
+            if (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
+                mutation.KeyEpoch != 0 || mutation.Value.Length != 0)
+                throw new InvalidDataException("Provider record tombstone is malformed.");
+        }
+        else if (mutation.IsTombstone)
+        {
+            if (mutation.FieldId == 0 || mutation.FieldId == Model.LifecycleFieldId ||
+                mutation.Value.Length != 0)
+                throw new InvalidDataException("Provider field tombstone is malformed.");
+        }
+        else if (mutation.FieldId == 0 || mutation.FieldId == Model.LifecycleFieldId)
+        {
+            throw new InvalidDataException("Provider field write is malformed.");
+        }
+
+        _ = new Hlc(mutation.HlcWall, mutation.HlcLogical);
+    }
+
     /// <summary>
     /// Apply the already-read local provider feed to the Node's in-memory cache without
     /// rebuilding the namespace from a full snapshot. Metadata Store remains the
@@ -142,11 +170,7 @@ public sealed partial class Node
                     throw new InvalidDataException("Provider changes require stable non-zero ChangeIds.");
 
                 ProviderMutation mutation = change.Mutation;
-                if (mutation.RecordId.IsZero || mutation.AuthorNodeId.IsZero ||
-                    mutation.AuthorNodeId != NodeId)
-                    throw new InvalidDataException("Provider mutation identity does not match the local Node.");
-                if (mutation.IsRecordTombstone && mutation.IsTombstone)
-                    throw new InvalidDataException("Provider mutation cannot be both a field and record tombstone.");
+                ValidateProviderMutation(mutation);
 
                 object operation;
                 if (mutation.IsRecordTombstone)
