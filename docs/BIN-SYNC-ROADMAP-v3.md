@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `84119128a9cf1f6e208199f72d6e7262d94ea27a`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
+Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest branch HEAD: `4aac39bfcff12aaaf9e589fa06c8726c34eb32f8`. Latest fully verified green code checkpoint: `1dfb7d686dd61eb80d3ade29b1392a6ffc5acdda` — Core 662/662, Fuzz/Lab 31/31, Storage Integration 156/156 on Ubuntu, Windows and macOS; durable metadata benchmark `42487879970` passed. C-pass code commits `aab64ad` (receipt retirement reservation guard) and `f0c2bd8` (provider local-intent contract) were committed after that green checkpoint; exact-head CI for the new code is pending. Current status is UNVERIFIED, not failed. Re-run full Core, Fuzz/Lab, Storage Integration and benchmark as appropriate during Phase T.
 
 ## 1. Target architecture
 
@@ -378,3 +378,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Clarified the public `IDataProvider.ApplyRemoteBatch` contract: remote materialization may change the visible LWW projection but MUST NOT append, rewrite or acknowledge the independent unpublished local-change feed.
 - [x] Inspected `StorageDataProvider.ApplyRemoteBatch`: its transaction updates current-state rows and the idempotency receipt only; it does not mutate LocalChange rows or local feed high/ACK watermarks.
 - [~] C contract committed as `f0c2bd8`; same-field remote-wins, local-intent publication and restart tests remain Phase T. No second PendingLocal journal is introduced.
+
+
+### 2026-11-08 — receipt GC design synchronized with C-pass guard
+
+- [x] Updated `METADATA-STORE-GC-DESIGN.md` to make unresolved outbound PendingBatch reservations an explicit receipt/peer-epoch retirement blocker, matching the new StorageMetadataStore guard and v3 §0.11.
+- [x] Clarified that a replacement epoch's completed initial-sync baseline cannot discard the old epoch's unresolved send/lost-ACK retry context.
+- [~] Current branch head is `4aac39b`; exact-head CI remains pending for C-pass code commits `aab64ad` and `f0c2bd8`.
