@@ -578,13 +578,15 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>Compact incoming batch receipts below the signed origin frontier under an external live-reference lease.</summary>
-    public int CompactReceipts(int namespaceId, int limit, Func<IDisposable?> acquireGcLease)
+    public int CompactReceipts(
+        int namespaceId, int limit, Func<IDisposable?> acquireGcLease,
+        IApplicationGcReferenceScanner externalReferences)
     {
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("Receipt GC requires the durable StorageMetadataStore implementation.");
         return storageMetadata.CompactReceipts(_scopeId
             ?? throw new InvalidOperationException("A durable metadata scope is required."),
-            _node.NodeId, namespaceId, limit, acquireGcLease);
+            _node.NodeId, namespaceId, limit, acquireGcLease, externalReferences);
     }
 
     /// <summary>
