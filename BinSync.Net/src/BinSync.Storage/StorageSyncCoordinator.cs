@@ -220,6 +220,8 @@ public sealed class StorageSyncCoordinator
             throw new NotSupportedException("Metadata-Store-owned publication requires the outbound ChangeId identity capability.");
         if (_provider is not IProviderPublicationMode publicationMode)
             throw new NotSupportedException("The attached provider does not support a durable outbound authority cutover.");
+        if (_provider is not IProviderPublishedOriginStore)
+            throw new NotSupportedException("The attached provider cannot durably stamp immutable publication origins.");
 
         lock (_gate)
         {
@@ -519,9 +521,9 @@ public sealed class StorageSyncCoordinator
     {
         ProviderMutation mutation = change.Mutation;
         if (change.ChangeId.IsZero || mutation.ChangeId != change.ChangeId ||
-            mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence != change.Sequence ||
+            mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence != 0 ||
             mutation.AuthorNodeId != _node.NodeId)
-            throw new InvalidDataException("Provider local feed entry is missing or conflicts with its immutable origin identity.");
+            throw new InvalidDataException("Provider local feed entry must retain a stable ChangeId/author epoch and defer OriginSequence until immutable freeze.");
         object op;
         byte opKind;
         if (mutation.IsRecordTombstone)
@@ -573,7 +575,7 @@ public sealed class StorageSyncCoordinator
             Fingerprint = fingerprint.ToArray(),
             Payload = envelope,
             OriginAuthorEpoch = mutation.OriginAuthorEpoch,
-            OriginSequence = mutation.OriginSequence
+            OriginSequence = 0
         };
     }
 
