@@ -595,7 +595,7 @@ public class ChangeIdWireTests
             Assert.Equal(author2, restored.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)].DurableAuthor);
             Assert.Equal(author2, restored.InboxAuthors[(issuer, 8, 3, batchDifferentAuthor)].DurableAuthor);
             Assert.Equal(fingerprint, restored.InboxAuthors[(issuer, 7, 3, batch1)].Fingerprint);
-            Assert.All(restored.InboxAuthors.Values, receipt => Assert.True(receipt.HasFingerprint && receipt.HasCursorEnd));
+            Assert.All(restored.InboxAuthors.Keys, key => { var receipt = restored.InboxAuthors[key]; Assert.True(receipt.HasFingerprint && receipt.HasCursorEnd); });
             Assert.Equal(3, restored.GlobalChangeLedger.Count);
             Assert.Equal(fingerprint, restored.GlobalChangeLedger[(7, change1)].Fingerprint);
             Assert.True(restored.GlobalChangeLedger[(7, change2)].IsKnown);
