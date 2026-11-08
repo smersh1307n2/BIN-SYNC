@@ -846,7 +846,6 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 3000, HlcLogical = 0, Value = "final"u8.ToArray()
         });
 
-        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce");
         int consumed = coordinator.PublishLocalChanges(_ => { }, limit: 16);
 
         Assert.Equal(4, consumed);
@@ -897,7 +896,6 @@ public sealed class StorageSyncCoordinatorTests
         Append(fieldA, 3000, "a-final");
         Append(fieldB, 2000, "b-old");
 
-        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "pending-coalesce-pages");
         Assert.Equal(5, coordinator.PublishLocalChanges(_ => { }, limit: 2));
 
         Assert.Equal(0, node.GetOutboxCount(1));
