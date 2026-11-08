@@ -48,9 +48,12 @@ public sealed class StorageSyncCoordinator
     {
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("Namespace-GC replay fencing requires the durable StorageMetadataStore implementation.");
-        storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
-        _namespaceGcStore = gcStore;
-        _namespaceGcTrustStore = trustStore;
+        lock (_gate)
+        {
+            storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
+            _namespaceGcStore = gcStore;
+            _namespaceGcTrustStore = trustStore;
+        }
     }
 
     /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
