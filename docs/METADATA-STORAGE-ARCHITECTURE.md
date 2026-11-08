@@ -933,7 +933,7 @@ The Storage-backed outbound source now supports a durable, explicit authority tr
 - `StorageArrayTcpSync` enables the cutover, completes an explicit empty initial peer baseline, sends through the Metadata Store durable transport overload and verifies a post-reopen update without advancing Node Outbox.
 - `AutoReconcileWithMetadataAsync` detects the persisted cutover marker and runs provider-authoritative rehydration before anti-entropy, so a stale Node checkpoint cannot reintroduce provider-external rows.
 
-Verified at BIN-SYNC code/test head `0399e8f0dfda39b5e860eca50364406323c7b7fa`: 644 core tests, 100 Storage Integration tests, 31 Fuzz/Lab cases, 70.8% line coverage and both Storage array samples pass.
+Verified at BIN-SYNC code/test head `be0d48db38e1c7f56cbd392311204a89120e72c5`: 644 core tests, 102 Storage Integration tests, 31 Fuzz/Lab cases, 70.8% line coverage and both Storage array samples pass.
 
 **Boundary:** this is the provider-owned outbound publication slice, not complete Node/Transport replacement. Node session epoch fencing, alias resolution, runtime caches and the legacy path remain. Physical crash-cut injection, multi-process concurrency/fencing, large-partition benchmarks and independent retention/GC proofs remain open.
 
@@ -947,7 +947,7 @@ The Storage adapter now has two complementary serialization layers:
 - The fence rejects a second open of the same partition in one process and across processes. The design is BCL-only; no P/Invoke or native library dependency was added.
 - This is deliberately **single-writer per partition**, not multi-writer. Parallel adapter operations sharing one in-process `StorageDatabase` are serialized; separate processes cannot write the same partition concurrently.
 
-Verified at BIN-SYNC `833433a515e262417b10590c285576cc5441e69d`: 644/644 core tests, 102/102 Storage Integration tests, 31/31 Fuzz/Lab cases, 70.8% line coverage; both Storage array samples and the real-TCP restart/tombstone flow pass. Integration regressions cover concurrent provider+metadata commits through one shared database, second-writer rejection, and successful reopen after the first writer disposes.
+Verified at BIN-SYNC `be0d48db38e1c7f56cbd392311204a89120e72c5`: 644/644 core tests, 102/102 Storage Integration tests, 31/31 Fuzz/Lab cases, 70.8% line coverage; both Storage array samples and the real-TCP restart/tombstone flow pass. Integration regressions cover concurrent provider+metadata commits through one shared database, second-writer rejection, and successful reopen after the first writer disposes.
 
 **Still to validate:** a separate-process integration test (including process termination while holding the fence) on each supported OS, symlink/alias path canonicalization, and physical power-loss cuts during WAL rotation/checkpoint. The current tests prove same-process rejection/reopen and the normal OS mutex path, not a complete hardware crash matrix.
 
