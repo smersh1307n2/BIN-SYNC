@@ -4,7 +4,8 @@ using System.Security.Cryptography;
 namespace BinSync.Storage;
 
 public sealed record StorageRemoteApplyPlan(
-    Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata, bool IsDuplicate = false);
+    Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata, bool IsDuplicate,
+    IReadOnlyList<bool> ApplyOperations);
 
 /// <summary>
 /// Coordinates BIN-SYNC with an application-owned durable Data Provider and optional
@@ -980,8 +981,11 @@ public sealed class StorageSyncCoordinator
         RegisterInterestedPeer(session, _namespaceId);
         StorageRemoteApplyPlan? plan = null;
         BatchResult result = await session.ReceiveBatchAsync(_node,
-            beforeApply: (batch, payload, senderPeer) =>
-                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer),
+            beforeApplyWithOperationDecisions: (batch, payload, senderPeer) =>
+            {
+                plan = BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), senderPeer);
+                return plan.ApplyOperations;
+            },
             beforeAck: (batch, _) =>
             {
                 var accepted = plan ?? throw new InvalidOperationException("Receive intent was not durably staged.");
@@ -1017,10 +1021,14 @@ public sealed class StorageSyncCoordinator
             Guid token = CreateBatchApplyToken(batch);
             bool finalizeMetadata = true;
             bool isDuplicate;
+            IReadOnlyList<bool> applyOperations;
             try
             {
                 var intent = _metadataStore.BeginPendingApply(metadataBatch, token);
                 isDuplicate = intent.IsDuplicate;
+                applyOperations = intent.ApplyOperations;
+                if (applyOperations.Count != metadataBatch.Operations.Count)
+                    throw new InvalidDataException("Metadata Store returned an incomplete operation decision mask.");
             }
             catch (MetadataPendingApplyAlreadyFinalizedException)
             {
@@ -1029,8 +1037,9 @@ public sealed class StorageSyncCoordinator
                     throw;
                 finalizeMetadata = false;
                 isDuplicate = true;
+                applyOperations = new bool[metadataBatch.Operations.Count];
             }
-            return new StorageRemoteApplyPlan(token, metadataBatch, finalizeMetadata, isDuplicate);
+            return new StorageRemoteApplyPlan(token, metadataBatch, finalizeMetadata, isDuplicate, applyOperations);
         }
     }
 
@@ -1111,7 +1120,7 @@ public sealed class StorageSyncCoordinator
                     if (persistNode is null)
                         throw new InvalidOperationException("Recovering a pre-Node PendingApply intent requires a Node checkpoint callback.");
                     if (intent.Batch.ReceiveStateOwnedByMetadataStore)
-                        _node.ApplyBatchPayloadWithMetadataAuthority(intent.Batch.WirePayload, intent.Batch.SenderPeer);
+                        _node.ApplyBatchPayloadWithMetadataAuthority(intent.Batch.WirePayload, intent.Batch.SenderPeer, intent.ApplyOperations);
                     else
                         _node.ApplyBatchPayload(intent.Batch.WirePayload, intent.Batch.SenderPeer);
                     persistNode(_node);
