@@ -33,7 +33,8 @@
 2. **Peer progress:** the previous scalar `lastAckedSeq` description was insufficient for independent author sequence spaces. The spec now describes peer/session state separately from per-author outbound and receive cursors.
 3. **Retention:** an ACK or TTL does not authorize deletion of receipts, ChangeId facts, relay history, Outbox payloads and tombstones as one coupled history. Each has its own proof horizon. Inbox receipt GC remains disabled because v2.4.20 has no explicit bilateral retention-checkpoint frame.
 4. **Duplicate ACK:** the receive pseudocode now returns the stored receipt cursor and durable author, not replay-supplied values.
-5. **Relay alias failure:** the old pseudocode silently skipped an operation with an unknown target alias. That contradicts contiguous author-stream cursors and the implementation's fail-closed behavior. The spec now rejects the whole batch with `UNKNOWN_ALIAS`.\n6. **Version label remains unresolved:** the specification title says `v2.4.20 FINAL`, while its `Версия` metadata and `ERRATA` heading still say `2.4.19`. Do not silently normalize this until the intended release/version history is confirmed.
+5. **Relay alias failure:** the old pseudocode silently skipped an operation with an unknown target alias. That contradicts contiguous author-stream cursors and the implementation's fail-closed behavior. The spec now rejects the whole batch with `UNKNOWN_ALIAS`.
+6. **Version label remains unresolved:** the specification title says `v2.4.20 FINAL`, while its `Версия` metadata and `ERRATA` heading still say `2.4.19`. Do not silently normalize this until the intended release/version history is confirmed.
 
 These are semantic clarifications/hardening changes; they do not change the wire layout.
 
