@@ -625,6 +625,11 @@ public sealed class StorageSyncCoordinatorTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
 
+        // Learn a third-party author only after the sender/receiver TCP session is
+        // established. The live ALIAS_MAP control update must reach the receiver
+        // before the relay DELTA_BATCH is sent.
+        Transport.MakeSession(sender, origin);
+
         RecordId record = RecordId.From(Guid.Parse("44000000-0000-0000-0000-000000000044").ToByteArray());
         providerA.AppendLocalChange(new ProviderMutation
         {
@@ -1018,10 +1023,6 @@ public sealed class StorageSyncCoordinatorTests
         using var sender = NewNode(18);
         using var origin = NewNode(20);
         using var receiver = NewNode(19);
-
-        // Teach the sender the third-party author's durable epoch before it stamps
-        // that author's relay operation for the downstream session.
-        Transport.MakeSession(sender, origin);
 
         var localOperations = new List<MetadataFrozenOperation>();
         for (int i = 0; i < 5; i++)
