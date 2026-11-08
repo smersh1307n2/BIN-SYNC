@@ -640,7 +640,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v16_groups_receipts_by_author_and_roundtrips_all_entries()
+    public void Persistence_v17_groups_receipts_by_author_and_roundtrips_all_entries()
     {
         using var node = Fix.MakeNode(123);
         var issuer = Fix.Nid(124);
@@ -662,12 +662,12 @@ public class ChangeIdWireTests
         node.GlobalChangeLedger[(7, change2)] = new ChangeLedgerValue(Digest16.From(Id(0xA7)), true);
         node.GlobalChangeLedger[(8, change3)] = new ChangeLedgerValue(fingerprint, true);
 
-        var path = Path.Combine(Path.GetTempPath(), $"binsync-v16-{Guid.NewGuid():N}.bin");
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v17-{Guid.NewGuid():N}.bin");
         try
         {
             NodePersistence.Save(node, path);
             var bytes = File.ReadAllBytes(path);
-            Assert.Equal((ushort)16, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
+            Assert.Equal((ushort)17, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
             using var restored = NodePersistence.Load(path);
             Assert.Equal(4, restored.InboxAuthors.Count);
             Assert.Equal(11, restored.InboxAuthors[(issuer, 7, 3, batch1)].CursorEnd);
