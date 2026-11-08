@@ -42,40 +42,60 @@ internal sealed class WalWriterFence : IDisposable
     private static string ResolvePhysicalDirectory(string path)
     {
         string fullPath = Path.GetFullPath(path);
-        string root = Path.GetPathRoot(fullPath)
-            ?? throw new IOException("WAL directory path has no filesystem root.");
-        if (OperatingSystem.IsWindows())
-            root = root.ToUpperInvariant();
-        string current = root;
-        string remainder = fullPath[root.Length..];
-        foreach (string segment in remainder.Split(
-                     new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
-                     StringSplitOptions.RemoveEmptyEntries))
+        for (int pass = 0; pass < 40; pass++)
         {
-            string actualSegment = segment;
-            if (Directory.Exists(current))
+            string root = Path.GetPathRoot(fullPath)
+                ?? throw new IOException("WAL directory path has no filesystem root.");
+            if (OperatingSystem.IsWindows())
+                root = root.ToUpperInvariant();
+
+            string current = root;
+            string[] segments = fullPath[root.Length..].Split(
+                new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                StringSplitOptions.RemoveEmptyEntries);
+            bool restart = false;
+
+            for (int i = 0; i < segments.Length; i++)
             {
-                string?[] matches = Directory.EnumerateFileSystemEntries(current)
-                    .Select(entry => Path.GetFileName(entry))
-                    .Where(name => name is not null &&
-                        string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
-                    .Take(2)
-                    .ToArray();
-                if (matches.Length == 1)
-                    actualSegment = matches[0]!;
-                else if (matches.Length > 1 &&
-                         matches.Any(name => string.Equals(name, segment, StringComparison.Ordinal)))
-                    actualSegment = segment;
+                string segment = segments[i];
+                string actualSegment = segment;
+                if (Directory.Exists(current))
+                {
+                    string?[] matches = Directory.EnumerateFileSystemEntries(current)
+                        .Select(entry => Path.GetFileName(entry))
+                        .Where(name => name is not null &&
+                            string.Equals(name, segment, StringComparison.OrdinalIgnoreCase))
+                        .Take(2)
+                        .ToArray();
+                    if (matches.Length == 1)
+                        actualSegment = matches[0]!;
+                    else if (matches.Length > 1 &&
+                             matches.Any(name => string.Equals(name, segment, StringComparison.Ordinal)))
+                        actualSegment = segment;
+                }
+
+                current = Path.Combine(current, actualSegment);
+                FileSystemInfo? target = new DirectoryInfo(current)
+                    .ResolveLinkTarget(returnFinalTarget: true);
+                if (target is null)
+                    continue;
+
+                string resolvedTarget = Path.GetFullPath(target.FullName);
+                string remaining = i + 1 < segments.Length
+                    ? Path.Combine(segments[(i + 1)..])
+                    : string.Empty;
+                fullPath = remaining.Length == 0
+                    ? resolvedTarget
+                    : Path.Combine(resolvedTarget, remaining);
+                restart = true;
+                break;
             }
 
-            current = Path.Combine(current, actualSegment);
-            var directory = new DirectoryInfo(current);
-            FileSystemInfo? target = directory.ResolveLinkTarget(returnFinalTarget: true);
-            if (target is not null)
-                current = Path.GetFullPath(target.FullName);
+            if (!restart)
+                return Path.TrimEndingDirectorySeparator(current);
         }
 
-        return Path.TrimEndingDirectorySeparator(current);
+        throw new IOException("WAL directory path contains too many symbolic-link indirections.");
     }
 
     private sealed class Manager
