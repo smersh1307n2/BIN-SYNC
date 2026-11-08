@@ -115,6 +115,43 @@ public sealed class StorageCrashConsistencyTests
         }
     }
 
+
+    [Fact]
+    public void Orphaned_wal_rotation_temp_is_ignored_on_open_and_replaced_on_next_rotation()
+    {
+        const ulong partitionId = 906;
+        string directory = Path.Combine(_root, "orphaned-wal-rotation-temp");
+        string walDirectory = Path.Combine(directory, "wal");
+        string orphanTemp = Path.Combine(walDirectory, $"p_{partitionId}.2.log.tmp");
+        string nextSegment = Path.Combine(walDirectory, $"p_{partitionId}.2.log");
+
+        try
+        {
+            using (var database = StorageDatabase.Open(directory, partitionId, walRotateAfterBytes: 1))
+                Put(database, 0x09, 0x99);
+
+            File.WriteAllBytes(orphanTemp, new byte[] { 0xFA, 0xFB, 0xFC });
+
+            using (var recovered = StorageDatabase.Open(directory, partitionId, walRotateAfterBytes: 1))
+            {
+                Assert.Equal(1UL, recovered.LastCommitSeq);
+                Put(recovered, 0x0A, 0xAA);
+            }
+
+            Assert.False(File.Exists(orphanTemp));
+            Assert.True(File.Exists(nextSegment));
+
+            using var reopened = StorageDatabase.Open(directory, partitionId, walRotateAfterBytes: 1);
+            Assert.Equal(2UL, reopened.LastCommitSeq);
+            Assert.True(reopened.TryGet(new byte[] { 0x09 }, out _));
+            Assert.True(reopened.TryGet(new byte[] { 0x0A }, out _));
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
