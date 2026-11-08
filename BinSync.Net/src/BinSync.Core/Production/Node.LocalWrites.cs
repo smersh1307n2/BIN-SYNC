@@ -188,6 +188,8 @@ public sealed partial class Node
         {
             NamespaceId = ns,
             Seq = current + 1,
+            OriginAuthorEpoch = checked((uint)Epoch),
+            OriginSequence = checked((ulong)(current + 1)),
             ChangeId = NewChangeId(),
             RecordId = recordId,
             OpKind = TagOf(op),

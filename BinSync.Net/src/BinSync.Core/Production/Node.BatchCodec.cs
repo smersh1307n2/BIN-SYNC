@@ -14,7 +14,7 @@ public sealed partial class Node
         int size = checked(Domains.DomainRecordsBytes.Length +
             Codec.VarintLength((ulong)count));
         for (int i = 0; i < count; i++)
-            size = checked(size + 33 +
+            size = checked(size + 45 +
                 Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
 
         var rented = ArrayPool<byte>.Shared.Rent(size);
@@ -39,7 +39,8 @@ public sealed partial class Node
             ref readonly var entry = ref entries[i];
             if (entry.ChangeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
-            writer.B128(entry.RecordId).B128(entry.ChangeId).U8(entry.OpKind)
+            writer.B128(entry.RecordId).B128(entry.ChangeId)
+                .U32(entry.OriginAuthorEpoch).U64(entry.OriginSequence).U8(entry.OpKind)
                 .Varint((ulong)entry.Payload.Length).Raw(entry.Payload.Span);
         }
     }
@@ -54,7 +55,7 @@ public sealed partial class Node
         for (int i = 0; i < entries.Count; i++)
         {
             var payload = entries[i].Payload;
-            est = checked(est + 33 + Codec.VarintLength((ulong)payload.Length) + payload.Length);
+            est = checked(est + 45 + Codec.VarintLength((ulong)payload.Length) + payload.Length);
         }
         return est;
     }
@@ -268,6 +269,10 @@ public sealed partial class Node
             var changeId = r.ReadBatchId();
             if (changeId.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED");
+            uint originEpoch = r.U32();
+            ulong originSequence = r.U64();
+            if (originEpoch == 0 || originSequence == 0)
+                throw new SyncException("BATCH_TRANSACTION_FAILED");
             byte opKind = r.U8();
             var payload = r.BytesMemory();
             entries.Add(new OutboxEntry
@@ -275,6 +280,8 @@ public sealed partial class Node
                 NamespaceId = ns,
                 Seq = 0,
                 ChangeId = changeId,
+                OriginAuthorEpoch = originEpoch,
+                OriginSequence = originSequence,
                 RecordId = recordId,
                 OpKind = opKind,
                 Payload = payload,
@@ -294,14 +301,18 @@ internal readonly struct TransportDeltaEntry
     internal RecordId RecordId { get; }
     internal BatchId ChangeId { get; }
     internal byte OpKind { get; }
+    internal uint OriginAuthorEpoch { get; }
+    internal ulong OriginSequence { get; }
     internal ReadOnlyMemory<byte> Payload { get; }
 
     internal TransportDeltaEntry(RecordId recordId, BatchId changeId, byte opKind,
-        ReadOnlyMemory<byte> payload)
+        uint originAuthorEpoch, ulong originSequence, ReadOnlyMemory<byte> payload)
     {
         RecordId = recordId;
         ChangeId = changeId;
         OpKind = opKind;
+        OriginAuthorEpoch = originAuthorEpoch;
+        OriginSequence = originSequence;
         Payload = payload;
     }
 }

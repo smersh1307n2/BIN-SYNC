@@ -83,6 +83,10 @@ public sealed class OutboxEntry
     public int NamespaceId { get; set; }
     /// <summary>Monotonic per (authorNodeId, namespaceId) [П1].</summary>
     public long Seq { get; set; }
+    /// <summary>Original author's incarnation when this operation was first published.</summary>
+    public uint OriginAuthorEpoch { get; set; }
+    /// <summary>Immutable original-author sequence; distinct from a relay's local Seq.</summary>
+    public ulong OriginSequence { get; set; }
     /// <summary>Idempotency key (16-byte) for this change.</summary>
     public BatchId ChangeId { get; set; }
     /// <summary>Record id (b128 / 16-byte).</summary>

@@ -123,6 +123,7 @@ public sealed partial class Node
             if (streamAuthor.IsZero)
                 throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
             ValidateAuthorStreamCursorSpan(batch, streamAuthor, batch.Entries.Count);
+            ValidateOriginProvenance(batch, streamAuthor);
             batch.AuthorStreamNodeId = streamAuthor;
 
             PeerState? peerState = PeerStates.TryGetValue((senderPeer, batch.NamespaceId), out var foundState)
@@ -194,6 +195,22 @@ public sealed partial class Node
         }
     }
 
+    private static void ValidateOriginProvenance(Batch batch, NodeId streamAuthor)
+    {
+        ulong previous = 0;
+        for (int i = 0; i < batch.Entries.Count; i++)
+        {
+            var entry = batch.Entries[i];
+            if (entry.OriginAuthorEpoch == 0 || entry.OriginSequence == 0 ||
+                (i != 0 && entry.OriginSequence <= previous))
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            if (batch.IssuerNodeId == streamAuthor &&
+                (entry.OriginAuthorEpoch > (uint)batch.IssuerEpoch ||
+                 entry.OriginSequence != checked((ulong)batch.CursorStart + (ulong)i)))
+                throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+            previous = entry.OriginSequence;
+        }
+    }
     private static void ValidateAuthorStreamCursorSpan(Batch batch, NodeId streamAuthor, int operationCount)
     {
         if (streamAuthor.IsZero || batch.CursorStart < 0 || batch.CursorEnd < batch.CursorStart ||
@@ -331,6 +348,7 @@ public sealed partial class Node
         // cursor span must match its operation count. This does NOT make the cursor
         // an origin sequence: a relay's range is its own local delivery coordinate.
         ValidateAuthorStreamCursorSpan(batch, streamAuthor, nEntEarly);
+        ValidateOriginProvenance(batch, streamAuthor);
         result.DurableAuthor = batch.DurableAuthor;
         var streamKey = (senderPeer, batch.IssuerEpoch, streamAuthor);
         if (!receiveStateOwnedByMetadataStore)
@@ -569,6 +587,8 @@ public sealed partial class Node
                 NamespaceId = e.NamespaceId != 0 ? e.NamespaceId : batch.NamespaceId,
                 Seq = relaySequences[idx],
                 ChangeId = relayChangeIds[idx],
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
                 Payload = durablePayload is null ? e.Payload : e.Payload.ToArray(),

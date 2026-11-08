@@ -218,27 +218,15 @@ public sealed partial class Node
                         wirePayload = Ops.EncodeOp(op, fullAuthor: false);
                     }
 
+                    if (e.OriginAuthorEpoch == 0 || e.OriginSequence == 0)
+                        throw new InvalidDataException("Outbox entry is missing immutable origin provenance.");
                     entries[entryIndex++] = new TransportDeltaEntry(
-                        e.RecordId, e.ChangeId, e.OpKind, wirePayload);
+                        e.RecordId, e.ChangeId, e.OpKind, e.OriginAuthorEpoch, e.OriginSequence, wirePayload);
                 }
             }
 
+            // The batch issuer epoch is the immediate sender's incarnation. Original-author epoch/sequence travel with each immutable record.
             int issuerEpoch = Epoch;
-            if (stream != NodeId)
-            {
-                if (AliasToNode.TryGetValue(targetPeer, out var map) &&
-                    map.TryGetValue(streamAlias.Value, out var binding) &&
-                    binding.Id == stream)
-                {
-                    issuerEpoch = binding.Epoch;
-                }
-                else
-                {
-                    foreach (var kv in KnownEpochs)
-                        if (kv.Key.Item2 >= 0 && kv.Key.Item1 == targetPeer)
-                            issuerEpoch = Math.Max(issuerEpoch, kv.Value);
-                }
-            }
 
             var recordsRoot = ComputeTransportRecordsRoot(entries, selectedCount);
             var chainKey = (NodeId, namespaceId, issuerEpoch);
@@ -274,7 +262,7 @@ public sealed partial class Node
 
             int payloadSize = checked(108 + 2 * Codec.VarintLength((ulong)selectedCount));
             for (int i = 0; i < selectedCount; i++)
-                payloadSize = checked(payloadSize + 33 +
+                payloadSize = checked(payloadSize + 45 +
                     Codec.VarintLength((ulong)entries[i].Payload.Length) + entries[i].Payload.Length);
 
             var payload = new byte[payloadSize];
