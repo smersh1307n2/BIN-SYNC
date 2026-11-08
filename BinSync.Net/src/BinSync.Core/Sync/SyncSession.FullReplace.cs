@@ -15,13 +15,14 @@ public partial class SyncSession
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(begin);
+        ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceBegin, GetFullReplaceStream(begin.NamespaceId),
             frameSequence, FullReplaceTransferProtocol.EncodeBegin(begin), ct).ConfigureAwait(false);
     }
 
     public async Task<FullReplaceTransferProtocol.Begin> ReceiveFullReplaceBeginAsync(
         int namespaceId, NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
-        CancellationToken ct = default)
+        ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(acceptedRoster);
@@ -29,7 +30,7 @@ public partial class SyncSession
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceBegin, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceBegin);
-        ValidateFullReplaceStream(frame, namespaceId);
+        ValidateFullReplaceStream(frame, namespaceId, expectedFrameSequence);
         var begin = FullReplaceTransferProtocol.DecodeBegin(frame.Payload);
         if (begin.NamespaceId != namespaceId)
             throw new FrameException("FRAME_REJECTED");
@@ -43,18 +44,19 @@ public partial class SyncSession
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(chunk);
+        ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceChunk, GetFullReplaceStream(chunk.NamespaceId),
             frameSequence, FullReplaceTransferProtocol.EncodeChunk(chunk), ct).ConfigureAwait(false);
     }
 
     public async Task<FullReplaceTransferProtocol.Chunk> ReceiveFullReplaceChunkAsync(
-        int namespaceId, CancellationToken ct = default)
+        int namespaceId, ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceChunk, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceChunk);
-        ValidateFullReplaceStream(frame, namespaceId);
+        ValidateFullReplaceStream(frame, namespaceId, expectedFrameSequence);
         var chunk = FullReplaceTransferProtocol.DecodeChunk(frame.Payload);
         if (chunk.NamespaceId != namespaceId)
             throw new FrameException("FRAME_REJECTED");
@@ -66,18 +68,19 @@ public partial class SyncSession
         CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceCommit, GetFullReplaceStream(transfer.NamespaceId),
             frameSequence, FullReplaceTransferProtocol.EncodeTransferId(transfer), ct).ConfigureAwait(false);
     }
 
     public async Task<FullReplaceTransferProtocol.TransferId> ReceiveFullReplaceCommitAsync(
-        int namespaceId, CancellationToken ct = default)
+        int namespaceId, ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceCommit, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceCommit);
-        ValidateFullReplaceStream(frame, namespaceId);
+        ValidateFullReplaceStream(frame, namespaceId, expectedFrameSequence);
         var transfer = FullReplaceTransferProtocol.DecodeTransferId(frame.Payload);
         if (transfer.NamespaceId != namespaceId)
             throw new FrameException("FRAME_REJECTED");
@@ -89,18 +92,19 @@ public partial class SyncSession
         CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceAbort, GetFullReplaceStream(transfer.NamespaceId),
             frameSequence, FullReplaceTransferProtocol.EncodeTransferId(transfer), ct).ConfigureAwait(false);
     }
 
     public async Task<FullReplaceTransferProtocol.TransferId> ReceiveFullReplaceAbortAsync(
-        int namespaceId, CancellationToken ct = default)
+        int namespaceId, ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
         EnsureV31Capability(SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceAbort, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceAbort);
-        ValidateFullReplaceStream(frame, namespaceId);
+        ValidateFullReplaceStream(frame, namespaceId, expectedFrameSequence);
         var transfer = FullReplaceTransferProtocol.DecodeTransferId(frame.Payload);
         if (transfer.NamespaceId != namespaceId)
             throw new FrameException("FRAME_REJECTED");
@@ -114,9 +118,15 @@ public partial class SyncSession
         return FullReplaceStreamPrefix | (uint)namespaceId;
     }
 
-    private static void ValidateFullReplaceStream(Frame frame, int namespaceId)
+    private static void ValidateFullReplaceSequence(ulong sequence)
     {
-        if (frame.StreamId != GetFullReplaceStream(namespaceId))
+        if (sequence == 0) throw new ArgumentOutOfRangeException(nameof(sequence));
+    }
+
+    private static void ValidateFullReplaceStream(Frame frame, int namespaceId, ulong expectedFrameSequence)
+    {
+        if (expectedFrameSequence == 0 || frame.FrameSeq != expectedFrameSequence ||
+            frame.StreamId != GetFullReplaceStream(namespaceId))
             throw new FrameException("FRAME_REJECTED");
     }
 }
