@@ -54,7 +54,7 @@ public sealed class NamespaceGcSessionTests
         Assert.Equal(capabilities, acceptor.NegotiatedCapabilities);
 
         var rosterReceive = acceptor.ReceiveNamespaceRosterAsync(trustB);
-        await initiator.SendNamespaceRosterAsync(roster, authoritySeed, frameSequence: 20);
+        await initiator.SendNamespaceRosterAsync(roster, authoritySeed, frameSequence: 1);
         NamespaceRosterCertificate receivedRoster = await rosterReceive;
         Assert.Equal(roster.RosterGeneration, receivedRoster.RosterGeneration);
 
@@ -69,14 +69,14 @@ public sealed class NamespaceGcSessionTests
             Entries = Array.Empty<AppliedOriginFrontierEntry>()
         };
         var frontierReceive = initiator.ReceiveOriginFrontierAsync(roster);
-        await acceptor.SendOriginFrontierAsync(report, memberSeed, frameSequence: 21);
+        await acceptor.SendOriginFrontierAsync(report, memberSeed, frameSequence: 1);
         AppliedOriginFrontierReport receivedFrontier = await frontierReceive;
         Assert.Equal(nodeB.NodeId, receivedFrontier.MemberNodeId);
 
         var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
             roster, 1, new byte[32], Array.Empty<AppliedOriginFrontierReport>());
         var checkpointReceive = acceptor.ReceiveRetentionCheckpointAsync(roster, trustB);
-        await initiator.SendRetentionCheckpointAsync(checkpoint, authoritySeed, frameSequence: 22);
+        await initiator.SendRetentionCheckpointAsync(checkpoint, authoritySeed, frameSequence: 2);
         NamespaceRetentionCheckpoint receivedCheckpoint = await checkpointReceive;
         Assert.Equal(1UL, receivedCheckpoint.CheckpointSequence);
 
@@ -94,7 +94,7 @@ public sealed class NamespaceGcSessionTests
             Installed = true
         };
         var ackReceive = initiator.ReceiveFullReplaceInstalledAckAsync(roster);
-        await acceptor.SendFullReplaceInstalledAckAsync(ack, memberSeed, frameSequence: 23);
+        await acceptor.SendFullReplaceInstalledAckAsync(ack, memberSeed, frameSequence: 2);
         FullReplaceInstalledAck receivedAck = await ackReceive;
         Assert.Equal(generation, receivedAck.Generation);
         Assert.Equal(nodeB.NodeId, receivedAck.MemberNodeId);
@@ -112,26 +112,10 @@ public sealed class NamespaceGcSessionTests
         await using var initiator = await connectTask;
 
         var (seed, key) = BatchSignature.GenerateKeyPair();
-        var roster = new NamespaceRosterCertificate
-        {
-            NamespaceId = 1,
-            RosterGeneration = 1,
-            PreviousRosterDigest = new byte[32],
-            AuthorityNodeId = nodeA.NodeId,
-            Members = new[]
-            {
-                new NamespaceRosterMember
-                {
-                    NodeId = nodeA.NodeId, PublicKey = key,
-                    TransportPeerEpoch = 1, Status = NamespaceMemberStatus.Active
-                }
-            }
-        };
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             initiator.SendOriginFrontierAsync(new AppliedOriginFrontierReport(), seed));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             initiator.SendFullReplaceInstalledAckAsync(new FullReplaceInstalledAck(), seed));
         Assert.Equal(SessionCapabilities.NamespaceRosterV31, acceptor.NegotiatedCapabilities);
-        _ = roster;
     }
 }
