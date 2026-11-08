@@ -2,7 +2,7 @@
 //
 // WAL-style durability contract:
 //  * Integrity — the serialized body is covered by a domain-tagged BLAKE3 digest
-//    ("BIN-SYNC/NODESTATE/v15", Blake3Core). Any bit flip,
+//    ("BIN-SYNC/NODESTATE/v17", Blake3Core). Any bit flip,
 //    truncation or version mismatch makes Load throw InvalidDataException.
 //  * Atomicity — the image goes to a temp file in the same directory, fsync'd, then
 //    File.Move(overwrite) renames it over the target; a crash can never leave a
@@ -16,7 +16,7 @@
 //  per-(author,ns) outbox seq counters, unified batch receipts (key -> durable author), LastBatchDigest and
 //  LastStreamDigest chain checkpoints, AliasToNode (reverse NodeToAlias is rebuilt on load), DurableAuthors,
 //  PeerStates (compact per-author progress, ReceivedStreams and replay Ids caches),
-//  local SeenChanges WAL replay markers, GlobalChangeLedger (namespace + ChangeId -> canonical semantic fingerprint), LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
+//  local SeenChanges WAL replay markers, GlobalChangeLedger (namespace + ChangeId -> compact semantic+Origin identity fingerprint), LastStreamAuthor, KnownEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions.
 //
 // Wire format: big-endian header (magic/version/bodyLen/digest), LE canonical body
 // written with the core Writer/Reader codec (varint-prefixed byte keys keep content
@@ -27,7 +27,7 @@ namespace BinSync;
 public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
-    public const string StateTag = "BIN-SYNC/NODESTATE/v16";
+    public const string StateTag = "BIN-SYNC/NODESTATE/v17";
     private const string Version14StateTag = "BIN-SYNC/NODESTATE/v14";
     private const string Version13StateTag = "BIN-SYNC/NODESTATE/v13";
     private const string Version12StateTag = "BIN-SYNC/NODESTATE/v12";
@@ -43,7 +43,7 @@ public static class NodePersistence
     private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
 
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
-    private const ushort Version = 16;
+    private const ushort Version = 17;
     private const int DigestLen = 32;
 
     // ---------------------------------------------------------------- Save
