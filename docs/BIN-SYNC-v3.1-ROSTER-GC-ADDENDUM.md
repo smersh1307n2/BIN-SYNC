@@ -338,3 +338,10 @@ The v3.1 implementation uses canonical encodings only: provider mutations requir
 ## 10.8. Receipt deletion retains the transport replay fence
 
 `CompactReceipts` requires the corresponding durable receive cursor to cover the receipt's `CursorEnd` and the sender digest-chain row to remain present, in addition to the signed origin frontier and no PendingApply reference. It deletes only the receipt row; receive cursor and digest-chain rows are deliberately retained. This makes an old cursor continuation fail after receipt pruning rather than appearing to be a fresh batch. Exact lost-ACK and reconnect behavior remains a T-pass obligation.
+
+
+## 10.9. Provider snapshot enumeration and GC enablement
+
+`StorageDataProvider.OpenSnapshot` now retains a pinned storage snapshot and streams the two current-state prefixes in canonical merged order using 4096-row keyset pages. This removes the extra full provider-row array and preserves a stable two-pass FULL_REPLACE view. The underlying `StorageDatabase.OpenSnapshot` still clones the partition, so total snapshot memory is not yet O(page).
+
+Physical receipt, ChangeId and tombstone collection are all explicitly disabled in v3.1 (`IsReceiptGcProofEnabled`, `IsChangeIdGcProofEnabled`, `IsTombstoneGcProofEnabled` are false). Receipt eligibility code additionally requires the sender's durable retired-transport-epoch fence, retained receive cursor/digest chain, safe origin frontier and no PendingApply. These compaction methods are plumbing only until exact-head proof tests and the remaining causal-horizon/application-lease work are complete.
