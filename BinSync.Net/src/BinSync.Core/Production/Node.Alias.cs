@@ -16,6 +16,40 @@ public sealed partial class Node
     /// HELLO carries the sender's incarnation epoch. Keep this peer-wide baseline
     /// separate from per-namespace batch watermarks so namespace 0 remains an ordinary
     /// namespace key (errata E-2/E-3). Reconnects may refresh aliases, never roll back epoch.
+    /// <summary>
+    /// Build (without mutating either session copy) the next collision-free ALIAS_MAP
+    /// proposal for a live transport. The peer accepts or rejects it before local commit.
+    /// </summary>
+    internal AliasMapEntry? CreateAliasMapProposal(NodeId peer, NodeId nodeId, int epoch)
+    {
+        if (peer.IsZero || nodeId.IsZero)
+            throw new ArgumentException("Peer and author identities must be non-zero.");
+        if (epoch < 0) throw new ArgumentOutOfRangeException(nameof(epoch));
+
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (DurableAuthors.TryGetValue(nodeId, out int knownEpoch) && epoch < knownEpoch)
+                throw new SyncException("EPOCH_REGRESSION");
+
+            if (NodeToAlias.TryGetValue(peer, out var reverse) &&
+                reverse.TryGetValue((nodeId, epoch), out int existing))
+                return null;
+
+            AliasToNode.TryGetValue(peer, out var forward);
+            int alias = 1;
+            while (forward is not null && forward.ContainsKey(alias))
+            {
+                if (alias == ushort.MaxValue)
+                    throw new SyncException("UNKNOWN_ALIAS");
+                alias++;
+            }
+            if (alias > ushort.MaxValue)
+                throw new SyncException("UNKNOWN_ALIAS");
+            return new AliasMapEntry((ushort)alias, nodeId, epoch);
+        }
+    }
+
     /// <summary>Thread-safe entry point (production hardening): takes the node gate
     /// and delegates to <c>RegisterSessionEpochInternal</c>. See <see cref="EnterAllGates"/>.</summary>
     public void RegisterSessionEpoch(NodeId peer, int epoch)
