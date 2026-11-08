@@ -231,7 +231,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     ? Array.Empty<IssuedOriginFrontierEntry>()
                     : current.OriginHighWatermarks
                         .Where(pair => pair.Key.NamespaceId == acceptedRoster.NamespaceId &&
-                            pair.Key.Author == localMember && pair.Value != 0)
+                            pair.Key.Author == localMember && pair.Value.Sequence != 0)
                         .OrderBy(pair => pair.Key.AuthorEpoch)
                         .Select(pair => new IssuedOriginFrontierEntry
                         {
@@ -1363,7 +1363,7 @@ private static bool ValidateIncomingBatchForStaging(
             ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var priorHighWatermark)
                 ? priorHighWatermark
                 : 0;
-            var originHighWatermarks = new Dictionary<OriginStreamKey, ulong>();
+            var originHighWatermarks = new Dictionary<OriginStreamKey, OriginIssuedState>();
             var frozen = new List<MetadataOutboundItem>(newOperations.Count);
             foreach (var operation in newOperations)
             {
