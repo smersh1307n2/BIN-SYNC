@@ -17,6 +17,7 @@ public class WalTests
         return new OutboxEntry
         {
             NamespaceId = 1, Seq = seq, ChangeId = BatchId.From(Guid.NewGuid().ToByteArray()),
+            OriginAuthorEpoch = checked((uint)node.Epoch), OriginSequence = checked((ulong)seq),
             RecordId = rid, OpKind = OpsConst.TagFieldWrite,
             Payload = Ops.EncodeOp(op, fullAuthor: false), AuthorNodeId = node.NodeId,
             CreatedAt = (long)hlc.Wall
