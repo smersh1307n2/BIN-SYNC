@@ -16,6 +16,14 @@ public sealed partial class Node
         {
             ThrowIfDisposed();
             _metadataStoreOwnedPublicationFences.Add(namespaceId);
+
+            // The durable Metadata Store is the sole ChangeId identity authority
+            // after this namespace's cutover. Retain no second Node-local identity
+            // ledger for the same namespace; local WAL replay markers (SeenChanges)
+            // are a separate recovery concern and intentionally remain untouched.
+            foreach (var key in GlobalChangeLedger.Keys
+                         .Where(key => key.Ns == namespaceId).ToArray())
+                GlobalChangeLedger.Remove(key);
         }
     }
 
