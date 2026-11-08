@@ -796,3 +796,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x C] The durable `StorageFullReplaceReceiver` now rejects a concrete `StorageDataProvider` + `StorageNamespaceGcStore` pair that do not share the same `StorageDatabase`. This aligns receiver generation switching and installed-ACK persistence with the coordinator/metadata transaction gate.
 - [~ T] Verify rejection for split databases and successful commit/ACK persistence when all three durable adapters share one database.
+
+
+### 2026-11-09 — C-pass: reduce snapshot payload duplication
+
+- [x C] `StorageDatabase.OpenSnapshot` now clones the sorted key index but shares the immutable stored value arrays. `Commit` copies caller-owned buffers on publication and later commits replace references rather than mutating arrays; snapshot reads still return owned copies through `TryGet`/bounded cursor pages.
+- [~ C] Snapshot creation still allocates an O(number-of-keys) sorted-index copy. A persistent immutable index/root or MVCC tree would be needed to reach O(page) total snapshot memory; do not claim that bound yet.
+- [~ T] Verify snapshot stability across replace/delete/reopen, concurrent commit and cursor paging; benchmark allocations/RSS with large values and 1M rows.
