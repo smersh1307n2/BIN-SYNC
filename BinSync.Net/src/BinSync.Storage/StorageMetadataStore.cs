@@ -1554,13 +1554,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 retiredThrough >= retiredPeerEpoch;
             var oldRosterKey = new InterestedPeerKey(namespaceId, peer, retiredPeerEpoch);
             if (current.PendingApplies.Values.Any(intent =>
-                    intent.Batch.SenderPeer == peer &&
+                    intent.Batch.SenderPeer == peer && intent.Batch.NamespaceId == namespaceId &&
                     (intent.Batch.TransportPeerEpoch == 0 ||
                      intent.Batch.TransportPeerEpoch == retiredPeerEpoch)))
                 throw new InvalidOperationException(
                     "Cannot retire a transport peer epoch while one of its PendingApply intents is unresolved; recover or finalize it first.");
             ReceiptKey[] oldReceipts = current.Receipts
-                .Where(pair => pair.Key.Sender == peer &&
+                .Where(pair => pair.Key.Sender == peer && pair.Key.NamespaceId == namespaceId &&
                     pair.Value.TransportPeerEpoch == retiredPeerEpoch)
                 .Select(pair => pair.Key)
                 .ToArray();
