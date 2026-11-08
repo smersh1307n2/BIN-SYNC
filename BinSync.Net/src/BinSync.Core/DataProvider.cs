@@ -122,6 +122,13 @@ public interface IProviderPublishedOriginStore
     void CommitPublishedOrigins(IReadOnlyList<ProviderPublishedOrigin> published);
 }
 
+/// <summary>Durable provider capability for terminally closing one local author epoch.</summary>
+public interface IProviderAuthorEpochClosureStore
+{
+    /// <summary>Closes the epoch only when no unpublished feed entries for it remain.</summary>
+    bool TryCloseLocalAuthorEpoch(uint authorEpoch);
+}
+
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
 public sealed record ProviderApplyReceipt(Guid ApplyToken, byte[] BatchFingerprint, bool IsDuplicate);
