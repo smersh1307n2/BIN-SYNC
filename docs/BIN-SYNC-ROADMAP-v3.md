@@ -845,3 +845,5 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `StorageMetadataStore.HasLiveRecordReference` checks pending apply payloads, relay payloads, outbound payloads and conservatively blocks on any pending immutable peer reservation in the namespace. Malformed retained payloads count as live.
 - [x C] `CompactRecordTombstones` now requires the durable Metadata Store and external scanner, verifies all three durable adapters share one StorageDatabase, and checks both internal and host record/ChangeId references under the supplied composed lease.
 - [~ C] The FLD/WAL scanner implementation and host lock composition remain cross-repository integration work. All physical GC feature flags remain false until that adapter and T-pass proof exist.
+
+- [x C] Threaded the required host scanner through the public `StorageSyncCoordinator` GC entry points; there is no coordinator wrapper that can silently invoke ChangeId or record-tombstone compaction without the scanner.
