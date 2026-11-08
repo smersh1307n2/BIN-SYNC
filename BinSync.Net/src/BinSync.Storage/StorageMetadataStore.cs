@@ -71,12 +71,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
-        if (state.Receipts.TryGetValue(receiptKey, out ReceiptValue? receipt))
-        {
-            if (!receipt.Matches(batch))
-                throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
-            return;
-        }
+        bool hasReceipt = state.Receipts.TryGetValue(receiptKey, out ReceiptValue? receipt);
+        if (hasReceipt && !receipt!.Matches(batch))
+            throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
 
         if (!gcStore.TryReadNamespaceRoster(batch.NamespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
             roster is null)
@@ -88,13 +85,107 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 continue;
             if (operation.AuthorNodeId.IsZero || operation.OriginAuthorEpoch == 0 ||
                 operation.OriginSequence == 0)
+            {
+                if (hasReceipt)
+                    throw new InvalidDataException("Stored batch receipt exists but its ChangeId ledger row is missing without origin provenance.");
                 continue;
+            }
             if (gcStore.IsOriginCoveredByRetentionCheckpoint(
                     roster, trustStore, operation.AuthorNodeId,
                     operation.OriginAuthorEpoch, operation.OriginSequence))
                 throw new InvalidDataException(
                     "Incoming operation has no retained ChangeId receipt but its origin is below the signed retention frontier; stale replay is rejected.");
+            if (hasReceipt)
+                throw new InvalidDataException("Stored batch receipt exists but its ChangeId ledger row is missing without a signed retention proof.");
         }
+    }
+
+    /// <summary>
+    /// Reclaim ChangeId ledger rows only below the signed all-active-member origin
+    /// frontier and while the caller holds an exclusive cross-store live-reference
+    /// lease. The retained checkpoint becomes the durable replay fence.
+    /// </summary>
+    public int CompactChangeLedger(
+        string scopeId, NodeId localReplica, int namespaceId, int limit,
+        Func<IDisposable?> acquireGcLease)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
+        ArgumentNullException.ThrowIfNull(acquireGcLease);
+
+        IDisposable? lease = acquireGcLease();
+        if (lease is null)
+            throw new InvalidOperationException("Cross-store ChangeId GC proof is unavailable; no ledger rows were reclaimed.");
+        using (lease)
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before ChangeId GC.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out PartitionState? current))
+                return 0;
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available for ChangeId GC.");
+
+            var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(Math.Min(limit, current.ChangeLedger.Count));
+            foreach (var pair in current.ChangeLedger)
+            {
+                if (pair.Key.NamespaceId != namespaceId)
+                    continue;
+                OperationOrigin origin = pair.Value.Provenance;
+                if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
+                    continue;
+                if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
+                        roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
+                    continue;
+                if (HasLiveChangeIdReference(current, namespaceId, pair.Key.ChangeId))
+                    continue;
+
+                byte[] suffix = new byte[18];
+                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+                pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
+                candidates.Add((pair.Key, StorageKey(PartitionRoot(partitionKey), 3, suffix)));
+                if (candidates.Count == limit)
+                    break;
+            }
+
+            if (candidates.Count == 0)
+                return 0;
+            byte[][] deletes = candidates.Select(item => item.StorageKey).ToArray();
+            CommitPeerMetadataDelta(partitionKey, current,
+                Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
+                () =>
+                {
+                    foreach (var item in candidates)
+                        current.ChangeLedger.Remove(item.Key);
+                });
+            return candidates.Count;
+        }
+    }
+
+    private static bool HasLiveChangeIdReference(PartitionState state, int namespaceId, BatchId changeId)
+    {
+        if (state.Relay.Any(pair => pair.Key.NamespaceId == namespaceId &&
+            pair.Value.Any(item => item.ChangeId.EqualsBytes(changeId))))
+            return true;
+        if (state.Outbound.Any(pair => pair.Key.NamespaceId == namespaceId &&
+            pair.Value.Any(item => item.ChangeId.EqualsBytes(changeId))))
+            return true;
+        if (state.PendingApplies.Values.Any(pending =>
+            pending.Batch.NamespaceId == namespaceId &&
+            pending.Batch.Operations.Any(operation => operation.ChangeId.EqualsBytes(changeId))))
+            return true;
+        // A pending immutable batch reservation may still contain the ChangeId even
+        // after its source rows have been compacted. Conservatively retain this
+        // namespace's ledger until every such reservation has been acknowledged.
+        return state.PeerStreams.Any(pair =>
+            pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null);
     }
 
     public bool SupportsRestartDurability => true;
