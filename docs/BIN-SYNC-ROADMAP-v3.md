@@ -472,6 +472,15 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Verified exact-head CI: Core 665/665; Fuzz/Lab 31/31; Storage Integration 168/168 on Windows, Ubuntu and macOS; all five public samples passed.
 - [x] Durable Metadata Bench completed, including one million existing ChangeId rows: freeze 1,024 local operations 218.1 µs / 7.77 KB. This is slower than the earlier 196.9 µs / 7.77 KB measurement; no performance improvement is claimed.
 - [x] Compared all twelve common vendored `external/Fld1.Storage` source files with FLD-DB `src/Fld1.Storage` at current branch heads. Five are byte-identical; `StorageDatabase`, `StorageFaultPoint`, `StorageSnapshotFile`, `Fld1.Storage.csproj`, `WalManager`, and `WalWriter` differ; `StorageDirectorySync.cs` exists only in the BIN-SYNC vendor snapshot. The vendor README pins `dcd4334`, but the files are not a byte-identical snapshot of that commit either. Do not blindly overwrite either repository.
-- [~] Storage divergence audit is active: reconcile durable directory-entry sync, WAL partial-write/fsync fault injection, and FLD's test-assembly visibility before updating the vendor snapshot. Keep FLD-DB authoritative. No FLD source changes were made during this comparison.
+- [x C] Reconciled Storage divergence by porting the vendor-side directory-entry durability and WAL partial-write/fsync fault injection into authoritative FLD-DB `src/Fld1.Storage`; preserved `Fld1.Storage.Tests` and `BinSync.Storage.Integration` friend assemblies. FLD exact-head CI passed 169/169 on Windows and all six test assemblies passed on Ubuntu/macOS as well.
+- [x C] Refreshed all 13 vendored Storage source/project files from FLD-DB code commit `a3abab3e0197f98aac12e9fdafcbfa204d9fbd77`; verified byte-identical file-by-file. Updated vendor README source pin and preserved the no-independent-semantic-changes rule. BIN-SYNC exact-head CI passed Core 665/665, Fuzz/Lab 31/31 and Storage Integration 168/168 on Ubuntu/Windows/macOS.
 - [ ] Update the vendor snapshot from one exact tested FLD-DB commit after differences are reconciled; update `external/Fld1.Storage/README.md` source pin in the same package.
 - [ ] Implement the FLD Metadata Store/Data Provider adapter using the shared Core codec; complete remote-apply/local-intent/reopen/crash conformance.
+
+
+### 2026-11-08 — vendored Storage snapshot synchronized and exact CI green
+
+- [x] FLD-DB Storage durability work passed exact code/test CI at `fd9f48f5ef7ec181bcacf2891bc45d8c1c11b28c`: 169 tests on Windows; Ubuntu/macOS also passed; `Fld1.Storage.Tests` 37/37 on all three OS.
+- [x] BIN-SYNC vendor snapshot `external/Fld1.Storage` now matches all 13 source/project files from FLD-DB source commit `a3abab3e0197f98aac12e9fdafcbfa204d9fbd77` byte-for-byte. Vendor README pin and test assembly visibility are aligned.
+- [x] Exact BIN-SYNC head after vendor refresh: `7cfddd45dec342f916a08f77a9521c831f6f8af7`; Core 665/665, Fuzz/Lab 31/31, Storage Integration 168/168 on Ubuntu/Windows/macOS. All StorageArraySync and StorageArrayTcpSync samples passed.
+- [ ] Proceed with v3.1 signed roster/frontier/checkpoint codecs and persistence; no ChangeId or tombstone/Ghost GC is enabled until all-member proof, replay fences, restart and adversarial tests are complete.
