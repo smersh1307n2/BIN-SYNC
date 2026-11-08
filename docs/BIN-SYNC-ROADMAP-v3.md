@@ -4,7 +4,7 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` — BinSync.Net Core 662/662, Fuzz/Lab SUCCESS, Storage Integration 168/168 on Ubuntu/Windows/macOS. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, and field/record tombstone preservation. Current implementation HEAD: `2f75b266c7c2d720d87b106573182393d5d15ea1`; status: GREEN. Latest documentation-only follow-up: `a94b1def5f7e9f89bd6538782b13c48fdac5a5e1` (includes v3.1 GC addendum links and API/conformance alignment).
+Mark [x] only after code, tests and exact-head CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint: `3b9db5bf97550036fce6b5b145a8717b806f6d72` — BinSync.Net Core 665/665, Fuzz/Lab 31/31, Storage Integration 168/168 on Ubuntu/Windows/macOS; all five public samples passed. Durable Metadata Bench completed, including one-million-row freeze: 218.1 µs / 7.77 KB for 1,024 local operations. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, field/record tombstone preservation, and the shared Core ProviderMutation codec. The 218.1 µs result is a measurement, not a proven improvement over the earlier 196.9 µs run. Current implementation HEAD: `3b9db5bf97550036fce6b5b145a8717b806f6d72`; status: GREEN. The previous `2f75b266` checkpoint is historical.
 
 ## 1. Target architecture
 
@@ -446,7 +446,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Added field-tombstone and record-tombstone preservation coverage; fixed the fixture HLC so the record tombstone actually dominates the field write.
 - [x] Added author-epoch equality to replacement-baseline retirement proof; a higher cursor from a different author epoch cannot discharge an old reservation.
 - [x] Updated v3 spec, Public API and Data Provider Conformance docs with canonical RFC-4122 generation encoding, digest byte order, bounded page limits, caller safety obligations and old-generation retention.
-- [x C] Promoted canonical ProviderMutation encode/decode/validation/order and `ProviderFullReplaceDigestBuilder` into `BinSync.Core/ProviderMutationCodec.cs`; `StorageDataProvider` delegates to the shared Core codec, so the FLD adapter can reuse it without depending on StorageDataProvider internals.
+- [x C] Promoted canonical ProviderMutation encode/decode/validation/order and `ProviderFullReplaceDigestBuilder` into `BinSync.Core/ProviderMutationCodec.cs`; `StorageDataProvider` delegates to the shared Core codec. Added round-trip, malformed encoding and canonical ordering tests; exact-head CI passed 665/665.
 - [ ] Implement signed namespace roster, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE installed ACKs in a separately negotiated v3.1 extension. Until then ChangeId and tombstone/ghost GC remain disabled.
 
 
@@ -464,3 +464,14 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Linked the proposed v3.1 roster/GC addendum from the v3.0 specification, Metadata Store GC design and Public API docs without changing v3.0 wire behavior.
 - [x] Updated Data Provider Conformance status to the exact green implementation head `2f75b26`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 168/168 on Ubuntu/Windows/macOS, coverage threshold passed, in-process/TCP/ScenarioHarness samples passed.
 - [x] Kept ChangeId and tombstone/Ghost GC disabled; no v3.1 protocol code is implied by the design document.
+
+
+### 2026-11-08 — shared ProviderMutation codec exact-head verification and Storage source audit
+
+- [x] Reconciled branch HEAD after the interruption: `3b9db5bf97550036fce6b5b145a8717b806f6d72`. The intervening commits cover codec promotion, canonical byte-order/spec updates, codec tests, duplicate-validation removal and StorageDataProvider delegation.
+- [x] Verified exact-head CI: Core 665/665; Fuzz/Lab 31/31; Storage Integration 168/168 on Windows, Ubuntu and macOS; all five public samples passed.
+- [x] Durable Metadata Bench completed, including one million existing ChangeId rows: freeze 1,024 local operations 218.1 µs / 7.77 KB. This is slower than the earlier 196.9 µs / 7.77 KB measurement; no performance improvement is claimed.
+- [x] Compared all twelve common vendored `external/Fld1.Storage` source files with FLD-DB `src/Fld1.Storage` at current branch heads. Five are byte-identical; `StorageDatabase`, `StorageFaultPoint`, `StorageSnapshotFile`, `Fld1.Storage.csproj`, `WalManager`, and `WalWriter` differ; `StorageDirectorySync.cs` exists only in the BIN-SYNC vendor snapshot. The vendor README pins `dcd4334`, but the files are not a byte-identical snapshot of that commit either. Do not blindly overwrite either repository.
+- [~] Storage divergence audit is active: reconcile durable directory-entry sync, WAL partial-write/fsync fault injection, and FLD's test-assembly visibility before updating the vendor snapshot. Keep FLD-DB authoritative. No FLD source changes were made during this comparison.
+- [ ] Update the vendor snapshot from one exact tested FLD-DB commit after differences are reconciled; update `external/Fld1.Storage/README.md` source pin in the same package.
+- [ ] Implement the FLD Metadata Store/Data Provider adapter using the shared Core codec; complete remote-apply/local-intent/reopen/crash conformance.
