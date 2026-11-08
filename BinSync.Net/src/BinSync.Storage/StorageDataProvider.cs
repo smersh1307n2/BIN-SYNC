@@ -561,7 +561,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (_storage.LastCommitSeq != snapshot.CommitSeq)
                 throw new StorageConflictException(snapshot.CommitSeq, _storage.LastCommitSeq);
             byte[] generationBytes = new byte[16];
-            generation.TryWriteBytes(generationBytes);
+            generation.TryWriteBytes(generationBytes, true, out _);
             batch.Put([ActiveGeneration], generationBytes);
             batch.Put(sessionKey, EncodeFullReplaceState(state with { IsCommitted = true }));
             batch.Commit();
@@ -1005,7 +1005,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         byte[] key = new byte[17];
         key[0] = FullReplaceSession;
-        generation.TryWriteBytes(key.AsSpan(1));
+        generation.TryWriteBytes(key.AsSpan(1), true, out _);
         return key;
     }
 
@@ -1023,7 +1023,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         hash.AppendData("BIN-SYNC/FULL-REPLACE/v1"u8);
         Span<byte> header = stackalloc byte[28];
-        generation.TryWriteBytes(header[..16]);
+        generation.TryWriteBytes(header[..16], true, out _);
         BinaryPrimitives.WriteUInt64LittleEndian(header[16..24], sourceChangeFeedWatermark);
         BinaryPrimitives.WriteInt32LittleEndian(header[24..28], count);
         hash.AppendData(header);
@@ -1040,7 +1040,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         state.ExpectedDigest.CopyTo(bytes, 13);
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(45), state.NextIndex);
         bytes[49] = state.IsCommitted ? (byte)1 : (byte)0;
-        state.BaseGeneration.TryWriteBytes(bytes.AsSpan(50, 16));
+        state.BaseGeneration.TryWriteBytes(bytes.AsSpan(50, 16), true, out _);
         state.LastSortKey.CopyTo(bytes, 66);
         return bytes;
     }
@@ -1056,14 +1056,14 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         return new FullReplaceState(expected,
             BinaryPrimitives.ReadUInt64LittleEndian(bytes[5..]),
             bytes.Slice(13, 32).ToArray(), next, bytes[49] != 0,
-            new Guid(bytes.Slice(50, 16)), bytes.Slice(66, 19).ToArray());
+            new Guid(bytes.Slice(50, 16), true), bytes.Slice(66, 19).ToArray());
     }
 
     private static byte[] CurrentKey(Guid generation, RecordId recordId, ushort fieldId)
     {
         byte[] key = new byte[35];
         key[0] = CurrentField;
-        generation.TryWriteBytes(key.AsSpan(1, 16));
+        generation.TryWriteBytes(key.AsSpan(1, 16), true, out _);
         recordId.WriteTo(key.AsSpan(17, 16));
         BinaryPrimitives.WriteUInt16BigEndian(key.AsSpan(33), fieldId);
         return key;
@@ -1082,7 +1082,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         byte[] prefix = new byte[17];
         prefix[0] = kind;
-        generation.TryWriteBytes(prefix.AsSpan(1));
+        generation.TryWriteBytes(prefix.AsSpan(1), true, out _);
         return prefix;
     }
 
@@ -1090,7 +1090,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         if (!storage.TryGet([ActiveGeneration], out var value) || value!.Length != 16)
             throw new InvalidDataException("Storage Data Provider active generation marker is missing or malformed.");
-        return new Guid(value);
+        return new Guid(value!, true);
     }
 
     private static Guid ReadActiveGeneration(StorageSnapshot snapshot)
