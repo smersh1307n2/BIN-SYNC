@@ -560,7 +560,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v15_groups_receipts_by_author_and_roundtrips_all_entries()
+    public void Persistence_v16_groups_receipts_by_author_and_roundtrips_all_entries()
     {
         using var node = Fix.MakeNode(123);
         var issuer = Fix.Nid(124);
@@ -569,77 +569,36 @@ public class ChangeIdWireTests
         var fingerprint = Digest16.From(Id(0xA5));
         var batch1 = BatchId.From(Id(0xA1));
         var batch2 = BatchId.From(Id(0xA2));
-        node.InboxAuthors[(issuer, 7, 3, batch1)] =
-            new InboxReceipt(author, 11, true, fingerprint, true, 100, 0);
-        node.InboxAuthors[(issuer, 7, 3, batch2)] =
-            new InboxReceipt(author, 12, true, fingerprint, true, 101, 0);
+        node.InboxAuthors[(issuer, 7, 3, batch1)] = new InboxReceipt(author, 11, true, fingerprint, true, 100, 0);
+        node.InboxAuthors[(issuer, 7, 3, batch2)] = new InboxReceipt(author, 12, true, fingerprint, true, 101, 0);
         var batchOtherAuthor = BatchId.From(Id(0xA6));
-        node.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)] =
-            new InboxReceipt(author2, 1, true, fingerprint, true, 101, 0);
+        node.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)] = new InboxReceipt(author2, 1, true, fingerprint, true, 101, 0);
         var batchDifferentAuthor = BatchId.From(Id(0xA3));
-        node.InboxAuthors[(issuer, 8, 3, batchDifferentAuthor)] =
-            new InboxReceipt(author2, 1, true, fingerprint, true, 102, 0);
-        var legacyBatch = BatchId.From(Id(0xA4));
-        node.InboxAuthors[(issuer, 8, 3, legacyBatch)] =
-            new InboxReceipt(author, 0, false, default, false, 103, 200);
-
+        node.InboxAuthors[(issuer, 8, 3, batchDifferentAuthor)] = new InboxReceipt(author2, 1, true, fingerprint, true, 102, 0);
         var change1 = BatchId.From(Id(0xB1));
         var change2 = BatchId.From(Id(0xB2));
         var change3 = BatchId.From(Id(0xB3));
         node.GlobalChangeLedger[(7, change1)] = new ChangeLedgerValue(fingerprint, true);
-        node.GlobalChangeLedger[(7, change2)] = new ChangeLedgerValue(default, false);
+        node.GlobalChangeLedger[(7, change2)] = new ChangeLedgerValue(Digest16.From(Id(0xA7)), true);
         node.GlobalChangeLedger[(8, change3)] = new ChangeLedgerValue(fingerprint, true);
 
-        var path = Path.Combine(Path.GetTempPath(), $"binsync-v15-{Guid.NewGuid():N}.bin");
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v16-{Guid.NewGuid():N}.bin");
         try
         {
             NodePersistence.Save(node, path);
             var bytes = File.ReadAllBytes(path);
-            Assert.Equal((ushort)15, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
-
-            // Namespace 7 has three receipts by two authors and should use author
-            // subgroups; namespace 8 has two singleton author groups and should stay flat.
-            var bodyReader = new Reader(bytes.AsSpan(46).ToArray());
-            bodyReader.B128(); bodyReader.Varint(); bodyReader.U64(); bodyReader.U32();
-            Assert.Equal(0UL, bodyReader.Varint()); // Storage
-            Assert.Equal(0UL, bodyReader.Varint()); // Outbox
-            Assert.Equal(0UL, bodyReader.Varint()); // Outbox sequence map
-            Assert.Equal(2UL, bodyReader.Varint()); // receipt session groups
-            bodyReader.B128(); bodyReader.Varint(); bodyReader.Varint();
-            Assert.Equal((byte)1, bodyReader.U8()); // author-grouped layout
-            int authorGroups = (int)bodyReader.Varint();
-            for (int ai = 0; ai < authorGroups; ai++)
-            {
-                bodyReader.B128();
-                int receiptCount = (int)bodyReader.Varint();
-                for (int ri = 0; ri < receiptCount; ri++)
-                {
-                    bodyReader.B128();
-                    byte flags = bodyReader.U8();
-                    if ((flags & 1) != 0) bodyReader.Varint();
-                    if ((flags & 2) != 0) bodyReader.B128();
-                    bodyReader.Varint(); if ((flags & 4) != 0) bodyReader.Varint();
-                }
-            }
-            bodyReader.B128(); bodyReader.Varint(); bodyReader.Varint();
-            Assert.Equal((byte)0, bodyReader.U8()); // flat layout avoids subgroup overhead
-
+            Assert.Equal((ushort)16, System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(bytes.AsSpan(4, 2)));
             using var restored = NodePersistence.Load(path);
-
-            Assert.Equal(5, restored.InboxAuthors.Count);
+            Assert.Equal(4, restored.InboxAuthors.Count);
             Assert.Equal(11, restored.InboxAuthors[(issuer, 7, 3, batch1)].CursorEnd);
             Assert.Equal(12, restored.InboxAuthors[(issuer, 7, 3, batch2)].CursorEnd);
             Assert.Equal(author2, restored.InboxAuthors[(issuer, 7, 3, batchOtherAuthor)].DurableAuthor);
             Assert.Equal(author2, restored.InboxAuthors[(issuer, 8, 3, batchDifferentAuthor)].DurableAuthor);
             Assert.Equal(fingerprint, restored.InboxAuthors[(issuer, 7, 3, batch1)].Fingerprint);
-            var legacyReceipt = restored.InboxAuthors[(issuer, 8, 3, legacyBatch)];
-            Assert.False(legacyReceipt.HasCursorEnd);
-            Assert.False(legacyReceipt.HasFingerprint);
-            Assert.Equal(103UL, legacyReceipt.AppliedAt);
-            Assert.Equal(200UL, legacyReceipt.ExpiresAt);
+            Assert.All(restored.InboxAuthors.Values, receipt => Assert.True(receipt.HasFingerprint && receipt.HasCursorEnd));
             Assert.Equal(3, restored.GlobalChangeLedger.Count);
             Assert.Equal(fingerprint, restored.GlobalChangeLedger[(7, change1)].Fingerprint);
-            Assert.False(restored.GlobalChangeLedger[(7, change2)].IsKnown);
+            Assert.True(restored.GlobalChangeLedger[(7, change2)].IsKnown);
             Assert.True(restored.GlobalChangeLedger[(8, change3)].IsKnown);
         }
         finally
@@ -649,7 +608,7 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v14_compact_outbox_shares_namespace_and_author_and_recovers_record_tombstone_id()
+    public void Persistence_v16_outbox_preserves_origin_and_record_tombstone_id()
     {
         using var node = Fix.MakeNode(127);
         const int ns = 7;
@@ -657,43 +616,15 @@ public class ChangeIdWireTests
         var relayAuthor = Fix.Nid(128);
         var fieldRecord = Fix.Rid(129);
         var tombRecord = Fix.Rid(130);
-        var fieldOp = new OpFieldWrite
-        {
-            FieldId = 0x0101, KeyEpoch = 0, Wall = 1000, Logical = 1,
-            Origin = 1, Value = System.Text.Encoding.UTF8.GetBytes("compact-outbox")
-        };
-        var tombOp = new OpRecordTombstone
-        {
-            RecordId = tombRecord, Wall = 1001, Logical = 0, Origin = 1
-        };
+        var fieldOp = new OpFieldWrite { FieldId = 0x0101, KeyEpoch = 0, Wall = 1000, Logical = 1, Origin = 1, Value = System.Text.Encoding.UTF8.GetBytes("compact-outbox") };
+        var tombOp = new OpRecordTombstone { RecordId = tombRecord, Wall = 1001, Logical = 0, Origin = 1 };
         node.Outbox[ns] = new List<OutboxEntry>
         {
-            new()
-            {
-                NamespaceId = ns, Seq = 1, ChangeId = BatchId.From(Id(0xC1)),
-                RecordId = fieldRecord, OpKind = OpsConst.TagFieldWrite,
-                Payload = Ops.EncodeOp(fieldOp, fullAuthor: false), AuthorNodeId = localAuthor,
-                CreatedAt = 1_700_000_000_000_000
-            },
-            new()
-            {
-                NamespaceId = ns, Seq = 4, ChangeId = BatchId.From(Id(0xC2)),
-                RecordId = tombRecord, OpKind = OpsConst.TagRecordTomb,
-                Payload = Ops.EncodeOp(tombOp, fullAuthor: false), AuthorNodeId = relayAuthor,
-                CreatedAt = 1_700_000_000_000_001
-            },
-            new()
-            {
-                NamespaceId = ns, Seq = 2, ChangeId = BatchId.From(Id(0xC3)),
-                RecordId = Fix.Rid(131), OpKind = OpsConst.TagFieldTomb,
-                Payload = Ops.EncodeOp(new OpFieldTomb
-                {
-                    FieldId = 0x0102, KeyEpoch = 0, Wall = 1002, Logical = 0, Origin = 1
-                }, fullAuthor: false),
-                AuthorNodeId = localAuthor, CreatedAt = 1_700_000_000_000_002
-            }
+            new() { NamespaceId = ns, Seq = 1, ChangeId = BatchId.From(Id(0xC1)), OriginAuthorEpoch = checked((uint)node.Epoch), OriginSequence = 1, RecordId = fieldRecord, OpKind = OpsConst.TagFieldWrite, Payload = Ops.EncodeOp(fieldOp, fullAuthor: false), AuthorNodeId = localAuthor, CreatedAt = 1_700_000_000_000_000 },
+            new() { NamespaceId = ns, Seq = 4, ChangeId = BatchId.From(Id(0xC2)), OriginAuthorEpoch = 1, OriginSequence = 1, RecordId = tombRecord, OpKind = OpsConst.TagRecordTomb, Payload = Ops.EncodeOp(tombOp, fullAuthor: false), AuthorNodeId = relayAuthor, CreatedAt = 1_700_000_000_000_001 },
+            new() { NamespaceId = ns, Seq = 2, ChangeId = BatchId.From(Id(0xC3)), OriginAuthorEpoch = checked((uint)node.Epoch), OriginSequence = 2, RecordId = Fix.Rid(131), OpKind = OpsConst.TagFieldTomb, Payload = Ops.EncodeOp(new OpFieldTomb { FieldId = 0x0102, KeyEpoch = 0, Wall = 1002, Logical = 0, Origin = 1 }, fullAuthor: false), AuthorNodeId = localAuthor, CreatedAt = 1_700_000_000_000_002 }
         };
-        var path = Path.Combine(Path.GetTempPath(), $"binsync-v14-outbox-{Guid.NewGuid():N}.bin");
+        var path = Path.Combine(Path.GetTempPath(), $"binsync-v16-outbox-{Guid.NewGuid():N}.bin");
         try
         {
             NodePersistence.Save(node, path);
@@ -706,12 +637,14 @@ public class ChangeIdWireTests
             Assert.Equal(1, entries[0].Seq);
             Assert.Equal(4, entries[1].Seq);
             Assert.Equal(2, entries[2].Seq);
-            Assert.Equal(OpsConst.TagFieldWrite, entries[0].OpKind);
+            Assert.Equal((uint)node.Epoch, entries[0].OriginAuthorEpoch);
+            Assert.Equal((ulong)1, entries[0].OriginSequence);
+            Assert.Equal((uint)1, entries[1].OriginAuthorEpoch);
+            Assert.Equal((ulong)1, entries[1].OriginSequence);
+            Assert.Equal((ulong)2, entries[2].OriginSequence);
             Assert.Equal(OpsConst.TagRecordTomb, entries[1].OpKind);
             Assert.Equal(tombRecord, entries[1].RecordId);
-            Assert.Equal(OpsConst.TagFieldTomb, entries[2].OpKind);
             Assert.Equal(fieldRecord, entries[0].RecordId);
-            Assert.Equal(1_700_000_000_000_001, entries[1].CreatedAt);
             Assert.Equal(entries[0].Payload.ToArray(), restored.Outbox[ns][0].Payload.ToArray());
         }
         finally
@@ -759,134 +692,27 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v11_flat_grouped_receipts_and_compact_local_markers_remain_readable()
+    public void Legacy_v11_state_is_rejected_by_v3_clean_break()
     {
-        var nodeId = NodeId.From(Id(0xE0));
-        var issuer = NodeId.From(Id(0xE1));
-        var author = NodeId.From(Id(0xE2));
-        var batchId = BatchId.From(Id(0xE3));
-        var fingerprint = Digest16.From(Id(0xE4));
-        var changeId = BatchId.From(Id(0xE5));
-        var writer = new Writer();
-        writer.B128(nodeId).Varint(0).U64(0).U32(0);
-        for (int i = 0; i < 3; i++) writer.Varint(0); // Storage, Outbox, sequence map
-        writer.Varint(1).B128(issuer).Varint(7).Varint(2).Varint(1)
-            .B128(batchId).B128(author).U8(3).Varint(9).B128(fingerprint).Varint(100).Varint(0);
-        for (int i = 0; i < 6; i++) writer.Varint(0); // digests, aliases, authors, peer states
-        writer.Varint(1).Varint(7).B128(changeId); // v11 compact local WAL marker
-        writer.Varint(0); // grouped global ledger
-        for (int i = 0; i < 7; i++) writer.Varint(0); // remaining metadata sections
-        var body = writer.Value();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v11", body);
-        var image = new byte[46 + body.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 11);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-        digest.CopyTo(image.AsSpan(14, 32));
-        body.CopyTo(image.AsSpan(46));
-
-        using var restored = NodePersistence.LoadFromBytes(image);
-        var receipt = restored.InboxAuthors[(issuer, 7, 2, batchId)];
-        Assert.Equal(author, receipt.DurableAuthor);
-        Assert.Equal(9, receipt.CursorEnd);
-        Assert.Equal(fingerprint, receipt.Fingerprint);
-        Assert.Contains((7, changeId), restored.SeenChanges);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(11)));
     }
 
     [Fact]
-    public void Persistence_v10_migrates_local_seen_marker_without_repeated_node_id()
+    public void Legacy_v10_state_is_rejected_by_v3_clean_break()
     {
-        var nodeId = NodeId.From(Id(0xD7));
-        var changeId = BatchId.From(Id(0xD8));
-        var writer = new Writer();
-        writer.B128(nodeId).Varint(0).U64(0).U32(0);
-        for (int i = 0; i < 3; i++) writer.Varint(0); // Storage, Outbox, sequence map
-        writer.Varint(0); // v10 grouped receipt count
-        for (int i = 0; i < 6; i++) writer.Varint(0); // digests, aliases, authors, peer states
-        writer.Varint(1).B128(nodeId).Varint(7).B128(changeId); // v10 legacy local marker
-        writer.Varint(0); // grouped global ledger
-        for (int i = 0; i < 7; i++) writer.Varint(0); // remaining metadata sections
-        var body = writer.Value();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v10", body);
-        var image = new byte[46 + body.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 10);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-        digest.CopyTo(image.AsSpan(14, 32));
-        body.CopyTo(image.AsSpan(46));
-
-        using var restored = NodePersistence.LoadFromBytes(image);
-        Assert.Contains((7, changeId), restored.SeenChanges);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(10)));
     }
 
     [Fact]
-    public void Persistence_v10_rejects_receipt_cursor_that_overflows_signed_range()
+    public void Legacy_v10_state_is_rejected_before_legacy_payload_decode()
     {
-        var nodeId = NodeId.From(Id(0xD0));
-        var issuer = NodeId.From(Id(0xD1));
-        var author = NodeId.From(Id(0xD2));
-        var batchId = BatchId.From(Id(0xD3));
-        var writer = new Writer();
-        writer.B128(nodeId).Varint(0).U64(0).U32(0);
-        for (int i = 0; i < 3; i++) writer.Varint(0);
-        // One v10 receipt group containing an invalid Int64 cursor.
-        writer.Varint(1).B128(issuer).Varint(7).Varint(2).Varint(1)
-            .B128(batchId).B128(author).U8(1).Varint(ulong.MaxValue).Varint(0).Varint(0);
-        for (int i = 0; i < 7; i++) writer.Varint(0);
-        writer.Varint(0); // grouped global ledger
-        for (int i = 0; i < 7; i++) writer.Varint(0);
-        var body = writer.Value();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v10", body);
-        var image = new byte[46 + body.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 10);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-        digest.CopyTo(image.AsSpan(14, 32));
-        body.CopyTo(image.AsSpan(46));
-
-        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(image));
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(10)));
     }
 
     [Fact]
-    public void Persistence_v9_grouped_state_reader_remains_backward_compatible()
+    public void Legacy_v9_state_is_rejected_by_v3_clean_break()
     {
-        var nodeId = NodeId.From(Id(0xC0));
-        var issuer = NodeId.From(Id(0xC1));
-        var author = NodeId.From(Id(0xC2));
-        var batchId = BatchId.From(Id(0xC3));
-        var receiptFingerprint = Digest16.From(Id(0xC4));
-        var changeId = BatchId.From(Id(0xC5));
-        var changeFingerprint = Digest16.From(Id(0xC6));
-        var writer = new Writer();
-        writer.B128(nodeId).Varint(0).U64(0).U32(0);
-        // Storage, Outbox and per-author sequence map.
-        for (int i = 0; i < 3; i++) writer.Varint(0);
-        // v9 flat receipt encoding.
-        writer.Varint(1).B128(issuer).Varint(7).Varint(2).B128(batchId).B128(author)
-            .U8(3).Varint(9).B128(receiptFingerprint).Varint(100).Varint(0);
-        // LastBatchDigest, LastStreamDigest, aliases, durable authors, peer states,
-        // SeenChanges.
-        for (int i = 0; i < 7; i++) writer.Varint(0);
-        // v9 flat global ChangeId ledger.
-        writer.Varint(1).Varint(7).B128(changeId).U8(1).B128(changeFingerprint);
-        // LastStreamAuthor, KnownEpochs, PeerSessionEpochs, quarantine,
-        // forbidden namespaces, schema versions and peer registry.
-        for (int i = 0; i < 7; i++) writer.Varint(0);
-        var body = writer.Value();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v9", body);
-        var image = new byte[46 + body.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 9);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-        digest.CopyTo(image.AsSpan(14, 32));
-        body.CopyTo(image.AsSpan(46));
-
-        using var restored = NodePersistence.LoadFromBytes(image);
-        var receipt = restored.InboxAuthors[(issuer, 7, 2, batchId)];
-        Assert.Equal(author, receipt.DurableAuthor);
-        Assert.Equal(9, receipt.CursorEnd);
-        Assert.Equal(receiptFingerprint, receipt.Fingerprint);
-        Assert.Equal(changeFingerprint, restored.GlobalChangeLedger[(7, changeId)].Fingerprint);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(9)));
     }
 
     [Fact]
@@ -925,37 +751,9 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v7_receipt_migrates_as_explicit_legacy_unknown()
+    public void Legacy_v7_state_is_rejected_by_v3_clean_break()
     {
-        var issuer = NodeId.From(Id(0x95));
-        var batchId = BatchId.From(Id(0x96));
-        var author = NodeId.From(Id(0x97));
-        var writer = new Writer();
-        writer.B128(NodeId.From(Id(0x94))).Varint(0).U64(0).U32(0);
-        // Storage, Outbox and per-author sequence map.
-        for (int i = 0; i < 3; i++) writer.Varint(0);
-        // v7 unified receipt key -> author map (without the v8 fingerprint/times).
-        writer.Varint(1).B128(issuer).Varint(9).Varint(2).B128(batchId).B128(author);
-        // LastBatchDigest, LastStreamDigest, aliases, durable authors, peer states,
-        // SeenChanges, GlobalChangeLedger, LastStreamAuthor, KnownEpochs,
-        // PeerSessionEpochs, quarantine, forbidden namespaces, schemas and peers.
-        for (int i = 0; i < 15; i++) writer.Varint(0);
-        var body = writer.Value();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v7", body);
-        var image = new byte[46 + body.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 7);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-        digest.CopyTo(image.AsSpan(14, 32));
-        body.CopyTo(image.AsSpan(46));
-
-        using var restored = NodePersistence.LoadFromBytes(image);
-        var receipt = restored.InboxAuthors[(issuer, 9, 2, batchId)];
-        Assert.Equal(author, receipt.DurableAuthor);
-        Assert.False(receipt.HasFingerprint);
-        Assert.False(receipt.HasCursorEnd);
-        Assert.Equal(0UL, receipt.AppliedAt);
-        Assert.Equal(0UL, receipt.ExpiresAt);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(7)));
     }
 
     [Fact]
@@ -1020,74 +818,15 @@ public class ChangeIdWireTests
     }
 
     [Fact]
-    public void Persistence_v5_seen_changes_migrate_to_explicit_unknown_global_fingerprints()
+    public void Legacy_v5_state_is_rejected_by_v3_clean_break()
     {
-        var peer = NodeId.From(Id(0x81));
-        var changeId = BatchId.From(Id(0x82));
-        var writer = new Writer();
-        writer.B128(NodeId.From(Id(0x80))).Varint(0).U64(0).U32(0);
-        // v5 body fields before SeenChanges.
-        for (int i = 0; i < 11; i++) writer.Varint(0);
-        writer.Varint(1).B128(peer).Varint(9).B128(changeId);
-        // LastStreamAuthor, KnownEpochs, PeerSessionEpochs, quarantine,
-        // forbidden namespaces, schema versions and peer registry.
-        for (int i = 0; i < 7; i++) writer.Varint(0);
-        var body = writer.Value();
-        var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v5", body);
-        var image = new byte[14 + 32 + body.Length];
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 5);
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-        digest.CopyTo(image.AsSpan(14, 32));
-        body.CopyTo(image.AsSpan(46));
-
-        using var restored = NodePersistence.LoadFromBytes(image);
-        Assert.Empty(restored.SeenChanges); // remote provenance is folded into the global ledger
-        Assert.False(restored.GlobalChangeLedger[(9, changeId)].IsKnown);
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(5)));
     }
 
     [Fact]
-    public void Persistence_v6_duplicate_inbox_key_and_author_maps_migrate_to_one_v7_receipt()
+    public void Legacy_v6_state_is_rejected_by_v3_clean_break()
     {
-        var issuer = NodeId.From(Id(0x91));
-        var batchId = BatchId.From(Id(0x92));
-        var author = NodeId.From(Id(0x93));
-
-        byte[] BuildV6Image(bool includeAuthor)
-        {
-            var writer = new Writer();
-            writer.B128(NodeId.From(Id(0x90))).Varint(0).U64(0).U32(0);
-            // Storage, Outbox and per-author sequence map.
-            for (int i = 0; i < 3; i++) writer.Varint(0);
-            // Legacy v6 inbox key set.
-            writer.Varint(1).B128(issuer).Varint(9).Varint(2).B128(batchId);
-            // Legacy v6 key -> author map.
-            writer.Varint(includeAuthor ? 1UL : 0UL);
-            if (includeAuthor)
-                writer.B128(issuer).Varint(9).Varint(2).B128(batchId).B128(author);
-            // LastBatchDigest, LastStreamDigest, AliasToNode, NodeToAlias,
-            // DurableAuthors, PeerStates, SeenChanges, GlobalChangeLedger,
-            // LastStreamAuthor, KnownEpochs, PeerSessionEpochs, Quarantined,
-            // ForbiddenNamespaces, SchemaVersions and peer registry.
-            for (int i = 0; i < 15; i++) writer.Varint(0);
-
-            var body = writer.Value();
-            var digest = Blake3Core.TaggedHash("BIN-SYNC/NODESTATE/v6", body);
-            var image = new byte[46 + body.Length];
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), 6);
-            System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), (ulong)body.Length);
-            digest.CopyTo(image.AsSpan(14, 32));
-            body.CopyTo(image.AsSpan(46));
-            return image;
-        }
-
-        using var restored = NodePersistence.LoadFromBytes(BuildV6Image(includeAuthor: true));
-        Assert.Single(restored.Inbox);
-        Assert.Equal(author, restored.InboxAuthors[(issuer, 9, 2, batchId)].DurableAuthor);
-        Assert.False(restored.InboxAuthors[(issuer, 9, 2, batchId)].HasFingerprint);
-        Assert.Throws<InvalidDataException>(() =>
-            NodePersistence.LoadFromBytes(BuildV6Image(includeAuthor: false)));
+        Assert.Throws<InvalidDataException>(() => NodePersistence.LoadFromBytes(BuildUnsupportedStateImage(6)));
     }
 
     [Fact]
@@ -1340,4 +1079,15 @@ public class ChangeIdWireTests
         Assert.Equal(firstBatch.CursorEnd, relay.PeerStates[(receiver.NodeId, 1)].AckedFor(author.NodeId));
     }
 
+
+    private static byte[] BuildUnsupportedStateImage(ushort version)
+    {
+        var body = Array.Empty<byte>();
+        var image = new byte[46];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(image.AsSpan(0, 4), 0x42534E53);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(image.AsSpan(4, 2), version);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64BigEndian(image.AsSpan(6, 8), 0);
+        Blake3Core.TaggedHash($"BIN-SYNC/NODESTATE/v{version}", body).CopyTo(image.AsSpan(14, 32));
+        return image;
+    }
 }
