@@ -172,6 +172,257 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return root;
     }
 
+    public void SavePreparedFullReplaceSnapshot(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        PreparedFullReplaceSnapshotState state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(state);
+        if (localReplica.IsZero || state.Generation == Guid.Empty || state.SnapshotToken == Guid.Empty ||
+            state.ManifestBytes is null || state.ManifestBytes.Length == 0)
+            throw new ArgumentException("Prepared FULL_REPLACE snapshot identity or manifest is invalid.", nameof(state));
+        ushort ns = checked((ushort)namespaceId);
+        byte[] encoded = EncodePreparedFullReplaceSnapshot(state);
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PreparedSnapshotRoot(partition);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            byte[] indexKey = StorageKey(root, 1, EncodeNamespaceSuffix(ns));
+            byte[] stateKey = StorageKey(root, 2, EncodePreparedSnapshotSuffix(ns, state.Generation));
+            using var snapshot = _storage.OpenSnapshot();
+
+            bool hasIdentity = snapshot.TryGet(identityKey, out byte[]? identity);
+            if (hasIdentity)
+                ValidatePartitionIdentity(partition, identity!);
+            if (snapshot.TryGet(stateKey, out byte[]? existing))
+            {
+                if (!existing!.AsSpan().SequenceEqual(encoded))
+                    throw new InvalidOperationException("Prepared FULL_REPLACE snapshot generation is immutable.");
+                return;
+            }
+
+            Guid[] generations = snapshot.TryGet(indexKey, out byte[]? indexBytes)
+                ? DecodePreparedSnapshotIndex(indexBytes!)
+                : Array.Empty<Guid>();
+            if (generations.Contains(state.Generation))
+                throw new InvalidDataException("Prepared FULL_REPLACE snapshot index references a missing generation.");
+            Guid[] updated = generations.Append(state.Generation).OrderBy(value => value).ToArray();
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            if (!hasIdentity)
+                batch.Put(identityKey, EncodePartitionIdentity(partition));
+            batch.Put(stateKey, encoded);
+            batch.Put(indexKey, EncodePreparedSnapshotIndex(updated));
+            batch.Commit();
+        }
+    }
+
+    public bool TryGetPreparedFullReplaceSnapshot(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        Guid generation,
+        out PreparedFullReplaceSnapshotState? state)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        if (generation == Guid.Empty) throw new ArgumentException("Generation is required.", nameof(generation));
+        ushort ns = checked((ushort)namespaceId);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PreparedSnapshotRoot(partition);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            byte[] stateKey = StorageKey(root, 2, EncodePreparedSnapshotSuffix(ns, generation));
+            using var snapshot = _storage.OpenSnapshot();
+            if (!snapshot.TryGet(identityKey, out byte[]? identity))
+            {
+                state = null;
+                return false;
+            }
+            ValidatePartitionIdentity(partition, identity!);
+            if (!snapshot.TryGet(stateKey, out byte[]? encoded))
+            {
+                state = null;
+                return false;
+            }
+            state = DecodePreparedFullReplaceSnapshot(encoded!);
+            state = state with { Generation = generation };
+            return true;
+        }
+    }
+
+    public IReadOnlyList<Guid> ListPreparedFullReplaceSnapshotGenerations(
+        string scopeId, NodeId localReplica, int namespaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        ushort ns = checked((ushort)namespaceId);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PreparedSnapshotRoot(partition);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            byte[] indexKey = StorageKey(root, 1, EncodeNamespaceSuffix(ns));
+            using var snapshot = _storage.OpenSnapshot();
+            if (!snapshot.TryGet(identityKey, out byte[]? identity))
+                return Array.Empty<Guid>();
+            ValidatePartitionIdentity(partition, identity!);
+            return snapshot.TryGet(indexKey, out byte[]? index)
+                ? DecodePreparedSnapshotIndex(index!)
+                : Array.Empty<Guid>();
+        }
+    }
+
+    public void DeletePreparedFullReplaceSnapshot(
+        string scopeId, NodeId localReplica, int namespaceId, Guid generation)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        if (generation == Guid.Empty) return;
+        ushort ns = checked((ushort)namespaceId);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PreparedSnapshotRoot(partition);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            byte[] indexKey = StorageKey(root, 1, EncodeNamespaceSuffix(ns));
+            byte[] stateKey = StorageKey(root, 2, EncodePreparedSnapshotSuffix(ns, generation));
+            using var snapshot = _storage.OpenSnapshot();
+            if (!snapshot.TryGet(identityKey, out byte[]? identity))
+                return;
+            ValidatePartitionIdentity(partition, identity!);
+            if (!snapshot.TryGet(stateKey, out _))
+                return;
+            Guid[] generations = snapshot.TryGet(indexKey, out byte[]? index)
+                ? DecodePreparedSnapshotIndex(index!)
+                : Array.Empty<Guid>();
+            Guid[] updated = generations.Where(value => value != generation).ToArray();
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            batch.Delete(stateKey);
+            if (updated.Length == 0)
+                batch.Delete(indexKey);
+            else
+                batch.Put(indexKey, EncodePreparedSnapshotIndex(updated));
+            batch.Commit();
+        }
+    }
+
+    private static byte[] PreparedSnapshotRoot(PartitionKey partition)
+    {
+        byte[] root = PartitionRoot(partition);
+        root[0] = 0x72;
+        return root;
+    }
+
+    private static byte[] EncodeNamespaceSuffix(ushort namespaceId)
+    {
+        byte[] suffix = new byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, namespaceId);
+        return suffix;
+    }
+
+    private static byte[] EncodePreparedSnapshotSuffix(ushort namespaceId, Guid generation)
+    {
+        byte[] suffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, namespaceId);
+        generation.TryWriteBytes(suffix.AsSpan(2));
+        return suffix;
+    }
+
+    private static byte[] EncodePreparedFullReplaceSnapshot(PreparedFullReplaceSnapshotState state)
+    {
+        int length = checked(48 + state.ManifestBytes.Length + 32);
+        byte[] bytes = new byte[length];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, PreparedFullReplaceMagic);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), PreparedFullReplaceVersion);
+        state.SnapshotToken.TryWriteBytes(bytes.AsSpan(8, 16));
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(24), state.SourceFeedWatermark);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(32), state.HlcWallFloor);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(40), state.HlcLogicalFloor);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(44), checked((uint)state.ManifestBytes.Length));
+        state.ManifestBytes.CopyTo(bytes, 48);
+        SHA256.HashData(bytes.AsSpan(0, length - 32)).CopyTo(bytes, length - 32);
+        return bytes;
+    }
+
+    private static PreparedFullReplaceSnapshotState DecodePreparedFullReplaceSnapshot(byte[] bytes)
+    {
+        if (bytes.Length < 80 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes) != PreparedFullReplaceMagic ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4)) != PreparedFullReplaceVersion ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6)) != 0)
+            throw new InvalidDataException("Prepared FULL_REPLACE state header is invalid.");
+        uint manifestLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(44));
+        if (48L + manifestLength + 32 != bytes.Length)
+            throw new InvalidDataException("Prepared FULL_REPLACE state length is invalid.");
+        byte[] actualHash = SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32));
+        if (!CryptographicOperations.FixedTimeEquals(actualHash, bytes.AsSpan(bytes.Length - 32)))
+            throw new InvalidDataException("Prepared FULL_REPLACE state checksum mismatch.");
+        Guid snapshotToken = new(bytes.AsSpan(8, 16));
+        if (snapshotToken == Guid.Empty)
+            throw new InvalidDataException("Prepared FULL_REPLACE state has an empty snapshot token.");
+        return new PreparedFullReplaceSnapshotState(
+            Guid.Empty,
+            snapshotToken,
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(24)),
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(32)),
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(40)),
+            bytes.AsSpan(48, (int)manifestLength).ToArray());
+    }
+
+    private static byte[] EncodePreparedSnapshotIndex(Guid[] generations)
+    {
+        byte[] bytes = new byte[checked(12 + generations.Length * 16)];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, PreparedFullReplaceIndexMagic);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), PreparedFullReplaceVersion);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8), checked((uint)generations.Length));
+        int offset = 12;
+        foreach (Guid generation in generations)
+        {
+            generation.TryWriteBytes(bytes.AsSpan(offset, 16));
+            offset += 16;
+        }
+        return bytes;
+    }
+
+    private static Guid[] DecodePreparedSnapshotIndex(byte[] bytes)
+    {
+        if (bytes.Length < 12 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes) != PreparedFullReplaceIndexMagic ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4)) != PreparedFullReplaceVersion ||
+            BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6)) != 0)
+            throw new InvalidDataException("Prepared FULL_REPLACE snapshot index header is invalid.");
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(8));
+        if (count > 4096 || 12L + (long)count * 16 != bytes.Length)
+            throw new InvalidDataException("Prepared FULL_REPLACE snapshot index length is invalid.");
+        var result = new Guid[(int)count];
+        var unique = new HashSet<Guid>();
+        int offset = 12;
+        for (int i = 0; i < result.Length; i++)
+        {
+            Guid generation = new(bytes.AsSpan(offset, 16));
+            if (generation == Guid.Empty || !unique.Add(generation))
+                throw new InvalidDataException("Prepared FULL_REPLACE snapshot index contains a zero or duplicate generation.");
+            result[i] = generation;
+            offset += 16;
+        }
+        return result;
+    }
+
     private void RejectForgottenOrigins(PartitionState state, MetadataIncomingBatch batch)
     {
         StorageNamespaceGcStore? gcStore = _namespaceGcStore;
@@ -3434,6 +3685,9 @@ private static bool ValidateIncomingBatchForStaging(
     private const uint MetadataPartitionMagicV3 = 0x33534D42; // "BMS3" little-endian
     private const uint ProviderPublicationCutoverMagic = 0x3150434D; // "MCP1" little-endian
     private const ushort ProviderPublicationCutoverVersion = 1;
+    private const uint PreparedFullReplaceMagic = 0x31524650; // "PFR1"
+    private const uint PreparedFullReplaceIndexMagic = 0x31584650; // "PFX1"
+    private const ushort PreparedFullReplaceVersion = 1;
 
     private static byte[] EncodePartitionIdentity(PartitionKey partition)
     {
