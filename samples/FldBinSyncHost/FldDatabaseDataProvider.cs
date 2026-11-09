@@ -294,11 +294,22 @@ public sealed class FldDatabaseDataProvider :
 
     public ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit)
     {
+        FldProviderSnapshot? snapshot;
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (!_snapshots.TryGetValue(snapshotToken, out FldProviderSnapshot? snapshot))
-                throw new ObjectDisposedException(nameof(snapshotToken));
+            _snapshots.TryGetValue(snapshotToken, out snapshot);
+        }
+        snapshot ??= _database.RestoreProviderSnapshot(snapshotToken);
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!_snapshots.TryGetValue(snapshotToken, out FldProviderSnapshot? current))
+                _snapshots.Add(snapshotToken, snapshot);
+            else
+                snapshot = current;
+
             FldProviderSnapshotPage page = snapshot.ReadPage(afterIndex, limit);
             var entries = new ProviderMutation[page.Entries.Count];
             for (int i = 0; i < entries.Length; i++)
@@ -309,14 +320,12 @@ public sealed class FldDatabaseDataProvider :
 
     public void ReleaseSnapshot(Guid snapshotToken)
     {
-        FldProviderSnapshot? snapshot;
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (!_snapshots.Remove(snapshotToken, out snapshot))
-                return;
+            _snapshots.Remove(snapshotToken);
         }
-        snapshot.Dispose();
+        _database.ReleaseProviderSnapshot(snapshotToken);
     }
 
     /// <summary>
