@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.73. C-pass: verify outbound reservation retirement is one atomic peer-stream write — 2026-11-09
+
+- [x C] Source audit confirmed `AcknowledgeOutboundBatch` clears `PendingBatch` in the same `PersistPeerStreamState` commit that advances `AckedCursor` and `LastBatchDigest`, after validating exact pushed reservation identity.
+- [x C] The pending immutable reservation is embedded in the single kind-15 peer/author row; it is not a separate durable payload table or per-operation receipt copy.
+- [~ T] Add crash injection immediately before/after the Storage commit, reopen/retry, duplicate ACK, wrong digest and wrong peer-epoch cases.
 ## 0.72. C-pass: v3.1 addendum links signed payload vectors and preserves GC gate — 2026-11-09
 
 - [x C] Updated the v3.1 addendum status to point to the deterministic NRS2/OFR2/RCP2/FRA2/FULL_REPLACE_BEGIN vectors and distinguish documented vectors from C#-verified vectors.
@@ -520,7 +525,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x] Relay/outbound payload rows persist only ChangeId[16] + payloadLength[u32] + payload; Origin is hydrated from the single global 45-byte ChangeId identity row. Missing ledger rows and author/stream mismatches fail closed. Physical compaction now deletes current row kinds 20/21 after reopen; exact CI passed 155/155 on all three OS platforms. [~] Full cross-store cardinality/byte audit remains.
 - [x] Node global ChangeId ledger stores a fixed 16-byte BLAKE3 identity digest that binds semantic mutation + immutable Origin tuple in one hash pass; no separate 29-byte Origin suffix is stored in the ledger value. [~] Storage metadata identity-row cardinality and cross-store duplication still require a byte-level audit and benchmark.
 - [ ] Collapse repeated author IDs in ACK/pushed/offset maps into one sparse progress row only if benchmarks prove a win.
-- [ ] Remove acknowledged replay reservations atomically with contiguous ACK, preserving digest-chain anchor.
+- [x C] `AcknowledgeOutboundBatch` validates the exact pushed reservation (peer/epoch/namespace/author stream, BatchId, cursor end and digest), then persists `AckedCursor`, digest-chain tail and `PendingBatch=null` together in the single peer-stream row/Storage batch. No separate reservation-delete transaction exists. [~ T] Inject crash/reopen around this commit and prove exact retry/duplicate ACK behavior.
 - [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
 - [ ] Remove duplicate relay payload copies and unnecessary WAL/ApplyJournal duplication only after recovery proof.
 - [~ C] On Metadata-Store-owned publication cutover, Node now drops its namespace-local `GlobalChangeLedger`; Metadata Store remains the only ChangeId authority. `SeenChanges` WAL replay markers are deliberately retained as a separate recovery concern. Cutover/restart assertions added; exact-head CI pending.
