@@ -39,8 +39,9 @@ FLD checkout as competing type identities.
 2. Open one `FldDatabase` for the same namespace and construct
    `FldBinSyncHostAdapter` with the stable metadata scope.
 3. Call `RecoverAndPublishAllAsync` before enabling any sender after process
-   startup. The outbound callback must enforce each
-   `PublishedThroughSequence` ceiling.
+   startup. Its watermark set contains the local Metadata Store outbound ceiling
+   plus every FLD relay author's RPM3 ceiling. Use `PublishReadyOutboxAsync` in
+   the callback; it invokes the ceiling-aware `SyncSession.PushBatchAsync` overload.
 4. Route remote APPLY through `ApplyAndPublishAllAsync`; route subsequent
    outbound sends through `RunOutboundAsync`.
 5. Route safe ACK through `AcknowledgeAllAsync`. FLD's durable ACK occurs
@@ -50,7 +51,9 @@ FLD checkout as competing type identities.
    `StorageSyncCoordinator.AcquireApplicationCommitGuard(fld.AcquireCommitGuard)`
    lease factory.
 
-This sample binds the durable contracts and lock order. It deliberately does
-not invent a transport/session implementation or enable physical GC. The sender
-callback is supplied by the application and must cap every author stream using
-the provided durable watermarks.
+This sample binds the durable contracts, lock order and bounded sender path. The
+application still creates/owns its `SyncSession` instances and transport lifecycle;
+inside the publication-gate callback, call `PublishReadyOutboxAsync` so the Core
+sender filters every author page to the captured ceiling and rejects an oversized
+pending reservation. Do not call the legacy ceiling-free send overload from this
+FLD relay path. Physical GC remains disabled.
