@@ -62,6 +62,10 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] The byte audit now records that `StorageDatabase.EncodeBatch` sorts all mutations by StorageKey before WAL append using LINQ `OrderBy`, adding O(N log N) CPU/allocation overhead per write batch.
 - [~ O] Benchmark realistic relay-page sizes and mixed metadata batches before changing the FLD Storage serializer; compare LINQ ordering with array sort and pre-sorted mutation collection, preserving deterministic byte order and atomic commit semantics.
 
+## 0.57. C-pass: adapter example imports current FLD/BIN-SYNC namespaces — 2026-11-09
+
+- [x C] Added explicit `using` directives to the guarded page-to-RPM3 integration snippet so the referenced FLD and BIN-SYNC types are unambiguous.
+
 ## 0.56. C-pass: guarded FLD page-to-RPM3 call sequence documented — 2026-11-09
 
 - [x C] Added a concrete current-API adapter flow to §9.5: acquire `AcquireApplicationCommitGuard(database.AcquireCommitGuard)`, read `ReadRelayBatchPage`, collect `Batch.RelayWrites` ChangeIds with their JournalSeq, then call `AppendRelayProvenancePage`.
