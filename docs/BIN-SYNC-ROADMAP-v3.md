@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.78. Recovery checkpoints refreshed before further extraction work — 2026-11-09
+
+- [x C] Created BIN-SYNC backup branch `backup/cpass-2026-11-09-0855` at `e0eb9f17ad40abe92da5155aaa86282404acd16e`.
+- [x C] Created FLD-DB backup branch `backup/cpass-2026-11-09-0855` at `d49f710c1e2992f753278836d521157813d8b503`.
+- [x C] Earlier pre-RPM3 and pre-integration backup branches remain preserved; these new checkpoints include the current C-pass documentation and signed-vector sample state.
 ## 0.77. C-pass: executable v3.1 signed-vector sample added — 2026-11-09
 
 - [x C] Added `samples/V31ControlPlaneVectors` to construct the deterministic NRS2/OFR2/RCP2/FRA2/FULL_REPLACE_BEGIN objects, compare payload and signed bytes against the checked-in vectors, and verify Ed25519 signatures.
