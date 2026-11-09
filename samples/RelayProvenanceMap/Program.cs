@@ -46,9 +46,18 @@ try
         Require(safeJournal == 3, "Fully acknowledged mapping did not advance through the scanned source cursor.");
         map.CommitAfterFldRelayAck(namespaceId, author, safeOutboxSeq: 3, safeThroughJournalSeq: safeJournal);
 
+    }
+
+    using (var storage = StorageDatabase.Open(databasePath, 213))
+    {
+        var map = new StorageRelayProvenanceMap(storage, "relay-provenance-sample", author);
+        StorageRelayProvenanceCursor cursor = map.ReadCursor(namespaceId, author);
+        Require(cursor.ScannedThroughJournalSeq == 3 && cursor.AckedThroughOutboxSeq == 3 &&
+            cursor.AckedThroughJournalSeq == 3, "Fully pruned cursor did not survive restart.");
+
         map.AppendPage(namespaceId, author, Array.Empty<StorageRelayProvenanceEntry>(),
             scannedThroughJournalSeq: 4);
-        safeJournal = map.TranslateSafeOutboxSequence(namespaceId, author, 3);
+        ulong safeJournal = map.TranslateSafeOutboxSequence(namespaceId, author, 3);
         Require(safeJournal == 4,
             "An empty author page may advance only after a positive Outbox watermark is already durable.");
         map.CommitAfterFldRelayAck(namespaceId, author, safeOutboxSeq: 3, safeThroughJournalSeq: 4);
