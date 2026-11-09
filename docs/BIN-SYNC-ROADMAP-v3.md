@@ -1931,3 +1931,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `ValidatePublished` remains strict and still rejects identity-zero record tombstones from outbound freeze or remote APPLY; immutable operations continue to require complete ChangeId/Origin.
 - [~ T] Add explicit codec/digest/FULL_REPLACE vectors for legacy record tombstones and negative tests proving `ValidatePublished` rejects them. No test/build result is claimed.
 - [~ C] Complete the BIN-SYNC `IDataProvider` host adapter and source-feed/key-resolution bridge; durable FULL_REPLACE sender restart recovery, generic Storage physical-format decision and host session scheduler remain open.
+
+
+## 1.20. C-pass: add the base FLD Database IDataProvider bridge and enforce exact host composition — 2026-11-09
+
+- [x C] Added optional-sample `FldDatabaseDataProvider`: direct 16-byte RecordId / 2-byte FieldId resolution, fenced FLD Outbox feed, stable ChangeId and deferred origin epoch/sequence mapping, generation-pinned paged snapshots, current-state reads, published-origin WAL stamping and FLD commit guard.
+- [x C] Context-free `IDataProvider.ApplyRemoteBatch` deliberately fails closed. The host must inject the exact `FldRemoteBatchApplyStore` so sender/transport epoch/cursor/digest context is not discarded.
+- [x C] Added `StorageSyncCoordinator.UsesDataProvider` and constructor checks in `FldBinSyncHostAdapter`: the coordinator must use the exact FLD provider, the provider must use the exact FLD database, and the contextual apply store must target that same database.
+- [x C] Updated the host README with construction order and the explicit remaining boundaries. FLD runtime still has exactly two DLLs; the adapter remains optional host code.
+- [~ C] Remaining v3/v3.1 gates: durable publication-mode cutover + author-epoch closure capability, FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot generation recovery across restart, generic Storage page/run/WAL physical-format decision, and host-owned multi-session transport scheduler.
+- [~ T] Exact cross-repository sample build and provider conformance/crash tests are deferred to the dedicated T-pass. No test/build pass is claimed.
+- [~ C] Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the complete cross-store reference proof and T-pass.
