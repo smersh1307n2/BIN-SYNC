@@ -412,82 +412,10 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         ulong tombstoneHlcWall, uint tombstoneHlcLogical,
         Guid fullReplaceGeneration, ReadOnlySpan<byte> fullReplaceDigest)
     {
-        if (originAuthor.IsZero || originEpoch == 0 || originSequence == 0 ||
-            fullReplaceGeneration == Guid.Empty || fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
-            return false;
-        lock (_gate)
-        {
-            EnsureCurrentRoster(acceptedRoster);
-            NamespaceRetentionCheckpoint? checkpoint = TryReadRetentionCheckpointCore(acceptedRoster, trustStore);
-            if (checkpoint is null ||
-                checkpoint.FullReplaceGeneration != fullReplaceGeneration ||
-                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(fullReplaceDigest) ||
-                tombstoneHlcWall > checkpoint.FullReplaceHlcWallFloor ||
-                (tombstoneHlcWall == checkpoint.FullReplaceHlcWallFloor &&
-                 tombstoneHlcLogical > checkpoint.FullReplaceHlcLogicalFloor) ||
-                !TryGetCommonInstalledHlcFloorCore(acceptedRoster, fullReplaceGeneration,
-                    fullReplaceDigest, out ulong installedWall, out uint installedLogical) ||
-                installedWall != checkpoint.FullReplaceHlcWallFloor ||
-                installedLogical != checkpoint.FullReplaceHlcLogicalFloor)
-                return false;
-
-            ulong finalIssuedSequence;
-            ulong maxIssuedHlcWall;
-            uint maxIssuedHlcLogical;
-            NamespaceRetiredOriginEpoch? closure = acceptedRoster.RetiredOriginEpochs.FirstOrDefault(entry =>
-                entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
-            if (closure is not null)
-            {
-                finalIssuedSequence = closure.FinalIssuedOriginSequence;
-                maxIssuedHlcWall = closure.MaxIssuedHlcWall;
-                maxIssuedHlcLogical = closure.MaxIssuedHlcLogical;
-            }
-            else
-            {
-                NamespaceRosterMember? authorMember = acceptedRoster.Members.FirstOrDefault(member =>
-                    member.NodeId == originAuthor);
-                if (authorMember is null || authorMember.Status != NamespaceMemberStatus.Active)
-                    return false;
-                AppliedOriginFrontierReport? authorReport = ReadOriginFrontiersCore(acceptedRoster)
-                    .FirstOrDefault(report => report.MemberNodeId == originAuthor);
-                IssuedOriginFrontierEntry? issued = authorReport?.IssuedOrigins.FirstOrDefault(entry =>
-                    entry.OriginAuthorEpoch == originEpoch);
-                if (issued is null) return false;
-                finalIssuedSequence = issued.IssuedOriginSequence;
-                maxIssuedHlcWall = issued.MaxIssuedHlcWall;
-                maxIssuedHlcLogical = issued.MaxIssuedHlcLogical;
-            }
-
-            if (originSequence > finalIssuedSequence ||
-                tombstoneHlcWall > maxIssuedHlcWall ||
-                (tombstoneHlcWall == maxIssuedHlcWall &&
-                 tombstoneHlcLogical > maxIssuedHlcLogical) ||
-                checkpoint.FullReplaceHlcWallFloor < maxIssuedHlcWall ||
-                (checkpoint.FullReplaceHlcWallFloor == maxIssuedHlcWall &&
-                 checkpoint.FullReplaceHlcLogicalFloor < maxIssuedHlcLogical))
-                return false;
-
-            RetentionFrontierEntry? safe = checkpoint.SafeFrontier.FirstOrDefault(entry =>
-                entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
-            if (safe is null || safe.SafeAppliedOriginSequence < finalIssuedSequence ||
-                !AreAllActiveMembersInstalledCore(acceptedRoster, fullReplaceGeneration, fullReplaceDigest))
-                return false;
-
-            IReadOnlyList<AppliedOriginFrontierReport> reports = ReadOriginFrontiersCore(acceptedRoster);
-            foreach (NamespaceRosterMember member in acceptedRoster.Members.Where(item =>
-                item.Status == NamespaceMemberStatus.Active))
-            {
-                AppliedOriginFrontierReport? report = reports.FirstOrDefault(item => item.MemberNodeId == member.NodeId);
-                if (report is null || report.UnpublishedDraftCount != 0)
-                    return false;
-                AppliedOriginFrontierEntry? applied = report.Entries.FirstOrDefault(entry =>
-                    entry.OriginAuthorNodeId == originAuthor && entry.OriginAuthorEpoch == originEpoch);
-                if (applied is null || applied.ContiguousAppliedOriginSequence < finalIssuedSequence)
-                    return false;
-            }
-
-            return true;
-        }
+        TombstoneGcProofSnapshot? snapshot = TryCreateTombstoneGcProofSnapshot(
+            acceptedRoster, trustStore, fullReplaceGeneration, fullReplaceDigest);
+        return snapshot is not null && snapshot.HasProof(
+            originAuthor, originEpoch, originSequence, tombstoneHlcWall, tombstoneHlcLogical);
     }
 
     private bool TryReadCurrentRosterCore(TrustStore trustStore, int namespaceId, out NamespaceRosterCertificate? roster)
