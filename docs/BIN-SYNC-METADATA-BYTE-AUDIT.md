@@ -64,11 +64,11 @@ Each operation's 65-byte fixed part is author[16] + ChangeId[16] + author epoch[
 | Row | Key bytes | Value bytes | Cardinality |
 |---|---:|---:|---|
 | Per-author scan/ACK cursor | 68 | 60 | One per (namespace, original author) that has been scanned |
-| JournalSeq/OutboxSeq mapping (RPM3) | 76 | 8 | One per unacknowledged relayed ChangeId |
+| JournalSeq/BIN-SYNC sequence mapping (RPM3) | 76 | 8 | One per unacknowledged relayed ChangeId |
 
-The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian OutboxSeq[8]. The RPM3 value is JournalSeq[8] only; each persisted mapping row is therefore 84 bytes total. ChangeId remains solely in BIN-SYNC's global ChangeId ledger and is resolved before AppendPage. Historical RPM2 rows with a 24-byte value are superseded and are not a supported fallback. The cursor value is marker[4] (RPM3) + scanned JournalSeq[8] + ACKed OutboxSeq[8] + ACKed JournalSeq[8] + mapping-set digest[32]. The digest is XOR(SHA-256(key || value)) over all retained mapping rows; append/prune updates rows and digest in one atomic Storage batch, and restart recomputes it from bounded pages.
+The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian per-author BIN-SYNC sequence[8]. Before metadata-owned publication cutover this sequence is Node OutboxSeq; after cutover it is the durable Metadata Store relay sequence. The RPM3 value is JournalSeq[8] only; each persisted mapping row is therefore 84 bytes total. ChangeId remains solely in BIN-SYNC's global ChangeId ledger and is resolved through the active outbound authority before AppendPage. Historical RPM2 rows with a 24-byte value are superseded and are not a supported fallback. The cursor value is marker[4] (RPM3) + scanned JournalSeq[8] + ACKed BIN-SYNC sequence[8] + ACKed JournalSeq[8] + mapping-set digest[32]. The digest is XOR(SHA-256(key || value)) over all retained mapping rows; append/prune updates rows and digest in one atomic Storage batch, and restart recomputes it from bounded pages.
 
-The RPM3 mapping index is intentionally proportional to unacknowledged relay mappings. It is not a per-peer copy and contains no operation payload, fingerprint, receipt or OriginSequence. ACK translation is lower-bound O(log N); restart reads mapping rows in OutboxSeq order through 1,024-entry pages. Mapping rows are deleted only after FLD durably accepts the translated JournalSeq ACK.
+The RPM3 mapping index is intentionally proportional to unacknowledged relay mappings. It is not a per-peer copy and contains no operation payload, fingerprint, receipt or OriginSequence. ACK translation is lower-bound O(log N); restart reads mapping rows in per-author BIN-SYNC sequence order through 1,024-entry pages. Mapping rows are deleted only after FLD durably accepts the translated JournalSeq ACK.
 
 ## 4. Cardinality model and non-duplication invariants
 
