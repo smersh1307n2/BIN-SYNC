@@ -175,7 +175,7 @@ public sealed class V31NamespaceGcHostOrchestrator
                 _acquireHostCommitLease,
                 pageSize,
                 NextSequence(authoritySession),
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                ct: cancellationToken).ConfigureAwait(false);
         if (report.MemberNodeId != _coordinator.LocalReplicaId ||
             report.RosterGeneration != roster.RosterGeneration)
             throw new InvalidDataException("The published OFR2 report does not match the accepted local member/roster.");
