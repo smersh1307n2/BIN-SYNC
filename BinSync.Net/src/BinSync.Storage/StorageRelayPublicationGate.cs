@@ -43,6 +43,7 @@ public sealed class StorageRelayPublicationGate
         CancellationToken cancellationToken = default)
     {
         ValidateArguments(coordinator, map, readRelayAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
+        coordinator.ValidateRelayProvenanceMap(map);
         ArgumentNullException.ThrowIfNull(applyRemoteBatch);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -161,6 +162,7 @@ public sealed class StorageRelayPublicationGate
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
         ArgumentNullException.ThrowIfNull(acknowledgeSource);
+        coordinator.ValidateRelayProvenanceMap(map);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -194,6 +196,7 @@ public sealed class StorageRelayPublicationGate
         ArgumentNullException.ThrowIfNull(readRelayAuthors);
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
         ArgumentNullException.ThrowIfNull(acknowledgeSource);
+        coordinator.ValidateRelayProvenanceMap(map);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -234,6 +237,7 @@ public sealed class StorageRelayPublicationGate
         ArgumentNullException.ThrowIfNull(readRelayAuthors);
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
         ArgumentNullException.ThrowIfNull(publish);
+        coordinator.ValidateRelayProvenanceMap(map);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
