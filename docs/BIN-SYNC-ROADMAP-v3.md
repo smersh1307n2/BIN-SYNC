@@ -10,6 +10,15 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.43. C-pass: ApplyJournal and Micro-WAL byte audit — 2026-11-09
+
+- [x C] Audited FLD `ApplyJournal.cs`: 16-byte file header; each record is 20-byte header + APPLY_COMMIT payload + 4-byte CRC32C; per-author relay-ACK sidecar is 12-byte header + 24 bytes/author + CRC; sparse index is 16 bytes/256 records in memory.
+- [x C] Audited `ApplyCommitCodec` v3: 139-byte fixed body envelope including the field count; each mutation adds 69 bytes plus value; non-relay-only WAL payload adds relay-index count and varuint indexes; relay-only ApplyJournal records store only relay fields.
+- [x C] Audited Micro-WAL v2: 64-byte segment header; each record is 20-byte envelope + payload + 4-byte CRC32C + 0–7 bytes alignment padding.
+- [x C] Documented the bounded handoff duplication: full APPLY WAL payload and relay-only ApplyJournal payload coexist until WAL seal/truncation; acknowledged relay payload can be compacted while receipt/protocol metadata remains in ApplyJournal.
+- [x C] Documented the FLD reference snapshot's in-memory ChangeId/RecordId/receipt indexes and conservative unsealed-WAL barrier.
+- [~ C/O] Manifest/Run, ApplyJournal receipt lifetime/independent compaction, Fld1.Storage page/index/write amplification and full workload cardinalities remain open; do not claim a complete cross-store byte total yet.
+
 ## 0.42. FLD source API audit completed — 2026-11-09
 
 - [x C] Located and inspected the current FLD source: `FldDatabase.ReadRelayBatchPage`, `AcknowledgeRelayBatches`, `AcquireCommitGuard`, `ReadUnpublishedLocalDraftHorizon`, `OpenReferenceSnapshot`, and `FldReferenceSnapshot` already exist in `Fld1.Engine.Db`.
