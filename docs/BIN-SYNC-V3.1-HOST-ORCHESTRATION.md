@@ -114,3 +114,8 @@ The constructor takes a host-owned `Func<SyncSession, ulong>` frame-sequence all
 - The optional `samples/FldBinSyncHost` now implements the FLD relay-page/RPM3/publication/ACK/reference-scan adapter around a preconstructed `StorageSyncCoordinator`. The full `FldDatabase`→`IDataProvider` snapshot/local-feed/remote-apply bridge is still an open C-pass item; do not claim the relay sample alone is a complete synchronized-FLD application. See `FLD-DB-INTEGRATION-CONTRACT.md` §§9.6–9.8.
 
 This is an orchestration recipe, not a background scheduler implementation. The application chooses cadence and transport policy while protocol/storage code remains deterministic and explicitly invoked.
+
+
+## FULL_REPLACE sender HLC confirmation
+
+The authority computes the source snapshot HLC floor during the same digest pass, retains it in `PreparedFullReplaceSnapshot`, and checks every receiver FRA2 wall/logical pair against that exact source floor before persisting the ACK. A signature alone proves which member made the claim; this equality check proves that the claim matches the authority's source generation. Do not accept an ACK that reports a higher/lower floor or only compare recipients with each other.
