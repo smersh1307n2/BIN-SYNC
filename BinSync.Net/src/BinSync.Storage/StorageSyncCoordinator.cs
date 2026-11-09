@@ -30,6 +30,23 @@ public sealed class StorageSyncCoordinator
     /// <summary>The local replica identity whose outbound streams this coordinator owns.</summary>
     public NodeId LocalReplicaId => _node.NodeId;
 
+    /// <summary>
+    /// Capture the current local-author publication ceiling from the durable Metadata
+    /// Store. Local provider-feed operations use the Metadata Store's outbound sequence
+    /// directly; they do not have an FLD relay JournalSeq/RPM3 mapping.
+    /// Call while the composed application commit guard is held.
+    /// </summary>
+    public StorageRelayAuthorPublicationWatermark ReadLocalPublicationWatermark()
+    {
+        if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "The local publication ceiling requires the durable Metadata Store and a stable scope.");
+        ulong publishedThrough = _metadataStore.GetOutboundHighWatermark(
+            _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
+        return new StorageRelayAuthorPublicationWatermark(
+            _node.NodeId, publishedThrough, ScannedThroughJournalSeq: 0);
+    }
+
     internal void ValidateRelayProvenanceMap(StorageRelayProvenanceMap map)
     {
         ArgumentNullException.ThrowIfNull(map);
