@@ -1487,6 +1487,31 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static int CompareSnapshotOrder(ProviderMutation left, ProviderMutation right)
         => ProviderMutationCodec.CompareCanonical(left, right);
 
+    private static void ValidateGenerationEntry(
+        Guid generation, in StorageEntryView entry, ProviderMutation mutation)
+    {
+        ReadOnlySpan<byte> key = entry.Key;
+        Span<byte> generationBytes = stackalloc byte[16];
+        generation.TryWriteBytes(generationBytes, true, out _);
+        if (key.Length < 17 || !key.Slice(1, 16).SequenceEqual(generationBytes))
+            throw new InvalidDataException("Full-replace row belongs to a different generation.");
+
+        Span<byte> recordBytes = stackalloc byte[16];
+        mutation.RecordId.WriteTo(recordBytes);
+        if (mutation.IsRecordTombstone)
+        {
+            if (key[0] != CurrentRecordTombstone || key.Length != 33 ||
+                !key.Slice(17, 16).SequenceEqual(recordBytes))
+                throw new InvalidDataException("Full-replace record tombstone key does not match its value.");
+            return;
+        }
+
+        if (key[0] != CurrentField || key.Length != 35 ||
+            !key.Slice(17, 16).SequenceEqual(recordBytes) ||
+            BinaryPrimitives.ReadUInt16BigEndian(key.Slice(33, 2)) != mutation.FieldId)
+            throw new InvalidDataException("Full-replace field key does not match its value.");
+    }
+
     private static void ValidateGenerationEntry(Guid generation, StorageEntry entry, ProviderMutation mutation)
     {
         Span<byte> generationBytes = stackalloc byte[16];
