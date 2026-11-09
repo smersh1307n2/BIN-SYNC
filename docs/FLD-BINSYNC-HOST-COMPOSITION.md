@@ -12,6 +12,7 @@ var metadata = new StorageMetadataStore(syncStorage);
 var map = new StorageRelayProvenanceMap(syncStorage, scopeId, localReplica);
 var coordinator = new StorageSyncCoordinator(node, provider, namespaceId, metadata, scopeId);
 var relayGate = StorageRelayPublicationGate.For(coordinator);
+var adapter = new FldBinSyncHostAdapter(fld, coordinator, map, scopeId);
 
 IDisposable? AcquireFldLease() => fld.AcquireCommitGuard();
 ```
