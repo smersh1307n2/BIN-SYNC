@@ -285,6 +285,8 @@ public sealed class V31NamespaceGcHostOrchestrator
     public async Task<FullReplaceInstalledAck?> ReceiveFullReplaceAsync(
         SyncSession authoritySession,
         StorageFullReplaceReceiver receiver,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
         CancellationToken cancellationToken = default)
     {
         await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -292,6 +294,12 @@ public sealed class V31NamespaceGcHostOrchestrator
         {
             ArgumentNullException.ThrowIfNull(authoritySession);
             ArgumentNullException.ThrowIfNull(receiver);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+            if (!receiver.IsBoundTo(gcStore, trustStore))
+                throw new InvalidOperationException(
+                    "FULL_REPLACE receiver must use this exact namespace-GC store and TrustStore.");
             NamespaceRosterCertificate roster =
                 await _coordinator.ReceiveAndAcceptNamespaceRosterAsync(
                     authoritySession, cancellationToken).ConfigureAwait(false);
@@ -346,6 +354,8 @@ public sealed class V31NamespaceGcHostOrchestrator
             ArgumentNullException.ThrowIfNull(trustStore);
             if (memberNodeId.IsZero || generation == Guid.Empty)
                 throw new ArgumentException("Joining member identity and FULL_REPLACE generation are required.");
+            if (authoritySeed.Length != 32)
+                throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
             if (fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
                 throw new ArgumentException("FULL_REPLACE digest must be 32 bytes.", nameof(fullReplaceDigest));
             if (authoritySeed.Length != 32)
@@ -408,7 +418,8 @@ public sealed class V31NamespaceGcHostOrchestrator
             };
             byte[] signed = NamespaceRosterProtocol.Sign(unsigned, authoritySeed);
             NamespaceRosterCertificate accepted = gcStore.AcceptNamespaceRoster(signed, trustStore);
-            await BroadcastAcceptedRosterCoreAsync(sessions, cancellationToken).ConfigureAwait(false);
+            await BroadcastAcceptedRosterCoreAsync(
+                sessions, authoritySeed, cancellationToken).ConfigureAwait(false);
             return accepted;
         }
         finally
@@ -459,15 +470,18 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// <summary>Retry broadcasting the currently accepted signed roster without changing its generation.</summary>
     public async Task BroadcastAcceptedRosterAsync(
         IReadOnlyList<SyncSession> memberSessions,
+        byte[] authoritySeed,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        if (authoritySeed.Length != 32)
+            throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
         await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             SyncSession[] sessions = ValidateSessions(memberSessions);
-            if (_coordinator.NamespaceId <= 0)
-                throw new InvalidOperationException("The coordinator namespace is invalid.");
-            await BroadcastAcceptedRosterCoreAsync(sessions, cancellationToken).ConfigureAwait(false);
+            await BroadcastAcceptedRosterCoreAsync(
+                sessions, authoritySeed, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -477,12 +491,13 @@ public sealed class V31NamespaceGcHostOrchestrator
 
     private async Task BroadcastAcceptedRosterCoreAsync(
         IReadOnlyList<SyncSession> sessions,
+        byte[] authoritySeed,
         CancellationToken cancellationToken)
     {
         foreach (SyncSession session in sessions)
         {
             await _coordinator.SendAcceptedNamespaceRosterAsync(
-                session, Array.Empty<byte>(), NextSequence(session), cancellationToken).ConfigureAwait(false);
+                session, authoritySeed, NextSequence(session), cancellationToken).ConfigureAwait(false);
         }
     }
 
