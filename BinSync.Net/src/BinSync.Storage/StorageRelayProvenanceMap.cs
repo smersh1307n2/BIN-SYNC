@@ -7,7 +7,7 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Durable source JournalSeq ↔ BIN-SYNC OutboxSeq bridge for synchronized FLD databases.
+/// Durable source JournalSeq ↔ BIN-SYNC per-author outbound sequence bridge for synchronized FLD databases (Node Outbox before metadata-owned cutover, Metadata Store relay sequence after cutover).
 /// ChangeId identity remains in BIN-SYNC's global ChangeId ledger; this stores only the
 /// cross-coordinate mapping and scan/ACK cursors, never ChangeId or operation payloads.
 /// </summary>
@@ -86,7 +86,8 @@ public sealed class StorageRelayProvenanceMap
     /// <summary>
     /// Atomically persists one complete FLD relay page's sequence mapping and its
     /// ScannedThroughJournalSeq. The caller must first resolve every source ChangeId through
-    /// the durable BIN-SYNC ChangeId ledger; ChangeId bytes are deliberately not duplicated
+    /// the active BIN-SYNC outbound authority (Node Outbox before metadata-owned cutover,
+    /// Metadata Store relay rows after cutover); ChangeId bytes are deliberately not duplicated
     /// here. Pages must end on whole JournalSeq boundaries; a source journal containing
     /// multiple operations cannot be split across pages. The caller may publish/send the mapped Outbox entries
     /// only after this method returns. JournalSeq and OutboxSeq remain separate domains.
