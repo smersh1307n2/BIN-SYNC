@@ -30,6 +30,11 @@ public sealed class StorageSyncCoordinator
     /// <summary>The local replica identity whose outbound streams this coordinator owns.</summary>
     public NodeId LocalReplicaId => _node.NodeId;
 
+    /// <summary>True after the provider-authoritative Metadata Store publication cutover.</summary>
+    public bool IsMetadataStoreOwnedPublication =>
+        _provider is IProviderPublicationMode publicationMode &&
+        publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _);
+
     /// <summary>
     /// Capture the current local-author publication ceiling from the durable Metadata
     /// Store. Local provider-feed operations use the Metadata Store's outbound sequence
@@ -41,8 +46,21 @@ public sealed class StorageSyncCoordinator
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new NotSupportedException(
                 "The local publication ceiling requires the durable Metadata Store and a stable scope.");
-        ulong publishedThrough = _metadataStore.GetOutboundHighWatermark(
-            _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
+        ulong publishedThrough;
+        if (IsMetadataStoreOwnedPublication)
+        {
+            publishedThrough = _metadataStore.GetOutboundHighWatermark(
+                _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
+        }
+        else
+        {
+            long nodeOutboxHighWatermark = _node.GetOutboxHighWatermark(
+                _namespaceId, _node.NodeId);
+            if (nodeOutboxHighWatermark < 0)
+                throw new InvalidDataException("Node Outbox returned a negative local publication watermark.");
+            publishedThrough = checked((ulong)nodeOutboxHighWatermark);
+        }
+
         return new StorageRelayAuthorPublicationWatermark(
             _node.NodeId, publishedThrough, ScannedThroughJournalSeq: 0);
     }
