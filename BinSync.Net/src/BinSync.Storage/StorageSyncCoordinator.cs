@@ -205,8 +205,9 @@ public sealed class StorageSyncCoordinator
 
             if (pageSize <= 0 || pageSize > 4096)
                 throw new ArgumentOutOfRangeException(nameof(pageSize));
-            ApplicationDraftHorizon hostDrafts =
-                externalState.ReadUnpublishedLocalDraftHorizon(_scopeId, _node.NodeId, _namespaceId);
+            using IApplicationGcReferenceScan externalScan =
+                externalState.OpenScan(_scopeId, _node.NodeId, _namespaceId);
+            ApplicationDraftHorizon hostDrafts = externalScan.UnpublishedLocalDraftHorizon;
             if (hostDrafts.Count == 0 &&
                 (hostDrafts.MaxHlcWall != 0 || hostDrafts.MaxHlcLogical != 0))
                 throw new InvalidDataException("Host draft scanner returned an HLC maximum for an empty draft set.");
