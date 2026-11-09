@@ -34,15 +34,20 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
     public ValueTask RunOutboundRoundAsync(
         IReadOnlyCollection<SyncSession> sessions,
         Node sender,
+        Action<Node> persistNode,
         IMetadataPeerStateStore? peerStateStore = null,
+        int limit = 1024,
         int schemaVersion = 1,
         CancellationToken cancellationToken = default)
     {
         SyncSession[] peers = ValidateSessions(sessions);
         ArgumentNullException.ThrowIfNull(sender);
+        ArgumentNullException.ThrowIfNull(persistNode);
         return _adapter.RunOutboundAsync(
+            persistNode,
             (ceilings, token) => PublishToPeersAsync(
                 peers, sender, peerStateStore, ceilings, schemaVersion, token),
+            limit,
             cancellationToken);
     }
 
@@ -117,12 +122,15 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
     public async Task RunPeriodicOutboundAsync(
         Func<IReadOnlyCollection<SyncSession>> getCurrentSessions,
         Node sender,
+        Action<Node> persistNode,
         TimeSpan interval,
         IMetadataPeerStateStore? peerStateStore = null,
+        int limit = 1024,
         int schemaVersion = 1,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(getCurrentSessions);
+        ArgumentNullException.ThrowIfNull(persistNode);
         if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
         using var timer = new PeriodicTimer(interval);
         while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
@@ -130,7 +138,7 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
             IReadOnlyCollection<SyncSession> peers = getCurrentSessions()
                 ?? throw new InvalidOperationException("The host returned a null session collection.");
             await RunOutboundRoundAsync(
-                peers, sender, peerStateStore, schemaVersion, cancellationToken).ConfigureAwait(false);
+                peers, sender, persistNode, peerStateStore, limit, schemaVersion, cancellationToken).ConfigureAwait(false);
         }
     }
 
