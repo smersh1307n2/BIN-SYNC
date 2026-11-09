@@ -2652,6 +2652,62 @@ private static bool ValidateIncomingBatchForStaging(
         }
     }
 
+    /// <summary>
+    /// Resolve relay ChangeIds to the durable per-author sequence assigned by the
+    /// Metadata Store. This is the authoritative resolver after metadata-owned
+    /// publication cutover; Node.Outbox is intentionally empty in that mode.
+    /// Returns false and clears the output if any relay payload has already been
+    /// compacted or is otherwise not retained.
+    /// </summary>
+    public bool TryResolveRelaySequences(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        NodeId originalAuthor,
+        ReadOnlySpan<BatchId> changeIds,
+        Span<ulong> sequences)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
+            if (sequences.Length != changeIds.Length)
+                throw new ArgumentException("Output length must match the requested ChangeIds.", nameof(sequences));
+            sequences.Clear();
+            if (changeIds.IsEmpty) return true;
+
+            var slots = new Dictionary<BatchId, int>(changeIds.Length);
+            for (int i = 0; i < changeIds.Length; i++)
+            {
+                if (changeIds[i].IsZero)
+                    throw new ArgumentException("Relay ChangeIds must be non-zero.", nameof(changeIds));
+                if (!slots.TryAdd(changeIds[i], i))
+                    throw new ArgumentException("Relay ChangeIds must be unique within one source page.", nameof(changeIds));
+            }
+
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state) ||
+                !state.Relay.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var entries))
+                return false;
+
+            int found = 0;
+            foreach (MetadataRelayItem item in entries)
+            {
+                if (!slots.TryGetValue(item.ChangeId, out int slot))
+                    continue;
+                if (item.OriginalAuthor != originalAuthor || item.Sequence == 0 ||
+                    sequences[slot] != 0)
+                    throw new InvalidDataException("Metadata relay contains a duplicate or conflicting ChangeId identity.");
+                sequences[slot] = item.Sequence;
+                found++;
+            }
+
+            if (found == changeIds.Length)
+                return true;
+            sequences.Clear();
+            return false;
+        }
+    }
+
     public ulong GetRelayHighWatermark(
         string scopeId,
         NodeId localReplica,
