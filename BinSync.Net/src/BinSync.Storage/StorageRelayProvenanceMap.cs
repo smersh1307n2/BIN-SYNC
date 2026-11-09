@@ -159,7 +159,15 @@ public sealed class StorageRelayProvenanceMap
             if (safeOutboxSeq < state.AckedThroughOutboxSeq)
                 throw new InvalidDataException("Safe Outbox ACK cannot regress below the already committed FLD relay ACK.");
             if (safeOutboxSeq == state.AckedThroughOutboxSeq)
-                return state.AckedThroughJournalSeq;
+            {
+                // Once a positive Outbox watermark is already durable and no mappings
+                // remain, newly scanned source journals contain no unacknowledged
+                // operations for this author and can be ACKed through the scan cursor.
+                // A zero Outbox watermark never authorizes a positive source ACK.
+                return safeOutboxSeq != 0 && state.Mappings.Count == 0
+                    ? state.ScannedThroughJournalSeq
+                    : state.AckedThroughJournalSeq;
+            }
 
             if (state.Mappings.Count == 0 || safeOutboxSeq > state.Mappings[^1].OutboxSeq)
                 throw new InvalidDataException("Safe Outbox ACK exceeds the last mapped sequence; scan/resolution must catch up before translating it.");
