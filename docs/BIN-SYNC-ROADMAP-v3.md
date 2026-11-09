@@ -1877,3 +1877,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-v31-capability-dependencies` in BIN-SYNC (anchored at `7a8c7f2eea341b879d6f39b747e19d3b3e5c0357`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
 - [~ T] Add asymmetric capability-matrix tests for every v3.1 send/receive API, exact negotiated intersections, partial peers and v3.0-only interoperability. No exact-head CI result is claimed.
 - [~ C] Durable FULL_REPLACE source snapshot recovery, complete FLD provider snapshot/local-feed/key-resolver bridge, generic Storage physical format decision and host transport scheduler remain open.
+
+## 1.15. C-pass: validate v3.1 capability dependencies in HELLO/HELLO_ACK
+
+- [x C] `SessionWire.EncodeHello` and `EncodeHelloAck` reject local capability advertisements that include `OriginFrontierV31` or `FullReplaceV31` without `NamespaceRosterV31`.
+- [x C] `SessionWire.DecodeHello` and `DecodeHelloAck` reject the same invalid dependency mask from a remote peer with `FRAME_REJECTED`, before constructing a session. Unknown future capability bits remain forward-compatible; valid v3.0 and v3.1 bitmasks retain identical wire bytes.
+- [x C] Created matching recovery branches `backup/cpass-2026-11-09-v31-hello-capability-validation` in BIN-SYNC (anchored at `7e763f0f5939ce2b134e0d5b7a55e92361e51b3b`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
+- [~ T] Add HELLO/HELLO_ACK encode/decode tests for each partial/valid capability mask, unknown bits, malformed peer advertisements and byte-for-byte valid HELLO compatibility. No exact-head CI result is claimed.
+- [~ C] Durable FULL_REPLACE source snapshot recovery, full FLD provider snapshot/local-feed/key-resolver bridge, generic Storage physical-format decision and host transport scheduler remain open.
