@@ -1087,6 +1087,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 checkpoint.FullReplaceDigest is null ||
                 checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
                 return 0;
+            TombstoneGcProofSnapshot? tombstoneProof =
+                gcStore.TryCreateTombstoneGcProofSnapshot(
+                    roster, trustStore, checkpoint.FullReplaceGeneration.Value,
+                    checkpoint.FullReplaceDigest);
+            if (tombstoneProof is null)
+                return 0;
 
             if (!metadataStore.TryBuildLiveRecordReferenceSet(
                     scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecordReferences))
@@ -1130,10 +1136,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     tombstone.RecordId != RecordId.From(tombstoneRow.Key.AsSpan(17, 16)) ||
                     tombstone.ChangeId.IsZero || tombstone.OriginAuthorEpoch == 0 ||
                     tombstone.OriginSequence == 0 ||
-                    !gcStore.HasProtocolTombstoneGcProof(
-                        roster, trustStore, tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
-                        tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
-                        checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest) ||
+                    !tombstoneProof.HasProof(
+                        tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
+                        tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical) ||
                     liveRecordReferences.Contains(tombstone.RecordId) ||
                     externalScan.HasExternalChangeIdReference(tombstone.ChangeId) ||
                     externalScan.HasExternalRecordReference(tombstone.RecordId, tombstone.ChangeId))
