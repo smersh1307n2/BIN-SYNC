@@ -454,9 +454,60 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(session);
         NamespaceRetentionCheckpoint checkpoint = PublishRetentionCheckpoint(
             authoritySeed, fullReplaceGeneration, fullReplaceDigest);
-        await session.SendRetentionCheckpointAsync(checkpoint, authoritySeed, frameSequence, ct)
-            .ConfigureAwait(false);
+        await SendAcceptedRetentionCheckpointAsync(
+            session, checkpoint, authoritySeed, frameSequence, ct).ConfigureAwait(false);
         return checkpoint;
+    }
+
+    /// <summary>
+    /// Broadcast an already-published checkpoint to another member without minting a
+    /// new checkpoint sequence. This lets the authority publish one durable checkpoint
+    /// per control-plane round and send the same signed object to every Active member.
+    /// </summary>
+    public async Task SendAcceptedRetentionCheckpointAsync(
+        SyncSession session, NamespaceRetentionCheckpoint checkpoint, byte[] authoritySeed,
+        ulong frameSequence = 1, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        if (authoritySeed.Length != 32)
+            throw new ArgumentException("Ed25519 namespace authority seed must be 32 bytes.", nameof(authoritySeed));
+
+        StorageNamespaceGcStore gcStore;
+        TrustStore trustStore;
+        NamespaceRosterCertificate roster;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the signed namespace-GC store before checkpoint broadcast.");
+            trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? acceptedRoster) ||
+                acceptedRoster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            roster = acceptedRoster;
+        }
+
+        if (roster.AuthorityNodeId != _node.NodeId ||
+            checkpoint.NamespaceId != _namespaceId ||
+            checkpoint.AuthorityNodeId != _node.NodeId)
+            throw new InvalidOperationException("Only this namespace authority may broadcast its accepted checkpoint.");
+
+        if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? accepted) ||
+            accepted is null ||
+            accepted.CheckpointSequence != checkpoint.CheckpointSequence ||
+            !NamespaceRetentionCheckpointProtocol.ComputeDigest(accepted).AsSpan()
+                .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(checkpoint)))
+            throw new InvalidDataException("Only the currently durable accepted checkpoint can be broadcast.");
+
+        byte[] signed = NamespaceRetentionCheckpointProtocol.Sign(accepted, authoritySeed);
+        NamespaceRetentionCheckpoint verified = gcStore.AcceptRetentionCheckpoint(signed, roster, trustStore);
+        if (!NamespaceRetentionCheckpointProtocol.ComputeDigest(verified).AsSpan()
+                .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(accepted)))
+            throw new InvalidDataException("Checkpoint signing did not preserve the accepted durable checkpoint.");
+        await session.SendRetentionCheckpointAsync(verified, authoritySeed, frameSequence, ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Receive, verify and durably accept the authority's RCP2 checkpoint.</summary>
