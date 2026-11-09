@@ -7,10 +7,14 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Per-author publication ceiling. A sender must not expose outbound operations with
-/// sequence values above PublishedThroughSequence; those source changes have not yet
-/// been durably mapped from FLD JournalSeq into the active BIN-SYNC outbound authority.
+/// Per-author publication ceiling captured by the namespace publication gate. Relay
+/// authors are capped by the RPM3 FLD JournalSeq mapping; the local author is capped
+/// by the active Node Outbox or Metadata Store outbound high watermark.
 /// </summary>
+/// <param name="Author">The immutable origin author stream.</param>
+/// <param name="PublishedThroughSequence">The highest sequence the sender may expose.</param>
+/// <param name="ScannedThroughJournalSeq">FLD source cursor; zero for the local author.</param>
+/// <param name="IsMetadataStoreOwnedPublication">The sequence authority captured with this watermark.</param>
 public readonly record struct StorageRelayAuthorPublicationWatermark(
     NodeId Author,
     ulong PublishedThroughSequence,
