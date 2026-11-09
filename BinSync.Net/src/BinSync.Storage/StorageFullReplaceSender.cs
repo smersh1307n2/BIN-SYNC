@@ -2,10 +2,15 @@ namespace BinSync.Storage;
 
 /// <summary>
 /// Sends an authoritative provider snapshot using the v3.1 FULL_REPLACE protocol.
-/// The provider snapshot is held stable for both digest and transfer passes.
+/// PrepareSnapshot computes and signs one immutable manifest; that prepared snapshot
+/// can then be transferred to every roster member without rescanning it for each peer.
 /// </summary>
 public static class StorageFullReplaceSender
 {
+    /// <summary>
+    /// Open one immutable provider snapshot, compute/sign its manifest once, send it
+    /// to one member and release the snapshot after the transfer completes.
+    /// </summary>
     public static async Task<FullReplaceInstalledAck> SendAsync(
         IDataProvider provider,
         SyncSession session,
@@ -17,28 +22,79 @@ public static class StorageFullReplaceSender
         byte[] authoritySeed,
         CancellationToken ct = default)
     {
+        using PreparedFullReplaceSnapshot prepared = PrepareSnapshot(
+            provider, trustStore, roster, authorityNodeId, generation, authoritySeed);
+        return await SendPreparedSnapshotAsync(
+            prepared, session, gcStore, trustStore, roster, authorityNodeId,
+            authoritySeed, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Capture one stable provider generation and compute its signed transfer manifest.
+    /// The returned lease owns the provider snapshot; dispose it after every intended
+    /// recipient has either installed the generation or the host abandons that attempt.
+    /// </summary>
+    public static PreparedFullReplaceSnapshot PrepareSnapshot(
+        IDataProvider provider,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        Guid generation,
+        byte[] authoritySeed)
+    {
         ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        ArgumentNullException.ThrowIfNull(roster);
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        ValidateAuthorityInputs(authorityNodeId, generation, authoritySeed);
+        NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+        ValidateAuthorityRoster(roster, authorityNodeId);
+
         ProviderSnapshotHandle snapshot = provider.OpenSnapshot();
         try
         {
-            return await SendSnapshotAsync(
-                provider, snapshot, session, gcStore, trustStore, roster,
-                authorityNodeId, generation, authoritySeed, ct).ConfigureAwait(false);
+            FullReplaceTransferProtocol.Begin manifest = CreateManifest(
+                provider, snapshot, trustStore, roster, authorityNodeId,
+                generation, authoritySeed);
+            return new PreparedFullReplaceSnapshot(provider, snapshot, manifest);
         }
-        finally
+        catch
         {
             provider.ReleaseSnapshot(snapshot.Token);
+            throw;
         }
     }
 
     /// <summary>
-    /// Transfer an already-open immutable provider snapshot. Hosts sending one
-    /// generation to several members should share this handle so every recipient
-    /// receives exactly the same ChangeFeedWatermark, entry count and digest even
-    /// while the live provider continues accepting later writes.
-    /// The caller owns and must release the snapshot handle.
+    /// Transfer a previously prepared immutable snapshot to one roster member.
+    /// The provider and snapshot token must be the exact pair returned by PrepareSnapshot.
+    /// This method does not dispose the prepared snapshot; the caller may reuse it for
+    /// the next recipient and owns its final disposal.
     /// </summary>
-    public static async Task<FullReplaceInstalledAck> SendSnapshotAsync(
+    public static Task<FullReplaceInstalledAck> SendPreparedSnapshotAsync(
+        PreparedFullReplaceSnapshot prepared,
+        SyncSession session,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        byte[] authoritySeed,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        IDataProvider provider = prepared.Provider;
+        return SendSnapshotCoreAsync(
+            provider, prepared.Snapshot, prepared.Manifest, session, gcStore,
+            trustStore, roster, authorityNodeId, authoritySeed, ct);
+    }
+
+    /// <summary>
+    /// Transfer an already-open immutable provider snapshot. The caller owns the
+    /// ProviderSnapshotHandle and must release it after the transfer. This overload
+    /// computes a manifest for compatibility with callers that manage snapshot lifetime.
+    /// Use PrepareSnapshot + SendPreparedSnapshotAsync for multiple recipients.
+    /// </summary>
+    public static Task<FullReplaceInstalledAck> SendSnapshotAsync(
         IDataProvider provider,
         ProviderSnapshotHandle snapshot,
         SyncSession session,
@@ -52,34 +108,35 @@ public static class StorageFullReplaceSender
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(snapshot);
-        ArgumentNullException.ThrowIfNull(session);
-        ArgumentNullException.ThrowIfNull(gcStore);
+        FullReplaceTransferProtocol.Begin manifest = CreateManifest(
+            provider, snapshot, trustStore, roster, authorityNodeId,
+            generation, authoritySeed);
+        return SendSnapshotCoreAsync(
+            provider, snapshot, manifest, session, gcStore, trustStore,
+            roster, authorityNodeId, authoritySeed, ct);
+    }
+
+    private static FullReplaceTransferProtocol.Begin CreateManifest(
+        IDataProvider provider,
+        ProviderSnapshotHandle snapshot,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        Guid generation,
+        byte[] authoritySeed)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(trustStore);
         ArgumentNullException.ThrowIfNull(roster);
-        ArgumentNullException.ThrowIfNull(authoritySeed);
-        if (generation == Guid.Empty)
-            throw new ArgumentException("FULL_REPLACE generation must be non-empty.", nameof(generation));
-        if (authorityNodeId.IsZero || authoritySeed.Length != 32)
-            throw new ArgumentException("Namespace authority identity and Ed25519 seed are required.");
-
+        ValidateAuthorityInputs(authorityNodeId, generation, authoritySeed);
         NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
-        if (roster.AuthorityNodeId != authorityNodeId)
-            throw new InvalidDataException("Only the pinned namespace authority may originate FULL_REPLACE.");
-        NamespaceRosterMember authority = roster.Members.FirstOrDefault(member => member.NodeId == authorityNodeId)
-            ?? throw new InvalidDataException("Namespace authority is not listed as a namespace member.");
-        if (authority.Status != NamespaceMemberStatus.Active)
-            throw new InvalidDataException("Retired or Joining namespace authority cannot originate FULL_REPLACE.");
-        if (session.PeerNodeId.IsZero || session.PeerEpoch <= 0)
-            throw new InvalidDataException("FULL_REPLACE target session has no valid peer identity.");
-        NamespaceRosterMember target = roster.Members.FirstOrDefault(member => member.NodeId == session.PeerNodeId)
-            ?? throw new InvalidDataException("FULL_REPLACE target is not in the accepted namespace roster.");
-        if (target.Status == NamespaceMemberStatus.Retired ||
-            target.TransportPeerEpoch != checked((uint)session.PeerEpoch))
-            throw new InvalidDataException("FULL_REPLACE target is retired or its transport epoch does not match the roster.");
+        ValidateAuthorityRoster(roster, authorityNodeId);
 
         byte[] digest;
         int entryCount;
-        using (var builder = new ProviderFullReplaceDigestBuilder(generation, snapshot.ChangeFeedWatermark))
+        using (var builder = new ProviderFullReplaceDigestBuilder(
+            generation, snapshot.ChangeFeedWatermark))
         {
             int index = 0;
             while (true)
@@ -89,67 +146,160 @@ public static class StorageFullReplaceSender
                 ValidatePage(page, index, FullReplaceTransferProtocol.MaxChunkEntries);
                 builder.AppendPage(page.Entries);
                 index = page.NextIndex;
-                if (page.IsComplete) break;
+                if (page.IsComplete)
+                    break;
             }
+
             entryCount = builder.EntryCount;
             digest = builder.Complete();
         }
 
         var unsignedManifest = new FullReplaceTransferProtocol.Begin(
-            roster.NamespaceId, generation, roster.RosterGeneration,
-            NamespaceRosterProtocol.ComputeDigest(roster), snapshot.ChangeFeedWatermark,
-            entryCount, digest, Array.Empty<byte>());
+            roster.NamespaceId,
+            generation,
+            roster.RosterGeneration,
+            NamespaceRosterProtocol.ComputeDigest(roster),
+            snapshot.ChangeFeedWatermark,
+            entryCount,
+            digest,
+            Array.Empty<byte>());
         FullReplaceTransferProtocol.Begin manifest =
             FullReplaceTransferProtocol.SignBegin(unsignedManifest, authoritySeed);
         FullReplaceTransferProtocol.VerifyBegin(manifest, roster, trustStore);
+        return manifest;
+    }
 
-        await session.SendFullReplaceBeginAsync(manifest, frameSequence: 1, ct).ConfigureAwait(false);
+    private static async Task<FullReplaceInstalledAck> SendSnapshotCoreAsync(
+        IDataProvider provider,
+        ProviderSnapshotHandle snapshot,
+        FullReplaceTransferProtocol.Begin manifest,
+        SyncSession session,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        byte[] authoritySeed,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        ArgumentNullException.ThrowIfNull(roster);
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        ValidateAuthorityInputs(authorityNodeId, manifest.Generation, authoritySeed);
+        NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+        ValidateAuthorityRoster(roster, authorityNodeId);
+        FullReplaceTransferProtocol.VerifyBegin(manifest, roster, trustStore);
+
+        if (manifest.NamespaceId != roster.NamespaceId ||
+            manifest.SourceChangeFeedWatermark != snapshot.ChangeFeedWatermark ||
+            manifest.RosterGeneration != roster.RosterGeneration ||
+            !manifest.RosterDigest.AsSpan().SequenceEqual(
+                NamespaceRosterProtocol.ComputeDigest(roster)))
+            throw new InvalidDataException(
+                "Prepared FULL_REPLACE manifest does not match the supplied snapshot or accepted roster.");
+
+        if (session.PeerNodeId.IsZero || session.PeerEpoch <= 0)
+            throw new InvalidDataException("FULL_REPLACE target session has no valid peer identity.");
+        NamespaceRosterMember target = roster.Members.FirstOrDefault(
+                member => member.NodeId == session.PeerNodeId)
+            ?? throw new InvalidDataException(
+                "FULL_REPLACE target is not in the accepted namespace roster.");
+        if (target.Status == NamespaceMemberStatus.Retired ||
+            target.TransportPeerEpoch != checked((uint)session.PeerEpoch))
+            throw new InvalidDataException(
+                "FULL_REPLACE target is retired or its transport epoch does not match the roster.");
+
+        await session.SendFullReplaceBeginAsync(
+            manifest, frameSequence: 1, ct).ConfigureAwait(false);
         FullReplaceTransferProtocol.Progress progress =
-            await session.ReceiveFullReplaceReadyAsync(roster.NamespaceId,
-                expectedFrameSequence: 1, ct).ConfigureAwait(false);
+            await session.ReceiveFullReplaceReadyAsync(
+                roster.NamespaceId, expectedFrameSequence: 1, ct).ConfigureAwait(false);
         ValidateProgress(progress, manifest);
 
         int nextIndex = progress.NextIndex;
         ulong frameSequence = progress.NextFrameSequence;
-        while (nextIndex < entryCount)
+        while (nextIndex < manifest.ExpectedEntryCount)
         {
             ProviderSnapshotPage page = provider.ReadSnapshot(
                 snapshot.Token, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
             ValidatePage(page, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
-            if (page.Entries.Count == 0 || page.NextIndex > entryCount ||
-                page.IsComplete != (page.NextIndex == entryCount))
-                throw new InvalidDataException("Provider snapshot changed or ended before the signed entry count.");
+            if (page.Entries.Count == 0 ||
+                page.NextIndex > manifest.ExpectedEntryCount ||
+                page.IsComplete != (page.NextIndex == manifest.ExpectedEntryCount))
+                throw new InvalidDataException(
+                    "Provider snapshot changed or ended before the signed entry count.");
+
             await session.SendFullReplaceChunkAsync(
-                new FullReplaceTransferProtocol.Chunk(roster.NamespaceId, generation, nextIndex, page.Entries),
+                new FullReplaceTransferProtocol.Chunk(
+                    roster.NamespaceId, manifest.Generation, nextIndex, page.Entries),
                 frameSequence, ct).ConfigureAwait(false);
             nextIndex = page.NextIndex;
             frameSequence = checked(frameSequence + 1);
         }
 
         await session.SendFullReplaceCommitAsync(
-            new FullReplaceTransferProtocol.TransferId(roster.NamespaceId, generation),
+            new FullReplaceTransferProtocol.TransferId(
+                roster.NamespaceId, manifest.Generation),
             frameSequence, ct).ConfigureAwait(false);
 
         FullReplaceInstalledAck acknowledgement =
-            await session.ReceiveFullReplaceInstalledAckAsync(roster, ct).ConfigureAwait(false);
-        if (acknowledgement.Generation != generation ||
-            !acknowledgement.Digest.AsSpan().SequenceEqual(digest) ||
+            await session.ReceiveFullReplaceInstalledAckAsync(roster, ct)
+                .ConfigureAwait(false);
+        if (!acknowledgement.Installed ||
+            acknowledgement.Generation != manifest.Generation ||
+            !acknowledgement.Digest.AsSpan().SequenceEqual(manifest.ExpectedDigest) ||
             acknowledgement.MemberNodeId != session.PeerNodeId ||
-            acknowledgement.MemberTransportEpoch != checked((uint)session.PeerEpoch))
-            throw new InvalidDataException("FULL_REPLACE installed ACK does not match the target, generation or digest.");
+            acknowledgement.MemberTransportEpoch != checked((uint)session.PeerEpoch) ||
+            acknowledgement.RosterGeneration != roster.RosterGeneration ||
+            !acknowledgement.RosterDigest.AsSpan().SequenceEqual(manifest.RosterDigest))
+            throw new InvalidDataException(
+                "FULL_REPLACE installed ACK does not match the target, roster, generation or digest.");
 
         gcStore.AcceptFullReplaceInstalledAck(
             FullReplaceInstalledAckProtocol.EncodeSigned(acknowledgement), roster);
         return acknowledgement;
     }
 
-    private static void ValidatePage(ProviderSnapshotPage page, int expectedStart, int limit)
+    private static void ValidateAuthorityInputs(
+        NodeId authorityNodeId, Guid generation, byte[] authoritySeed)
+    {
+        if (generation == Guid.Empty)
+            throw new ArgumentException(
+                "FULL_REPLACE generation must be non-empty.", nameof(generation));
+        if (authorityNodeId.IsZero || authoritySeed.Length != 32)
+            throw new ArgumentException(
+                "Namespace authority identity and Ed25519 seed are required.");
+    }
+
+    private static void ValidateAuthorityRoster(
+        NamespaceRosterCertificate roster, NodeId authorityNodeId)
+    {
+        if (roster.AuthorityNodeId != authorityNodeId)
+            throw new InvalidDataException(
+                "Only the pinned namespace authority may originate FULL_REPLACE.");
+        NamespaceRosterMember authority = roster.Members.FirstOrDefault(
+                member => member.NodeId == authorityNodeId)
+            ?? throw new InvalidDataException(
+                "Namespace authority is not listed as a namespace member.");
+        if (authority.Status != NamespaceMemberStatus.Active)
+            throw new InvalidDataException(
+                "Retired or Joining namespace authority cannot originate FULL_REPLACE.");
+    }
+
+    private static void ValidatePage(
+        ProviderSnapshotPage page, int expectedStart, int limit)
     {
         ArgumentNullException.ThrowIfNull(page);
         if (page.Entries is null || page.NextIndex < expectedStart ||
             page.NextIndex != checked(expectedStart + page.Entries.Count) ||
-            page.Entries.Count > limit || (!page.IsComplete && page.Entries.Count != limit))
-            throw new InvalidDataException("Provider snapshot returned a non-contiguous or non-canonical page.");
+            page.Entries.Count > limit ||
+            (!page.IsComplete && page.Entries.Count != limit))
+            throw new InvalidDataException(
+                "Provider snapshot returned a non-contiguous or non-canonical page.");
     }
 
     private static void ValidateProgress(
@@ -163,6 +313,7 @@ public static class StorageFullReplaceSender
             progress.NextIndex > progress.ExpectedEntryCount ||
             (progress.NextIndex != progress.ExpectedEntryCount &&
              progress.NextIndex % FullReplaceTransferProtocol.MaxChunkEntries != 0))
-            throw new InvalidDataException("FULL_REPLACE_READY does not match the signed manifest or durable page boundary.");
+            throw new InvalidDataException(
+                "FULL_REPLACE_READY does not match the signed manifest or durable page boundary.");
     }
 }
