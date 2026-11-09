@@ -265,13 +265,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// lease. The retained checkpoint becomes the durable replay fence.
     /// </summary>
     public int CompactChangeLedger(
-        string scopeId, NodeId localReplica, int namespaceId, int limit,
+        string scopeId, NodeId localReplica, int namespaceId, IDataProvider provider, int limit,
         Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
         if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
+        ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(acquireGcLease);
         ArgumentNullException.ThrowIfNull(externalReferences);
 
@@ -303,6 +304,25 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
                 return 0;
             var liveChangeIds = new HashSet<BatchId>();
+            ulong providerCursor = 0;
+            const int providerPageSize = 1024;
+            while (true)
+            {
+                ProviderChangePage providerPage = provider.ReadLocalChanges(providerCursor, providerPageSize);
+                if (providerPage.Changes.Count == 0)
+                    break;
+                if (providerPage.ScannedThroughSequence <= providerCursor)
+                    throw new InvalidDataException("Provider local feed cursor did not advance during ChangeId GC.");
+                foreach (ProviderChange change in providerPage.Changes)
+                {
+                    if (change.ChangeId.IsZero)
+                        return 0; // Legacy/unknown feed identity blocks ChangeId reclamation.
+                    liveChangeIds.Add(change.ChangeId);
+                }
+                providerCursor = providerPage.ScannedThroughSequence;
+                if (providerPage.Changes.Count < providerPageSize)
+                    break;
+            }
             foreach (var stream in current.Relay)
                 if (stream.Key.NamespaceId == namespaceId)
                     foreach (var item in stream.Value)
