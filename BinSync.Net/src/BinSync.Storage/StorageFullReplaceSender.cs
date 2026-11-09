@@ -151,10 +151,10 @@ public static class StorageFullReplaceSender
 
         var prepared = new PreparedFullReplaceSnapshot(
             provider, snapshot, manifest, state.HlcWallFloor, state.HlcLogicalFloor);
+        prepared.MarkPersisted();
         try
         {
             ValidatePreparedSnapshot(prepared, trustStore, roster, authorityNodeId, authoritySeed);
-            prepared.MarkPersisted();
             return prepared;
         }
         catch
