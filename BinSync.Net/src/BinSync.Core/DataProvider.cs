@@ -82,9 +82,9 @@ public sealed class ProviderMutation
     public required byte[] Value { get; init; }
     /// <summary>Stable global identity of the immutable source operation; zero only for legacy materialized rows.</summary>
     public BatchId ChangeId { get; init; }
-    /// <summary>Immutable origin author incarnation; zero only for legacy materialized rows.</summary>
+    /// <summary>Immutable origin author incarnation; zero for legacy materialized rows or a local draft before host epoch binding.</summary>
     public uint OriginAuthorEpoch { get; init; }
-    /// <summary>Immutable origin sequence; zero only for legacy materialized rows.</summary>
+    /// <summary>Immutable origin sequence; zero for legacy rows and unpublished drafts until Metadata Store freeze.</summary>
     public ulong OriginSequence { get; init; }
     public OperationOrigin Provenance
     {
