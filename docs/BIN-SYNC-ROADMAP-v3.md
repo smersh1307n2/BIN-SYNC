@@ -1604,3 +1604,13 @@ Overall estimate: **~75–80%**. Remaining C-pass is not a rewrite of BIN-SYNC v
 - [x C] Audited the guide against the actual FLD public API (`ReadRelayBatchPage`, `ReadUnacknowledgedRelayAuthors`, `GetRelayJournalHighWatermark`, `AcknowledgeRelayBatches`, `AcquireCommitGuard`, `OpenReferenceSnapshot`) and BIN-SYNC gate/delegate signatures.
 - [~ C] This is a host composition recipe, not a built adapter assembly: no host executable/project is present in either repository. The actual application must bind the callbacks and use the same gate for every receive/send/ACK path. Do not add a third FLD runtime DLL or a FLD→BIN-SYNC dependency.
 - [~ T] Compile the guide's sample in the real host project and add crash-cut/reopen tests for startup reconciliation, multi-author page drain, FLD-ACK-before-RPM3-prune and scanner disposal/lock ordering.
+
+
+## 0.84. C-pass: allocation-free deterministic relay-author ordering — 2026-11-09
+
+- [x C] `StorageRelayPublicationGate.DiscoverAuthors` now preserves the exact ordinal order of `NodeId.ToString()` by comparing the two 64-bit identity limbs in reversed-endian order. This avoids allocating a 16-byte array and 32-character hex string for each comparison in the O(A log A) author sort.
+- [x C] FLD `FldDatabase.ReadUnacknowledgedRelayAuthors` now sorts by its already-materialized canonical hex dictionary key instead of recomputing a hex string per author; code commit `bf72f0d8c4e82303612f079e3aefa790d6794451` and FLD roadmap §7.74.
+- [~ T] Verify comparator equivalence against the canonical hex order for zero/high-bit/byte-boundary identities and verify FLD discovery order/identity on reopen.
+- [~ O] Measure startup/recovery discovery CPU and allocations across representative author counts; these source-level allocation reductions are not yet benchmark claims.
+
+BIN-SYNC code commit: `9d187f6cbe6c496ec013d1d39c969f8820ed1dab`. Current C-pass remains unvalidated; no CI success is claimed.
