@@ -959,6 +959,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!current.Relay.TryGetValue(item.Key, out var entries))
                 current.Relay.Add(item.Key, entries = new List<MetadataRelayItem>());
             entries.Add(item.Item);
+            current.RelaySequenceIndex?.TryAdd(
+                new RelayIdentityKey(item.Key.NamespaceId, item.Key.Author, item.Item.ChangeId),
+                item.Item.Sequence);
         }
         foreach (var pair in relayHigh) current.RelayHighWatermarks[pair.Key] = pair.Value;
         foreach (var pair in newPeerStreams) current.PeerStreams.Add(pair.Key, pair.Value);
@@ -1325,6 +1328,13 @@ private static bool ValidateIncomingBatchForStaging(
             if (!current.Relay.TryGetValue(pair.Key, out var entries))
                 current.Relay.Add(pair.Key, entries = new List<MetadataRelayItem>());
             entries.AddRange(pair.Value);
+            if (current.RelaySequenceIndex is { } relayIndex)
+            {
+                foreach (MetadataRelayItem item in pair.Value)
+                    relayIndex.TryAdd(
+                        new RelayIdentityKey(pair.Key.NamespaceId, pair.Key.Author, item.ChangeId),
+                        item.Sequence);
+            }
         }
         foreach (var pair in relayHigh)
             current.RelayHighWatermarks[pair.Key] = pair.Value;
@@ -2689,15 +2699,35 @@ private static bool ValidateIncomingBatchForStaging(
                 !state.Relay.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var entries))
                 return false;
 
-            int found = 0;
-            foreach (MetadataRelayItem item in entries)
+            Dictionary<RelayIdentityKey, ulong> index;
+            if (state.RelaySequenceIndex is null)
             {
-                if (!slots.TryGetValue(item.ChangeId, out int slot))
+                index = new Dictionary<RelayIdentityKey, ulong>();
+                foreach (var relayStream in state.Relay)
+                {
+                    foreach (MetadataRelayItem item in relayStream.Value)
+                    {
+                        if (item.OriginalAuthor != relayStream.Key.Author || item.Sequence == 0 ||
+                            !index.TryAdd(new RelayIdentityKey(
+                                relayStream.Key.NamespaceId, relayStream.Key.Author, item.ChangeId), item.Sequence))
+                            throw new InvalidDataException("Metadata relay contains a duplicate or conflicting ChangeId identity.");
+                    }
+                }
+                state.RelaySequenceIndex = index;
+            }
+            else
+            {
+                index = state.RelaySequenceIndex;
+            }
+
+            int found = 0;
+            for (int i = 0; i < changeIds.Length; i++)
+            {
+                if (!index.TryGetValue(new RelayIdentityKey(namespaceId, originalAuthor, changeIds[i]), out ulong sequence))
                     continue;
-                if (item.OriginalAuthor != originalAuthor || item.Sequence == 0 ||
-                    sequences[slot] != 0)
-                    throw new InvalidDataException("Metadata relay contains a duplicate or conflicting ChangeId identity.");
-                sequences[slot] = item.Sequence;
+                if (sequence == 0 || sequences[i] != 0)
+                    throw new InvalidDataException("Metadata relay index contains a duplicate or zero sequence.");
+                sequences[i] = sequence;
                 found++;
             }
 
@@ -2886,7 +2916,12 @@ private static bool ValidateIncomingBatchForStaging(
         }
 
         if (relay)
+        {
             current.Relay[new RelayKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
+            // A compaction changes the identity→sequence lookup set. Rebuild lazily
+            // on the next page rather than retaining stale ChangeId resolutions.
+            current.RelaySequenceIndex = null;
+        }
         else
             current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
@@ -4212,6 +4247,7 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
+    private readonly record struct RelayIdentityKey(int NamespaceId, NodeId Author, BatchId ChangeId);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
     private readonly record struct OriginStreamKey(int NamespaceId, NodeId Author, uint AuthorEpoch);
     private readonly record struct OriginIssuedState(ulong Sequence, ulong MaxHlcWall, uint MaxHlcLogical);
@@ -4273,6 +4309,8 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
         public Dictionary<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; } = new();
         public Dictionary<LedgerKey, ChangeLedgerValue> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
+        // Rebuildable in-memory index only; ChangeId→sequence is never duplicated on disk.
+        public Dictionary<RelayIdentityKey, ulong>? RelaySequenceIndex { get; set; }
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
         public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, List<MetadataOutboundItem>> Outbound { get; } = new();
@@ -4301,7 +4339,8 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
             {
                 StorageCommitSeq = StorageCommitSeq,
                 IsPersisted = IsPersisted,
-                PersistedEntries = PersistedEntries
+                PersistedEntries = PersistedEntries,
+                RelaySequenceIndex = RelaySequenceIndex
             };
             foreach (var pair in Receipts) clone.Receipts.Add(pair.Key, pair.Value);
             foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
