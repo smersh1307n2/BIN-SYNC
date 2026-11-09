@@ -1942,3 +1942,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ C] Remaining v3/v3.1 gates: durable publication-mode cutover + author-epoch closure capability, FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot generation recovery across restart, generic Storage page/run/WAL physical-format decision, and host-owned multi-session transport scheduler.
 - [~ T] Exact cross-repository sample build and provider conformance/crash tests are deferred to the dedicated T-pass. No test/build pass is claimed.
 - [~ C] Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the complete cross-store reference proof and T-pass.
+
+
+## 1.21. C-pass: close local FLD author epochs only after drafts and Outbox are drained — 2026-11-09
+
+- [x C] `FldDatabaseDataProvider` now implements `IProviderAuthorEpochClosureStore`. An epoch closes only while holding the FLD commit guard and only when `ReadUnpublishedLocalDraftHorizon().Count == 0` and Outbox high watermark equals its acknowledged watermark.
+- [x C] Local append and epoch activation use the same FLD→provider lock order as closure, preventing a writer that passed an early check from racing into a just-closed epoch.
+- [x C] The adapter obtains the active epoch from the host's durable BIN-SYNC identity authority; it does not duplicate protocol epoch state in FLD. New epochs must be strictly greater than the last locally closed epoch.
+- [~ C] Durable publication-mode cutover and FLD FULL_REPLACE receiver staging/atomic generation switch remain open, as do sender restart snapshot recovery, generic Storage physical-format decision and host session scheduling.
+- [~ T] Verify pending drafts, unacked Outbox, replayable WAL horizon, writer-vs-close race, restart after closure, reactivation and stale-epoch rejection in the T-pass. No test/build result is claimed.
