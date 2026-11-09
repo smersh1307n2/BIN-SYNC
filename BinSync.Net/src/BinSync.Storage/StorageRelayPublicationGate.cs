@@ -32,7 +32,7 @@ public sealed class StorageRelayPublicationGate
     public async ValueTask<bool> ApplyAndPublishAllAsync(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
-        IReadOnlyList<NodeId> originalAuthors,
+        Func<IReadOnlyList<NodeId>> readRelayAuthors,
         Func<IDisposable?> acquireHostCommitLease,
         Func<CancellationToken, ValueTask> applyRemoteBatch,
         Func<NodeId, StorageRelayProvenanceCursor,
@@ -40,7 +40,7 @@ public sealed class StorageRelayPublicationGate
         Func<CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
-        ValidateArguments(coordinator, map, originalAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
+        ValidateArguments(coordinator, map, readRelayAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
         ArgumentNullException.ThrowIfNull(applyRemoteBatch);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -50,7 +50,7 @@ public sealed class StorageRelayPublicationGate
             try
             {
                 await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-                foreach (NodeId author in ValidateAuthors(coordinator, originalAuthors))
+                foreach (NodeId author in DiscoverAuthors(coordinator, acquireHostCommitLease, readRelayAuthors))
                 {
                     if (!DrainAllPages(
                         coordinator, map, author, acquireHostCommitLease,
@@ -86,7 +86,7 @@ public sealed class StorageRelayPublicationGate
     public async ValueTask<bool> RecoverAndPublishAllAsync(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
-        IReadOnlyList<NodeId> originalAuthors,
+        Func<IReadOnlyList<NodeId>> readRelayAuthors,
         Func<IDisposable?> acquireHostCommitLease,
         Func<ulong> readSourceJournalHighWatermark,
         Func<NodeId, StorageRelayProvenanceCursor,
@@ -94,7 +94,7 @@ public sealed class StorageRelayPublicationGate
         Func<CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
-        ValidateArguments(coordinator, map, originalAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
+        ValidateArguments(coordinator, map, readRelayAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
         ArgumentNullException.ThrowIfNull(readSourceJournalHighWatermark);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -102,7 +102,7 @@ public sealed class StorageRelayPublicationGate
         {
             try
             {
-                NodeId[] authors = ValidateAuthors(coordinator, originalAuthors);
+                NodeId[] authors = DiscoverAuthors(coordinator, acquireHostCommitLease, readRelayAuthors);
                 foreach (NodeId author in authors)
                 {
                     coordinator.ValidateRelayProvenanceRecovery(
@@ -187,7 +187,7 @@ public sealed class StorageRelayPublicationGate
     private static void ValidateArguments(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
-        IReadOnlyList<NodeId> originalAuthors,
+        Func<IReadOnlyList<NodeId>> readRelayAuthors,
         Func<IDisposable?> acquireHostCommitLease,
         Func<NodeId, StorageRelayProvenanceCursor,
             (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
@@ -195,23 +195,29 @@ public sealed class StorageRelayPublicationGate
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(map);
-        ArgumentNullException.ThrowIfNull(originalAuthors);
+        ArgumentNullException.ThrowIfNull(readRelayAuthors);
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
         ArgumentNullException.ThrowIfNull(readSourcePage);
         ArgumentNullException.ThrowIfNull(publishReadyOutbox);
     }
 
-    private static NodeId[] ValidateAuthors(
-        StorageSyncCoordinator coordinator, IReadOnlyList<NodeId> originalAuthors)
+    private static NodeId[] DiscoverAuthors(
+        StorageSyncCoordinator coordinator,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<IReadOnlyList<NodeId>> readRelayAuthors)
     {
+        using IDisposable commitGuard =
+            coordinator.AcquireApplicationCommitGuard(acquireHostCommitLease);
+        IReadOnlyList<NodeId> discovered = readRelayAuthors()
+            ?? throw new InvalidDataException("Host relay-author discovery returned null.");
         var seen = new HashSet<NodeId>();
-        var authors = new List<NodeId>(originalAuthors.Count);
-        foreach (NodeId author in originalAuthors)
+        var authors = new List<NodeId>(discovered.Count);
+        foreach (NodeId author in discovered)
         {
             if (author.IsZero || author == coordinator.LocalReplicaId)
-                throw new ArgumentException("Relay author list must contain only non-zero remote authors.", nameof(originalAuthors));
+                throw new InvalidDataException("Relay author discovery returned a zero or local author identity.");
             if (!seen.Add(author))
-                throw new ArgumentException("Relay author list contains a duplicate identity.", nameof(originalAuthors));
+                throw new InvalidDataException("Relay author discovery returned a duplicate identity.");
             authors.Add(author);
         }
         authors.Sort(static (left, right) =>
