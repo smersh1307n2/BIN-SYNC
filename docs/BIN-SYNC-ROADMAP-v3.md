@@ -1592,18 +1592,20 @@ Estimated completion (engineering assessment, not CI pass percentage):
 - Protocol/core v3 and durable metadata invariants: **~90%**.
 - RPM3 relay mapping, publication gate, all-author recovery and ACK primitives: **~85%**.
 - FLD two-project split and durable scan primitives: **~80%** (physical project split done; generic backend integration and compatibility audit remain).
-- End-to-end host composition: **~65%** (callbacks and ordering contract exist; concrete host binding/restart scheduler still open).
+- End-to-end host composition: **~80%** (optional adapter source now binds FLD relay paging, startup reconciliation, publication ceilings, safe ACK and GC reference snapshots; concrete transport scheduler and compile/CI validation remain).
 - T-pass/conformance/CI: **~45%** (Core 672/678; Storage Integration 91/171; Fuzz/Lab passed; coverage 68.1% on the last completed code-equivalent run).
 - Benchmarks and final acceptance: **~25%**.
 
-Overall estimate: **~75–80%**. Remaining C-pass is not a rewrite of BIN-SYNC v3: it is primarily the concrete host composition, generic Storage backend/API audit, end-to-end sample, and final metadata/format audit. After that, switch to T-pass, then O/F. Physical GC remains disabled until safe horizons for receipts, ChangeId and tombstones are proven end-to-end.
+Overall estimate: **~78–82%**. Remaining C-pass is not a rewrite of BIN-SYNC v3: it is the last host transport/scheduler binding, generic Storage backend/API and format audit, plus a final public-surface review. Then switch to T-pass, followed by O/F. These are engineering estimates, not test-pass percentages. Physical GC remains disabled until safe horizons for receipts, ChangeId and tombstones are proven end-to-end.
 
 ### 2026-11-09 — concrete FLD host composition guide
 
 - [x C] Added `docs/FLD-BINSYNC-HOST-COMPOSITION.md` with the concrete public API binding: shared BIN-SYNC Storage partition, FLD commit lease, all-author discovery, whole-JournalSeq page projection, RPM3 source mapping, startup recovery gate, safe ACK ordering and one immutable FLD reference snapshot.
 - [x C] Audited the guide against the actual FLD public API (`ReadRelayBatchPage`, `ReadUnacknowledgedRelayAuthors`, `GetRelayJournalHighWatermark`, `AcknowledgeRelayBatches`, `AcquireCommitGuard`, `OpenReferenceSnapshot`) and BIN-SYNC gate/delegate signatures.
-- [~ C] This is a host composition recipe, not a built adapter assembly: no host executable/project is present in either repository. The actual application must bind the callbacks and use the same gate for every receive/send/ACK path. Do not add a third FLD runtime DLL or a FLD→BIN-SYNC dependency.
-- [~ T] Compile the guide's sample in the real host project and add crash-cut/reopen tests for startup reconciliation, multi-author page drain, FLD-ACK-before-RPM3-prune and scanner disposal/lock ordering.
+- [x C] Added optional `samples/FldBinSyncHost` host-composition project and `FldBinSyncHostAdapter`. It binds all-author discovery, whole-JournalSeq page projection, startup recovery, APPLY/publication, outbound gating, FLD-safe-ACK-before-RPM3-prune and the immutable FLD reference scanner. It is a host/sample assembly, not a third FLD runtime DLL.
+- [x C] Both `BinSync.Storage` and `Fld1.Database` now accept the same `Fld1StorageProject` MSBuild property. The optional sample points both project references at the canonical FLD `Fld1.Storage.csproj`, avoiding duplicate Storage assembly/type identities.
+- [~ C] The adapter deliberately leaves transport/session implementation and the actual application's sender callback to the host. The callback must enforce every `PublishedThroughSequence` ceiling; do not bypass the shared publication gate.
+- [~ T] Compile the optional sample with sibling FLD-DB checkout (or explicit project paths), migrate host callback call sites and add crash-cut/reopen tests for startup reconciliation, multi-author page drain, FLD-ACK-before-RPM3-prune and scanner disposal/lock ordering.
 
 
 ## 0.84. C-pass: allocation-free deterministic relay-author ordering — 2026-11-09
@@ -1690,3 +1692,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Matching recovery branches `backup/cpass-2026-11-09-snapshot-index-cache` exist in both repositories (BIN-SYNC `f1232647518ff2801c96a2c7a8af3e1e2e47a08c`, FLD-DB `9869aa81f2cbe964163d21922e1949f470496e42`).
 - [~ T] Verify snapshots opened in one epoch remain stable across later commits/checkpoints/deletes and that cache invalidation happens only after durable publication. No test/benchmark claim yet.
 - [~ O] Measure repeated snapshot creation in unchanged epochs and first snapshot after commit; O(number-of-keys) index creation remains on a new epoch.
+
+
+## 0.93. C-pass: concrete FLD host adapter and canonical Storage project injection — 2026-11-09
+
+- [x C] Added optional `samples/FldBinSyncHost/FldBinSyncHostAdapter.cs` implementing the public FLD↔BIN-SYNC composition: all-author discovery, complete JournalSeq page projection, recovery-before-send, APPLY/publication gate, ceiling-bearing outbound callback, durable FLD ACK before RPM3 prune, and one immutable FLD reference snapshot held under the FLD commit guard.
+- [x C] Added an optional sample project and build guide. It is not added to the default BIN-SYNC solution because FLD-DB is a separate checkout; it is not a database runtime DLL and creates no FLD→BIN-SYNC dependency.
+- [x C] BIN-SYNC `BinSync.Storage` and FLD `Fld1.Database` now both accept `Fld1StorageProject`, allowing the host sample to resolve one canonical FLD Storage project instead of duplicate vendor/authoritative assembly identities.
+- [x C] Created matching pre-adapter recovery branches `backup/cpass-2026-11-09-host-adapter-prep` in both repositories (BIN-SYNC at `ef410ca05d8230618273c2907c52b106ba51d671`; FLD-DB at `cf4c454d539f96766ef66febb3d117c9a7c5965b`).
+- [~ T] Compile the optional sample against the sibling FLD checkout; verify the shared Storage project resolves once, then add host crash/reopen tests for recovery, publication ceilings, multi-author drain, ACK-before-prune and scanner disposal/lock order. No test/build claim is made for this sample yet.
+- [~ C] Transport/session construction, the actual host send callback and process-level startup scheduler remain application responsibilities. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
