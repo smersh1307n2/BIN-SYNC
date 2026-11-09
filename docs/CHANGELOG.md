@@ -2,7 +2,7 @@
 
 ## Unreleased — v3.1 C-pass
 
-- Added the RPM2 durable relay provenance map in `BinSync.Storage`: atomic JournalSeq/ChangeId/OutboxSeq mapping, per-author scan/ACK cursor, SHA-256/XOR mapping-set checksum, OutboxSeq-ordered recovery and O(log N) safe-ACK translation. Mapping pruning remains strictly after durable FLD relay ACK.
+- Added the RPM3 durable relay provenance map in `BinSync.Storage`: atomic JournalSeq↔OutboxSeq mapping (ChangeId remains in the global ledger), per-author scan/ACK cursor, SHA-256/XOR mapping-set checksum, OutboxSeq-ordered recovery and O(log N) safe-ACK translation. Mapping pruning remains strictly after durable FLD relay ACK.
 - Added a persisted-row golden sample for the provenance map and a source-derived metadata byte inventory, including FLD Outbox fixed record/sidecar costs.
 - Added explicit broadcast of one accepted retention checkpoint to multiple members without minting a checkpoint sequence per destination; authority verification and durable checkpoint revalidation are serialized under the coordinator gate.
 - Added v3.1 host orchestration and FLD integration sequencing guidance. No background scheduler or premature direct Node↔FldDatabase bridge is introduced.
