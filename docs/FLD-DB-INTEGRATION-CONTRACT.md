@@ -328,6 +328,11 @@ For each page returned by FLD `ReadRelayBatchPage(author, afterJournalSeq, limit
 Concrete current-API shape (the adapter assembly remains deferred until FLD extraction):
 
 ```csharp
+using BinSync;
+using BinSync.Storage;
+using Fld1.Engine.Db;
+using Fld1.Engine.Sync;
+
 using IDisposable commitGuard =
     coordinator.AcquireApplicationCommitGuard(database.AcquireCommitGuard);
 
