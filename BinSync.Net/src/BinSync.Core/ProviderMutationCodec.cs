@@ -67,8 +67,8 @@ public static class ProviderMutationCodec
         bool hasChangeId = !mutation.ChangeId.IsZero;
         bool hasOriginEpoch = mutation.OriginAuthorEpoch != 0;
         bool hasOriginSequence = mutation.OriginSequence != 0;
-        if (hasChangeId != hasOriginEpoch || (!hasChangeId && hasOriginSequence))
-            throw new ArgumentException("ChangeId and origin epoch must be present together; an unpublished local draft may defer OriginSequence until freeze.", nameof(mutation));
+        if (hasOriginEpoch != hasOriginSequence || (!hasChangeId && (hasOriginEpoch || hasOriginSequence)))
+            throw new ArgumentException("Origin epoch and sequence must be present together and require a stable ChangeId; a materialized or unpublished row may retain ChangeId before an Origin is assigned.", nameof(mutation));
         if (mutation.IsRecordTombstone)
         {
             // A provider FULL_REPLACE may carry a legacy materialized record tombstone
