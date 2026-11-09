@@ -583,7 +583,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     snapshot.OpenPrefixCursor([LocalChange], ChangeKey(acked));
                 using var batch = _storage.BeginWriteBatch();
                 ulong lastDeleted = acked;
-                int deleted = 0;
                 bool foundBeyondSafeWatermark = false;
                 int visited = cursor.VisitPage(deletePageSize, VisitDelete);
 
@@ -611,7 +610,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
                     batch.Delete(row.Key);
                     lastDeleted = sequence;
-                    deleted++;
                     return true;
                 }
             }
