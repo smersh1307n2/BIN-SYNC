@@ -161,9 +161,6 @@ public sealed class StorageSyncCoordinator
         if (sourceChanges.Length > 4096)
             throw new ArgumentOutOfRangeException(nameof(sourceChanges), "Relay source page cannot exceed 4,096 changes.");
 
-        var identities = new OutboxChangeIdentity[sourceChanges.Length];
-        var outboxSequences = new long[sourceChanges.Length];
-        var mappedEntries = new StorageRelayProvenanceEntry[sourceChanges.Length];
         ulong previousJournalSeq = 0;
         for (int i = 0; i < sourceChanges.Length; i++)
         {
@@ -172,8 +169,13 @@ public sealed class StorageSyncCoordinator
                 journalSeq > scannedThroughJournalSeq)
                 throw new InvalidDataException("Relay source JournalSeq values must be positive, non-decreasing and within the scanned cursor.");
             previousJournalSeq = journalSeq;
-            identities[i] = new OutboxChangeIdentity(originalAuthor, sourceChanges[i].ChangeId);
         }
+
+        var identities = new OutboxChangeIdentity[sourceChanges.Length];
+        var outboxSequences = new long[sourceChanges.Length];
+        var mappedEntries = new StorageRelayProvenanceEntry[sourceChanges.Length];
+        for (int i = 0; i < sourceChanges.Length; i++)
+            identities[i] = new OutboxChangeIdentity(originalAuthor, sourceChanges[i].ChangeId);
 
         if (!_node.TryResolveOutboxSequences(_namespaceId, identities, outboxSequences))
             return false;
