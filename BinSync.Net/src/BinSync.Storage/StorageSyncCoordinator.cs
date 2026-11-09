@@ -167,9 +167,12 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
-    /// Publish this member's signed contiguous applied-origin frontier. The scan
-    /// scans the durable ChangeId ledger for applied origins and separately reports
-    /// pending provider drafts as a barrier; drafts never consume OriginSequence. Call after local freeze and remote apply.
+    /// Publish this member's signed contiguous applied-origin frontier. The host scanner
+    /// reports WAL/FLD drafts not yet frozen into BIN-SYNC; the provider scan reports
+    /// durable provider-feed drafts. Both are sampled under coordinator→Node→host
+    /// WAL/FLD→shared-Storage locks. Their counts are conservative (overlap may be
+    /// counted twice); only zero authorizes a FULL_REPLACE retention barrier. Neither
+    /// FLD JournalSeq, CommitSeq nor OutboxSeq is used as OriginSequence.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
         byte[] memberSeed, IApplicationGcReferenceScanner externalState,
