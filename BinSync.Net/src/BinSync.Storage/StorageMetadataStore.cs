@@ -2790,19 +2790,13 @@ private static bool ValidateIncomingBatchForStaging(
             return true;
         byte[] root = PartitionRoot(key);
         using var snapshot = _storage.OpenSnapshot();
-        var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, int.MaxValue);
-        if (rows.Count == 0)
+        state = DecodePartition(key, root, EnumeratePartitionRows(snapshot, root), snapshot.CommitSeq)!;
+        if (state is null)
         {
             _partitions.Remove(key);
-            state = null!;
             return false;
         }
 
-        state = DecodePartition(key, root, rows, snapshot.CommitSeq);
-        state.PersistedEntries = rows.ToDictionary(
-            row => Convert.ToHexString(row.Key),
-            row => (row.Key, row.Value),
-            StringComparer.Ordinal);
         _partitions[key] = state;
         return true;
     }
@@ -3538,16 +3532,36 @@ private static bool ValidateIncomingBatchForStaging(
         return entries;
     }
 
-    private static PartitionState DecodePartition(
+    private static IEnumerable<StorageEntry> EnumeratePartitionRows(
+        StorageSnapshot snapshot, byte[] root)
+    {
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(root);
+        const int pageSize = 512;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+                yield return row;
+            if (page.Count < pageSize)
+                yield break;
+        }
+    }
+
+    private static PartitionState? DecodePartition(
         PartitionKey partition,
         byte[] root,
-        IReadOnlyList<StorageEntry> rows,
+        IEnumerable<StorageEntry> rows,
         ulong commitSeq)
     {
         var state = new PartitionState { StorageCommitSeq = commitSeq, IsPersisted = true };
+        state.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         bool identitySeen = false;
+        bool rowSeen = false;
         foreach (var row in rows)
         {
+            rowSeen = true;
+            state.PersistedEntries.Add(
+                Convert.ToHexString(row.Key), (row.Key, row.Value));
             ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
             if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
             byte kind = suffix[0];
@@ -3762,6 +3776,8 @@ private static bool ValidateIncomingBatchForStaging(
             }
         }
 
+        if (!rowSeen)
+            return null;
         if (!identitySeen)
             throw new InvalidDataException("Metadata partition is missing its scope identity record.");
 
