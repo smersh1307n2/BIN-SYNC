@@ -73,9 +73,9 @@ public sealed class StorageRelayPublicationGate
                 throw;
             }
 
-            StorageRelayAuthorPublicationWatermark[] publicationWatermarks = authors
-                .Select(author => map.ReadPublicationWatermark(coordinator.NamespaceId, author))
-                .ToArray();
+            StorageRelayAuthorPublicationWatermark[] publicationWatermarks =
+                CapturePublicationWatermarks(
+                    coordinator, map, authors, acquireHostCommitLease);
             await publishReadyOutbox(publicationWatermarks, cancellationToken).ConfigureAwait(false);
             return true;
         }
@@ -133,9 +133,9 @@ public sealed class StorageRelayPublicationGate
                 throw;
             }
 
-            StorageRelayAuthorPublicationWatermark[] publicationWatermarks = authors
-                .Select(author => map.ReadPublicationWatermark(coordinator.NamespaceId, author))
-                .ToArray();
+            StorageRelayAuthorPublicationWatermark[] publicationWatermarks =
+                CapturePublicationWatermarks(
+                    coordinator, map, authors, acquireHostCommitLease);
             await publishReadyOutbox(publicationWatermarks, cancellationToken).ConfigureAwait(false);
             return true;
         }
@@ -243,15 +243,39 @@ public sealed class StorageRelayPublicationGate
         {
             EnsureReconciled();
             NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
-            StorageRelayAuthorPublicationWatermark[] publicationWatermarks = authors
-                .Select(author => map.ReadPublicationWatermark(coordinator.NamespaceId, author))
-                .ToArray();
+            StorageRelayAuthorPublicationWatermark[] publicationWatermarks =
+                CapturePublicationWatermarks(
+                    coordinator, map, authors, acquireHostCommitLease);
             await publish(publicationWatermarks, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private static StorageRelayAuthorPublicationWatermark[] CapturePublicationWatermarks(
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        IReadOnlyList<NodeId> relayAuthors,
+        Func<IDisposable?> acquireHostCommitLease)
+    {
+        // Capture local outbound and all relay ceilings under one application barrier.
+        // A concurrent FLD apply/freeze can only publish above this captured ceiling,
+        // so the sender cannot leak a not-yet-mapped operation.
+        using IDisposable commitGuard =
+            coordinator.AcquireApplicationCommitGuard(acquireHostCommitLease);
+        var watermarks = new StorageRelayAuthorPublicationWatermark[relayAuthors.Count + 1];
+        watermarks[0] = coordinator.ReadLocalPublicationWatermark();
+        for (int i = 0; i < relayAuthors.Count; i++)
+        {
+            NodeId author = relayAuthors[i];
+            if (author == coordinator.LocalReplicaId || author.IsZero)
+                throw new InvalidDataException("Relay publication watermark contains a zero or local relay author.");
+            watermarks[i + 1] = map.ReadPublicationWatermark(
+                coordinator.NamespaceId, author);
+        }
+        return watermarks;
     }
 
     private static void ValidateArguments(
