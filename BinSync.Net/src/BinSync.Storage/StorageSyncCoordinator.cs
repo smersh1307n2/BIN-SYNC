@@ -129,6 +129,58 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>
+    /// Resolve an FLD relay page through the durable global ChangeId ledger and atomically
+    /// persist its compact JournalSeq↔OutboxSeq map. Call inside
+    /// <see cref="AcquireApplicationCommitGuard(Func{IDisposable?})"/> while the FLD
+    /// commit lease used to read the source page is still held.
+    /// </summary>
+    /// <returns>
+    /// False when any ChangeId is no longer retained in the Node Outbox; in that case
+    /// no mapping row or scan cursor is written and the caller must recover/catch up.
+    /// </returns>
+    public bool AppendRelayProvenancePage(
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        ReadOnlySpan<StorageRelaySourceChange> sourceChanges,
+        ulong scannedThroughJournalSeq)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        if (!Monitor.IsEntered(_gate))
+            throw new InvalidOperationException(
+                "Relay provenance pages must be appended inside the application commit guard.");
+        if (_metadataStore is not StorageMetadataStore metadataStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Relay provenance mapping requires the durable StorageMetadataStore.");
+        if (!map.IsBoundTo(_scopeId, _node.NodeId) || !map.IsBoundTo(metadataStore))
+            throw new InvalidOperationException(
+                "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
+        if (originalAuthor.IsZero)
+            throw new ArgumentException("Original relay author must be non-zero.", nameof(originalAuthor));
+
+        var identities = new OutboxChangeIdentity[sourceChanges.Length];
+        var outboxSequences = new long[sourceChanges.Length];
+        var mappedEntries = new StorageRelayProvenanceEntry[sourceChanges.Length];
+        for (int i = 0; i < sourceChanges.Length; i++)
+            identities[i] = new OutboxChangeIdentity(originalAuthor, sourceChanges[i].ChangeId);
+
+        if (!_node.TryResolveOutboxSequences(_namespaceId, identities, outboxSequences))
+            return false;
+
+        for (int i = 0; i < sourceChanges.Length; i++)
+        {
+            long outboxSequence = outboxSequences[i];
+            if (outboxSequence <= 0)
+                throw new InvalidDataException("Resolved relay OutboxSeq must be positive.");
+            mappedEntries[i] = new StorageRelayProvenanceEntry(
+                sourceChanges[i].JournalSeq, checked((ulong)outboxSequence));
+        }
+
+        map.AppendPage(_namespaceId, originalAuthor, mappedEntries, scannedThroughJournalSeq);
+        return true;
+    }
+
     private sealed class ApplicationCommitLease : IDisposable
     {
         private IDisposable? _providerLease;
