@@ -316,7 +316,7 @@ The provider feed remains a live ChangeId reference until \`CommitPublishedOrigi
 
 BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping primitive for the synchronized-FLD adapter. It is scoped by (scope, local replica) at construction and by (namespace, original author) per stream.
 
-For each FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)` result:
+For each FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)` result. Pages must end on complete JournalSeq boundaries: a single FLD journal transaction containing multiple ChangeIds cannot be split across pages, and `ScannedThroughJournalSeq` must mean every source journal through that boundary has been examined:
 
 1. Resolve the page's unique `(author, ChangeId)` identities through `Node.TryResolveOutboxSequences(namespaceId, identities, sequences)`. If any identity is no longer retained, stop and reconcile; never infer an OutboxSeq from current field winners.
 2. Preserve the original FLD `JournalSeq` for every resolved ChangeId. Do not substitute JournalSeq, CommitSeq or OutboxSeq for protocol `OriginSequence`.
