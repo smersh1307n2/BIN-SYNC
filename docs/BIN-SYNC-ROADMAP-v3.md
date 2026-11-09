@@ -10,6 +10,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.44. O-pass candidate recorded: Storage batch sort — 2026-11-09
+
+- [x C] The byte audit now records that `StorageDatabase.EncodeBatch` sorts all mutations by StorageKey before WAL append using LINQ `OrderBy`, adding O(N log N) CPU/allocation overhead per write batch.
+- [~ O] Benchmark realistic relay-page sizes and mixed metadata batches before changing the FLD Storage serializer; compare LINQ ordering with array sort and pre-sorted mutation collection, preserving deterministic byte order and atomic commit semantics.
+
 ## 0.43. C-pass: ApplyJournal and Micro-WAL byte audit — 2026-11-09
 
 - [x C] Audited FLD `ApplyJournal.cs`: 16-byte file header; each record is 20-byte header + APPLY_COMMIT payload + 4-byte CRC32C; per-author relay-ACK sidecar is 12-byte header + 24 bytes/author + CRC; sparse index is 16 bytes/256 records in memory.
