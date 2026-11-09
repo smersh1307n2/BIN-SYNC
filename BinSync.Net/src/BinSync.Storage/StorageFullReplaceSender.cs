@@ -66,6 +66,35 @@ public static class StorageFullReplaceSender
     }
 
     /// <summary>
+    /// Validate a retained prepared snapshot against the currently accepted roster,
+    /// authority key and source snapshot watermark before any network side effect.
+    /// </summary>
+    public static void ValidatePreparedSnapshot(
+        PreparedFullReplaceSnapshot prepared,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        byte[] authoritySeed)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        ArgumentNullException.ThrowIfNull(roster);
+        ArgumentNullException.ThrowIfNull(authoritySeed);
+        ValidateAuthorityInputs(authorityNodeId, prepared.Generation, authoritySeed);
+        NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+        ValidateAuthorityRoster(roster, authorityNodeId);
+        if (prepared.NamespaceId != roster.NamespaceId ||
+            prepared.RosterGeneration != roster.RosterGeneration ||
+            !prepared.RosterDigest.AsSpan().SequenceEqual(
+                NamespaceRosterProtocol.ComputeDigest(roster)) ||
+            prepared.SourceChangeFeedWatermark != prepared.Snapshot.ChangeFeedWatermark)
+            throw new InvalidOperationException(
+                "Prepared FULL_REPLACE snapshot belongs to a different roster or provider generation.");
+        FullReplaceTransferProtocol.VerifyBegin(
+            prepared.Manifest, roster, trustStore);
+    }
+
+    /// <summary>
     /// Transfer a previously prepared immutable snapshot to one roster member.
     /// The provider and snapshot token must be the exact pair returned by PrepareSnapshot.
     /// This method does not dispose the prepared snapshot; the caller may reuse it for
@@ -82,6 +111,8 @@ public static class StorageFullReplaceSender
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        ValidatePreparedSnapshot(
+            prepared, trustStore, roster, authorityNodeId, authoritySeed);
         IDataProvider provider = prepared.Provider;
         return SendSnapshotCoreAsync(
             provider, prepared.Snapshot, prepared.Manifest, session, gcStore,
