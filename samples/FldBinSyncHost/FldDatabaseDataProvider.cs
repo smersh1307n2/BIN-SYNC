@@ -14,7 +14,8 @@ namespace BinSync.FldHost;
 public sealed class FldDatabaseDataProvider :
     IDataProvider,
     IProviderPublishedOriginStore,
-    IProviderCommitGuard
+    IProviderCommitGuard,
+    IProviderAuthorEpochClosureStore
 {
     private readonly object _gate = new();
     private readonly FldDatabase _database;
@@ -23,6 +24,7 @@ public sealed class FldDatabaseDataProvider :
     private readonly Dictionary<Guid, FldProviderSnapshot> _snapshots = new();
     private readonly HashSet<ulong> _snapshotBarriers = new();
     private ulong _highestReadSequence;
+    private uint _closedAuthorEpoch;
     private bool _disposed;
 
     public bool IsBoundTo(FldDatabase database)
@@ -73,6 +75,12 @@ public sealed class FldDatabaseDataProvider :
         ProviderMutationCodec.Validate(mutation);
         NodeId localAuthor = NodeId.From(_database.LocalAuthor);
         uint activeEpoch = _activeAuthorEpoch();
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_closedAuthorEpoch == activeEpoch)
+                throw new InvalidOperationException("The FLD local author epoch is closed.");
+        }
         if (activeEpoch == 0 || mutation.AuthorNodeId != localAuthor ||
             mutation.ChangeId.IsZero || mutation.OriginAuthorEpoch != activeEpoch ||
             mutation.OriginSequence != 0)
@@ -158,6 +166,46 @@ public sealed class FldDatabaseDataProvider :
             _snapshotBarriers.RemoveWhere(barrier => barrier <= _highestReadSequence);
         }
         return new ProviderChangePage(changes, scannedThrough);
+    }
+
+    public bool TryCloseLocalAuthorEpoch(uint authorEpoch)
+    {
+        if (authorEpoch == 0) throw new ArgumentOutOfRangeException(nameof(authorEpoch));
+        EnsureOpen();
+        using IDisposable commitLease = _database.AcquireCommitGuard();
+        if (_activeAuthorEpoch() != authorEpoch)
+            return false;
+        FldDraftHorizon drafts = _database.ReadUnpublishedLocalDraftHorizon();
+        if (drafts.Count != 0 ||
+            _database.GetOutboxHighWatermark() != _database.GetOutboxWatermark())
+            return false;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            _closedAuthorEpoch = authorEpoch;
+        }
+        return true;
+    }
+
+    public void CloseLocalAuthorIdentity(uint finalAuthorEpoch)
+    {
+        if (!TryCloseLocalAuthorEpoch(finalAuthorEpoch))
+            throw new InvalidOperationException("FLD local author identity cannot close while drafts or unacknowledged Outbox entries remain.");
+    }
+
+    public void ActivateLocalAuthorEpoch(uint authorEpoch)
+    {
+        if (authorEpoch == 0) throw new ArgumentOutOfRangeException(nameof(authorEpoch));
+        EnsureOpen();
+        if (_activeAuthorEpoch() != authorEpoch)
+            throw new InvalidOperationException("The durable host author-epoch source does not expose the requested active epoch.");
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_closedAuthorEpoch != 0 && authorEpoch <= _closedAuthorEpoch)
+                throw new InvalidOperationException("A closed FLD author epoch cannot be reactivated.");
+            _closedAuthorEpoch = 0;
+        }
     }
 
     public void AcknowledgeLocalChanges(ulong safeThroughSequence)
