@@ -22,7 +22,7 @@ Everything `internal`, under `*.Tests`, `bench/`, and unmarked helpers is **not*
 
 Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them is configuration, not a silent default change.
 
-**GC extension note:** signed namespace rosters, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE wire frames are proposed for a separately negotiated v3.1 extension (`BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md`). They are not v3.0 public/wire contracts; ChangeId and tombstone/Ghost GC remain disabled.
+**v3.1 extension note:** signed namespace rosters, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE wire frames are implemented in the current branch as the separately negotiated v3.1 extension (`BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md`). They are not part of the v3.0 wire baseline. Coordinator operations are explicit; the host owns lifecycle scheduling, cadence and one receive owner per `SyncSession`. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the composed host-reference proof and T-pass close.
 
 ---
 
@@ -167,6 +167,14 @@ MergePolicyRegistry is a standalone helper registry; it is not connected to Node
 | `Transport` | In-process `MakeSession`, `DeliverBatch`, `SyncRound`, typed ACK codec, NodeId-based sneakernet helpers |
 | `LoopbackTransport` | Lab loopback with `NodeId` peer routing; routing dictionaries are private to the adapter |
 
+
+
+### Negotiated v3.1 namespace control-plane extension
+
+The current Storage integration exposes explicit coordinator operations for signed roster exchange, applied-origin frontier publication/acceptance, durable retention checkpoint publication/acceptance, FULL_REPLACE installed-ACK exchange, and composed application commit/GC leases. `SendAcceptedRetentionCheckpointAsync` broadcasts an already accepted checkpoint without minting a new sequence for each destination; authorities should publish once and send the same checkpoint to all members in a serialized round.
+
+The host owns scheduling and transport policy. No timer or background worker is created by protocol core. See [BIN-SYNC-V3.1-HOST-ORCHESTRATION.md](BIN-SYNC-V3.1-HOST-ORCHESTRATION.md) for the authority/member and Joining→FULL_REPLACE→Active sequence. The synchronized-FLD source adapter remains a later integration phase; see [FLD-DB-INTEGRATION-CONTRACT.md](FLD-DB-INTEGRATION-CONTRACT.md) §9.6.
+
 ### Persistence
 
 The `NodePersistence` / `Wal` surface remains Node-owned persistence. The optional durable external metadata/provider implementation is shipped in the separate `BinSync.Storage` assembly: `StorageMetadataStore`, `StorageDataProvider` and `StorageSyncCoordinator` provide row-level durable metadata transitions, provider receipts and the Storage-backed transport path. The Core package remains usable without this assembly. The volatile reference adapter is test-only; durable storage behavior is exercised by the Storage Integration suite. See `METADATA-STORE-AUTHORITY-MIGRATION.md` and `METADATA-STORE-BENCHMARKS.md` for ownership, migration and measured scaling details.
@@ -175,6 +183,7 @@ The `NodePersistence` / `Wal` surface remains Node-owned persistence. The option
 
 - `StorageMetadataStore` is the durable `IMetadataStore` / `IMetadataPeerStateStore` implementation. BMS3 is mandatory; legacy/unknown row formats fail closed. Metadata mutations use row-level atomic transactions.
 - `StorageDataProvider` stores generation-scoped provider values, a mandatory BSP3 format marker, stable local-feed ChangeIds and idempotent apply receipts. `StorageSyncCoordinator` orders PendingApply staging, Node checkpoint, provider apply, metadata finalization and ACK.
+- `StorageRelayProvenanceMap` is the durable host-neutral JournalSeq→ChangeId→OutboxSeq bridge for later synchronized-FLD integration. RPM2 stores OutboxSeq-ordered mapping rows and an atomic scanned/ACK cursor with a SHA-256/XOR retained-map checksum; it stores no payload or per-peer copy. The full FLD adapter is deliberately sequenced after FLD's neutral semantic/two-DLL extraction.
 - `MetadataIncomingBatch.ReceiveStateOwnedByMetadataStore` marks a PendingApply intent whose receive cursor/digest/inbox authority belongs to the Metadata Store. StorageSyncCoordinator sets it; callers must not set it without a durable Metadata Store acceptance callback.
 - `MetadataIncomingBatch.HeaderFingerprint` carries the 16-byte canonical full-wire-header fingerprint. New metadata-authoritative intents require it; the durable receipt and completed PendingApply retain it with `MetadataBatchReceipt.DurableAuthor`. A duplicate BatchId with a different full header is rejected, even if BatchDigest alone would not distinguish the header fields.
 - `MetadataPendingApplyIntent.IsDuplicate` reports whether the batch identity already has a matching durable receipt. `MetadataBatchReceipt.HeaderFingerprint` returns the committed fingerprint.
