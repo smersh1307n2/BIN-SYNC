@@ -70,6 +70,37 @@ public sealed class StorageRelayProvenanceMap
     }
 
     /// <summary>Returns the durable FLD scan cursor and last durably translated relay ACK.</summary>
+    /// <summary>
+    /// Enumerate author streams with durable RPM3 cursor rows for startup recovery.
+    /// The caller unions this set with the source database's unacknowledged relay
+    /// authors so it also revisits the crash window FLD-ACK-before-RPM3-prune.
+    /// </summary>
+    public IReadOnlyList<NodeId> ReadAuthors(int namespaceId)
+    {
+        ValidateNamespaceId(namespaceId);
+        byte[] prefix = Join(_root, CursorNamespacePrefix(namespaceId));
+        var authors = new SortedDictionary<string, NodeId>(StringComparer.Ordinal);
+        using var snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 1024;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                if (row.Key.Length != RootLength + 1 + 2 + 16)
+                    throw new InvalidDataException("Malformed RPM3 author cursor key.");
+                NodeId author = NodeId.From(row.Key.AsSpan(RootLength + 3, 16));
+                if (author.IsZero)
+                    throw new InvalidDataException("RPM3 cursor contains a zero author identity.");
+                authors.TryAdd(author.ToString(), author);
+            }
+            if (page.Count < pageSize)
+                break;
+        }
+        return authors.Values.ToArray();
+    }
+
     public StorageRelayProvenanceCursor ReadCursor(int namespaceId, NodeId author)
     {
         ValidateStream(namespaceId, author);
@@ -338,6 +369,14 @@ public sealed class StorageRelayProvenanceMap
     }
 
     private byte[] CursorKey(int namespaceId, NodeId author) => Join(_root, CursorSuffix(namespaceId, author));
+
+    private static byte[] CursorNamespacePrefix(int namespaceId)
+    {
+        byte[] suffix = new byte[1 + 2];
+        suffix[0] = CursorKind;
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(1), checked((ushort)namespaceId));
+        return suffix;
+    }
 
     private static byte[] CursorSuffix(int namespaceId, NodeId author)
     {
