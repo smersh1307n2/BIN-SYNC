@@ -682,6 +682,16 @@ public sealed class StorageSyncCoordinator
         }
         NamespaceRosterCertificate received =
             await session.ReceiveNamespaceRosterAsync(trustStore, ct).ConfigureAwait(false);
+        if (received.NamespaceId != _namespaceId ||
+            received.AuthorityNodeId != session.PeerNodeId)
+            throw new InvalidDataException(
+                "The signed namespace roster does not match the configured namespace and authenticated authority session.");
+        NamespaceRosterMember? authorityMember = received.Members
+            .FirstOrDefault(member => member.NodeId == received.AuthorityNodeId);
+        if (authorityMember is null ||
+            authorityMember.TransportPeerEpoch != checked((uint)session.PeerEpoch))
+            throw new InvalidDataException(
+                "The roster authority transport epoch does not match the authenticated session.");
         return gcStore.AcceptNamespaceRoster(
             EncodeSignedPayload(NamespaceRosterProtocol.EncodePayload(received), received.Signature),
             trustStore);
@@ -776,6 +786,11 @@ public sealed class StorageSyncCoordinator
         }
         AppliedOriginFrontierReport report =
             await session.ReceiveOriginFrontierAsync(roster, ct).ConfigureAwait(false);
+        if (report.NamespaceId != _namespaceId ||
+            report.MemberNodeId != session.PeerNodeId ||
+            report.MemberTransportEpoch != checked((uint)session.PeerEpoch))
+            throw new InvalidDataException(
+                "The signed OFR2 member identity/epoch does not match the authenticated session.");
         return gcStore.AcceptOriginFrontier(
             EncodeSignedPayload(OriginFrontierProtocol.EncodePayload(report), report.Signature), roster);
     }
@@ -864,6 +879,11 @@ public sealed class StorageSyncCoordinator
         }
         NamespaceRetentionCheckpoint checkpoint =
             await session.ReceiveRetentionCheckpointAsync(roster, trustStore, ct).ConfigureAwait(false);
+        if (session.PeerNodeId != roster.AuthorityNodeId ||
+            checkpoint.NamespaceId != _namespaceId ||
+            checkpoint.RosterGeneration != roster.RosterGeneration)
+            throw new InvalidDataException(
+                "The signed RCP2 checkpoint does not match the authenticated namespace authority and accepted roster.");
         return gcStore.AcceptRetentionCheckpoint(
             EncodeSignedPayload(NamespaceRetentionCheckpointProtocol.EncodePayload(checkpoint), checkpoint.Signature),
             roster, trustStore);
@@ -933,6 +953,12 @@ public sealed class StorageSyncCoordinator
             await session.ReceiveFullReplaceInstalledAckAsync(roster, ct).ConfigureAwait(false);
         if (acknowledgement.Generation != generation)
             throw new InvalidDataException("Installed ACK belongs to another FULL_REPLACE generation.");
+        if (acknowledgement.NamespaceId != _namespaceId ||
+            acknowledgement.MemberNodeId != session.PeerNodeId ||
+            acknowledgement.MemberTransportEpoch != checked((uint)session.PeerEpoch) ||
+            acknowledgement.RosterGeneration != roster.RosterGeneration)
+            throw new InvalidDataException(
+                "The signed FRA2 member identity/epoch does not match the authenticated session and accepted roster.");
         return gcStore.AcceptFullReplaceInstalledAck(
             EncodeSignedPayload(FullReplaceInstalledAckProtocol.EncodePayload(acknowledgement),
                 acknowledgement.Signature), roster);
