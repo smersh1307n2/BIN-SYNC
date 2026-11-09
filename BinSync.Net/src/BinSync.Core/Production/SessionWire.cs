@@ -73,6 +73,7 @@ public static class SessionWire
     /// <summary>Encode hello into canonical wire bytes.</summary>
     public static byte[] EncodeHello(HelloPayload h)
     {
+        ValidateCapabilitiesForEncoding(h.Capabilities);
         var rented = ArrayPool<byte>.Shared.Rent(48);
         try
         {
@@ -106,7 +107,29 @@ public static class SessionWire
             throw new FrameException("FRAME_REJECTED");
         if (epoch > int.MaxValue)
             throw new FrameException("FRAME_REJECTED");
-        return new HelloPayload(nodeId, (int)epoch, (SessionCapabilities)capabilities);
+        var decodedCapabilities = (SessionCapabilities)capabilities;
+        ValidateCapabilitiesFromWire(decodedCapabilities);
+        return new HelloPayload(nodeId, (int)epoch, decodedCapabilities);
+    }
+
+    private static void ValidateCapabilitiesForEncoding(SessionCapabilities capabilities)
+    {
+        SessionCapabilities rosterDependent =
+            SessionCapabilities.OriginFrontierV31 | SessionCapabilities.FullReplaceV31;
+        if ((capabilities & rosterDependent) != 0 &&
+            (capabilities & SessionCapabilities.NamespaceRosterV31) == 0)
+            throw new ArgumentException(
+                "OFR2/RCP2 and FULL_REPLACE capabilities require NamespaceRosterV31.",
+                nameof(capabilities));
+    }
+
+    private static void ValidateCapabilitiesFromWire(SessionCapabilities capabilities)
+    {
+        SessionCapabilities rosterDependent =
+            SessionCapabilities.OriginFrontierV31 | SessionCapabilities.FullReplaceV31;
+        if ((capabilities & rosterDependent) != 0 &&
+            (capabilities & SessionCapabilities.NamespaceRosterV31) == 0)
+            throw new FrameException("FRAME_REJECTED");
     }
 
     private static Frame ParseControlFrame(byte[] frameBytes, byte expectedType)
@@ -124,6 +147,7 @@ public static class SessionWire
     /// <summary>Encode hello ack into canonical wire bytes.</summary>
     public static byte[] EncodeHelloAck(HelloPayload h)
     {
+        ValidateCapabilitiesForEncoding(h.Capabilities);
         var rented = ArrayPool<byte>.Shared.Rent(48);
         try
         {
