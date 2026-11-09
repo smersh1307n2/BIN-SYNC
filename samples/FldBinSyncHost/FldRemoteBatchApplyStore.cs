@@ -18,6 +18,10 @@ public sealed class FldRemoteBatchApplyStore : IProviderRemoteBatchCommitStore
     public FldRemoteBatchApplyStore(FldDatabase database)
         => _database = database ?? throw new ArgumentNullException(nameof(database));
 
+    /// <summary>True only for the exact FLD database instance captured by this adapter.</summary>
+    public bool IsBoundTo(FldDatabase database)
+        => ReferenceEquals(_database, database);
+
     public ProviderApplyReceipt ApplyRemoteBatch(ProviderRemoteBatchCommit batch)
     {
         ArgumentNullException.ThrowIfNull(batch);
