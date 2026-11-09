@@ -102,7 +102,7 @@ public static class StorageFullReplaceSender
     /// This method does not dispose the prepared snapshot; the caller may reuse it for
     /// the next recipient and owns its final disposal.
     /// </summary>
-    public static Task<FullReplaceInstalledAck> SendPreparedSnapshotAsync(
+    public static async Task<FullReplaceInstalledAck> SendPreparedSnapshotAsync(
         PreparedFullReplaceSnapshot prepared,
         SyncSession session,
         IMetadataNamespaceGcStore gcStore,
@@ -113,13 +113,15 @@ public static class StorageFullReplaceSender
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        using IDisposable transferLease = prepared.AcquireTransferLease();
         ValidatePreparedSnapshot(
             prepared, trustStore, roster, authorityNodeId, authoritySeed);
         IDataProvider provider = prepared.Provider;
-        return SendSnapshotCoreAsync(
+        return await SendSnapshotCoreAsync(
             provider, prepared.Snapshot, prepared.Manifest,
             prepared.HlcWallFloor, prepared.HlcLogicalFloor,
-            session, gcStore, trustStore, roster, authorityNodeId, authoritySeed, ct);
+            session, gcStore, trustStore, roster, authorityNodeId, authoritySeed, ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
