@@ -62,6 +62,10 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] The byte audit now records that `StorageDatabase.EncodeBatch` sorts all mutations by StorageKey before WAL append using LINQ `OrderBy`, adding O(N log N) CPU/allocation overhead per write batch.
 - [~ O] Benchmark realistic relay-page sizes and mixed metadata batches before changing the FLD Storage serializer; compare LINQ ordering with array sort and pre-sorted mutation collection, preserving deterministic byte order and atomic commit semantics.
 
+## 0.60. C-pass: direct provenance-map page bound aligned — 2026-11-09
+
+- [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
+
 ## 0.59. C-pass: relay provenance resolver page bounded — 2026-11-09
 
 - [x C] `AppendRelayProvenancePage` now rejects more than 4,096 source changes before allocating identity/sequence arrays, matching the coordinator's existing bounded page policy.
