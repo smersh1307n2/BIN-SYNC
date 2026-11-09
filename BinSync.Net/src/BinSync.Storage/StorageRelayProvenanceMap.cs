@@ -89,12 +89,13 @@ public sealed class StorageRelayProvenanceMap
             ulong priorOutbox = state.Mappings.Count == 0
                 ? state.AckedThroughOutboxSeq
                 : state.Mappings[^1].OutboxSeq;
-            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var seen = new HashSet<string>(state.Mappings.Select(mapping => Convert.ToHexString(mapping.ChangeId)), StringComparer.Ordinal);
+            bool firstEntry = true;
             var writes = new List<(byte[] Key, byte[] Value)>(entries.Count + 1);
 
             foreach (StorageRelayProvenanceEntry entry in entries)
             {
-                if (entry.JournalSeq <= priorJournal || entry.JournalSeq > scannedThroughJournalSeq)
+                if ((firstEntry && entry.JournalSeq <= priorJournal) || (!firstEntry && entry.JournalSeq < priorJournal) || entry.JournalSeq > scannedThroughJournalSeq)
                     throw new InvalidDataException("Every new relay mapping must be after the prior scan cursor and at/before the new scan cursor.");
                 if (entry.ChangeId is null || entry.ChangeId.Length != ChangeIdLength ||
                     IsZero(entry.ChangeId))
@@ -111,6 +112,7 @@ public sealed class StorageRelayProvenanceMap
                 writes.Add((key, value));
                 priorJournal = entry.JournalSeq;
                 priorOutbox = entry.OutboxSeq;
+                firstEntry = false;
             }
 
             if (entries.Count != 0 && entries[^1].JournalSeq > scannedThroughJournalSeq)
@@ -211,7 +213,9 @@ public sealed class StorageRelayProvenanceMap
 
     private StreamState GetState(int namespaceId, NodeId author)
     {
-        string authorHex = Convert.ToHexString(author.ToArray());
+        byte[] authorBytes = new byte[16];
+        author.WriteTo(authorBytes);
+        string authorHex = Convert.ToHexString(authorBytes);
         var key = new StreamKey(namespaceId, authorHex);
         ulong commitSeq = _storage.LastCommitSeq;
         if (_states.TryGetValue(key, out StreamState? cached) && cached.StorageCommitSeq == commitSeq)
@@ -236,10 +240,16 @@ public sealed class StorageRelayProvenanceMap
             ulong outboxSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
             if (journalSeq <= state.AckedThroughJournalSeq ||
                 journalSeq > state.ScannedThroughJournalSeq ||
-                outboxSeq <= state.AckedThroughOutboxSeq ||
-                (state.Mappings.Count != 0 && outboxSeq <= state.Mappings[^1].OutboxSeq))
-                throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
+                outboxSeq <= state.AckedThroughOutboxSeq)
+                throw new InvalidDataException("Relay provenance mapping is outside its durable cursor.");
             state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
+        }
+        state.Mappings.Sort(static (left, right) => left.OutboxSeq.CompareTo(right.OutboxSeq));
+        for (int i = 1; i < state.Mappings.Count; i++)
+        {
+            if (state.Mappings[i].OutboxSeq <= state.Mappings[i - 1].OutboxSeq ||
+                state.Mappings[i].JournalSeq < state.Mappings[i - 1].JournalSeq)
+                throw new InvalidDataException("Relay provenance mapping sequence coordinates are not monotonic.");
         }
         _states[key] = state;
         return state;
