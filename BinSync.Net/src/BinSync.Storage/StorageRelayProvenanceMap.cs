@@ -113,9 +113,10 @@ public sealed class StorageRelayProvenanceMap
                 if (!seen.Add(identity))
                     throw new InvalidDataException("A ChangeId occurs more than once in one relay page.");
 
-                byte[] key = MappingKey(namespaceId, author, entry.JournalSeq, changeId);
-                byte[] value = new byte[8];
-                BinaryPrimitives.WriteUInt64LittleEndian(value, entry.OutboxSeq);
+                byte[] key = MappingKey(namespaceId, author, entry.OutboxSeq);
+                byte[] value = new byte[8 + ChangeIdLength];
+                BinaryPrimitives.WriteUInt64LittleEndian(value, entry.JournalSeq);
+                changeId.CopyTo(value, 8);
                 writes.Add((key, value));
                 appended.Add(new Mapping(entry.JournalSeq, changeId, entry.OutboxSeq));
                 priorJournal = entry.JournalSeq;
@@ -163,10 +164,9 @@ public sealed class StorageRelayProvenanceMap
             if (safeOutboxSeq == state.AckedThroughOutboxSeq)
                 return state.AckedThroughJournalSeq;
 
-            foreach (Mapping mapping in state.Mappings)
-                if (mapping.OutboxSeq > safeOutboxSeq)
-                    return Math.Max(state.AckedThroughJournalSeq, mapping.JournalSeq - 1);
-
+            int index = FindFirstOutboxSequenceGreaterThan(state.Mappings, safeOutboxSeq);
+            if (index < state.Mappings.Count)
+                return Math.Max(state.AckedThroughJournalSeq, state.Mappings[index].JournalSeq - 1);
             return state.ScannedThroughJournalSeq;
         }
     }
@@ -199,7 +199,7 @@ public sealed class StorageRelayProvenanceMap
 
             var deletes = state.Mappings
                 .Where(mapping => mapping.JournalSeq <= safeThroughJournalSeq)
-                .Select(mapping => MappingKey(namespaceId, author, mapping.JournalSeq, mapping.ChangeId))
+                .Select(mapping => MappingKey(namespaceId, author, mapping.OutboxSeq))
                 .ToArray();
             byte[] cursorKey = CursorKey(namespaceId, author);
             byte[] cursorValue = EncodeCursor(
@@ -243,18 +243,19 @@ public sealed class StorageRelayProvenanceMap
                 IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
                 foreach (StorageEntry row in page)
                 {
-                    if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 + ChangeIdLength ||
-                        row.Value.Length != 8)
+                    if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 ||
+                        row.Value.Length != 8 + ChangeIdLength)
                         throw new InvalidDataException("Malformed relay provenance mapping row.");
-                    ulong journalSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
-                    byte[] changeId = row.Key.AsSpan(row.Key.Length - ChangeIdLength).ToArray();
+                    ulong outboxSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
+                    ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                    byte[] changeId = row.Value.AsSpan(8, ChangeIdLength).ToArray();
                     if (!loadedChangeIds.Add(Convert.ToHexString(changeId)))
                         throw new InvalidDataException("A ChangeId is mapped more than once in one author stream.");
-                    ulong outboxSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
                     if (journalSeq <= state.AckedThroughJournalSeq ||
                         journalSeq > state.ScannedThroughJournalSeq ||
-                        outboxSeq <= state.AckedThroughOutboxSeq)
-                        throw new InvalidDataException("Relay provenance mapping is outside its durable cursor.");
+                        outboxSeq <= state.AckedThroughOutboxSeq ||
+                        (state.Mappings.Count != 0 && journalSeq < state.Mappings[^1].JournalSeq))
+                        throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
                     state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
                 }
                 if (page.Count < pageSize) break;
@@ -269,6 +270,21 @@ public sealed class StorageRelayProvenanceMap
         }
         _states[key] = state;
         return state;
+    }
+
+    private static int FindFirstOutboxSequenceGreaterThan(List<Mapping> mappings, ulong sequence)
+    {
+        int low = 0;
+        int high = mappings.Count;
+        while (low < high)
+        {
+            int middle = low + ((high - low) >> 1);
+            if (mappings[middle].OutboxSeq <= sequence)
+                low = middle + 1;
+            else
+                high = middle;
+        }
+        return low;
     }
 
     private byte[] CursorKey(int namespaceId, NodeId author) => Join(_root, CursorSuffix(namespaceId, author));
@@ -291,14 +307,13 @@ public sealed class StorageRelayProvenanceMap
         return suffix;
     }
 
-    private byte[] MappingKey(int namespaceId, NodeId author, ulong journalSeq, byte[] changeId)
+    private byte[] MappingKey(int namespaceId, NodeId author, ulong outboxSeq)
     {
-        byte[] suffix = new byte[1 + 2 + 16 + 8 + ChangeIdLength];
+        byte[] suffix = new byte[1 + 2 + 16 + 8];
         suffix[0] = MappingKind;
         BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(1), checked((ushort)namespaceId));
         author.WriteTo(suffix.AsSpan(3));
-        BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(19), journalSeq);
-        changeId.CopyTo(suffix, 27);
+        BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(19), outboxSeq);
         return Join(_root, suffix);
     }
 
