@@ -117,8 +117,9 @@ public static class StorageFullReplaceSender
             prepared, trustStore, roster, authorityNodeId, authoritySeed);
         IDataProvider provider = prepared.Provider;
         return SendSnapshotCoreAsync(
-            provider, prepared.Snapshot, prepared.Manifest, session, gcStore,
-            trustStore, roster, authorityNodeId, authoritySeed, ct);
+            provider, prepared.Snapshot, prepared.Manifest,
+            prepared.HlcWallFloor, prepared.HlcLogicalFloor,
+            session, gcStore, trustStore, roster, authorityNodeId, authoritySeed, ct);
     }
 
     /// <summary>
@@ -145,8 +146,9 @@ public static class StorageFullReplaceSender
             provider, snapshot, trustStore, roster, authorityNodeId,
             generation, authoritySeed);
         return SendSnapshotCoreAsync(
-            provider, snapshot, prepared.Manifest, session, gcStore, trustStore,
-            roster, authorityNodeId, authoritySeed, ct);
+            provider, snapshot, prepared.Manifest,
+            prepared.HlcWallFloor, prepared.HlcLogicalFloor,
+            session, gcStore, trustStore, roster, authorityNodeId, authoritySeed, ct);
     }
 
     private sealed record PreparedManifest(
@@ -224,6 +226,8 @@ public static class StorageFullReplaceSender
         IDataProvider provider,
         ProviderSnapshotHandle snapshot,
         FullReplaceTransferProtocol.Begin manifest,
+        ulong expectedHlcWallFloor,
+        uint expectedHlcLogicalFloor,
         SyncSession session,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
@@ -306,9 +310,11 @@ public static class StorageFullReplaceSender
             acknowledgement.MemberNodeId != session.PeerNodeId ||
             acknowledgement.MemberTransportEpoch != checked((uint)session.PeerEpoch) ||
             acknowledgement.RosterGeneration != roster.RosterGeneration ||
-            !acknowledgement.RosterDigest.AsSpan().SequenceEqual(manifest.RosterDigest))
+            !acknowledgement.RosterDigest.AsSpan().SequenceEqual(manifest.RosterDigest) ||
+            acknowledgement.HlcWallFloor != expectedHlcWallFloor ||
+            acknowledgement.HlcLogicalFloor != expectedHlcLogicalFloor)
             throw new InvalidDataException(
-                "FULL_REPLACE installed ACK does not match the target, roster, generation or digest.");
+                "FULL_REPLACE installed ACK does not match the target, roster, generation, digest or source snapshot HLC floor.");
 
         gcStore.AcceptFullReplaceInstalledAck(
             FullReplaceInstalledAckProtocol.EncodeSigned(acknowledgement), roster);
