@@ -163,3 +163,11 @@ Legend: **implemented** · **partial** · **helper-only** · **not implemented**
 ## Latest continuation checkpoint — author-stream fairness (2026-11-08)
 
 **Code/test head:** `9848227caee54aebbba936afee094eba6e65fc3e`. CI green: BinSync.Net 649/649, Fuzz + Lab 31/31, Storage Integration 142/142 on Ubuntu, Windows and macOS. The Node-owned batch builder and the durable Metadata Store push path both select the smallest next contiguous author sequence across eligible streams; a gap stream is only selected when no contiguous stream is available. The durable transport test seeds a local stream whose next sequence is 5 and a relay stream whose next sequence is 1, then verifies the relay stream is sent and ACKed first. Scenario 23 now explicitly verifies that a first-seen relay operation remains relay-eligible even when it loses LWW on the downstream node. The E-6 and E-8 evidence gaps are closed for these paths.
+
+
+## 2026-11-09 exact CI refresh
+
+- The prior compile blocker `StorageRelayProvenanceMap.ReadAuthors → ValidateNamespaceId` was fixed in `66ae3ac50833db9f4226f33490c780176bac0b14`.
+- Latest completed code-equivalent CI (run `42562536212`): Core 672/678, 6 failed (five legacy OFR1/RCP1 issued-watermark fixtures, one malformed tombstone fixture); Storage Integration 91/171, 80 failed on all three OSes (provider draft fixtures still assign OriginSequence instead of deferred zero, and test providers lack IProviderCommitGuard); Fuzz/Lab passed; coverage 68.1%.
+- Latest FLD-DB CI (`42561687647`) had all jobs fail before runner allocation (`runner_id=0`, no steps, no artifacts/logs). It is not evidence of a source build failure; a real runner-backed build/test is still required.
+- Physical GC remains disabled. Current source code head after the compile fix is not accepted until all relevant exact-head tests pass.
