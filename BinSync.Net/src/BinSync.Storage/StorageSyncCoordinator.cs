@@ -179,9 +179,10 @@ public sealed class StorageSyncCoordinator
         for (int i = 0; i < sourceChanges.Length; i++)
         {
             ulong journalSeq = sourceChanges[i].JournalSeq;
-            if (journalSeq == 0 || journalSeq < previousJournalSeq ||
+            if (journalSeq == 0 ||
+                (i == 0 ? journalSeq <= previousJournalSeq : journalSeq < previousJournalSeq) ||
                 journalSeq > scannedThroughJournalSeq)
-                throw new InvalidDataException("Relay source JournalSeq values must be positive, non-decreasing and within the scanned cursor.");
+                throw new InvalidDataException("Relay source JournalSeq values must start after the prior cursor, remain non-decreasing within the page, and not exceed the scanned cursor.");
             previousJournalSeq = journalSeq;
         }
 
