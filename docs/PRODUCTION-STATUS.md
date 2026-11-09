@@ -2,8 +2,9 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
-- BIN-SYNC `feature/fld-external-storage` latest code head: `7e763f0f5939ce2b134e0d5b7a55e92361e51b3b`. The v3.1 session capability dependency matrix is now enforced at both frame APIs and HELLO/HELLO_ACK encode/decode.
-- FLD-DB `fix/crash-consistency-outbox` latest inspected head: `d432d0a1f30720a352dacff76bfd7ffee4edd55f`; no FLD source code change in these slices.
+- BIN-SYNC `feature/fld-external-storage` latest C-pass source head: `a6c4218f3447fb39d5f7d0a8fa300c750ae4d962`; latest roadmap/host documentation commit: `545cc3589f31423372e4ac31827209230a0d0fa5`. This pass adds the base FLD `IDataProvider` bridge, exact coordinator/provider/database/apply-store identity checks and legacy identity-zero snapshot record-tombstone compatibility.
+- FLD-DB `fix/crash-consistency-outbox` latest C-pass source head: `7365367eca376177e960067d5f9ecb89486c9e3f`; latest ADR/roadmap commit: `7ae7086df0e7db565068fd2eb93debfc35755e9b`. This pass adds indexed Run RecordId access and generation-pinned paged FLD provider snapshots with retained immutable run buffers.
+- **C-pass continuation update (2026-11-09):** code was advanced without running the T-pass, per the requested sequencing. The previous exact CI evidence remains red (Core 672/678; Storage Integration 91/171) and does not validate the new commits. No build/test result is claimed for the new FLD provider snapshot or host IDataProvider bridge.
 - Latest completed BIN-SYNC CI evidence remains for code head `d4ad36fe4fc1a3660c43cc4209a71f400ed224fe`: Build passed; v3.1 golden vectors passed; Fuzz/Lab passed; Core tests 672/678 with 6 stale OFR1/RCP1/record-tombstone fixtures; Storage Integration 91/171 with 80 stale provider/provenance/guard fixtures across Ubuntu/macOS/Windows. Production validation remains strict.
 - Cross-repository FLD host compile was skipped because `FLD_DB_READ_TOKEN` was empty; it is not counted as a build success.
 - Code changes after `d4ad36f` (`d0b301b`, `545041f`, `10a4e17`, `b211979`, `9478589`, `7a8c7f2`, `7e763f0`) have not yet had exact-head CI. Earlier results do not validate current HEAD.
