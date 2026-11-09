@@ -1756,3 +1756,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Added direct cross-references from the v3.0 specification, Public API, addendum and host guide to the correct companion documents. Corrected the stale host-guide statement that treated the synchronized-FLD relay adapter as wholly future work.
 - [~ T] Execute `samples/V31ControlPlaneVectors`, assert exact payload/signature bytes and negative tamper cases in CI, and complete authority/member, joining/rejoin, FULL_REPLACE, crash/restart and safe-horizon conformance. Existing source implementation is not a conformance pass.
 - [~ C] The `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/full remote-apply bridge, generic Storage format decision and host transport scheduler remain open. Physical GC remains disabled.
+
+
+## 1.01. C-pass: execute v3.1 golden vectors as a required CI sample — 2026-11-09
+
+- [x C] Extended `samples/V31ControlPlaneVectors` beyond encode-only checks: NRS2/OFR2/RCP2/FRA2 now decode and verify against trust/roster context and re-sign to byte-identical payloads; FULL_REPLACE_BEGIN now decode/verifies against the accepted roster; chunk/READY/COMMIT/ABORT round-trip coverage remains.
+- [x C] Added fail-closed sample cases for truncated signatures, trailing bytes, tampered payloads, wrong pinned authority key, wrong signing domain, wrong roster generation/digest and invalid FULL_REPLACE_READY flags.
+- [x C] Added the vector sample to `.github/workflows/dotnet.yml` and included `samples/**` in push/PR path filters so vector-only changes cannot bypass CI.
+- [~ T] Exact-head CI for the sample change is running; close only after the executable returns PASS and Core/Fuzz plus Storage Integration results are captured for the same code head.
+- [~ T] Add dedicated unit tests for malformed roster/checkpoint/frontier edge cases and the complete FULL_REPLACE sender/receiver crash/rejoin state machine; the sample does not replace the full adversarial test matrix.
