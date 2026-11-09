@@ -140,6 +140,23 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         nextSequence < oldEntry.ContiguousAppliedOriginSequence)
                         throw new InvalidDataException("Applied-origin frontier regressed or dropped a previously reported author epoch.");
                 }
+
+                // Issued-origin maxima are GC authority too: keeping the applied
+                // vector monotonic is insufficient if a member can lower its issued
+                // sequence/HLC claim in a later signed report.
+                var nextIssuedByEpoch = report.IssuedOrigins.ToDictionary(
+                    entry => entry.OriginAuthorEpoch);
+                foreach (IssuedOriginFrontierEntry oldIssued in prior.IssuedOrigins)
+                {
+                    if (!nextIssuedByEpoch.TryGetValue(oldIssued.OriginAuthorEpoch,
+                            out IssuedOriginFrontierEntry? nextIssued) ||
+                        nextIssued.IssuedOriginSequence < oldIssued.IssuedOriginSequence ||
+                        nextIssued.MaxIssuedHlcWall < oldIssued.MaxIssuedHlcWall ||
+                        (nextIssued.MaxIssuedHlcWall == oldIssued.MaxIssuedHlcWall &&
+                         nextIssued.MaxIssuedHlcLogical < oldIssued.MaxIssuedHlcLogical))
+                        throw new InvalidDataException(
+                            "Issued-origin sequence or HLC maximum regressed or dropped a previously reported author epoch.");
+                }
             }
             WriteRows((key, owned));
             return report;
