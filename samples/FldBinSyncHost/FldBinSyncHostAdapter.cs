@@ -40,11 +40,6 @@ public sealed class FldBinSyncHostAdapter
     }
 
     /// <summary>
-    /// Reconcile FLD source authors and RPM3-only authors before the host enables
-    /// any namespace sender. The callback must enforce every supplied per-author
-    /// PublishedThroughSequence ceiling when reading durable outbound payload.
-    /// </summary>
-    /// <summary>
     /// Freeze the provider's currently pending local feed into the active outbound
     /// authority (Node Outbox before cutover, Metadata Store after cutover). Call
     /// before startup recovery/publication and before each later outbound gate run.
@@ -53,6 +48,27 @@ public sealed class FldBinSyncHostAdapter
         => _coordinator.PublishLocalChanges(
             persistNode ?? throw new ArgumentNullException(nameof(persistNode)), limit);
 
+    /// <summary>
+    /// Freeze local provider changes, reconcile FLD/RPM3 recovery state, then publish
+    /// through the supplied ceiling-aware sender callback.
+    /// </summary>
+    public async ValueTask<bool> RecoverAndPublishAllAsync(
+        Action<Node> persistNode,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publishReadyOutbox,
+        int limit = 1024,
+        CancellationToken cancellationToken = default)
+    {
+        PublishLocalChanges(persistNode, limit);
+        return await RecoverAndPublishAllAsync(
+            publishReadyOutbox, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reconcile FLD source authors and RPM3-only authors before the host enables
+    /// any namespace sender. The callback must use PublishReadyOutboxAsync or another
+    /// ceiling-enforcing sender path.
+    /// </summary>
     public ValueTask<bool> RecoverAndPublishAllAsync(
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
             CancellationToken, ValueTask> publishReadyOutbox,
@@ -72,6 +88,23 @@ public sealed class FldBinSyncHostAdapter
     /// namespace-wide send. The apply callback must finish its durable FLD commit
     /// before returning; the sender receives only committed per-author ceilings.
     /// </summary>
+    /// <summary>
+    /// Freeze current local provider changes, durably apply one remote batch, then
+    /// map and publish every resulting relay page through captured ceilings.
+    /// </summary>
+    public async ValueTask<bool> ApplyAndPublishAllAsync(
+        Action<Node> persistNode,
+        Func<CancellationToken, ValueTask> applyRemoteBatch,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publishReadyOutbox,
+        int limit = 1024,
+        CancellationToken cancellationToken = default)
+    {
+        PublishLocalChanges(persistNode, limit);
+        return await ApplyAndPublishAllAsync(
+            applyRemoteBatch, publishReadyOutbox, cancellationToken).ConfigureAwait(false);
+    }
+
     public ValueTask<bool> ApplyAndPublishAllAsync(
         Func<CancellationToken, ValueTask> applyRemoteBatch,
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
@@ -88,6 +121,18 @@ public sealed class FldBinSyncHostAdapter
             cancellationToken);
 
     /// <summary>Run a later outbound send through the same reconciled namespace gate.</summary>
+    /// <summary>Freeze current local changes, then run an outbound send through the shared gate.</summary>
+    public async ValueTask RunOutboundAsync(
+        Action<Node> persistNode,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publish,
+        int limit = 1024,
+        CancellationToken cancellationToken = default)
+    {
+        PublishLocalChanges(persistNode, limit);
+        await RunOutboundAsync(publish, cancellationToken).ConfigureAwait(false);
+    }
+
     public ValueTask RunOutboundAsync(
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
             CancellationToken, ValueTask> publish,
