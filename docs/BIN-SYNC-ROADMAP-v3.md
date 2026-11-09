@@ -1614,3 +1614,14 @@ Overall estimate: **~75–80%**. Remaining C-pass is not a rewrite of BIN-SYNC v
 - [~ O] Measure startup/recovery discovery CPU and allocations across representative author counts; these source-level allocation reductions are not yet benchmark claims.
 
 BIN-SYNC code commit: `9d187f6cbe6c496ec013d1d39c969f8820ed1dab`. Current C-pass remains unvalidated; no CI success is claimed.
+
+
+## 0.85. C-pass: enforce per-author publication ceilings at every sender callback — 2026-11-09
+
+- [x C] `StorageRelayProvenanceMap.ReadPublicationWatermark` exposes the highest per-author sequence backed by durable RPM3 mappings (or the already-ACKed lower bound when no rows remain).
+- [x C] `ApplyAndPublishAllAsync`, `RecoverAndPublishAllAsync` and `RunOutboundAsync` now pass the complete author-specific ceiling set to the host sender callback. The host must send only listed authors and cap each stream at `PublishedThroughSequence`; absent authors have ceiling zero. This closes the gap where an FLD local commit could append an unmapped Outbox row after the page guard was released but before the sender callback ran.
+- [x C] Updated `docs/FLD-DB-INTEGRATION-CONTRACT.md` to make the cap mandatory and distinguish it from the adapter async gate.
+- [~ T] Migrate host callback implementations and test concurrent local commit between final page commit and send, unknown/new author exclusion, zero ceiling, metadata-owned cutover and ACKed-tail behavior. API migration is intentionally deferred until C-pass closure.
+- [~ O] Measure the added per-author map lookup/array cost against the safety benefit; do not remove the ceiling without an equivalent enforceable publication fence.
+
+BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a84f8cbc93ce4f53be90dfd3`, `97609fb3c91e15aac27ff8d2eccf576381993c1c`, contract `87a8b7a0d364f80982696f1b748294bf042424a4`. Exact-head CI is not yet run; do not mark T complete.
