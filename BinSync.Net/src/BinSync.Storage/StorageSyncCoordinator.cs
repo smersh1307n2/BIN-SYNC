@@ -43,6 +43,13 @@ public sealed class StorageSyncCoordinator
             ReferenceEquals(_provider, store);
     }
 
+    /// <summary>True only when this coordinator uses the exact supplied Metadata Store instance.</summary>
+    public bool UsesMetadataPeerStateStore(IMetadataPeerStateStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        return ReferenceEquals(_metadataStore, store);
+    }
+
     /// <summary>True after the provider-authoritative Metadata Store publication cutover.</summary>
     public bool IsMetadataStoreOwnedPublication =>
         _provider is IProviderPublicationMode publicationMode &&
