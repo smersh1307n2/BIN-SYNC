@@ -491,24 +491,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
-    private static bool HasLiveChangeIdReference(PartitionState state, int namespaceId, BatchId changeId)
-    {
-        if (state.Relay.Any(pair => pair.Key.NamespaceId == namespaceId &&
-            pair.Value.Any(item => item.ChangeId.Equals(changeId))))
-            return true;
-        if (state.Outbound.Any(pair => pair.Key.NamespaceId == namespaceId &&
-            pair.Value.Any(item => item.ChangeId.Equals(changeId))))
-            return true;
-        if (state.PendingApplies.Values.Any(pending =>
-            pending.Batch.NamespaceId == namespaceId &&
-            pending.Batch.Operations.Any(operation => operation.ChangeId.Equals(changeId))))
-            return true;
-        // A pending immutable batch reservation may still contain the ChangeId even
-        // after its source rows have been compacted. Conservatively retain this
-        // namespace's ledger until every such reservation has been acknowledged.
-        return state.PeerStreams.Any(pair =>
-            pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null);
-    }
 
     public bool SupportsRestartDurability => true;
 
