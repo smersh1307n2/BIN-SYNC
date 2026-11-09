@@ -2164,7 +2164,7 @@ public sealed class StorageSyncCoordinator
             var mutations = CreateProviderMutations(plan.Batch.Operations);
             if (mutations.Count == 0)
                 throw new InvalidDataException("Pre-staged receive intent contains no provider mutations.");
-            var receipt = _provider.ApplyRemoteBatch(plan.ApplyToken, mutations);
+            var receipt = ApplyProviderRemoteBatch(batch, plan.Batch, plan.ApplyToken, mutations);
             if (plan.FinalizeMetadata)
             {
                 var metadataReceipt = _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
@@ -2213,12 +2213,14 @@ public sealed class StorageSyncCoordinator
                 if (intent.Batch.NamespaceId != _namespaceId)
                     continue;
 
+                Batch? recoveredBatch = null;
                 if (intent.Batch.WirePayload.Length > 0)
                 {
                     if (persistNode is null)
                         throw new InvalidOperationException("Recovering a pre-Node PendingApply intent requires a Node checkpoint callback.");
                     if (intent.Batch.ReceiveStateOwnedByMetadataStore)
-                        _node.ApplyBatchPayloadWithMetadataAuthority(intent.Batch.WirePayload, intent.Batch.SenderPeer, intent.ApplyOperations);
+                        recoveredBatch = _node.ApplyBatchPayloadWithMetadataAuthority(
+                            intent.Batch.WirePayload, intent.Batch.SenderPeer, intent.ApplyOperations).Batch;
                     else
                         _node.ApplyBatchPayload(intent.Batch.WirePayload, intent.Batch.SenderPeer);
                     persistNode(_node);
@@ -2228,7 +2230,11 @@ public sealed class StorageSyncCoordinator
                 if (mutations.Count == 0)
                     throw new InvalidDataException("Pending apply intent contains no provider mutations.");
 
-                _provider.ApplyRemoteBatch(intent.ApplyToken, mutations);
+                if (recoveredBatch is not null)
+                    _ = ApplyProviderRemoteBatch(
+                        recoveredBatch, intent.Batch, intent.ApplyToken, mutations);
+                else
+                    _provider.ApplyRemoteBatch(intent.ApplyToken, mutations);
                 var metadataReceipt = _metadataStore.FinalizePendingApply(_scopeId!, _node.NodeId,
                     new MetadataProviderApplyReceipt(intent.ApplyToken, intent.Batch.BatchDigest.ToArray()));
                 NodeId expectedAuthor = !intent.Batch.AuthorStreamNodeId.IsZero
@@ -2244,6 +2250,48 @@ public sealed class StorageSyncCoordinator
 
             return recovered;
         }
+    }
+
+    private ProviderApplyReceipt ApplyProviderRemoteBatch(
+        Batch wireBatch,
+        MetadataIncomingBatch pending,
+        Guid applyToken,
+        IReadOnlyList<ProviderMutation> mutations)
+    {
+        ArgumentNullException.ThrowIfNull(wireBatch);
+        ArgumentNullException.ThrowIfNull(pending);
+        if (_provider is not IProviderRemoteBatchCommitStore contextualProvider)
+            return _provider.ApplyRemoteBatch(applyToken, mutations);
+
+        if (!pending.ReceiveStateOwnedByMetadataStore ||
+            pending.WirePayload.Length == 0 ||
+            wireBatch.NamespaceId != pending.NamespaceId ||
+            wireBatch.BatchId != pending.BatchId ||
+            checked((ulong)wireBatch.CursorStart) != pending.CursorStart ||
+            checked((ulong)wireBatch.CursorEnd) != pending.CursorEnd ||
+            wireBatch.IssuerEpoch < 0 ||
+            checked((uint)wireBatch.IssuerEpoch) != pending.SenderEpoch ||
+            wireBatch.PrevBatchDigest != Digest16.FromBytes(pending.PreviousBatchDigest) ||
+            wireBatch.BatchDigest != Digest16.FromBytes(pending.BatchDigest))
+            throw new InvalidDataException(
+                "Full provider remote-batch context does not match its durable PendingApply header.");
+
+        var context = new ProviderRemoteBatchCommit(
+            applyToken,
+            pending.SenderPeer,
+            pending.TransportPeerEpoch,
+            pending.NamespaceId,
+            wireBatch.IssuerNodeId,
+            checked((uint)wireBatch.IssuerEpoch),
+            wireBatch.BatchId,
+            checked((ulong)wireBatch.CursorStart),
+            checked((ulong)wireBatch.CursorEnd),
+            pending.PreviousBatchDigest,
+            pending.BatchDigest,
+            wireBatch.RecordsRoot.ToArray(),
+            ReadOnlySpan<byte>.Empty,
+            mutations);
+        return contextualProvider.ApplyRemoteBatch(context);
     }
 
     private MetadataIncomingBatch CreateMetadataBatch(Batch batch, byte[]? wirePayload = null,
