@@ -93,21 +93,23 @@ public sealed class StorageRelayProvenanceMap
         const int pageSize = 1024;
         while (true)
         {
-            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
-            foreach (StorageEntry row in page)
-            {
-                if (row.Key.Length != RootLength + 1 + 2 + 16)
-                    throw new InvalidDataException("Malformed RPM3 author cursor key.");
-                NodeId author = NodeId.From(row.Key.AsSpan(RootLength + 3, 16));
-                if (author.IsZero)
-                    throw new InvalidDataException("RPM3 cursor contains a zero author identity.");
-                authors.Add(author);
-            }
-            if (page.Count < pageSize)
+            int visited = cursor.VisitPage(pageSize, VisitAuthor);
+            if (visited < pageSize)
                 break;
         }
         authors.Sort(NodeIdCanonicalComparer.Instance);
         return authors.ToArray();
+
+        bool VisitAuthor(in StorageEntryView row)
+        {
+            if (row.Key.Length != RootLength + 1 + 2 + 16)
+                throw new InvalidDataException("Malformed RPM3 author cursor key.");
+            NodeId author = NodeId.From(row.Key.Slice(RootLength + 3, 16));
+            if (author.IsZero)
+                throw new InvalidDataException("RPM3 cursor contains a zero author identity.");
+            authors.Add(author);
+            return true;
+        }
     }
 
     public StorageRelayProvenanceCursor ReadCursor(int namespaceId, NodeId author)
@@ -335,25 +337,27 @@ public sealed class StorageRelayProvenanceMap
             const int pageSize = 1024;
             while (true)
             {
-                IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
-                foreach (StorageEntry row in page)
-                {
-                    if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 ||
-                        row.Value.Length != 8)
-                        throw new InvalidDataException("Malformed relay provenance mapping row.");
-                    ulong outboxSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
-                    ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
-                    if (journalSeq <= state.AckedThroughJournalSeq ||
-                        journalSeq > state.ScannedThroughJournalSeq ||
-                        outboxSeq <= state.AckedThroughOutboxSeq ||
-                        (state.Mappings.Count != 0 &&
-                            (outboxSeq <= state.Mappings[^1].OutboxSeq ||
-                             journalSeq < state.Mappings[^1].JournalSeq)))
-                        throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
-                    state.Mappings.Add(new Mapping(journalSeq, outboxSeq));
-                    XorRowDigest(computedDigest, row.Key, row.Value);
-                }
-                if (page.Count < pageSize) break;
+                int visited = cursor.VisitPage(pageSize, VisitMapping);
+                if (visited < pageSize) break;
+            }
+
+            bool VisitMapping(in StorageEntryView row)
+            {
+                if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 ||
+                    row.Value.Length != 8)
+                    throw new InvalidDataException("Malformed relay provenance mapping row.");
+                ulong outboxSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.Slice(RootLength + 1 + 2 + 16, 8));
+                ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                if (journalSeq <= state.AckedThroughJournalSeq ||
+                    journalSeq > state.ScannedThroughJournalSeq ||
+                    outboxSeq <= state.AckedThroughOutboxSeq ||
+                    (state.Mappings.Count != 0 &&
+                        (outboxSeq <= state.Mappings[^1].OutboxSeq ||
+                         journalSeq < state.Mappings[^1].JournalSeq)))
+                    throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
+                state.Mappings.Add(new Mapping(journalSeq, outboxSeq));
+                XorRowDigest(computedDigest, row.Key, row.Value);
+                return true;
             }
         }
         if (!CryptographicOperations.FixedTimeEquals(computedDigest, state.MappingSetDigest))
