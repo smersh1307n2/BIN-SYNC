@@ -69,19 +69,18 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     }
 
     /// <summary>Permanently releases a persisted generation after every transfer has finished.</summary>
-    internal void ReleasePermanently()
+    internal void ReleasePermanently(IDataProvider provider)
     {
-        IDataProvider? release;
+        ArgumentNullException.ThrowIfNull(provider);
         lock (_gate)
         {
             if (_activeTransfers != 0)
                 throw new InvalidOperationException("Cannot permanently release a FULL_REPLACE snapshot while transfers are active.");
             _disposeRequested = true;
             _preserveOnDispose = false;
-            release = _provider;
             _provider = null;
         }
-        release?.ReleaseSnapshot(Snapshot.Token);
+        provider.ReleaseSnapshot(Snapshot.Token);
     }
 
     /// <summary>
