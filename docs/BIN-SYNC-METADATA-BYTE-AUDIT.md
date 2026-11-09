@@ -110,3 +110,49 @@ Source: FLD-DB `src/Fld1.Engine/Outbox/OutboxLog.cs` on `fix/crash-consistency-o
 The FLD Outbox is the unpublished local-intent source and already carries ChangeId, RecordId, author and HLC with the payload. The BIN-SYNC provenance map adds only the 100-byte key/value row per unacknowledged relay identity plus one 60-byte per-author cursor; it must not copy the payload or replace the Outbox. FLD's Outbox compaction still depends on the WAL seal/checkpoint horizon and is independent of BIN-SYNC mapping pruning.
 
 **Not included:** ApplyJournal record sizes, WAL record/segment framing, manifest/run overhead and Fld1.Storage page/index/write amplification. Those require a source-complete audit of the corresponding FLD formats; do not infer them from Outbox sizes.
+
+
+## 7. FLD ApplyJournal (cross-repository source audit)
+
+Source: FLD-DB `src/Fld1.Engine/Outbox/ApplyJournal.cs` on `fix/crash-consistency-outbox`.
+
+- ApplyJournal file header: 16 bytes (`FLDA` magic + version/namespace/header fields).
+- Each record: 20-byte record header + encoded APPLY_COMMIT payload + 4-byte CRC32C = **24 + payloadBytes**. Records are not 8-byte aligned.
+- The 20-byte header stores JournalSeq[8] + WAL CommitSeq[8] + payload length[4].
+- Relay-ACK sidecar: 12-byte header + 24 bytes per author (AuthorNodeId[16] + safe JournalSeq[8]) + 4-byte CRC32C = **16 + 24 × authorCount**.
+- In-memory sparse index: one 16-byte (JournalSeq[8], file offset[8]) anchor per 256 records. Batch identity lookup is an in-memory dictionary and is not a persisted per-peer row.
+
+### APPLY_COMMIT v3 payload formula
+
+The v3 body has a 139-byte fixed envelope, then:
+- ProtocolStateDelta: 4-byte length + delta bytes;
+- field list: 4-byte count + Σ(69-byte fixed mutation header + value bytes);
+- for non-relay-only WAL records: 4-byte relay-index count + varuint32 index per relay field.
+
+The 69-byte mutation header is RecordId[16] + FieldId[2] + OpKind[1] + KeyEpoch[2] + HLC wall[8] + HLC logical[4] + AuthorNodeId[16] + ChangeId[16] + value length[4]. A relay-only journal record stores exactly the relay fields in the same field-list format and omits the separate relay-index list.
+
+A normal full APPLY WAL record is therefore:
+`139 + 4 + deltaBytes + 4 + Σ(69 + valueBytes) + 4 + Σ(varuint32IndexBytes)`.
+
+A relay-only ApplyJournal payload is:
+`139 + 4 + deltaBytes + 4 + Σ(relayField(69 + valueBytes))`.
+
+After relay payload acknowledgement and WAL sealing, `CompactAcknowledgedRelayPayloads` can rewrite the ApplyJournal record with an empty relay field list while retaining the protocol/receipt metadata. The minimum retained record is therefore 24-byte journal framing + 143-byte empty relay-only body + ProtocolStateDelta bytes = **167 + deltaBytes**. Receipt metadata and relay payload still share one append-only ApplyJournal file; their physical retention lifetimes are not yet independent.
+
+## 8. FLD Micro-WAL v2 (cross-repository source audit)
+
+Source: FLD-DB `src/Fld1.Wal/Format/WalConstants.cs`, `WalEnvelope.cs`, `WalHeader.cs`, `WalWriter.cs` and `Codec/ApplyCommit.cs`.
+
+- WAL segment header: 64 bytes (`FLDW` magic, v2 header fields and CRC32C).
+- Each WAL record: 20-byte envelope + payload bytes + 4-byte record CRC32C + 0–7 bytes alignment padding = **24 + payloadBytes + pad(0..7)**.
+- Envelope CRC32C covers its first 16 bytes; record CRC32C covers the first 16 envelope bytes plus payload. The record payload is not copied into a second payload-sized buffer just to calculate CRC.
+- APPLY_COMMIT body is described in §7; current body version is v3 and v2 remains readable.
+- Segment header cost is per segment, not per record. WAL record padding is `(- (24 + payloadBytes)) mod 8`.
+
+WAL is the crash-recovery source. ApplyJournal is the durable remote receipt/relay source after WAL sealing. The full WAL APPLY payload and the compact relay-only ApplyJournal payload may coexist until the corresponding WAL commit is sealed/truncated; that is a bounded handoff duplication, not a second long-lived full field store. Do not count WAL and ApplyJournal as permanently independent full payload copies.
+
+## 9. Cross-store reference-snapshot memory (not persistent bytes)
+
+`FldDatabase.OpenReferenceSnapshot()` builds three in-memory indexes while the FLD commit gate is held: ChangeId references (16-byte `FldId128` keys), RecordId references (16-byte keys), and receipt references keyed by sender[16] + transport epoch[4] + author epoch[4] + namespace[2] + BatchId[16]. Hash-table capacity, padding and managed-object overhead are runtime-dependent and are not persistent row bytes. If WAL is unsealed, the snapshot conservatively reports every queried identity/receipt as referenced and keeps the draft horizon non-zero.
+
+The snapshot is one scan per GC/frontier operation, not a per-candidate rescan. The adapter must keep its lifetime inside the composed application commit lease and dispose it before releasing that lease.
