@@ -1476,3 +1476,9 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Created `backup/cpass-2026-11-09-after-relay-guards` at `7342dc7f8634d64b8911d0ab4ff93f4750127f97` before the next host-adapter/control-plane changes. Earlier `backup/pre-rpm3-compact-provenance-2026-11-09` remains intact.
 - [x C] Relay resolver now rejects first JournalSeq at/below the durable scan cursor before array allocation; same-JournalSeq entries remain valid within a page.
 - [~ T] Exact-head CI remains red on the previously observed 6 Core + 80 Storage Integration stale-fixture failures. Continue the C-pass without weakening validation; T-pass remains a separate gate.
+
+### 2026-11-09 — C-pass status file synchronized to exact test evidence
+
+- [x C] `docs/PRODUCTION-STATUS.md` now reflects current branch HEAD `57edd1f0032d24b17e51d265c16c3134472f3d66` and latest production-code commit `ea6968106e697f9d81ef94331cbf6dd986f71b29`.
+- [~ T] Latest completed code-equivalent run on `7342dc7f8634d64b8911d0ab4ff93f4750127f97`: Core 672/678 (6 stale OFR1/RCP1 + tombstone fixtures), Storage Integration 91/171 (80 provenance/OriginSequence/commit-guard fixture failures), Fuzz/Lab passed. Exact current HEAD differs only by documentation since the tested code snapshot.
+- [~ C] FullReplace receiver state machine, causal frontier/checkpoint production, retired-origin replay fence and host GC proof contracts are now marked implemented in the roadmap. The remaining cross-repository C gate is the concrete FLD Database host adapter and reference scanner; physical GC stays disabled.
