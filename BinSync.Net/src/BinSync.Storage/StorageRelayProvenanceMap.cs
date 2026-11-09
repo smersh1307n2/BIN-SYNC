@@ -360,7 +360,7 @@ public sealed class StorageRelayProvenanceMap
 
     private static void ValidateStream(int namespaceId, NodeId author)
     {
-        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+        if (namespaceId < 0 || namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
         if (author.IsZero)
             throw new ArgumentException("Original author identity must be non-zero.", nameof(author));
