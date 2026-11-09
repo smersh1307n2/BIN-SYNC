@@ -46,6 +46,21 @@ try
         Require(safeJournal == 3, "Fully acknowledged mapping did not advance through the scanned source cursor.");
         map.CommitAfterFldRelayAck(namespaceId, author, safeOutboxSeq: 3, safeThroughJournalSeq: safeJournal);
 
+        map.AppendPage(namespaceId, author, Array.Empty<StorageRelayProvenanceEntry>(),
+            scannedThroughJournalSeq: 4);
+        safeJournal = map.TranslateSafeOutboxSequence(namespaceId, author, 3);
+        Require(safeJournal == 4,
+            "An empty author page may advance only after a positive Outbox watermark is already durable.");
+        map.CommitAfterFldRelayAck(namespaceId, author, safeOutboxSeq: 3, safeThroughJournalSeq: 4);
+
+        byte[] secondAuthorBytes = new byte[16];
+        secondAuthorBytes[0] = 0xA2;
+        NodeId secondAuthor = NodeId.From(secondAuthorBytes);
+        map.AppendPage(namespaceId, secondAuthor, Array.Empty<StorageRelayProvenanceEntry>(),
+            scannedThroughJournalSeq: 5);
+        Require(map.TranslateSafeOutboxSequence(namespaceId, secondAuthor, 0) == 0,
+            "A zero Outbox watermark must never authorize a positive FLD ACK.");
+
         bool rejected = false;
         try
         {
