@@ -171,7 +171,7 @@ MergePolicyRegistry is a standalone helper registry; it is not connected to Node
 
 ### Negotiated v3.1 namespace control-plane extension
 
-The current Storage integration exposes explicit coordinator operations for signed roster exchange, applied-origin frontier publication/acceptance, durable retention checkpoint publication/acceptance, FULL_REPLACE installed-ACK exchange, and composed application commit/GC leases. `SendAcceptedRetentionCheckpointAsync` broadcasts an already accepted checkpoint without minting a new sequence for each destination; authorities should publish once and send the same checkpoint to all members in a serialized round.
+The current Storage integration exposes explicit coordinator operations for signed roster exchange, applied-origin frontier publication/acceptance, durable retention checkpoint publication/acceptance, FULL_REPLACE installed-ACK exchange, composed application commit/GC leases, and `AppendRelayProvenancePage` (global ChangeId resolution plus atomic RPM3 sequence-map append). `SendAcceptedRetentionCheckpointAsync` broadcasts an already accepted checkpoint without minting a new sequence for each destination; authorities should publish once and send the same checkpoint to all members in a serialized round.
 
 The host owns scheduling and transport policy. No timer or background worker is created by protocol core. See [BIN-SYNC-V3.1-HOST-ORCHESTRATION.md](BIN-SYNC-V3.1-HOST-ORCHESTRATION.md) for the authority/member and Joining→FULL_REPLACE→Active sequence. The synchronized-FLD source adapter remains a later integration phase; see [FLD-DB-INTEGRATION-CONTRACT.md](FLD-DB-INTEGRATION-CONTRACT.md) §9.6.
 
