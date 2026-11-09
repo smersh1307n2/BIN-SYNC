@@ -1767,10 +1767,17 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ T] Add dedicated unit tests for malformed roster/checkpoint/frontier edge cases and the complete FULL_REPLACE sender/receiver crash/rejoin state machine; the sample does not replace the full adversarial test matrix.
 
 
-## 1.01. C-pass: executable v3.1 authority/member host-round composition — 2026-11-09
+## 1.02. C-pass: executable v3.1 authority/member host-round composition — 2026-11-09
 
 - [x C] Added `samples/FldBinSyncHost/V31NamespaceGcHostOrchestrator.cs` as a reusable one-shot host helper over the explicit v3.1 coordinator APIs. It sequences accepted-roster send, per-session OFR2 receive/accept, exactly one durable RCP2 publication and broadcast of the same checkpoint.
 - [x C] Added Active-member round composition: receive/accept roster, reject non-Active local members, publish/send OFR2 under the supplied composed host lease, then receive/accept RCP2. Added retries for an already-durable OFR2 and an already-accepted RCP2 without allocating new report/checkpoint sequence identities.
 - [x C] The helper validates unique remote sessions and binds each received OFR2's member NodeId and transport epoch to the authenticated session peer. Missing Active roster members remain safe at frontier zero; caller-provided session lists are not treated as authoritative membership.
 - [~ C] FULL_REPLACE Joining→installed ACK→Active transition remains a separate explicit receiver/authority operation; the helper intentionally refuses to run an Active-member frontier round for a Joining/Retired member. Actual `FldDatabase`→`IDataProvider` snapshot/local-feed/full remote-apply bridge remains open.
 - [~ T] Build the cross-repository sample and test partial authority-round failure, checkpoint rebroadcast idempotency, report resend, duplicate/mismatched session identity, stale transport epoch, missing Active member frontier zero, cancellation and concurrent receive ownership. No build/test pass is claimed for this new helper.
+
+
+## 1.03. C-pass: cross-repository FLD host build added to CI — 2026-11-09
+
+- [x C] Added independent `fld-host-integration-build` job to `.github/workflows/dotnet.yml`. It checks out the BIN-SYNC branch and `FLD-DB/fix/crash-consistency-outbox`, vendors the required Ed25519 source, and builds the optional host adapter against explicit canonical `Fld1.Database.csproj` and `Fld1.Storage.csproj` paths.
+- [x C] The job is independent of the red Core/Storage test jobs, so the cross-repository compile result is visible even while fixture migration remains outstanding.
+- [~ T] Exact-head job for workflow commit `6ff484f2730d22aacb224163628ff528417fb3a7` was queued/in progress at this update; no build pass is claimed until the job completes.
