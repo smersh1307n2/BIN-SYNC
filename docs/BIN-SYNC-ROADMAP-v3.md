@@ -1913,3 +1913,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ C] Continue the FLD generation-pinned paged snapshot over captured immutable run buffers and a bounded overlay snapshot; then implement the complete `IDataProvider` current-state, local-feed and key-resolution bridge. No whole-database RAM materialization.
 - [~ T] FLD RunReader index-boundary/order tests and cross-repository snapshot/compaction stability tests remain deferred to the dedicated T-pass. No build or test pass is claimed.
 - [~ C] Durable FULL_REPLACE source snapshot recovery across sender restart, generic Storage page/run/WAL format decision and host transport/session scheduler remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+
+## 1.18. C-pass: implement generation-pinned paged FLD provider snapshot primitive — 2026-11-09
+
+- [x C] FLD-DB `FldDatabase.OpenProviderSnapshot()` now captures an immutable Run/overlay generation and the source Outbox watermark under its commit guard. The handle retains immutable run buffers across concurrent compaction and releases them exactly once on disposal/database close.
+- [x C] Snapshot pages use an O(keys) compact sorted RecordId index and bounded page materialization; no whole-database field/value list is built. The implementation is in FLD-DB commit `86088614d06297f5c9a44ffcc9784b33abbb0961` plus follow-up correctness/performance commits `c010333c019001bab35af29b879e5757020309ee`, `8f54b6c09396897bc88ecb5c2da6e65d634b99fe`, `08fcad22169664c2d9f1ab204278b247c2111215` and `8202c6c5b7085071f6df3d2db81389d76e4e4a84`.
+- [x C] Current-state resolution preserves Run v2 ChangeId/Origin and keeps Run v1 identity-zero semantics; field tombstones and record lifecycle tombstones remain distinct.
+- [~ C] Bind this snapshot to BIN-SYNC `IDataProvider`, including FLD Outbox local feed, durable published-origin stamping, key resolution and current-state lookup. Durable FULL_REPLACE source-generation recovery across sender restart remains open.
+- [~ T] Snapshot/compaction concurrency, ordered page retry, tombstone mapping, mixed Run v1/v2, release-on-dispose and cross-repository host build tests remain deferred. No build/test result is claimed.
+- [~ C] Generic Storage page/run/WAL physical-format decision and host transport/session scheduler remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
