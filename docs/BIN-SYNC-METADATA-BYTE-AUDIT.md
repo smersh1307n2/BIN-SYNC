@@ -64,7 +64,7 @@ Each operation's 65-byte fixed part is author[16] + ChangeId[16] + author epoch[
 | Per-author scan/ACK cursor | 68 | 60 | One per (namespace, original author) that has been scanned |
 | JournalSeq/ChangeId/OutboxSeq mapping | 76 | 24 | One per unacknowledged relayed ChangeId |
 
-The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian OutboxSeq[8]. The value is JournalSeq[8] + ChangeId[16]. The cursor value is marker[4] (RPM2) + scanned JournalSeq[8] + ACKed OutboxSeq[8] + ACKed JournalSeq[8] + mapping-set digest[32]. The digest is XOR(SHA-256(key || value)) over all retained mapping rows; append/prune updates rows and digest in one atomic Storage batch, and restart recomputes it from bounded pages.
+The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian OutboxSeq[8]. The value is JournalSeq[8] only; ChangeId remains solely in BIN-SYNC's global ChangeId ledger and is resolved before AppendPage. The cursor value is marker[4] (RPM3) + scanned JournalSeq[8] + ACKed OutboxSeq[8] + ACKed JournalSeq[8] + mapping-set digest[32]. The digest is XOR(SHA-256(key || value)) over all retained mapping rows; append/prune updates rows and digest in one atomic Storage batch, and restart recomputes it from bounded pages.
 
 The mapping index is intentionally proportional to unacknowledged relay mappings. It is not a per-peer copy and contains no operation payload, fingerprint, receipt or OriginSequence. ACK translation is lower-bound O(log N); restart reads mapping rows in OutboxSeq order through 1,024-entry pages. Mapping rows are deleted only after FLD durably accepts the translated JournalSeq ACK.
 
@@ -107,7 +107,7 @@ Source: FLD-DB `src/Fld1.Engine/Outbox/OutboxLog.cs` on `fix/crash-consistency-o
 - Sidecars per namespace: ACK 12 bytes; materialized-state watermark 20 bytes; consumer lease 36 bytes.
 - In-memory sparse index stride: one (OutboxSeq[8], file offset[8]) point per 64 records, excluding collection/runtime overhead.
 
-The FLD Outbox is the unpublished local-intent source and already carries ChangeId, RecordId, author and HLC with the payload. The BIN-SYNC provenance map adds only the 100-byte key/value row per unacknowledged relay identity plus one 60-byte per-author cursor; it must not copy the payload or replace the Outbox. FLD's Outbox compaction still depends on the WAL seal/checkpoint horizon and is independent of BIN-SYNC mapping pruning.
+The FLD Outbox is the unpublished local-intent source and already carries ChangeId, RecordId, author and HLC with the payload. The BIN-SYNC provenance map adds only the 84-byte key/value row per unacknowledged relay identity plus one 60-byte per-author cursor; it must not copy the payload or replace the Outbox. FLD's Outbox compaction still depends on the WAL seal/checkpoint horizon and is independent of BIN-SYNC mapping pruning.
 
 **Not included:** ApplyJournal record sizes, WAL record/segment framing, manifest/run overhead and Fld1.Storage page/index/write amplification. Those require a source-complete audit of the corresponding FLD formats; do not infer them from Outbox sizes.
 
@@ -169,7 +169,7 @@ Source: FLD-DB `src/Fld1.Storage/Engine/StorageDatabase.cs`, `StorageSnapshotFil
 - Snapshot footer: 4-byte CRC32C over the complete snapshot body.
 - Per-partition manifest: 48 bytes (`FLDM`) with its own CRC32C and snapshot length/CRC reference.
 
-Therefore a retained provenance mapping row occupies **108 bytes** in the compacted snapshot (8 + 76-byte key + 24-byte value); its per-author cursor occupies **136 bytes** (8 + 68-byte key + 60-byte RPM2 value). The snapshot header/footer/manifest are amortized per snapshot/partition.
+Therefore a retained provenance mapping row occupies **92 bytes** in the compacted snapshot (8 + 76-byte key + 8-byte value); its per-author cursor occupies **136 bytes** (8 + 68-byte key + 60-byte RPM3 value). The snapshot header/footer/manifest are amortized per snapshot/partition.
 
 ### Storage WAL write-batch framing
 
