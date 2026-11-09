@@ -35,6 +35,20 @@ public sealed class StorageMetadataPublicationMode : IProviderPublicationMode
         return ReferenceEquals(_store, store);
     }
 
+    public bool IsBoundTo(
+        StorageMetadataStore store,
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        return ReferenceEquals(_store, store) &&
+            string.Equals(_scopeId, scopeId, StringComparison.Ordinal) &&
+            _localReplica == localReplica &&
+            _namespaceId == namespaceId;
+    }
+
     public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark)
         => _store.TryGetProviderPublicationCutover(
             _scopeId, _localReplica, _namespaceId, out nodeOutboxHighWatermark);
