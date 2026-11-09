@@ -148,7 +148,9 @@ public sealed class StorageRelayProvenanceMap
     /// <summary>
     /// Translates BIN-SYNC's per-author safe OutboxSeq into FLD's safe-through
     /// JournalSeq. The first source journal containing an unacknowledged OutboxSeq
-    /// is retained in full; all earlier source journals are safe.
+    /// is retained in full; all earlier source journals are safe. An empty scanned tail
+    /// may advance after an already-positive durable Outbox ACK; zero never authorizes
+    /// a positive FLD ACK.
     /// </summary>
     public ulong TranslateSafeOutboxSequence(int namespaceId, NodeId author, ulong safeOutboxSeq)
     {
