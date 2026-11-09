@@ -42,6 +42,10 @@ public interface IMetadataOutboundChangeIdentityStore
     /// <summary>Returns the durable fingerprint when the ChangeId is already frozen as a local outbound operation.</summary>
     bool TryGetOutboundChangeFingerprint(string scopeId, NodeId localReplica, int namespaceId,
         BatchId changeId, out ReadOnlyMemory<byte> fingerprint);
+
+    /// <summary>Returns the immutable origin already assigned to a frozen local ChangeId.</summary>
+    bool TryGetOutboundChangeOrigin(string scopeId, NodeId localReplica, int namespaceId,
+        BatchId changeId, out OperationOrigin origin);
 }
 
 public interface IMetadataStoreSnapshot : IDisposable
