@@ -540,3 +540,14 @@ The authority sender computes the maximum HLC while scanning the same immutable 
 ## 10.33. Joining-member promotion binds FRA2 to the prior RCP2 HLC floor
 
 A Joining member's signed installed ACK is not sufficient for promotion merely because generation and digest match. Before the authority writes the next roster with that member marked Active, it now also requires the ACK's `HlcWallFloor` and `HlcLogicalFloor` to equal the corresponding floors in the already accepted FULL_REPLACE-bound RCP2 for the same generation/digest. This proves that the joining copy installed the same HLC horizon as the existing Active roster, not just bytes with an identical digest under an inconsistent reported floor. A mismatch leaves the member Joining and fails closed.
+
+
+## 10.34. v3.1 capability dependency matrix
+
+v3.1 message families are capability-gated symmetrically on both send and receive paths:
+
+- NRS2 namespace roster: `NamespaceRosterV31`;
+- OFR2 member frontier and RCP2 authority checkpoint: `NamespaceRosterV31 | OriginFrontierV31`;
+- FULL_REPLACE BEGIN/READY/CHUNK/COMMIT/ABORT and FRA2 installed ACK: `NamespaceRosterV31 | FullReplaceV31`.
+
+A session may negotiate a partial v3.1 capability intersection, but a dependent operation must fail closed before it touches the transport. In particular, OFR2/RCP2 cannot be used without the roster capability that binds member identity/status/transport epoch, and FULL_REPLACE/FRA2 cannot be used without the same roster context. v3.0-only frames are unaffected. Destructive GC still requires the full namespace evidence and separate retention proof; negotiation alone never authorizes deletion.
