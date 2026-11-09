@@ -603,7 +603,7 @@ public sealed class StorageSyncCoordinator
             throw new NotSupportedException("ChangeId GC requires the durable StorageMetadataStore implementation.");
         return storageMetadata.CompactChangeLedger(_scopeId
             ?? throw new InvalidOperationException("A durable metadata scope is required."),
-            _node.NodeId, namespaceId, limit, acquireGcLease, externalReferences);
+            _node.NodeId, namespaceId, _provider, limit, acquireGcLease, externalReferences);
     }
 
     /// <summary>Attempt fail-closed record-tombstone compaction with internal and host live-reference scans.</summary>
