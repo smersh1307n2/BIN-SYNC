@@ -1597,3 +1597,10 @@ Estimated completion (engineering assessment, not CI pass percentage):
 - Benchmarks and final acceptance: **~25%**.
 
 Overall estimate: **~75–80%**. Remaining C-pass is not a rewrite of BIN-SYNC v3: it is primarily the concrete host composition, generic Storage backend/API audit, end-to-end sample, and final metadata/format audit. After that, switch to T-pass, then O/F. Physical GC remains disabled until safe horizons for receipts, ChangeId and tombstones are proven end-to-end.
+
+### 2026-11-09 — concrete FLD host composition guide
+
+- [x C] Added `docs/FLD-BINSYNC-HOST-COMPOSITION.md` with the concrete public API binding: shared BIN-SYNC Storage partition, FLD commit lease, all-author discovery, whole-JournalSeq page projection, RPM3 source mapping, startup recovery gate, safe ACK ordering and one immutable FLD reference snapshot.
+- [x C] Audited the guide against the actual FLD public API (`ReadRelayBatchPage`, `ReadUnacknowledgedRelayAuthors`, `GetRelayJournalHighWatermark`, `AcknowledgeRelayBatches`, `AcquireCommitGuard`, `OpenReferenceSnapshot`) and BIN-SYNC gate/delegate signatures.
+- [~ C] This is a host composition recipe, not a built adapter assembly: no host executable/project is present in either repository. The actual application must bind the callbacks and use the same gate for every receive/send/ACK path. Do not add a third FLD runtime DLL or a FLD→BIN-SYNC dependency.
+- [~ T] Compile the guide's sample in the real host project and add crash-cut/reopen tests for startup reconciliation, multi-author page drain, FLD-ACK-before-RPM3-prune and scanner disposal/lock ordering.
