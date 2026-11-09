@@ -551,3 +551,8 @@ v3.1 message families are capability-gated symmetrically on both send and receiv
 - FULL_REPLACE BEGIN/READY/CHUNK/COMMIT/ABORT and FRA2 installed ACK: `NamespaceRosterV31 | FullReplaceV31`.
 
 A session may negotiate a partial v3.1 capability intersection, but a dependent operation must fail closed before it touches the transport. In particular, OFR2/RCP2 cannot be used without the roster capability that binds member identity/status/transport epoch, and FULL_REPLACE/FRA2 cannot be used without the same roster context. v3.0-only frames are unaffected. Destructive GC still requires the full namespace evidence and separate retention proof; negotiation alone never authorizes deletion.
+
+
+## 10.35. HELLO capability dependency validation
+
+The HELLO/HELLO_ACK boundary now rejects a local or remote capability set that advertises `OriginFrontierV31` or `FullReplaceV31` without `NamespaceRosterV31`. This prevents a session from being established with a known-impossible v3.1 dependency combination. Unknown future capability bits are preserved for forward compatibility, and valid v3.0/v3.1 capability payloads keep the same wire encoding. Frame APIs still enforce the same dependency masks independently before transport I/O.
