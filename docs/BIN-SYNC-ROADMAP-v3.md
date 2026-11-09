@@ -1482,3 +1482,8 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `docs/PRODUCTION-STATUS.md` now reflects current branch HEAD `57edd1f0032d24b17e51d265c16c3134472f3d66` and latest production-code commit `ea6968106e697f9d81ef94331cbf6dd986f71b29`.
 - [~ T] Latest completed code-equivalent run on `7342dc7f8634d64b8911d0ab4ff93f4750127f97`: Core 672/678 (6 stale OFR1/RCP1 + tombstone fixtures), Storage Integration 91/171 (80 provenance/OriginSequence/commit-guard fixture failures), Fuzz/Lab passed. Exact current HEAD differs only by documentation since the tested code snapshot.
 - [~ C] FullReplace receiver state machine, causal frontier/checkpoint production, retired-origin replay fence and host GC proof contracts are now marked implemented in the roadmap. The remaining cross-repository C gate is the concrete FLD Database host adapter and reference scanner; physical GC stays disabled.
+
+### 2026-11-09 — C-pass: complete FULL_REPLACE wire-vector sample
+
+- [x C] Expanded `samples/V31ControlPlaneVectors` with exact canonical vectors and encode/decode round-trips for FULL_REPLACE_CHUNK, READY, COMMIT and ABORT in addition to signed BEGIN. The sample now covers all four transfer frame payload forms alongside NRS2/OFR2/RCP2/FRA2.
+- [~ T] The sample has not yet been run on the current branch; validate the fixed bytes and signature vectors in the dedicated T pass and include it in CI sample execution.
