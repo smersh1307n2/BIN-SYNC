@@ -10,6 +10,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.37. C-pass: production-status head refreshed — 2026-11-09
+
+- [x C] Updated `docs/PRODUCTION-STATUS.md` with the current unvalidated head and the latest coordinator/provenance/sample implementation commits.
+- [x C] The historical v3.0 CI baseline remains explicitly historical; no test success is attributed to the C-pass head.
+- [~ T] Exact-head build/test matrix remains deferred until the code sweep ends.
+
 ## 0.36. C-pass: Unreleased changelog synchronized — 2026-11-09
 
 - [x C] Added the v3.1 C-pass implementation summary to `docs/CHANGELOG.md`, including RPM2 provenance mapping, persisted-row sample, byte audit, checkpoint broadcast and host integration sequencing.
