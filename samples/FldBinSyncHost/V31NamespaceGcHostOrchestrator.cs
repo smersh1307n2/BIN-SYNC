@@ -40,11 +40,31 @@ public sealed class V31NamespaceGcHostOrchestrator
     public AppliedOriginFrontierReport PublishAuthorityMemberFrontier(
         byte[] authorityMemberSeed,
         int pageSize = 1024)
-        => _coordinator.PublishAppliedOriginFrontier(
-            authorityMemberSeed,
-            _externalState,
-            _acquireHostCommitLease,
-            pageSize);
+    {
+        if (!_roundGate.Wait(0))
+            throw new InvalidOperationException(
+                "A v3.1 namespace control-plane round is already active.");
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authorityMemberSeed);
+            if (authorityMemberSeed.Length != 32)
+                throw new ArgumentException(
+                    "Ed25519 authority-member seed must be 32 bytes.",
+                    nameof(authorityMemberSeed));
+            if (pageSize <= 0 || pageSize > 4096)
+                throw new ArgumentOutOfRangeException(nameof(pageSize));
+
+            return _coordinator.PublishAppliedOriginFrontier(
+                authorityMemberSeed,
+                _externalState,
+                _acquireHostCommitLease,
+                pageSize);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
 
     /// <summary>
     /// Run one serialized authority round: send the accepted roster to each supplied
@@ -67,8 +87,25 @@ public sealed class V31NamespaceGcHostOrchestrator
         ArgumentNullException.ThrowIfNull(authoritySeed);
         if (authoritySeed.Length != 32)
             throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
+        if (authorityMemberSeed is not null && authorityMemberSeed.Length != 32)
+            throw new ArgumentException("Ed25519 authority-member seed must be 32 bytes.", nameof(authorityMemberSeed));
         if (pageSize <= 0 || pageSize > 4096)
             throw new ArgumentOutOfRangeException(nameof(pageSize));
+        if (fullReplaceGeneration.HasValue)
+        {
+            if (fullReplaceGeneration.Value == Guid.Empty ||
+                fullReplaceDigest is null ||
+                fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
+                throw new ArgumentException(
+                    "FULL_REPLACE binding requires a non-empty generation and 32-byte digest.",
+                    nameof(fullReplaceDigest));
+        }
+        else if (fullReplaceDigest is { Length: > 0 })
+        {
+            throw new ArgumentException(
+                "FULL_REPLACE digest cannot be supplied without a generation.",
+                nameof(fullReplaceDigest));
+        }
 
         SyncSession[] sessions = ValidateSessions(activeMemberSessions);
         foreach (SyncSession session in sessions)
@@ -82,8 +119,6 @@ public sealed class V31NamespaceGcHostOrchestrator
 
         if (authorityMemberSeed is not null)
         {
-            if (authorityMemberSeed.Length != 32)
-                throw new ArgumentException("Ed25519 authority-member seed must be 32 bytes.", nameof(authorityMemberSeed));
             _ = _coordinator.PublishAppliedOriginFrontier(
                 authorityMemberSeed,
                 _externalState,
