@@ -172,16 +172,20 @@ public sealed class StorageSyncCoordinator
     /// pending provider drafts as a barrier; drafts never consume OriginSequence. Call after local freeze and remote apply.
     /// </summary>
     public AppliedOriginFrontierReport PublishAppliedOriginFrontier(
-        byte[] memberSeed, int pageSize = 1024, bool finalForAuthor = false, uint finalAuthorEpoch = 0)
+        byte[] memberSeed, IApplicationGcReferenceScanner externalState,
+        Func<IDisposable?> acquireHostCommitLease,
+        int pageSize = 1024, bool finalForAuthor = false, uint finalAuthorEpoch = 0)
     {
         ArgumentNullException.ThrowIfNull(memberSeed);
+        ArgumentNullException.ThrowIfNull(externalState);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
         if (memberSeed.Length != 32)
             throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
 
         // The draft count and applied frontier must describe one application
         // commit boundary even for non-final reports; otherwise a concurrent local
         // write could race a zero-draft report used by a FULL_REPLACE checkpoint.
-        using IDisposable commitGuard = AcquireApplicationCommitGuard();
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
         lock (_gate)
         {
             if (_metadataStore is not StorageMetadataStore metadataStore ||
@@ -215,9 +219,15 @@ public sealed class StorageSyncCoordinator
                 throw new ArgumentException("finalAuthorEpoch is only valid when finalForAuthor is true.", nameof(finalAuthorEpoch));
             }
 
-            ulong unpublishedDraftCount = 0;
-            ulong maxDraftHlcWall = 0;
-            uint maxDraftHlcLogical = 0;
+            ApplicationDraftHorizon hostDrafts =
+                externalState.ReadUnpublishedLocalDraftHorizon(_scopeId, _node.NodeId, _namespaceId);
+            if (hostDrafts.Count == 0 &&
+                (hostDrafts.MaxHlcWall != 0 || hostDrafts.MaxHlcLogical != 0))
+                throw new InvalidDataException("Host draft scanner returned an HLC maximum for an empty draft set.");
+
+            ulong unpublishedDraftCount = hostDrafts.Count;
+            ulong maxDraftHlcWall = hostDrafts.MaxHlcWall;
+            uint maxDraftHlcLogical = hostDrafts.MaxHlcLogical;
             ulong afterSequence = 0;
             while (true)
             {
@@ -390,13 +400,17 @@ public sealed class StorageSyncCoordinator
 
     /// <summary>Publish and persist the local OFR2 report before sending it to the authority peer.</summary>
     public async Task<AppliedOriginFrontierReport> PublishAndSendAppliedOriginFrontierAsync(
-        SyncSession session, byte[] memberSeed, int pageSize = 1024,
-        ulong frameSequence = 1, bool finalForAuthor = false, uint finalAuthorEpoch = 0,
+        SyncSession session, byte[] memberSeed,
+        IApplicationGcReferenceScanner externalState,
+        Func<IDisposable?> acquireHostCommitLease,
+        int pageSize = 1024, ulong frameSequence = 1,
+        bool finalForAuthor = false, uint finalAuthorEpoch = 0,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         AppliedOriginFrontierReport report = PublishAppliedOriginFrontier(
-            memberSeed, pageSize, finalForAuthor, finalAuthorEpoch);
+            memberSeed, externalState, acquireHostCommitLease,
+            pageSize, finalForAuthor, finalAuthorEpoch);
         await session.SendOriginFrontierAsync(report, memberSeed, frameSequence, ct).ConfigureAwait(false);
         return report;
     }
