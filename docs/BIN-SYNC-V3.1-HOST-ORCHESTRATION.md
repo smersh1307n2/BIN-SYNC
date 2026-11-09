@@ -1,6 +1,6 @@
 # BIN-SYNC v3.1 host orchestration
 
-This document is the application-owned orchestration pattern for the explicit v3.1 coordinator APIs. BIN-SYNC core does not start timers, own background workers or decide transport cadence. The host owns session lifetime, cancellation, one receive loop per session, frame sequence allocation and retry policy.
+This document is the application-owned orchestration pattern for the explicit v3.1 coordinator APIs. BIN-SYNC core does not start timers, own background workers or decide transport cadence. The host owns session lifetime, cancellation, one receive loop per session, frame sequence allocation and retry policy. Implementing the v3.1 APIs and adopting this safe host ordering are mandatory for project completion; this guide itself remains non-normative and does not override the addendum's wire/storage rules.
 
 ## 1. Authority round
 
@@ -75,6 +75,6 @@ A Joining member is not treated as an Active retention participant. A Retired me
 - Broadcast one accepted checkpoint object to every member in a round with `SendAcceptedRetentionCheckpointAsync`; do not mint a new checkpoint per peer.
 - Compose `AcquireApplicationCommitGuard(acquireHostCommitLease)` for FULL_REPLACE and physical GC. The host lease must cover the actual FLD/WAL/ApplyJournal source snapshot.
 - Do not enable receipt, ChangeId or tombstone/Ghost physical GC. All three proof flags remain false until the composed scanner, membership fencing and adversarial T-pass are complete.
-- The synchronized-FLD JournalSeq provenance adapter is a later FLD integration phase; do not bridge directly to the current pre-extraction `FldDatabase` project graph. See `FLD-DB-INTEGRATION-CONTRACT.md` §9.6.
+- The optional `samples/FldBinSyncHost` now implements the FLD relay-page/RPM3/publication/ACK/reference-scan adapter around a preconstructed `StorageSyncCoordinator`. The full `FldDatabase`→`IDataProvider` snapshot/local-feed/remote-apply bridge is still an open C-pass item; do not claim the relay sample alone is a complete synchronized-FLD application. See `FLD-DB-INTEGRATION-CONTRACT.md` §§9.6–9.8.
 
 This is an orchestration recipe, not a background scheduler implementation. The application chooses cadence and transport policy while protocol/storage code remains deterministic and explicitly invoked.
