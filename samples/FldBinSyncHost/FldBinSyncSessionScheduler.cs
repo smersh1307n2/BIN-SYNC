@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using BinSync;
 using BinSync.Storage;
 
@@ -19,10 +18,11 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
         public readonly SemaphoreSlim Receive = new(1, 1);
     }
 
+    private readonly object _lifecycleGate = new();
     private readonly FldBinSyncHostAdapter _adapter;
-    private readonly ConcurrentDictionary<SyncSession, SessionGates> _sessionGates =
+    private readonly Dictionary<SyncSession, SessionGates> _sessionGates =
         new(ReferenceEqualityComparer.Instance);
-    private volatile bool _disposed;
+    private bool _disposed;
 
     public FldBinSyncSessionScheduler(FldBinSyncHostAdapter adapter)
         => _adapter = adapter ?? throw new ArgumentNullException(nameof(adapter));
@@ -136,12 +136,15 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        if (_disposed) return ValueTask.CompletedTask;
-        _disposed = true;
-        // Do not dispose per-session semaphores while an inbound callback may be
-        // waiting for that same session's send gate. Active calls retain their gate
-        // objects until completion; clearing the registry releases idle gates to GC.
-        _sessionGates.Clear();
+        lock (_lifecycleGate)
+        {
+            if (_disposed) return ValueTask.CompletedTask;
+            _disposed = true;
+            // Do not dispose per-session semaphores while an inbound callback may be
+            // waiting for that same session's send gate. Active calls retain their gate
+            // objects until completion; clearing the registry releases idle gates to GC.
+            _sessionGates.Clear();
+        }
         return ValueTask.CompletedTask;
     }
 
@@ -198,8 +201,15 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
 
     private SessionGates GetGates(SyncSession session)
     {
-        ThrowIfDisposed();
-        return _sessionGates.GetOrAdd(session, static _ => new SessionGates());
+        lock (_lifecycleGate)
+        {
+            ThrowIfDisposed();
+            if (_sessionGates.TryGetValue(session, out SessionGates? gates))
+                return gates;
+            gates = new SessionGates();
+            _sessionGates.Add(session, gates);
+            return gates;
+        }
     }
 
     private void ThrowIfDisposed()
