@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using BinSync;
 using Fld1.Engine.Db;
 using Fld1.Engine.Outbox;
+using Fld1.Engine.Storage;
 
 namespace BinSync.FldHost;
 
