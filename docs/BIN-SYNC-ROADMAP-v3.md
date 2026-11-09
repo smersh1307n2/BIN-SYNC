@@ -1670,3 +1670,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created `backup/cpass-2026-11-09-provider-snapshot-streaming` at `7c8e160352c08756721a278dac25c63e90e8b541`.
 - [~ T] Verify merge ordering, Reset/absolute-offset behavior, cursor exhaustion/disposal, record-tombstone ordering and snapshot lifetime while commits/checkpoints advance.
 - [~ O] Benchmark snapshot sender allocations and throughput at 1k/100k/1m rows; compare against prior page-buffer implementation before claiming improvement.
+
+
+## 0.91. C-pass: preserve FLD1 WAL format while reusing Storage writer fence — 2026-11-09
+
+- [x C] Added public `StorageDatabase.AcquirePartitionLease` / `StoragePartitionLease` to `Fld1.Storage`. It reuses the exact cross-process `WalWriterFence` used by `StorageDatabase.Open` without opening a generic Storage WAL or changing any FLD1 on-disk bytes.
+- [x C] FLD `FldDatabase.Open` now acquires one root-wide reserved partition lease before manifest load, WAL recovery, Outbox/ApplyJournal open and run reconciliation; `Dispose` releases it only after all FLD file handles are closed. Multiple namespace handles for one physical root cannot race the shared manifest/runs.
+- [x C] FLD Storage and BIN-SYNC vendor remain byte-identical at blob `4582c446ef11f308f9442c59438c5aca691614a8`.
+- [x C] Created matching recovery branches `backup/cpass-2026-11-09-fl-database-lease` in both repositories (BIN-SYNC `88de4289abaaf9b954f5c54be4d34590733f9f55`, FLD-DB `408399e4a465aecfa21c7dde245c297c85595191`).
+- [~ T] Verify same-root second process/second namespace rejection, release after failed open, release after disposal from another thread, abandoned-owner recovery and no generic WAL files/format mutation.
+- [~ C] This is the first shared ownership seam, not a completed `FldDatabase` migration to `StorageDatabase`. FLD-specific WAL/Run/Manifest encoding remains authoritative and unchanged pending a separate format/recovery ADR.
