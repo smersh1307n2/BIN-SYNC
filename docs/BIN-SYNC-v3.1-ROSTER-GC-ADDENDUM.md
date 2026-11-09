@@ -127,7 +127,7 @@ A member signs a bounded vector of contiguous, durably applied origin prefixes:
 - IssuedOriginCount u16 followed by entries sorted by OriginAuthorEpoch: OriginAuthorEpoch u32, IssuedOriginSequence u64, MaxIssuedHlcWall u64, MaxIssuedHlcLogical u32;
 - Ed25519 signature[64] by the member key bound in the accepted roster over `BIN-SYNC/APPLIED-ORIGIN-FRONTIER/v2 || canonical-payload`.
 
-A frontier is an assertion that every operation in that origin stream through the sequence has been durably applied, not merely received. The member must persist the application before signing. Missing author entries mean zero. Reports must be monotonic; regression, wrong roster generation, wrong member epoch or unknown member key is rejected. A member's IssuedOrigins must cover every locally-authored applied epoch and cannot be below its own applied frontier. A final report requires zero unpublished drafts and is terminal.
+A frontier is an assertion that every operation in that origin stream through the sequence has been durably applied, not merely received. The member must persist the application before signing. Missing author entries mean zero. Reports must be monotonic; regression, wrong roster generation, wrong member epoch or unknown member key is rejected. Across successive reports for one member/roster generation, every previously reported IssuedOrigins epoch must remain present, IssuedOriginSequence must not decrease, and the maximum issued HLC (wall/logical tuple) must not decrease. A member's IssuedOrigins must cover every locally-authored applied epoch and cannot be below its own applied frontier. A final report requires zero unpublished drafts and is terminal.
 
 ### 4.3 RetentionCheckpoint (`RCP2`)
 
