@@ -2,14 +2,14 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
-- BIN-SYNC `feature/fld-external-storage` HEAD: `545041f4d35a9e9ed5414d1619ffedba6559312d`. Latest C changes: validate each FRA2 HLC floor against the exact source snapshot; hold an in-flight prepared-snapshot lease across asynchronous FULL_REPLACE transfer so concurrent Dispose cannot invalidate pages.
-- FLD-DB `fix/crash-consistency-outbox` latest inspected HEAD: `d432d0a1f30720a352dacff76bfd7ffee4edd55f`; no FLD source code change in these slices.
+- BIN-SYNC `feature/fld-external-storage` latest code head: `10a4e17492641a3911acdbdf8e4aadc865dad371`. Latest C changes bind FRA2 to the exact source-snapshot HLC floor, retain prepared FULL_REPLACE snapshots until all in-flight sends release their lease, and require a Joining member's HLC floor to match the prior accepted RCP2 before promotion.
+- FLD-DB `fix/crash-consistency-outbox` latest inspected head: `d432d0a1f30720a352dacff76bfd7ffee4edd55f`; no FLD source code change in these slices.
 - **Latest completed BIN-SYNC CI for code head `d4ad36fe4fc1a3660c43cc4209a71f400ed224fe`:** Build passed; v3.1 signed control-plane golden-vector job passed; Fuzz/Lab passed; Core tests failed 6/678; Storage Integration failed 80/171 on Ubuntu/macOS/Windows. Core failures remain OFR1/RCP1 legacy fixtures and one incomplete record-tombstone fixture. Integration failures remain stale provider local-draft/provenance fixtures and fake provider guard/shared-Storage contract gaps. Production validation was not relaxed.
-- The cross-repository FLD host job on that run was **skipped**, not built: `FLD_DB_READ_TOKEN` was empty, `Checkout FLD-DB integration branch` and `Build cross-repository FLD host adapter` both skipped. Do not report it as a successful adapter compile.
-- The two latest C code commits (`d0b301b` prepared snapshot transfer ref-count and `545041f` sender lease use) have not yet had exact-head CI. The previous d4ad build success and vector success do not validate them.
+- The cross-repository FLD host job on that run was **skipped**, not built: `FLD_DB_READ_TOKEN` was empty, and both FLD checkout and host adapter build steps skipped. Do not report it as a successful adapter compile.
+- Code changes after `d4ad36f` (`d0b301b`, `545041f`, `10a4e17`) have no exact-head CI result yet. The previous d4ad build/vector/Fuzz results do not validate them.
 - The optional host adapter includes contextual receive-before-ACK, relay/RPM3 publication, dual-mode ceilings, v3.1 authority/member rounds and prepared FULL_REPLACE fanout. It still does not implement the complete `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver API.
 - **Remaining C-pass:** generation-pinned FLD snapshot/local ChangeId+origin mapping, durable FULL_REPLACE source snapshot recovery across sender process restart, generic Storage ordered page/run/WAL format decision, final public/package/source/byte audit and host transport/session scheduler.
-- **Next T-pass:** exact-head build/tests; FRA2/source-HLC mismatch and concurrent-dispose cases; FULL_REPLACE fanout/retry/restart; authority/member/rejoin; all crash cuts and the three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- **Next T-pass:** exact-head build/tests; FRA2/source-HLC mismatch and concurrent-dispose cases; Joining promotion floor mismatch; FULL_REPLACE fanout/retry/restart; authority/member/rejoin; all crash cuts and the three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ---
 
