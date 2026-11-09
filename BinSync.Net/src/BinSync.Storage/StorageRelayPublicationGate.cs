@@ -27,8 +27,9 @@ public sealed class StorageRelayPublicationGate
     /// Serialize durable remote apply, all pending relay pages for all source authors,
     /// and namespace-wide downstream send. The host supplies the union of FLD's
     /// unacknowledged relay authors and the RPM3 map's existing author cursors.
-    /// The page callback returns the source high watermark observed under the same
-    /// FLD commit lease as the page read.
+    /// The sender callback receives a durable per-author sequence ceiling and must
+    /// never expose an outbound item above that ceiling. This prevents a concurrent
+    /// FLD local write from escaping before its provenance page is committed.
     /// </summary>
     public async ValueTask<bool> ApplyAndPublishAllAsync(
         StorageSyncCoordinator coordinator,
@@ -38,7 +39,7 @@ public sealed class StorageRelayPublicationGate
         Func<CancellationToken, ValueTask> applyRemoteBatch,
         Func<NodeId, StorageRelayProvenanceCursor,
             (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
-        Func<CancellationToken, ValueTask> publishReadyOutbox,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>, CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
         ValidateArguments(coordinator, map, readRelayAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
@@ -51,7 +52,8 @@ public sealed class StorageRelayPublicationGate
             try
             {
                 await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-                foreach (NodeId author in DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors))
+                NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
+                foreach (NodeId author in authors)
                 {
                     if (!DrainAllPages(
                         coordinator, map, author, acquireHostCommitLease,
@@ -70,7 +72,10 @@ public sealed class StorageRelayPublicationGate
                 throw;
             }
 
-            await publishReadyOutbox(cancellationToken).ConfigureAwait(false);
+            StorageRelayAuthorPublicationWatermark[] publicationWatermarks = authors
+                .Select(author => map.ReadPublicationWatermark(coordinator.NamespaceId, author))
+                .ToArray();
+            await publishReadyOutbox(publicationWatermarks, cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -82,7 +87,8 @@ public sealed class StorageRelayPublicationGate
     /// <summary>
     /// Startup/recovery path. Keep every namespace sender disabled while all author
     /// cursors are checked against the durable source high watermark and every remaining
-    /// source page is resolved/committed. Only then invoke the namespace sender callback.
+    /// source page is resolved/committed. The sender receives the resulting per-author
+    /// sequence ceilings and must cap all outbound reads at those values.
     /// </summary>
     public async ValueTask<bool> RecoverAndPublishAllAsync(
         StorageSyncCoordinator coordinator,
@@ -92,7 +98,7 @@ public sealed class StorageRelayPublicationGate
         Func<ulong> readSourceJournalHighWatermark,
         Func<NodeId, StorageRelayProvenanceCursor,
             (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
-        Func<CancellationToken, ValueTask> publishReadyOutbox,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>, CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
         ValidateArguments(coordinator, map, readRelayAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
@@ -124,7 +130,10 @@ public sealed class StorageRelayPublicationGate
                 throw;
             }
 
-            await publishReadyOutbox(cancellationToken).ConfigureAwait(false);
+            StorageRelayAuthorPublicationWatermark[] publicationWatermarks = authors
+                .Select(author => map.ReadPublicationWatermark(coordinator.NamespaceId, author))
+                .ToArray();
+            await publishReadyOutbox(publicationWatermarks, cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -206,19 +215,32 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
-    /// Run any other outbound batch construction/send under the same host publication
-    /// gate. Do not call this from ApplyAndPublishAllAsync/RecoverAndPublishAllAsync callbacks.
+    /// Run another outbound send under the same host publication gate, passing the
+    /// current durable per-author publication ceilings. Do not call this from the
+    /// ApplyAndPublishAllAsync/RecoverAndPublishAllAsync callbacks.
     /// </summary>
     public async ValueTask RunOutboundAsync(
-        Func<CancellationToken, ValueTask> publish,
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        Func<IReadOnlyList<NodeId>> readRelayAuthors,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>, CancellationToken, ValueTask> publish,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(readRelayAuthors);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
         ArgumentNullException.ThrowIfNull(publish);
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             EnsureReconciled();
-            await publish(cancellationToken).ConfigureAwait(false);
+            NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
+            StorageRelayAuthorPublicationWatermark[] publicationWatermarks = authors
+                .Select(author => map.ReadPublicationWatermark(coordinator.NamespaceId, author))
+                .ToArray();
+            await publish(publicationWatermarks, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -233,7 +255,7 @@ public sealed class StorageRelayPublicationGate
         Func<IDisposable?> acquireHostCommitLease,
         Func<NodeId, StorageRelayProvenanceCursor,
             (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
-        Func<CancellationToken, ValueTask> publishReadyOutbox)
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>, CancellationToken, ValueTask> publishReadyOutbox)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(map);
