@@ -10,6 +10,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.39. C-pass status head synchronized after test-plan consolidation — 2026-11-09
+
+- [x C] Refreshed `docs/PRODUCTION-STATUS.md` to the current unvalidated head after consolidating the T-pass backlog.
+- [x C] The T-pass is now enumerated in one place and remains intentionally unexecuted while C-pass work continues.
+
 ## 0.38. T-pass backlog consolidated (execution still deferred) — 2026-11-09
 
 The following is a test plan only; no tests are run in this C pass.
