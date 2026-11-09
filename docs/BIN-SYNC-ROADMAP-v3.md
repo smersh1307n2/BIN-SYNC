@@ -78,6 +78,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.83. C-pass: FLD adapter recipe preserves whole JournalSeq groups within RPM3 bound — 2026-11-09
+
+- [x C] Changed the integration recipe to read one `RelayJournalBatch` at a time, so the source map page ends on a complete JournalSeq boundary.
+- [x C] Added an explicit 4,096-operation guard before allocating the transient ChangeId array. An oversized single FLD JournalSeq group fails closed; it is not split across two durable map/cursor commits.
+- [~ C] The 4,096 bound is the current bounded adapter contract, not yet enforced at FLD remote-apply ingress. The two-DLL adapter must preserve this guard or introduce a separately proven continuation protocol before allowing larger journal groups.
+- [~ T] Test empty batch, one group at 4,096, one group at 4,097 and multi-operation same-JournalSeq ordering.
 ## 0.82. C-pass: document exact Outbox projection dependency of RPM3 resolver — 2026-11-09
 
 - [x C] Corrected the coordinator XML contract: `AppendRelayProvenancePage` resolves transient ChangeIds against **retained Node Outbox entries** to obtain OutboxSeq; the global ChangeId ledger remains the identity authority but is not itself a sequence index.
