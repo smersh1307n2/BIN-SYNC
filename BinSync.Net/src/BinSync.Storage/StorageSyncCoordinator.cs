@@ -132,7 +132,7 @@ public sealed class StorageSyncCoordinator
     /// <summary>
     /// Resolve an FLD relay page through the durable global ChangeId ledger and atomically
     /// persist its compact JournalSeq↔OutboxSeq map. Call inside
-    /// <see cref="AcquireApplicationCommitGuard(Func{IDisposable?})"/> while the FLD
+    /// <see cref="AcquireApplicationCommitGuard"/> while the FLD
     /// commit lease used to read the source page is still held.
     /// </summary>
     /// <returns>
