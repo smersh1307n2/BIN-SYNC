@@ -2044,6 +2044,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Whole-blob streaming checks the exact copied byte count in addition to SHA-256; malformed length/page geometry fails closed before a valid reader can be constructed.
 - [x C] Reader page access, full streaming/materialization and disposal share a reader gate. Disposal cannot release the page-directory pin while a read operation is in flight; independent readers remain concurrent.
 - [x C] The public directory-sync helper validates its path argument and documents the platform boundary.
+- [x C] `StorageDatabase.Open` now normalizes the partition directory to an absolute path before opening WAL/catalog files; `DirectoryPath` is stable even if the process working directory later changes.
 - [~ T] Add malformed metadata vectors around `UInt64.MaxValue`, page-count boundary, zero-length blob, simultaneous `CopyTo`/`Dispose`, concurrent independent readers and deletion while pinned. No exact-head build/test result is claimed.
 - [~ C] Continue final public API/source/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
