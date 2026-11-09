@@ -1,6 +1,6 @@
 # BIN-SYNC v3.1 signed control-plane golden vectors
 
-**Status:** deterministic reference vectors authored; C# encoder/decoder cross-check remains a T-pass gate. These vectors do not authorize physical GC.
+**Status:** deterministic v3.1 reference vectors are authored and the executable C# sample exists at `samples/V31ControlPlaneVectors`; exact-head execution, encoder/decoder cross-check, negative tamper tests and CI confirmation remain mandatory T-pass gates. These vectors are conformance fixtures for the mandatory v3.1 addendum, not an authorization for physical GC.
 
 All integers are little-endian unless stated otherwise. `B128` and NodeId are raw 16 bytes. GUIDs use RFC-4122/network byte order. Signatures are Ed25519 over UTF-8 domain string concatenated directly with canonical payload; no separator or length prefix.
 
@@ -85,6 +85,8 @@ c1aa9215a61eeb2b5ef8abd371ed23b1fda68fda1a171b5918d3e5f00e1f624133d885e8482a2e15
 ```
 
 ## Required T-pass cross-check
+
+Run `dotnet run --project samples/V31ControlPlaneVectors/V31ControlPlaneVectors.csproj -c Release` on the exact release candidate and make it a required CI sample. A successful manual source review is not a substitute for the executable result.
 
 - Instantiate the exact objects and compare `EncodePayload` byte-for-byte.
 - Compare `Sign` / `SignBegin` output byte-for-byte using the test-only seed; verify each signature with the pinned public key and correct roster context.
