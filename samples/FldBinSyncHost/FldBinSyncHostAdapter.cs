@@ -101,7 +101,7 @@ public sealed class FldBinSyncHostAdapter
             cancellationToken);
 
     /// <summary>
-    /// Drain one peer's Metadata Store outbound streams using the exact ceilings
+    /// Drain one peer's active outbound streams using the exact ceilings
     /// captured by the publication gate. Invoke this from the gate's publish callback;
     /// it cannot independently discover or widen the eligible author set.
     /// </summary>
