@@ -2046,3 +2046,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The public directory-sync helper validates its path argument and documents the platform boundary.
 - [~ T] Add malformed metadata vectors around `UInt64.MaxValue`, page-count boundary, zero-length blob, simultaneous `CopyTo`/`Dispose`, concurrent independent readers and deletion while pinned. No exact-head build/test result is claimed.
 - [~ C] Continue final public API/source/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+## 1.32. C-pass: reclaim provider snapshot generations that never published a manifest — 2026-11-09
+
+- [x C] FLD open now removes only GUID-named provider snapshot directories that lack the final `snapshot.manifest`. Such a directory could not have been returned as a durable snapshot token and therefore cannot carry a recoverable Run pin.
+- [x C] Cleanup runs after FULL_REPLACE stage-marker recovery and before Run/blob orphan collection. Directories with a valid manifest are preserved; corrupt manifests still fail closed through the pin scan and are never treated as permission to delete Runs.
+- [x C] The snapshot-root directory is flushed after successful cleanup on Linux/macOS; Windows directory-entry durability remains unclaimed.
+- [~ T] Add crash cuts before/after final manifest rename, restart cleanup of temp-only generations, preservation of valid token generations, corrupt-manifest fail-closed and interaction with sender progress pruning. No exact-head build/test result is claimed.
+- [~ C] Continue final source/API/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
