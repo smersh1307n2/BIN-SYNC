@@ -221,7 +221,7 @@ public sealed class ProviderRemoteBatchCommit
         if (applyToken == Guid.Empty) throw new ArgumentException("Apply token must be non-empty.", nameof(applyToken));
         if (senderPeer.IsZero) throw new ArgumentException("Sender peer must be non-zero.", nameof(senderPeer));
         if (issuerNodeId.IsZero) throw new ArgumentException("Batch issuer must be non-zero.", nameof(issuerNodeId));
-        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+        if ((uint)namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
         if (issuerEpoch == 0) throw new ArgumentOutOfRangeException(nameof(issuerEpoch));
         if (batchId.IsZero) throw new ArgumentException("Batch identity must be non-zero.", nameof(batchId));
