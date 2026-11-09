@@ -18,6 +18,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - **Remaining C work:** finish author-issued per-epoch horizon and retired-origin closure; complete cross-store live-reference scan and prove the application commit/GC lease covers Node/WAL/FLD state (the author-issued/retired-origin horizon and HLC floor are now represented by OFR2/NRS2/FRA2/RCP2); connect authority/member lifecycle and periodic frontier/checkpoint exchange to application orchestration; concrete application-wide commit/GC lease and cross-store live-reference scan; complete source snapshot memory path (StorageDatabase.OpenSnapshot still clones the partition); FLD JournalSeq-to-ChangeId/Origin adapter; public samples and golden vectors. Preserve the two-DLL split and no legacy API/fallback decoder.
 - **T pass is not complete.** Historical checklist entries below are execution history; this active section and latest dated execution entries supersede earlier snapshots.
 
+### C-pass continuation — 2026-11-09
+
+- [x C] Updated the test-only `VolatileMetadataStoreAdapter` to implement `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeIdentity`. It returns fingerprint and immutable non-zero Origin from the same ChangeId ledger entry, rejects identities owned by incoming routes, and fails closed for incomplete frozen identities. This restores interface completeness without weakening production validation.
+- [ ] T remains deferred: migrate provider-draft fixtures to non-zero author epoch with `OriginSequence=0`; update test providers to implement `IProviderCommitGuard`; add freeze-before-stamp crash-window coverage. The exact-head CI must be rerun after the C pass.
+- [ ] Remaining C gates: application orchestration for authority/member lifecycle and periodic frontier/checkpoint exchange; FLD JournalSeq→ChangeId adapter; public samples/golden vectors; final source-snapshot and metadata byte audits. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until the composed host live-reference proof and adversarial T pass.
+
+
 ## 1. Target architecture
 
 - One immutable published operation/payload per (scope, namespace, ChangeId), shared by every peer.
