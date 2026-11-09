@@ -261,7 +261,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!snapshot.TryGet(stateKey, out byte[]? encoded))
                 throw new InvalidDataException("Prepared FULL_REPLACE generation index references a missing state row.");
             state = DecodePreparedFullReplaceSnapshot(encoded!);
-            state = state with { Generation = generation };
+            if (state.Generation != generation)
+                throw new InvalidDataException("Prepared FULL_REPLACE state key and value generation differ.");
             return true;
         }
     }
@@ -357,43 +358,45 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     private static byte[] EncodePreparedFullReplaceSnapshot(PreparedFullReplaceSnapshotState state)
     {
-        int length = checked(48 + state.ManifestBytes.Length + 32);
+        int length = checked(64 + state.ManifestBytes.Length + 32);
         byte[] bytes = new byte[length];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, PreparedFullReplaceMagic);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), PreparedFullReplaceVersion);
-        state.SnapshotToken.TryWriteBytes(bytes.AsSpan(8, 16));
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(24), state.SourceFeedWatermark);
-        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(32), state.HlcWallFloor);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(40), state.HlcLogicalFloor);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(44), checked((uint)state.ManifestBytes.Length));
-        state.ManifestBytes.CopyTo(bytes, 48);
+        state.Generation.TryWriteBytes(bytes.AsSpan(8, 16));
+        state.SnapshotToken.TryWriteBytes(bytes.AsSpan(24, 16));
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(40), state.SourceFeedWatermark);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(48), state.HlcWallFloor);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(56), state.HlcLogicalFloor);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(60), checked((uint)state.ManifestBytes.Length));
+        state.ManifestBytes.CopyTo(bytes, 64);
         SHA256.HashData(bytes.AsSpan(0, length - 32)).CopyTo(bytes, length - 32);
         return bytes;
     }
 
     private static PreparedFullReplaceSnapshotState DecodePreparedFullReplaceSnapshot(byte[] bytes)
     {
-        if (bytes.Length < 80 ||
+        if (bytes.Length < 96 ||
             BinaryPrimitives.ReadUInt32LittleEndian(bytes) != PreparedFullReplaceMagic ||
             BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(4)) != PreparedFullReplaceVersion ||
             BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6)) != 0)
             throw new InvalidDataException("Prepared FULL_REPLACE state header is invalid.");
-        uint manifestLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(44));
-        if (manifestLength == 0 || manifestLength > 4096 || 48L + manifestLength + 32 != bytes.Length)
+        Guid generation = new(bytes.AsSpan(8, 16));
+        uint manifestLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(60));
+        if (generation == Guid.Empty || manifestLength == 0 || manifestLength > 4096 || 64L + manifestLength + 32 != bytes.Length)
             throw new InvalidDataException("Prepared FULL_REPLACE state length is invalid.");
         byte[] actualHash = SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32));
         if (!CryptographicOperations.FixedTimeEquals(actualHash, bytes.AsSpan(bytes.Length - 32)))
             throw new InvalidDataException("Prepared FULL_REPLACE state checksum mismatch.");
-        Guid snapshotToken = new(bytes.AsSpan(8, 16));
+        Guid snapshotToken = new(bytes.AsSpan(24, 16));
         if (snapshotToken == Guid.Empty)
             throw new InvalidDataException("Prepared FULL_REPLACE state has an empty snapshot token.");
         return new PreparedFullReplaceSnapshotState(
-            Guid.Empty,
+            generation,
             snapshotToken,
-            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(24)),
-            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(32)),
-            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(40)),
-            bytes.AsSpan(48, (int)manifestLength).ToArray());
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(40)),
+            BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(48)),
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(56)),
+            bytes.AsSpan(64, (int)manifestLength).ToArray());
     }
 
     private static byte[] EncodePreparedSnapshotIndex(Guid[] generations)
