@@ -47,17 +47,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
     private sealed class ProviderSnapshotState : IDisposable
     {
-        private const int ScanPageSize = 1024;
         private readonly StorageSnapshot _snapshot;
         private readonly Guid _activeGeneration;
         private readonly byte[] _fieldPrefix;
         private readonly byte[] _recordTombstonePrefix;
         private StorageSnapshot.PrefixCursor _fieldCursor;
         private StorageSnapshot.PrefixCursor _recordTombstoneCursor;
-        private StorageEntry[] _fieldPage = Array.Empty<StorageEntry>();
-        private StorageEntry[] _recordTombstonePage = Array.Empty<StorageEntry>();
-        private int _fieldPageIndex;
-        private int _recordTombstonePageIndex;
         private ProviderMutation? _fieldMutation;
         private ProviderMutation? _recordTombstoneMutation;
         private bool _disposed;
@@ -113,10 +108,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         public void Reset()
         {
             EnsureOpen();
-            _fieldPage = Array.Empty<StorageEntry>();
-            _recordTombstonePage = Array.Empty<StorageEntry>();
-            _fieldPageIndex = 0;
-            _recordTombstonePageIndex = 0;
             _fieldCursor.Dispose();
             _recordTombstoneCursor.Dispose();
             _fieldCursor = _snapshot.OpenPrefixCursor(_fieldPrefix);
@@ -133,23 +124,20 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             _fieldCursor.Dispose();
             _recordTombstoneCursor.Dispose();
             _snapshot.Dispose();
-            _fieldPage = Array.Empty<StorageEntry>();
-            _recordTombstonePage = Array.Empty<StorageEntry>();
             _fieldMutation = null;
             _recordTombstoneMutation = null;
         }
 
         private bool TryPeekField(out ProviderMutation? mutation)
         {
-            EnsureFieldPage();
-            if (_fieldPageIndex >= _fieldPage.Length)
-            {
-                mutation = null;
-                return false;
-            }
+            EnsureOpen();
             if (_fieldMutation is null)
             {
-                StorageEntry row = _fieldPage[_fieldPageIndex];
+                if (!_fieldCursor.TryReadNext(out StorageEntryView row))
+                {
+                    mutation = null;
+                    return false;
+                }
                 ProviderMutation decoded = DecodeMutation(row.Value);
                 ValidateGenerationEntry(_activeGeneration, row, decoded);
                 _fieldMutation = decoded;
@@ -160,15 +148,14 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
 
         private bool TryPeekRecordTombstone(out ProviderMutation? mutation)
         {
-            EnsureRecordTombstonePage();
-            if (_recordTombstonePageIndex >= _recordTombstonePage.Length)
-            {
-                mutation = null;
-                return false;
-            }
+            EnsureOpen();
             if (_recordTombstoneMutation is null)
             {
-                StorageEntry row = _recordTombstonePage[_recordTombstonePageIndex];
+                if (!_recordTombstoneCursor.TryReadNext(out StorageEntryView row))
+                {
+                    mutation = null;
+                    return false;
+                }
                 ProviderMutation decoded = DecodeMutation(row.Value);
                 ValidateGenerationEntry(_activeGeneration, row, decoded);
                 _recordTombstoneMutation = decoded;
@@ -177,33 +164,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             return true;
         }
 
-        private void EnsureFieldPage()
-        {
-            if (_fieldPageIndex < _fieldPage.Length) return;
-            _fieldPage = _fieldCursor.ReadPage(ScanPageSize).ToArray();
-            _fieldPageIndex = 0;
-            _fieldMutation = null;
-        }
+        private void ConsumeField() => _fieldMutation = null;
 
-        private void EnsureRecordTombstonePage()
-        {
-            if (_recordTombstonePageIndex < _recordTombstonePage.Length) return;
-            _recordTombstonePage = _recordTombstoneCursor.ReadPage(ScanPageSize).ToArray();
-            _recordTombstonePageIndex = 0;
-            _recordTombstoneMutation = null;
-        }
-
-        private void ConsumeField()
-        {
-            _fieldPageIndex++;
-            _fieldMutation = null;
-        }
-
-        private void ConsumeRecordTombstone()
-        {
-            _recordTombstonePageIndex++;
-            _recordTombstoneMutation = null;
-        }
+        private void ConsumeRecordTombstone() => _recordTombstoneMutation = null;
 
         private void EnsureOpen() => ObjectDisposedException.ThrowIf(_disposed, this);
     }
