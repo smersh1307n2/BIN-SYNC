@@ -128,8 +128,20 @@ public interface IProviderPublishedOriginStore
 /// durable references outside BIN-SYNC's own Storage database. Call only while
 /// the caller's composed application commit lease is held; exceptions fail closed.
 /// </summary>
+public readonly record struct ApplicationDraftHorizon(
+    ulong Count, ulong MaxHlcWall, uint MaxHlcLogical);
+
 public interface IApplicationGcReferenceScanner
 {
+    /// <summary>
+    /// Return all host-local operations not yet frozen into BIN-SYNC immutable
+    /// outbound metadata. Include WAL commits beyond the Outbox materialization
+    /// watermark and unacknowledged FLD Outbox entries; never use WAL CommitSeq,
+    /// JournalSeq or OutboxSeq as BIN-SYNC OriginSequence.
+    /// </summary>
+    ApplicationDraftHorizon ReadUnpublishedLocalDraftHorizon(
+        string scopeId, NodeId localReplica, int namespaceId);
+
     bool HasExternalReceiptReference(
         string scopeId, NodeId localReplica, int namespaceId,
         NodeId senderPeer, uint authorEpoch, uint transportPeerEpoch, BatchId batchId);
