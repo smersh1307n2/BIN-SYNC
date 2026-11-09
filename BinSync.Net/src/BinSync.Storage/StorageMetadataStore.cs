@@ -295,6 +295,25 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for ChangeId GC.");
 
+            // Build the live identity set once. The previous per-candidate LINQ scans
+            // multiplied retained relay/outbound/pending rows by the GC batch size.
+            if (current.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                return 0;
+            var liveChangeIds = new HashSet<BatchId>();
+            foreach (var stream in current.Relay)
+                if (stream.Key.NamespaceId == namespaceId)
+                    foreach (var item in stream.Value)
+                        liveChangeIds.Add(item.ChangeId);
+            foreach (var stream in current.Outbound)
+                if (stream.Key.NamespaceId == namespaceId)
+                    foreach (var item in stream.Value)
+                        liveChangeIds.Add(item.ChangeId);
+            foreach (PendingApplyValue pending in current.PendingApplies.Values)
+                if (pending.Batch.NamespaceId == namespaceId)
+                    foreach (MetadataOperation operation in pending.Batch.Operations)
+                        liveChangeIds.Add(operation.ChangeId);
+
             var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(Math.Min(limit, current.ChangeLedger.Count));
             foreach (var pair in current.ChangeLedger)
             {
@@ -306,7 +325,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
                         roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
                     continue;
-                if (HasLiveChangeIdReference(current, namespaceId, pair.Key.ChangeId) ||
+                if (liveChangeIds.Contains(pair.Key.ChangeId) ||
                     externalReferences.HasExternalChangeIdReference(scopeId, localReplica, namespaceId, pair.Key.ChangeId))
                     continue;
 
@@ -368,6 +387,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
 
+            var pendingReceiptKeys = new HashSet<ReceiptKey>();
+            foreach (PendingApplyValue pending in current.PendingApplies.Values)
+            {
+                MetadataIncomingBatch batch = pending.Batch;
+                pendingReceiptKeys.Add(new ReceiptKey(
+                    batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId));
+            }
+
             var candidates = new List<ReceiptKey>(Math.Min(limit, current.Receipts.Count));
             foreach (var pair in current.Receipts)
             {
@@ -389,11 +416,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     receive.CursorEnd < receipt.CursorEnd ||
                     !current.ReceiveChains.ContainsKey(chainKey))
                     continue;
-                if (current.PendingApplies.Values.Any(pending =>
-                    pending.Batch.SenderPeer == key.Sender &&
-                    pending.Batch.SenderEpoch == key.Epoch &&
-                    pending.Batch.NamespaceId == key.NamespaceId &&
-                    pending.Batch.BatchId == key.BatchId))
+                if (pendingReceiptKeys.Contains(key))
                     continue;
                 if (externalReferences.HasExternalReceiptReference(
                     scopeId, localReplica, namespaceId, key.Sender, key.Epoch,
