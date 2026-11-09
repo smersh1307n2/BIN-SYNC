@@ -51,17 +51,23 @@ public sealed class DelegateApplicationGcReferenceScan : IApplicationGcReference
         Func<BatchId, bool> hasChangeId,
         Func<RecordId, BatchId, bool> hasRecord)
     {
-        _hostCommitLease = hostCommitLease ?? throw new ArgumentNullException(nameof(hostCommitLease));
-        _snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
+        ArgumentNullException.ThrowIfNull(hostCommitLease);
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(hasReceipt);
+        ArgumentNullException.ThrowIfNull(hasChangeId);
+        ArgumentNullException.ThrowIfNull(hasRecord);
         if (unpublishedLocalDraftHorizon.Count == 0 &&
             (unpublishedLocalDraftHorizon.MaxHlcWall != 0 ||
              unpublishedLocalDraftHorizon.MaxHlcLogical != 0))
             throw new ArgumentException("An empty draft horizon cannot have a non-zero HLC maximum.",
                 nameof(unpublishedLocalDraftHorizon));
+
+        _hostCommitLease = hostCommitLease;
+        _snapshot = snapshot;
         UnpublishedLocalDraftHorizon = unpublishedLocalDraftHorizon;
-        _hasReceipt = hasReceipt ?? throw new ArgumentNullException(nameof(hasReceipt));
-        _hasChangeId = hasChangeId ?? throw new ArgumentNullException(nameof(hasChangeId));
-        _hasRecord = hasRecord ?? throw new ArgumentNullException(nameof(hasRecord));
+        _hasReceipt = hasReceipt;
+        _hasChangeId = hasChangeId;
+        _hasRecord = hasRecord;
     }
 
     public ApplicationDraftHorizon UnpublishedLocalDraftHorizon { get; }
