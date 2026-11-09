@@ -82,7 +82,7 @@ public partial class SyncSession
     public async Task<FullReplaceInstalledAck> ReceiveFullReplaceInstalledAckAsync(
         NamespaceRosterCertificate acceptedRoster, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceAck, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceAck);
