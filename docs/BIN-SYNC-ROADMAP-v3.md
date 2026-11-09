@@ -10,6 +10,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.46. C-pass: public sample catalog aligned with compact map — 2026-11-09
+
+- [x C] Updated `samples/README.md` to describe the JournalSeq↔OutboxSeq sequence map and explicitly state that ChangeId remains in the global ledger, not in the provenance rows.
+- [~ T] Run the sample and verify its RPM3 row bytes against the v3 golden vector.
+
 ## 0.45. C-pass: eliminate duplicated ChangeId from provenance rows (RPM3) — 2026-11-09
 
 - [x C] Reworked `StorageRelayProvenanceMap` to persist only the sequence pair: OutboxSeq in the ordered key and JournalSeq in the value. ChangeId remains solely in the durable global BIN-SYNC ChangeId ledger; the host must resolve every FLD ChangeId through `Node.TryResolveOutboxSequences` before appending the page.
