@@ -1,6 +1,6 @@
 # BIN-SYNC v3.1 host orchestration
 
-This document is the application-owned orchestration pattern for the explicit v3.1 coordinator APIs. BIN-SYNC core does not start timers, own background workers or decide transport cadence. The host owns session lifetime, cancellation, one receive loop per session, frame sequence allocation and retry policy. Implementing the v3.1 APIs and adopting this safe host ordering are mandatory for project completion; this guide itself remains non-normative and does not override the addendum's wire/storage rules.
+This document is the application-owned orchestration pattern for the explicit v3.1 coordinator APIs. The optional `samples/FldBinSyncHost/V31NamespaceGcHostOrchestrator` now provides a reusable one-shot implementation of the authority/member round ordering below; it does not replace application-owned scheduling or transport ownership. BIN-SYNC core does not start timers, own background workers or decide transport cadence. The host owns session lifetime, cancellation, one receive loop per session, frame sequence allocation and retry policy. Implementing the v3.1 APIs and adopting this safe host ordering are mandatory for project completion; this guide itself remains non-normative and does not override the addendum's wire/storage rules.
 
 ## 1. Authority round
 
@@ -66,6 +66,17 @@ The host should schedule another round only after the prior per-session control 
 6. The authority promotes the member to Active in a new signed roster and sends it. The member accepts the Active roster, then calls `ActivateLocalAuthorEpoch` before producing local operations under the new epoch.
 
 A Joining member is not treated as an Active retention participant. A Retired member cannot silently rejoin under the old author epoch.
+
+## 4.1 Implemented host helper
+
+The optional `V31NamespaceGcHostOrchestrator` in `samples/FldBinSyncHost` exposes:
+
+- `RunAuthorityRoundAsync`: send the accepted roster to the supplied sessions, receive/accept one OFR2 per supplied session, verify the signed member identity and transport epoch match that session, publish one durable RCP2 and broadcast the same object.
+- `BroadcastAcceptedCheckpointAsync`: retry a partial broadcast using the exact already-accepted checkpoint; the coordinator rejects a superseded checkpoint and never allocates a new checkpoint sequence here.
+- `RunActiveMemberRoundAsync`: accept the authority roster, require the local member to be Active, publish/send OFR2 under the composed application barrier, then receive/accept RCP2.
+- `ResendAcceptedFrontierAsync`: resend the persisted local OFR2 without creating a new ReportSequence.
+
+The constructor takes a host-owned `Func<SyncSession, ulong>` frame-sequence allocator. The authority must call `PublishAuthorityMemberFrontier` (or supply `authorityMemberSeed` to the authority round) when it is itself an Active member. Missing Active members are not silently excluded: absent reports contribute zero in `PublishRetentionCheckpoint`. Joining members are rejected by the Active-member helper and must complete the FULL_REPLACE/installed-ACK/Active-roster sequence first.
 
 ## 4. Host scheduling and safety rules
 
