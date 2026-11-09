@@ -38,17 +38,16 @@ FLD checkout as competing type identities.
    `StorageSyncCoordinator` to it.
 2. Open one `FldDatabase` for the same namespace and construct
    `FldBinSyncHostAdapter` with the stable metadata scope.
-3. Call `PublishLocalChanges(persistNode)` to freeze the current provider feed
-   into the active outbound authority. Do this before startup recovery and before
-   each later outbound gate run. Then call `RecoverAndPublishAllAsync` before
-   enabling any sender after process startup. Its watermark set contains the local-author ceiling plus every FLD
+3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
+   enabling any sender after process startup. It freezes the provider feed into
+   the active outbound authority before startup recovery and publication. Its watermark set contains the local-author ceiling plus every FLD
    relay author's RPM3 ceiling. Before Metadata Store cutover the local ceiling
    comes from Node Outbox; after cutover it comes from Metadata Store. Use
    `PublishReadyOutboxAsync` in the callback; it selects the matching ceiling-aware
    `SyncSession.PushBatchAsync` overload from the mode captured with the ceilings.
-4. Route remote APPLY through `ApplyAndPublishAllAsync`; route subsequent
-   outbound sends through `RunOutboundAsync`. Freeze newly pending local feed
-   entries again with `PublishLocalChanges` before each gate invocation.
+4. Route remote APPLY through the `ApplyAndPublishAllAsync(persistNode, ...)`
+   overload; route subsequent outbound sends through `RunOutboundAsync(persistNode, ...)`.
+   These overloads freeze newly pending local feed entries before each gate invocation.
 5. Route safe ACK through `AcknowledgeAllAsync`. FLD's durable ACK occurs
    before RPM3 pruning.
 6. Pass `CreateReferenceScanner()` to the BIN-SYNC physical-GC/frontier and
