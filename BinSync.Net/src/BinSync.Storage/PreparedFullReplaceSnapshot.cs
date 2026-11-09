@@ -13,11 +13,15 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     internal PreparedFullReplaceSnapshot(
         IDataProvider provider,
         ProviderSnapshotHandle snapshot,
-        FullReplaceTransferProtocol.Begin manifest)
+        FullReplaceTransferProtocol.Begin manifest,
+        ulong hlcWallFloor,
+        uint hlcLogicalFloor)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         Manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
+        HlcWallFloor = hlcWallFloor;
+        HlcLogicalFloor = hlcLogicalFloor;
     }
 
     internal IDataProvider Provider
@@ -33,6 +37,9 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     public ulong RosterGeneration => Manifest.RosterGeneration;
     public ulong SourceChangeFeedWatermark => Manifest.SourceChangeFeedWatermark;
     public int ExpectedEntryCount => Manifest.ExpectedEntryCount;
+    /// <summary>Maximum HLC found in the exact immutable provider snapshot.</summary>
+    public ulong HlcWallFloor { get; }
+    public uint HlcLogicalFloor { get; }
     public byte[] Digest => Manifest.ExpectedDigest.ToArray();
     public byte[] RosterDigest => Manifest.RosterDigest.ToArray();
 
