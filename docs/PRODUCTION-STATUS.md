@@ -3,7 +3,7 @@
 ## C-pass continuation update — 2026-11-10
 
 - Latest production-code slice: `47be8895046662a06481ac097229c59e2cb2ed47` hardens durable OFR2 acceptance so a member cannot lower or omit a previously reported issued-origin epoch, issued sequence, or maximum HLC while keeping its applied-origin vector monotonic.
-- Roadmap progress recorded in `d180a33dd2a18292b2ed823c842e0c693d4c57f2`.
+- Roadmap progress (issued-origin monotonicity and Storage blob publication/cleanup source audit) recorded in `5379faaddd9167ce81867925272edec66fe3d041`; the v3.1 addendum now states the issued-origin monotonicity rule explicitly (`476748632357a5f6031be435f1aa6e81b6545719`).
 - This is implementation-only C-pass work. No tests/build were run for this slice; historical CI evidence below does not validate it. Receipt, ChangeId and tombstone/Ghost physical GC remain disabled.
 
 ## Current continuation checkpoint — 2026-11-09
