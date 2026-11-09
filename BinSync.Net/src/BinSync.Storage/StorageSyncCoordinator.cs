@@ -491,7 +491,7 @@ public sealed class StorageSyncCoordinator
 
         if (roster.AuthorityNodeId != _node.NodeId ||
             checkpoint.NamespaceId != _namespaceId ||
-            checkpoint.AuthorityNodeId != _node.NodeId)
+            checkpoint.RosterGeneration != roster.RosterGeneration)
             throw new InvalidOperationException("Only this namespace authority may broadcast its accepted checkpoint.");
 
         if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? accepted) ||
