@@ -1598,6 +1598,33 @@ private static bool ValidateIncomingBatchForStaging(
         }
     }
 
+    public bool TryGetOutboundChangeIdentity(
+        string scopeId, NodeId localReplica, int namespaceId,
+        BatchId changeId, out ReadOnlyMemory<byte> fingerprint,
+        out OperationOrigin origin)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (changeId.IsZero)
+                throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
+            fingerprint = ReadOnlyMemory<byte>.Empty;
+            origin = default;
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+                return false;
+            if (!state.ChangeLedger.TryGetValue(new LedgerKey(namespaceId, changeId), out ChangeLedgerValue? ledger))
+                return false;
+            if (!ledger.IsLocalOutbound)
+                throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
+            if (ledger.AuthorNodeId.IsZero || ledger.OriginAuthorEpoch == 0 || ledger.OriginSequence == 0)
+                throw new InvalidDataException("Frozen local ChangeId is missing its immutable origin provenance.");
+            fingerprint = ledger.Fingerprint;
+            origin = new OperationOrigin(ledger.AuthorNodeId, ledger.OriginAuthorEpoch, ledger.OriginSequence);
+            return true;
+        }
+    }
+
     public ulong AcquireOutboundLease(
         string scopeId,
         NodeId localReplica,
