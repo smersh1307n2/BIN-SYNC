@@ -662,18 +662,15 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 ArgumentNullException.ThrowIfNull(entry);
                 ProviderChange change = entry.Change
                     ?? throw new InvalidDataException("Published-origin entry has no provider feed change.");
-                MetadataOutboundItem outbound = entry.Published
-                    ?? throw new InvalidDataException("Published-origin entry has no frozen Metadata Store item.");
+                OperationOrigin origin = entry.Origin;
                 ProviderMutation draft = change.Mutation
                     ?? throw new InvalidDataException("Published-origin feed mutation is missing.");
                 if (change.ChangeId.IsZero || draft.ChangeId != change.ChangeId ||
                     draft.AuthorNodeId.IsZero || draft.OriginAuthorEpoch == 0 ||
-                    draft.OriginSequence != 0 ||
-                    outbound.ChangeId != change.ChangeId ||
-                    outbound.AuthorNodeId != draft.AuthorNodeId ||
-                    outbound.OriginAuthorEpoch != draft.OriginAuthorEpoch ||
-                    outbound.OriginSequence == 0)
-                    throw new InvalidDataException("Published Metadata Store identity does not match the provisional provider feed entry.");
+                    draft.OriginSequence != 0 || !origin.IsValid ||
+                    origin.AuthorNodeId != draft.AuthorNodeId ||
+                    origin.AuthorEpoch != draft.OriginAuthorEpoch)
+                    throw new InvalidDataException("Published Metadata Store origin does not match the provisional provider feed entry.");
 
                 if (!batch.TryGet(ChangeKey(change.Sequence), out byte[]? feedBytes))
                     throw new InvalidDataException("Provider local feed entry disappeared before its publication identity was committed.");
@@ -692,13 +689,13 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 if (!SameMutationContent(current, draft) ||
                     current.OriginAuthorEpoch != draft.OriginAuthorEpoch)
                     throw new InvalidDataException("Current provider row conflicts with the frozen ChangeId content.");
-                if (current.OriginSequence == outbound.OriginSequence)
+                if (current.OriginSequence == origin.Sequence)
                     continue; // Idempotent retry after a successful stamp.
                 if (current.OriginSequence != 0)
                     throw new InvalidDataException("Current provider row already carries a different immutable OriginSequence.");
 
                 ProviderMutation stamped = CloneMutation(
-                    current, current.ChangeId, current.OriginAuthorEpoch, outbound.OriginSequence);
+                    current, current.ChangeId, current.OriginAuthorEpoch, origin.Sequence);
                 ValidateMutation(stamped);
                 batch.Put(currentKey, EncodeMutation(stamped));
                 updated++;
