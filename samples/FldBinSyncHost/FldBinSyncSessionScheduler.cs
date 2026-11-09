@@ -130,6 +130,7 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(getCurrentSessions);
+        ArgumentNullException.ThrowIfNull(sender);
         ArgumentNullException.ThrowIfNull(persistNode);
         if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
         using var timer = new PeriodicTimer(interval);
