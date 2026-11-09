@@ -668,10 +668,10 @@ The following is a test plan only; no tests are run in this C pass.
 
 - [x] Provider feed/FLD Outbox is the sole authority for unpublished local changes in Metadata-Store-owned publication mode; no parallel MetadataStore PendingLocal table. The cutover fence rejects a non-empty local feed/Node Outbox state that would make ownership ambiguous.
 - [x] Verify LWW field coalescing across provider pages; field writes and record-lifecycle tombstones use distinct coalescing identities. Provider conformance separately covers lifecycle tombstone/ghost ordering.
-- [~ C] Make the provider contract explicitly require remote APPLY to leave the local unpublished feed and its ACK state untouched; StorageDataProvider already follows this boundary. Same-field remote-wins/restart conformance remains Phase T.
+- [x C] The public `IDataProvider.ApplyRemoteBatch` contract explicitly requires remote APPLY to leave the local unpublished feed and its ACK state untouched; `StorageDataProvider` follows this boundary. [~ T] Same-field remote-wins/restart conformance remains Phase T.
 - [x] Freeze ChangeId + immutable Origin + payload into Metadata Store atomically; provider source-feed ACK follows durable freeze and Node checkpoint persistence.
 - [x] Freeze replay is idempotent when metadata commit succeeds but provider ACK fails; frozen ChangeIds are recognized and only the later unfrozen suffix is coalesced/published.
-- [ ] Map FLD JournalSeq to stable ChangeId/Origin without using JournalSeq as OriginSequence.
+- [x C] The optional FLD host adapter resolves each source ChangeId to the active BIN-SYNC immutable identity and appends the JournalSeq↔OutboxSeq RPM3 mapping; JournalSeq is never used as OriginSequence. [~ T] Verify end-to-end before/after cutover and restart.
 - [ ] Complete Storage/DataProvider/MetadataStore conformance including reopen and crash boundaries.
 - [x] Storage DLL remains protocol-agnostic; field/HLC/tombstone semantics stay in Database DLL.
 
@@ -901,8 +901,8 @@ Append a dated entry after each meaningful implementation package. Update checkl
 - [x] Fixed the analyzer violation by using Assert.Single(collection, predicate) in commit `95140bb`.
 - [x] Re-ran exact code head `f6f041b`: Core 662/662, Fuzz/Lab 31/31, Storage Integration 155/155 on Ubuntu, Windows and macOS. The xUnit2031 assertion issue and the stale compaction key-kind bug are fixed.
 
-- [~] Tighten the compact-row corruption boundary with explicit tests that orphaned payload rows and ledger/stream author mismatches fail closed during hydration; add this before accepting the 12-byte reduction.
-- [~] CI exposed a second compact-row issue: compaction still targeted legacy row kinds 4/7 after writers moved to 20/21. Fix deletion keys and assert physical removal after reopen before accepting the storage reduction.
+- [x] Tightened the compact-row corruption boundary with explicit fail-closed tests for orphaned payload rows and ledger/stream author mismatches during hydration (see 2026-11-08 compact-row fix below).
+- [x] Fixed the compact-row compaction issue: deletion now targets current row kinds 20/21, with reopen assertions proving physical removal while retaining ChangeId identity (see 2026-11-08 compact-row fix below).
 - [x C] Namespace membership roster, per-author issued/applied frontiers, FULL_REPLACE-bound checkpoint, retired-origin closure and replay fence are implemented. [~ T] Physical GC remains disabled pending composed host live-reference proof, safe-horizon adversarial tests and storage/recovery validation.
 
 ### 2026-11-08 — compact-row compaction fix and exact-head green
