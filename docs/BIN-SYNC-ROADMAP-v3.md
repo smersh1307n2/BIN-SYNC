@@ -10,6 +10,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.40. C-pass: source page boundaries made explicit — 2026-11-09
+
+- [x C] The map API and FLD integration contract now require relay pages to end on whole JournalSeq boundaries. A journal transaction with multiple ChangeIds cannot be split across pages; the scanned-through cursor means all source journals up to that boundary were examined.
+- [x C] This matches the invariant that a safe relay ACK cannot split a source JournalSeq group.
+- [~ T] Add a page-split rejection test and a multi-operation same-JournalSeq page/restart test.
+
 ## 0.39. C-pass status head synchronized after test-plan consolidation — 2026-11-09
 
 - [x C] Refreshed `docs/PRODUCTION-STATUS.md` to the current unvalidated head after consolidating the T-pass backlog.
