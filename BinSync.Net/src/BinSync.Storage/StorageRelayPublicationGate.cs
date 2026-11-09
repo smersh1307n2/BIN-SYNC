@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace BinSync.Storage;
 
 /// <summary>
@@ -9,7 +11,17 @@ namespace BinSync.Storage;
 /// </summary>
 public sealed class StorageRelayPublicationGate
 {
+    private static readonly ConditionalWeakTable<StorageSyncCoordinator, StorageRelayPublicationGate> Gates = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    private StorageRelayPublicationGate() { }
+
+    /// <summary>Returns the one shared publication gate for this namespace coordinator.</summary>
+    public static StorageRelayPublicationGate For(StorageSyncCoordinator coordinator)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        return Gates.GetValue(coordinator, static _ => new StorageRelayPublicationGate());
+    }
 
     /// <summary>
     /// Serialize remote apply, source-page resolution/persistence and the subsequent
