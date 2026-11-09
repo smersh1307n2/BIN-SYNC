@@ -28,20 +28,6 @@ public static class NodePersistence
 {
     /// <summary>Digest tag mandated by the spec.</summary>
     public const string StateTag = "BIN-SYNC/NODESTATE/v17";
-    private const string Version14StateTag = "BIN-SYNC/NODESTATE/v14";
-    private const string Version13StateTag = "BIN-SYNC/NODESTATE/v13";
-    private const string Version12StateTag = "BIN-SYNC/NODESTATE/v12";
-    private const string Version11StateTag = "BIN-SYNC/NODESTATE/v11";
-    private const string Version10StateTag = "BIN-SYNC/NODESTATE/v10";
-    private const string Version9StateTag = "BIN-SYNC/NODESTATE/v9";
-    private const string Version8StateTag = "BIN-SYNC/NODESTATE/v8";
-    private const string Version7StateTag = "BIN-SYNC/NODESTATE/v7";
-    private const string Version6StateTag = "BIN-SYNC/NODESTATE/v6";
-    private const string Version5StateTag = "BIN-SYNC/NODESTATE/v5";
-    private const string Version4StateTag = "BIN-SYNC/NODESTATE/v4";
-    private const string Version3StateTag = "BIN-SYNC/NODESTATE/v3";
-    private const string LegacyVersion3StateTag = "BIN-SYNC/NODESTATE/v2";
-
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
     private const ushort Version = 17;
     private const int DigestLen = 32;
@@ -130,77 +116,11 @@ public static class NodePersistence
         if (body.Length != (int)bodyLen)
             throw new InvalidDataException("State file truncated mid-body.");
 
-        bool validDigest;
-        if (ver == Version)
-        {
-            var actual = Blake3Core.TaggedHash(StateTag, body);
-            validDigest = actual.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 14)
-        {
-            var v14 = Blake3Core.TaggedHash(Version14StateTag, body);
-            validDigest = v14.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 13)
-        {
-            var v13 = Blake3Core.TaggedHash(Version13StateTag, body);
-            validDigest = v13.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 12)
-        {
-            var v12 = Blake3Core.TaggedHash(Version12StateTag, body);
-            validDigest = v12.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 11)
-        {
-            var v11 = Blake3Core.TaggedHash(Version11StateTag, body);
-            validDigest = v11.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 10)
-        {
-            var v10 = Blake3Core.TaggedHash(Version10StateTag, body);
-            validDigest = v10.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 9)
-        {
-            var v9 = Blake3Core.TaggedHash(Version9StateTag, body);
-            validDigest = v9.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 8)
-        {
-            var v8 = Blake3Core.TaggedHash(Version8StateTag, body);
-            validDigest = v8.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 7)
-        {
-            var v7 = Blake3Core.TaggedHash(Version7StateTag, body);
-            validDigest = v7.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 6)
-        {
-            var v6 = Blake3Core.TaggedHash(Version6StateTag, body);
-            validDigest = v6.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 5)
-        {
-            var v5 = Blake3Core.TaggedHash(Version5StateTag, body);
-            validDigest = v5.AsSpan().SequenceEqual(storedDigest);
-        }
-        else if (ver == 4)
-        {
-            var v4 = Blake3Core.TaggedHash(Version4StateTag, body);
-            validDigest = v4.AsSpan().SequenceEqual(storedDigest);
-        }
-        else
-        {
-            var v3 = Blake3Core.TaggedHash(Version3StateTag, body);
-            var legacy = Blake3Core.TaggedHash(LegacyVersion3StateTag, body);
-            validDigest = v3.AsSpan().SequenceEqual(storedDigest) || legacy.AsSpan().SequenceEqual(storedDigest);
-        }
-        if (!validDigest)
+        var actualDigest = Blake3Core.TaggedHash(StateTag, body);
+        if (!actualDigest.AsSpan().SequenceEqual(storedDigest))
             throw new InvalidDataException("State digest mismatch — file corrupted (tagged BLAKE3 " + StateTag + ").");
 
-        return DeserializeBody(body, ver);
+        return DeserializeBody(body, Version);
     }
 
     // ------------------------------------------------------------- serialization
