@@ -152,6 +152,41 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Validate the persisted RPM3 scan/ACK cursors against the durable FLD journal before
+    /// a host opens its namespace sender after restart. This is fail-closed: a map cursor
+    /// beyond the source journal high watermark indicates lost/replaced source history.
+    /// </summary>
+    public StorageRelayProvenanceCursor ValidateRelayProvenanceRecovery(
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<ulong> readSourceJournalHighWatermark)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(readSourceJournalHighWatermark);
+        if (originalAuthor.IsZero)
+            throw new ArgumentException("Original relay author must be non-zero.", nameof(originalAuthor));
+
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
+        if (_metadataStore is not StorageMetadataStore metadataStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Relay provenance recovery requires the durable StorageMetadataStore.");
+        if (!map.IsBoundTo(_scopeId, _node.NodeId) || !map.IsBoundTo(metadataStore))
+            throw new InvalidOperationException(
+                "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
+
+        ulong sourceHighWatermark = readSourceJournalHighWatermark();
+        StorageRelayProvenanceCursor cursor = map.ReadCursor(_namespaceId, originalAuthor);
+        if (cursor.ScannedThroughJournalSeq > sourceHighWatermark ||
+            cursor.AckedThroughJournalSeq > sourceHighWatermark)
+            throw new InvalidDataException(
+                "Persisted RPM3 cursor is ahead of the durable FLD relay journal; keep namespace publication closed and recover the source history.");
+        return cursor;
+    }
+
+    /// <summary>
     /// Resolve transient FLD ChangeIds against retained Node Outbox entries and atomically
     /// persist their compact JournalSeq↔OutboxSeq map. The global ChangeId ledger remains
     /// the identity authority; this method obtains the current OutboxSeq from the retained
