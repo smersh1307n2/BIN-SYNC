@@ -1975,7 +1975,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 ## 1.24. C-pass: persist FLD provider publication cutover in the exact Metadata Store keyspace — 2026-11-09
 
 - [x C] Added `StorageMetadataPublicationMode`, a namespace-scoped `IProviderPublicationMode` view over the exact `StorageMetadataStore` instance used by the coordinator.
-- [x C] The immutable cutover marker is persisted under a dedicated root (0x71) and namespace key, separate from decoded metadata partition rows so ordinary metadata rewrites cannot erase it. Identity row, marker length, immutable watermark and Storage commit-sequence conflict are validated.
+- [x C] The immutable 16-byte MCP1/version-1 cutover marker is persisted under a dedicated root (0x71) and namespace key, separate from decoded metadata partition rows so ordinary metadata rewrites cannot erase it. Partition identity, marker magic/version/length, immutable watermark and Storage commit-sequence conflict are validated.
 - [x C] `FldDatabaseDataProvider` delegates publication-mode reads/writes to that wrapper and refuses cutover while FLD dirty/replayable drafts or unacknowledged Outbox entries remain.
 - [x C] `FldBinSyncHostAdapter` now requires exact provider/FLD database/Metadata Store/scope/local-replica/namespace/remote-apply identities; a provider cutover marker cannot silently point at a different namespace or Metadata Store.
 - [~ T] Add reopen/restart, concurrent metadata-write conflict, immutable marker mismatch, missing/corrupt identity row, namespace isolation, exact-composition and cutover crash-boundary tests. No build/test result is claimed.
