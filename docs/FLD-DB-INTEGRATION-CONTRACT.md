@@ -112,6 +112,9 @@ The source-level integration boundary now has concrete BIN-SYNC coordinator orch
 
 **BIN-SYNC APIs (in `BinSync.Storage`):**
 
+- `StorageSyncCoordinator.PublishAndSendAppliedOriginFrontierAsync(...)` — creates and persists a new frontier report before sending it.
+- `StorageSyncCoordinator.SendAcceptedAppliedOriginFrontierAsync(...)` — retries transport of the latest already-persisted local report without allocating a new ReportSequence; it verifies the stored signature against the accepted roster and supplied member key.
+
 - `StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)` — composes coordinator, Node, host FLD and shared Storage gates in the documented lock order.
 - `StorageSyncCoordinator.ReadAndAppendRelayProvenancePage(map, originalAuthor, hostLeaseFactory, readSourcePage)` — acquires the composed application guard, invokes the host's synchronous page-read/flatten callback while the FLD commit lease is held, then calls the resolver/atomic RPM3 append. The callback returns ordered `StorageRelaySourceChange[]` plus `ScannedThroughJournalSeq`; it must not perform network I/O.
 - `StorageSyncCoordinator.AppendRelayProvenancePage(map, originalAuthor, sourceChanges, scannedThroughJournalSeq)` — the lower-level variant for callers already holding the composed application guard. It resolves each transient `(JournalSeq, ChangeId)` through `Node.TryResolveOutboxSequences` and atomically persists only `(JournalSeq, OutboxSeq)` plus the scan cursor. It returns false without cursor advancement if any ChangeId is no longer in the retained Node Outbox.
