@@ -258,7 +258,7 @@ public sealed class StorageSyncCoordinator
             if (finalForAuthor && unpublishedDraftCount != 0)
                 throw new InvalidOperationException("Cannot close a local author epoch while unpublished provider drafts remain.");
             if (finalForAuthor)
-                ((IProviderAuthorEpochClosureStore)_provider).CloseLocalAuthorIdentity();
+                ((IProviderAuthorEpochClosureStore)_provider).CloseLocalAuthorIdentity(finalAuthorEpoch);
             return metadataStore.PublishAppliedOriginFrontier(
                 _scopeId, _node.NodeId, roster, unpublishedDraftCount,
                 maxDraftHlcWall, maxDraftHlcLogical, finalForAuthor, memberSeed);
