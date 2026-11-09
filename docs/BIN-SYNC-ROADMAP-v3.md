@@ -15,6 +15,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Updated `docs/PRODUCTION-STATUS.md` to identify the compact RPM3 implementation/sample commits and the current unvalidated branch head.
 - [x C] The historical green v3.0 baseline remains explicitly separate from all current C-pass work.
 
+## 0.48. C-pass: FLD adapter contract uses sequence-only entries — 2026-11-09
+
+- [x C] Clarified §9.5 that the host constructs `StorageRelayProvenanceEntry(JournalSeq, resolved OutboxSeq)` after calling the global Node ChangeId resolver. ChangeId is not copied into the provenance map.
+- [x C] This makes the no-duplicate-metadata rule explicit at the adapter call site, not only in the RPM3 row codec.
+
 ## 0.46. C-pass: public sample catalog aligned with compact map — 2026-11-09
 
 - [x C] Updated `samples/README.md` to describe the JournalSeq↔OutboxSeq sequence map and explicitly state that ChangeId remains in the global ledger, not in the provenance rows.
