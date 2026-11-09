@@ -39,8 +39,12 @@ FLD checkout as competing type identities.
    provide the `FldDatabase`→`IDataProvider` adapter**; this remains a C-pass item.
    Do not substitute a whole-database in-memory snapshot or a lossy remote-apply
    mapping.
-2. Open one `FldDatabase` for the same namespace and construct
-   `FldBinSyncHostAdapter` with the stable metadata scope.
+2. Open one `FldDatabase` for the same namespace. Create exactly one
+   `FldRemoteBatchApplyStore` for that instance, inject that same object into the
+   `StorageSyncCoordinator(remoteBatchCommitStore: fldApply)` constructor argument,
+   and pass it to `FldBinSyncHostAdapter`. The adapter rejects a different FLD
+   database instance or a coordinator that does not use that exact capability.
+   This prevents field state and ApplyJournal receipts from landing in separate DBs.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
    enabling any sender after process startup. It freezes the provider feed into
    the active outbound authority before startup recovery and publication. Its watermark set contains the local-author ceiling plus every FLD
@@ -48,11 +52,12 @@ FLD checkout as competing type identities.
    comes from Node Outbox; after cutover it comes from Metadata Store. Use
    `PublishReadyOutboxAsync` in the callback; it selects the matching ceiling-aware
    `SyncSession.PushBatchAsync` overload from the mode captured with the ceilings.
-4. Route remote APPLY through the `ApplyAndPublishAllAsync(persistNode, ...)`
-   overload with a durable FLD apply callback that preserves the full incoming
-   batch context. The sample wraps this callback but does not implement the
-   `IDataProvider`/`RemoteBatchCommit` bridge yet. Route subsequent outbound sends
-   through `RunOutboundAsync(persistNode, ...)`.
+4. Route inbound batches through `ReceiveAndPublishAllAsync(inboundSession, persistNode, ...)`.
+   This calls `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync`, so PendingApply,
+   Node checkpoint, the injected `FldRemoteBatchApplyStore` and Metadata receipt
+   finalization complete before the incoming sender is ACKed; only then does the
+   relay gate drain and publish downstream. Route subsequent outbound sends through
+   `RunOutboundAsync(persistNode, ...)`.
    These overloads freeze newly pending local feed entries before each gate invocation.
 5. Route safe ACK through `AcknowledgeAllAsync`. FLD's durable ACK occurs
    before RPM3 pruning.
@@ -73,7 +78,7 @@ overload from this FLD relay path. Physical GC remains disabled.
 
 ## Explicit implementation boundary
 
-`FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The next C-pass must add a neutral provider snapshot/apply-context seam and a generation-pinned FLD snapshot; do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
+`FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The contextual `IProviderRemoteBatchCommitStore` half is now implemented independently; the remaining bridge is the generation-pinned snapshot/local-feed/key-resolver provider adapter. do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
 
 
 ## v3.1 control-plane round helper
