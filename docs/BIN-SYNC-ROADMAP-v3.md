@@ -1791,3 +1791,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The FLD adapter deliberately passes an empty `RelayWrites` set because BIN-SYNC Metadata Store is the sole v3 owner of relay payload and delivery retention; it does not create a duplicate FLD relay history. The current v3 Batch DTO has no protocol-state-delta member, so none is synthesized.
 - [~ C] Full `IDataProvider` integration is not complete: stable generation-pinned paged snapshots, Outbox-backed local feed/author-epoch mapping, record/field key resolver policy and current-state `TryReadCurrent` semantics remain open.
 - [~ T] Build the cross-repository sample using `FLD_DB_READ_TOKEN` (fine-grained Contents: read for FLD-DB) and test lossless header propagation, same-apply-token retry, crash after FLD WAL/ApplyJournal before Metadata finalization, record/field tombstone mapping and duplicate replay. No sample build is claimed until the private checkout job actually executes.
+
+
+## 1.05. C-pass: inject remote-apply capability separately from IDataProvider — 2026-11-09
+
+- [x C] `StorageSyncCoordinator` now accepts an optional `IProviderRemoteBatchCommitStore` dependency separate from `IDataProvider`. Contextual remote APPLY and PendingApply recovery use the explicit capability first, then a provider-implemented capability, then the compatibility fallback.
+- [x C] This allows `FldRemoteBatchApplyStore` to be composed over the same FLD database without requiring a not-yet-complete FLD snapshot/feed provider to masquerade as an all-in-one decorator. Host must guarantee both adapters use the same database and composed commit lease.
+- [~ C] The full `FldDatabase`→`IDataProvider` snapshot/local-feed/key-resolver bridge remains open; this dependency split only closes the lossless remote-apply half.
+- [~ T] Verify recovery calls use the injected adapter after process reopen, adapter/database identity is consistent, duplicate ApplyToken is idempotent, and Node/FLD/Metadata finalize order survives each crash cut.
