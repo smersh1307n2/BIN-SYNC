@@ -1892,7 +1892,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `SessionWire.DecodeHello` and `DecodeHelloAck` reject the same invalid dependency mask from a remote peer with `FRAME_REJECTED`, before constructing a session. Unknown future capability bits remain forward-compatible; valid v3.0 and v3.1 bitmasks retain identical wire bytes.
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-v31-hello-capability-validation` in BIN-SYNC (anchored at `7e763f0f5939ce2b134e0d5b7a55e92361e51b3b`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
 - [~ T] Add HELLO/HELLO_ACK encode/decode tests for each partial/valid capability mask, unknown bits, malformed peer advertisements and byte-for-byte valid HELLO compatibility. No exact-head CI result is claimed.
-- [~ C] Durable FULL_REPLACE source snapshot recovery, FLD FULL_REPLACE receiver staging, durable publication-mode cutover and generic Storage physical-format decision remain open; base provider bridge and host scheduler are implemented in §§1.20–1.23.
+- [~ C] Durable FULL_REPLACE source snapshot recovery, FLD FULL_REPLACE receiver staging and generic Storage physical-format decision remain open; base provider bridge, author closure, publication cutover and host scheduler are implemented in §§1.20–1.24.
 
 
 ## 1.16. C-pass: make Metadata Store the exclusive relay authority after cutover — 2026-11-09
@@ -1950,7 +1950,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `FldDatabaseDataProvider` now implements `IProviderAuthorEpochClosureStore`. An epoch closes only while holding the FLD commit guard and only when `ReadUnpublishedLocalDraftHorizon().Count == 0` and Outbox high watermark equals its acknowledged watermark.
 - [x C] Local append and epoch activation use the same FLD→provider lock order as closure, preventing a writer that passed an early check from racing into a just-closed epoch.
 - [x C] The adapter obtains the active epoch from the host's durable BIN-SYNC identity authority; it does not duplicate protocol epoch state in FLD. New epochs must be strictly greater than the last locally closed epoch.
-- [~ C] Durable publication-mode cutover and FLD FULL_REPLACE receiver staging/atomic generation switch remain open, as do sender restart snapshot recovery and generic Storage physical-format decision. Host session scheduling is implemented in §1.23.
+- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, sender restart snapshot recovery and generic Storage physical-format decision remain open. Publication cutover is implemented in §1.24 and host session scheduling in §1.23.
 - [~ T] Verify pending drafts, unacked Outbox, replayable WAL horizon, writer-vs-close race, restart after closure, reactivation and stale-epoch rejection in the T-pass. No test/build result is claimed.
 
 
