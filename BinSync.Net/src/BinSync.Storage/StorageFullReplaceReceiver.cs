@@ -202,7 +202,11 @@ public sealed class StorageFullReplaceReceiver
             {
                 using IApplicationGcReferenceScan hostScan =
                     _externalState.OpenScan(_scopeId, _localMember, _namespaceId);
-                if (hostScan.UnpublishedLocalDraftHorizon.Count != 0)
+                ApplicationDraftHorizon hostDrafts = hostScan.UnpublishedLocalDraftHorizon;
+                if (hostDrafts.Count == 0 &&
+                    (hostDrafts.MaxHlcWall != 0 || hostDrafts.MaxHlcLogical != 0))
+                    throw new InvalidDataException("Host draft scanner returned an HLC maximum for an empty draft set.");
+                if (hostDrafts.Count != 0)
                     throw new InvalidOperationException("Drain FLD/WAL and host-local drafts before committing FULL_REPLACE; the composed application commit guard keeps this horizon stable.");
                 ProviderChangePage pendingLocal = _provider.ReadLocalChanges(0, 1);
                 if (pendingLocal.Changes.Count != 0)
