@@ -104,10 +104,10 @@ public sealed class StorageRelayPublicationGate
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            coordinator.ValidateRelayProvenanceRecovery(
-                map, originalAuthor, acquireHostCommitLease, readSourceJournalHighWatermark);
             try
             {
+                coordinator.ValidateRelayProvenanceRecovery(
+                    map, originalAuthor, acquireHostCommitLease, readSourceJournalHighWatermark);
                 bool committed = DrainAllPages(
                     coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
                 if (!committed)
