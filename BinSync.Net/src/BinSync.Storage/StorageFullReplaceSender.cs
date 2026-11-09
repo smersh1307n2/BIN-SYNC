@@ -203,7 +203,20 @@ public static class StorageFullReplaceSender
                     scopeId, localReplica, namespaceId, generation, out PreparedFullReplaceSnapshotState? state) ||
                 state is null)
                 throw new InvalidDataException("Prepared FULL_REPLACE index references a missing source generation.");
-            activeSnapshotTokens.Add(state.SnapshotToken);
+            try
+            {
+                _ = provider.ReadSnapshot(state.SnapshotToken, 0, 1);
+                activeSnapshotTokens.Add(state.SnapshotToken);
+            }
+            catch (FileNotFoundException)
+            {
+                // Provider generation was released before a crash interrupted metadata cleanup.
+                metadataStore.DeletePreparedFullReplaceSnapshot(scopeId, localReplica, namespaceId, generation);
+            }
+            catch (DirectoryNotFoundException)
+            {
+                metadataStore.DeletePreparedFullReplaceSnapshot(scopeId, localReplica, namespaceId, generation);
+            }
         }
         provider.PruneSnapshotsExcept(activeSnapshotTokens);
     }
