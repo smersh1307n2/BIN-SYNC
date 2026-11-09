@@ -124,3 +124,8 @@ The authority computes the source snapshot HLC floor during the same digest pass
 ### Prepared source snapshot lifetime
 
 A host may retain one `PreparedFullReplaceSnapshot` for multi-recipient fanout/retry. `SendPreparedSnapshotAsync` takes an internal transfer lease before preflight and holds it until the asynchronous send completes. The owner may call `Dispose` from a cancellation/failure cleanup path without invalidating an in-flight read; it prevents new sends and defers the provider token release until the last transfer exits. Still keep ownership explicit and dispose after intended fanout; this lease is process-local and is not a restart token.
+
+
+### Joining promotion and HLC floor
+
+After a Joining member has completed FULL_REPLACE and its signed FRA2 is durably stored, promotion checks that both HLC floor components in that ACK exactly match the prior accepted FULL_REPLACE-bound RCP2, in addition to generation/digest, roster generation and transport epoch. A mismatch leaves the member Joining; do not promote using only a matching snapshot digest.
