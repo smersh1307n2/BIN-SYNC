@@ -294,6 +294,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for ChangeId GC.");
+            using IApplicationGcReferenceScan externalScan =
+                externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
             // Build the live identity set once. The previous per-candidate LINQ scans
             // multiplied retained relay/outbound/pending rows by the GC batch size.
@@ -326,7 +328,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
                     continue;
                 if (liveChangeIds.Contains(pair.Key.ChangeId) ||
-                    externalReferences.HasExternalChangeIdReference(scopeId, localReplica, namespaceId, pair.Key.ChangeId))
+                    externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
                     continue;
 
                 byte[] suffix = new byte[18];
@@ -386,6 +388,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
+            using IApplicationGcReferenceScan externalScan =
+                externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
             var pendingReceiptKeys = new HashSet<ReceiptKey>();
             foreach (PendingApplyValue pending in current.PendingApplies.Values)
@@ -418,9 +422,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     continue;
                 if (pendingReceiptKeys.Contains(key))
                     continue;
-                if (externalReferences.HasExternalReceiptReference(
-                    scopeId, localReplica, namespaceId, key.Sender, key.Epoch,
-                    receipt.TransportPeerEpoch, key.BatchId))
+                if (externalScan.HasExternalReceiptReference(
+                    key.Sender, key.Epoch, receipt.TransportPeerEpoch, key.BatchId))
                     continue;
                 if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
                         roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
