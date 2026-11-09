@@ -336,10 +336,12 @@ using Fld1.Engine.Sync;
 using IDisposable commitGuard =
     coordinator.AcquireApplicationCommitGuard(database.AcquireCommitGuard);
 
-RelayBatchPage page = database.ReadRelayBatchPage(author.ToArray(), afterJournalSeq, 256);
+RelayBatchPage page = database.ReadRelayBatchPage(author.ToArray(), afterJournalSeq, 1);
 int changeCount = 0;
 foreach (RelayJournalBatch batch in page.Batches)
     changeCount = checked(changeCount + batch.Batch.RelayWrites.Count);
+if (changeCount > 4096)
+    throw new InvalidDataException("One FLD JournalSeq group exceeds the current bounded RPM3 page limit.");
 
 var sourceChanges = new StorageRelaySourceChange[changeCount];
 int writeIndex = 0;
@@ -359,7 +361,7 @@ if (!coordinator.AppendRelayProvenancePage(
 }
 ```
 
-Keep the application guard alive across the FLD page read and coordinator append. The guard acquires coordinator → Node → FLD commit gate → shared Storage gate in the documented order. The sample uses one bounded array of transient source identities; durable RPM3 rows contain only sequence pairs.
+Keep the application guard alive across the FLD page read and coordinator append. The guard acquires coordinator → Node → FLD commit gate → shared Storage gate in the documented order. The sample reads one whole FLD JournalSeq group per call and uses one bounded array of at most 4,096 transient source identities. A single oversized FLD group fails closed rather than being split across map commits; durable RPM3 rows contain only sequence pairs.
 
 
 Crash behavior is intentionally asymmetric: a crash before mapping commit rereads the same FLD page; a crash after mapping commit reuses the durable mapping and cursor; a crash after FLD ACK but before map pruning replays the same idempotent FLD ACK and then prunes. Never prune the mapping before FLD confirms its relay ACK is durable.
