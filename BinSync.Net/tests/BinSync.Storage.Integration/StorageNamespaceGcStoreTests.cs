@@ -19,8 +19,7 @@ public sealed class StorageNamespaceGcStoreTests
     private static NamespaceRosterCertificate Roster(
         int generation, byte[] previousDigest,
         (byte[] Seed, byte[] PublicKey)[] keys,
-        NamespaceMemberStatus[]? statuses = null,
-        IReadOnlyList<NamespaceRetiredOriginEpoch>? retiredOrigins = null)
+        NamespaceMemberStatus[]? statuses = null)
     {
         statuses ??= Enumerable.Repeat(NamespaceMemberStatus.Active, keys.Length).ToArray();
         var members = new NamespaceRosterMember[keys.Length];
@@ -41,8 +40,7 @@ public sealed class StorageNamespaceGcStoreTests
             RosterGeneration = (ulong)generation,
             PreviousRosterDigest = previousDigest,
             AuthorityNodeId = NodeId.From(Id(1)),
-            Members = members,
-            RetiredOriginEpochs = retiredOrigins ?? Array.Empty<NamespaceRetiredOriginEpoch>()
+            Members = members
         };
     }
 
@@ -61,11 +59,23 @@ public sealed class StorageNamespaceGcStoreTests
             {
                 new AppliedOriginFrontierEntry
                 {
-                    OriginAuthorNodeId = NodeId.From(Id(9)),
+                    OriginAuthorNodeId = NodeId.From(Id(2)),
                     OriginAuthorEpoch = 3,
                     ContiguousAppliedOriginSequence = appliedSequence
                 }
-            }
+            },
+            IssuedOrigins = memberIndex == 1
+                ? new[]
+                {
+                    new IssuedOriginFrontierEntry
+                    {
+                        OriginAuthorEpoch = 3,
+                        IssuedOriginSequence = appliedSequence,
+                        MaxIssuedHlcWall = 100,
+                        MaxIssuedHlcLogical = 2
+                    }
+                }
+                : Array.Empty<IssuedOriginFrontierEntry>()
         };
 
     private static byte[] SignedReport(
@@ -96,18 +106,7 @@ public sealed class StorageNamespaceGcStoreTests
         var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
         var trust = new TrustStore();
         trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
-        var roster = Roster(1, new byte[32], keys,
-            retiredOrigins: new[]
-            {
-                new NamespaceRetiredOriginEpoch
-                {
-                    OriginAuthorNodeId = NodeId.From(Id(9)),
-                    OriginAuthorEpoch = 3,
-                    FinalIssuedOriginSequence = 90,
-                    MaxIssuedHlcWall = 100,
-                    MaxIssuedHlcLogical = 2
-                }
-            });
+        var roster = Roster(1, new byte[32], keys);
         byte[] rosterBytes = NamespaceRosterProtocol.Sign(roster, keys[0].Seed);
         Guid generation = Guid.Parse("12345678-1234-5678-9abc-def012345678");
         byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("authoritative snapshot"));
@@ -130,12 +129,12 @@ public sealed class StorageNamespaceGcStoreTests
                 gc.AcceptRetentionCheckpoint(checkpointBytes, roster, trust);
 
                 Assert.True(gc.AreAllActiveMembersInstalled(roster, generation, replaceDigest));
-                Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(9)), 3, 90));
-                Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(9)), 3, 91));
+                Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(2)), 3, 90));
+                Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(2)), 3, 91));
                 Assert.True(gc.HasProtocolTombstoneGcProof(
-                    roster, trust, NodeId.From(Id(9)), 3, 90, 0, 0, generation, replaceDigest));
+                    roster, trust, NodeId.From(Id(2)), 3, 90, 0, 0, generation, replaceDigest));
                 Assert.False(gc.HasProtocolTombstoneGcProof(
-                    roster, trust, NodeId.From(Id(9)), 3, 91, 0, 0, generation, replaceDigest));
+                    roster, trust, NodeId.From(Id(2)), 3, 91, 0, 0, generation, replaceDigest));
             }
 
             using (var reopened = StorageDatabase.Open(directory, 901))
@@ -149,7 +148,7 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.Equal(2, gc.ReadOriginFrontiers(restoredRoster).Count);
                 Assert.Equal(2, gc.ReadFullReplaceInstalledAcks(restoredRoster, generation).Count);
                 Assert.True(gc.HasProtocolTombstoneGcProof(
-                    restoredRoster, trust, NodeId.From(Id(9)), 3, 90, 0, 0, generation, replaceDigest));
+                    restoredRoster, trust, NodeId.From(Id(2)), 3, 90, 0, 0, generation, replaceDigest));
             }
         }
         finally
