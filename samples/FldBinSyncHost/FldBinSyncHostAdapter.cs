@@ -110,10 +110,16 @@ public sealed class FldBinSyncHostAdapter
         if (sender.NodeId != _coordinator.LocalReplicaId)
             throw new ArgumentException("Sender does not match the coordinated local replica.", nameof(sender));
 
+        if (publicationWatermarks.Count == 0)
+            throw new InvalidDataException("Publication gate returned no author ceilings.");
+        bool metadataStoreOwnedPublication =
+            publicationWatermarks[0].IsMetadataStoreOwnedPublication;
         var ceilings = new Dictionary<NodeId, ulong>(publicationWatermarks.Count);
         bool localAuthorPresent = false;
         foreach (StorageRelayAuthorPublicationWatermark watermark in publicationWatermarks)
         {
+            if (watermark.IsMetadataStoreOwnedPublication != metadataStoreOwnedPublication)
+                throw new InvalidDataException("Publication ceilings were captured from mixed authority modes.");
             if (watermark.Author.IsZero || !ceilings.TryAdd(
                     watermark.Author, watermark.PublishedThroughSequence))
                 throw new InvalidDataException("Publication ceilings contain a zero or duplicate author.");
@@ -123,7 +129,7 @@ public sealed class FldBinSyncHostAdapter
         if (!localAuthorPresent)
             throw new InvalidDataException("Publication gate omitted the local author's durable outbound ceiling.");
 
-        if (_coordinator.IsMetadataStoreOwnedPublication)
+        if (metadataStoreOwnedPublication)
         {
             if (peerStateStore is null)
                 throw new ArgumentNullException(nameof(peerStateStore),
