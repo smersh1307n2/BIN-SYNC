@@ -1640,3 +1640,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Applied this validation to APPLY/publication, startup recovery, single/all-author ACK and `RunOutboundAsync`. The no-author case can no longer bypass ownership checks and emit a misleading empty/foreign ceiling set.
 - [x C] Created recovery branch `backup/cpass-2026-11-09-publication-ceilings-v2` at `0f46e444529b77997ce1ba190838de3c4f4ecb6d`.
 - [~ T] Add wrong-scope, wrong-replica, different-StorageDatabase and empty-author-list rejection tests; migrate all callback call sites to the new ceiling-bearing API. No tests have been run for this C-pass.
+
+
+## 0.88. C-pass: allocation-free RPM3 author enumeration — 2026-11-09
+
+- [x C] Added shared `NodeIdCanonicalComparer`, an allocation-free comparer exactly equivalent to ordinal `NodeId.ToString()` order (little-endian byte identity order).
+- [x C] `StorageRelayPublicationGate.DiscoverAuthors` and `StorageRelayProvenanceMap.ReadAuthors` now use the comparer; RPM3 discovery no longer creates a hex string per author or a `SortedDictionary<string,NodeId>`.
+- [x C] Created `backup/cpass-2026-11-09-nodeid-ordering` at `2c7007f059c2da1878c24e64a76dec902f9e8c73`.
+- [~ T] Compare exact ordering with canonical hex strings for random and edge-case IDs; verify duplicate/corrupt cursor handling and author ordering across reopen.
+- [~ O] Measure large-author startup scan allocations/CPU; no benchmark claim yet.
