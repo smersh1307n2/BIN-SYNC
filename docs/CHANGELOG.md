@@ -1,5 +1,14 @@
 ## Unreleased
 
+## Unreleased — v3.1 C-pass
+
+- Added the RPM2 durable relay provenance map in `BinSync.Storage`: atomic JournalSeq/ChangeId/OutboxSeq mapping, per-author scan/ACK cursor, SHA-256/XOR mapping-set checksum, OutboxSeq-ordered recovery and O(log N) safe-ACK translation. Mapping pruning remains strictly after durable FLD relay ACK.
+- Added a persisted-row golden sample for the provenance map and a source-derived metadata byte inventory, including FLD Outbox fixed record/sidecar costs.
+- Added explicit broadcast of one accepted retention checkpoint to multiple members without minting a checkpoint sequence per destination; authority verification and durable checkpoint revalidation are serialized under the coordinator gate.
+- Added v3.1 host orchestration and FLD integration sequencing guidance. No background scheduler or premature direct Node↔FldDatabase bridge is introduced.
+- Validation remains pending on the current C-pass head. This entry does not claim test/build success; physical ChangeId and tombstone/Ghost GC remain disabled.
+
+
 - Made the Metadata Store reference adapter's outbound freeze operation idempotent for exact full-batch retries: a retry returns the original sequence assignments without appending duplicate entries.
 - Conflicting payload/author reuse and partially overlapping retries fail closed without advancing the outbound high watermark.
 - Added conformance coverage for exact retry, stable sequence reuse, and partial-overlap rejection. This is a semantic reference-model improvement; durable adapter and PendingLocal/source-feed atomic handoff remain separate implementation gates.
