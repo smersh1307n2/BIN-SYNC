@@ -4,11 +4,19 @@
 **Normative contract:** BIN-SYNC-SPECIFICATION.txt, v3.0.0 DRAFT.  
 **Cross-repository integration:** FLD-DB docs/SYNC-STORAGE-COMPACTION-ROADMAP.md.
 
-Mark [x] only after code, tests and exact-head CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint before the v3.1 implementation pass: `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` — BinSync.Net Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS; the in-memory SyncSession, TCP and ScenarioHarness public samples passed. Subsequent v3.1 commits are in progress and are NOT green yet. Durable Metadata Bench completed, including one-million-row freeze: 218.1 µs / 7.77 KB for 1,024 local operations. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, field/record tombstone preservation, and the shared Core ProviderMutation codec. The 218.1 µs result is a measurement, not a proven improvement over the earlier 196.9 µs run. Current branch HEAD before this roadmap refresh: `ddbf3606dfa07bff8b230f6e976fa8da3a4a60cd`; latest production-code commit: `963328d9635b641ad832a76878f48418bcecb577` (zero-Outbox/positive-FLD cursor rejection); latest sample commit: `97c9ea4c07f4ef867dc8deae74ee07b46fa4f793`; latest control-plane API commit: `16933bc7ffc33d6a7213d782c376581a6acc57bc9`; RPM2 checksum implementation: `5e16e371fd3216e008101d7c5c1968f62b59e260`; FLD Outbox byte audit: `b45bbc1a3462e9b11142dd6656a2eff55200b1c9`; FLD roadmap §7.45 update: `a962371ec293708f61f02453f9bc7c441eafa015`. FLD engine support is at `FLD-DB/fix/crash-consistency-outbox` @ `e6bec094807f660e07b70874254a5925bc8b6deb`. Cross-repository FLD host primitives are on `FLD-DB/fix/crash-consistency-outbox` @ `a52b1c2206e077cf57b04a36c676106dc6d24c93`. This remains a C-pass head, not an exact-head green checkpoint. The last exact-head runs on `1acdfa65979a` were red: Core build failed because `VolatileMetadataStoreAdapter` lacked `TryGetOutboundChangeIdentity(...)`; that test-only adapter compile blocker is now fixed in `bae10f4c2d32` but has not yet been validated by exact-head CI. Storage Integration had 80 failures, predominantly old fixtures assigning OriginSequence to provider drafts (v3.1 requires deferred `OriginSequence=0`), plus old test providers without `IProviderCommitGuard`; these remain T-pass migrations. The Durable Metadata Bench succeeded; Metadata Retry Comparison failed. Do not weaken production invariants. No new exact-head test result is claimed.
+Mark [x] only after code, tests and exact-head CI prove it; [~] means active/partial; [ ] means not done. Documentation alone never closes a code gate. Latest exact-head green checkpoint before the v3.1 implementation pass: `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` — BinSync.Net Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS; the in-memory SyncSession, TCP and ScenarioHarness public samples passed. Subsequent v3.1 commits are in progress and are NOT green yet. Durable Metadata Bench completed, including one-million-row freeze: 218.1 µs / 7.77 KB for 1,024 local operations. This verifies strict BSP3 provider marker/feed identity, Node ChangeId-ledger cutover, generation-scoped provider rows, atomic FULL_REPLACE staging/switch, canonical RFC-4122 generation bytes, same-author-epoch reservation baseline proof, bounded streaming digest builder, field/record tombstone preservation, and the shared Core ProviderMutation codec. The 218.1 µs result is a measurement, not a proven improvement over the earlier 196.9 µs run. Current branch HEAD before this roadmap refresh: `ddbf3606dfa07bff8b230f6e976fa8da3a4a60cd`; latest production-code commit: `963328d9635b641ad832a76878f48418bcecb577` (zero-Outbox/positive-FLD cursor rejection); latest sample commit: `97c9ea4c07f4ef867dc8deae74ee07b46fa4f793`; latest control-plane API commit: `16933bc7ffc33d6a7213d782c376581a6acc57bc9`; RPM3 compact sequence-pair implementation: `0831076f29624b521e2b3a5cd599c4fd72b1d3c0`; FLD Outbox byte audit: `b45bbc1a3462e9b11142dd6656a2eff55200b1c9`; FLD roadmap §7.45 update: `a962371ec293708f61f02453f9bc7c441eafa015`. FLD engine support is at `FLD-DB/fix/crash-consistency-outbox` @ `e6bec094807f660e07b70874254a5925bc8b6deb`. Cross-repository FLD host primitives are on `FLD-DB/fix/crash-consistency-outbox` @ `a52b1c2206e077cf57b04a36c676106dc6d24c93`. This remains a C-pass head, not an exact-head green checkpoint. The last exact-head runs on `1acdfa65979a` were red: Core build failed because `VolatileMetadataStoreAdapter` lacked `TryGetOutboundChangeIdentity(...)`; that test-only adapter compile blocker is now fixed in `bae10f4c2d32` but has not yet been validated by exact-head CI. Storage Integration had 80 failures, predominantly old fixtures assigning OriginSequence to provider drafts (v3.1 requires deferred `OriginSequence=0`), plus old test providers without `IProviderCommitGuard`; these remain T-pass migrations. The Durable Metadata Bench succeeded; Metadata Retry Comparison failed. Do not weaken production invariants. No new exact-head test result is claimed.
 
 ## 0.33. FLD recovery checkpoint branch created — 2026-11-09
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
+
+## 0.45. C-pass: eliminate duplicated ChangeId from provenance rows (RPM3) — 2026-11-09
+
+- [x C] Reworked `StorageRelayProvenanceMap` to persist only the sequence pair: OutboxSeq in the ordered key and JournalSeq in the value. ChangeId remains solely in the durable global BIN-SYNC ChangeId ledger; the host must resolve every FLD ChangeId through `Node.TryResolveOutboxSequences` before appending the page.
+- [x C] Removed the per-mapping ChangeId bytes and the in-memory `HashSet<BatchId>`. This removes 16 persistent bytes per unacknowledged mapping plus the corresponding per-entry managed hash-set overhead; uniqueness remains enforced by the global ledger and strictly increasing resolved OutboxSeq.
+- [x C] Bumped cursor marker to RPM3. The 60-byte cursor checksum now covers the compact 76-byte key + 8-byte JournalSeq value rows. Append WAL cost falls from 109 to 93 bytes per mapping Put; compacted snapshot row falls from 108 to 92 bytes.
+- [x C] Updated the sample to verify actual RPM3 rows and the checksum, added `RELAY-PROVENANCE-MAP-v3.txt`, and updated byte audit, public API, changelog, production status and FLD integration contract.
+- [~ T] Verify resolver-before-append, duplicate ChangeId returning the original OutboxSeq, monotonic rejection after ACK pruning, RPM3 byte vector, and checksum recovery/corruption. Historical RPM2/HashSet entries above are implementation history only and are superseded by this section.
 
 ## 0.44. O-pass candidate recorded: Storage batch sort — 2026-11-09
 
@@ -53,13 +61,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 The following is a test plan only; no tests are run in this C pass.
 
 1. **Compile/API:** build Core, Storage, all five samples, XML docs and analyzers on net10.0; resolve any new API/type/nullability/analyzer failures without weakening invariants.
-2. **RPM2 persistence:** compare actual rows with `RELAY-PROVENANCE-MAP-v2.txt`; reopen/reconstruct; append empty and multi-entry pages; verify digest stability after append/prune; corrupt cursor marker/length/digest, row key/value, zero/duplicate ChangeId, and non-monotonic coordinates.
+2. **RPM3 persistence:** compare actual rows with `RELAY-PROVENANCE-MAP-v3.txt`; reopen/reconstruct; append empty and multi-entry pages; verify digest stability after append/prune; corrupt cursor marker/length/digest, row key/value, and non-monotonic coordinates. Verify the caller's Node ChangeId resolver prevents duplicate identities before map append.
 3. **Relay ACK translation:** no mapping, safe=acked, below-first, exact sequence, within same JournalSeq group, between groups, exact-last, above-last, after partial prune, after full prune; verify zero Outbox ACK never advances positive FLD JournalSeq.
 4. **Crash ordering:** crash before map batch, after map+cursor batch, after durable FLD ACK but before map prune, during map prune batch; replay must be idempotent and never over-ACK.
 5. **Coordinator broadcast:** publish one checkpoint and send to N sessions; wrong authority seed, stale checkpoint, roster generation mismatch, superseding checkpoint between member sends, and cancellation/retry.
 6. **Existing red integration fixtures:** migrate provider-draft OriginSequence to deferred `OriginSequence=0`; update providers for `IProviderCommitGuard`; test freeze-before-stamp and exact-head CI.
 7. **GC proof:** adversarial live-reference scanner, lease ordering, membership retirement/rejoin, and independent safe horizons for receipts, ChangeId and tombstone/Ghost. Physical GC stays disabled until all proofs pass.
-8. **O-pass:** benchmark metadata row/cardinality footprint, RPM2 cold recovery and hot append/translation, HashSet memory cost, provider snapshot memory, and checkpoint broadcast overhead; revert any regression.
+8. **O-pass:** benchmark metadata row/cardinality footprint, RPM3 cold recovery and hot append/translation, compact mapping-list memory, provider snapshot memory, Storage batch sort, and checkpoint broadcast overhead; revert any regression.
 
 ## 0.37. C-pass: production-status head refreshed — 2026-11-09
 
@@ -69,13 +77,13 @@ The following is a test plan only; no tests are run in this C pass.
 
 ## 0.36. C-pass: Unreleased changelog synchronized — 2026-11-09
 
-- [x C] Added the v3.1 C-pass implementation summary to `docs/CHANGELOG.md`, including RPM2 provenance mapping, persisted-row sample, byte audit, checkpoint broadcast and host integration sequencing.
+- [x C] Added the v3.1 C-pass implementation summary to `docs/CHANGELOG.md`, including RPM3 compact provenance mapping, persisted-row sample, byte audit, checkpoint broadcast and host integration sequencing.
 - [x C] The changelog explicitly states that current-head validation is pending and physical ChangeId/tombstone/Ghost GC remains disabled.
 - [~ T] Promote these notes to a release entry only after exact-head CI, sample execution and v3.1 wire-vector review.
 
 ## 0.35. C-pass: production status no longer overstates current CI — 2026-11-09
 
-- [x C] Updated `docs/PRODUCTION-STATUS.md` to distinguish the historical fully verified v3.0 baseline from the current v3.1 C-pass head. It explicitly states that new v3.1 code, RPM2 mapping/checksum, new sample and checkpoint-broadcast changes are not yet built/tested.
+- [x C] Updated `docs/PRODUCTION-STATUS.md` to distinguish the historical fully verified v3.0 baseline from the current v3.1 C-pass head. It explicitly states that new v3.1 code, RPM3 mapping/checksum, new sample and checkpoint-broadcast changes are not yet built/tested.
 - [x C] Updated the public sample status: three pre-v3.1 samples were in the historical baseline; five current executable samples are not yet verified on the current branch.
 - [x C] Kept physical ChangeId and tombstone/Ghost GC disabled. No green CI claim is made for the current head.
 - [~ T] Exact-head build, full test matrix and sample execution remain deferred until C-pass closure.
@@ -83,7 +91,7 @@ The following is a test plan only; no tests are run in this C pass.
 ## 0.34. C-pass: public API guide aligned with negotiated v3.1 code — 2026-11-09
 
 - [x C] Updated `docs/PUBLIC-API.md`: v3.1 roster/frontier/checkpoint/FULL_REPLACE are no longer described as merely proposed; the guide now distinguishes the v3.1 negotiated extension from the v3.0 wire baseline and keeps physical GC disabled.
-- [x C] Documented `StorageRelayProvenanceMap` RPM2 and the host-owned coordinator lifecycle/broadcast surface; linked the orchestration and FLD integration contracts.
+- [x C] Documented `StorageRelayProvenanceMap` RPM3 and the host-owned coordinator lifecycle/broadcast surface; linked the orchestration and FLD integration contracts.
 - [~ T] Reconcile this guide against the compiled public API XML and exact-head build during T; no API docs are considered release-final before compilation.
 
 ## 0.32. Recovery checkpoint branch created — 2026-11-09
@@ -111,12 +119,12 @@ The following is a test plan only; no tests are run in this C pass.
 ## 0.28. C-pass: FLD Outbox byte costs added to cross-store audit — 2026-11-09
 
 - [x C] Audited FLD `OutboxLog.cs` directly: 16-byte file header; each record is 88-byte fixed header + value bytes + 4-byte CRC32C; ACK/state/lease sidecars are 12/20/36 bytes; in-memory sparse index is one 16-byte point per 64 records.
-- [x C] Added this to `BIN-SYNC-METADATA-BYTE-AUDIT.md` and explicitly separated FLD Outbox intent from the BIN-SYNC 100-byte mapping row. No payload copy is introduced by the mapping.
+- [x C] Added this to `BIN-SYNC-METADATA-BYTE-AUDIT.md` and explicitly separated FLD Outbox intent from the BIN-SYNC 84-byte mapping row. No payload copy is introduced by the mapping.
 - [~ C/O] ApplyJournal, WAL, Manifest/Run and Fld1.Storage page/index/write amplification remain unmeasured; the source paths/layouts must be audited before a complete cross-store total is claimed.
 
 ## 0.27. C-pass: reject impossible zero-Outbox positive-FLD cursor — 2026-11-09
 
-- [x C] RPM2 cursor recovery now rejects a positive AckedThroughJournalSeq paired with AckedThroughOutboxSeq=0. The v3.1 adapter contract explicitly states that zero safe OutboxSeq never authorizes a positive FLD relay ACK.
+- [x C] RPM3 cursor recovery now rejects a positive AckedThroughJournalSeq paired with AckedThroughOutboxSeq=0. The v3.1 adapter contract explicitly states that zero safe OutboxSeq never authorizes a positive FLD relay ACK.
 - [~ T] Add malformed-cursor coverage for this impossible watermark pair and the valid partial-group case (positive OutboxSeq with JournalSeq safe-through still zero).
 
 ## 0.26. C-pass: public sample index links orchestration guidance — 2026-11-09
@@ -124,7 +132,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x C] Updated `samples/README.md` with links to the v3.1 host orchestration recipe and the FLD integration contract, so sample users can find the correct control-plane lifecycle and cross-repository dependency order.
 - [~ T] Verify links and examples as part of the final docs/sample CI pass.
 
-## 0.25. C-pass: sample verifies actual RPM2 rows — 2026-11-09
+## 0.25. C-pass: sample verifies actual RPM2 rows (historical schema, superseded by RPM3) — 2026-11-09
 
 - [x C] Extended `samples/RelayProvenanceMap` to inspect its actual Storage snapshot and compare the three persisted mapping rows, cursor marker/watermarks, endian order, ChangeIds and recomputed SHA-256/XOR mapping-set digest against the deterministic fixture.
 - [x C] The sample now checks the durable row representation rather than only the public translation behavior.
@@ -132,10 +140,10 @@ The following is a test plan only; no tests are run in this C pass.
 
 ## 0.24. C-pass: versioned mapping-set checksum and atomic cursor boundary — 2026-11-09
 
-- [x C] Upgraded the provenance cursor to RPM2 (60 bytes): version marker, scanned JournalSeq, ACKed OutboxSeq, ACKed JournalSeq and a 32-byte retained-mapping-set digest.
+- [x C] Upgraded the provenance cursor to RPM2 (60 bytes; historical, superseded by RPM3): version marker, scanned JournalSeq, ACKed OutboxSeq, ACKed JournalSeq and a 32-byte retained-mapping-set digest.
 - [x C] Each mapping row is hashed as SHA-256(key || value); hashes are XOR-aggregated. Append and post-FLD-ACK prune update mapping rows plus cursor/digest in one Storage write batch. Empty pages advance the cursor without changing the digest.
 - [x C] Restart reconstructs rows through bounded 1,024-entry pages, recomputes the mapping-set digest and uses constant-time comparison against the durable cursor. Missing/torn/mismatched rows fail closed; no page can be silently skipped.
-- [x C] Updated the byte audit, FLD integration contract and deterministic RPM2 golden vector.
+- [x C] Updated the byte audit, FLD integration contract and deterministic RPM2 golden vector (historical, superseded by RPM3).
 - [~ T] Verify exact persisted bytes, append/prune/reopen checksum stability, row corruption, cursor corruption, empty-page digest stability and crash injection around the atomic batch.
 
 ## 0.23. C-pass: fail-closed persisted ChangeId validation — 2026-11-09
@@ -297,7 +305,7 @@ The following is a test plan only; no tests are run in this C pass.
 - **Origin contract:** provider feed cursor is not OriginSequence. Coalescible drafts carry ChangeId + author epoch and OriginSequence=0. Metadata Store allocates contiguous OriginSequence only at immutable freeze and persists it with the ChangeId ledger. Coalesced-away drafts consume no origin number. Remote operation apply requires a complete non-zero origin tuple.
 - **GC status:** receipt, ChangeId and tombstone/ghost physical deletion remain fail-closed/disabled. Receipt additionally requires retired transport epoch, preserved receive cursor/digest chain, signed origin frontier and no PendingApply. Author-issued horizon, retired-origin closure and checkpoint-bound global HLC floor are represented by OFR2/NRS2/FRA2/RCP2. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until host WAL/FLD plus PendingApply/relay/reservation/snapshot live references are covered by the composed lease and the T-pass proves crash/replay safety. Never enable physical GC in the C pass.
 - **Latest observed CI before the current code slice:** exact build succeeded and Fuzz/Lab passed; Core had one outdated tombstone fixture failure and Storage Integration had 53 failures sharing the outdated zero-OriginAuthorEpoch fixture assumption. These are T-pass fixture updates, not a reason to relax production v3 validation. Exact-head CI for the current code is pending.
-- **Remaining C work:** the generic durable JournalSeq→ChangeId→OutboxSeq mapping primitive, RPM2 checksum/cursor, sample and storage golden vector are implemented; the concrete synchronized-FLD page/publication/ACK adapter and BIN-SYNC scanner wrapper are blocked behind extraction of FLD's already-existing Engine semantic/reference APIs into the approved neutral/two-DLL project boundary (see §0.19). The authority/member one-round orchestration APIs and host recipe are present; a concrete app scheduler remains application-owned. BIN-SYNC Storage row byte inventory and FLD Outbox fixed-record/sidecar sizes are documented; ApplyJournal/WAL, Manifest/Run and Storage-engine page/index/write-amplification audit remains open. Signed v3.1 wire vectors and exact frame-registry audit remain open. Preserve no legacy API/fallback decoder.
+- **Remaining C work:** the generic durable JournalSeq↔OutboxSeq mapping primitive, RPM3 checksum/cursor; ChangeId remains only in the global BIN-SYNC ledger, sample and storage golden vector are implemented; the concrete synchronized-FLD page/publication/ACK adapter and BIN-SYNC scanner wrapper are blocked behind extraction of FLD's already-existing Engine semantic/reference APIs into the approved neutral/two-DLL project boundary (see §0.19). The authority/member one-round orchestration APIs and host recipe are present; a concrete app scheduler remains application-owned. BIN-SYNC Storage row byte inventory and FLD Outbox fixed-record/sidecar sizes are documented; ApplyJournal/WAL, Manifest/Run and Storage-engine page/index/write-amplification audit remains open. Signed v3.1 wire vectors and exact frame-registry audit remain open. Preserve no legacy API/fallback decoder.
 - **T pass is not complete.** Historical checklist entries below are execution history; this active section and latest dated execution entries supersede earlier snapshots.
 
 ### C-pass continuation — 2026-11-09
