@@ -17,7 +17,7 @@ var adapter = new FldBinSyncHostAdapter(fld, coordinator, map, scopeId);
 IDisposable? AcquireFldLease() => fld.AcquireCommitGuard();
 ```
 
-Keep one `FldDatabase`, one `StorageSyncCoordinator`, one RPM3 map and one shared publication gate per local replica/scope/namespace. Never send directly through a session outside this gate. The gate captures the local author's Metadata Store outbound high watermark together with all relay-author RPM3 ceilings under the same composed commit guard; local outbound rows do not have an FLD JournalSeq mapping.
+Keep one `FldDatabase`, one `StorageSyncCoordinator`, one RPM3 map and one shared publication gate per local replica/scope/namespace. Never send directly through a session outside this gate. The gate captures the local author's publication high watermark together with all relay-author RPM3 ceilings under the same composed commit guard. Before provider cutover, the local watermark comes from Node Outbox; after cutover, it comes from Metadata Store. The captured mode is carried with every watermark so the host cannot race the cutover between capture and send.
 
 ## Relay page projection
 
@@ -151,4 +151,4 @@ The guide is now implemented by the optional cross-repository sample in BIN-SYNC
 
 ### Ceiling-aware sender API
 
-The optional host adapter's `PublishReadyOutboxAsync` converts the captured watermark set into a per-author ceiling map and drains the peer session using the new `SyncSession.PushBatchAsync(..., IReadOnlyDictionary<NodeId, ulong> publicationCeilings, ...)` overload. That Core overload filters both local-outbound and relay pages before batch construction and rejects any immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Authors absent from the set and zero-ceiling authors are not eligible. Do not use the legacy ceiling-free overload inside this FLD publication gate.
+The optional host adapter's `PublishReadyOutboxAsync` converts the captured watermark set into a per-author ceiling map and drains the peer session using the matching ceiling-aware Core overload. Before cutover it uses Node-owned `SyncSession.PushBatchAsync`; after cutover it uses the Metadata Store overload. Both paths filter local-outbound and relay pages before batch construction. The Metadata Store path also rejects any immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Authors absent from the set and zero-ceiling authors are not eligible. The captured authority-mode bit prevents a cutover race. Do not use a legacy ceiling-free overload inside this FLD publication gate.
