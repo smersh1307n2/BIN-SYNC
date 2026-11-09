@@ -522,17 +522,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new InvalidDataException("Requested local change cursor skips changes that have not been scanned or covered by a source snapshot.");
 
             ulong start = Math.Max(afterSequence, acked);
-            var rows = snapshot.ScanPrefix([LocalChange], ChangeKey(start), limit);
-            var changes = new List<ProviderChange>(rows.Count);
-            foreach (var row in rows)
-            {
-                ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
-                var decoded = DecodeLocalFeedChange(row.Value);
-                changes.Add(new ProviderChange(sequence, decoded.Mutation)
-                {
-                    ChangeId = decoded.ChangeId
-                });
-            }
+            using StorageSnapshot.PrefixCursor cursor =
+                snapshot.OpenPrefixCursor([LocalChange], ChangeKey(start));
+            var changes = new List<ProviderChange>(Math.Min(limit, 64));
+            cursor.VisitPage(limit, VisitChange);
 
             ulong scanned = changes.Count == limit ? changes[^1].Sequence : high;
             if (scanned > highestRead)
@@ -546,6 +539,17 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             }
 
             return new ProviderChangePage(changes, scanned);
+
+            bool VisitChange(in StorageEntryView row)
+            {
+                ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.Slice(1, 8));
+                var decoded = DecodeLocalFeedChange(row.Value);
+                changes.Add(new ProviderChange(sequence, decoded.Mutation)
+                {
+                    ChangeId = decoded.ChangeId
+                });
+                return true;
+            }
         }
     }
 
@@ -554,28 +558,63 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         lock (_gate)
         {
             ThrowIfDisposed();
-            using var snapshot = _storage.OpenSnapshot();
-            ulong high = ReadUInt64(snapshot, [LocalHighWatermark]);
-            ulong acked = ReadUInt64(snapshot, [LocalAckWatermark]);
-            ulong highestRead = ReadUInt64(snapshot, [LocalReadWatermark]);
-            if (safeThroughSequence > high || safeThroughSequence > highestRead)
-                throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
-            if (safeThroughSequence <= acked) return;
-
-            var rows = snapshot.ScanPrefix([LocalChange], ChangeKey(acked), int.MaxValue);
-            using var batch = _storage.BeginWriteBatch();
-            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
-            if (actualBaseCommitSeq != snapshot.CommitSeq)
-                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
-            foreach (var row in rows)
+            using (StorageSnapshot validation = _storage.OpenSnapshot())
             {
-                ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(1, 8));
-                if (sequence > safeThroughSequence) break;
-                batch.Delete(row.Key);
+                ulong high = ReadUInt64(validation, [LocalHighWatermark]);
+                ulong acked = ReadUInt64(validation, [LocalAckWatermark]);
+                ulong highestRead = ReadUInt64(validation, [LocalReadWatermark]);
+                if (safeThroughSequence > high || safeThroughSequence > highestRead)
+                    throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+                if (safeThroughSequence <= acked) return;
             }
 
-            batch.Put([LocalAckWatermark], EncodeUInt64(safeThroughSequence));
-            batch.Commit();
+            // Delete and advance the ACK watermark in the same bounded transaction.
+            // A crash can therefore resume from the last committed page without either
+            // resurrecting deleted rows or skipping an uncommitted prefix.
+            const int deletePageSize = 4096;
+            while (true)
+            {
+                using var snapshot = _storage.OpenSnapshot();
+                ulong acked = ReadUInt64(snapshot, [LocalAckWatermark]);
+                if (safeThroughSequence <= acked)
+                    return;
+
+                using StorageSnapshot.PrefixCursor cursor =
+                    snapshot.OpenPrefixCursor([LocalChange], ChangeKey(acked));
+                using var batch = _storage.BeginWriteBatch();
+                ulong lastDeleted = acked;
+                int deleted = 0;
+                bool foundBeyondSafeWatermark = false;
+                int visited = cursor.VisitPage(deletePageSize, VisitDelete);
+
+                ulong nextAck = foundBeyondSafeWatermark || visited < deletePageSize
+                    ? safeThroughSequence
+                    : lastDeleted;
+                batch.Put([LocalAckWatermark], EncodeUInt64(nextAck));
+
+                ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+                if (actualBaseCommitSeq != snapshot.CommitSeq)
+                    throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+                batch.Commit();
+
+                if (nextAck >= safeThroughSequence)
+                    return;
+
+                bool VisitDelete(in StorageEntryView row)
+                {
+                    ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(row.Key.Slice(1, 8));
+                    if (sequence > safeThroughSequence)
+                    {
+                        foundBeyondSafeWatermark = true;
+                        return false;
+                    }
+
+                    batch.Delete(row.Key);
+                    lastDeleted = sequence;
+                    deleted++;
+                    return true;
+                }
+            }
         }
     }
 
