@@ -17,6 +17,7 @@ public sealed class StorageSyncCoordinator
 {
     private readonly Node _node;
     private readonly IDataProvider _provider;
+    private readonly IProviderRemoteBatchCommitStore? _remoteBatchCommitStore;
     private readonly int _namespaceId;
     private readonly IMetadataStore? _metadataStore;
     private readonly string? _scopeId;
@@ -83,10 +84,12 @@ public sealed class StorageSyncCoordinator
     }
 
     public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId,
-        IMetadataStore? metadataStore = null, string? scopeId = null)
+        IMetadataStore? metadataStore = null, string? scopeId = null,
+        IProviderRemoteBatchCommitStore? remoteBatchCommitStore = null)
     {
         _node = node ?? throw new ArgumentNullException(nameof(node));
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
+        _remoteBatchCommitStore = remoteBatchCommitStore;
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
         if (metadataStore is not null && string.IsNullOrWhiteSpace(scopeId))
@@ -2260,7 +2263,9 @@ public sealed class StorageSyncCoordinator
     {
         ArgumentNullException.ThrowIfNull(wireBatch);
         ArgumentNullException.ThrowIfNull(pending);
-        if (_provider is not IProviderRemoteBatchCommitStore contextualProvider)
+        IProviderRemoteBatchCommitStore? contextualProvider =
+            _remoteBatchCommitStore ?? _provider as IProviderRemoteBatchCommitStore;
+        if (contextualProvider is null)
             return _provider.ApplyRemoteBatch(applyToken, mutations);
 
         if (!pending.ReceiveStateOwnedByMetadataStore ||
