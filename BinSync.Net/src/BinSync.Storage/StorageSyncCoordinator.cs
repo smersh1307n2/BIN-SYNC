@@ -83,6 +83,92 @@ public sealed class StorageSyncCoordinator
             IsMetadataStoreOwnedPublication: metadataStoreOwnedPublication);
     }
 
+    /// <summary>
+    /// Capture the complete Metadata-Store-owned publication cut: local outbound
+    /// watermark plus every original-author relay watermark. This path deliberately
+    /// does not consult FLD JournalSeq or RPM3; the Metadata Store owns both relay
+    /// payload and per-author sequence after the provider-authoritative cutover.
+    /// The caller's FLD commit lease is composed with Node/Storage gates here.
+    /// </summary>
+    public IReadOnlyList<StorageRelayAuthorPublicationWatermark>
+        CaptureMetadataOwnedPublicationWatermarks(
+            Func<IDisposable?> acquireHostCommitLease)
+    {
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        if (!IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata-owned relay ceilings are available only after the durable provider cutover.");
+        if (_metadataStore is not IMetadataPeerStateStore peerStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Metadata-owned relay publication requires a durable peer-state store and stable scope.");
+
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
+        var result = new List<StorageRelayAuthorPublicationWatermark>
+        {
+            ReadLocalPublicationWatermark(metadataStoreOwnedPublication: true)
+        };
+        IReadOnlyList<NodeId> authors = peerStore.ReadRelayAuthors(
+            _scopeId!, _node.NodeId, _namespaceId);
+        var seen = new HashSet<NodeId> { _node.NodeId };
+        foreach (NodeId author in authors)
+        {
+            if (author.IsZero || !seen.Add(author))
+                throw new InvalidDataException(
+                    "Metadata Store relay author set contains a zero or local/duplicate identity.");
+            ulong highWatermark = _metadataStore!.GetRelayHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            result.Add(new StorageRelayAuthorPublicationWatermark(
+                author,
+                highWatermark,
+                ScannedThroughJournalSeq: 0,
+                IsMetadataStoreOwnedPublication: true));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Compact only Metadata Store relay payload through the minimum durable ACK
+    /// across all interested peers. Per-peer ACKs are committed by SyncSession; this
+    /// method never writes FLD's legacy ApplyJournal relay-ACK sidecar.
+    /// </summary>
+    public IReadOnlyList<(NodeId Author, ulong SafeThroughSequence)>
+        CompactAcknowledgedMetadataRelayPayloads(
+            Func<IDisposable?> acquireHostCommitLease)
+    {
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        if (!IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata relay compaction requires the provider-authoritative cutover.");
+        if (_metadataStore is not IMetadataPeerStateStore peerStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Metadata relay compaction requires a durable peer-state store and stable scope.");
+
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
+        IReadOnlyList<NodeId> authors = peerStore.ReadRelayAuthors(
+            _scopeId!, _node.NodeId, _namespaceId);
+        var result = new List<(NodeId Author, ulong SafeThroughSequence)>(authors.Count);
+        foreach (NodeId author in authors)
+        {
+            if (author.IsZero || author == _node.NodeId)
+                throw new InvalidDataException(
+                    "Metadata Store relay author set contains a zero or local identity.");
+            ulong safeThrough = peerStore.GetSafePeerStreamCompactionCursor(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            ulong highWatermark = _metadataStore!.GetRelayHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            if (safeThrough > highWatermark)
+                throw new InvalidDataException(
+                    "Metadata Store peer ACK exceeds its durable relay high watermark.");
+            if (safeThrough != 0)
+                _metadataStore.CompactRelayThrough(
+                    _scopeId!, _node.NodeId, _namespaceId, author, safeThrough);
+            result.Add((author, safeThrough));
+        }
+        return result;
+    }
+
     internal void ValidateRelayProvenanceMap(StorageRelayProvenanceMap map)
     {
         ArgumentNullException.ThrowIfNull(map);
