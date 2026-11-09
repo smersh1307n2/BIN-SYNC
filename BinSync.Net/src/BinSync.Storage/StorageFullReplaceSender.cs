@@ -83,13 +83,18 @@ public static class StorageFullReplaceSender
         string scopeId,
         NodeId localReplica)
     {
+        ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        if (provider is not IProviderDurableSnapshotStore durableSnapshots)
+            throw new NotSupportedException("Restart-durable FULL_REPLACE requires IProviderDurableSnapshotStore.");
         PreparedFullReplaceSnapshot prepared = PrepareSnapshot(
             provider, trustStore, roster, authorityNodeId, generation, authoritySeed);
         try
         {
+            if (!durableSnapshots.HasPersistedSnapshot(prepared.Snapshot.Token))
+                throw new InvalidOperationException("Provider did not durably persist the prepared snapshot token.");
             metadataStore.SavePreparedFullReplaceSnapshot(
                 scopeId,
                 localReplica,
@@ -130,6 +135,8 @@ public static class StorageFullReplaceSender
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (provider is not IProviderDurableSnapshotStore durableSnapshots)
+            throw new NotSupportedException("Restoring FULL_REPLACE requires IProviderDurableSnapshotStore.");
         if (!metadataStore.TryGetPreparedFullReplaceSnapshot(
                 scopeId, localReplica, namespaceId, generation, out PreparedFullReplaceSnapshotState? state) ||
             state is null)
@@ -142,6 +149,8 @@ public static class StorageFullReplaceSender
             manifest.SourceChangeFeedWatermark != state.SourceFeedWatermark)
             throw new InvalidDataException("Persisted FULL_REPLACE manifest and snapshot metadata disagree.");
 
+        if (!durableSnapshots.HasPersistedSnapshot(state.SnapshotToken))
+            throw new InvalidDataException("The persisted FULL_REPLACE provider snapshot token is no longer present.");
         var snapshot = new ProviderSnapshotHandle(state.SnapshotToken, state.SourceFeedWatermark);
         ProviderSnapshotPage firstPage = provider.ReadSnapshot(snapshot.Token, 0, 1);
         if (firstPage.Entries.Count != firstPage.NextIndex ||
