@@ -629,6 +629,10 @@ public sealed class StorageSyncCoordinator
             OriginFrontierProtocol.EncodePayload(report), report.Signature);
         AppliedOriginFrontierReport verified =
             OriginFrontierProtocol.DecodeAndVerify(encoded, roster);
+        byte[] locallySigned = OriginFrontierProtocol.Sign(verified, memberSeed);
+        if (!locallySigned.AsSpan(locallySigned.Length - BatchSignature.SignatureSize)
+                .SequenceEqual(verified.Signature))
+            throw new CryptographicException("The supplied member seed does not match the persisted frontier signature.");
         await session.SendOriginFrontierAsync(verified, memberSeed, frameSequence, ct)
             .ConfigureAwait(false);
         return verified;
