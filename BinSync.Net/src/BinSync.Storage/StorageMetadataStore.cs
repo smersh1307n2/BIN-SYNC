@@ -451,6 +451,62 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// retained payloads fail closed. A pending immutable peer reservation blocks
     /// conservatively because it may retain a payload copy no longer in the live page.
     /// </summary>
+    internal bool TryBuildLiveRecordReferenceSet(
+        string scopeId, NodeId localReplica, int namespaceId,
+        out HashSet<RecordId> liveRecords)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            liveRecords = new HashSet<RecordId>();
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+                return true;
+
+            if (state.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                return false;
+
+            foreach (PendingApplyValue pending in state.PendingApplies.Values)
+            {
+                if (pending.Batch.NamespaceId != namespaceId)
+                    continue;
+                foreach (MetadataOperation operation in pending.Batch.Operations)
+                    if (!TryAddPayloadRecordReference(operation.Payload, liveRecords))
+                        return false;
+            }
+            foreach (var stream in state.Relay)
+            {
+                if (stream.Key.NamespaceId != namespaceId) continue;
+                foreach (var item in stream.Value)
+                    if (!TryAddPayloadRecordReference(item.Payload, liveRecords))
+                        return false;
+            }
+            foreach (var stream in state.Outbound)
+            {
+                if (stream.Key.NamespaceId != namespaceId) continue;
+                foreach (var item in stream.Value)
+                    if (!TryAddPayloadRecordReference(item.Payload, liveRecords))
+                        return false;
+            }
+            return true;
+        }
+    }
+
+    private static bool TryAddPayloadRecordReference(byte[] payload, HashSet<RecordId> records)
+    {
+        try
+        {
+            records.Add(ProviderMutationCodec.Decode(payload).RecordId);
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or
+            ArgumentException or EndOfStreamException or IndexOutOfRangeException)
+        {
+            return false;
+        }
+    }
+
     public bool HasLiveRecordReference(
         string scopeId, NodeId localReplica, int namespaceId, RecordId recordId)
     {
