@@ -7,9 +7,9 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Durable source JournalSeq → ChangeId → BIN-SYNC OutboxSeq bridge for synchronized
-/// FLD databases. This stores only the cross-coordinate mapping and scan/ACK cursors;
-/// it never stores operation payloads or assigns protocol OriginSequence.
+/// Durable source JournalSeq ↔ BIN-SYNC OutboxSeq bridge for synchronized FLD databases.
+/// ChangeId identity remains in BIN-SYNC's global ChangeId ledger; this stores only the
+/// cross-coordinate mapping and scan/ACK cursors, never ChangeId or operation payloads.
 /// </summary>
 public sealed class StorageRelayProvenanceMap
 {
@@ -17,7 +17,6 @@ public sealed class StorageRelayProvenanceMap
     private const byte CursorKind = 0x01;
     private const byte MappingKind = 0x02;
     private const int RootLength = 49;
-    private const int ChangeIdLength = 16;
     private const int CursorValueLength = 60;
 
     private readonly StorageDatabase _storage;
@@ -35,10 +34,9 @@ public sealed class StorageRelayProvenanceMap
         public ulong AckedThroughJournalSeq;
         public byte[] MappingSetDigest = new byte[32];
         public readonly List<Mapping> Mappings = new();
-        public readonly HashSet<BatchId> ChangeIds = new();
     }
 
-    private readonly record struct Mapping(ulong JournalSeq, BatchId ChangeId, ulong OutboxSeq);
+    private readonly record struct Mapping(ulong JournalSeq, ulong OutboxSeq);
 
     public StorageRelayProvenanceMap(StorageDatabase storage, string scopeId, NodeId localReplica)
     {
@@ -71,9 +69,11 @@ public sealed class StorageRelayProvenanceMap
     }
 
     /// <summary>
-    /// Atomically persists one complete FLD relay page's identity mapping and its
-    /// ScannedThroughJournalSeq. Pages must end on whole JournalSeq boundaries; a source
-    /// journal containing multiple operations cannot be split across pages. The caller may publish/send the mapped Outbox entries
+    /// Atomically persists one complete FLD relay page's sequence mapping and its
+    /// ScannedThroughJournalSeq. The caller must first resolve every source ChangeId through
+    /// the durable BIN-SYNC ChangeId ledger; ChangeId bytes are deliberately not duplicated
+    /// here. Pages must end on whole JournalSeq boundaries; a source journal containing
+    /// multiple operations cannot be split across pages. The caller may publish/send the mapped Outbox entries
     /// only after this method returns. JournalSeq and OutboxSeq remain separate domains.
     /// </summary>
     public void AppendPage(
@@ -94,7 +94,6 @@ public sealed class StorageRelayProvenanceMap
             ulong priorOutbox = state.Mappings.Count == 0
                 ? state.AckedThroughOutboxSeq
                 : state.Mappings[^1].OutboxSeq;
-            var pageChangeIds = new HashSet<BatchId>();
             bool firstEntry = true;
             var writes = new List<(byte[] Key, byte[] Value)>(entries.Count + 1);
             byte[] nextDigest = state.MappingSetDigest.ToArray();
@@ -106,23 +105,15 @@ public sealed class StorageRelayProvenanceMap
                     (!firstEntry && entry.JournalSeq < priorJournal) ||
                     entry.JournalSeq > scannedThroughJournalSeq)
                     throw new InvalidDataException("Every new relay mapping must be after the prior scan cursor and at/before the new scan cursor.");
-                if (entry.ChangeId is null || entry.ChangeId.Length != ChangeIdLength ||
-                    IsZero(entry.ChangeId))
-                    throw new InvalidDataException("Relay ChangeId must be a non-zero 16-byte identity.");
-                byte[] changeId = entry.ChangeId.ToArray();
                 if (entry.OutboxSeq == 0 || entry.OutboxSeq <= priorOutbox)
                     throw new InvalidDataException("Mapped OutboxSeq values must be non-zero and strictly increasing per author.");
-                BatchId changeIdentity = BatchId.From(changeId);
-                if (state.ChangeIds.Contains(changeIdentity) || !pageChangeIds.Add(changeIdentity))
-                    throw new InvalidDataException("A ChangeId is already mapped in this author stream or occurs more than once in the page.");
 
                 byte[] key = MappingKey(namespaceId, author, entry.OutboxSeq);
-                byte[] value = new byte[8 + ChangeIdLength];
+                byte[] value = new byte[8];
                 BinaryPrimitives.WriteUInt64LittleEndian(value, entry.JournalSeq);
-                changeId.CopyTo(value, 8);
                 XorRowDigest(nextDigest, key, value);
                 writes.Add((key, value));
-                appended.Add(new Mapping(entry.JournalSeq, changeIdentity, entry.OutboxSeq));
+                appended.Add(new Mapping(entry.JournalSeq, entry.OutboxSeq));
                 priorJournal = entry.JournalSeq;
                 priorOutbox = entry.OutboxSeq;
                 firstEntry = false;
@@ -149,8 +140,6 @@ public sealed class StorageRelayProvenanceMap
             batch.Commit();
 
             state.Mappings.AddRange(appended);
-            foreach (Mapping mapping in appended)
-                state.ChangeIds.Add(mapping.ChangeId);
             state.ScannedThroughJournalSeq = scannedThroughJournalSeq;
             state.MappingSetDigest = nextDigest;
         }
@@ -227,11 +216,6 @@ public sealed class StorageRelayProvenanceMap
             batch.Put(cursorKey, cursorValue);
             batch.Commit();
 
-            foreach (Mapping mapping in state.Mappings)
-            {
-                if (mapping.JournalSeq > safeThroughJournalSeq) break;
-                state.ChangeIds.Remove(mapping.ChangeId);
-            }
             state.Mappings.RemoveAll(mapping => mapping.JournalSeq <= safeThroughJournalSeq);
             state.AckedThroughOutboxSeq = safeOutboxSeq;
             state.AckedThroughJournalSeq = safeThroughJournalSeq;
@@ -267,16 +251,10 @@ public sealed class StorageRelayProvenanceMap
                 foreach (StorageEntry row in page)
                 {
                     if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 ||
-                        row.Value.Length != 8 + ChangeIdLength)
+                        row.Value.Length != 8)
                         throw new InvalidDataException("Malformed relay provenance mapping row.");
                     ulong outboxSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
                     ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
-                    byte[] changeId = row.Value.AsSpan(8, ChangeIdLength).ToArray();
-                    BatchId changeIdentity = BatchId.From(changeId);
-                    if (changeIdentity.IsZero)
-                        throw new InvalidDataException("Persisted relay provenance contains a zero ChangeId.");
-                    if (!state.ChangeIds.Add(changeIdentity))
-                        throw new InvalidDataException("A ChangeId is mapped more than once in one author stream.");
                     if (journalSeq <= state.AckedThroughJournalSeq ||
                         journalSeq > state.ScannedThroughJournalSeq ||
                         outboxSeq <= state.AckedThroughOutboxSeq ||
@@ -284,7 +262,7 @@ public sealed class StorageRelayProvenanceMap
                             (outboxSeq <= state.Mappings[^1].OutboxSeq ||
                              journalSeq < state.Mappings[^1].JournalSeq)))
                         throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
-                    state.Mappings.Add(new Mapping(journalSeq, changeIdentity, outboxSeq));
+                    state.Mappings.Add(new Mapping(journalSeq, outboxSeq));
                     XorRowDigest(computedDigest, row.Key, row.Value);
                 }
                 if (page.Count < pageSize) break;
@@ -298,9 +276,8 @@ public sealed class StorageRelayProvenanceMap
 
     private static byte[] EncodeMappingValue(Mapping mapping)
     {
-        byte[] value = new byte[8 + ChangeIdLength];
+        byte[] value = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(value, mapping.JournalSeq);
-        mapping.ChangeId.WriteTo(value.AsSpan(8));
         return value;
     }
 
@@ -368,7 +345,7 @@ public sealed class StorageRelayProvenanceMap
         if (mappingSetDigest.Length != 32)
             throw new ArgumentException("Mapping-set digest must be 32 bytes.", nameof(mappingSetDigest));
         byte[] value = new byte[CursorValueLength];
-        "RPM2"u8.CopyTo(value);
+        "RPM3"u8.CopyTo(value);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(4), scanned);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(12), ackedOutbox);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(20), ackedJournal);
@@ -378,7 +355,7 @@ public sealed class StorageRelayProvenanceMap
 
     private static void DecodeCursor(byte[] value, StreamState state)
     {
-        if (value.Length != CursorValueLength || !value.AsSpan(0, 4).SequenceEqual("RPM2"u8))
+        if (value.Length != CursorValueLength || !value.AsSpan(0, 4).SequenceEqual("RPM3"u8))
             throw new InvalidDataException("Relay provenance cursor marker or length is invalid.");
         state.ScannedThroughJournalSeq = BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(4));
         state.AckedThroughOutboxSeq = BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(12));
@@ -398,13 +375,6 @@ public sealed class StorageRelayProvenanceMap
         return result;
     }
 
-    private static bool IsZero(byte[] bytes)
-    {
-        int value = 0;
-        foreach (byte b in bytes) value |= b;
-        return value == 0;
-    }
-
     private static void ValidateStream(int namespaceId, NodeId author)
     {
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
@@ -415,7 +385,7 @@ public sealed class StorageRelayProvenanceMap
 }
 
 /// <summary>A relay operation's immutable source and destination sequence coordinates.</summary>
-public sealed record StorageRelayProvenanceEntry(ulong JournalSeq, byte[] ChangeId, ulong OutboxSeq);
+public sealed record StorageRelayProvenanceEntry(ulong JournalSeq, ulong OutboxSeq);
 
 /// <summary>Durable scan and post-FLD-ACK watermarks for one original-author stream.</summary>
 public readonly record struct StorageRelayProvenanceCursor(
