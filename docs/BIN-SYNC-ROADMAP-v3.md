@@ -62,6 +62,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] The byte audit now records that `StorageDatabase.EncodeBatch` sorts all mutations by StorageKey before WAL append using LINQ `OrderBy`, adding O(N log N) CPU/allocation overhead per write batch.
 - [~ O] Benchmark realistic relay-page sizes and mixed metadata batches before changing the FLD Storage serializer; compare LINQ ordering with array sort and pre-sorted mutation collection, preserving deterministic byte order and atomic commit semantics.
 
+## 0.56. C-pass: guarded FLD page-to-RPM3 call sequence documented — 2026-11-09
+
+- [x C] Added a concrete current-API adapter flow to §9.5: acquire `AcquireApplicationCommitGuard(database.AcquireCommitGuard)`, read `ReadRelayBatchPage`, collect `Batch.RelayWrites` ChangeIds with their JournalSeq, then call `AppendRelayProvenancePage`.
+- [x C] Clarified that the coordinator helper performs global ChangeId resolution; the host must not duplicate that logic or infer OutboxSeq from field winners.
+- [~ T] Compile the adapter after the approved two-DLL extraction and test guard ordering, page retry and missing-ledger identity behavior.
+
 ## 0.55. C-pass: coordinator resolves ChangeIds before RPM3 append — 2026-11-09
 
 - [x C] Added `StorageSyncCoordinator.AppendRelayProvenancePage`: accepts transient `(JournalSeq, ChangeId)` source entries, resolves all ChangeIds through `Node.TryResolveOutboxSequences`, converts positive local OutboxSeq values to compact sequence-pair entries and appends mapping+RPM3 cursor atomically.
