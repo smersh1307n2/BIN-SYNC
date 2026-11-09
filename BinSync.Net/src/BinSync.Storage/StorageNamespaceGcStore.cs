@@ -312,6 +312,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                 TryReadRetentionCheckpointCore(acceptedRoster, trustStore);
             if (checkpoint is null ||
                 checkpoint.FullReplaceGeneration != fullReplaceGeneration ||
+                checkpoint.FullReplaceDigest is null ||
+                checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize ||
                 !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(fullReplaceDigest) ||
                 !TryGetCommonInstalledHlcFloorCore(
                     acceptedRoster, fullReplaceGeneration, fullReplaceDigest,
