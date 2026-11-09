@@ -71,9 +71,13 @@ public static class ProviderMutationCodec
             throw new ArgumentException("ChangeId and origin epoch must be present together; an unpublished local draft may defer OriginSequence until freeze.", nameof(mutation));
         if (mutation.IsRecordTombstone)
         {
-            if (!hasChangeId || mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
+            // A provider FULL_REPLACE may carry a legacy materialized record tombstone
+            // read from a v1 source row whose ChangeId/Origin were never persisted.
+            // Such a row is valid snapshot state, but ValidatePublished below still
+            // rejects it as an outbound/remote immutable operation.
+            if (mutation.IsTombstone || mutation.FieldId != Model.LifecycleFieldId ||
                 mutation.KeyEpoch != 0 || mutation.Value.Length != 0)
-                throw new ArgumentException("Record tombstone requires a stable ChangeId/origin epoch and the lifecycle field with key epoch zero and no value.", nameof(mutation));
+                throw new ArgumentException("Record tombstone must use the lifecycle field, key epoch zero and no value.", nameof(mutation));
         }
         else if (mutation.IsTombstone && mutation.Value.Length != 0)
         {
