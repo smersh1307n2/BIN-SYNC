@@ -12,6 +12,47 @@ public sealed class StorageRelayPublicationGate
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
+    /// Serialize remote apply, source-page resolution/persistence and the subsequent
+    /// outbound send as one publication boundary. The apply callback must durably apply
+    /// one remote batch to the host database; no sender may observe its relay Outbox
+    /// entries until the source mapping has committed and the publish callback runs.
+    /// </summary>
+    public async ValueTask<bool> ApplyAndPublishPageAsync(
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<CancellationToken, ValueTask> applyRemoteBatch,
+        Func<(StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq)> readSourcePage,
+        Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(applyRemoteBatch);
+        ArgumentNullException.ThrowIfNull(readSourcePage);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
+            bool committed = coordinator.ReadAndAppendRelayProvenancePage(
+                map, originalAuthor, acquireHostCommitLease, readSourcePage);
+            if (!committed)
+                return false;
+
+            await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Read one whole FLD relay page, resolve all ChangeIds, persist its RPM3 cursor,
     /// and only then allow the host to publish/send ready Outbox entries. If resolution
     /// fails because a source ChangeId is no longer retained, the callback is not run.
