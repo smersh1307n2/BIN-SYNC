@@ -1457,3 +1457,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `AppendRelayProvenancePage` now rejects a first source JournalSeq equal to or below the already committed scan cursor before allocating resolver arrays or touching the Node ledger. Subsequent entries may share a JournalSeq (one source batch with multiple operations) but may not decrease.
 - [x C] This makes the coordinator's early validation match `StorageRelayProvenanceMap.AppendPage`'s strict page-boundary rule; the durable map remains the final atomic invariant check.
 - [~ T] Add direct tests for first-entry-equals-cursor, decreasing JournalSeq, same-JournalSeq multi-operation page, and assert rejected pages do not mutate Node Outbox or map cursor.
+
+### 2026-11-09 — C-pass: FLD source now physically consolidated
+
+- [x C] FLD-DB commit `d63a8c49a889c28838305ce15aa4ca5e0b189201` physically moved all 40 Core/Engine/Manifest/Run/WAL source files under `src/Fld1.Database`; removed the five component project files. This replaces the earlier linked-source scaffold and obeys the no-shortcut/two-runtime-DLL decision.
+- [x C] The supported solution surface is now `Fld1.Database` + `Fld1.Storage`; tests and benchmarks target Database, Storage-only tests/consumers target Storage.
+- [~ T] The physical consolidation has not yet passed exact-head three-OS CI. Continue to treat the FLD project graph as unverified until build/test succeeds.
+- [~ C] With the physical project boundary now established, resume the concrete host integration: complete-JournalSeq relay read, resolver/map append, immutable downstream publication, safe ACK translation, durable FLD ACK, RPM3 prune, and reference-snapshot scanner lease.
