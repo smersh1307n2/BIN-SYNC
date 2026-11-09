@@ -1781,3 +1781,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Added independent `fld-host-integration-build` job to `.github/workflows/dotnet.yml`. It checks out the BIN-SYNC branch and `FLD-DB/fix/crash-consistency-outbox`, vendors the required Ed25519 source, and builds the optional host adapter against explicit canonical `Fld1.Database.csproj` and `Fld1.Storage.csproj` paths.
 - [x C] The job is independent of the red Core/Storage test jobs, so the cross-repository compile result is visible even while fixture migration remains outstanding.
 - [~ T] Exact-head job for workflow commit `6ff484f2730d22aacb224163628ff528417fb3a7` was queued/in progress at this update; no build pass is claimed until the job completes.
+
+
+## 1.04. C-pass: preserve full remote APPLY context across provider boundary — 2026-11-09
+
+- [x C] Added optional Core capability `IProviderRemoteBatchCommitStore` and immutable `ProviderRemoteBatchCommit`. It retains authenticated SenderPeer/transport epoch separately from wire issuer/epoch, and carries BatchId, cursor range, previous/current digest, RecordsRoot, protocol-state delta and immutable provider mutations.
+- [x C] `StorageSyncCoordinator` dispatches to the contextual capability after Node apply and during PendingApply recovery. It verifies the exact full-header fingerprint against the durable PendingApply before calling the provider; non-capability providers retain the existing `IDataProvider.ApplyRemoteBatch(token, mutations)` fallback.
+- [x C] Added `samples/FldBinSyncHost/FldRemoteBatchApplyStore`, which maps the full context to FLD `RemoteBatchCommit` and `FldDatabase.ApplyRemoteBatch`. Record tombstones map to FLD lifecycle field 0/DeadValue; field tombstones remain distinct.
+- [x C] The FLD adapter deliberately passes an empty `RelayWrites` set because BIN-SYNC Metadata Store is the sole v3 owner of relay payload and delivery retention; it does not create a duplicate FLD relay history. The current v3 Batch DTO has no protocol-state-delta member, so none is synthesized.
+- [~ C] Full `IDataProvider` integration is not complete: stable generation-pinned paged snapshots, Outbox-backed local feed/author-epoch mapping, record/field key resolver policy and current-state `TryReadCurrent` semantics remain open.
+- [~ T] Build the cross-repository sample using `FLD_DB_READ_TOKEN` (fine-grained Contents: read for FLD-DB) and test lossless header propagation, same-apply-token retry, crash after FLD WAL/ApplyJournal before Metadata finalization, record/field tombstone mapping and duplicate replay. No sample build is claimed until the private checkout job actually executes.
