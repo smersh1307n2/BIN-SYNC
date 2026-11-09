@@ -367,7 +367,7 @@ For each page returned by FLD `ReadRelayBatchPage(author, afterJournalSeq, limit
 5. Compute BIN-SYNC's per-author safe `OutboxSeq` with `Node.GetSafeOutboxAckedThrough`; translate it with `TranslateSafeOutboxSequence`. The first JournalSeq containing any OutboxSeq above the safe watermark is retained in full.
 6. Call FLD `AcknowledgeRelayBatches(author, safeThroughJournalSeq)` and wait for its durable return. Only then call `CommitAfterFldRelayAck` to persist both translated ACK watermarks and prune mapping rows.
 
-Concrete current-API shape (the adapter assembly remains deferred until FLD extraction):
+Concrete current-API shape (the optional host-side source adapter is now implemented in `samples/FldBinSyncHost`; it remains outside the two FLD runtime assemblies and is not a direct Node→FldDatabase dependency):
 
 ```csharp
 using BinSync;
@@ -413,6 +413,6 @@ The map's durable mapping key is ordered by big-endian OutboxSeq; each value car
 
 ### 9.6 Integration sequencing and two-DLL dependency
 
-Section 9.5 is the target contract for synchronized-FLD mode; it is not permission to add a direct `Node ↔ FldDatabase` bridge against the current pre-extraction FLD project graph. FLD-DB's controlling roadmap §7.20 places this adapter after: (1) neutral semantic operations and Data Provider atomicity/conformance, (2) BIN-SYNC persistence refactoring behind the neutral boundary, (3) FLD's two-public-DLL Storage/Database extraction, and (4) the Storage-only Metadata Store adapter. The current FLD source tree still has separate Core/Engine/Manifest/Run/Wal projects and `FldDatabase` does not yet use `Fld1.Storage` as its persistence backend.
+Section 9.5 is the target contract for synchronized-FLD mode. The optional host-side sample now binds the current public FLD and BIN-SYNC APIs after the two-public-DLL source extraction; it remains application-layer code and does not introduce a direct Node→FldDatabase dependency inside either runtime. The sample is not yet a transport executable or a separately published integration package, and its cross-repository build remains to be validated. FLD's field-aware WAL/Run/Manifest/ApplyJournal persistence is still FLD-specific; the generic `Fld1.Storage` engine currently supplies the shared writer-fence and canonical Storage assembly seam, not a wholesale replacement of those formats.
 
 Keep the two database runtime DLLs exactly `Fld1.Storage.dll` and `Fld1.Database.dll`; adapters are optional integration packages outside those two database runtimes. Do not put either adapter in `Fld1.Storage`, do not make Storage depend on BinSync.Core, and do not create a premature NuGet bridge. The BIN-SYNC `StorageRelayProvenanceMap` is an independent durable primitive and does not change this dependency order.
