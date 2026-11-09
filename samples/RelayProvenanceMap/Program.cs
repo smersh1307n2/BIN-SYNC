@@ -20,9 +20,9 @@ try
         var map = new StorageRelayProvenanceMap(storage, "relay-provenance-sample", author);
         map.AppendPage(namespaceId, author,
         [
-            new StorageRelayProvenanceEntry(1, Guid.Parse("10000000-0000-0000-0000-000000000001").ToByteArray(), 1),
-            new StorageRelayProvenanceEntry(1, Guid.Parse("10000000-0000-0000-0000-000000000002").ToByteArray(), 2),
-            new StorageRelayProvenanceEntry(2, Guid.Parse("20000000-0000-0000-0000-000000000001").ToByteArray(), 3)
+            new StorageRelayProvenanceEntry(1, 1),
+            new StorageRelayProvenanceEntry(1, 2),
+            new StorageRelayProvenanceEntry(2, 3)
         ], scannedThroughJournalSeq: 3);
         VerifyGoldenRows(storage, author, namespaceId);
 
@@ -99,8 +99,8 @@ static void VerifyGoldenRows(StorageDatabase storage, NodeId author, int namespa
     IReadOnlyList<StorageEntry> cursorRows = snapshot.ScanPrefix(root, cursorPrefix, 2);
     Require(cursorRows.Count == 1, "Expected exactly one durable provenance cursor.");
     byte[] cursor = cursorRows[0].Value;
-    Require(cursor.Length == 60 && cursor.AsSpan(0, 4).SequenceEqual("RPM2"u8),
-        "Persisted provenance cursor does not match RPM2.");
+    Require(cursor.Length == 60 && cursor.AsSpan(0, 4).SequenceEqual("RPM3"u8),
+        "Persisted provenance cursor does not match RPM3.");
     Require(BinaryPrimitives.ReadUInt64LittleEndian(cursor.AsSpan(4)) == 3 &&
         BinaryPrimitives.ReadUInt64LittleEndian(cursor.AsSpan(12)) == 0 &&
         BinaryPrimitives.ReadUInt64LittleEndian(cursor.AsSpan(20)) == 0,
@@ -109,24 +109,16 @@ static void VerifyGoldenRows(StorageDatabase storage, NodeId author, int namespa
     IReadOnlyList<StorageEntry> rows = snapshot.ScanPrefix(root, mappingPrefix, 4);
     Require(rows.Count == 3, "Expected three durable mapping rows.");
     ulong[] journalSequences = [1, 1, 2];
-    Guid[] ids =
-    [
-        Guid.Parse("10000000-0000-0000-0000-000000000001"),
-        Guid.Parse("10000000-0000-0000-0000-000000000002"),
-        Guid.Parse("20000000-0000-0000-0000-000000000001")
-    ];
-
     byte[] aggregate = new byte[32];
     for (int i = 0; i < rows.Count; i++)
     {
         StorageEntry row = rows[i];
-        Require(row.Key.Length == 76 && row.Value.Length == 24,
+        Require(row.Key.Length == 76 && row.Value.Length == 8,
             "Mapping key/value length differs from the golden fixture.");
         Require(BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(68, 8)) == (ulong)(i + 1),
             "Mapping key is not ordered by big-endian OutboxSeq.");
-        Require(BinaryPrimitives.ReadUInt64LittleEndian(row.Value) == journalSequences[i] &&
-            row.Value.AsSpan(8, 16).SequenceEqual(ids[i].ToByteArray()),
-            "Mapping value differs from the JournalSeq/ChangeId golden fixture.");
+        Require(BinaryPrimitives.ReadUInt64LittleEndian(row.Value) == journalSequences[i],
+            "Mapping value differs from the JournalSeq-only golden fixture.");
 
         byte[] rowBytes = new byte[row.Key.Length + row.Value.Length];
         row.Key.CopyTo(rowBytes, 0);
