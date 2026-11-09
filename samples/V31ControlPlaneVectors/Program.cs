@@ -228,7 +228,7 @@ try
     VerifySignature(beginEncoded, 102, "BIN-SYNC/FULL-REPLACE-MANIFEST/v1", publicKey, "FULL_REPLACE_BEGIN");
     FullReplaceTransferProtocol.Begin decodedBegin =
         FullReplaceTransferProtocol.DecodeBegin(beginEncoded);
-    FullReplaceTransferProtocol.VerifyBegin(decodedBegin, roster, trustStore);
+    FullReplaceTransferProtocol.VerifyBegin(decodedBegin, decodedRoster, trustStore);
     ExpectBytes(FullReplaceTransferProtocol.EncodeBegin(decodedBegin), beginEncoded,
         "FULL_REPLACE_BEGIN decode/encode roundtrip");
     byte[] tamperedBegin = beginEncoded.ToArray();
