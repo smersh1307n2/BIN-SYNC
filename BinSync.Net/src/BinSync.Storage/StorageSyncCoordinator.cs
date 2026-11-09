@@ -129,6 +129,20 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>True when this coordinator is attached to the exact supplied namespace-GC store.</summary>
+    public bool UsesNamespaceGcStore(IMetadataNamespaceGcStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        lock (_gate) return ReferenceEquals(_namespaceGcStore, store);
+    }
+
+    /// <summary>True when this coordinator trusts the exact supplied trust-store instance.</summary>
+    public bool UsesNamespaceGcTrustStore(TrustStore trustStore)
+    {
+        ArgumentNullException.ThrowIfNull(trustStore);
+        lock (_gate) return ReferenceEquals(_namespaceGcTrustStore, trustStore);
+    }
+
     /// <summary>Activate a fresh author epoch after this member has rejoined as Active.</summary>
     public void ActivateLocalAuthorEpoch(uint authorEpoch)
     {
