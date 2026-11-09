@@ -199,16 +199,17 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             bool hasIdentity = snapshot.TryGet(identityKey, out byte[]? identity);
             if (hasIdentity)
                 ValidatePartitionIdentity(partition, identity!);
+            Guid[] generations = snapshot.TryGet(indexKey, out byte[]? indexBytes)
+                ? DecodePreparedSnapshotIndex(indexBytes!)
+                : Array.Empty<Guid>();
             if (snapshot.TryGet(stateKey, out byte[]? existing))
             {
+                if (!generations.Contains(state.Generation))
+                    throw new InvalidDataException("Prepared FULL_REPLACE state exists outside its generation index.");
                 if (!existing!.AsSpan().SequenceEqual(encoded))
                     throw new InvalidOperationException("Prepared FULL_REPLACE snapshot generation is immutable.");
                 return;
             }
-
-            Guid[] generations = snapshot.TryGet(indexKey, out byte[]? indexBytes)
-                ? DecodePreparedSnapshotIndex(indexBytes!)
-                : Array.Empty<Guid>();
             if (generations.Contains(state.Generation))
                 throw new InvalidDataException("Prepared FULL_REPLACE snapshot index references a missing generation.");
             Guid[] updated = generations.Append(state.Generation).OrderBy(value => value).ToArray();
@@ -249,11 +250,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return false;
             }
             ValidatePartitionIdentity(partition, identity!);
+            byte[] indexKey = StorageKey(root, 1, EncodeNamespaceSuffix(ns));
+            Guid[] generations = snapshot.TryGet(indexKey, out byte[]? index)
+                ? DecodePreparedSnapshotIndex(index!)
+                : Array.Empty<Guid>();
+            if (!generations.Contains(generation))
+                throw new InvalidDataException("Prepared FULL_REPLACE state is absent from its durable generation index.");
             if (!snapshot.TryGet(stateKey, out byte[]? encoded))
-            {
-                state = null;
-                return false;
-            }
+                throw new InvalidDataException("Prepared FULL_REPLACE generation index references a missing state row.");
             state = DecodePreparedFullReplaceSnapshot(encoded!);
             state = state with { Generation = generation };
             return true;
@@ -277,9 +281,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!snapshot.TryGet(identityKey, out byte[]? identity))
                 return Array.Empty<Guid>();
             ValidatePartitionIdentity(partition, identity!);
-            return snapshot.TryGet(indexKey, out byte[]? index)
+            Guid[] generations = snapshot.TryGet(indexKey, out byte[]? index)
                 ? DecodePreparedSnapshotIndex(index!)
                 : Array.Empty<Guid>();
+            foreach (Guid generation in generations)
+            {
+                if (!snapshot.TryGet(StorageKey(root, 2, EncodePreparedSnapshotSuffix(ns, generation)), out _))
+                    throw new InvalidDataException("Prepared FULL_REPLACE index references a missing state row.");
+            }
+            return generations;
         }
     }
 
