@@ -41,8 +41,7 @@ A host may pipeline the per-session operations across different sessions, but mu
 After accepting the authority's current roster, an Active member publishes its signed applied-origin frontier under the composed application commit barrier, sends it, then receives and durably accepts the authority checkpoint.
 
 ```csharp
-NamespaceRosterCertificate roster =
-    await coordinator.ReceiveAndAcceptNamespaceRosterAsync(session, cancellationToken);
+_ = await coordinator.ReceiveAndAcceptNamespaceRosterAsync(session, cancellationToken);
 
 // The scanner must cover FLD/WAL/ApplyJournal plus any other external live references.
 // The lease callback composes the FLD commit guard in coordinator → Node → FLD → Storage order.
