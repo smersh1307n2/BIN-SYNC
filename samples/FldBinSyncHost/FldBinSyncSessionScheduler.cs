@@ -13,16 +13,10 @@ namespace BinSync.FldHost;
 /// </summary>
 public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
 {
-    private sealed class SessionGates : IDisposable
+    private sealed class SessionGates
     {
         public readonly SemaphoreSlim Send = new(1, 1);
         public readonly SemaphoreSlim Receive = new(1, 1);
-
-        public void Dispose()
-        {
-            Send.Dispose();
-            Receive.Dispose();
-        }
     }
 
     private readonly FldBinSyncHostAdapter _adapter;
