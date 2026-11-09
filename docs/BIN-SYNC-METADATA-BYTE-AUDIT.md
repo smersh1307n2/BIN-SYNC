@@ -61,10 +61,10 @@ Each operation's 65-byte fixed part is author[16] + ChangeId[16] + author epoch[
 
 | Row | Key bytes | Value bytes | Cardinality |
 |---|---:|---:|---|
-| Per-author scan/ACK cursor | 68 | 28 | One per (namespace, original author) that has been scanned |
+| Per-author scan/ACK cursor | 68 | 60 | One per (namespace, original author) that has been scanned |
 | JournalSeq/ChangeId/OutboxSeq mapping | 76 | 24 | One per unacknowledged relayed ChangeId |
 
-The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian OutboxSeq[8]. The value is JournalSeq[8] + ChangeId[16]. The cursor value is marker[4] + scanned JournalSeq[8] + ACKed OutboxSeq[8] + ACKed JournalSeq[8].
+The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian OutboxSeq[8]. The value is JournalSeq[8] + ChangeId[16]. The cursor value is marker[4] (RPM2) + scanned JournalSeq[8] + ACKed OutboxSeq[8] + ACKed JournalSeq[8] + mapping-set digest[32]. The digest is XOR(SHA-256(key || value)) over all retained mapping rows; append/prune updates rows and digest in one atomic Storage batch, and restart recomputes it from bounded pages.
 
 The mapping index is intentionally proportional to unacknowledged relay mappings. It is not a per-peer copy and contains no operation payload, fingerprint, receipt or OriginSequence. ACK translation is lower-bound O(log N); restart reads mapping rows in OutboxSeq order through 1,024-entry pages. Mapping rows are deleted only after FLD durably accepts the translated JournalSeq ACK.
 
