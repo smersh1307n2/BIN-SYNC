@@ -130,6 +130,28 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Read one complete host relay page and append its RPM3 provenance while the
+    /// composed application commit guard is held. The host callback must only read
+    /// and flatten durable source data; it must not perform network I/O.
+    /// </summary>
+    public bool ReadAndAppendRelayProvenancePage(
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<(StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq)> readSourcePage)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(readSourcePage);
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
+        (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq) page = readSourcePage();
+        if (page.Changes is null)
+            throw new InvalidDataException("Host relay page callback returned a null change array.");
+        return AppendRelayProvenancePage(
+            map, originalAuthor, page.Changes, page.ScannedThroughJournalSeq);
+    }
+
+    /// <summary>
     /// Resolve transient FLD ChangeIds against retained Node Outbox entries and atomically
     /// persist their compact JournalSeq↔OutboxSeq map. The global ChangeId ledger remains
     /// the identity authority; this method obtains the current OutboxSeq from the retained
