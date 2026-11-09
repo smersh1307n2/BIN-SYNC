@@ -17,7 +17,8 @@ public sealed class FldDatabaseDataProvider :
     IProviderPublishedOriginStore,
     IProviderCommitGuard,
     IProviderAuthorEpochClosureStore,
-    IProviderPublicationMode
+    IProviderPublicationMode,
+    IProviderDurableSnapshotStore
 {
     private readonly object _gate = new();
     private readonly FldDatabase _database;
