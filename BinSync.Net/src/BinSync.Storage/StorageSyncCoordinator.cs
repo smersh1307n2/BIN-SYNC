@@ -31,6 +31,18 @@ public sealed class StorageSyncCoordinator
     /// <summary>The local replica identity whose outbound streams this coordinator owns.</summary>
     public NodeId LocalReplicaId => _node.NodeId;
 
+    /// <summary>
+    /// True only when this coordinator will invoke the supplied contextual remote-apply
+    /// store instance for metadata-owned incoming batches. Hosts use this to prevent a
+    /// separately-created FLD ApplyJournal adapter from being silently bypassed.
+    /// </summary>
+    public bool UsesRemoteBatchCommitStore(IProviderRemoteBatchCommitStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        return ReferenceEquals(_remoteBatchCommitStore, store) ||
+            ReferenceEquals(_provider, store);
+    }
+
     /// <summary>True after the provider-authoritative Metadata Store publication cutover.</summary>
     public bool IsMetadataStoreOwnedPublication =>
         _provider is IProviderPublicationMode publicationMode &&
