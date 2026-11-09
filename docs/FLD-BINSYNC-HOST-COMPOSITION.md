@@ -139,3 +139,8 @@ Pass this scanner and `AcquireFldLease` into every BIN-SYNC physical-GC/frontier
 6. A failed or ambiguous durable operation closes publication until full recovery; a network retry reuses immutable outbound state.
 7. FLD1 WAL, ApplyJournal, Outbox, Run and Manifest formats remain unchanged by this adapter.
 8. Physical GC remains disabled until the host reference snapshot and composed lock proof pass T/O gates.
+
+
+## Optional source implementation
+
+The guide is now implemented by the optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost). It contains the concrete adapter for relay paging, startup reconciliation, publication ceilings, safe ACK ordering and the FLD reference scanner. The sample remains outside the default BIN-SYNC solution because FLD-DB is a separate checkout; see its README for the canonical shared-Storage project build command. It does not provide a transport implementation or enable physical GC.
