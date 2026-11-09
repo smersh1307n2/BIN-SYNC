@@ -193,16 +193,37 @@ jobs:
       - name: Vendor Ed25519 from ZtSharp (MIT subset)
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
+      - name: Check cross-repository read credential
+        id: fld_access
+        env:
+          FLD_DB_READ_TOKEN: ${{ secrets.FLD_DB_READ_TOKEN }}
+        run: |
+          if [ -n "$FLD_DB_READ_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Cross-repository FLD-DB build skipped: configure the read-only FLD_DB_READ_TOKEN repository secret."
+          fi
+
       - name: Checkout FLD-DB integration branch
+        if: steps.fld_access.outputs.available == 'true'
         uses: actions/checkout@v4
         with:
           repository: smersh1307n2/FLD-DB
           ref: fix/crash-consistency-outbox
+          token: ${{ secrets.FLD_DB_READ_TOKEN }}
           path: FLD-DB
 
       - name: Build cross-repository FLD host adapter
+        if: steps.fld_access.outputs.available == 'true'
         run: |
           dotnet build samples/FldBinSyncHost/FldBinSyncHost.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Explain skipped private cross-repository build
+        if: steps.fld_access.outputs.available != 'true'
+        run: |
+          echo "No cross-repository compile result was produced."
+          echo "Add a fine-grained read-only token with Contents: read access to smersh1307n2/FLD-DB as repository secret FLD_DB_READ_TOKEN."
