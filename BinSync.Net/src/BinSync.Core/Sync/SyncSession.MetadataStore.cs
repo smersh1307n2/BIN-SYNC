@@ -248,6 +248,39 @@ public partial class SyncSession
 
     private static IReadOnlyList<(ulong Sequence, BatchId ChangeId,
         uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)> ProjectWithinPublicationCeiling(
+        MetadataRelayPage page, ulong ceiling)
+    {
+        int count = 0;
+        ulong previous = 0;
+        bool ceilingReached = false;
+        foreach (MetadataRelayItem item in page.Items)
+        {
+            if (item.Sequence == 0 || (previous != 0 && item.Sequence <= previous))
+                throw new InvalidDataException("Metadata relay page is not strictly sequence ordered.");
+            previous = item.Sequence;
+            if (item.Sequence > ceiling)
+                ceilingReached = true;
+            else if (ceilingReached)
+                throw new InvalidDataException("Metadata relay page is not ordered at the publication ceiling.");
+            else
+                count++;
+        }
+
+        if (count == 0)
+            return Array.Empty<(ulong, BatchId, uint, ulong, byte[])>();
+        var result = new (ulong Sequence, BatchId ChangeId,
+            uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)[count];
+        for (int i = 0; i < count; i++)
+        {
+            MetadataRelayItem item = page.Items[i];
+            result[i] = (item.Sequence, item.ChangeId,
+                item.OriginAuthorEpoch, item.OriginSequence, item.Payload);
+        }
+        return result;
+    }
+
+    private static IReadOnlyList<(ulong Sequence, BatchId ChangeId,
+        uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)> ProjectWithinPublicationCeiling(
         MetadataOutboundPage page, ulong ceiling)
     {
         int count = 0;
