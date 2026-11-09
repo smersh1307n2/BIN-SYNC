@@ -82,7 +82,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Changed the integration recipe to read one `RelayJournalBatch` at a time, so the source map page ends on a complete JournalSeq boundary.
 - [x C] Added an explicit 4,096-operation guard before allocating the transient ChangeId array. An oversized single FLD JournalSeq group fails closed; it is not split across two durable map/cursor commits.
-- [~ C] The 4,096 bound is the current bounded adapter contract, not yet enforced at FLD remote-apply ingress. The two-DLL adapter must preserve this guard or introduce a separately proven continuation protocol before allowing larger journal groups.
+- [x C] The 4,096-operation bound is enforced at FLD remote-apply ingress and aggregate relay page reads; whole JournalSeq groups are never split. Boundary/resume tests remain T work.
 - [~ T] Test empty batch, one group at 4,096, one group at 4,097 and multi-operation same-JournalSeq ordering.
 ## 0.82. C-pass: document exact Outbox projection dependency of RPM3 resolver — 2026-11-09
 
@@ -104,7 +104,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Reclassified authority/member orchestration as complete at the protocol/host-recipe boundary; recurring scheduling is intentionally application-owned and must not become a protocol-core timer.
 - [x C] Reclassified signed v3.1 payload vectors and executable sample as authored; exact C# execution, decode/trust-store checks and negative cases remain T.
 - [x C] Reclassified fixed source-derived byte-layout inventory as complete across NodePersistence, Metadata Store, FLD Outbox/ApplyJournal/WAL, Storage, Manifest and Run; workload measurement and runtime amplification remain O/T.
-- [~ C] The remaining major code work is now explicit and upstream-gated: FLD two-DLL extraction, concrete synchronized-FLD publication/ACK adapter and concrete FLD reference-snapshot scanner wrapper.
+- [~ C] The physical two-DLL project consolidation is complete. Remaining cross-repository code work: generic Storage backend/WAL compatibility seam, synchronized-FLD publication/ACK host adapter, and concrete FLD reference-snapshot scanner wrapper.
 ## 0.78. Recovery checkpoints refreshed before further extraction work — 2026-11-09
 
 - [x C] Created BIN-SYNC backup branch `backup/cpass-2026-11-09-0855` at `e0eb9f17ad40abe92da5155aaa86282404acd16e`.
@@ -161,8 +161,8 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Cross-checked FLD source graph against `FLD-STORAGE-CORE-ARCHITECTURE.md`: `Fld1.Storage` is already a separate opaque byte-key/value engine, but `FldDatabase` still uses `Fld1.Engine` + FLD-specific `Fld1.Run`, `Fld1.Manifest`, `Fld1.Wal` and mixed `Fld1.Core` assemblies.
 - [x C] Recorded that there is no `Fld1.Database.csproj` and the current `FldDatabase` does not use `StorageDatabase` as its backing store. The two-DLL extraction therefore needs a physical-format/dependency seam decision, not a cosmetic AssemblyName change.
-- [~ C] FLD roadmap §7.50 now lists the extraction order: freeze FLD1 on-disk compatibility, split generic WAL mechanics from FLD codecs, classify Core primitives, consolidate Database-owned source into one physical project, and re-home Storage-only/Database tests. No third Common DLL or linked-source shortcut.
-- [~ C] Keep the FLD adapter and scanner wrapper blocked until this extraction boundary exists. Do not introduce direct Engine→BIN-SYNC dependencies.
+- [~ C] FLD roadmap §7.50/§7.57 now records the extraction order. Physical `Fld1.Database` consolidation is complete; generic WAL/file-generation reuse, Core primitive classification, public API audit, Storage-only/Database test re-homing and package proof remain. No third Common DLL or linked-source shortcut.
+- [x C] The physical `Fld1.Database` boundary now exists. Implement the adapter in a separate host/integration layer; do not introduce direct Engine/Database→BIN-SYNC dependencies.
 ## 0.67. C-pass: reject stale/duplicate relay scan pages before ChangeId lookup — 2026-11-09
 
 - [x C] `AppendRelayProvenancePage` now reads the RPM3 cursor under the already-held application guard and rejects a regressing scan cursor or non-empty page reusing the committed cursor before allocating resolver arrays or consulting Node.
@@ -175,13 +175,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Confirmed the approved FLD two-DLL extraction remains outstanding: current source still builds `Fld1.Core`, `Fld1.Engine`, `Fld1.Manifest`, `Fld1.Run`, and `Fld1.Wal` separately; `Fld1.Engine` references four of them. `Fld1.Storage` is already a separate generic project.
 - [x C] FLD-DB host reference-snapshot code passed exact-head CI at `0db64f8d8f78f714fb197e0f375a536dcdec47d6`; current FLD branch `8a113b167a85d0a01d7b492b3e340b6ee56f7b3c` has a successful `.NET CI` run. This does not validate the unbuilt cross-repository adapter.
 - [~ T] BIN-SYNC prior head `7036e1544d0e8aa3f8b4a15b2c90d0f51fb13f35` failed both Core and Fuzz/Lab at build due the bad map binding check. Fixed at `cf08a22158fc1784fe225ef38efd0e2a165d7eb1`; subsequent workflow attempts were cancelled by later pushes, so the fix remains unverified.
-- [~ C] Remaining C: two-DLL FLD extraction and public Storage API conformance; concrete FLD page read→resolver→map append→downstream send→safe ACK→FLD ACK→map prune adapter; concrete FLD reference-snapshot scanner wrapper; signed golden wire vectors and complete sample orchestration; remaining source/byte audit. Do not mark the whole adapter complete from the coordinator helper alone.
+- [~ C] Remaining C: generic Storage backend/WAL reuse and public Storage API conformance; concrete FLD page read→resolver→map append→downstream send→safe ACK→FLD ACK→map prune adapter; concrete FLD reference-snapshot scanner wrapper; signed golden wire vectors and complete sample orchestration; remaining source/byte audit. Do not mark the whole adapter complete from the coordinator helper alone.
 ## 0.65. C-pass: repair exact-head provenance binding compile blocker — 2026-11-09
 
 - [x C] Inspected both failed exact-head workflows for `7036e1544d0e8aa3f8b4a15b2c90d0f51fb13f35`; both stopped at build with CS0103 because `StorageRelayProvenanceMap.IsBoundTo` referenced nonexistent `_scopeId` / `_localReplica` fields.
 - [x C] Corrected the binding check to compare the stored canonical root's SHA-256 scope bytes and 16-byte local-replica bytes. This avoids duplicated mutable identity fields and uses the exact same root representation as the persisted map namespace.
 - [~ T] Commit `cf08a22158fc1784fe225ef38efd0e2a165d7eb1` is not yet exact-head CI validated. Both previous workflows failed before tests started; no T-pass test result is inferred.
-- [~ C] Continue the FLD host adapter/extraction and remaining control-plane/golden-vector/code-audit work before the broad T pass. Physical GC remains disabled.
+- [~ C] Continue the FLD host adapter/scanner, generic Storage backend seam, golden-vector/sample and source/byte audit before the broad T pass. The v3.1 control-plane protocol code is implemented; physical GC remains disabled.
 ## 0.64. C-pass: empty relay pages avoid resolver allocations — 2026-11-09
 
 - [x C] `AppendRelayProvenancePage` now fast-paths an empty source page directly to the atomic map cursor update, avoiding zero-length identity/sequence arrays and a no-op Node ledger lookup.
@@ -240,7 +240,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Confirmed `ReadRelayBatchPage` returns whole ApplyJournal batches for one author and advances `ScannedThroughJournalSeq` across nonmatching-author records; `AcknowledgeRelayBatches` persists the per-author source ACK.
 - [x C] Confirmed `FldReferenceSnapshot` provides exactly the four required scanner surfaces: draft horizon, ChangeId, RecordId/tombstone and receipt reference checks. It builds one immutable index under the FLD commit gate and disposes without retaining a file lock.
 - [x C] Updated `FLD-DB-INTEGRATION-CONTRACT.md` with exact current signatures and `SYNC-STORAGE-COMPACTION-ROADMAP.md` §7.47 with the source audit.
-- [~ C] The remaining blocker is no longer missing semantic logic: these APIs are still housed in the pre-extraction Engine project. The adapter must wait for neutral/two-DLL extraction; no Engine→BinSync dependency or premature package is allowed.
+- [x C] The FLD Database source is now physically consolidated in `Fld1.Database`; its actual APIs are identified. The remaining host adapter must live outside FLD and must not create an Engine→BIN-SYNC dependency or premature package.
 
 ## 0.41. C-pass: FLD target API names not misrepresented as current — 2026-11-09
 
@@ -371,14 +371,14 @@ The following is a test plan only; no tests are run in this C pass.
 
 - [x C] Mirrored the FLD roadmap's required sequencing and two-DLL dependency into `docs/FLD-DB-INTEGRATION-CONTRACT.md` §9.6.
 - [x C] The contract now explicitly distinguishes the BIN-SYNC Storage-only Metadata Store adapter from the later synchronized-FLD JournalSeq provenance adapter; neither may be placed inside `Fld1.Storage`.
-- [~ C] The adapter is an upstream dependency gate, not a locally closable task until FLD's neutral semantic/storage extraction is complete.
+- [~ C] The adapter is now actionable at the host integration boundary; finish the generic Storage backend/API compatibility gate and exact-head FLD build before binding it to the Database API.
 
 ## 0.19. Cross-repository adapter dependency revalidated — 2026-11-09
 
 - [x C] Re-read FLD-DB `SYNC-STORAGE-COMPACTION-ROADMAP.md` §§7.19–7.20 and the current FLD branch project graph. The JournalSeq→ChangeId→OutboxSeq adapter is explicitly a later integration gate, after neutral semantic operations/Data Provider conformance, BIN-SYNC persistence refactor, FLD Storage extraction, and the Storage-only Metadata Store adapter.
 - [x C] Confirmed FLD still builds the pre-extraction `Fld1.Core`, `Fld1.Engine`, `Fld1.Manifest`, `Fld1.Run` and `Fld1.Wal` projects separately; `Fld1.Storage` is not yet the persistence backend of `FldDatabase`. The approved two-public-DLL boundary is not yet the actual project/package graph.
 - [x C] FLD roadmap explicitly forbids a premature direct Node↔FldDatabase bridge or early NuGet adapter. Therefore the current BIN-SYNC Storage map primitive and sample are valid independent C work, but a concrete synchronized-FLD adapter must remain blocked until the upstream architecture gates close. Do not violate the two-DLL boundary just to clear a checkbox.
-- [~ C] Keep the host adapter/scanner gate open with this explicit dependency; resume it only after the FLD semantic and two-DLL extraction gates are complete. Storage-only mode remains a separate Metadata Store adapter path and must not instantiate FldDatabase.
+- [~ C] Keep the host adapter/scanner gate open pending FLD build validation and generic Storage backend compatibility. Storage-only mode remains a separate Metadata Store adapter path and must not instantiate FldDatabase.
 
 ## 0.18. C-pass: relay provenance storage golden vector — 2026-11-09
 
@@ -473,7 +473,7 @@ The following is a test plan only; no tests are run in this C pass.
 
 - [x C] Mapping recovery now reads durable rows through 1,024-entry `StorageSnapshot.PrefixCursor` pages instead of materializing the complete persisted prefix in one temporary list. The in-memory ordered index remains proportional to unacknowledged mappings, which is required for logarithmic ACK translation; no claim of O(page) total index memory is made.
 - [x C] Updated `docs/FLD-DB-INTEGRATION-CONTRACT.md` §9.5 with the exact host call order: page read → ChangeId resolution → atomic map+scan-cursor commit → publication gate/send → safe Outbox ACK translation → durable FLD relay ACK → mapping prune commit.
-- [~ C] The mapping primitive is not yet called by a concrete synchronized-FLD adapter. The source `FldDatabase` implementation path/API is not sufficiently identified in the current connector view to safely add a compile-bound adapter here; do not invent FLD type names or move semantic code into `Fld1.Storage`. Next inspect the FLD branch's actual Database assembly layout and integrate at that boundary.
+- [x C] The FLD Database source path and public relay/reference APIs are now identified under `src/Fld1.Database/Fld1.Engine/Db/FldDatabase.cs`. The RPM3 coordinator resolver is ready for a host adapter; no FLD types are added to `Fld1.Storage`.
 - [~ T] No tests/build were run for these C commits, by design. Compile/API conformance, same-JournalSeq multi-operation, sparse author pages, crash before/after map commit, FLD-ACK-before-prune replay and restart reconstruction remain T-pass cases.
 
 ## 0.2. C-pass: durable JournalSeq provenance mapping primitive — 2026-11-09
@@ -483,7 +483,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x C] Added monotonicity/identity validation, same-journal multi-operation support, duplicate ChangeId rejection, cursor rollback rejection and fail-closed malformed-row checks. Prefix-cursor reload reads OutboxSeq order directly and validates nondecreasing source JournalSeq without a post-load sort.
 - [x C] Added safe ACK translation: the first source JournalSeq containing any OutboxSeq above the BIN-SYNC safe watermark is retained in full; the preceding JournalSeq is the FLD safe-through. If no such mapping remains, the durable scanned-through cursor is safe.
 - [x C] Added `CommitAfterFldRelayAck`: it validates the caller's translated watermark and atomically persists the acknowledged source/destination cursors while pruning mapping rows. Its contract requires the caller to durably call FLD `AcknowledgeRelayBatches` first; after a crash before map pruning, replaying that FLD ACK is idempotent and mappings remain available.
-- [~ C] This is the durable mapping store primitive, not the complete synchronized-FLD adapter. Still open: feed `ReadRelayBatchPage` pages into it, resolve ChangeIds with `Node.TryResolveOutboxSequences`, enforce the namespace publication gate, call FLD relay ACK, and recover/reconcile the page+cursor on host startup. The adapter must use the FLD commit guard and preserve the approved two-DLL boundary.
+- [~ C] This is the durable mapping store primitive, not the complete synchronized-FLD adapter. The coordinator resolver now resolves ChangeIds and atomically appends the page map. Still open: feed actual `ReadRelayBatchPage` groups, enforce the namespace publication gate, publish immutable Outbox batches, translate safe ACK, call FLD relay ACK, prune RPM3 mappings and recover/reconcile page+cursor on host startup under the FLD commit guard.
 - [~ T] Compile/API conformance and crash-boundary tests are deferred to the dedicated T pass, as requested. No test result is claimed for this new code.
 
 ## 0.1. Resumption audit — 2026-11-09
@@ -515,7 +515,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x C] Updated the test-only `VolatileMetadataStoreAdapter` to implement `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeIdentity`. It returns fingerprint and immutable non-zero Origin from the same ChangeId ledger entry, rejects identities owned by incoming routes, and fails closed for incomplete frozen identities. This restores interface completeness without weakening production validation.
 - [ ] T remains deferred: migrate provider-draft fixtures to non-zero author epoch with `OriginSequence=0`; update test providers to implement `IProviderCommitGuard`; add freeze-before-stamp crash-window coverage. The exact-head CI must be rerun after the C pass.
 - [x C] Authority/member one-round orchestration APIs and host recipe, signed-payload vectors/sample, fixed source-derived metadata byte audit and frame registry inventory are present.
-- [~ C] Remaining upstream C gates: two-DLL FLD extraction/public Storage API; concrete FLD relay publication/ACK adapter; concrete FLD reference-snapshot scanner wrapper. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until the composed host live-reference proof and adversarial T pass.
+- [~ C] Remaining upstream C gates: generic Storage backend/WAL compatibility and public API conformance; concrete FLD relay publication/ACK adapter; concrete FLD reference-snapshot scanner wrapper. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until the composed host live-reference proof and adversarial T pass.
 
 
 ## 1. Target architecture
@@ -825,7 +825,7 @@ Append a dated entry after each meaningful implementation package. Update checkl
 
 - [~] Tighten the compact-row corruption boundary with explicit tests that orphaned payload rows and ledger/stream author mismatches fail closed during hydration; add this before accepting the 12-byte reduction.
 - [~] CI exposed a second compact-row issue: compaction still targeted legacy row kinds 4/7 after writers moved to 20/21. Fix deletion keys and assert physical removal after reopen before accepting the storage reduction.
-- [ ] Continue with ChangeId/receipt/tombstone GC safe-frontier proof; GC remains disabled because a complete namespace membership roster, contiguous per-author applied-origin frontier, snapshot generation and stale-rejoin fence are not yet available.
+- [x C] Namespace membership roster, per-author issued/applied frontiers, FULL_REPLACE-bound checkpoint, retired-origin closure and replay fence are implemented. [~ T] Physical GC remains disabled pending composed host live-reference proof, safe-horizon adversarial tests and storage/recovery validation.
 
 ### 2026-11-08 — compact-row compaction fix and exact-head green
 
@@ -999,10 +999,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 ### 2026-11-08 — v3.1 implementation pass started (not complete)
 
-- [~ C] Added `IMetadataNamespaceGcStore` as a durable metadata-store contract for accepted namespace roster, per-member Origin frontiers, retention checkpoints, FULL_REPLACE installation ACKs, and protocol-only tombstone-GC proof. This is a new production API, not merely test scaffolding.
-- [~ C] Added `StorageNamespaceGcStore` backed by the opaque Storage engine. It stores roster certificates, current-roster pointers, signed member frontiers, signed retention checkpoints and FULL_REPLACE ACKs under a separate key prefix; it shares the Storage transaction gate and does not rewrite ChangeId identity rows.
-- [~ C] Added checks for roster generation rollback/fork, authority continuity, member state transitions, Joining→Active only after a durable installed ACK, per-member frontier monotonicity, retention checkpoint monotonicity/previous-digest chain, checkpoint overclaim, all-Active-member installation, and protocol tombstone proof.
-- [~ C] Added v3.1 frame IDs and `SyncSession` send/receive adapters for signed roster, Origin frontier, retention checkpoint and FULL_REPLACE installed ACK. The methods fail closed unless the relevant v3.1 capabilities were negotiated; frontier/checkpoint and installed-ACK paths also require roster capability.
+- [x C] Added `IMetadataNamespaceGcStore` as a durable metadata-store contract for accepted namespace roster, per-member Origin frontiers, retention checkpoints, FULL_REPLACE installation ACKs, and protocol-only tombstone-GC proof. This is a new production API, not merely test scaffolding.
+- [x C] Added `StorageNamespaceGcStore` backed by the opaque Storage engine. It stores roster certificates, current-roster pointers, signed member frontiers, signed retention checkpoints and FULL_REPLACE ACKs under a separate key prefix; it shares the Storage transaction gate and does not rewrite ChangeId identity rows.
+- [x C] Added checks for roster generation rollback/fork, authority continuity, member state transitions, Joining→Active only after a durable installed ACK, per-member frontier monotonicity, retention checkpoint monotonicity/previous-digest chain, checkpoint overclaim, all-Active-member installation, and protocol tombstone proof.
+- [x C] Added v3.1 frame IDs and `SyncSession` send/receive adapters for signed roster, Origin frontier, retention checkpoint and FULL_REPLACE installed ACK. The methods fail closed unless the relevant v3.1 capabilities were negotiated; frontier/checkpoint and installed-ACK paths also require roster capability.
 - [~ T] Added Storage integration tests for restart persistence, frontier and checkpoint safety horizons, Joining-member activation fencing, rollback/fork and overclaim rejection.
 - [~ T] Added SyncSession tests for signed v3.1 frame exchange and missing-capability rejection. First CI exposed two test expectation failures: the handshake automatically negotiates `IncrementalAliasMap`; production code compiled and the remaining 676 tests passed. Corrected the assertions in commit `43efda1`; exact-head CI for `43efda1` is pending.
 - [~] The v3.1 C implementation now includes signed FULL_REPLACE BEGIN/READY/CHUNK/COMMIT/ABORT codecs, sender/receiver state machines, durable resume, signed installed ACK, roster/frontier/checkpoint storage and ChangeId forgotten-origin replay fencing. Remaining: wire the transfer to authority/member lifecycle and SyncSession orchestration, produce/publish frontiers and checkpoints, complete retired-origin closure, provide a real application-wide commit/GC lease, and finish cross-store live-reference scans. Physical receipt/ChangeId/tombstone GC is disabled.
@@ -1016,7 +1016,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x] Reconciled the commits after the previous roadmap refresh: `d58e2e5`, `1d6878d`, `eff6e6d`, `43efda1`, `640af0d` (with `c56d2e2` as the prior green checkpoint). The v3.1 work now has durable roster/frontier/checkpoint/installed-ACK storage, signed message codecs, capability-gated SyncSession send/receive adapters, and a typed receive-frame range extended through `FULL_REPLACE_ABORT`.
 - [x] Fixed the two initial SyncSession test expectation failures in `43efda1`: `IncrementalAliasMap` is automatically negotiated and must be included in expected capabilities.
 - [x] On `640af0d610c7a3ee20d001210360d555c1f60c1f`, the BinSync.Net workflow Build and benchmark build succeeded; Fuzz/Lab succeeded; the test step failed; public samples were skipped as a consequence. Coverage threshold step reported success but does not make the failed test job green.
-- [~ C] Code slice: accept registered v3.1 GC frame IDs in `ReceiveExpectedExclusiveAsync`; the upper bound is now `NamespaceGcFrames.FullReplaceAbort` rather than hard-coded v3.0 frame `0x13`.
+- [x C] Code slice: accept registered v3.1 GC frame IDs in `ReceiveExpectedExclusiveAsync`; the upper bound is now `NamespaceGcFrames.FullReplaceAbort` rather than hard-coded v3.0 frame `0x13`.
 - [~ T] Exact-head test failure on `640af0d` is not yet diagnosed. Retrieve the test failure details / TRX before changing production behavior. FLD Storage Integration run `42498381271` was still in progress when this roadmap entry was written.
 - [x C] FULL_REPLACE BEGIN/CHUNK/COMMIT/ABORT transfer state machine is implemented by `StorageFullReplaceReceiver`: signed roster/authority validation, durable bounded staging, contiguous page/index and frame-sequence enforcement, restart progress, ABORT-vs-CHUNK/COMMIT arbitration, durable bounded abort, digest-checked provider switch, composed host commit/reference scan, HLC-floor advancement and signed installed ACK. The receiver keeps the switch separate from GC.
 - [x C] Namespace roster acceptance/lifecycle validation, signed OFR2 member reports (including per-epoch issued watermarks), authority retention checkpoints, all-Active-member minimum safe frontier, retired-origin closure, FULL_REPLACE-bound HLC floor and checkpoint replay fence are implemented in `StorageNamespaceGcStore`, `OriginFrontierProtocol` and `StorageSyncCoordinator`.
@@ -1028,8 +1028,8 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 ### 2026-11-08 — v3.1 FULL_REPLACE C-pass: wire envelopes and session transport
 
-- [~ C] Added canonical bounded codecs for FULL_REPLACE_BEGIN, FULL_REPLACE_CHUNK, FULL_REPLACE_COMMIT and FULL_REPLACE_ABORT in `FullReplaceTransferProtocol.cs`. BEGIN binds namespace, generation, accepted-roster generation/digest, provider feed watermark, expected entry count and digest. CHUNK carries a bounded page (≤4096 mutations, ≤16 MiB) with strict length/trailing-byte validation and canonical ProviderMutation decoding. Control frames carry only namespace + generation.
-- [~ C] Added capability-gated `SyncSession` send/receive adapters for the four transfer frames on a dedicated per-namespace transfer stream. Receiving frames returns validated envelopes only; it does NOT stage or commit provider state.
+- [x C] Added canonical bounded codecs for FULL_REPLACE_BEGIN, FULL_REPLACE_CHUNK, FULL_REPLACE_COMMIT and FULL_REPLACE_ABORT in `FullReplaceTransferProtocol.cs`. BEGIN binds namespace, generation, accepted-roster generation/digest, provider feed watermark, expected entry count and digest. CHUNK carries a bounded page (≤4096 mutations, ≤16 MiB) with strict length/trailing-byte validation and canonical ProviderMutation decoding. Control frames carry only namespace + generation.
+- [x C] Added capability-gated `SyncSession` send/receive adapters for the four transfer frames on a dedicated per-namespace transfer stream. Receiving frames returns validated envelopes only; it does NOT stage or commit provider state.
 - [x C] Corrected all established-session receive type guards to admit registered v3.1 frame IDs through `FULL_REPLACE_ABORT`. The earlier 640af0d change had widened only `ReceiveExpectedExclusiveAsync`; `ReceivePacketAsync` and the single-reader `ReceivePumpAsync` still rejected frame IDs above 0x13. This was a real dispatcher defect and is now fixed.
 - [~ T] No focused codec/transport tests or exact-head build have yet validated this package. The previous exact run on 640af0d built successfully but failed during the test step; do not infer that this package is green.
 - [x C] Connected received BEGIN/CHUNK/COMMIT/ABORT to roster/authority validation, bounded durable provider staging, digest verification, restart progress, durable abort/recovery and installed-ACK publication. The receiver rejects wrong generation/namespace, non-contiguous chunk index, non-canonical page size, wrong frame sequence, stale roster and committed-stage mutation before provider switch.
