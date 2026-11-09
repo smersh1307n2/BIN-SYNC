@@ -26,8 +26,8 @@ Partition identity row:
 | 1 | Inbox receipt | 88 | Canonical 96; older accepted encodings 76/80/92 | One per retained (sender, transport epoch, namespace, BatchId) |
 | 2 | Receive cursor | 88 | 8 | One per (sender, sender epoch, namespace, author stream) |
 | 3 | Global ChangeId ledger | 68 | 45 | One per retained (namespace, ChangeId), shared across all peers |
-| 5 | Relay ACK + high watermark | 68 | 16 | One per (namespace, original author) |
-| 8 | Outbound ACK + high watermark | 68 | 16 | One per (namespace, local author) |
+| 5 | Relay ACK + high watermark | 68 | 16 | One per (namespace, original author); canonical combined row only |
+| 8 | Outbound ACK + high watermark | 68 | 16 | One per (namespace, local author); canonical combined row only |
 | 10 | Outbound lease | 68 | 24 | At most one active lease per (namespace, local author) |
 | 12 | PendingApply | 66 | Dynamic | One per unresolved apply token; removed on completion |
 | 13 | CompletedApply receipt | 66 | Canonical 85; older accepted encoding 69 | One per completed apply token while retained |
@@ -43,7 +43,7 @@ Partition identity row:
 
 The 45-byte ChangeId ledger value is: fingerprint[16] + author NodeId[16] + author epoch[4] + OriginSequence[8] + local-outbound flag[1]. The 20-byte payload-row envelope is ChangeId[16] + payload length[4]. Immutable origin is deliberately not duplicated in relay/outbound payload rows; it is hydrated from the global ChangeId ledger.
 
-The 16-byte stream watermark is acknowledged sequence[8] + high watermark[8]. The 24-byte lease value is generation[8] + consumer Guid[16].
+The 16-byte stream watermark is acknowledged sequence[8] + high watermark[8]. Decoder-only split-row kinds 6/9 and 8-byte ACK/high-watermark values are rejected; current writers emit only the canonical combined kind 5/8 rows. The 24-byte lease value is generation[8] + consumer Guid[16].
 
 The 46-byte peer stream base value is version[1] + ACK cursor[8] + pushed cursor[8] + stream offset[8] + issuer epoch[4] + last digest[16] + pending-present flag[1]. A pending batch adds 80 fixed bytes plus its encoded payload.
 
