@@ -177,3 +177,115 @@ public interface IProviderCommitGuard
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
 public sealed record ProviderApplyReceipt(Guid ApplyToken, byte[] BatchFingerprint, bool IsDuplicate);
+
+/// <summary>
+/// Full, transport-neutral remote batch context delivered to providers that persist a
+/// source-specific apply journal. Sender/transport epoch are distinct from the wire
+/// issuer/author epoch; cursor and digest-chain values are the received immutable batch
+/// coordinates. Current v3 DELTA_BATCH has no separate protocol-state-delta field, so
+/// that payload is empty unless a future negotiated contract supplies one.
+/// </summary>
+public sealed class ProviderRemoteBatchCommit
+{
+    public Guid ApplyToken { get; }
+    public NodeId SenderPeer { get; }
+    public uint SenderTransportEpoch { get; }
+    public int NamespaceId { get; }
+    public NodeId IssuerNodeId { get; }
+    public uint IssuerEpoch { get; }
+    public BatchId BatchId { get; }
+    public ulong CursorStart { get; }
+    public ulong CursorEnd { get; }
+    public byte[] PreviousBatchDigest { get; }
+    public byte[] BatchDigest { get; }
+    public byte[] RecordsRoot { get; }
+    public byte[] ProtocolStateDelta { get; }
+    public IReadOnlyList<ProviderMutation> Mutations { get; }
+
+    public ProviderRemoteBatchCommit(
+        Guid applyToken,
+        NodeId senderPeer,
+        uint senderTransportEpoch,
+        int namespaceId,
+        NodeId issuerNodeId,
+        uint issuerEpoch,
+        BatchId batchId,
+        ulong cursorStart,
+        ulong cursorEnd,
+        ReadOnlySpan<byte> previousBatchDigest,
+        ReadOnlySpan<byte> batchDigest,
+        ReadOnlySpan<byte> recordsRoot,
+        ReadOnlySpan<byte> protocolStateDelta,
+        IReadOnlyList<ProviderMutation> mutations)
+    {
+        if (applyToken == Guid.Empty) throw new ArgumentException("Apply token must be non-empty.", nameof(applyToken));
+        if (senderPeer.IsZero) throw new ArgumentException("Sender peer must be non-zero.", nameof(senderPeer));
+        if (issuerNodeId.IsZero) throw new ArgumentException("Batch issuer must be non-zero.", nameof(issuerNodeId));
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (issuerEpoch == 0) throw new ArgumentOutOfRangeException(nameof(issuerEpoch));
+        if (batchId.IsZero) throw new ArgumentException("Batch identity must be non-zero.", nameof(batchId));
+        if (cursorStart == 0 || cursorEnd < cursorStart)
+            throw new ArgumentOutOfRangeException(nameof(cursorStart), "Remote batch cursor range is invalid.");
+        if (previousBatchDigest.Length != 16 || batchDigest.Length != 16 || recordsRoot.Length != 16)
+            throw new ArgumentException("v3 batch digests must be exactly 16 bytes.");
+        if (protocolStateDelta.Length > 4 * 1024 * 1024)
+            throw new ArgumentOutOfRangeException(nameof(protocolStateDelta));
+        ArgumentNullException.ThrowIfNull(mutations);
+        if (mutations.Count == 0 || mutations.Count > 4096 ||
+            checked(cursorEnd - cursorStart + 1) != (ulong)mutations.Count)
+            throw new ArgumentException("Remote batch mutation count must match its bounded cursor range.", nameof(mutations));
+
+        var owned = new ProviderMutation[mutations.Count];
+        var seen = new HashSet<BatchId>();
+        for (int i = 0; i < mutations.Count; i++)
+        {
+            ProviderMutation mutation = mutations[i]
+                ?? throw new ArgumentException("Remote batch contains a null mutation.", nameof(mutations));
+            ProviderMutationCodec.ValidatePublished(mutation);
+            if (!seen.Add(mutation.ChangeId))
+                throw new ArgumentException("Remote batch contains duplicate ChangeId values.", nameof(mutations));
+            owned[i] = new ProviderMutation
+            {
+                RecordId = mutation.RecordId,
+                FieldId = mutation.FieldId,
+                IsTombstone = mutation.IsTombstone,
+                IsRecordTombstone = mutation.IsRecordTombstone,
+                HlcWall = mutation.HlcWall,
+                HlcLogical = mutation.HlcLogical,
+                AuthorNodeId = mutation.AuthorNodeId,
+                KeyEpoch = mutation.KeyEpoch,
+                Value = mutation.Value.ToArray(),
+                ChangeId = mutation.ChangeId,
+                OriginAuthorEpoch = mutation.OriginAuthorEpoch,
+                OriginSequence = mutation.OriginSequence
+            };
+        }
+
+        ApplyToken = applyToken;
+        SenderPeer = senderPeer;
+        SenderTransportEpoch = senderTransportEpoch;
+        NamespaceId = namespaceId;
+        IssuerNodeId = issuerNodeId;
+        IssuerEpoch = issuerEpoch;
+        BatchId = batchId;
+        CursorStart = cursorStart;
+        CursorEnd = cursorEnd;
+        PreviousBatchDigest = previousBatchDigest.ToArray();
+        BatchDigest = batchDigest.ToArray();
+        RecordsRoot = recordsRoot.ToArray();
+        ProtocolStateDelta = protocolStateDelta.ToArray();
+        Mutations = Array.AsReadOnly(owned);
+    }
+}
+
+/// <summary>
+/// Optional provider capability for a full remote-apply journal. Adapters that
+/// implement this interface receive the complete immutable batch header instead of
+/// only the lossy (ApplyToken, mutations) projection. BIN-SYNC falls back to
+/// IDataProvider.ApplyRemoteBatch for providers that do not need the wider context.
+/// </summary>
+public interface IProviderRemoteBatchCommitStore
+{
+    ProviderApplyReceipt ApplyRemoteBatch(ProviderRemoteBatchCommit batch);
+}
