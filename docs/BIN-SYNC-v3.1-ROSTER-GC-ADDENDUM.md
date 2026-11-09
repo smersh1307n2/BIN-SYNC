@@ -503,3 +503,8 @@ The provider terminal-retirement operation now takes the declared final author e
 The host scanner now opens a partition-scoped \`IApplicationGcReferenceScan\` while the composed application commit lease is held. The scan object supplies the unpublished draft horizon and indexed receipt/ChangeId/RecordId queries. OFR2, receipt GC, ChangeId GC and tombstone GC each open one scan and reuse it for the complete operation, avoiding candidate-count × host-history rescans.
 
 FLD exposes the neutral \`FldDatabase.OpenReferenceSnapshot()\` / \`FldReferenceSnapshot\` primitive. It indexes dirty local state, unacknowledged Outbox entries and retained ApplyJournal field/relay payloads once; any unsealed WAL prefix conservatively makes every destructive-reference query return live and keeps the unpublished-draft horizon non-zero. This is required because restart recovery may reconstruct previously acknowledged/compacted Outbox rows from an unsealed WAL; final author closure must wait for source checkpoint/seal so those old writes cannot be republished under a fresh author epoch. The thin adapter still belongs outside FLD so no BIN-SYNC dependency is introduced into the database engine.
+
+
+## 10.29. FULL_REPLACE requires an empty host draft horizon (2026-11-09)
+
+\`StorageFullReplaceReceiver\` now requires the partition-scoped host reference scanner and scope id. While holding the composed application commit lease, it opens one host scan and refuses the generation switch if either the host unpublished draft horizon or provider local feed is non-zero. Because the FLD horizon remains non-zero while WAL is unsealed, callers must checkpoint/seal source WAL before FULL_REPLACE can commit. The same host scan/lease contract is used for OFR2 and physical GC.
