@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.81. C-pass: legacy TCP session API search closed — 2026-11-09
+
+- [x C] Searched the current BIN-SYNC repository for `TcpSyncSession`, `TcpSyncClient` and `LegacyTcp`; no remaining source references were returned.
+- [x C] Confirmed the current TCP examples are transport adapters around the generic `SyncSession`/`ISyncTransport` surface, not a parallel TCP-specific session API.
+- [~ T] Run full solution plus all sample builds and inspect the final public API diff; a search result alone is not a build/conformance proof.
 ## 0.80. Recovery checkpoints refreshed after persistence and sample C slices — 2026-11-09
 
 - [x C] Created BIN-SYNC `backup/cpass-2026-11-09-0915` at `bf277d14aea91977feb5ea4ba57ce3234a681baa`.
@@ -617,7 +622,7 @@ Design: [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.m
 ### Phase 5 — Public API and clean cutover
 
 - [x C] The public `TcpSyncSession` surface is already removed by the v3 clean cut; `docs/PUBLIC-API.md` explicitly records the removal and generic `SyncSession` as the transport-independent API. No compatibility wrapper is to be restored.
-- [~ C] Audit all examples/tests and remaining public API for legacy TCP-specific/compatibility-only references; migrate any remaining call sites to canonical `SyncSession`/`ISyncTransport`/provider API during the C pass, then verify in Phase T.
+- [x C] Repository code search for `TcpSyncSession`, `TcpSyncClient` and `LegacyTcp` returns no remaining references; current TCP samples use the generic `SyncSession`/`ISyncTransport` path through transport adapters. [~ T] Run the full solution/sample build and public API surface audit on the exact final head.
 - [x] Removed optional immutable-Origin provenance negotiation: v3 HELLO/HELLO_ACK carry and require ProtocolMajor=3; `SessionCapabilities` contains no provenance/downgrade bit and decode rejects every other major.
 - [x C] On Metadata-Store-owned cutover, Node drops its namespace `GlobalChangeLedger` and Outbox payload projections; `SeenChanges` remains only as the distinct WAL replay marker. Cutover/restart assertions pass.
 - [x C] Mandatory `BSP3` provider marker and active-generation pointer are written atomically on fresh open; unmarked/unknown partitions fail closed. Current state keys are generation-scoped; LocalChange rows require exactly one nonzero ChangeId suffix and no read-time synthesis. Exact checkpoint CI green.
@@ -891,7 +896,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x] Confirmed the v3 public API contract explicitly states that `TcpSyncSession` was removed and the TCP listener now returns the generic `SyncSession`; no legacy public session wrapper is to be preserved.
 - [x] Updated `docs/PUBLIC-API.md` normative reference from the historical v2.4.17 text to BIN-SYNC-SPECIFICATION.txt v3.0.0 clean-break contract.
-- [~] Remaining C work: scan and migrate every sample/test/API call site still using TCP-specific or compatibility-only entry points. The complete build/reference audit is deferred to Phase T.
+- [x C] Legacy TCP-specific session/client entry-point source search is clean; current TCP samples use the canonical generic session/transport API. [~ T] Complete compile/reference/API audit in Phase T.
 - [~] Current branch head at this log entry: `d501785`; exact-head CI remains pending for the C-pass code changes `aab64ad` and `f0c2bd8`.
 
 
