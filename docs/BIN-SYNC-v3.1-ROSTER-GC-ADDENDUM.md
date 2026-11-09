@@ -530,3 +530,8 @@ The host implementation now prepares one immutable provider snapshot and one sig
 ## 10.31. Sender independently validates receiver FRA2 HLC floor against the source snapshot (2026-11-09)
 
 The authority sender computes the maximum HLC while scanning the same immutable provider snapshot that feeds the signed FULL_REPLACE digest. The prepared snapshot retains this pair through multi-recipient fanout/retry. On receiving FRA2, the sender validates the member signature and all target/roster/generation/digest fields, then requires exact equality of both HLC wall and logical components with the locally computed source floor before persisting the ACK. This prevents an otherwise valid member signature from substituting a larger or smaller reported HLC horizon. The RCP2 publisher therefore aggregates ACKs that have each been checked against the same immutable source generation, not merely ACKs that happen to agree with one another.
+
+
+## 10.32. Prepared FULL_REPLACE source snapshot lease protects active sends
+
+`PreparedFullReplaceSnapshot` now defers releasing the underlying provider snapshot token while one or more `SendPreparedSnapshotAsync` operations hold transfer leases. Calling `Dispose()` prevents new transfers immediately but the provider snapshot remains readable until the final active send exits, including cancellation and fault paths. The final lease release performs the one `ReleaseSnapshot` call. This removes the race in which a host could dispose a shared prepared generation while an asynchronous recipient transfer was between READY and its final CHUNK/COMMIT. The source snapshot remains in-process only; this does not create durable restart recovery.
