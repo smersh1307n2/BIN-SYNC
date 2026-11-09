@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
 namespace BinSync.Storage;
@@ -298,17 +297,7 @@ public sealed class StorageRelayPublicationGate
                     authors.Add(author);
             }
         }
-        // Match NodeId.ToString()'s canonical byte/hex order without allocating
-        // a 16-byte array and 32-character string for every comparison.
-        authors.Sort(static (left, right) =>
-        {
-            int lo = BinaryPrimitives.ReverseEndianness(left.Lo)
-                .CompareTo(BinaryPrimitives.ReverseEndianness(right.Lo));
-            return lo != 0
-                ? lo
-                : BinaryPrimitives.ReverseEndianness(left.Hi)
-                    .CompareTo(BinaryPrimitives.ReverseEndianness(right.Hi));
-        });
+        authors.Sort(NodeIdCanonicalComparer.Instance);
         return authors.ToArray();
     }
 
