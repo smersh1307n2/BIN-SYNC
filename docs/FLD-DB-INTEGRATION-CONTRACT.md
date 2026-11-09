@@ -105,7 +105,7 @@ The source-level integration boundary now has concrete BIN-SYNC coordinator orch
 
 **FLD Database APIs (in `Fld1.Database`):**
 
-- `FldDatabase.AcquireCommitGuard()` — serializes local commits, remote apply, checkpoint/recovery-sensitive operations and reference snapshots.
+- `FldDatabase.AcquireCommitGuard()` — serializes local commits, remote apply, checkpoint/recovery-sensitive operations and reference snapshots. `AcquireReferenceSnapshotGuard(out FldReferenceSnapshot snapshot)` is the safer one-call composition: it acquires this guard first, captures the immutable snapshot under it, returns the guard to the caller, and disposes the guard if snapshot creation fails. The host scan wrapper owns both returned guard and snapshot; dispose the snapshot first, then the guard on the acquiring thread.
 - `FldDatabase.ReadUnacknowledgedRelayAuthors()` — enumerates remote author streams with unacknowledged relay rows by scanning the durable ApplyJournal once; returns identity bytes only and creates no second persistent author index.
 - `FldDatabase.ReadRelayBatchPage(author, afterJournalSeq, limit)` — returns complete journal batches plus `ScannedThroughJournalSeq`. The page is now bounded to 4,096 matching operations in aggregate and never splits a JournalSeq group.
 - `FldDatabase.AcknowledgeRelayBatches(author, safeThroughJournalSeq)` — durably acknowledges a per-original-author source prefix; physical removal still waits for the FLD checkpoint/compaction path.
@@ -346,7 +346,7 @@ The scan object must implement all three reference checks:
 
 Unknown/corrupt retained records are live references. Scanner exceptions fail closed. The scanner must be partition-scoped by (scopeId, localReplica, namespaceId) and must not infer namespace from an unrelated global cursor.
 
-This is an integration contract, not an assertion that the FLD adapter already exists. Until the adapter, lock composition and cross-store crash tests are implemented, all physical GC feature flags remain false. The current FLD `FldReferenceSnapshot` already provides the source-side queries needed by the adapter: `UnpublishedLocalDraftHorizon`, `HasChangeIdReference`, `HasRecordReference`, and `HasReceiptReference`. It is built once by `OpenReferenceSnapshot()` while `AcquireCommitGuard()` is held and owns in-memory indexes only; the wrapper should dispose it with the BIN-SYNC scan lease.
+This is an integration contract, not an assertion that the FLD adapter already exists. Until the adapter, lock composition and cross-store crash tests are implemented, all physical GC feature flags remain false. The current FLD `FldReferenceSnapshot` already provides the source-side queries needed by the adapter: `UnpublishedLocalDraftHorizon`, `HasChangeIdReference`, `HasRecordReference`, and `HasReceiptReference`. It is built once by `OpenReferenceSnapshot()` while `AcquireCommitGuard()` is held (prefer `AcquireReferenceSnapshotGuard(out snapshot)` to avoid an unlocked gap) and owns in-memory indexes only; the wrapper should dispose it with the BIN-SYNC scan lease.
 
 
 ### 9.4 Freeze-before-stamp crash recovery and ChangeId GC
