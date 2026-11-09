@@ -1,3 +1,11 @@
+## 1.13. C-pass: generic Storage blob publication/cleanup source audit — 2026-11-10
+
+- [x C] Re-read FLD-DB `StorageBlobStore` end-to-end. Immutable blob publication is ordered as pending catalog row → atomic page-file writes → page-directory fsync → complete catalog marker; readers pin the immutable generation and validate page geometry plus whole-blob SHA-256 when streaming.
+- [x C] Confirmed deletion removes the catalog row before page-directory cleanup; interrupted cleanup is recoverable through orphan pruning. Pending catalog generations remain protected by catalog presence, and reader pins block deletion.
+- [x C] Confirmed persisted page geometry is authoritative for existing generations; changing the configured default page size affects only new blobs. Metadata decode validates page count without overflow-prone round-up arithmetic.
+- [~ T] Crash/fault proof remains open for every pending-row/page/temp-rename/directory-fsync/completion-marker boundary, catalog-delete/page-delete interruption, orphan cleanup and concurrent reader pins. Source review is not a durability test.
+- [~ C] Continue the remaining cross-store reference/liveness ordering and final public API/source/byte audit. Do not enable physical receipt, ChangeId or tombstone/Ghost GC.
+
 ## 1.12. C-pass: preserve issued-origin maxima across signed frontier reports — 2026-11-10
 
 - [x C] Hardened `StorageNamespaceGcStore.AcceptOriginFrontier`: every previously reported author epoch must remain present, and its issued sequence plus maximum HLC (wall/logical tuple) may not regress in a later signed report. The applied-origin vector was already monotonic; the issued-origin vector is independently consumed by tombstone/GC proof construction and must be monotonic as well.
