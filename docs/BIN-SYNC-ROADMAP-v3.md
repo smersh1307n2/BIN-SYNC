@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.63. C-pass: source JournalSeq order validated before ledger work — 2026-11-09
+
+- [x C] `AppendRelayProvenancePage` now rejects zero, decreasing or beyond-scanned JournalSeq values before allocating/consulting the Node ledger; same-JournalSeq operations remain allowed as one complete source batch.
+- [~ T] Verify malformed page rejection does not touch Node Outbox or Storage cursor.
+
 ## 0.59. C-pass: relay provenance resolver page bounded — 2026-11-09
 
 - [x C] `AppendRelayProvenancePage` now rejects more than 4,096 source changes before allocating identity/sequence arrays, matching the coordinator's existing bounded page policy.
