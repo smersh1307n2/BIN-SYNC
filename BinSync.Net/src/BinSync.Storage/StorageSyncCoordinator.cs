@@ -30,6 +30,18 @@ public sealed class StorageSyncCoordinator
     /// <summary>The local replica identity whose outbound streams this coordinator owns.</summary>
     public NodeId LocalReplicaId => _node.NodeId;
 
+    internal void ValidateRelayProvenanceMap(StorageRelayProvenanceMap map)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        if (_metadataStore is not StorageMetadataStore metadataStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Relay publication requires the durable StorageMetadataStore and a stable metadata scope.");
+        if (!map.IsBoundTo(_scopeId, _node.NodeId) || !map.IsBoundTo(metadataStore))
+            throw new InvalidOperationException(
+                "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
+    }
+
     public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId,
         IMetadataStore? metadataStore = null, string? scopeId = null)
     {
