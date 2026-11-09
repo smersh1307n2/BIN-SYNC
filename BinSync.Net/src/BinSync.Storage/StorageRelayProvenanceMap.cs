@@ -7,6 +7,14 @@ using Fld1.Storage.Engine;
 namespace BinSync.Storage;
 
 /// <summary>
+/// Per-author publication ceiling. A sender must not expose outbound operations with
+/// sequence values above PublishedThroughSequence; those source changes have not yet
+/// been durably mapped from FLD JournalSeq into the active BIN-SYNC outbound authority.
+/// </summary>
+public readonly record struct StorageRelayAuthorPublicationWatermark(
+    NodeId Author, ulong PublishedThroughSequence, ulong ScannedThroughJournalSeq);
+
+/// <summary>
 /// Durable source JournalSeq ↔ BIN-SYNC per-author outbound sequence bridge for synchronized FLD databases (Node Outbox before metadata-owned cutover, Metadata Store relay sequence after cutover).
 /// ChangeId identity remains in BIN-SYNC's global ChangeId ledger; this stores only the
 /// cross-coordinate mapping and scan/ACK cursors, never ChangeId or operation payloads.
@@ -111,6 +119,26 @@ public sealed class StorageRelayProvenanceMap
                 state.ScannedThroughJournalSeq,
                 state.AckedThroughOutboxSeq,
                 state.AckedThroughJournalSeq);
+        }
+    }
+
+    /// <summary>
+    /// Return the highest sequence with a durable source-provenance mapping for this
+    /// author. Hosts must cap every outbound read/send at this value; an appended FLD
+    /// Outbox row is not publishable merely because it exists.
+    /// </summary>
+    public StorageRelayAuthorPublicationWatermark ReadPublicationWatermark(
+        int namespaceId, NodeId author)
+    {
+        ValidateStream(namespaceId, author);
+        lock (_gate)
+        {
+            StreamState state = GetState(namespaceId, author);
+            ulong publishedThrough = state.Mappings.Count == 0
+                ? state.AckedThroughOutboxSeq
+                : state.Mappings[^1].OutboxSeq;
+            return new StorageRelayAuthorPublicationWatermark(
+                author, publishedThrough, state.ScannedThroughJournalSeq);
         }
     }
 
