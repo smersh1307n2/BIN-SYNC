@@ -100,9 +100,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 nodeOutboxHighWatermark = 0;
                 return false;
             }
-            if (value!.Length != sizeof(ulong))
-                throw new InvalidDataException("Provider publication cutover marker has an invalid length.");
-            nodeOutboxHighWatermark = BinaryPrimitives.ReadUInt64LittleEndian(value);
+            nodeOutboxHighWatermark = DecodeProviderPublicationCutover(value!);
             return true;
         }
     }
@@ -132,8 +130,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 if (!hasIdentity)
                     throw new InvalidDataException("Provider publication cutover marker has no partition identity row.");
-                if (existing!.Length != sizeof(ulong) ||
-                    BinaryPrimitives.ReadUInt64LittleEndian(existing) != nodeOutboxHighWatermark)
+                if (DecodeProviderPublicationCutover(existing!) != nodeOutboxHighWatermark)
                     throw new InvalidOperationException("Provider publication cutover watermark is immutable.");
                 return;
             }
@@ -144,9 +141,28 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
             if (!hasIdentity)
                 batch.Put(identityKey, EncodePartitionIdentity(partition));
-            batch.Put(markerKey, EncodeUInt64(nodeOutboxHighWatermark));
+            batch.Put(markerKey, EncodeProviderPublicationCutover(nodeOutboxHighWatermark));
             batch.Commit();
         }
+    }
+
+    private static byte[] EncodeProviderPublicationCutover(ulong nodeOutboxHighWatermark)
+    {
+        byte[] value = new byte[16];
+        BinaryPrimitives.WriteUInt32LittleEndian(value, ProviderPublicationCutoverMagic);
+        BinaryPrimitives.WriteUInt16LittleEndian(value.AsSpan(4), ProviderPublicationCutoverVersion);
+        BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), nodeOutboxHighWatermark);
+        return value;
+    }
+
+    private static ulong DecodeProviderPublicationCutover(byte[] value)
+    {
+        if (value.Length != 16 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(value) != ProviderPublicationCutoverMagic ||
+            BinaryPrimitives.ReadUInt16LittleEndian(value.AsSpan(4)) != ProviderPublicationCutoverVersion ||
+            BinaryPrimitives.ReadUInt16LittleEndian(value.AsSpan(6)) != 0)
+            throw new InvalidDataException("Provider publication cutover marker is not in canonical MCP1 format.");
+        return BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(8));
     }
 
     private static byte[] PublicationModeRoot(PartitionKey partition)
@@ -3416,6 +3432,8 @@ private static bool ValidateIncomingBatchForStaging(
     private static readonly Dictionary<string, (byte[] Key, byte[] Value)> EmptyEntries = new(StringComparer.Ordinal);
 
     private const uint MetadataPartitionMagicV3 = 0x33534D42; // "BMS3" little-endian
+    private const uint ProviderPublicationCutoverMagic = 0x3150434D; // "MCP1" little-endian
+    private const ushort ProviderPublicationCutoverVersion = 1;
 
     private static byte[] EncodePartitionIdentity(PartitionKey partition)
     {
