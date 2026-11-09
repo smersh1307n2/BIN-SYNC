@@ -82,15 +82,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] root = PublicationModeRoot(partition);
             using var snapshot = _storage.OpenSnapshot();
             byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
-            if (!snapshot.TryGet(identityKey, out byte[]? identity))
+            byte[] suffix = new byte[2];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, ns);
+            byte[] markerKey = StorageKey(root, 1, suffix);
+            bool hasIdentity = snapshot.TryGet(identityKey, out byte[]? identity);
+            bool hasMarker = snapshot.TryGet(markerKey, out byte[]? value);
+            if (!hasIdentity)
             {
+                if (hasMarker)
+                    throw new InvalidDataException("Provider publication cutover marker has no partition identity row.");
                 nodeOutboxHighWatermark = 0;
                 return false;
             }
             ValidatePartitionIdentity(partition, identity!);
-            byte[] suffix = new byte[2];
-            BinaryPrimitives.WriteUInt16LittleEndian(suffix, ns);
-            if (!snapshot.TryGet(StorageKey(root, 1, suffix), out byte[]? value))
+            if (!hasMarker)
             {
                 nodeOutboxHighWatermark = 0;
                 return false;
@@ -120,10 +125,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] markerKey = StorageKey(root, 1, suffix);
             using var snapshot = _storage.OpenSnapshot();
 
-            if (snapshot.TryGet(identityKey, out byte[]? identity))
+            bool hasIdentity = snapshot.TryGet(identityKey, out byte[]? identity);
+            if (hasIdentity)
                 ValidatePartitionIdentity(partition, identity!);
             if (snapshot.TryGet(markerKey, out byte[]? existing))
             {
+                if (!hasIdentity)
+                    throw new InvalidDataException("Provider publication cutover marker has no partition identity row.");
                 if (existing!.Length != sizeof(ulong) ||
                     BinaryPrimitives.ReadUInt64LittleEndian(existing) != nodeOutboxHighWatermark)
                     throw new InvalidOperationException("Provider publication cutover watermark is immutable.");
@@ -134,7 +142,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ulong actualBaseCommitSeq = _storage.LastCommitSeq;
             if (actualBaseCommitSeq != snapshot.CommitSeq)
                 throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
-            if (!snapshot.TryGet(identityKey, out _))
+            if (!hasIdentity)
                 batch.Put(identityKey, EncodePartitionIdentity(partition));
             batch.Put(markerKey, EncodeUInt64(nodeOutboxHighWatermark));
             batch.Commit();
