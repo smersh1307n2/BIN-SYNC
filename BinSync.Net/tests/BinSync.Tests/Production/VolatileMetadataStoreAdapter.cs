@@ -505,6 +505,43 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         return true;
     }
 
+    public bool TryGetOutboundChangeIdentity(
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        BatchId changeId,
+        out ReadOnlyMemory<byte> fingerprint,
+        out OperationOrigin origin)
+    {
+        ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+        if (changeId.IsZero)
+            throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
+
+        fingerprint = ReadOnlyMemory<byte>.Empty;
+        origin = default;
+        if (!_partitions.TryGetValue(new PartitionKey(scopeId, localReplica), out var state))
+            return false;
+
+        var outboundKey = new OutboundChangeKey(namespaceId, changeId);
+        var ledgerKey = new LedgerKey(namespaceId, changeId);
+        if (!state.ChangeLedger.TryGetValue(ledgerKey, out var identity))
+        {
+            if (state.OutboundChangeIds.Contains(outboundKey))
+                throw new InvalidDataException("Frozen outbound ChangeId is missing its global fingerprint.");
+            return false;
+        }
+        if (!state.OutboundChangeIds.Contains(outboundKey))
+            throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
+        if (!identity.IsLocalOutbound)
+            throw new InvalidDataException("Provider ChangeId is owned by an incoming route.");
+        if (identity.AuthorNodeId.IsZero || identity.OriginAuthorEpoch == 0 || identity.OriginSequence == 0)
+            throw new InvalidDataException("Frozen outbound ChangeId is missing immutable Origin provenance.");
+
+        fingerprint = identity.Fingerprint;
+        origin = new OperationOrigin(identity.AuthorNodeId, identity.OriginAuthorEpoch, identity.OriginSequence);
+        return true;
+    }
+
     public ulong AcquireOutboundLease(
         string scopeId,
         NodeId localReplica,
