@@ -71,8 +71,16 @@ public sealed class FldBinSyncHostAdapter
     {
         ArgumentNullException.ThrowIfNull(persistNode);
         if (_coordinator.IsMetadataStoreOwnedPublication)
+        {
+            using IDisposable recoveryGuard =
+                _coordinator.AcquireApplicationCommitGuard(_database.AcquireCommitGuard);
             _ = _coordinator.RecoverPendingApplies(persistNode);
-        PublishLocalChanges(persistNode, limit);
+            PublishLocalChanges(persistNode, limit);
+        }
+        else
+        {
+            PublishLocalChanges(persistNode, limit);
+        }
         return await RecoverAndPublishAllAsync(
             publishReadyOutbox, cancellationToken).ConfigureAwait(false);
     }
