@@ -159,7 +159,7 @@ public interface IProviderAuthorEpochClosureStore
 {
     /// <summary>Closes the epoch only when no unpublished feed entries for it remain.</summary>
     bool TryCloseLocalAuthorEpoch(uint authorEpoch);
-    void CloseLocalAuthorIdentity();
+    void CloseLocalAuthorIdentity(uint finalAuthorEpoch);
     void ActivateLocalAuthorEpoch(uint authorEpoch);
 }
 
