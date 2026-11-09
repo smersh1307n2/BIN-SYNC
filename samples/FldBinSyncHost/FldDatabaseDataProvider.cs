@@ -568,6 +568,12 @@ public sealed class FldDatabaseDataProvider :
     /// Reclaims snapshot generations not referenced by recovered FULL_REPLACE sender
     /// progress. The host must pass the complete durable active-token set.
     /// </summary>
+    public bool TryGetPersistedSnapshotWatermark(Guid snapshotToken, out ulong changeFeedWatermark)
+    {
+        EnsureOpen();
+        return _database.TryGetProviderSnapshotWatermark(snapshotToken, out changeFeedWatermark);
+    }
+
     public void PruneSnapshotsExcept(IReadOnlySet<Guid> activeGenerations)
     {
         ArgumentNullException.ThrowIfNull(activeGenerations);
