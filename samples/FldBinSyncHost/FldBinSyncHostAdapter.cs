@@ -17,6 +17,7 @@ public sealed class FldBinSyncHostAdapter
     private const int MaximumSourceChangesPerPage = 4096;
 
     private readonly FldDatabase _database;
+    private readonly FldDatabaseDataProvider _dataProvider;
     private readonly StorageSyncCoordinator _coordinator;
     private readonly StorageRelayProvenanceMap _map;
     private readonly StorageRelayPublicationGate _publicationGate;
@@ -24,18 +25,24 @@ public sealed class FldBinSyncHostAdapter
 
     public FldBinSyncHostAdapter(
         FldDatabase database,
+        FldDatabaseDataProvider dataProvider,
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
         string scopeId,
         FldRemoteBatchApplyStore remoteBatchApplyStore)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
+        _dataProvider = dataProvider ?? throw new ArgumentNullException(nameof(dataProvider));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _map = map ?? throw new ArgumentNullException(nameof(map));
         ArgumentNullException.ThrowIfNull(remoteBatchApplyStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (coordinator.NamespaceId != checked((int)database.NamespaceId))
             throw new ArgumentException("The coordinator and FLD database must target the same namespace.", nameof(coordinator));
+        if (!dataProvider.IsBoundTo(database))
+            throw new ArgumentException("The FLD data provider must target this exact database instance.", nameof(dataProvider));
+        if (!coordinator.UsesDataProvider(dataProvider))
+            throw new ArgumentException("The StorageSyncCoordinator must be constructed with this exact FldDatabaseDataProvider.", nameof(coordinator));
         if (!remoteBatchApplyStore.IsBoundTo(database))
             throw new ArgumentException(
                 "The contextual remote-apply store must target this exact FLD database instance.",
