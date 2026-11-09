@@ -26,14 +26,24 @@ public sealed class FldBinSyncHostAdapter
         FldDatabase database,
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
-        string scopeId)
+        string scopeId,
+        FldRemoteBatchApplyStore remoteBatchApplyStore)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _map = map ?? throw new ArgumentNullException(nameof(map));
+        ArgumentNullException.ThrowIfNull(remoteBatchApplyStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (coordinator.NamespaceId != checked((int)database.NamespaceId))
             throw new ArgumentException("The coordinator and FLD database must target the same namespace.", nameof(coordinator));
+        if (!remoteBatchApplyStore.IsBoundTo(database))
+            throw new ArgumentException(
+                "The contextual remote-apply store must target this exact FLD database instance.",
+                nameof(remoteBatchApplyStore));
+        if (!coordinator.UsesRemoteBatchCommitStore(remoteBatchApplyStore))
+            throw new ArgumentException(
+                "The StorageSyncCoordinator must be constructed with this exact FldRemoteBatchApplyStore.",
+                nameof(coordinator));
 
         _scopeId = scopeId;
         _publicationGate = StorageRelayPublicationGate.For(coordinator);
