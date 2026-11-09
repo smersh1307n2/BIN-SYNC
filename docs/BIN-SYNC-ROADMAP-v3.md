@@ -1733,6 +1733,6 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 ## 0.98. C-pass: expose provider-feed freeze in the concrete host adapter — 2026-11-09
 
-- [x C] `FldBinSyncHostAdapter.PublishLocalChanges(persistNode, limit)` now exposes the coordinator's local-feed freeze operation. The host can explicitly drain provider changes into Node Outbox before cutover or Metadata Store after cutover before capturing publication ceilings.
-- [x C] The integration guide and sample lifecycle now require a local-feed freeze before startup recovery/publication and before each later outbound gate invocation. Provider edits not frozen at the captured barrier remain above the ceiling and are deferred safely.
+- [x C] `FldBinSyncHostAdapter.PublishLocalChanges(persistNode, limit)` exposes the coordinator's local-feed freeze operation. Convenience overloads for `RecoverAndPublishAllAsync`, `ApplyAndPublishAllAsync` and `RunOutboundAsync` invoke it before entering the gate, draining provider changes into Node Outbox before cutover or Metadata Store after cutover.
+- [x C] The integration guide and sample lifecycle require a local-feed freeze before startup recovery/publication and before each later outbound gate invocation. Provider edits not frozen at the captured barrier remain above the ceiling and are deferred safely.
 - [~ T] Verify feed drain, idempotent retry, persistence callback ordering and concurrent provider writes around ceiling capture in both publication modes. No tests/build have been run for this C-pass.
