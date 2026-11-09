@@ -183,6 +183,8 @@ public sealed class StorageSyncCoordinator
                 (i == 0 ? journalSeq <= previousJournalSeq : journalSeq < previousJournalSeq) ||
                 journalSeq > scannedThroughJournalSeq)
                 throw new InvalidDataException("Relay source JournalSeq values must start after the prior cursor, remain non-decreasing within the page, and not exceed the scanned cursor.");
+            if (sourceChanges[i].ChangeId.IsZero)
+                throw new InvalidDataException("Relay source ChangeId must be non-zero before Outbox identity resolution.");
             previousJournalSeq = journalSeq;
         }
 
