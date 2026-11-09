@@ -1451,3 +1451,9 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ T] FLD exact-head CI on `a0ea90b9490cc1d93eafd048008327a5bcb4a54f` failed on all three OS jobs, but diagnostic log retrieval returned unavailable blobs. The consolidation has not been accepted as built until actionable errors are inspected and Ubuntu/macOS/Windows pass.
 - [~ C] This does not yet supply the cross-repository host adapter. The FLD host must still read complete JournalSeq pages, hold the FLD commit guard while invoking the BIN-SYNC coordinator resolver, send immutable OutboxSeq batches, translate safe ACK back to FLD RelayJournalBatch ACK, then prune RPM3 map rows. The host GC scanner must bind one FLD reference snapshot under the same composed guard.
 - [~ T] BIN-SYNC exact-head `29eea904621768175d1021f2de487d144c7d2d50` remains red: 6/678 Core tests and 80/171 Storage Integration tests fail for known stale fixture/provider-contract reasons; Fuzz/Lab passes. Do not relax production checks.
+
+### 2026-11-09 — C-pass: reject replayed JournalSeq at resolver boundary
+
+- [x C] `AppendRelayProvenancePage` now rejects a first source JournalSeq equal to or below the already committed scan cursor before allocating resolver arrays or touching the Node ledger. Subsequent entries may share a JournalSeq (one source batch with multiple operations) but may not decrease.
+- [x C] This makes the coordinator's early validation match `StorageRelayProvenanceMap.AppendPage`'s strict page-boundary rule; the durable map remains the final atomic invariant check.
+- [~ T] Add direct tests for first-entry-equals-cursor, decreasing JournalSeq, same-JournalSeq multi-operation page, and assert rejected pages do not mutate Node Outbox or map cursor.
