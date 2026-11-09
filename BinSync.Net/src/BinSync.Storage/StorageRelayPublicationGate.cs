@@ -53,6 +53,47 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
+    /// Startup/recovery path: validate the persisted RPM3 cursor against the durable
+    /// source JournalSeq high watermark, then reconcile and publish the next page while
+    /// the namespace sender remains serialized behind this gate.
+    /// </summary>
+    public async ValueTask<bool> RecoverAndPublishPageAsync(
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<ulong> readSourceJournalHighWatermark,
+        Func<(StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq)> readSourcePage,
+        Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(readSourceJournalHighWatermark);
+        ArgumentNullException.ThrowIfNull(readSourcePage);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            coordinator.ValidateRelayProvenanceRecovery(
+                map, originalAuthor, acquireHostCommitLease, readSourceJournalHighWatermark);
+            bool committed = coordinator.ReadAndAppendRelayProvenancePage(
+                map, originalAuthor, acquireHostCommitLease, readSourcePage);
+            if (!committed)
+                return false;
+
+            await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Read one whole FLD relay page, resolve all ChangeIds, persist its RPM3 cursor,
     /// and only then allow the host to publish/send ready Outbox entries. If resolution
     /// fails because a source ChangeId is no longer retained, the callback is not run.
