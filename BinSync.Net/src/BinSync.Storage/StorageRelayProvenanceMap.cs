@@ -34,6 +34,7 @@ public sealed class StorageRelayProvenanceMap
         public ulong AckedThroughOutboxSeq;
         public ulong AckedThroughJournalSeq;
         public readonly List<Mapping> Mappings = new();
+        public readonly HashSet<string> ChangeIds = new(StringComparer.Ordinal);
     }
 
     private readonly record struct Mapping(ulong JournalSeq, byte[] ChangeId, ulong OutboxSeq);
@@ -91,8 +92,7 @@ public sealed class StorageRelayProvenanceMap
             ulong priorOutbox = state.Mappings.Count == 0
                 ? state.AckedThroughOutboxSeq
                 : state.Mappings[^1].OutboxSeq;
-            var seen = new HashSet<string>(
-                state.Mappings.Select(mapping => Convert.ToHexString(mapping.ChangeId)), StringComparer.Ordinal);
+            var pageChangeIds = new HashSet<string>(StringComparer.Ordinal);
             bool firstEntry = true;
             var writes = new List<(byte[] Key, byte[] Value)>(entries.Count + 1);
             var appended = new List<Mapping>(entries.Count);
@@ -110,8 +110,8 @@ public sealed class StorageRelayProvenanceMap
                 if (entry.OutboxSeq == 0 || entry.OutboxSeq <= priorOutbox)
                     throw new InvalidDataException("Mapped OutboxSeq values must be non-zero and strictly increasing per author.");
                 string identity = Convert.ToHexString(changeId);
-                if (!seen.Add(identity))
-                    throw new InvalidDataException("A ChangeId occurs more than once in one relay page.");
+                if (state.ChangeIds.Contains(identity) || !pageChangeIds.Add(identity))
+                    throw new InvalidDataException("A ChangeId is already mapped in this author stream or occurs more than once in the page.");
 
                 byte[] key = MappingKey(namespaceId, author, entry.OutboxSeq);
                 byte[] value = new byte[8 + ChangeIdLength];
@@ -144,6 +144,8 @@ public sealed class StorageRelayProvenanceMap
             batch.Commit();
 
             state.Mappings.AddRange(appended);
+            foreach (Mapping mapping in appended)
+                state.ChangeIds.Add(Convert.ToHexString(mapping.ChangeId));
             state.ScannedThroughJournalSeq = scannedThroughJournalSeq;
         }
     }
@@ -213,6 +215,11 @@ public sealed class StorageRelayProvenanceMap
             batch.Put(cursorKey, cursorValue);
             batch.Commit();
 
+            foreach (Mapping mapping in state.Mappings)
+            {
+                if (mapping.JournalSeq > safeThroughJournalSeq) break;
+                state.ChangeIds.Remove(Convert.ToHexString(mapping.ChangeId));
+            }
             state.Mappings.RemoveAll(mapping => mapping.JournalSeq <= safeThroughJournalSeq);
             state.AckedThroughOutboxSeq = safeOutboxSeq;
             state.AckedThroughJournalSeq = safeThroughJournalSeq;
@@ -252,7 +259,8 @@ public sealed class StorageRelayProvenanceMap
                     ulong outboxSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
                     ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
                     byte[] changeId = row.Value.AsSpan(8, ChangeIdLength).ToArray();
-                    if (!loadedChangeIds.Add(Convert.ToHexString(changeId)))
+                    string changeIdHex = Convert.ToHexString(changeId);
+                    if (!loadedChangeIds.Add(changeIdHex))
                         throw new InvalidDataException("A ChangeId is mapped more than once in one author stream.");
                     if (journalSeq <= state.AckedThroughJournalSeq ||
                         journalSeq > state.ScannedThroughJournalSeq ||
@@ -262,6 +270,7 @@ public sealed class StorageRelayProvenanceMap
                              journalSeq < state.Mappings[^1].JournalSeq)))
                         throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
                     state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
+                    state.ChangeIds.Add(changeIdHex);
                 }
                 if (page.Count < pageSize) break;
             }
