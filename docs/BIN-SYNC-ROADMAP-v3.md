@@ -2049,8 +2049,8 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 ## 1.32. C-pass: reclaim provider snapshot generations that never published a manifest — 2026-11-09
 
-- [x C] FLD open now removes only GUID-named provider snapshot directories that lack the final `snapshot.manifest`. Such a directory could not have been returned as a durable snapshot token and therefore cannot carry a recoverable Run pin.
-- [x C] Cleanup runs after FULL_REPLACE stage-marker recovery and before Run/blob orphan collection. Directories with a valid manifest are preserved; corrupt manifests still fail closed through the pin scan and are never treated as permission to delete Runs.
-- [x C] The snapshot-root directory is flushed after successful cleanup on Linux/macOS; Windows directory-entry durability remains unclaimed.
+- [x C] Audit rejected automatic deletion of GUID-named snapshot directories without a final `snapshot.manifest`: after a crash, absence can mean either an unpublished generation or loss/corruption of a previously durable pin manifest. FLD's pin scan now returns an indeterminate result for this case, and Run/blob orphan GC fails closed.
+- [x C] `PruneProviderSnapshotsExcept` remains the only destructive cleanup path for such directories and may run only after the host supplies the complete durable sender-generation set. It removes generations absent from that authority set, then flushes the snapshot-root directory on Linux/macOS.
+- [x C] Valid manifests are parsed and their Run IDs retained; corrupt/missing manifests never become implicit permission to delete Runs. Windows directory-entry durability remains unclaimed.
 - [~ T] Add crash cuts before/after final manifest rename, restart cleanup of temp-only generations, preservation of valid token generations, corrupt-manifest fail-closed and interaction with sender progress pruning. No exact-head build/test result is claimed.
 - [~ C] Continue final source/API/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
