@@ -156,3 +156,8 @@ The adapter provides `RecoverAndPublishAllAsync(persistNode, ...)`, `ApplyAndPub
 
 
 The optional host adapter's `PublishReadyOutboxAsync` converts the captured watermark set into a per-author ceiling map and drains the peer session using the matching ceiling-aware Core overload. Before cutover it uses Node-owned `SyncSession.PushBatchAsync`; after cutover it uses the Metadata Store overload. Both paths filter local-outbound and relay pages before batch construction. The Metadata Store path also rejects any immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Authors absent from the set and zero-ceiling authors are not eligible. The captured authority-mode bit prevents a cutover race. Do not use a legacy ceiling-free overload inside this FLD publication gate.
+
+
+### Remaining provider bridge (still C-pass)
+
+The optional adapter is intentionally only the relay/ACK/GC integration layer. It accepts a preconstructed `StorageSyncCoordinator` and a host-supplied remote-apply callback. It does not yet implement `IDataProvider` over `FldDatabase`: FLD needs a generation-pinned, paged full-data snapshot API, and the neutral provider apply contract must carry the complete remote batch context (sender peer/epoch, issuer, cursor, batch identity/digests and relay writes) so FLD can persist the correct `RemoteBatchCommit` without synthetic identities. This is a separate remaining C-pass item, not a test-only task.
