@@ -8,18 +8,22 @@ The BIN-SYNC `StorageMetadataStore`, `StorageNodePersistence`, namespace GC stor
 
 ```csharp
 int namespaceId = checked((int)fld.NamespaceId);
-var metadata = new StorageMetadataStore(syncStorage);
+var metadataStore = new StorageMetadataStore(syncStorage);
 var map = new StorageRelayProvenanceMap(syncStorage, scopeId, localReplica);
-var coordinator = new StorageSyncCoordinator(node, provider, namespaceId, metadata, scopeId);
-var relayGate = StorageRelayPublicationGate.For(coordinator);
+
+// TODO C-pass: provide the generation-pinned FldDatabase -> IDataProvider adapter.
+// Do not replace this with an in-memory mirror or a second independent database.
+IDataProvider fldDataProvider = CreateFldDataProvider(fld);
+
 var fldApply = new FldRemoteBatchApplyStore(fld);
 var coordinator = new StorageSyncCoordinator(
     node, fldDataProvider, namespaceId, metadataStore, scopeId,
     remoteBatchCommitStore: fldApply);
 var adapter = new FldBinSyncHostAdapter(
     fld, coordinator, map, scopeId, fldApply);
+var relayGate = StorageRelayPublicationGate.For(coordinator);
 
-IDisposable? AcquireFldLease() => fld.AcquireCommitGuard();
+IDisposable AcquireFldLease() => fld.AcquireCommitGuard();
 ```
 
 Keep one `FldDatabase`, one `StorageSyncCoordinator`, one RPM3 map and one shared publication gate per local replica/scope/namespace. Never send directly through a session outside this gate. The gate captures the local author's publication high watermark together with all relay-author RPM3 ceilings under the same composed commit guard. Before provider cutover, the local watermark comes from Node Outbox; after cutover, it comes from Metadata Store. The captured mode is carried with every watermark so the host cannot race the cutover between capture and send.
@@ -80,7 +84,7 @@ ValueTask<bool> RecoverRelayAsync(CancellationToken cancellationToken) =>
         cancellationToken);
 ```
 
-For each newly accepted remote batch, the host must use `ApplyAndPublishAllAsync` so durable APPLY, relay-page mapping and the sender callback are serialized by the same gate. If APPLY or mapping fails after the remote commit may have become durable, the gate closes publication and requires full recovery before another sender callback. A failed network send is retried from immutable durable outbound state; it must not create a new ChangeId or source mapping.
+For each newly accepted remote batch, the host must use `ReceiveAndPublishAllAsync(inboundSession, persistNode, ...)`. It routes through `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync`, so PendingApply, Node checkpoint, contextual FLD ApplyJournal and Metadata receipt finalization complete before the source ACK; the gate then drains relay pages and invokes the ceiling-aware sender. Use lower-level `ApplyAndPublishAllAsync` only for a host callback that itself performs the same durable receive-before-ACK sequence. If APPLY or mapping fails after the remote commit may have become durable, the gate closes publication and requires full recovery before another sender callback. A failed network send is retried from immutable durable outbound state; it must not create a new ChangeId or source mapping.
 
 ## Safe ACK order
 
