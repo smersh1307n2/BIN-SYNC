@@ -7,7 +7,8 @@ namespace BinSync.FldHost;
 /// Application-owned, one-shot v3.1 namespace-GC round orchestration.
 /// The caller owns sessions, durable frame-sequence allocation, cadence and retries;
 /// this helper only enforces the required ordering across the coordinator APIs.
-/// It deliberately creates no timer, worker or background receive loop.
+/// Use one instance per namespace/coordinator. The round gate enforces one local
+/// control-plane round at a time. No timer, worker or background receive loop is created.
 /// </summary>
 public sealed class V31NamespaceGcHostOrchestrator
 {
@@ -15,6 +16,7 @@ public sealed class V31NamespaceGcHostOrchestrator
     private readonly IApplicationGcReferenceScanner _externalState;
     private readonly Func<IDisposable?> _acquireHostCommitLease;
     private readonly Func<SyncSession, ulong> _nextFrameSequence;
+    private readonly SemaphoreSlim _roundGate = new(1, 1);
 
     public V31NamespaceGcHostOrchestrator(
         StorageSyncCoordinator coordinator,
@@ -59,6 +61,9 @@ public sealed class V31NamespaceGcHostOrchestrator
         int pageSize = 1024,
         CancellationToken cancellationToken = default)
     {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
         ArgumentNullException.ThrowIfNull(authoritySeed);
         if (authoritySeed.Length != 32)
             throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
@@ -107,6 +112,11 @@ public sealed class V31NamespaceGcHostOrchestrator
         await BroadcastAcceptedCheckpointAsync(
             sessions, checkpoint, authoritySeed, cancellationToken).ConfigureAwait(false);
         return checkpoint;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
     }
 
     /// <summary>
@@ -149,6 +159,9 @@ public sealed class V31NamespaceGcHostOrchestrator
         int pageSize = 1024,
         CancellationToken cancellationToken = default)
     {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
         ArgumentNullException.ThrowIfNull(authoritySession);
         ArgumentNullException.ThrowIfNull(memberSeed);
         if (memberSeed.Length != 32)
@@ -188,21 +201,34 @@ public sealed class V31NamespaceGcHostOrchestrator
         if (checkpoint.RosterGeneration != roster.RosterGeneration)
             throw new InvalidDataException("The accepted RCP2 checkpoint does not match the accepted roster generation.");
         return checkpoint;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
     }
 
     /// <summary>Resend the latest durable local OFR2 without allocating a new report sequence.</summary>
-    public Task<AppliedOriginFrontierReport> ResendAcceptedFrontierAsync(
+    public async Task<AppliedOriginFrontierReport> ResendAcceptedFrontierAsync(
         SyncSession authoritySession,
         byte[] memberSeed,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(authoritySession);
-        ArgumentNullException.ThrowIfNull(memberSeed);
-        return _coordinator.SendAcceptedAppliedOriginFrontierAsync(
-            authoritySession,
-            memberSeed,
-            NextSequence(authoritySession),
-            cancellationToken);
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authoritySession);
+            ArgumentNullException.ThrowIfNull(memberSeed);
+            return await _coordinator.SendAcceptedAppliedOriginFrontierAsync(
+                authoritySession,
+                memberSeed,
+                NextSequence(authoritySession),
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
     }
 
     private SyncSession[] ValidateSessions(IReadOnlyList<SyncSession> sessions)
