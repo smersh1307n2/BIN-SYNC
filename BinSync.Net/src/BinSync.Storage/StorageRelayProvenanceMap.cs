@@ -12,7 +12,10 @@ namespace BinSync.Storage;
 /// been durably mapped from FLD JournalSeq into the active BIN-SYNC outbound authority.
 /// </summary>
 public readonly record struct StorageRelayAuthorPublicationWatermark(
-    NodeId Author, ulong PublishedThroughSequence, ulong ScannedThroughJournalSeq);
+    NodeId Author,
+    ulong PublishedThroughSequence,
+    ulong ScannedThroughJournalSeq,
+    bool IsMetadataStoreOwnedPublication = false);
 
 /// <summary>
 /// Durable source JournalSeq ↔ BIN-SYNC per-author outbound sequence bridge for synchronized FLD databases (Node Outbox before metadata-owned cutover, Metadata Store relay sequence after cutover).
