@@ -304,3 +304,6 @@ Blind merge compares ciphertext with open HLC + author.
 ### Optional full provider remote-apply context
 
 Providers that maintain a source-specific durable apply journal may implement `IProviderRemoteBatchCommitStore`. `StorageSyncCoordinator` then supplies `ProviderRemoteBatchCommit`, preserving transport sender/epoch separately from wire issuer/epoch plus BatchId, cursor range, previous/current digest, records root and immutable provider mutations across PendingApply and restart recovery. Providers that do not need this context continue to use the base `IDataProvider.ApplyRemoteBatch(applyToken, mutations)` contract. This capability does not replace the separate v3.1 roster/frontier/FULL_REPLACE release gates or authorize physical GC.
+
+
+`StorageSyncCoordinator` also accepts an optional `IProviderRemoteBatchCommitStore` constructor argument independent of `IDataProvider`, allowing hosts to compose a source-specific ApplyJournal adapter over the same provider database. The explicit capability is used for receive and PendingApply recovery; otherwise the coordinator uses a provider-implemented capability or the base mutation-only fallback. Hosts must bind both contracts to the same durable storage and application commit lease.
