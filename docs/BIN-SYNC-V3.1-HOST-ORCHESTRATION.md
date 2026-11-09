@@ -129,3 +129,8 @@ A host may retain one `PreparedFullReplaceSnapshot` for multi-recipient fanout/r
 ### Joining promotion and HLC floor
 
 After a Joining member has completed FULL_REPLACE and its signed FRA2 is durably stored, promotion checks that both HLC floor components in that ACK exactly match the prior accepted FULL_REPLACE-bound RCP2, in addition to generation/digest, roster generation and transport epoch. A mismatch leaves the member Joining; do not promote using only a matching snapshot digest.
+
+
+### v3.1 capability dependencies
+
+The session enforces the same dependency masks in both directions: NRS2 requires `NamespaceRosterV31`; OFR2 and RCP2 require both `NamespaceRosterV31` and `OriginFrontierV31`; all FULL_REPLACE frames and FRA2 require both `NamespaceRosterV31` and `FullReplaceV31`. A partial capability intersection can still establish a v3.0-capable session, but the dependent v3.1 operation throws before transport I/O. The host should treat that as a capability incompatibility and must not retry the same v3.1 operation through a v3.0 frame fallback.
