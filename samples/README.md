@@ -36,3 +36,8 @@ dotnet run --project samples/ScenarioHarness -c Release -- --soak 10
 | S10 | Soak (`--soak [sec]`, default 15) |
 
 S1–S8 exercise the public in-process `Transport` helpers and core mutation APIs. S9 and the dedicated loopback/TCP samples demonstrate the transport-independent session API used by production transport adapters.
+
+
+## v3.1 host integration
+
+The authority/member control-plane round, Joining/FULL_REPLACE/Active lifecycle, one-checkpoint-per-round broadcast and application-owned scheduling are documented in [BIN-SYNC-V3.1-HOST-ORCHESTRATION.md](../docs/BIN-SYNC-V3.1-HOST-ORCHESTRATION.md). The synchronized-FLD JournalSeq provenance adapter remains a later integration gate after FLD's neutral semantic and two-DLL extraction work; see [FLD-DB-INTEGRATION-CONTRACT.md](../docs/FLD-DB-INTEGRATION-CONTRACT.md).
