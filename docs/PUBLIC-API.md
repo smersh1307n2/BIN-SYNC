@@ -22,7 +22,7 @@ Everything `internal`, under `*.Tests`, `bench/`, and unmarked helpers is **not*
 
 Opt-in surfaces (causal, E2EE, schema, trust gates) stay opt-in: enabling them is configuration, not a silent default change.
 
-**v3.1 extension note:** signed namespace rosters, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE wire frames are implemented in the current branch as the separately negotiated v3.1 extension (`BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md`). They are not part of the v3.0 wire baseline. Coordinator operations are explicit; the host owns lifecycle scheduling, cadence and one receive owner per `SyncSession`. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the composed host-reference proof and T-pass close.
+**Mandatory v3.1 project extension:** signed namespace rosters, member applied-origin frontiers, authority-signed retention checkpoints and FULL_REPLACE wire frames are specified in [`BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md`](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md) and must be implemented/validated before project completion. They are separate negotiated protocol behavior and do not alter the v3.0 wire baseline. Host lifecycle guidance is [`BIN-SYNC-V3.1-HOST-ORCHESTRATION.md`](BIN-SYNC-V3.1-HOST-ORCHESTRATION.md); exact signed payload fixtures are [`BIN-SYNC-v3.1-GOLDEN-VECTORS.md`](BIN-SYNC-v3.1-GOLDEN-VECTORS.md). Coordinator operations remain explicit; host owns lifecycle scheduling, cadence and one receive owner per `SyncSession`. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the composed host-reference proof and independent T-pass horizons close.
 
 ---
 
