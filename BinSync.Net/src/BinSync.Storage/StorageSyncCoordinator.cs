@@ -43,6 +43,13 @@ public sealed class StorageSyncCoordinator
             ReferenceEquals(_provider, store);
     }
 
+    /// <summary>True only when this coordinator uses the exact supplied application data provider.</summary>
+    public bool UsesDataProvider(IDataProvider provider)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        return ReferenceEquals(_provider, provider);
+    }
+
     /// <summary>True only when this coordinator uses the exact supplied Metadata Store instance.</summary>
     public bool UsesMetadataPeerStateStore(IMetadataPeerStateStore store)
     {
