@@ -85,7 +85,7 @@ public static class StorageFullReplaceSender
     {
         ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
-        ArgumentNullException.ThrowIfNull(localReplica);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
         PreparedFullReplaceSnapshot prepared = PrepareSnapshot(
             provider, trustStore, roster, authorityNodeId, generation, authoritySeed);
         try
@@ -144,7 +144,8 @@ public static class StorageFullReplaceSender
 
         var snapshot = new ProviderSnapshotHandle(state.SnapshotToken, state.SourceFeedWatermark);
         ProviderSnapshotPage firstPage = provider.ReadSnapshot(snapshot.Token, 0, 1);
-        if (firstPage.NextIndex > manifest.ExpectedEntryCount ||
+        if (firstPage.Entries.Count != firstPage.NextIndex ||
+            firstPage.NextIndex > manifest.ExpectedEntryCount ||
             firstPage.IsComplete != (firstPage.NextIndex == manifest.ExpectedEntryCount))
             throw new InvalidDataException("Restored provider snapshot does not match the signed entry count.");
 
@@ -178,9 +179,9 @@ public static class StorageFullReplaceSender
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
-        prepared.ReleasePermanently(provider);
         metadataStore.DeletePreparedFullReplaceSnapshot(
             scopeId, localReplica, prepared.NamespaceId, prepared.Generation);
+        prepared.ReleasePermanently(provider);
     }
 
     /// <summary>Reclaims provider snapshot generations not present in durable sender progress.</summary>
@@ -193,9 +194,18 @@ public static class StorageFullReplaceSender
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(metadataStore);
-        IReadOnlyList<Guid> active = metadataStore.ListPreparedFullReplaceSnapshotGenerations(
+        IReadOnlyList<Guid> generations = metadataStore.ListPreparedFullReplaceSnapshotGenerations(
             scopeId, localReplica, namespaceId);
-        provider.PruneSnapshotsExcept(active.ToHashSet());
+        var activeSnapshotTokens = new HashSet<Guid>();
+        foreach (Guid generation in generations)
+        {
+            if (!metadataStore.TryGetPreparedFullReplaceSnapshot(
+                    scopeId, localReplica, namespaceId, generation, out PreparedFullReplaceSnapshotState? state) ||
+                state is null)
+                throw new InvalidDataException("Prepared FULL_REPLACE index references a missing source generation.");
+            activeSnapshotTokens.Add(state.SnapshotToken);
+        }
+        provider.PruneSnapshotsExcept(activeSnapshotTokens);
     }
 
     /// <summary>
