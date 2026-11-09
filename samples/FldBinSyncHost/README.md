@@ -46,33 +46,43 @@ FLD checkout as competing type identities.
    database instance or a coordinator that does not use that exact capability.
    This prevents field state and ApplyJournal receipts from landing in separate DBs.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
-   enabling any sender after process startup. It freezes the provider feed into
-   the active outbound authority before startup recovery and publication. Its watermark set contains the local-author ceiling plus every FLD
-   relay author's RPM3 ceiling. Before Metadata Store cutover the local ceiling
-   comes from Node Outbox; after cutover it comes from Metadata Store. Use
-   `PublishReadyOutboxAsync` in the callback; it selects the matching ceiling-aware
-   `SyncSession.PushBatchAsync` overload from the mode captured with the ceilings.
+   enabling any sender after process startup. It recovers durable PendingApply
+   intents and freezes the local provider feed under the composed coordinator →
+   Node → FLD → Storage commit barrier. Before cutover it then reconciles FLD
+   JournalSeq pages into RPM3. After Metadata Store cutover it skips FLD relay
+   scanning entirely and captures the local outbound plus every relay-author
+   high watermark directly from Metadata Store. Use `PublishReadyOutboxAsync`
+   in the callback; it selects the matching ceiling-aware sender from the
+   authority mode captured with the ceilings.
 4. Route inbound batches through `ReceiveAndPublishAllAsync(inboundSession, persistNode, ...)`.
    This calls `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync`, so PendingApply,
    Node checkpoint, the injected `FldRemoteBatchApplyStore` and Metadata receipt
-   finalization complete before the incoming sender is ACKed; only then does the
-   relay gate drain and publish downstream. Route subsequent outbound sends through
-   `RunOutboundAsync(persistNode, ...)`.
-   These overloads freeze newly pending local feed entries before each gate invocation.
-5. Route safe ACK through `AcknowledgeAllAsync`. FLD's durable ACK occurs
-   before RPM3 pruning.
+   finalization complete before the incoming sender is ACKed. In metadata-owned
+   mode that finalization also atomically creates the authoritative relay payload
+   in Metadata Store; FLD ApplyJournal retains contextual receipt/recovery data but
+   deliberately receives no duplicate `RelayWrites`. Route subsequent outbound
+   sends through `RunOutboundAsync(persistNode, ...)`; the local feed freeze runs
+   before each gate invocation.
+5. After downstream peer ACKs, use the matching retention operation:
+   - Metadata Store-owned mode: per-peer ACK/reservation state is already committed
+     by `SyncSession`; call `CompactAcknowledgedRelayPayloadsAsync` to compact
+     Metadata Store relay payload through the minimum durable peer ACK. Do not
+     call FLD `AcknowledgeRelayBatches` or RPM3 in this mode.
+   - Legacy Node-owned mode: call `AcknowledgeAllAsync`; it translates safe
+     OutboxSeq through RPM3, durably ACKs FLD JournalSeq, then prunes RPM3.
+   Never combine the two authorities or duplicate a relay payload journal.
 6. Pass `CreateReferenceScanner()` to the BIN-SYNC physical-GC/frontier and
    FULL_REPLACE proof paths, with the same
    `StorageSyncCoordinator.AcquireApplicationCommitGuard(fld.AcquireCommitGuard)`
    lease factory.
 
 This sample binds the durable contracts, lock order and bounded sender path. The
-application still creates/owns its `SyncSession` instances and transport lifecycle;
-inside the publication-gate callback, call `PublishReadyOutboxAsync` so the Core
-sender filters every author page to the captured ceiling. Before cutover it uses
-Node-owned Outbox transport; after cutover it uses Metadata Store-owned transport.
-The mode bit is captured under the same commit barrier as the ceilings, preventing
-a cutover race from mixing sequence authorities. Do not call a legacy ceiling-free
+application still creates/owns its `SyncSession` instances and transport lifecycle.
+Before cutover the Node-owned sender uses the RPM3-mapped per-author ceiling. After
+cutover, the same helper reads both local outbound and relay author ceilings directly
+from Metadata Store; FLD JournalSeq and RPM3 are not consulted for publication or
+ACK/compaction. The mode bit is captured under the composed commit barrier, preventing
+a cutover race from mixing sequence domains. Do not call a legacy ceiling-free
 overload from this FLD relay path. Physical GC remains disabled.
 
 
