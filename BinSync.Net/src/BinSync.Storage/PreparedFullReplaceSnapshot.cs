@@ -3,8 +3,9 @@ namespace BinSync.Storage;
 /// <summary>
 /// One immutable provider snapshot and its signed FULL_REPLACE manifest, prepared once
 /// and reusable for every recipient in the same namespace generation. The instance owns
-/// the provider snapshot token. Dispose requests release; active send leases keep the
-/// token alive until their transfer exits, including on cancellation or failure.
+/// the provider snapshot token. Non-persisted instances release on Dispose; persisted
+/// instances detach while retaining their durable generation for restart. Use the
+/// sender's ReleasePreparedSnapshot method for permanent release.
 /// </summary>
 public sealed class PreparedFullReplaceSnapshot : IDisposable
 {
