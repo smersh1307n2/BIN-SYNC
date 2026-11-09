@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
 using BinSync;
 using BinSync.Storage;
 using Fld1.Storage.Engine;
@@ -21,6 +24,7 @@ try
             new StorageRelayProvenanceEntry(1, Guid.Parse("10000000-0000-0000-0000-000000000002").ToByteArray(), 2),
             new StorageRelayProvenanceEntry(2, Guid.Parse("20000000-0000-0000-0000-000000000001").ToByteArray(), 3)
         ], scannedThroughJournalSeq: 3);
+        VerifyGoldenRows(storage, author, namespaceId);
 
         Require(map.TranslateSafeOutboxSequence(namespaceId, author, 1) == 0,
             "A partial ACK must not split one FLD JournalSeq.");
@@ -71,4 +75,67 @@ finally
 static void Require(bool condition, string message)
 {
     if (!condition) throw new InvalidOperationException(message);
+}
+
+static void VerifyGoldenRows(StorageDatabase storage, NodeId author, int namespaceId)
+{
+    byte[] scopeHash = SHA256.HashData(Encoding.UTF8.GetBytes("relay-provenance-sample"));
+    byte[] root = new byte[49];
+    root[0] = 0x6D;
+    scopeHash.CopyTo(root, 1);
+    author.WriteTo(root.AsSpan(33));
+
+    byte[] cursorPrefix = new byte[19];
+    cursorPrefix[0] = 0x01;
+    BinaryPrimitives.WriteUInt16LittleEndian(cursorPrefix.AsSpan(1), checked((ushort)namespaceId));
+    author.WriteTo(cursorPrefix.AsSpan(3));
+
+    byte[] mappingPrefix = new byte[19];
+    mappingPrefix[0] = 0x02;
+    BinaryPrimitives.WriteUInt16LittleEndian(mappingPrefix.AsSpan(1), checked((ushort)namespaceId));
+    author.WriteTo(mappingPrefix.AsSpan(3));
+
+    using StorageSnapshot snapshot = storage.OpenSnapshot();
+    IReadOnlyList<StorageEntry> cursorRows = snapshot.ScanPrefix(root, cursorPrefix, 2);
+    Require(cursorRows.Count == 1, "Expected exactly one durable provenance cursor.");
+    byte[] cursor = cursorRows[0].Value;
+    Require(cursor.Length == 60 && cursor.AsSpan(0, 4).SequenceEqual("RPM2"u8),
+        "Persisted provenance cursor does not match RPM2.");
+    Require(BinaryPrimitives.ReadUInt64LittleEndian(cursor.AsSpan(4)) == 3 &&
+        BinaryPrimitives.ReadUInt64LittleEndian(cursor.AsSpan(12)) == 0 &&
+        BinaryPrimitives.ReadUInt64LittleEndian(cursor.AsSpan(20)) == 0,
+        "Persisted provenance cursor watermarks differ from the golden fixture.");
+
+    IReadOnlyList<StorageEntry> rows = snapshot.ScanPrefix(root, mappingPrefix, 4);
+    Require(rows.Count == 3, "Expected three durable mapping rows.");
+    ulong[] journalSequences = [1, 1, 2];
+    Guid[] ids =
+    [
+        Guid.Parse("10000000-0000-0000-0000-000000000001"),
+        Guid.Parse("10000000-0000-0000-0000-000000000002"),
+        Guid.Parse("20000000-0000-0000-0000-000000000001")
+    ];
+
+    byte[] aggregate = new byte[32];
+    for (int i = 0; i < rows.Count; i++)
+    {
+        StorageEntry row = rows[i];
+        Require(row.Key.Length == 76 && row.Value.Length == 24,
+            "Mapping key/value length differs from the golden fixture.");
+        Require(BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(68, 8)) == (ulong)(i + 1),
+            "Mapping key is not ordered by big-endian OutboxSeq.");
+        Require(BinaryPrimitives.ReadUInt64LittleEndian(row.Value) == journalSequences[i] &&
+            row.Value.AsSpan(8, 16).SequenceEqual(ids[i].ToByteArray()),
+            "Mapping value differs from the JournalSeq/ChangeId golden fixture.");
+
+        byte[] rowBytes = new byte[row.Key.Length + row.Value.Length];
+        row.Key.CopyTo(rowBytes, 0);
+        row.Value.CopyTo(rowBytes, row.Key.Length);
+        byte[] hash = SHA256.HashData(rowBytes);
+        for (int j = 0; j < aggregate.Length; j++)
+            aggregate[j] ^= hash[j];
+    }
+
+    Require(CryptographicOperations.FixedTimeEquals(aggregate, cursor.AsSpan(28, 32)),
+        "Persisted mapping-set checksum differs from the recomputed golden digest.");
 }
