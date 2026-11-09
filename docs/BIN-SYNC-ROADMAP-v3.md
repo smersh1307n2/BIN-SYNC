@@ -1708,9 +1708,9 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 ## 0.94. C-pass: enforce publication ceilings inside the Core sender — 2026-11-09
 
-- [x C] The publication gate now captures the local author's durable Metadata Store outbound high watermark alongside all relay-author RPM3 watermarks under one composed application commit guard. Local outbound changes are not incorrectly omitted merely because they have no FLD JournalSeq map.
-- [x C] Added a ceiling-aware durable Metadata Store `SyncSession.PushBatchAsync` overload. It excludes absent/zero-ceiling authors, trims local and relay pages before constructing a batch, and rejects immutable pending reservations above the captured absolute sequence (`CursorEnd + StreamOffset`). The legacy overload retains its prior behavior.
-- [x C] `FldBinSyncHostAdapter.PublishReadyOutboxAsync` converts the gate watermark list into the Core ceiling map and drains a peer session only through the enforcing overload.
+- [x C] The publication gate captures the local-author high watermark and all relay-author RPM3 ceilings under one composed application commit guard. Before provider cutover the local ceiling is read from Node Outbox; after cutover it is read from Metadata Store. The captured authority-mode bit accompanies every watermark, preventing a cutover race between ceiling capture and send.
+- [x C] Added ceiling-aware `SyncSession.PushBatchAsync` overloads for both Node-owned and Metadata Store-owned transport. The Node path filters Outbox entries by author ceiling; the Metadata Store path filters outbound/relay pages and rejects immutable pending reservations above the captured absolute sequence (`CursorEnd + StreamOffset`). Both exclude absent/zero-ceiling authors; legacy overloads preserve their prior behavior.
+- [x C] `FldBinSyncHostAdapter.PublishReadyOutboxAsync` selects the matching sender path from the captured mode, converts the watermark list into the Core ceiling map and drains a peer session only through the enforcing overload.
 - [~ T] Verify local and relay streams at zero/exact/above-ceiling boundaries, pending-reservation replay, page truncation and concurrent local freeze between ceiling capture and send. No tests/build have been run for this C-pass.
 - [~ C] The host still owns session creation, transport lifecycle, multi-peer scheduling and ensuring every send uses the gated helper. Physical GC remains disabled.
 
@@ -1720,3 +1720,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Reconciled the earlier open items in §§0.79–0.80, 0.84–0.89 and the integration/API checklist: the concrete FLD relay-page reader, RPM3 resolver/append, startup recovery, publication gate, local+relay author ceilings, Core-enforced sender, durable FLD ACK-before-RPM3-prune and reference-snapshot scanner are implemented in the optional host sample and Core/Storage APIs (§§0.93–0.94).
 - [~ C] Still open in the broad C-pass: generic Storage page/run/WAL backend compatibility decision and implementation, final public/package/source/byte audit, and host-owned transport/session scheduler. The existing FLD1 field-aware WAL/Run/Manifest format is not to be replaced without the required versioned compatibility decision.
 - [~ T] The optional cross-repository sample and new sender overload have not been built or tested. The earlier red BIN-SYNC Core/Storage tests remain T-pass work; no physical receipt, ChangeId or tombstone/Ghost GC is enabled.
+
+
+## 0.97. C-pass: preserve the active outbound authority across cutover — 2026-11-09
+
+- [x C] The local publication ceiling now comes from Node Outbox before provider-authoritative cutover and from Metadata Store after cutover. Relay ceilings remain RPM3-derived in both modes.
+- [x C] The gate captures the authority-mode bit under the composed application commit guard and carries it with the complete watermark set. The sender no longer re-reads mutable cutover state after the barrier is released.
+- [x C] Added ceiling-aware Node-owned transport filtering and updated the host sample to choose Node or Metadata Store send path from the captured mode. This preserves the pre-cutover Node Outbox path and the post-cutover Metadata Store path without mixing sequence domains.
+- [~ T] Verify both modes before/after cutover, concurrent cutover attempts, local and relay ceiling boundaries, retry/reservation replay and process restart. No tests/build have been run for this C-pass.
+- [~ C] Host still owns session lifecycle and multi-peer scheduling; all sends must go through the gate callback. Physical GC remains disabled.
