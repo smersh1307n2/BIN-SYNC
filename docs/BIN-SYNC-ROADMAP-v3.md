@@ -15,6 +15,10 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Updated `docs/PRODUCTION-STATUS.md` to identify the compact RPM3 implementation/sample commits and the current unvalidated branch head.
 - [x C] The historical green v3.0 baseline remains explicitly separate from all current C-pass work.
 
+## 0.51. C-pass: empty-tail ACK semantics documented at API surface — 2026-11-09
+
+- [x C] Added XML documentation to `TranslateSafeOutboxSequence` for positive prior ACK + empty scanned tail progression and the zero-watermark prohibition.
+
 ## 0.50. C-pass: empty-page progress sample includes full-prune reopen — 2026-11-09
 
 - [x C] Extended the public sample to close/reopen after all mapped rows are pruned, then advance a later empty author page using the already-positive Outbox ACK. It also verifies a fresh author with OutboxSeq=0 cannot advance a positive FLD ACK.
