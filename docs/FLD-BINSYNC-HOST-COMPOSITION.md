@@ -26,10 +26,11 @@ var relayGate = StorageRelayPublicationGate.For(coordinator);
 IDisposable AcquireFldLease() => fld.AcquireCommitGuard();
 ```
 
-Keep one `FldDatabase`, one `StorageSyncCoordinator`, one RPM3 map and one shared publication gate per local replica/scope/namespace. Never send directly through a session outside this gate. The gate captures the local author's publication high watermark together with all relay-author RPM3 ceilings under the same composed commit guard. Before provider cutover, the local watermark comes from Node Outbox; after cutover, it comes from Metadata Store. The captured mode is carried with every watermark so the host cannot race the cutover between capture and send.
+Keep one `FldDatabase`, one `StorageSyncCoordinator` and one shared publication gate per local replica/scope/namespace. The RPM3 map is required only for legacy Node-owned publication. Never send directly through a session outside the adapter/gate. Before cutover, the gate captures the local Node Outbox ceiling plus every relay-author RPM3 ceiling under the composed commit guard. After provider-authoritative Metadata Store cutover, it captures the local outbound high watermark and every relay-author high watermark directly from the same Metadata Store; it does not read FLD relay pages or consult RPM3. The authority mode is captured with the watermarks so a concurrent cutover cannot mix sequence domains.
 
-## Relay page projection
+## Legacy Node-owned relay provenance (pre-cutover only)
 
+This FLD JournalSeq→RPM3 projection is used only while Node Outbox remains the publication authority. After Metadata Store cutover, `FldRemoteBatchApplyStore` intentionally passes an empty `RelayWrites` set to FLD ApplyJournal; Metadata Store finalization owns relay payload, sequence allocation and delivery retention. Do not run the source-page callback or append RPM3 rows in that mode.
 The gate invokes the source-page callback while holding the composed coordinator → Node → FLD → shared Storage commit barrier. The callback must not perform network I/O or acquire a second independent FLD lease. The FLD monitor-based guard is reentrant for the same thread, so public database read methods can be called inside the callback.
 
 ```csharp
@@ -67,43 +68,43 @@ The gate persists only `(JournalSeq, OutboxSeq)` in RPM3. It resolves each trans
 
 ## Startup recovery and send
 
-Keep every namespace sender closed on process startup until all source authors and RPM3-only authors have been reconciled. `RecoverAndPublishAllAsync` unions FLD's `ReadUnacknowledgedRelayAuthors()` with `map.ReadAuthors(namespaceId)`, validates every saved cursor against `GetRelayJournalHighWatermark()`, drains all pages and only then invokes the sender callback.
+Use the `RecoverAndPublishAllAsync(persistNode, ...)` adapter overload before opening any sender. It recovers PendingApply, checkpoints Node and freezes the local provider feed under the composed coordinator → Node → FLD → Storage barrier.
+
+- **Before Metadata Store cutover:** startup recovery unions FLD unacknowledged relay authors with RPM3-only authors, validates source JournalSeq cursors and drains complete source pages into RPM3 before sending.
+- **After Metadata Store cutover:** startup recovery switches to `RecoverMetadataOwnedAndPublishAsync`. It captures the local outbound plus every relay-author sequence directly from Metadata Store. No FLD JournalSeq scan or RPM3 mapping is performed. This is the required mode for the contextual FLD receive path because FLD ApplyJournal deliberately stores no duplicate relay payload.
+
+The host send callback remains the same ceiling-enforcing entry point:
 
 ```csharp
 ValueTask<bool> RecoverRelayAsync(CancellationToken cancellationToken) =>
-    relayGate.RecoverAndPublishAllAsync(
-        coordinator,
-        map,
-        ReadRelayAuthors,
-        AcquireFldLease,
-        fld.GetRelayJournalHighWatermark,
-        ReadRelayPage,
+    adapter.RecoverAndPublishAllAsync(
+        persistNode,
         async (ceilings, ct) =>
             await adapter.PublishReadyOutboxAsync(
-                session, node, peerStateStore, ceilings, cancellationToken: ct),
-        cancellationToken);
+                session, node, peerStateStore, ceilings,
+                cancellationToken: ct),
+        cancellationToken: cancellationToken);
 ```
 
-For each newly accepted remote batch, the host must use `ReceiveAndPublishAllAsync(inboundSession, persistNode, ...)`. It routes through `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync`, so PendingApply, Node checkpoint, contextual FLD ApplyJournal and Metadata receipt finalization complete before the source ACK; the gate then drains relay pages and invokes the ceiling-aware sender. Use lower-level `ApplyAndPublishAllAsync` only for a host callback that itself performs the same durable receive-before-ACK sequence. If APPLY or mapping fails after the remote commit may have become durable, the gate closes publication and requires full recovery before another sender callback. A failed network send is retried from immutable durable outbound state; it must not create a new ChangeId or source mapping.
+For each newly accepted remote batch, use `ReceiveAndPublishAllAsync(inboundSession, persistNode, ...)`. It routes through `ReceiveBatchBeforeAckAsync`: PendingApply → Node checkpoint → contextual FLD ApplyJournal receipt → Metadata receipt finalization → incoming ACK. Once cutover is active, that Metadata finalization atomically creates the relay payload and author sequence; the gate then captures Metadata Store ceilings and sends it without RPM3. If APPLY/finalization fails after a durable mutation may have happened, the corresponding gate remains closed until startup/PendingApply recovery. Network retries reuse immutable durable outbound reservations and never create a new ChangeId.
 
-## Safe ACK order
+## Safe ACK and relay compaction
 
-BIN-SYNC computes the downstream-safe ACK across every interested peer. The host callback durably ACKs the FLD source journal first; RPM3 rows are pruned only after that callback returns successfully.
+Two mutually exclusive retention paths exist:
+
+**Metadata Store-owned mode (after cutover).** Each peer's ACK and immutable reservation are committed by `SyncSession` into `IMetadataPeerStateStore`. There is no FLD JournalSeq ACK and no RPM3 prune. Once all peer ACKs advance, call:
 
 ```csharp
-ValueTask<IReadOnlyList<(NodeId Author, ulong SafeJournalSeq)>> AckRelayAsync(
-    CancellationToken cancellationToken) =>
-    relayGate.AcknowledgeAllAsync(
-        coordinator,
-        map,
-        ReadRelayAuthors,
-        AcquireFldLease,
-        (author, safeJournalSeq) =>
-            fld.AcknowledgeRelayBatches(author.ToArray(), safeJournalSeq),
-        cancellationToken);
+ValueTask<IReadOnlyList<(NodeId Author, ulong SafeThroughSequence)>>
+    CompactRelayAsync(CancellationToken cancellationToken) =>
+    adapter.CompactAcknowledgedRelayPayloadsAsync(cancellationToken);
 ```
 
-The callback must be idempotent. A crash after FLD ACK but before RPM3 prune is recovered because RPM3 cursor authors are unioned with FLD's remaining unacknowledged authors. A partial multi-author ACK is retried from the remaining map cursors.
+The coordinator computes the minimum durable per-peer safe cursor for each relay author and calls `IMetadataStore.CompactRelayThrough` under the composed application commit guard. An absent/incomplete peer remains at zero and therefore blocks compaction.
+
+**Legacy Node-owned mode (before cutover).** The safe Node Outbox sequence is translated through RPM3 to a complete FLD JournalSeq; the host durably writes `FldDatabase.AcknowledgeRelayBatches` first, then RPM3 mapping rows are pruned. The old `AcknowledgeAllAsync` API is reserved for this mode and fails closed after Metadata Store cutover.
+
+Do not run both paths or mirror relay payload/ACK state in FLD. A crash before Metadata Store ACK leaves the peer reservation retryable; a crash after ACK but before payload compaction is harmless because compaction is idempotently recomputed from durable peer cursors.
 
 ## GC reference snapshot binding
 
@@ -143,19 +144,19 @@ Pass this scanner and `AcquireFldLease` into every BIN-SYNC physical-GC/frontier
 
 ## Operational invariants
 
-1. One shared publication gate serializes remote APPLY, all author relay mappings, outbound sends and ACKs for the namespace.
-2. No send before startup reconciliation has validated every author and drained every source page.
-3. Every page ends on a complete JournalSeq boundary; one JournalSeq may map to several operations within the page.
-4. RPM3 stores sequence coordinates only; ChangeId remains in the global BIN-SYNC ledger.
-5. Safe ACK order is downstream-safe BIN-SYNC watermark → durable FLD ACK → RPM3 prune.
-6. A failed or ambiguous durable operation closes publication until full recovery; a network retry reuses immutable outbound state.
+1. One shared publication gate serializes remote APPLY, outbound sends and the mode-specific ACK/compaction path for the namespace.
+2. No send before startup PendingApply recovery and authority-specific publication reconciliation complete.
+3. Before cutover, complete FLD JournalSeq pages are mapped atomically into RPM3; after cutover, Metadata Store owns relay payload and sequence directly and FLD ApplyJournal carries no duplicate RelayWrites.
+4. RPM3 stores only sequence pairs and is used only by legacy Node-owned mode; ChangeId remains in the global BIN-SYNC ledger.
+5. After cutover, peer ACKs are durable in Metadata Store and relay payload compacts only through the minimum durable peer cursor. Before cutover: safe Node ACK → durable FLD JournalSeq ACK → RPM3 prune.
+6. A failed or ambiguous durable operation closes the corresponding publication gate until recovery; a network retry reuses immutable outbound state.
 7. FLD1 WAL, ApplyJournal, Outbox, Run and Manifest formats remain unchanged by this adapter.
 8. Physical GC remains disabled until the host reference snapshot and composed lock proof pass T/O gates.
 
 
 ## Optional source implementation
 
-The guide is now implemented by the optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost). It contains the concrete adapter for relay paging, startup reconciliation, publication ceilings, safe ACK ordering and the FLD reference scanner. The sample remains outside the default BIN-SYNC solution because FLD-DB is a separate checkout; see its README for the canonical shared-Storage project build command. It does not provide a transport implementation or enable physical GC.
+The optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost) implements both the legacy FLD/RPM3 relay adapter and the direct Metadata Store-owned relay publication/compaction path, plus the contextual FLD ApplyJournal receipt adapter and reference scanner. The full `FldDatabase`→`IDataProvider` snapshot/local-feed/key-resolver bridge remains open. The sample stays outside the default BIN-SYNC solution because FLD-DB is a separate checkout; its cross-repository build is still a T-pass requirement. Physical GC remains disabled.
 
 
 ### Local feed freeze and ceiling-aware sender API
