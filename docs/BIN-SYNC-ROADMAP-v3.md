@@ -10,6 +10,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.47. C-pass: current production-status pointer refreshed for RPM3 — 2026-11-09
+
+- [x C] Updated `docs/PRODUCTION-STATUS.md` to identify the compact RPM3 implementation/sample commits and the current unvalidated branch head.
+- [x C] The historical green v3.0 baseline remains explicitly separate from all current C-pass work.
+
 ## 0.46. C-pass: public sample catalog aligned with compact map — 2026-11-09
 
 - [x C] Updated `samples/README.md` to describe the JournalSeq↔OutboxSeq sequence map and explicitly state that ChangeId remains in the global ledger, not in the provenance rows.
