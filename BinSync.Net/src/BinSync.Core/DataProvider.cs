@@ -169,6 +169,13 @@ public interface IProviderAuthorEpochClosureStore
 }
 
 /// <summary>Provider-wide exclusive lease used to serialize FULL_REPLACE commit and local GC.</summary>
+/// <summary>Optional durable provider snapshot capability used by FULL_REPLACE sender recovery.</summary>
+public interface IProviderDurableSnapshotStore
+{
+    bool HasPersistedSnapshot(Guid snapshotToken);
+    void PruneSnapshotsExcept(IReadOnlySet<Guid> activeSnapshotTokens);
+}
+
 public interface IProviderCommitGuard
 {
     IDisposable AcquireCommitGuard();
