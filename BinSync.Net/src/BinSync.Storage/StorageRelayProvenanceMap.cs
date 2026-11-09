@@ -38,6 +38,12 @@ public sealed class StorageRelayProvenanceMap
 
     private readonly record struct Mapping(ulong JournalSeq, ulong OutboxSeq);
 
+    internal bool IsBoundTo(string scopeId, NodeId localReplica) =>
+        StringComparer.Ordinal.Equals(_scopeId, scopeId) && _localReplica == localReplica;
+
+    internal bool IsBoundTo(StorageMetadataStore metadataStore) =>
+        metadataStore.IsBoundTo(_storage);
+
     public StorageRelayProvenanceMap(StorageDatabase storage, string scopeId, NodeId localReplica)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
@@ -395,7 +401,10 @@ public sealed class StorageRelayProvenanceMap
 }
 
 /// <summary>A relay operation's immutable source and destination sequence coordinates.</summary>
-public sealed record StorageRelayProvenanceEntry(ulong JournalSeq, ulong OutboxSeq);
+public readonly record struct StorageRelayProvenanceEntry(ulong JournalSeq, ulong OutboxSeq);
+
+/// <summary>Transient source identity supplied by an FLD relay page before global ChangeId resolution.</summary>
+public readonly record struct StorageRelaySourceChange(ulong JournalSeq, BatchId ChangeId);
 
 /// <summary>Durable scan and post-FLD-ACK watermarks for one original-author stream.</summary>
 public readonly record struct StorageRelayProvenanceCursor(
