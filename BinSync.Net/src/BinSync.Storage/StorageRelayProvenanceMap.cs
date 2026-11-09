@@ -90,6 +90,8 @@ public sealed class StorageRelayProvenanceMap
     {
         ValidateStream(namespaceId, author);
         ArgumentNullException.ThrowIfNull(entries);
+        if (entries.Count > 4096)
+            throw new ArgumentOutOfRangeException(nameof(entries), "Relay provenance page cannot exceed 4,096 mappings.");
         lock (_gate)
         {
             StreamState state = GetState(namespaceId, author);
