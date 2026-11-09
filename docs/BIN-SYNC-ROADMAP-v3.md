@@ -1819,3 +1819,19 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created recovery branch `backup/cpass-2026-11-09-contextual-receive-v31-gate` at `3c256b0cd9d7df778874659cf5482519889cd476`.
 - [~ T] Verify concurrent authority-round + checkpoint-retry exclusion, partial-broadcast recovery, cancellation at each session boundary, non-member/Joining session rejection, durable frame-sequence monotonicity and same-checkpoint digest identity. Latest CI for `3c256b0` was queued/in progress at this update; no result is claimed.
 - [~ C] The `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver bridge and generic Storage backend/format strategy remain open. Physical receipt, ChangeId and tombstone/Ghost GC stay disabled.
+
+## 1.08. C-pass: immutable prepared FULL_REPLACE snapshot and shared manifest — 2026-11-09
+
+- [x C] Added `PreparedFullReplaceSnapshot`, which owns one provider snapshot token plus the one signed FULL_REPLACE manifest (roster generation/digest, source change-feed watermark, entry count and digest). Disposal releases the provider snapshot exactly once.
+- [x C] Refactored `StorageFullReplaceSender` with `PrepareSnapshot` and `SendPreparedSnapshotAsync`. The digest scan and manifest signing now happen once; each recipient streams the same immutable snapshot and verifies the same signed digest. Existing single-recipient `SendAsync` remains as a convenience wrapper.
+- [x C] Added `V31NamespaceGcHostOrchestrator.TransferFullReplaceToMembersAsync`: validates the full non-retired roster/session set, broadcasts the accepted roster, captures one source snapshot and fans the same generation out to all intended peers.
+- [~ T] Exact-head compile and partial-fanout/retry tests remain pending. Verify that every recipient receives identical watermark/count/digest and that an already-installed recipient can safely retry the same generation. This is not yet a durable cross-process source snapshot.
+- [~ C] The `FldDatabase`→`IDataProvider` source snapshot/local-feed/key-resolver bridge and durable source-snapshot recovery across process restart remain open. Physical GC remains disabled.
+
+## 1.09. C-pass: retain prepared FULL_REPLACE source snapshot for partial fanout retry — 2026-11-09
+
+- [x C] Added `PrepareFullReplaceSnapshot` to return ownership of the immutable prepared snapshot to the host instead of tying its lifetime to one fanout call.
+- [x C] Added `TransferPreparedFullReplaceToMemberAsync`. A host can retry only a missing/failed recipient using the exact same source watermark, roster digest, generation and FULL_REPLACE digest; the method revalidates the current accepted roster and target transport epoch before sending.
+- [x C] The convenience all-member fanout remains available; the explicit prepare/retry API is the resumable in-process path. The caller owns and must dispose the prepared snapshot only after the intended fanout is complete or abandoned.
+- [~ T] Verify partial failure after each recipient, repeat send to already-installed receiver, accepted-roster change during retry, and snapshot disposal after cancellation. No exact-head test result is claimed.
+- [~ C] In-process prepared snapshot lifetime does not yet survive process restart; crash-resumable fanout requires a durable provider snapshot generation. The missing FLD provider adapter must supply that without synthesizing ChangeId/origin metadata.
