@@ -39,9 +39,11 @@ FLD checkout as competing type identities.
 2. Open one `FldDatabase` for the same namespace and construct
    `FldBinSyncHostAdapter` with the stable metadata scope.
 3. Call `RecoverAndPublishAllAsync` before enabling any sender after process
-   startup. Its watermark set contains the local Metadata Store outbound ceiling
-   plus every FLD relay author's RPM3 ceiling. Use `PublishReadyOutboxAsync` in
-   the callback; it invokes the ceiling-aware `SyncSession.PushBatchAsync` overload.
+   startup. Its watermark set contains the local-author ceiling plus every FLD
+   relay author's RPM3 ceiling. Before Metadata Store cutover the local ceiling
+   comes from Node Outbox; after cutover it comes from Metadata Store. Use
+   `PublishReadyOutboxAsync` in the callback; it selects the matching ceiling-aware
+   `SyncSession.PushBatchAsync` overload from the mode captured with the ceilings.
 4. Route remote APPLY through `ApplyAndPublishAllAsync`; route subsequent
    outbound sends through `RunOutboundAsync`.
 5. Route safe ACK through `AcknowledgeAllAsync`. FLD's durable ACK occurs
@@ -54,6 +56,8 @@ FLD checkout as competing type identities.
 This sample binds the durable contracts, lock order and bounded sender path. The
 application still creates/owns its `SyncSession` instances and transport lifecycle;
 inside the publication-gate callback, call `PublishReadyOutboxAsync` so the Core
-sender filters every author page to the captured ceiling and rejects an oversized
-pending reservation. Do not call the legacy ceiling-free send overload from this
-FLD relay path. Physical GC remains disabled.
+sender filters every author page to the captured ceiling. Before cutover it uses
+Node-owned Outbox transport; after cutover it uses Metadata Store-owned transport.
+The mode bit is captured under the same commit barrier as the ceilings, preventing
+a cutover race from mixing sequence authorities. Do not call a legacy ceiling-free
+overload from this FLD relay path. Physical GC remains disabled.
