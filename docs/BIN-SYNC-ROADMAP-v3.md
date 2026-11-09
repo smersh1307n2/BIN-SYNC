@@ -2028,3 +2028,10 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Exposed the domain-neutral `StorageDirectorySync` helper as a documented public API so the separate `Fld1.Database.dll` can share the exact same Unix durability primitive without duplicating native P/Invoke logic. FLD open-failure cleanup now releases the root writer lease even if disposing the generic Storage database itself throws.
 - [~ T] Verify process-kill/reopen at every boundary: generation mkdir, overlay file, temp manifest, final rename, release and prune; verify Windows remains explicitly outside the directory-entry durability claim. No exact-head build/test result is claimed.
 - [~ C] Continue the full Run/blob/snapshot pin audit, generic Storage API boundary and final v3/v3.1 source/byte audit. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+## 1.30. C-pass: make persisted provider snapshots consume the generic Run backend — 2026-11-09
+
+- [x C] `RestoreProviderSnapshot` now prefers the generic immutable Run blob and validates the reconstructed FLD1 Run; the legacy `.fld1` mirror remains a fallback only when no completed blob is published.
+- [x C] Durable snapshot-token checks now require each pinned Run to have a readable completed blob or a legacy mirror. The watermark-binding path streams each blob to `Stream.Null` to verify every page and the whole-blob SHA-256 without materializing the Run; the cheap presence-only check does not perform a redundant full read.
+- [~ T] Verify snapshot reopen with blob-only, mirror-only and mixed Run v1/v2 generations; missing page, wrong digest, pending catalog row, corrupt mirror fallback and concurrent release while checking the token. No exact-head build/test result is claimed.
+- [~ C] Continue the final source/API/byte audit and exact T-pass for blob-backed provider snapshot recovery. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
