@@ -68,6 +68,137 @@ public static class StorageFullReplaceSender
     }
 
     /// <summary>
+    /// Prepares a FULL_REPLACE source generation and durably records its provider
+    /// token, signed manifest and HLC floor before the caller starts network transfer.
+    /// Dispose detaches the in-process handle but preserves the generation for restart.
+    /// </summary>
+    public static PreparedFullReplaceSnapshot PrepareSnapshotAndPersist(
+        IDataProvider provider,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        Guid generation,
+        byte[] authoritySeed,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        NodeId localReplica)
+    {
+        ArgumentNullException.ThrowIfNull(metadataStore);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(localReplica);
+        PreparedFullReplaceSnapshot prepared = PrepareSnapshot(
+            provider, trustStore, roster, authorityNodeId, generation, authoritySeed);
+        try
+        {
+            metadataStore.SavePreparedFullReplaceSnapshot(
+                scopeId,
+                localReplica,
+                prepared.NamespaceId,
+                new PreparedFullReplaceSnapshotState(
+                    prepared.Generation,
+                    prepared.Snapshot.Token,
+                    prepared.SourceChangeFeedWatermark,
+                    prepared.HlcWallFloor,
+                    prepared.HlcLogicalFloor,
+                    FullReplaceTransferProtocol.EncodeBegin(prepared.Manifest)));
+            prepared.MarkPersisted();
+            return prepared;
+        }
+        catch
+        {
+            prepared.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Restores a persisted provider generation after process restart and revalidates
+    /// its signed manifest against the currently accepted roster and authority.
+    /// </summary>
+    public static PreparedFullReplaceSnapshot RestorePreparedSnapshot(
+        IDataProvider provider,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId,
+        Guid generation,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        byte[] authoritySeed)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(metadataStore);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (!metadataStore.TryGetPreparedFullReplaceSnapshot(
+                scopeId, localReplica, namespaceId, generation, out PreparedFullReplaceSnapshotState? state) ||
+            state is null)
+            throw new KeyNotFoundException("No durable prepared FULL_REPLACE source generation exists.");
+
+        FullReplaceTransferProtocol.Begin manifest =
+            FullReplaceTransferProtocol.DecodeBegin(state.ManifestBytes);
+        if (manifest.Generation != generation ||
+            manifest.NamespaceId != namespaceId ||
+            manifest.SourceChangeFeedWatermark != state.SourceFeedWatermark)
+            throw new InvalidDataException("Persisted FULL_REPLACE manifest and snapshot metadata disagree.");
+
+        var snapshot = new ProviderSnapshotHandle(state.SnapshotToken, state.SourceFeedWatermark);
+        ProviderSnapshotPage firstPage = provider.ReadSnapshot(snapshot.Token, 0, 1);
+        if (firstPage.NextIndex > manifest.ExpectedEntryCount ||
+            firstPage.IsComplete != (firstPage.NextIndex == manifest.ExpectedEntryCount))
+            throw new InvalidDataException("Restored provider snapshot does not match the signed entry count.");
+
+        var prepared = new PreparedFullReplaceSnapshot(
+            provider, snapshot, manifest, state.HlcWallFloor, state.HlcLogicalFloor);
+        try
+        {
+            ValidatePreparedSnapshot(prepared, trustStore, roster, authorityNodeId, authoritySeed);
+            prepared.MarkPersisted();
+            return prepared;
+        }
+        catch
+        {
+            prepared.Dispose(); // Persisted generation is retained for explicit recovery or cleanup.
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Permanently releases a prepared generation after all recipient transfers have
+    /// completed, then removes its durable sender-progress record.
+    /// </summary>
+    public static void ReleasePreparedSnapshot(
+        PreparedFullReplaceSnapshot prepared,
+        IDataProvider provider,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        NodeId localReplica)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(metadataStore);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        prepared.ReleasePermanently(provider);
+        metadataStore.DeletePreparedFullReplaceSnapshot(
+            scopeId, localReplica, prepared.NamespaceId, prepared.Generation);
+    }
+
+    /// <summary>Reclaims provider snapshot generations not present in durable sender progress.</summary>
+    public static void PruneUnreferencedPreparedSnapshots(
+        FldDatabaseDataProvider provider,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(metadataStore);
+        IReadOnlyList<Guid> active = metadataStore.ListPreparedFullReplaceSnapshotGenerations(
+            scopeId, localReplica, namespaceId);
+        provider.PruneSnapshotsExcept(active.ToHashSet());
+    }
+
+    /// <summary>
     /// Validate a retained prepared snapshot against the currently accepted roster,
     /// authority key and source snapshot watermark before any network side effect.
     /// </summary>
