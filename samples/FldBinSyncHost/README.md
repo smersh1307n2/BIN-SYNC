@@ -78,7 +78,7 @@ overload from this FLD relay path. Physical GC remains disabled.
 
 ## Explicit implementation boundary
 
-`FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The contextual `IProviderRemoteBatchCommitStore` half is now implemented independently; the remaining bridge is the generation-pinned snapshot/local-feed/key-resolver provider adapter. do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
+`FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The contextual `IProviderRemoteBatchCommitStore` half is now implemented independently; the remaining bridge is the generation-pinned snapshot/local-feed/key-resolver provider adapter. Do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
 
 
 ## v3.1 control-plane round helper
@@ -106,7 +106,7 @@ The helper sends the accepted roster before receiving reports, binds every recei
 
 ## Full remote-apply context adapter
 
-`FldRemoteBatchApplyStore` implements the optional Core capability `IProviderRemoteBatchCommitStore`. Compose it into the actual `IDataProvider` adapter used to construct `StorageSyncCoordinator`. When Core applies/replays a metadata-owned PendingApply, it passes the exact authenticated sender/transport epoch, wire issuer/epoch, BatchId, cursor range, previous/current digest, records root and immutable provider mutations. The FLD capability maps those fields to `RemoteBatchCommit` and calls `FldDatabase.ApplyRemoteBatch`.
+`FldRemoteBatchApplyStore` implements the optional Core capability `IProviderRemoteBatchCommitStore`. Create it once for the target `FldDatabase`, pass that exact instance as `remoteBatchCommitStore` to `StorageSyncCoordinator`, and pass it again to `FldBinSyncHostAdapter`. The adapter fails closed if the capability/database identities differ. On the receive-before-ACK path, Core passes the exact authenticated sender/transport epoch, wire issuer/epoch, BatchId, cursor range, previous/current digest, records root and immutable provider mutations. The FLD capability maps those fields to `RemoteBatchCommit` and calls `FldDatabase.ApplyRemoteBatch`.
 
 The adapter maps BIN-SYNC record tombstones to FLD's canonical lifecycle field (`FieldId=0`, `DeadValue`) with the original HLC, author and ChangeId. Field tombstones stay field tombstones. Its `RelayWrites` list is intentionally empty: v3 assigns relay payload and delivery retention to the BIN-SYNC Metadata Store, not a second FLD relay history. Current v3 DELTA_BATCH has no separate provider protocol-state delta, so the adapter passes an empty delta rather than synthesizing protocol state.
 
