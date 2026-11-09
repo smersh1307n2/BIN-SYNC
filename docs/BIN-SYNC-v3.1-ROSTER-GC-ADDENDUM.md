@@ -508,3 +508,10 @@ FLD exposes the neutral \`FldDatabase.OpenReferenceSnapshot()\` / \`FldReference
 ## 10.29. FULL_REPLACE requires an empty host draft horizon (2026-11-09)
 
 \`StorageFullReplaceReceiver\` now requires the partition-scoped host reference scanner and scope id. While holding the composed application commit lease, it opens one host scan and refuses the generation switch if either the host unpublished draft horizon or provider local feed is non-zero. Because the FLD horizon remains non-zero while WAL is unsealed, callers must checkpoint/seal source WAL before FULL_REPLACE can commit. The same host scan/lease contract is used for OFR2 and physical GC.
+
+
+## 10.30. Recover immutable provider origin after freeze-before-stamp interruption (2026-11-09)
+
+The provider publication boundary now treats the durable ChangeLedger identity as sufficient to finish a provider stamp even if the outbound payload row has already been acknowledged/compacted. \`TryGetOutboundChangeIdentity\` returns fingerprint and immutable \`OperationOrigin\` in one ledger lookup. \`PublishLocalChangesCore\` collects already-frozen feed rows and replays their origin stamps before Node persistence and provider-feed ACK. \`ProviderPublishedOrigin\` carries the origin tuple directly; it no longer requires retaining a \`MetadataOutboundItem\`.
+
+ChangeId compaction now builds its live set from the provider's pending local feed as well as relay/outbound/PendingApply state and the host \`IApplicationGcReferenceScan\`. Thus a crash after freeze but before provider stamp cannot lose the origin mapping to GC while the provider feed remains pending. A dedicated crash-window test belongs in Phase T.
