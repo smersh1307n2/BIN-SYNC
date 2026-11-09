@@ -1960,3 +1960,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `FldDatabaseDataProvider` binds the host's durable active author epoch to local ChangeId-bearing current-state/snapshot rows whose FLD Run provenance has not yet been stamped. Legacy Run v1 rows with zero ChangeId remain identity-zero and receive no synthetic identity.
 - [x C] The local Outbox feed similarly binds the active epoch while keeping OriginSequence deferred until Metadata Store freeze; author-epoch closure prevents a feed from crossing epoch transitions.
 - [~ T] Add codec/digest vectors for ChangeId-without-Origin, published-operation rejection, local epoch binding, legacy Run v1 rows, stamp-before/after-supersede and restart after epoch closure. No build/test result is claimed.
+
+
+## 1.23. C-pass: add host-owned multi-session send/receive scheduling — 2026-11-09
+
+- [x C] Added `FldBinSyncSessionScheduler`: one receive owner per session, serialized sends per session, concurrent fanout across peers and one captured publication-ceiling set shared by every peer in a namespace round.
+- [x C] Added one-shot receive/apply/publish, continuous inbound loop and host-cadence periodic outbound loop. A false publication-gate result stops the receive loop so the host can run reconciliation/recovery rather than silently continuing.
+- [x C] Scheduler shutdown clears its gate registry without disposing semaphores still held by active duplex callbacks; lock-order inversion during receive-triggered fanout is avoided.
+- [~ C] Application still owns transport/session creation, reconnection policy and final `SyncSession` disposal. Generic Storage page/run/WAL physical-format decision and durable FULL_REPLACE sender restart recovery remain open.
+- [~ T] Validate one-reader-per-session, concurrent duplex send/receive, multi-peer ceiling consistency, failure retry, cancellation and scheduler shutdown with exact-head sample tests. No build/test result is claimed.
