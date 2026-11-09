@@ -152,7 +152,52 @@ try
         "FULL_REPLACE_BEGIN signed");
     VerifySignature(beginEncoded, 102, "BIN-SYNC/FULL-REPLACE-MANIFEST/v1", publicKey, "FULL_REPLACE_BEGIN");
 
-    Console.WriteLine("v3.1 signed control-plane golden vectors: PASS");
+    var chunkMutation = new ProviderMutation
+    {
+        RecordId = RecordId.From(Convert.FromHexString("02000000000000000000000000000000")),
+        FieldId = 1,
+        HlcWall = 100,
+        HlcLogical = 2,
+        AuthorNodeId = node,
+        Value = "abc"u8.ToArray(),
+        ChangeId = BatchId.From(Convert.FromHexString("03000000000000000000000000000000")),
+        OriginAuthorEpoch = 1,
+        OriginSequence = 1
+    };
+    var chunk = new FullReplaceTransferProtocol.Chunk(7, generation, 0, [chunkMutation]);
+    byte[] chunkEncoded = FullReplaceTransferProtocol.EncodeChunk(chunk);
+    ExpectHex(chunkEncoded,
+        "070000112233445566778899aabbccddeeff00000000010054000000020000000000000000000000000000000100006400000000000000020000000100000000000000000000000000000000000300000003000000000000000000000000000000010000000100000000000000616263",
+        "FULL_REPLACE_CHUNK");
+    ExpectHex(FullReplaceTransferProtocol.EncodeChunk(
+            FullReplaceTransferProtocol.DecodeChunk(chunkEncoded)),
+        "070000112233445566778899aabbccddeeff00000000010054000000020000000000000000000000000000000100006400000000000000020000000100000000000000000000000000000000000300000003000000000000000000000000000000010000000100000000000000616263",
+        "FULL_REPLACE_CHUNK roundtrip");
+
+    var ready = new FullReplaceTransferProtocol.Progress(
+        7, generation, 1, 1, Enumerable.Repeat((byte)0x33, 32).ToArray(),
+        false, FullReplaceTransferProtocol.GetNextFrameSequence(1));
+    byte[] readyEncoded = FullReplaceTransferProtocol.EncodeProgress(ready);
+    ExpectHex(readyEncoded,
+        "070000112233445566778899aabbccddeeff01000000010000003333333333333333333333333333333333333333333333333333333333333333000300000000000000",
+        "FULL_REPLACE_READY");
+    ExpectHex(FullReplaceTransferProtocol.EncodeProgress(
+            FullReplaceTransferProtocol.DecodeProgress(readyEncoded)),
+        "070000112233445566778899aabbccddeeff01000000010000003333333333333333333333333333333333333333333333333333333333333333000300000000000000",
+        "FULL_REPLACE_READY roundtrip");
+
+    var transferId = new FullReplaceTransferProtocol.TransferId(7, generation);
+    byte[] controlEncoded = FullReplaceTransferProtocol.EncodeTransferId(transferId);
+    ExpectHex(controlEncoded,
+        "070000112233445566778899aabbccddeeff",
+        "FULL_REPLACE_COMMIT / ABORT");
+    FullReplaceTransferProtocol.TransferId decodedControl =
+        FullReplaceTransferProtocol.DecodeTransferId(controlEncoded);
+    ExpectHex(FullReplaceTransferProtocol.EncodeTransferId(decodedControl),
+        "070000112233445566778899aabbccddeeff",
+        "FULL_REPLACE_COMMIT / ABORT roundtrip");
+
+    Console.WriteLine("v3.1 signed control-plane and FULL_REPLACE golden vectors: PASS");
     return 0;
 }
 catch (Exception exception)
