@@ -201,6 +201,107 @@ public sealed class V31NamespaceGcHostOrchestrator
     }
 
     /// <summary>
+    /// Transfer one identical FULL_REPLACE generation to every non-retired remote
+    /// roster member. One provider snapshot and one signed manifest are reused for
+    /// the complete fanout, so local writes between recipients cannot create
+    /// different watermarks or digests under the same generation.
+    /// </summary>
+    public async Task<IReadOnlyList<FullReplaceInstalledAck>> TransferFullReplaceToMembersAsync(
+        IDataProvider authorityProvider,
+        IReadOnlyList<SyncSession> memberSessions,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        byte[] authoritySeed,
+        Guid generation,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authorityProvider);
+            ArgumentNullException.ThrowIfNull(memberSessions);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            ArgumentNullException.ThrowIfNull(authoritySeed);
+            if (authorityProvider is not IProviderFullReplace)
+                throw new NotSupportedException(
+                    "The authority provider must expose the durable IProviderFullReplace capability.");
+            if (authoritySeed.Length != 32)
+                throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
+            if (generation == Guid.Empty)
+                throw new ArgumentException("FULL_REPLACE generation must be non-empty.", nameof(generation));
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+
+            if (!gcStore.TryReadNamespaceRoster(
+                    _coordinator.NamespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+            if (roster.AuthorityNodeId != _coordinator.LocalReplicaId)
+                throw new InvalidOperationException(
+                    "Only the local pinned namespace authority may initiate FULL_REPLACE.");
+            NamespaceRosterMember authority = FindRosterMember(roster, roster.AuthorityNodeId);
+            if (authority.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException(
+                    "A Joining or Retired member cannot originate FULL_REPLACE.");
+
+            SyncSession[] sessions = ValidateSessions(memberSessions);
+            ValidateCompleteRosterSessionSet(roster, sessions);
+
+            // Send the same accepted roster before any member receives the transfer.
+            foreach (SyncSession session in sessions)
+            {
+                await _coordinator.SendAcceptedNamespaceRosterAsync(
+                    session, authoritySeed, NextSequence(session), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            // The manifest and provider snapshot are captured once for the whole fanout.
+            using PreparedFullReplaceSnapshot prepared =
+                StorageFullReplaceSender.PrepareSnapshot(
+                    authorityProvider,
+                    trustStore,
+                    roster,
+                    _coordinator.LocalReplicaId,
+                    generation,
+                    authoritySeed);
+
+            var acknowledgements = new FullReplaceInstalledAck[sessions.Length];
+            for (int i = 0; i < sessions.Length; i++)
+            {
+                SyncSession session = sessions[i];
+                FullReplaceInstalledAck acknowledgement =
+                    await StorageFullReplaceSender.SendPreparedSnapshotAsync(
+                        prepared,
+                        session,
+                        gcStore,
+                        trustStore,
+                        roster,
+                        _coordinator.LocalReplicaId,
+                        authoritySeed,
+                        cancellationToken).ConfigureAwait(false);
+
+                NamespaceRosterMember target = FindRosterMember(roster, session.PeerNodeId);
+                if (!acknowledgement.Installed ||
+                    acknowledgement.MemberNodeId != session.PeerNodeId ||
+                    acknowledgement.MemberTransportEpoch != target.TransportPeerEpoch ||
+                    acknowledgement.RosterGeneration != roster.RosterGeneration ||
+                    acknowledgement.Generation != generation ||
+                    !acknowledgement.Digest.AsSpan().SequenceEqual(prepared.Digest))
+                    throw new InvalidDataException(
+                        "FULL_REPLACE installed ACK does not match the shared fanout snapshot and target roster.");
+                acknowledgements[i] = acknowledgement;
+            }
+
+            return acknowledgements;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Authority-side FULL_REPLACE transfer for one accepted non-retired member.
     /// The durable accepted roster is sent first; the sender verifies its signed
     /// manifest and persists the member's signed FRA2 in the same namespace-GC store.
