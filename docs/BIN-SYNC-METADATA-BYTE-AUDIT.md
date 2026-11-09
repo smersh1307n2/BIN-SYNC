@@ -191,3 +191,32 @@ For one prune transaction deleting (N) mapping rows plus one cursor Put:
 An empty-page cursor-only update is one Put: 141-byte WAL payload + 24-byte record framing + 0–7 padding. These formulas exclude segment-header amortization, WAL rotation/flush policy and the in-memory sorted-key index.
 
 The compacted snapshot stores only live rows; deletes are represented in the WAL until the next snapshot generation. The Storage snapshot reader copies the sorted key index while sharing immutable value arrays, so snapshot payload arrays are not duplicated wholesale. Runtime dictionary/list/HashSet overhead remains implementation- and cardinality-dependent. Write-batch encoding also sorts all mutations lexicographically by StorageKey before WAL append (currently via LINQ `OrderBy`); this is an O(N log N) per-batch CPU/allocation cost, not a byte cost. Benchmark it before replacing it with an array sort or a sorted mutation collection.
+
+
+## 11. FLD Manifest and Run structural overhead (cross-repository source audit)
+
+Sources: FLD-DB `src/Fld1.Manifest/Format/ManifestCodec.cs`, `ManifestModel.cs`, `AtomicManifestStore.cs`, and `src/Fld1.Run/Format/RunConstants.cs`.
+
+### Manifest
+
+The encoded manifest has an 80-byte fixed base plus variable entries:
+- Namespace entry: 4 bytes.
+- RunEntry: 64 bytes (RunId[8], Level[2], pad[2], Namespace[4], MinRec[16], MaxRec[16], SeqLo[8], SeqHi[8]).
+- RetainEntry: 16 bytes (RunId[8], RetainUntilEpoch[8]).
+- ResultClient entry: 52 bytes + AcceptedBitmap bytes (ClientInstanceId[16], SeqLo[8], SeqHi[8], FinalizedThroughSeq[8], FloorSeq[8], bitmap length[4], bitmap).
+- ProvenanceIndex entry: 40 bytes (ClientInstanceId[16], RequestSeq[8], Outcome[1], pad[3], CommitSeq[8], ErrorCode[2], pad[2]).
+
+Total encoded length:
+`80 + 4×NamespaceCount + 64×RunCount + 16×RetainCount + Σ(52 + AcceptedBitmapBytes) + 40×ProvenanceIndexCount`.
+
+The fixed 80 bytes include Generation[8], CRC32C[4], last flushed CommitSeq[8], certified HLC+padding[16], five count fields[20], coordinator lease epoch[8] and session ID[16]. AtomicManifestStore publishes the complete CRC-checked manifest atomically; a present corrupt manifest fails closed.
+
+### Run files
+
+- Run header: 256 bytes; footer: 8 bytes; empty run: 264 bytes.
+- Cluster header: 40 bytes.
+- Field descriptor: 8 bytes per field; tombstone and HLC-override are flags in this descriptor.
+- Optional per-field HLC override: 24 bytes.
+- Structural constants: CompactSlot 16 bytes, PGM segment 32 bytes, ValueRef 16 bytes, InternEntry 16 bytes.
+
+Run files are the materialized field-state/data layer, not a second synchronization history. The header carries AliveFields and GhostCount; a tombstone is represented by the field descriptor flag, not a separate fixed-size tombstone row. Variable payload, dictionary, PGM and compaction layout costs depend on the actual run and are not added to the relay metadata totals above.
