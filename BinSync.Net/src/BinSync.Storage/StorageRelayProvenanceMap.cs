@@ -254,19 +254,14 @@ public sealed class StorageRelayProvenanceMap
                     if (journalSeq <= state.AckedThroughJournalSeq ||
                         journalSeq > state.ScannedThroughJournalSeq ||
                         outboxSeq <= state.AckedThroughOutboxSeq ||
-                        (state.Mappings.Count != 0 && journalSeq < state.Mappings[^1].JournalSeq))
+                        (state.Mappings.Count != 0 &&
+                            (outboxSeq <= state.Mappings[^1].OutboxSeq ||
+                             journalSeq < state.Mappings[^1].JournalSeq)))
                         throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
                     state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
                 }
                 if (page.Count < pageSize) break;
             }
-        }
-        state.Mappings.Sort(static (left, right) => left.OutboxSeq.CompareTo(right.OutboxSeq));
-        for (int i = 1; i < state.Mappings.Count; i++)
-        {
-            if (state.Mappings[i].OutboxSeq <= state.Mappings[i - 1].OutboxSeq ||
-                state.Mappings[i].JournalSeq < state.Mappings[i - 1].JournalSeq)
-                throw new InvalidDataException("Relay provenance mapping sequence coordinates are not monotonic.");
         }
         _states[key] = state;
         return state;
