@@ -18,7 +18,8 @@ public sealed class FldDatabaseDataProvider :
     IProviderCommitGuard,
     IProviderAuthorEpochClosureStore,
     IProviderPublicationMode,
-    IProviderDurableSnapshotStore
+    IProviderDurableSnapshotStore,
+    IProviderFullReplace
 {
     private readonly object _gate = new();
     private readonly FldDatabase _database;
@@ -423,6 +424,138 @@ public sealed class FldDatabaseDataProvider :
     {
         EnsureOpen();
         return _database.AcquireCommitGuard();
+    }
+
+    public bool TryGetFullReplaceProgress(Guid generation, out ProviderFullReplaceProgress? progress)
+    {
+        EnsureOpen();
+        if (!_database.TryGetProviderReplacementProgress(generation, out FldFullReplaceProgress? state) ||
+            state is null)
+        {
+            progress = null;
+            return false;
+        }
+        progress = new ProviderFullReplaceProgress(
+            state.Generation, state.SourceFeedWatermark, state.ExpectedEntryCount,
+            state.NextIndex, state.ExpectedDigest.ToArray(), state.IsCommitted);
+        return true;
+    }
+
+    public void BeginFullReplace(
+        Guid generation,
+        ulong sourceChangeFeedWatermark,
+        int expectedEntryCount,
+        ReadOnlyMemory<byte> expectedDigest)
+    {
+        EnsureOpen();
+        _database.BeginProviderReplacement(
+            generation, sourceChangeFeedWatermark, expectedEntryCount, expectedDigest);
+    }
+
+    public void StageFullReplacePage(
+        Guid generation,
+        int startIndex,
+        IReadOnlyList<ProviderMutation> entries)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        EnsureOpen();
+        if (entries.Count == 0 || entries.Count > ProviderFullReplaceDigestBuilder.MaxPageEntries)
+            throw new ArgumentOutOfRangeException(nameof(entries));
+        var staged = new FldProviderSnapshotEntry[entries.Count];
+        for (int i = 0; i < entries.Count; i++)
+        {
+            ProviderMutation mutation = entries[i]
+                ?? throw new ArgumentException("FULL_REPLACE page contains a null mutation.", nameof(entries));
+            ProviderMutationCodec.Validate(mutation);
+            staged[i] = new FldProviderSnapshotEntry(
+                ToRecordIdBytes(mutation.RecordId),
+                mutation.FieldId,
+                mutation.Value.ToArray(),
+                mutation.HlcWall,
+                mutation.HlcLogical,
+                ToNodeIdBytes(mutation.AuthorNodeId),
+                mutation.KeyEpoch,
+                mutation.IsTombstone,
+                mutation.ChangeId.IsZero ? Array.Empty<byte>() : mutation.ChangeId.ToArray(),
+                mutation.OriginAuthorEpoch,
+                mutation.OriginSequence,
+                mutation.IsRecordTombstone);
+        }
+        _database.StageProviderReplacementPage(generation, startIndex, staged);
+    }
+
+    public void CommitFullReplace(Guid generation)
+    {
+        EnsureOpen();
+        if (!_database.TryGetProviderReplacementProgress(generation, out FldFullReplaceProgress? progress) ||
+            progress is null)
+            throw new InvalidOperationException("FULL_REPLACE generation has not been begun.");
+        if (progress.IsCommitted) return;
+        if (progress.NextIndex != progress.ExpectedEntryCount)
+            throw new InvalidOperationException("FULL_REPLACE snapshot is incomplete.");
+
+        using var digest = new ProviderFullReplaceDigestBuilder(
+            generation, progress.SourceFeedWatermark);
+        int nextIndex = 0;
+        while (nextIndex < progress.ExpectedEntryCount)
+        {
+            FldProviderSnapshotPage page = _database.ReadProviderReplacementPage(
+                generation, nextIndex, ProviderFullReplaceDigestBuilder.MaxPageEntries);
+            if (page.Entries.Count == 0 ||
+                page.NextIndex != checked(nextIndex + page.Entries.Count) ||
+                page.Entries.Count > ProviderFullReplaceDigestBuilder.MaxPageEntries)
+                throw new InvalidDataException("FLD FULL_REPLACE staging returned a non-contiguous digest page.");
+            var mutations = new ProviderMutation[page.Entries.Count];
+            for (int i = 0; i < mutations.Length; i++)
+                mutations[i] = FromStagedReplacementEntry(page.Entries[i]);
+            digest.AppendPage(mutations);
+            nextIndex = page.NextIndex;
+            if (page.HasMore != (nextIndex < progress.ExpectedEntryCount))
+                throw new InvalidDataException("FLD FULL_REPLACE staging continuation flag is inconsistent.");
+        }
+
+        byte[] actualDigest = digest.Complete();
+        if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                actualDigest, progress.ExpectedDigest))
+            throw new InvalidDataException("FLD FULL_REPLACE staged image digest does not match the signed manifest.");
+        _database.CommitProviderReplacement(generation, actualDigest);
+    }
+
+    public bool AbortFullReplace(Guid generation, int limit)
+    {
+        EnsureOpen();
+        return _database.AbortProviderReplacement(generation, limit);
+    }
+
+    private static ProviderMutation FromStagedReplacementEntry(FldProviderSnapshotEntry entry)
+        => new()
+        {
+            RecordId = RecordId.From(entry.RecordId),
+            FieldId = entry.FieldId,
+            IsTombstone = entry.IsTombstone,
+            IsRecordTombstone = entry.IsRecordTombstone,
+            HlcWall = entry.HlcWall,
+            HlcLogical = entry.HlcLogical,
+            AuthorNodeId = NodeId.From(entry.AuthorNodeId),
+            KeyEpoch = entry.KeyEpoch,
+            Value = entry.Value.ToArray(),
+            ChangeId = entry.ChangeId.Length == 16 ? BatchId.From(entry.ChangeId) : default,
+            OriginAuthorEpoch = entry.OriginAuthorEpoch,
+            OriginSequence = entry.OriginSequence
+        };
+
+    private static byte[] ToRecordIdBytes(RecordId id)
+    {
+        byte[] bytes = new byte[16];
+        id.WriteTo(bytes);
+        return bytes;
+    }
+
+    private static byte[] ToNodeIdBytes(NodeId id)
+    {
+        byte[] bytes = new byte[16];
+        id.WriteTo(bytes);
+        return bytes;
     }
 
     public bool HasPersistedSnapshot(Guid snapshotToken)
