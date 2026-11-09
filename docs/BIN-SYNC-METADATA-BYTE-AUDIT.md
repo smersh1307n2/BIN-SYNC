@@ -156,3 +156,38 @@ WAL is the crash-recovery source. ApplyJournal is the durable remote receipt/rel
 `FldDatabase.OpenReferenceSnapshot()` builds three in-memory indexes while the FLD commit gate is held: ChangeId references (16-byte `FldId128` keys), RecordId references (16-byte keys), and receipt references keyed by sender[16] + transport epoch[4] + author epoch[4] + namespace[2] + BatchId[16]. Hash-table capacity, padding and managed-object overhead are runtime-dependent and are not persistent row bytes. If WAL is unsealed, the snapshot conservatively reports every queried identity/receipt as referenced and keeps the draft horizon non-zero.
 
 The snapshot is one scan per GC/frontier operation, not a per-candidate rescan. The adapter must keep its lifetime inside the composed application commit lease and dispose it before releasing that lease.
+
+
+## 10. Fld1.Storage engine framing (cross-repository source audit)
+
+Source: FLD-DB `src/Fld1.Storage/Engine/StorageDatabase.cs`, `StorageSnapshotFile.cs`, and `Wal/Format/*`.
+
+### Compacted snapshot
+
+- Snapshot file header: 36 bytes (`FLDS`).
+- Each live key/value row: keyLength[4] + valueLength[4] + key + value = **8 + keyBytes + valueBytes**.
+- Snapshot footer: 4-byte CRC32C over the complete snapshot body.
+- Per-partition manifest: 48 bytes (`FLDM`) with its own CRC32C and snapshot length/CRC reference.
+
+Therefore a retained provenance mapping row occupies **108 bytes** in the compacted snapshot (8 + 76-byte key + 24-byte value); its per-author cursor occupies **136 bytes** (8 + 68-byte key + 60-byte RPM2 value). The snapshot header/footer/manifest are amortized per snapshot/partition.
+
+### Storage WAL write-batch framing
+
+The encoded write-batch payload is:
+- batch operation count: 4 bytes;
+- each Put: kind[1] + keyLength[4] + valueLength[4] + key + value = **9 + keyBytes + valueBytes**;
+- each Delete: kind[1] + keyLength[4] + valueLength[4] (zero) + key = **9 + keyBytes**.
+
+The Storage WAL uses the same framing sizes as the FLD Micro-WAL: 64-byte segment header; 20-byte record envelope + payload + 4-byte CRC32C + 0–7 byte alignment padding.
+
+For one AppendPage transaction with (N) mapping Puts plus one cursor Put:
+- WAL payload bytes = (4 + 109N + 137 = 141 + 109N);
+- WAL record bytes = (165 + 109N + pad(0..7)).
+
+For one prune transaction deleting (N) mapping rows plus one cursor Put:
+- WAL payload bytes = (4 + 85N + 137 = 141 + 85N);
+- WAL record bytes = (165 + 85N + pad(0..7)).
+
+An empty-page cursor-only update is one Put: 141-byte WAL payload + 24-byte record framing + 0–7 padding. These formulas exclude segment-header amortization, WAL rotation/flush policy and the in-memory sorted-key index.
+
+The compacted snapshot stores only live rows; deletes are represented in the WAL until the next snapshot generation. The Storage snapshot reader copies the sorted key index while sharing immutable value arrays, so snapshot payload arrays are not duplicated wholesale. Runtime dictionary/list/HashSet overhead remains implementation- and cardinality-dependent.
