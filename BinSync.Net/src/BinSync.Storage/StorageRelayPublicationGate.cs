@@ -11,6 +11,7 @@ public sealed class StorageRelayPublicationGate
 {
     private static readonly ConditionalWeakTable<StorageSyncCoordinator, StorageRelayPublicationGate> Gates = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _reconciliationRequired = true;
 
     private StorageRelayPublicationGate() { }
 
@@ -48,11 +49,25 @@ public sealed class StorageRelayPublicationGate
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-            bool committed = DrainAllPages(
-                coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
-            if (!committed)
-                return false;
+            EnsureReconciled();
+            try
+            {
+                await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
+                bool committed = DrainAllPages(
+                    coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
+                if (!committed)
+                {
+                    _reconciliationRequired = true;
+                    return false;
+                }
+            }
+            catch
+            {
+                // APPLY may have become durable before a later callback/resolver failed.
+                // Require a complete source rescan before any sender can run again.
+                _reconciliationRequired = true;
+                throw;
+            }
 
             await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
             return true;
@@ -91,10 +106,22 @@ public sealed class StorageRelayPublicationGate
         {
             coordinator.ValidateRelayProvenanceRecovery(
                 map, originalAuthor, acquireHostCommitLease, readSourceJournalHighWatermark);
-            bool committed = DrainAllPages(
-                coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
-            if (!committed)
-                return false;
+            try
+            {
+                bool committed = DrainAllPages(
+                    coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
+                if (!committed)
+                {
+                    _reconciliationRequired = true;
+                    return false;
+                }
+                _reconciliationRequired = false;
+            }
+            catch
+            {
+                _reconciliationRequired = true;
+                throw;
+            }
 
             await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
             return true;
@@ -126,6 +153,7 @@ public sealed class StorageRelayPublicationGate
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            EnsureReconciled();
             return coordinator.AcknowledgeRelayProvenance(
                 map, originalAuthor, acquireHostCommitLease, acknowledgeSource);
         }
@@ -147,12 +175,20 @@ public sealed class StorageRelayPublicationGate
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            EnsureReconciled();
             await publish(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private void EnsureReconciled()
+    {
+        if (_reconciliationRequired)
+            throw new InvalidOperationException(
+                "Relay publication is closed until RecoverAndPublishAsync reconciles the durable FLD journal and RPM3 cursor.");
     }
 
     private static bool DrainAllPages(
