@@ -15,6 +15,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Updated `docs/PRODUCTION-STATUS.md` to identify the compact RPM3 implementation/sample commits and the current unvalidated branch head.
 - [x C] The historical green v3.0 baseline remains explicitly separate from all current C-pass work.
 
+## 0.49. C-pass: empty-author scan cursor can progress after positive ACK — 2026-11-09
+
+- [x C] `TranslateSafeOutboxSequence` now advances through newly scanned empty author pages when the supplied safe OutboxSeq equals an already-positive durable ACK and no unacknowledged mappings remain.
+- [x C] A zero OutboxSeq still returns the prior FLD ACK only; it can never authorize a positive JournalSeq ACK. If mappings remain, the equal-watermark path cannot skip them.
+- [x C] Extended `RelayProvenanceMap` sample for empty-page progression and the zero-watermark invariant; updated the FLD integration contract.
+- [~ T] Verify after reopen, with outstanding mappings, with a positive prior ACK, and with a zero Outbox watermark.
+
 ## 0.48. C-pass: FLD adapter contract uses sequence-only entries — 2026-11-09
 
 - [x C] Clarified §9.5 that the host constructs `StorageRelayProvenanceEntry(JournalSeq, resolved OutboxSeq)` after calling the global Node ChangeId resolver. ChangeId is not copied into the provenance map.
