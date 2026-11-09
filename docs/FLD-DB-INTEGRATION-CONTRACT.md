@@ -310,3 +310,21 @@ This is an integration contract, not an assertion that the FLD adapter already e
 ### 9.4 Freeze-before-stamp crash recovery and ChangeId GC
 
 The provider feed remains a live ChangeId reference until \`CommitPublishedOrigins\` has durably stamped the exact immutable \`OperationOrigin\` and the feed sequence is acknowledged. If a crash occurs after Metadata Store freeze but before provider stamping, retry resolves both fingerprint and origin from the durable ChangeLedger row using \`TryGetOutboundChangeIdentity\`; it must not allocate a new origin or require the outbound payload row to remain retained. ChangeId compaction also scans the provider's pending local feed and blocks every matching ChangeId. The external FLD snapshot alone is insufficient because the FLD Outbox may already have been ACKed after the provider accepted the entry.
+
+
+### 9.5 Durable synchronized-FLD relay provenance map
+
+BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping primitive for the synchronized-FLD adapter. It is scoped by (scope, local replica) at construction and by (namespace, original author) per stream.
+
+For each FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)` result:
+
+1. Resolve the page's unique `(author, ChangeId)` identities through `Node.TryResolveOutboxSequences(namespaceId, identities, sequences)`. If any identity is no longer retained, stop and reconcile; never infer an OutboxSeq from current field winners.
+2. Preserve the original FLD `JournalSeq` for every resolved ChangeId. Do not substitute JournalSeq, CommitSeq or OutboxSeq for protocol `OriginSequence`.
+3. Call `StorageRelayProvenanceMap.AppendPage(namespaceId, author, entries, ScannedThroughJournalSeq)`. The complete page mapping and scan cursor commit in one Storage transaction. Empty author pages still advance the cursor.
+4. Only after the mapping commit may the host open the corresponding BIN-SYNC outbound publication path. The adapter-level namespace gate must serialize this boundary against inbound relay publication and outbound batching.
+5. Compute BIN-SYNC's per-author safe `OutboxSeq` with `Node.GetSafeOutboxAckedThrough`; translate it with `TranslateSafeOutboxSequence`. The first JournalSeq containing any OutboxSeq above the safe watermark is retained in full.
+6. Call FLD `AcknowledgeRelayBatches(author, safeThroughJournalSeq)` and wait for its durable return. Only then call `CommitAfterFldRelayAck` to persist both translated ACK watermarks and prune mapping rows.
+
+Crash behavior is intentionally asymmetric: a crash before mapping commit rereads the same FLD page; a crash after mapping commit reuses the durable mapping and cursor; a crash after FLD ACK but before map pruning replays the same idempotent FLD ACK and then prunes. Never prune the mapping before FLD confirms its relay ACK is durable.
+
+The map stores only sequence/identity coordinates, not operation payloads, per-peer ACKs or OriginSequence. It is not itself the full FLD adapter: host code still owns the FLD commit guard, source-page read, ChangeId resolver, namespace publication gate, transport scheduling and ACK call. The generic Storage engine remains unaware of FLD and BIN-SYNC semantics.
