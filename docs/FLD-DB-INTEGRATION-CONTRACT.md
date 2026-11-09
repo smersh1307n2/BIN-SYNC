@@ -267,3 +267,41 @@ The cross-repository phase plan is in [Sync Storage Compaction Roadmap](https://
 - Per-peer progress and ACK aggregation remain BIN-SYNC responsibilities; FLD receives only the safe aggregate local Outbox watermark.
 
 These decisions do not weaken atomic APPLY or ACK-after-durable-acceptance. If FLD and BIN-SYNC metadata cannot share one atomic transaction, the recoverable apply protocol and idempotent sidecar promotion must be explicit and crash-tested. See roadmap §7.19 for the later synchronized-database provenance adapter and §7.20 for the controlling cross-repository implementation order.
+
+
+## 9. v3.1 application draft horizon and physical-GC scanner boundary
+
+The BIN-SYNC v3.1 coordinator now requires the host integration to implement \`IApplicationGcReferenceScanner\`; FLD itself must remain protocol-neutral and must not reference \`BinSync.Core\`. The adapter belongs in the layer that depends on both FLD and BIN-SYNC.
+
+### 9.1. One application commit lock order
+
+All operations that publish an OFR2 frontier, commit FULL_REPLACE, or physically compact receipts/ChangeId/tombstones must use one composed lease in this order:
+
+1. BIN-SYNC coordinator gate;
+2. Node's complete gate set;
+3. FLD/WAL transaction or writer gate;
+4. shared BIN-SYNC Storage transaction gate.
+
+Release in reverse order. The host passes its WAL/FLD lease factory to \`StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\`. For GC, pass \`() => coordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\` as the \`acquireGcLease\` callback. For FULL_REPLACE, use the same composed callback as the receiver's commit-guard factory. Do not acquire the shared Storage gate and then wait for the FLD/WAL gate: that reverses the order and can deadlock with a normal FLD commit.
+
+### 9.2. Complete unpublished local draft horizon
+
+\`ReadUnpublishedLocalDraftHorizon(scopeId, localReplica, namespaceId)\` must account for every durable local operation that has not yet been frozen into BIN-SYNC Metadata Store, including:
+
+- FLD Outbox entries after \`OutboxLog.AckedThrough\`;
+- WAL commits beyond \`OutboxLog.MaterializedThroughCommitSeq\` that have not yet been materialized into Outbox;
+- any additional durable local-intent/source queue used by the host.
+
+The scanner returns a conservative \`(Count, MaxHlcWall, MaxHlcLogical)\`. The WAL/Outbox ranges above are disjoint by the materialization watermark; do not count one WAL commit twice. \`CommitSeq\`, \`JournalSeq\` and \`OutboxSeq\` remain source-local coordinates and must never be copied into \`OriginSequence\`. A zero count is meaningful only while the composed host lease is held. A final-author report is rejected before provider epoch closure if either host drafts or provider-feed drafts remain.
+
+### 9.3. Live references for physical reclamation
+
+The same adapter must implement all three reference checks:
+
+- \`HasExternalReceiptReference\`: inspect durable apply/retry/relay state that still names (namespace, sender, transport epoch, author epoch, batch id);
+- \`HasExternalChangeIdReference\`: inspect WAL, Outbox and any durable local/remote intent that still names the ChangeId;
+- \`HasExternalRecordReference\`: inspect WAL, Outbox, pending apply and other durable application state for the RecordId or tombstone ChangeId.
+
+Unknown/corrupt retained records are live references. Scanner exceptions fail closed. The scanner must be partition-scoped by (scopeId, localReplica, namespaceId) and must not infer namespace from an unrelated global cursor.
+
+This is an integration contract, not an assertion that the FLD adapter already exists. Until the adapter, lock composition and cross-store crash tests are implemented, all physical GC feature flags remain false.
