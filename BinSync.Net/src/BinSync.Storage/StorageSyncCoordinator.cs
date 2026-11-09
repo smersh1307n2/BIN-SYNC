@@ -2271,8 +2271,8 @@ public sealed class StorageSyncCoordinator
             checked((ulong)wireBatch.CursorEnd) != pending.CursorEnd ||
             wireBatch.IssuerEpoch < 0 ||
             checked((uint)wireBatch.IssuerEpoch) != pending.SenderEpoch ||
-            wireBatch.PrevBatchDigest != Digest16.FromBytes(pending.PreviousBatchDigest) ||
-            wireBatch.BatchDigest != Digest16.FromBytes(pending.BatchDigest))
+            !wireBatch.PrevBatchDigest.ToArray().AsSpan().SequenceEqual(pending.PreviousBatchDigest) ||
+            !wireBatch.BatchDigest.ToArray().AsSpan().SequenceEqual(pending.BatchDigest))
             throw new InvalidDataException(
                 "Full provider remote-batch context does not match its durable PendingApply header.");
 
