@@ -134,3 +134,8 @@ After a Joining member has completed FULL_REPLACE and its signed FRA2 is durably
 ### v3.1 capability dependencies
 
 The session enforces the same dependency masks in both directions: NRS2 requires `NamespaceRosterV31`; OFR2 and RCP2 require both `NamespaceRosterV31` and `OriginFrontierV31`; all FULL_REPLACE frames and FRA2 require both `NamespaceRosterV31` and `FullReplaceV31`. A partial capability intersection can still establish a v3.0-capable session, but the dependent v3.1 operation throws before transport I/O. The host should treat that as a capability incompatibility and must not retry the same v3.1 operation through a v3.0 frame fallback.
+
+
+### HELLO capability preflight
+
+The session bootstrap validates the v3.1 dependency mask on both encode and decode: OFR2/RCP2 and FULL_REPLACE capabilities require NRS2/namespace-roster support. An invalid local advertisement fails before HELLO/HELLO_ACK is emitted; an invalid remote advertisement is rejected before the session is established. The host should treat this as protocol incompatibility, not retry the same feature with a v3.0 fallback.
