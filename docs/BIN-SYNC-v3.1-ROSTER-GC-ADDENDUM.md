@@ -1,7 +1,7 @@
 # BIN-SYNC v3.1 Addendum — Signed Namespace Roster and Safe GC
 
-**Status:** v3.1 implementation in progress; not part of v3.0 wire conformance and not production-complete. Durable roster/frontier/checkpoint/installed-ACK storage contracts and initial SyncSession frame adapters are present; end-to-end orchestration, FULL_REPLACE transfer, crash proof and GC integration remain incomplete.  
-**Last green pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). Exact-head CI after the first v3.1 adapters had two test assertion failures, fixed in `43efda1`; its CI is pending.
+**Status:** v3.1 C-pass substantially implemented, but not production-complete and not part of v3.0 wire conformance. Signed roster/frontier/checkpoint/installed-ACK, FULL_REPLACE transfer, coordinator lifecycle orchestration, author-issued/retired-origin/HLC horizons, provider epoch closure, composed host commit-lease API, and mandatory host reference-scanner contracts are present. Exact-head CI is red; Phase T fixture migration, crash/race proof, FLD host adapter, and performance validation remain open. All physical GC flags remain false.  
+**Last green pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). This is historical, not current-head validation.
 
 This addendum closes the missing proof needed before enabling global ChangeId GC and tombstone/Ghost GC. It deliberately does not weaken the current fail-closed behavior.
 
@@ -482,3 +482,12 @@ The protocol tombstone proof rejects a candidate whose HLC exceeds the signed ma
 ## 10.25. Physical GC requires explicit host live-reference scanners (2026-11-09)
 
 `IApplicationGcReferenceScanner` is a mandatory host contract for physical receipt, ChangeId and record-tombstone reclamation. It receives the exact `(scopeId, localReplica, namespaceId)` partition on every call and exposes receipt references keyed by sender/author epoch/transport epoch/batch id, in addition to ChangeId and record references. It checks references outside BIN-SYNC's Storage database, including host WAL/FLD outbox and pending application work, while the caller's composed application commit lease is held. `CompactChangeLedger` checks internal relay/outbound/PendingApply/reservation references and this external scanner. `CompactRecordTombstones` additionally requires the durable Metadata Store, checks internal pending apply/relay/outbound payloads by RecordId (malformed payloads fail closed), blocks on pending immutable reservations, and checks host ChangeId/record references. Provider, Metadata Store and namespace-GC store must share one StorageDatabase. These API gates do not enable physical GC; the host adapter and adversarial T-pass remain mandatory.
+
+
+## 10.26. Host draft horizon and canonical cross-store lock order (2026-11-09)
+
+\`StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\` now acquires locks in the required order: coordinator → all Node gates → host WAL/FLD gate → shared BIN-SYNC Storage transaction gate. The returned lease releases in reverse order. The no-argument overload remains suitable only when no external host store participates. FULL_REPLACE and physical GC integrations must use the composed overload whenever FLD/WAL state is separate.
+
+\`IApplicationGcReferenceScanner\` now also exposes \`ReadUnpublishedLocalDraftHorizon(scopeId, localReplica, namespaceId)\`. OFR2 publication requires both the scanner and a host lease factory; it combines host WAL/Outbox drafts with provider-feed drafts and carries the maximum HLC. A final-author report is rejected while host drafts remain, before any provider epoch is closed. The count is conservative; zero is the only authorization signal. The host adapter must account for WAL commits beyond the Outbox materialization watermark and unacknowledged Outbox entries without mapping source-local cursors into OriginSequence.
+
+This closes the protocol-side gap where a zero provider-feed count could miss a local WAL commit not yet materialized into the provider. It does not claim that the FLD-specific adapter already exists. Update the host implementation and crash/race tests before any physical GC flag is enabled.
