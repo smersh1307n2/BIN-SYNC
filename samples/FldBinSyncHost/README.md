@@ -109,9 +109,14 @@ ChangeId/Origin. It intentionally refuses context-free remote APPLY; the exact
 The provider now implements durable Metadata Store publication cutover and author-
 epoch closure (the active epoch itself is read from the host's durable identity
 authority). The remaining C-pass work is FLD-backed FULL_REPLACE receiver
-staging/atomic generation switch, restart-durable prepared FULL_REPLACE source
-generations, generic Storage page/run/WAL physical-format decision and final public
-API/source/byte audit. The optional sample supplies a multi-session scheduler, but
+staging/atomic generation switch, generic Storage page/run/WAL physical-format
+decision and final public API/source/byte audit. Durable sender-side prepared
+FULL_REPLACE source generations are now implemented: use
+`StorageFullReplaceSender.PrepareSnapshotAndPersist` before transfer,
+`RestorePreparedSnapshot` after process restart, and
+`ReleasePreparedSnapshot` after the intended fanout is complete. The FLD provider
+implements the durable snapshot-token capability; this path still requires T-pass
+restart/crash validation. The optional sample supplies a multi-session scheduler, but
 the application still owns transport creation/reconnect/disposal. The adapter is
 not yet a complete v3.1 receiver. Physical receipt,
 ChangeId and tombstone/Ghost GC remain disabled until the full cross-store T-pass.
@@ -162,9 +167,12 @@ foreach (SyncSession missing in missingRecipients)
 ```
 
 Dispose the prepared object after the intended fanout completes or is abandoned.
-This retry token is in-process only; a durable sender snapshot that survives a
-process restart remains open work and must not be simulated by taking a new live
-snapshot under the old generation.
+To survive process restart, persist the prepared generation with the Metadata Store
+before starting network transfer. On restart, reopen the same FLD database and
+Metadata Store, call `RestorePreparedSnapshot` with the currently accepted roster
+and authority, then retry only recipients that have not installed. Never recreate
+the same generation from a newer live provider snapshot. Release permanently only
+after fanout completes or the generation is explicitly abandoned.
 ## Full remote-apply context adapter
 
 `FldRemoteBatchApplyStore` implements the optional Core capability `IProviderRemoteBatchCommitStore`. Create it once for the target `FldDatabase`, pass that exact instance as `remoteBatchCommitStore` to `StorageSyncCoordinator`, and pass it again to `FldBinSyncHostAdapter`. The adapter fails closed if the capability/database identities differ. On the receive-before-ACK path, Core passes the exact authenticated sender/transport epoch, wire issuer/epoch, BatchId, cursor range, previous/current digest, records root and immutable provider mutations. The FLD capability maps those fields to `RemoteBatchCommit` and calls `FldDatabase.ApplyRemoteBatch`.
