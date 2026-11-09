@@ -93,8 +93,10 @@ public static class StorageFullReplaceSender
             provider, trustStore, roster, authorityNodeId, generation, authoritySeed);
         try
         {
-            if (!durableSnapshots.HasPersistedSnapshot(prepared.Snapshot.Token))
-                throw new InvalidOperationException("Provider did not durably persist the prepared snapshot token.");
+            if (!durableSnapshots.TryGetPersistedSnapshotWatermark(
+                    prepared.Snapshot.Token, out ulong persistedWatermark) ||
+                persistedWatermark != prepared.SourceChangeFeedWatermark)
+                throw new InvalidOperationException("Provider did not durably persist the exact prepared snapshot token/watermark pair.");
             metadataStore.SavePreparedFullReplaceSnapshot(
                 scopeId,
                 localReplica,
@@ -149,8 +151,10 @@ public static class StorageFullReplaceSender
             manifest.SourceChangeFeedWatermark != state.SourceFeedWatermark)
             throw new InvalidDataException("Persisted FULL_REPLACE manifest and snapshot metadata disagree.");
 
-        if (!durableSnapshots.HasPersistedSnapshot(state.SnapshotToken))
-            throw new InvalidDataException("The persisted FULL_REPLACE provider snapshot token is no longer present.");
+        if (!durableSnapshots.TryGetPersistedSnapshotWatermark(
+                state.SnapshotToken, out ulong persistedWatermark) ||
+            persistedWatermark != state.SourceFeedWatermark)
+            throw new InvalidDataException("The persisted FULL_REPLACE provider snapshot token/watermark pair is missing or inconsistent.");
         var snapshot = new ProviderSnapshotHandle(state.SnapshotToken, state.SourceFeedWatermark);
         ProviderSnapshotPage firstPage = provider.ReadSnapshot(snapshot.Token, 0, 1);
         if (firstPage.Entries.Count != firstPage.NextIndex ||
