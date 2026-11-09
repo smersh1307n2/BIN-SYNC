@@ -210,6 +210,50 @@ public sealed class StorageSyncCoordinator
         return true;
     }
 
+    /// <summary>
+    /// Translate the aggregate downstream-safe Node Outbox watermark to a whole FLD
+    /// JournalSeq, durably acknowledge that FLD prefix, then prune RPM3 rows. The
+    /// host callback executes while the composed FLD/Node/Storage commit guard is held.
+    /// If the callback throws, the provenance map is untouched and the FLD ACK can be
+    /// retried. If map pruning fails after the FLD ACK, replaying the idempotent FLD ACK
+    /// and then this method is safe.
+    /// </summary>
+    public ulong AcknowledgeRelayProvenance(
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        Func<IDisposable?> acquireHostCommitLease,
+        Action<ulong> acknowledgeSource)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(acknowledgeSource);
+        if (originalAuthor.IsZero)
+            throw new ArgumentException("Original relay author must be non-zero.", nameof(originalAuthor));
+
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
+        if (_metadataStore is not StorageMetadataStore metadataStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Relay provenance acknowledgement requires the durable StorageMetadataStore.");
+        if (!map.IsBoundTo(_scopeId, _node.NodeId) || !map.IsBoundTo(metadataStore))
+            throw new InvalidOperationException(
+                "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
+
+        long safeOutboxSequence = _node.GetSafeOutboxAckedThrough(_namespaceId, originalAuthor);
+        if (safeOutboxSequence < 0)
+            throw new InvalidDataException("Node returned a negative safe Outbox watermark.");
+        ulong safeOutbox = checked((ulong)safeOutboxSequence);
+        ulong safeJournal = map.TranslateSafeOutboxSequence(
+            _namespaceId, originalAuthor, safeOutbox);
+
+        // This callback must durably acknowledge the source JournalSeq prefix.
+        // Do not move the map cursor until it returns successfully.
+        acknowledgeSource(safeJournal);
+        map.CommitAfterFldRelayAck(
+            _namespaceId, originalAuthor, safeOutbox, safeJournal);
+        return safeJournal;
+    }
+
     private sealed class ApplicationCommitLease : IDisposable
     {
         private IDisposable? _providerLease;
