@@ -201,6 +201,328 @@ public sealed class V31NamespaceGcHostOrchestrator
     }
 
     /// <summary>
+    /// Authority-side FULL_REPLACE transfer for one accepted non-retired member.
+    /// The durable accepted roster is sent first; the sender verifies its signed
+    /// manifest and persists the member's signed FRA2 in the same namespace-GC store.
+    /// Keep the authority provider unchanged for all members that must install the
+    /// same generation/digest before publishing the bound RCP2.
+    /// </summary>
+    public async Task<FullReplaceInstalledAck> TransferFullReplaceToMemberAsync(
+        IDataProvider authorityProvider,
+        SyncSession memberSession,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        byte[] authoritySeed,
+        Guid generation,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authorityProvider);
+            ArgumentNullException.ThrowIfNull(memberSession);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            ArgumentNullException.ThrowIfNull(authoritySeed);
+            if (authoritySeed.Length != 32)
+                throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
+            if (generation == Guid.Empty)
+                throw new ArgumentException("FULL_REPLACE generation must be non-empty.", nameof(generation));
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+
+            if (!gcStore.TryReadNamespaceRoster(
+                    _coordinator.NamespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+            if (roster.AuthorityNodeId != _coordinator.LocalReplicaId)
+                throw new InvalidOperationException("Only the local pinned namespace authority may initiate FULL_REPLACE.");
+            NamespaceRosterMember authority = FindRosterMember(roster, roster.AuthorityNodeId);
+            if (authority.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("A Joining or Retired member cannot originate FULL_REPLACE.");
+
+            NamespaceRosterMember target = FindRosterMember(roster, memberSession.PeerNodeId);
+            if (target.Status == NamespaceMemberStatus.Retired ||
+                target.TransportPeerEpoch != checked((uint)memberSession.PeerEpoch))
+                throw new InvalidDataException(
+                    "FULL_REPLACE target is retired or does not match the accepted roster transport epoch.");
+
+            await _coordinator.SendAcceptedNamespaceRosterAsync(
+                memberSession, authoritySeed, NextSequence(memberSession), cancellationToken)
+                .ConfigureAwait(false);
+
+            FullReplaceInstalledAck acknowledgement = await StorageFullReplaceSender.SendAsync(
+                authorityProvider,
+                memberSession,
+                gcStore,
+                trustStore,
+                roster,
+                _coordinator.LocalReplicaId,
+                generation,
+                authoritySeed,
+                cancellationToken).ConfigureAwait(false);
+
+            if (acknowledgement.MemberNodeId != memberSession.PeerNodeId ||
+                acknowledgement.MemberTransportEpoch != target.TransportPeerEpoch ||
+                acknowledgement.RosterGeneration != roster.RosterGeneration ||
+                acknowledgement.Generation != generation ||
+                !acknowledgement.Installed)
+                throw new InvalidDataException("FULL_REPLACE installed ACK does not match the accepted target roster.");
+            return acknowledgement;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Member-side Joining receive. It accepts the authority's signed roster before
+    /// reading FULL_REPLACE frames. StorageFullReplaceReceiver performs durable staging,
+    /// cross-store guarded commit, HLC/Node refresh and FRA2 persistence before sending
+    /// the installed ACK. An ABORT returns null and never promotes the member.
+    /// </summary>
+    public async Task<FullReplaceInstalledAck?> ReceiveFullReplaceAsync(
+        SyncSession authoritySession,
+        StorageFullReplaceReceiver receiver,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authoritySession);
+            ArgumentNullException.ThrowIfNull(receiver);
+            NamespaceRosterCertificate roster =
+                await _coordinator.ReceiveAndAcceptNamespaceRosterAsync(
+                    authoritySession, cancellationToken).ConfigureAwait(false);
+            if (roster.NamespaceId != _coordinator.NamespaceId ||
+                roster.AuthorityNodeId != authoritySession.PeerNodeId)
+                throw new InvalidDataException("FULL_REPLACE roster does not match the authenticated authority session.");
+            NamespaceRosterMember authority = FindRosterMember(roster, authoritySession.PeerNodeId);
+            if (authority.Status != NamespaceMemberStatus.Active ||
+                authority.TransportPeerEpoch != checked((uint)authoritySession.PeerEpoch))
+                throw new InvalidDataException("FULL_REPLACE authority is not Active at this transport epoch.");
+            NamespaceRosterMember local = FindRosterMember(roster, _coordinator.LocalReplicaId);
+            if (local.Status != NamespaceMemberStatus.Joining)
+                throw new InvalidOperationException("This receive entry point is only for a Joining member.");
+
+            FullReplaceInstalledAck? acknowledgement =
+                await receiver.ReceiveTransferAsync(authoritySession, cancellationToken).ConfigureAwait(false);
+            if (acknowledgement is not null &&
+                (acknowledgement.MemberNodeId != _coordinator.LocalReplicaId ||
+                 acknowledgement.MemberTransportEpoch != local.TransportPeerEpoch ||
+                 acknowledgement.RosterGeneration != roster.RosterGeneration ||
+                 !acknowledgement.Installed))
+                throw new InvalidDataException("FULL_REPLACE receiver returned an ACK outside the accepted Joining roster.");
+            return acknowledgement;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Promote one Joining member only after the current durable RCP2 is bound to the
+    /// same FULL_REPLACE generation/digest and the member's FRA2 is durably accepted
+    /// under the prior roster. The updated NRS2 is persisted before it is broadcast.
+    /// </summary>
+    public async Task<NamespaceRosterCertificate> PromoteInstalledJoiningMemberAsync(
+        NodeId memberNodeId,
+        Guid generation,
+        byte[] fullReplaceDigest,
+        byte[] authoritySeed,
+        IReadOnlyList<SyncSession> allMemberSessions,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(fullReplaceDigest);
+            ArgumentNullException.ThrowIfNull(authoritySeed);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            if (memberNodeId.IsZero || generation == Guid.Empty)
+                throw new ArgumentException("Joining member identity and FULL_REPLACE generation are required.");
+            if (fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
+                throw new ArgumentException("FULL_REPLACE digest must be 32 bytes.", nameof(fullReplaceDigest));
+            if (authoritySeed.Length != 32)
+                throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+
+            if (!gcStore.TryReadNamespaceRoster(
+                    _coordinator.NamespaceId, trustStore, out NamespaceRosterCertificate? prior) ||
+                prior is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            NamespaceRosterProtocol.VerifyOrThrow(prior, trustStore);
+            if (prior.AuthorityNodeId != _coordinator.LocalReplicaId)
+                throw new InvalidOperationException("Only the local pinned namespace authority may promote a member.");
+            NamespaceRosterMember joining = FindRosterMember(prior, memberNodeId);
+            if (joining.Status != NamespaceMemberStatus.Joining)
+                throw new InvalidOperationException("Only a Joining member can be promoted by this operation.");
+
+            if (!gcStore.TryReadRetentionCheckpoint(prior, trustStore, out NamespaceRetentionCheckpoint? checkpoint) ||
+                checkpoint is null ||
+                checkpoint.FullReplaceGeneration != generation ||
+                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(fullReplaceDigest) ||
+                !gcStore.AreAllActiveMembersInstalled(prior, generation, fullReplaceDigest))
+                throw new InvalidOperationException(
+                    "The prior roster must have a durable FULL_REPLACE-bound RCP2 and installed ACKs from every current Active member.");
+
+            FullReplaceInstalledAck? joiningAck = gcStore.ReadFullReplaceInstalledAcks(prior, generation)
+                .FirstOrDefault(ack => ack.MemberNodeId == memberNodeId);
+            if (joiningAck is null ||
+                joiningAck.MemberTransportEpoch != joining.TransportPeerEpoch ||
+                joiningAck.RosterGeneration != prior.RosterGeneration ||
+                !joiningAck.Installed ||
+                !joiningAck.Digest.AsSpan().SequenceEqual(fullReplaceDigest))
+                throw new InvalidOperationException(
+                    "The Joining member has not durably installed the exact FULL_REPLACE generation under the prior roster.");
+
+            SyncSession[] sessions = ValidateSessions(allMemberSessions);
+            ValidateCompleteRosterSessionSet(prior, sessions);
+
+            NamespaceRosterMember[] promotedMembers = prior.Members
+                .Select(member => member.NodeId == memberNodeId
+                    ? new NamespaceRosterMember
+                    {
+                        NodeId = member.NodeId,
+                        PublicKey = member.PublicKey.ToArray(),
+                        TransportPeerEpoch = member.TransportPeerEpoch,
+                        Status = NamespaceMemberStatus.Active,
+                        RetiredThroughEpoch = member.RetiredThroughEpoch
+                    }
+                    : member)
+                .ToArray();
+            var unsigned = new NamespaceRosterCertificate
+            {
+                NamespaceId = prior.NamespaceId,
+                RosterGeneration = checked(prior.RosterGeneration + 1),
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(prior),
+                AuthorityNodeId = prior.AuthorityNodeId,
+                Members = promotedMembers,
+                RetiredOriginEpochs = prior.RetiredOriginEpochs,
+                Signature = Array.Empty<byte>()
+            };
+            byte[] signed = NamespaceRosterProtocol.Sign(unsigned, authoritySeed);
+            NamespaceRosterCertificate accepted = gcStore.AcceptNamespaceRoster(signed, trustStore);
+            await BroadcastAcceptedRosterCoreAsync(sessions, cancellationToken).ConfigureAwait(false);
+            return accepted;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Accept a later Active roster on the rejoined member and only then activate its
+    /// fresh local author epoch. This is deliberately separate from FULL_REPLACE commit:
+    /// installed data does not grant permission to originate new local operations.
+    /// </summary>
+    public async Task<NamespaceRosterCertificate> AcceptActiveRosterAndActivateLocalAuthorEpochAsync(
+        SyncSession authoritySession,
+        uint newAuthorEpoch,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authoritySession);
+            if (newAuthorEpoch == 0)
+                throw new ArgumentOutOfRangeException(nameof(newAuthorEpoch));
+            NamespaceRosterCertificate roster =
+                await _coordinator.ReceiveAndAcceptNamespaceRosterAsync(
+                    authoritySession, cancellationToken).ConfigureAwait(false);
+            if (roster.NamespaceId != _coordinator.NamespaceId ||
+                roster.AuthorityNodeId != authoritySession.PeerNodeId)
+                throw new InvalidDataException("Activation roster does not match the authenticated authority session.");
+            NamespaceRosterMember authority = FindRosterMember(roster, authoritySession.PeerNodeId);
+            if (authority.Status != NamespaceMemberStatus.Active ||
+                authority.TransportPeerEpoch != checked((uint)authoritySession.PeerEpoch))
+                throw new InvalidDataException("Activation roster authority is not Active at this transport epoch.");
+            NamespaceRosterMember local = FindRosterMember(roster, _coordinator.LocalReplicaId);
+            if (local.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("A local author epoch can be activated only after the accepted roster marks this member Active.");
+
+            _coordinator.ActivateLocalAuthorEpoch(newAuthorEpoch);
+            return roster;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>Retry broadcasting the currently accepted signed roster without changing its generation.</summary>
+    public async Task BroadcastAcceptedRosterAsync(
+        IReadOnlyList<SyncSession> memberSessions,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            SyncSession[] sessions = ValidateSessions(memberSessions);
+            if (_coordinator.NamespaceId <= 0)
+                throw new InvalidOperationException("The coordinator namespace is invalid.");
+            await BroadcastAcceptedRosterCoreAsync(sessions, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    private async Task BroadcastAcceptedRosterCoreAsync(
+        IReadOnlyList<SyncSession> sessions,
+        CancellationToken cancellationToken)
+    {
+        foreach (SyncSession session in sessions)
+        {
+            await _coordinator.SendAcceptedNamespaceRosterAsync(
+                session, Array.Empty<byte>(), NextSequence(session), cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void EnsureNamespaceGcBinding(
+        IMetadataNamespaceGcStore gcStore, TrustStore trustStore)
+    {
+        if (!_coordinator.UsesNamespaceGcStore(gcStore) ||
+            !_coordinator.UsesNamespaceGcTrustStore(trustStore))
+            throw new InvalidOperationException(
+                "The v3.1 host helper and StorageSyncCoordinator must share the exact namespace-GC store and TrustStore instances.");
+    }
+
+    private static NamespaceRosterMember FindRosterMember(
+        NamespaceRosterCertificate roster, NodeId nodeId)
+        => roster.Members.FirstOrDefault(member => member.NodeId == nodeId)
+            ?? throw new InvalidDataException("Namespace roster does not contain the required member.");
+
+    private void ValidateCompleteRosterSessionSet(
+        NamespaceRosterCertificate roster, IReadOnlyList<SyncSession> sessions)
+    {
+        NamespaceRosterMember[] expected = roster.Members
+            .Where(member => member.Status != NamespaceMemberStatus.Retired &&
+                member.NodeId != _coordinator.LocalReplicaId)
+            .ToArray();
+        if (sessions.Count != expected.Length)
+            throw new ArgumentException(
+                "Roster promotion must be broadcast to every non-retired remote member.", nameof(sessions));
+        foreach (SyncSession session in sessions)
+        {
+            NamespaceRosterMember member = FindRosterMember(roster, session.PeerNodeId);
+            if (member.Status == NamespaceMemberStatus.Retired ||
+                member.TransportPeerEpoch != checked((uint)session.PeerEpoch))
+                throw new ArgumentException(
+                    "Roster promotion session set does not match the accepted member epochs.", nameof(sessions));
+        }
+        if (expected.Any(member => !sessions.Any(session => session.PeerNodeId == member.NodeId)))
+            throw new ArgumentException("Roster promotion omitted a non-retired member session.", nameof(sessions));
+    }
+
+    /// <summary>
     /// Run one Active-member round: accept the authority roster, publish/send this
     /// member's OFR2 under the composed application commit lease, then receive and
     /// durably accept the authority RCP2. Joining members must complete FULL_REPLACE
