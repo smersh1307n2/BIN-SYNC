@@ -103,9 +103,9 @@ public sealed class FldBinSyncHostAdapter
     }
 
     /// <summary>
-    /// Serialize a durable remote APPLY with relay mapping and the following
-    /// namespace-wide send. The apply callback must finish its durable FLD commit
-    /// before returning; the sender receives only committed per-author ceilings.
+    /// Serialize a durable remote APPLY with the following namespace-wide send.
+    /// After Metadata Store cutover, finalizing PendingApply publishes relay payload
+    /// directly into Metadata Store; before cutover the legacy FLD/RPM3 mapping path is used.
     /// </summary>
     /// <summary>
     /// Freeze current local provider changes, durably apply one remote batch, then
@@ -151,11 +151,10 @@ public sealed class FldBinSyncHostAdapter
     }
 
     /// <summary>
-    /// Receive one durable batch through the coordinator's PendingApply protocol,
-    /// apply it to Node and the configured contextual FLD ApplyJournal store, then
-    /// drain all resulting FLD relay pages and publish downstream through the same
-    /// namespace gate. This is the lossless FLD receive path; do not substitute
-    /// ApplyRemoteBatch(Batch) or a provider-only callback.
+    /// Receive one durable batch through PendingApply, apply it to Node and the
+    /// contextual FLD ApplyJournal receipt store, then publish the durable relay rows
+    /// owned by Metadata Store when cutover is active. FLD ApplyJournal does not receive
+    /// a duplicate relay payload copy in this mode.
     /// </summary>
     public ValueTask<bool> ReceiveAndPublishAllAsync(
         SyncSession inboundSession,
@@ -257,6 +256,9 @@ public sealed class FldBinSyncHostAdapter
             if (peerStateStore is null)
                 throw new ArgumentNullException(nameof(peerStateStore),
                     "Metadata Store-owned publication requires the durable peer-state adapter.");
+            if (!_coordinator.UsesMetadataPeerStateStore(peerStateStore))
+                throw new InvalidOperationException(
+                    "The outbound session must use the exact Metadata Store instance owned by this coordinator.");
             while (await session.PushBatchAsync(
                 sender,
                 _coordinator.NamespaceId,
@@ -282,17 +284,16 @@ public sealed class FldBinSyncHostAdapter
     }
 
     /// <summary>
-    /// Persist the safe source ACK in FLD first. The publication gate prunes RPM3
-    /// only after this idempotent durable callback returns successfully.
+    /// Legacy Node-owned path: translate the downstream-safe Outbox cursor to FLD
+    /// JournalSeq, durably ACK ApplyJournal, then prune RPM3. Metadata-owned publication
+    /// commits per-peer ACKs inside SyncSession and must use CompactAcknowledgedRelayPayloadsAsync.
     /// </summary>
     public ValueTask<IReadOnlyList<(NodeId Author, ulong SafeJournalSeq)>> AcknowledgeAllAsync(
         CancellationToken cancellationToken = default)
     {
         if (_coordinator.IsMetadataStoreOwnedPublication)
-            return _publicationGate.CompactMetadataOwnedAcknowledgedAsync(
-                _coordinator,
-                _database.AcquireCommitGuard,
-                cancellationToken);
+            throw new InvalidOperationException(
+                "Metadata-owned peer ACKs are already durable in the Metadata Store; use CompactAcknowledgedRelayPayloadsAsync.");
         return _publicationGate.AcknowledgeAllAsync(
             _coordinator,
             _map,
@@ -300,6 +301,24 @@ public sealed class FldBinSyncHostAdapter
             _database.AcquireCommitGuard,
             (author, safeJournalSeq) =>
                 _database.AcknowledgeRelayBatches(author.ToArray(), safeJournalSeq),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Metadata-owned path: compact only relay payload below the minimum durable
+    /// per-peer ACK already committed by SyncSession. No FLD JournalSeq or RPM3 row
+    /// is written or acknowledged.
+    /// </summary>
+    public ValueTask<IReadOnlyList<(NodeId Author, ulong SafeThroughSequence)>>
+        CompactAcknowledgedRelayPayloadsAsync(
+            CancellationToken cancellationToken = default)
+    {
+        if (!_coordinator.IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata relay payload compaction requires provider-authoritative cutover.");
+        return _publicationGate.CompactMetadataOwnedAcknowledgedAsync(
+            _coordinator,
+            _database.AcquireCommitGuard,
             cancellationToken);
     }
 
