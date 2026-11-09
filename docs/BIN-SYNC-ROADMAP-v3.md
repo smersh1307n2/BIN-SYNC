@@ -1649,3 +1649,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created `backup/cpass-2026-11-09-nodeid-ordering` at `2c7007f059c2da1878c24e64a76dec902f9e8c73`.
 - [~ T] Compare exact ordering with canonical hex strings for random and edge-case IDs; verify duplicate/corrupt cursor handling and author ordering across reopen.
 - [~ O] Measure large-author startup scan allocations/CPU; no benchmark claim yet.
+
+
+## 0.89. C-pass: bounded Storage snapshot/feed scans and crash-resumable ACK compaction — 2026-11-09
+
+- [x C] Reconciled the authoritative FLD `StorageDatabase.cs` with BIN-SYNC's vendored copy; both now share the same blob `fa31c0e6395ad6bc999bf4a3fee8570b6acef20a`. `OpenSnapshot` shares immutable value arrays and materializes only a sorted key/reference index; `PrefixCursor` supports bounded pages and the borrowed `StorageEntryView`/`VisitPage` API.
+- [x C] `StorageMetadataStore.TryGetPartition` now decodes persisted rows through 512-row pages instead of materializing the entire partition in one `ScanPrefix(..., int.MaxValue)` result; persisted-entry indexing is built during decode.
+- [x C] `StorageRelayProvenanceMap` uses borrowed spans for author and mapping recovery scans, avoiding copied `StorageEntry` key/value arrays.
+- [x C] `StorageDataProvider.ReadLocalChanges` uses borrowed prefix views; `AcknowledgeLocalChanges` deletes at most 4,096 rows per atomic transaction while advancing the durable ACK watermark in the same transaction, so reopen resumes at the last committed page. Tombstone-GC session validation is also paged.
+- [x C] Created `backup/cpass-2026-11-09-storage-streaming` at `7b77065bd2904943585e254d3368c99fb01a1b85`.
+- [~ T] Add cursor-boundary, visitor-stop, snapshot-lifetime, >100k feed ACK, crash-between-ACK-pages, partition-reopen and exact FLD/BIN byte-parity tests. No tests were run in this C-pass.
+- [~ O] Measure snapshot open allocations, metadata partition reopen peak memory, provider ACK throughput and map recovery allocations; the sorted key index remains O(number of keys), not O(page).
