@@ -2708,7 +2708,8 @@ private static bool ValidateIncomingBatchForStaging(
                 foreach (MetadataRelayItem item in entries)
                 {
                     if (item.OriginalAuthor != originalAuthor ||
-                        item.Sequence == 0 || item.Sequence <= previousSequence ||
+                        item.Sequence == 0 ||
+                        (previousSequence != 0 && item.Sequence != checked(previousSequence + 1)) ||
                         item.Sequence > highWatermark ||
                         !index.TryAdd(item.ChangeId, item.Sequence))
                         throw new InvalidDataException("Metadata relay contains a duplicate, conflicting or non-monotonic ChangeId identity.");
