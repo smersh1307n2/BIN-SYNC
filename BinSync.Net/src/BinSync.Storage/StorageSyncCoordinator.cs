@@ -245,22 +245,47 @@ public sealed class StorageSyncCoordinator
             previousJournalSeq = journalSeq;
         }
 
-        var identities = new OutboxChangeIdentity[sourceChanges.Length];
-        var outboxSequences = new long[sourceChanges.Length];
         var mappedEntries = new StorageRelayProvenanceEntry[sourceChanges.Length];
-        for (int i = 0; i < sourceChanges.Length; i++)
-            identities[i] = new OutboxChangeIdentity(originalAuthor, sourceChanges[i].ChangeId);
-
-        if (!_node.TryResolveOutboxSequences(_namespaceId, identities, outboxSequences))
-            return false;
-
-        for (int i = 0; i < sourceChanges.Length; i++)
+        bool metadataOwnsOutbound = _provider is IProviderPublicationMode publicationMode &&
+            publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _);
+        if (metadataOwnsOutbound)
         {
-            long outboxSequence = outboxSequences[i];
-            if (outboxSequence <= 0)
-                throw new InvalidDataException("Resolved relay OutboxSeq must be positive.");
-            mappedEntries[i] = new StorageRelayProvenanceEntry(
-                sourceChanges[i].JournalSeq, checked((ulong)outboxSequence));
+            var changeIds = new BatchId[sourceChanges.Length];
+            var relaySequences = new ulong[sourceChanges.Length];
+            for (int i = 0; i < sourceChanges.Length; i++)
+                changeIds[i] = sourceChanges[i].ChangeId;
+
+            if (!metadataStore.TryResolveRelaySequences(
+                _scopeId!, _node.NodeId, _namespaceId, originalAuthor, changeIds, relaySequences))
+                return false;
+
+            for (int i = 0; i < sourceChanges.Length; i++)
+            {
+                ulong relaySequence = relaySequences[i];
+                if (relaySequence == 0)
+                    throw new InvalidDataException("Resolved metadata relay sequence must be positive.");
+                mappedEntries[i] = new StorageRelayProvenanceEntry(
+                    sourceChanges[i].JournalSeq, relaySequence);
+            }
+        }
+        else
+        {
+            var identities = new OutboxChangeIdentity[sourceChanges.Length];
+            var outboxSequences = new long[sourceChanges.Length];
+            for (int i = 0; i < sourceChanges.Length; i++)
+                identities[i] = new OutboxChangeIdentity(originalAuthor, sourceChanges[i].ChangeId);
+
+            if (!_node.TryResolveOutboxSequences(_namespaceId, identities, outboxSequences))
+                return false;
+
+            for (int i = 0; i < sourceChanges.Length; i++)
+            {
+                long outboxSequence = outboxSequences[i];
+                if (outboxSequence <= 0)
+                    throw new InvalidDataException("Resolved relay OutboxSeq must be positive.");
+                mappedEntries[i] = new StorageRelayProvenanceEntry(
+                    sourceChanges[i].JournalSeq, checked((ulong)outboxSequence));
+            }
         }
 
         map.AppendPage(_namespaceId, originalAuthor, mappedEntries, scannedThroughJournalSeq);
@@ -296,10 +321,21 @@ public sealed class StorageSyncCoordinator
             throw new InvalidOperationException(
                 "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
 
-        long safeOutboxSequence = _node.GetSafeOutboxAckedThrough(_namespaceId, originalAuthor);
-        if (safeOutboxSequence < 0)
-            throw new InvalidDataException("Node returned a negative safe Outbox watermark.");
-        ulong safeOutbox = checked((ulong)safeOutboxSequence);
+        ulong safeOutbox;
+        bool metadataOwnsOutbound = _provider is IProviderPublicationMode publicationMode &&
+            publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _);
+        if (metadataOwnsOutbound)
+        {
+            safeOutbox = metadataStore.GetSafePeerStreamCompactionCursor(
+                _scopeId!, _node.NodeId, _namespaceId, originalAuthor);
+        }
+        else
+        {
+            long safeOutboxSequence = _node.GetSafeOutboxAckedThrough(_namespaceId, originalAuthor);
+            if (safeOutboxSequence < 0)
+                throw new InvalidDataException("Node returned a negative safe Outbox watermark.");
+            safeOutbox = checked((ulong)safeOutboxSequence);
+        }
         ulong safeJournal = map.TranslateSafeOutboxSequence(
             _namespaceId, originalAuthor, safeOutbox);
 
