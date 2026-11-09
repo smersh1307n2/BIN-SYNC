@@ -27,6 +27,9 @@ public sealed class StorageSyncCoordinator
     /// <summary>The immutable namespace coordinated by this instance.</summary>
     public int NamespaceId => _namespaceId;
 
+    /// <summary>The local replica identity whose outbound streams this coordinator owns.</summary>
+    public NodeId LocalReplicaId => _node.NodeId;
+
     public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId,
         IMetadataStore? metadataStore = null, string? scopeId = null)
     {
