@@ -639,9 +639,11 @@ public sealed class V31NamespaceGcHostOrchestrator
                 joiningAck.MemberTransportEpoch != joining.TransportPeerEpoch ||
                 joiningAck.RosterGeneration != prior.RosterGeneration ||
                 !joiningAck.Installed ||
-                !joiningAck.Digest.AsSpan().SequenceEqual(fullReplaceDigest))
+                !joiningAck.Digest.AsSpan().SequenceEqual(fullReplaceDigest) ||
+                joiningAck.HlcWallFloor != checkpoint.FullReplaceHlcWallFloor ||
+                joiningAck.HlcLogicalFloor != checkpoint.FullReplaceHlcLogicalFloor)
                 throw new InvalidOperationException(
-                    "The Joining member has not durably installed the exact FULL_REPLACE generation under the prior roster.");
+                    "The Joining member has not durably installed the exact FULL_REPLACE generation and HLC floor under the prior roster.");
 
             SyncSession[] sessions = ValidateSessions(allMemberSessions);
             ValidateCompleteRosterSessionSet(prior, sessions);
