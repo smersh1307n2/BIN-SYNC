@@ -4,8 +4,8 @@ namespace BinSync.Storage;
 
 /// <summary>
 /// Host-facing serialization boundary for FLD relay publication. One instance is shared
-/// per StorageSyncCoordinator. It drains every complete source page and commits all RPM3
-/// mappings through the durable source high watermark before any sender callback runs.
+/// per StorageSyncCoordinator. It drains every pending source page for every relay
+/// author before any namespace-wide sender callback can observe outbound payload.
 /// </summary>
 public sealed class StorageRelayPublicationGate
 {
@@ -23,28 +23,25 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
-    /// Serialize durable remote apply, every pending relay-page resolution/map commit,
-    /// and downstream send. The read callback receives the current RPM3 cursor and must
-    /// return one whole JournalSeq-bounded page plus the source journal high watermark
-    /// observed under the same FLD commit lease.
+    /// Serialize durable remote apply, all pending relay pages for all source authors,
+    /// and namespace-wide downstream send. The host supplies the union of FLD's
+    /// unacknowledged relay authors and the RPM3 map's existing author cursors.
+    /// The page callback returns the source high watermark observed under the same
+    /// FLD commit lease as the page read.
     /// </summary>
-    public async ValueTask<bool> ApplyAndPublishAsync(
+    public async ValueTask<bool> ApplyAndPublishAllAsync(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
-        NodeId originalAuthor,
+        IReadOnlyList<NodeId> originalAuthors,
         Func<IDisposable?> acquireHostCommitLease,
         Func<CancellationToken, ValueTask> applyRemoteBatch,
-        Func<StorageRelayProvenanceCursor,
+        Func<NodeId, StorageRelayProvenanceCursor,
             (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
-        Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
+        Func<CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(coordinator);
-        ArgumentNullException.ThrowIfNull(map);
-        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ValidateArguments(coordinator, map, originalAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
         ArgumentNullException.ThrowIfNull(applyRemoteBatch);
-        ArgumentNullException.ThrowIfNull(readSourcePage);
-        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -53,12 +50,15 @@ public sealed class StorageRelayPublicationGate
             try
             {
                 await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-                bool committed = DrainAllPages(
-                    coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
-                if (!committed)
+                foreach (NodeId author in ValidateAuthors(coordinator, originalAuthors))
                 {
-                    _reconciliationRequired = true;
-                    return false;
+                    if (!DrainAllPages(
+                        coordinator, map, author, acquireHostCommitLease,
+                        cursor => readSourcePage(author, cursor)))
+                    {
+                        _reconciliationRequired = true;
+                        return false;
+                    }
                 }
             }
             catch
@@ -69,7 +69,7 @@ public sealed class StorageRelayPublicationGate
                 throw;
             }
 
-            await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
+            await publishReadyOutbox(cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -79,41 +79,41 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
-    /// Startup/recovery path. Keep every sender disabled while the persisted RPM3 cursor
-    /// is checked against the durable source high watermark and all remaining pages are
-    /// resolved/committed. Only then invoke the sender callback.
+    /// Startup/recovery path. Keep every namespace sender disabled while all author
+    /// cursors are checked against the durable source high watermark and every remaining
+    /// source page is resolved/committed. Only then invoke the namespace sender callback.
     /// </summary>
-    public async ValueTask<bool> RecoverAndPublishAsync(
+    public async ValueTask<bool> RecoverAndPublishAllAsync(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
-        NodeId originalAuthor,
+        IReadOnlyList<NodeId> originalAuthors,
         Func<IDisposable?> acquireHostCommitLease,
         Func<ulong> readSourceJournalHighWatermark,
-        Func<StorageRelayProvenanceCursor,
+        Func<NodeId, StorageRelayProvenanceCursor,
             (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
-        Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
+        Func<CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(coordinator);
-        ArgumentNullException.ThrowIfNull(map);
-        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ValidateArguments(coordinator, map, originalAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
         ArgumentNullException.ThrowIfNull(readSourceJournalHighWatermark);
-        ArgumentNullException.ThrowIfNull(readSourcePage);
-        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             try
             {
-                coordinator.ValidateRelayProvenanceRecovery(
-                    map, originalAuthor, acquireHostCommitLease, readSourceJournalHighWatermark);
-                bool committed = DrainAllPages(
-                    coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
-                if (!committed)
+                NodeId[] authors = ValidateAuthors(coordinator, originalAuthors);
+                foreach (NodeId author in authors)
                 {
-                    _reconciliationRequired = true;
-                    return false;
+                    coordinator.ValidateRelayProvenanceRecovery(
+                        map, author, acquireHostCommitLease, readSourceJournalHighWatermark);
+                    if (!DrainAllPages(
+                        coordinator, map, author, acquireHostCommitLease,
+                        cursor => readSourcePage(author, cursor)))
+                    {
+                        _reconciliationRequired = true;
+                        return false;
+                    }
                 }
                 _reconciliationRequired = false;
             }
@@ -123,7 +123,7 @@ public sealed class StorageRelayPublicationGate
                 throw;
             }
 
-            await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
+            await publishReadyOutbox(cancellationToken).ConfigureAwait(false);
             return true;
         }
         finally
@@ -165,7 +165,7 @@ public sealed class StorageRelayPublicationGate
 
     /// <summary>
     /// Run any other outbound batch construction/send under the same host publication
-    /// gate. Do not call this from ApplyAndPublishAsync/RecoverAndPublishAsync callbacks.
+    /// gate. Do not call this from ApplyAndPublishAllAsync/RecoverAndPublishAllAsync callbacks.
     /// </summary>
     public async ValueTask RunOutboundAsync(
         Func<CancellationToken, ValueTask> publish,
@@ -184,11 +184,46 @@ public sealed class StorageRelayPublicationGate
         }
     }
 
+    private static void ValidateArguments(
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        IReadOnlyList<NodeId> originalAuthors,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<NodeId, StorageRelayProvenanceCursor,
+            (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
+        Func<CancellationToken, ValueTask> publishReadyOutbox)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(originalAuthors);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(readSourcePage);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+    }
+
+    private static NodeId[] ValidateAuthors(
+        StorageSyncCoordinator coordinator, IReadOnlyList<NodeId> originalAuthors)
+    {
+        var seen = new HashSet<NodeId>();
+        var authors = new List<NodeId>(originalAuthors.Count);
+        foreach (NodeId author in originalAuthors)
+        {
+            if (author.IsZero || author == coordinator.LocalReplicaId)
+                throw new ArgumentException("Relay author list must contain only non-zero remote authors.", nameof(originalAuthors));
+            if (!seen.Add(author))
+                throw new ArgumentException("Relay author list contains a duplicate identity.", nameof(originalAuthors));
+            authors.Add(author);
+        }
+        authors.Sort(static (left, right) =>
+            StringComparer.Ordinal.Compare(left.ToString(), right.ToString()));
+        return authors.ToArray();
+    }
+
     private void EnsureReconciled()
     {
         if (_reconciliationRequired)
             throw new InvalidOperationException(
-                "Relay publication is closed until RecoverAndPublishAsync reconciles the durable FLD journal and RPM3 cursor.");
+                "Relay publication is closed until RecoverAndPublishAllAsync reconciles every durable FLD relay author and RPM3 cursor.");
     }
 
     private static bool DrainAllPages(
