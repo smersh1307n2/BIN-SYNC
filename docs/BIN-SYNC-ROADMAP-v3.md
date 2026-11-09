@@ -10,6 +10,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.36. C-pass: Unreleased changelog synchronized — 2026-11-09
+
+- [x C] Added the v3.1 C-pass implementation summary to `docs/CHANGELOG.md`, including RPM2 provenance mapping, persisted-row sample, byte audit, checkpoint broadcast and host integration sequencing.
+- [x C] The changelog explicitly states that current-head validation is pending and physical ChangeId/tombstone/Ghost GC remains disabled.
+- [~ T] Promote these notes to a release entry only after exact-head CI, sample execution and v3.1 wire-vector review.
+
 ## 0.35. C-pass: production status no longer overstates current CI — 2026-11-09
 
 - [x C] Updated `docs/PRODUCTION-STATUS.md` to distinguish the historical fully verified v3.0 baseline from the current v3.1 C-pass head. It explicitly states that new v3.1 code, RPM2 mapping/checksum, new sample and checkpoint-broadcast changes are not yet built/tested.
