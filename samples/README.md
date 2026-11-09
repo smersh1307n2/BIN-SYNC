@@ -8,6 +8,7 @@ dotnet run --project samples/TwoNodeLoopback -c Release
 dotnet run --project samples/TwoNodeTcp -c Release
 dotnet run --project samples/StorageArrayTcpSync -c Release
 dotnet run --project samples/RelayProvenanceMap -c Release
+dotnet run --project samples/V31ControlPlaneVectors -c Release
 dotnet run --project samples/ScenarioHarness -c Release
 dotnet run --project samples/ScenarioHarness -c Release -- --soak 10
 ```
@@ -18,6 +19,7 @@ dotnet run --project samples/ScenarioHarness -c Release -- --soak 10
 | **TwoNodeTcp** | `TcpSyncListener` + `TcpSync.ConnectAsync`; both endpoints receive the same generic `SyncSession` abstraction and exchange batches in both directions |
 | **StorageArrayTcpSync** | Two durable Storage-backed array replicas over real TCP; provider, Metadata Store and Node checkpoints survive reopen, with update and record tombstone propagation |
 | **RelayProvenanceMap** | Durable FLD JournalSeq↔BIN-SYNC OutboxSeq mapping with ChangeId kept only in the global ledger; multi-operation source-journal ACK boundary, RPM3 checksum, restart reconstruction and fail-closed unmapped watermark handling |
+| **V31ControlPlaneVectors** | Exact signed-payload golden vectors for NRS2, OFR2, RCP2, FRA2 and FULL_REPLACE_BEGIN; checks canonical payload bytes and Ed25519 signatures using a public-only test key |
 | **ScenarioHarness** | Ten integration scenarios: bidirectional sync, three-node relay, LWW, tombstones, persistence/resume, sneakernet, idempotent replay, concurrent writers, TCP, and optional soak |
 
 ## ScenarioHarness matrix
