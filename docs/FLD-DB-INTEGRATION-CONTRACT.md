@@ -314,7 +314,7 @@ The provider feed remains a live ChangeId reference until \`CommitPublishedOrigi
 
 ### 9.5 Durable synchronized-FLD relay provenance map
 
-BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping primitive for the synchronized-FLD adapter. It is scoped by (scope, local replica) at construction and by (namespace, original author) per stream.
+BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping primitive for the synchronized-FLD adapter. It is scoped by (scope, local replica) at construction and by (namespace, original author) per stream. The method names below (`ReadRelayBatchPage`, `AcknowledgeRelayBatches`, and the ChangeId resolver) describe the target neutral FLD semantic boundary; they are not a claim that the current pre-extraction FLD branch already exposes these final APIs.
 
 For each FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)` result. Pages must end on complete JournalSeq boundaries: a single FLD journal transaction containing multiple ChangeIds cannot be split across pages, and `ScannedThroughJournalSeq` must mean every source journal through that boundary has been examined:
 
