@@ -3,11 +3,9 @@ using System.Runtime.CompilerServices;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Host-facing serialization boundary for FLD relay publication. The host must route
-/// every outbound batch construction/send for the coordinated namespace through this
-/// gate; a source page is scanned and its RPM3 mapping committed before the publish
-/// callback can observe the Outbox. The same gate serializes safe-ACK translation and
-/// FLD ACK + map pruning against publication.
+/// Host-facing serialization boundary for FLD relay publication. One instance is shared
+/// per StorageSyncCoordinator. It drains every complete source page and commits all RPM3
+/// mappings through the durable source high watermark before any sender callback runs.
 /// </summary>
 public sealed class StorageRelayPublicationGate
 {
@@ -24,18 +22,19 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
-    /// Serialize remote apply, source-page resolution/persistence and the subsequent
-    /// outbound send as one publication boundary. The apply callback must durably apply
-    /// one remote batch to the host database; no sender may observe its relay Outbox
-    /// entries until the source mapping has committed and the publish callback runs.
+    /// Serialize durable remote apply, every pending relay-page resolution/map commit,
+    /// and downstream send. The read callback receives the current RPM3 cursor and must
+    /// return one whole JournalSeq-bounded page plus the source journal high watermark
+    /// observed under the same FLD commit lease.
     /// </summary>
-    public async ValueTask<bool> ApplyAndPublishPageAsync(
+    public async ValueTask<bool> ApplyAndPublishAsync(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
         NodeId originalAuthor,
         Func<IDisposable?> acquireHostCommitLease,
         Func<CancellationToken, ValueTask> applyRemoteBatch,
-        Func<(StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq)> readSourcePage,
+        Func<StorageRelayProvenanceCursor,
+            (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
         Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
@@ -50,8 +49,8 @@ public sealed class StorageRelayPublicationGate
         try
         {
             await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-            bool committed = coordinator.ReadAndAppendRelayProvenancePage(
-                map, originalAuthor, acquireHostCommitLease, readSourcePage);
+            bool committed = DrainAllPages(
+                coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
             if (!committed)
                 return false;
 
@@ -65,17 +64,18 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
-    /// Startup/recovery path: validate the persisted RPM3 cursor against the durable
-    /// source JournalSeq high watermark, then reconcile and publish the next page while
-    /// the namespace sender remains serialized behind this gate.
+    /// Startup/recovery path. Keep every sender disabled while the persisted RPM3 cursor
+    /// is checked against the durable source high watermark and all remaining pages are
+    /// resolved/committed. Only then invoke the sender callback.
     /// </summary>
-    public async ValueTask<bool> RecoverAndPublishPageAsync(
+    public async ValueTask<bool> RecoverAndPublishAsync(
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
         NodeId originalAuthor,
         Func<IDisposable?> acquireHostCommitLease,
         Func<ulong> readSourceJournalHighWatermark,
-        Func<(StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq)> readSourcePage,
+        Func<StorageRelayProvenanceCursor,
+            (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage,
         Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
     {
@@ -91,8 +91,8 @@ public sealed class StorageRelayPublicationGate
         {
             coordinator.ValidateRelayProvenanceRecovery(
                 map, originalAuthor, acquireHostCommitLease, readSourceJournalHighWatermark);
-            bool committed = coordinator.ReadAndAppendRelayProvenancePage(
-                map, originalAuthor, acquireHostCommitLease, readSourcePage);
+            bool committed = DrainAllPages(
+                coordinator, map, originalAuthor, acquireHostCommitLease, readSourcePage);
             if (!committed)
                 return false;
 
@@ -106,46 +106,9 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
-    /// Read one whole FLD relay page, resolve all ChangeIds, persist its RPM3 cursor,
-    /// and only then allow the host to publish/send ready Outbox entries. If resolution
-    /// fails because a source ChangeId is no longer retained, the callback is not run.
-    /// </summary>
-    public async ValueTask<bool> PublishPageAsync(
-        StorageSyncCoordinator coordinator,
-        StorageRelayProvenanceMap map,
-        NodeId originalAuthor,
-        Func<IDisposable?> acquireHostCommitLease,
-        Func<(StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq)> readSourcePage,
-        Func<NodeId, CancellationToken, ValueTask> publishReadyOutbox,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(coordinator);
-        ArgumentNullException.ThrowIfNull(map);
-        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
-        ArgumentNullException.ThrowIfNull(readSourcePage);
-        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
-
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            bool committed = coordinator.ReadAndAppendRelayProvenancePage(
-                map, originalAuthor, acquireHostCommitLease, readSourcePage);
-            if (!committed)
-                return false;
-
-            await publishReadyOutbox(originalAuthor, cancellationToken).ConfigureAwait(false);
-            return true;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
-
-    /// <summary>
-    /// Compute the downstream-safe author Outbox watermark, durably ACK the corresponding
-    /// FLD JournalSeq prefix, then prune RPM3 rows. The host callback must call
-    /// FldDatabase.AcknowledgeRelayBatches and must be idempotent across crash/retry.
+    /// Compute the downstream-safe author sequence, durably ACK the corresponding FLD
+    /// JournalSeq prefix, then prune RPM3 rows. The host callback must call
+    /// FldDatabase.AcknowledgeRelayBatches and be idempotent across crash/retry.
     /// </summary>
     public async ValueTask<ulong> AcknowledgeAsync(
         StorageSyncCoordinator coordinator,
@@ -174,7 +137,7 @@ public sealed class StorageRelayPublicationGate
 
     /// <summary>
     /// Run any other outbound batch construction/send under the same host publication
-    /// gate. Do not call this from PublishPageAsync/AcknowledgeAsync callbacks.
+    /// gate. Do not call this from ApplyAndPublishAsync/RecoverAndPublishAsync callbacks.
     /// </summary>
     public async ValueTask RunOutboundAsync(
         Func<CancellationToken, ValueTask> publish,
@@ -189,6 +152,41 @@ public sealed class StorageRelayPublicationGate
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private static bool DrainAllPages(
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        NodeId originalAuthor,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<StorageRelayProvenanceCursor,
+            (StorageRelaySourceChange[] Changes, ulong ScannedThroughJournalSeq, ulong SourceHighWatermark)> readSourcePage)
+    {
+        while (true)
+        {
+            using IDisposable commitGuard =
+                coordinator.AcquireApplicationCommitGuard(acquireHostCommitLease);
+            StorageRelayProvenanceCursor prior = map.ReadCursor(
+                coordinator.NamespaceId, originalAuthor);
+            var page = readSourcePage(prior);
+            if (page.Changes is null)
+                throw new InvalidDataException("Host relay page callback returned a null change array.");
+            if (page.ScannedThroughJournalSeq < prior.ScannedThroughJournalSeq ||
+                page.ScannedThroughJournalSeq > page.SourceHighWatermark)
+                throw new InvalidDataException("Host relay page cursor is outside the durable source journal range.");
+
+            bool progressed = page.ScannedThroughJournalSeq > prior.ScannedThroughJournalSeq;
+            if (!progressed && page.SourceHighWatermark > prior.ScannedThroughJournalSeq)
+                throw new InvalidDataException("Host relay page made no JournalSeq progress while source history remains.");
+
+            bool committed = coordinator.AppendRelayProvenancePage(
+                map, originalAuthor, page.Changes, page.ScannedThroughJournalSeq);
+            if (!committed)
+                return false;
+
+            if (page.ScannedThroughJournalSeq == page.SourceHighWatermark)
+                return true;
         }
     }
 }
