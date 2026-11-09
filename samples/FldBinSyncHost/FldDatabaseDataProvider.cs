@@ -74,6 +74,7 @@ public sealed class FldDatabaseDataProvider :
         EnsureOpen();
         ProviderMutationCodec.Validate(mutation);
         NodeId localAuthor = NodeId.From(_database.LocalAuthor);
+        using IDisposable commitLease = _database.AcquireCommitGuard();
         uint activeEpoch = _activeAuthorEpoch();
         lock (_gate)
         {
@@ -103,7 +104,6 @@ public sealed class FldDatabaseDataProvider :
             isTombstone = mutation.IsTombstone;
         }
 
-        using IDisposable commitLease = _database.AcquireCommitGuard();
         _database.PutWithIdentity(
             recordId,
             mutation.FieldId,
@@ -197,6 +197,7 @@ public sealed class FldDatabaseDataProvider :
     {
         if (authorEpoch == 0) throw new ArgumentOutOfRangeException(nameof(authorEpoch));
         EnsureOpen();
+        using IDisposable commitLease = _database.AcquireCommitGuard();
         if (_activeAuthorEpoch() != authorEpoch)
             throw new InvalidOperationException("The durable host author-epoch source does not expose the requested active epoch.");
         lock (_gate)
