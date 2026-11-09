@@ -1843,3 +1843,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The convenience single-recipient and all-member fanout paths now capture and verify the provider snapshot/manifest before broadcasting the roster. This avoids partial remote state changes when the source snapshot or authority signature is invalid.
 - [~ T] Validate no network frame is sent on invalid seed, wrong authority, stale roster, disposed snapshot, corrupt page, and wrong target epoch; verify partial retry after a successful preflight. CI for the newest code head is pending.
 - [~ C] Prepared source snapshot survives retries only while retained in process memory. Durable FULL_REPLACE source generation recovery after process restart remains open; no physical GC is enabled.
+
+## 1.11. C-pass: bind every FRA2 acknowledgement to the exact source snapshot HLC floor — 2026-11-09
+
+- [x C] `StorageFullReplaceSender.CreateManifest` computes the maximum `(HlcWall,HlcLogical)` while scanning the exact immutable provider snapshot used for the signed manifest/digest. `PreparedFullReplaceSnapshot` retains the pair for multi-recipient fanout and retry.
+- [x C] Both `SendPreparedSnapshotAsync` and the compatibility `SendSnapshotAsync` path now pass the source snapshot floor into the common transfer routine. After FRA2 signature/identity/roster/digest checks, the sender also requires the installed ACK's HLC floor to equal the source floor exactly before persisting the ACK into the namespace GC store.
+- [x C] This prevents a validly signed but inconsistent receiver acknowledgement from inflating or lowering the common RCP2 FULL_REPLACE HLC floor. All members must install the same immutable source HLC horizon, not merely report mutually equal values.
+- [x C] Created matching recovery branches `backup/cpass-2026-11-09-fullreplace-hlc-ack` in BIN-SYNC and FLD-DB (BIN-SYNC anchored at `d4ad36fe4fc1a3660c43cc4209a71f400ed224fe`, FLD-DB at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
+- [~ T] Add tests for exact wall/logical equality, wall mismatch, logical mismatch at equal wall, empty snapshot `(0,0)`, source changes after snapshot, signed inconsistent FRA2 from a custom peer and retry after a rejected ACK. No tests were changed or claimed in this C slice.
+- [~ C] Durable FULL_REPLACE source snapshot recovery across sender process restart remains open; this code only guarantees process-local immutable snapshot identity. `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver bridge also remains open.
