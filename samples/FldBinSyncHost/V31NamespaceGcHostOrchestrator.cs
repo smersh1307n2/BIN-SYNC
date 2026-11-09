@@ -290,13 +290,11 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new InvalidOperationException(
                     "No accepted namespace roster is available.");
             NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
-            if (roster.AuthorityNodeId != _coordinator.LocalReplicaId ||
-                prepared.NamespaceId != roster.NamespaceId ||
-                prepared.RosterGeneration != roster.RosterGeneration ||
-                !prepared.RosterDigest.AsSpan().SequenceEqual(
-                    NamespaceRosterProtocol.ComputeDigest(roster)))
+            if (roster.AuthorityNodeId != _coordinator.LocalReplicaId)
                 throw new InvalidOperationException(
-                    "Prepared FULL_REPLACE snapshot belongs to a stale or different accepted roster.");
+                    "Only the local namespace authority may send a prepared FULL_REPLACE snapshot.");
+            StorageFullReplaceSender.ValidatePreparedSnapshot(
+                prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
             NamespaceRosterMember authority = FindRosterMember(
                 roster, roster.AuthorityNodeId);
             if (authority.Status != NamespaceMemberStatus.Active)
@@ -387,15 +385,7 @@ public sealed class V31NamespaceGcHostOrchestrator
             SyncSession[] sessions = ValidateSessions(memberSessions);
             ValidateCompleteRosterSessionSet(roster, sessions);
 
-            // Send the same accepted roster before any member receives the transfer.
-            foreach (SyncSession session in sessions)
-            {
-                await _coordinator.SendAcceptedNamespaceRosterAsync(
-                    session, authoritySeed, NextSequence(session), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            // The manifest and provider snapshot are captured once for the whole fanout.
+            // Capture and verify the source generation before changing any remote session.
             using PreparedFullReplaceSnapshot prepared =
                 StorageFullReplaceSender.PrepareSnapshot(
                     authorityProvider,
@@ -404,6 +394,16 @@ public sealed class V31NamespaceGcHostOrchestrator
                     _coordinator.LocalReplicaId,
                     generation,
                     authoritySeed);
+            StorageFullReplaceSender.ValidatePreparedSnapshot(
+                prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
+
+            // Only after preflight succeeds do we broadcast the accepted roster.
+            foreach (SyncSession session in sessions)
+            {
+                await _coordinator.SendAcceptedNamespaceRosterAsync(
+                    session, authoritySeed, NextSequence(session), cancellationToken)
+                    .ConfigureAwait(false);
+            }
 
             var acknowledgements = new FullReplaceInstalledAck[sessions.Length];
             for (int i = 0; i < sessions.Length; i++)
@@ -490,20 +490,31 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new InvalidDataException(
                     "FULL_REPLACE target is retired or does not match the accepted roster transport epoch.");
 
+            using PreparedFullReplaceSnapshot prepared =
+                StorageFullReplaceSender.PrepareSnapshot(
+                    authorityProvider,
+                    trustStore,
+                    roster,
+                    _coordinator.LocalReplicaId,
+                    generation,
+                    authoritySeed);
+            StorageFullReplaceSender.ValidatePreparedSnapshot(
+                prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
+
             await _coordinator.SendAcceptedNamespaceRosterAsync(
                 memberSession, authoritySeed, NextSequence(memberSession), cancellationToken)
                 .ConfigureAwait(false);
 
-            FullReplaceInstalledAck acknowledgement = await StorageFullReplaceSender.SendAsync(
-                authorityProvider,
-                memberSession,
-                gcStore,
-                trustStore,
-                roster,
-                _coordinator.LocalReplicaId,
-                generation,
-                authoritySeed,
-                cancellationToken).ConfigureAwait(false);
+            FullReplaceInstalledAck acknowledgement =
+                await StorageFullReplaceSender.SendPreparedSnapshotAsync(
+                    prepared,
+                    memberSession,
+                    gcStore,
+                    trustStore,
+                    roster,
+                    _coordinator.LocalReplicaId,
+                    authoritySeed,
+                    cancellationToken).ConfigureAwait(false);
 
             if (acknowledgement.MemberNodeId != memberSession.PeerNodeId ||
                 acknowledgement.MemberTransportEpoch != target.TransportPeerEpoch ||
