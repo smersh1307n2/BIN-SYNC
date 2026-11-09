@@ -160,14 +160,20 @@ public sealed class StorageSyncCoordinator
             throw new ArgumentException("Original relay author must be non-zero.", nameof(originalAuthor));
         if (sourceChanges.Length > 4096)
             throw new ArgumentOutOfRangeException(nameof(sourceChanges), "Relay source page cannot exceed 4,096 changes.");
+
+        StorageRelayProvenanceCursor priorCursor = map.ReadCursor(_namespaceId, originalAuthor);
+        if (scannedThroughJournalSeq < priorCursor.ScannedThroughJournalSeq)
+            throw new InvalidDataException("FLD relay scan cursor cannot regress.");
         if (sourceChanges.IsEmpty)
         {
             map.AppendPage(_namespaceId, originalAuthor,
                 Array.Empty<StorageRelayProvenanceEntry>(), scannedThroughJournalSeq);
             return true;
         }
+        if (scannedThroughJournalSeq == priorCursor.ScannedThroughJournalSeq)
+            throw new InvalidDataException("A committed FLD scan cursor cannot be reused for new relay mappings.");
 
-        ulong previousJournalSeq = 0;
+        ulong previousJournalSeq = priorCursor.ScannedThroughJournalSeq;
         for (int i = 0; i < sourceChanges.Length; i++)
         {
             ulong journalSeq = sourceChanges[i].JournalSeq;
