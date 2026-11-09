@@ -151,7 +151,7 @@ The guide is now implemented by the optional cross-repository sample in BIN-SYNC
 
 ### Local feed freeze and ceiling-aware sender API
 
-Before startup recovery and before each later outbound gate invocation, call `adapter.PublishLocalChanges(persistNode)`. This drains the provider's durable local feed into the active authority; the captured local ceiling then includes only the rows actually frozen. A provider edit that arrives after the freeze is deferred to the next gate pass and cannot leak above the current ceiling.
+The adapter provides `RecoverAndPublishAllAsync(persistNode, ...)`, `ApplyAndPublishAllAsync(persistNode, ...)` and `RunOutboundAsync(persistNode, ...)` overloads. Each freezes the provider's durable local feed into the active authority before entering the gate; the captured local ceiling then includes only rows actually frozen. A provider edit that arrives after the freeze is deferred to the next gate pass and cannot leak above the current ceiling. The lower-level overloads remain available when the host deliberately manages the freeze separately.
 
 
 
