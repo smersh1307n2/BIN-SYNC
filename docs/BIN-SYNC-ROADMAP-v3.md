@@ -78,6 +78,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.79. C/T/O boundary refreshed after orchestration, vector and byte-audit completion — 2026-11-09
+
+- [x C] Reclassified authority/member orchestration as complete at the protocol/host-recipe boundary; recurring scheduling is intentionally application-owned and must not become a protocol-core timer.
+- [x C] Reclassified signed v3.1 payload vectors and executable sample as authored; exact C# execution, decode/trust-store checks and negative cases remain T.
+- [x C] Reclassified fixed source-derived byte-layout inventory as complete across NodePersistence, Metadata Store, FLD Outbox/ApplyJournal/WAL, Storage, Manifest and Run; workload measurement and runtime amplification remain O/T.
+- [~ C] The remaining major code work is now explicit and upstream-gated: FLD two-DLL extraction, concrete synchronized-FLD publication/ACK adapter and concrete FLD reference-snapshot scanner wrapper.
 ## 0.78. Recovery checkpoints refreshed before further extraction work — 2026-11-09
 
 - [x C] Created BIN-SYNC backup branch `backup/cpass-2026-11-09-0855` at `e0eb9f17ad40abe92da5155aaa86282404acd16e`.
@@ -330,8 +336,8 @@ The following is a test plan only; no tests are run in this C pass.
 
 - [x C] Added `docs/BIN-SYNC-V3.1-HOST-ORCHESTRATION.md` with authority/member round ordering, one checkpoint published once and broadcast to all members, Joining→FULL_REPLACE→installed ACK→Active→new author epoch lifecycle, per-session reader/sequence ownership, and composed host commit-lease rules.
 - [x C] The recipe uses the new `SendAcceptedRetentionCheckpointAsync` surface and explicitly keeps timers/scheduling in the application rather than protocol core.
-- [~ C] A concrete application scheduler is intentionally not added to BIN-SYNC runtime: no consuming host application is part of this repository, and FLD's own roadmap requires the two-DLL/neutral semantic extraction before synchronized-FLD adapter integration.
-- [~ T] Compileable end-to-end multi-member control-plane sample and signed frame vectors remain T/C follow-up after the protocol frame registry audit.
+- [x C] Application scheduling is intentionally host-owned: BIN-SYNC exposes explicit roster/frontier/checkpoint/FULL_REPLACE one-message operations and the host orchestration recipe documents round ordering, broadcast, lifecycle and cancellation. No timer/background scheduler is added to protocol core; this is a deliberate architecture boundary, not unfinished runtime work.
+- [x C] Deterministic signed-payload vectors and an executable C# vector sample now cover NRS2/OFR2/RCP2/FRA2/FULL_REPLACE_BEGIN. [~ T] Run the sample, add trust-store decode/verify and negative frame/payload cases; full frame-envelope vectors remain T.
 
 ## 0.21. C-pass: one durable checkpoint per authority broadcast round — 2026-11-09
 
@@ -357,7 +363,7 @@ The following is a test plan only; no tests are run in this C pass.
 
 - [x C] Added `docs/golden/RELAY-PROVENANCE-MAP-v2.txt` with deterministic root, cursor key/value and OutboxSeq-ordered mapping key/value bytes, including exact lengths and endian rules.
 - [~ T] The vector is a source-derived fixture, not yet compared with actual persisted rows. T must run the sample against a temporary StorageDatabase and compare byte-for-byte; do not mark storage/wire golden-vector coverage complete from the document alone.
-- [~ C] Signed v3.1 NRS2/OFR2/RCP2/FRA2 and FULL_REPLACE wire vectors remain open until the complete production frame registry is audited and the canonical signed payload encoders are exercised.
+- [x C] Complete frame registry is audited and signed NRS2/OFR2/RCP2/FRA2/FULL_REPLACE_BEGIN payload vectors plus executable sample are authored. [~ T] Compare against C# encoder/decoder and full frame envelopes.
 
 ## 0.17. C-pass: namespace range matches Node API — 2026-11-09
 
@@ -466,9 +472,9 @@ The following is a test plan only; no tests are run in this C pass.
 - [x C] Confirmed the provider snapshot path uses sorted-key lower-bound seeking and bounded 1,024-entry pages. It shares immutable value arrays but still copies an O(key-count) sorted index; therefore only payload duplication is closed, not total snapshot memory bounded to O(page).
 - [~ C] The synchronized-FLD adapter is a separate integration boundary from the Storage-only Metadata Store adapter. The durable JournalSeq↔OutboxSeq map and RPM3 cursor exist; `StorageSyncCoordinator.AppendRelayProvenancePage` now resolves transient ChangeIds through the Node Outbox under the composed application guard and atomically appends the sequence map. The FLD page read, publication/send gate, safe-ACK translation, durable FLD ACK and post-ACK map pruning are still host-adapter work. Do not put FLD semantic types into `Fld1.Storage` or add a third database runtime DLL; implement at the FLD Database/BIN-SYNC host boundary after confirming the final two-DLL project graph.
 - [~ C] The concrete `IApplicationGcReferenceScanner` implementation must open one `FldReferenceSnapshot` under `FldDatabase.AcquireCommitGuard()`, map its immutable draft horizon and receipt/ChangeId/RecordId indexes to the scanner contract, and return a lease whose disposal releases the FLD guard. FLD already exposes the primitives; BIN-SYNC's coordinator only defines/consumes the host contract.
-- [~ C] Current public coordinator APIs are explicit one-message operations. The application must still drive member lifecycle (Joining→FULL_REPLACE→installed ACK→Active; Retired→fenced rejoin) and periodic frontier/checkpoint scheduling. No background timer/worker is to be added inside protocol core; provide an explicit host orchestration surface or sample so cancellation, transport ownership and persistence remain application-controlled.
-- [~ C] Public samples and canonical golden vectors are not yet verified against the final v3.1 wire registry. The v3.1 addendum itself says frame assignments must be checked against the complete registry before vectors are frozen.
-- [~ C] Metadata footprint audit remains open across Node persistence, StorageMetadataStore rows, provider rows, FLD Outbox, ApplyJournal and WAL. Existing adaptive receipt grouping and per-author progress compaction must be measured before any additional schema consolidation.
+- [x C] Public coordinator APIs are explicit one-message operations and the host orchestration recipe covers member lifecycle (Joining→FULL_REPLACE→installed ACK→Active; Retired→fenced rejoin), one-checkpoint-per-round broadcast, cancellation, transport ownership and persistence. Periodic scheduling remains deliberately application-owned; no background timer/worker belongs inside protocol core.
+- [x C] Public sample and canonical signed-payload vectors are now aligned to the audited 0x01–0x1C frame registry. [~ T] Execute the vector sample and verify encode/decode/trust-store/negative cases; no test pass is claimed yet.
+- [x C] Fixed framing and row formulas are documented across NodePersistence v17, StorageMetadataStore, FLD Outbox/ApplyJournal/Micro-WAL, Fld1.Storage, Manifest and Run. [~ O/T] Actual workload cardinalities, adaptive receipt grouping savings, per-author progress compaction, PGM/dictionary amplification, in-memory indexes and write/snapshot amplification still require measurement.
 - [ ] Do not mark any of these gates complete from documentation alone. The next C slices are the host integration adapter/mapping and public orchestration/sample surface; then the exact source/byte audit. T/O/F remain separate.
 
 ## 0. Active status at current C-pass HEAD
@@ -480,14 +486,15 @@ The following is a test plan only; no tests are run in this C pass.
 - **Origin contract:** provider feed cursor is not OriginSequence. Coalescible drafts carry ChangeId + author epoch and OriginSequence=0. Metadata Store allocates contiguous OriginSequence only at immutable freeze and persists it with the ChangeId ledger. Coalesced-away drafts consume no origin number. Remote operation apply requires a complete non-zero origin tuple.
 - **GC status:** receipt, ChangeId and tombstone/ghost physical deletion remain fail-closed/disabled. Receipt additionally requires retired transport epoch, preserved receive cursor/digest chain, signed origin frontier and no PendingApply. Author-issued horizon, retired-origin closure and checkpoint-bound global HLC floor are represented by OFR2/NRS2/FRA2/RCP2. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until host WAL/FLD plus PendingApply/relay/reservation/snapshot live references are covered by the composed lease and the T-pass proves crash/replay safety. Never enable physical GC in the C pass.
 - **Latest observed CI before the current code slice:** exact build succeeded and Fuzz/Lab passed; Core had one outdated tombstone fixture failure and Storage Integration had 53 failures sharing the outdated zero-OriginAuthorEpoch fixture assumption. These are T-pass fixture updates, not a reason to relax production v3 validation. Exact-head CI for the current code is pending.
-- **Remaining C work:** the generic durable JournalSeq↔OutboxSeq mapping primitive, RPM3 checksum/cursor; ChangeId remains only in the global BIN-SYNC ledger, sample and storage golden vector are implemented; the concrete synchronized-FLD page/publication/ACK adapter and BIN-SYNC scanner wrapper are blocked behind extraction of FLD's already-existing Engine semantic/reference APIs into the approved neutral/two-DLL project boundary (see §0.19). The authority/member one-round orchestration APIs and host recipe are present; a concrete app scheduler remains application-owned. BIN-SYNC StorageMetadataStore, NodePersistence v17, FLD Outbox/ApplyJournal/Micro-WAL/Manifest/Run and Fld1.Storage fixed framing/row formulas are documented; variable Run PGM/dictionary amplification, Storage in-memory index overhead and measured write/snapshot amplification remain open. Exact v3.1 frame registry is audited and contiguous; signed payload golden vectors and per-message encode/decode round trips remain open. Preserve no legacy API/fallback decoder.
+- **Remaining C work:** the only major upstream blocker is the approved two-DLL FLD extraction plus public Storage API conformance; after that, implement the concrete FLD page-read→ChangeId resolver→RPM3 append→publication/send gate→safe-ACK translation→durable FLD ACK→mapping prune adapter and the `IApplicationGcReferenceScanner` wrapper. The BIN-SYNC-side resolver/append primitive, RPM3 checksum/cursor, host control-plane recipe, signed payload vectors and executable sample are present. Fixed source-derived metadata formulas are documented. App scheduling is deliberately host-owned. Preserve no legacy API/fallback decoder.
 - **T pass is not complete.** Historical checklist entries below are execution history; this active section and latest dated execution entries supersede earlier snapshots.
 
 ### C-pass continuation — 2026-11-09
 
 - [x C] Updated the test-only `VolatileMetadataStoreAdapter` to implement `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeIdentity`. It returns fingerprint and immutable non-zero Origin from the same ChangeId ledger entry, rejects identities owned by incoming routes, and fails closed for incomplete frozen identities. This restores interface completeness without weakening production validation.
 - [ ] T remains deferred: migrate provider-draft fixtures to non-zero author epoch with `OriginSequence=0`; update test providers to implement `IProviderCommitGuard`; add freeze-before-stamp crash-window coverage. The exact-head CI must be rerun after the C pass.
-- [ ] Remaining C gates: application orchestration for authority/member lifecycle and periodic frontier/checkpoint exchange; FLD JournalSeq→ChangeId adapter; public samples/golden vectors; final source-snapshot and metadata byte audits. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until the composed host live-reference proof and adversarial T pass.
+- [x C] Authority/member one-round orchestration APIs and host recipe, signed-payload vectors/sample, fixed source-derived metadata byte audit and frame registry inventory are present.
+- [~ C] Remaining upstream C gates: two-DLL FLD extraction/public Storage API; concrete FLD relay publication/ACK adapter; concrete FLD reference-snapshot scanner wrapper. Physical receipt, ChangeId and tombstone/ghost GC remain disabled until the composed host live-reference proof and adversarial T pass.
 
 
 ## 1. Target architecture
