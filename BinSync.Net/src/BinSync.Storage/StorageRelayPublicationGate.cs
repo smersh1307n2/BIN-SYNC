@@ -49,10 +49,11 @@ public sealed class StorageRelayPublicationGate
         try
         {
             EnsureReconciled();
+            NodeId[] authors;
             try
             {
                 await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-                NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
+                authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
                 foreach (NodeId author in authors)
                 {
                     if (!DrainAllPages(
@@ -107,9 +108,10 @@ public sealed class StorageRelayPublicationGate
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            NodeId[] authors;
             try
             {
-                NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
+                authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
                 foreach (NodeId author in authors)
                 {
                     coordinator.ValidateRelayProvenanceRecovery(
