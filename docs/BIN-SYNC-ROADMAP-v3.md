@@ -920,6 +920,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ T] Exact-head CI is in progress for \`78a7080\`. The last completed BIN-SYNC test runs remain red only on known stale T fixtures: OFR1/RCP1 reports without issued-origin vectors, record-tombstone fixture violating canonical lifecycle metadata, local provider drafts still supplying assigned OriginSequence, and old freeze/remote batch fixtures violating immutable contiguous provenance. No production validation was relaxed.
 - [x T] FLD engine reference-snapshot primitives passed exact-head CI on Ubuntu/Windows/macOS at \`0db64f8d8f78f714fb197e0f375a536dcdec47d6\`; later unsealed-WAL barrier changes are on \`e6bec094807f660e07b70874254a5925bc8b6deb\` and have CI pending.
 
+
+### 2026-11-09 — C-pass continuation: conformance adapter contract
+
+- [x C] `VolatileMetadataStoreAdapter` now implements the combined frozen ChangeId identity lookup. It reads fingerprint and immutable Origin from one ledger entry, verifies local-outbound ownership and rejects incomplete identity; no production behavior or validation was weakened.
+- [~ T] The adapter compile blocker reported at `1acdfa65979a` has a code fix committed; exact-head CI has not yet validated it. The 80 Storage Integration failures remain T fixtures/adapters (deferred OriginSequence drafts and `IProviderCommitGuard`).
+
 ### 2026-11-09 — C-pass continuation: crash-safe origin stamping and provider-feed GC references
 
 - [x C] Provider publication no longer retains outbound payload objects solely to recover immutable origins. The coordinator resolves the frozen ChangeId identity (fingerprint + OperationOrigin) from one Metadata Store ledger lookup and stamps only the matching current provider winner before ACK.
