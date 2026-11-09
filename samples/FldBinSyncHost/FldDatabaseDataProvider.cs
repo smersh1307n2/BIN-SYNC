@@ -21,6 +21,8 @@ public sealed class FldDatabaseDataProvider :
     private readonly Func<uint> _activeAuthorEpoch;
     private readonly OutboxLease _outboxLease;
     private readonly Dictionary<Guid, FldProviderSnapshot> _snapshots = new();
+    private readonly HashSet<ulong> _snapshotBarriers = new();
+    private ulong _highestReadSequence;
     private bool _disposed;
 
     public bool IsBoundTo(FldDatabase database)
@@ -115,6 +117,12 @@ public sealed class FldDatabaseDataProvider :
         ulong highWatermark = _database.GetOutboxHighWatermark();
         if (afterSequence > highWatermark)
             throw new ArgumentOutOfRangeException(nameof(afterSequence));
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (afterSequence > _highestReadSequence && !_snapshotBarriers.Contains(afterSequence))
+                throw new InvalidDataException("Provider feed cursor skips changes that were neither scanned nor covered by an immutable source snapshot.");
+        }
 
         uint activeEpoch = _activeAuthorEpoch();
         if (activeEpoch == 0)
@@ -142,6 +150,13 @@ public sealed class FldDatabaseDataProvider :
             });
 
         ulong scannedThrough = visited == limit ? lastScanned : highWatermark;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (scannedThrough > _highestReadSequence)
+                _highestReadSequence = scannedThrough;
+            _snapshotBarriers.RemoveWhere(barrier => barrier <= _highestReadSequence);
+        }
         return new ProviderChangePage(changes, scannedThrough);
     }
 
@@ -149,6 +164,15 @@ public sealed class FldDatabaseDataProvider :
     {
         EnsureOpen();
         using IDisposable commitLease = _database.AcquireCommitGuard();
+        ulong highWatermark = _database.GetOutboxHighWatermark();
+        if (safeThroughSequence > highWatermark)
+            throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (safeThroughSequence > _highestReadSequence && !_snapshotBarriers.Contains(safeThroughSequence))
+                throw new InvalidDataException("Provider ACK exceeds the scanned feed prefix and is not covered by a completed source snapshot.");
+        }
         _database.AcknowledgeOutbox(safeThroughSequence, _outboxLease);
     }
 
@@ -169,6 +193,7 @@ public sealed class FldDatabaseDataProvider :
             ThrowIfDisposed();
             FldProviderSnapshot snapshot = _database.OpenProviderSnapshot();
             _snapshots.Add(snapshot.Generation, snapshot);
+            _snapshotBarriers.Add(snapshot.SourceFeedWatermark);
             return new ProviderSnapshotHandle(snapshot.Generation, snapshot.SourceFeedWatermark);
         }
     }
