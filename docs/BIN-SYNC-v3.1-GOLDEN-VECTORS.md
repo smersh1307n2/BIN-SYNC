@@ -1,6 +1,6 @@
 # BIN-SYNC v3.1 signed control-plane golden vectors
 
-**Status:** deterministic v3.1 reference vectors are authored and the executable C# sample exists at `samples/V31ControlPlaneVectors`; exact-head execution, encoder/decoder cross-check, negative tamper tests and CI confirmation remain mandatory T-pass gates. These vectors are conformance fixtures for the mandatory v3.1 addendum, not an authorization for physical GC.
+**Status:** deterministic v3.1 reference vectors are authored. `samples/V31ControlPlaneVectors` now exercises exact payload/signature bytes, decode/verify/re-sign round-trips and negative domain/key/roster/signature/tamper cases. The sample has been added to the mandatory Core GitHub Actions workflow; exact-head execution result is pending. These vectors are conformance fixtures for the mandatory v3.1 addendum, not an authorization for physical GC.
 
 All integers are little-endian unless stated otherwise. `B128` and NodeId are raw 16 bytes. GUIDs use RFC-4122/network byte order. Signatures are Ed25519 over UTF-8 domain string concatenated directly with canonical payload; no separator or length prefix.
 
