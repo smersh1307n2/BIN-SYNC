@@ -213,6 +213,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (generations.Contains(state.Generation))
                 throw new InvalidDataException("Prepared FULL_REPLACE snapshot index references a missing generation.");
             Guid[] updated = generations.Append(state.Generation).OrderBy(value => value).ToArray();
+            if (updated.Length > 4096)
+                throw new InvalidOperationException("Prepared FULL_REPLACE generation index exceeds its bounded capacity.");
             using var batch = _storage.BeginWriteBatch();
             ulong actualBaseCommitSeq = _storage.LastCommitSeq;
             if (actualBaseCommitSeq != snapshot.CommitSeq)
@@ -377,7 +379,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(6)) != 0)
             throw new InvalidDataException("Prepared FULL_REPLACE state header is invalid.");
         uint manifestLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(44));
-        if (48L + manifestLength + 32 != bytes.Length)
+        if (manifestLength == 0 || manifestLength > 4096 || 48L + manifestLength + 32 != bytes.Length)
             throw new InvalidDataException("Prepared FULL_REPLACE state length is invalid.");
         byte[] actualHash = SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32));
         if (!CryptographicOperations.FixedTimeEquals(actualHash, bytes.AsSpan(bytes.Length - 32)))
