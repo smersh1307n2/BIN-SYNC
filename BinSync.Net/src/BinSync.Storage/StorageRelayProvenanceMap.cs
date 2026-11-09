@@ -38,8 +38,17 @@ public sealed class StorageRelayProvenanceMap
 
     private readonly record struct Mapping(ulong JournalSeq, ulong OutboxSeq);
 
-    internal bool IsBoundTo(string scopeId, NodeId localReplica) =>
-        StringComparer.Ordinal.Equals(_scopeId, scopeId) && _localReplica == localReplica;
+    internal bool IsBoundTo(string scopeId, NodeId localReplica)
+    {
+        if (string.IsNullOrWhiteSpace(scopeId) || localReplica.IsZero)
+            return false;
+
+        byte[] scopeHash = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId));
+        Span<byte> replica = stackalloc byte[16];
+        localReplica.WriteTo(replica);
+        return _root.AsSpan(1, 32).SequenceEqual(scopeHash) &&
+            _root.AsSpan(33, 16).SequenceEqual(replica);
+    }
 
     internal bool IsBoundTo(StorageMetadataStore metadataStore) =>
         metadataStore.IsBoundTo(_storage);
