@@ -1,10 +1,10 @@
 ## 1.11. Recovery point and C-pass continuation reset — 2026-11-09
 
 - [x C] Created `backup/pre-v3-code-sweep-2026-11-09` from `feature/fld-external-storage` before the next broad implementation pass.
-- [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `bfa30e69ecd7bd8cef397e39c202462f75e4dd86`; the source-snapshot recovery pass is recorded in §1.25.
+- [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `0fdf2358905cb087912be05ae3c1b61498d80e92`; durable sender recovery is in §1.25 and FLD receiver staging/switch is in §1.26.
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
-- [~ C] Remaining code gates: FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Durable sender snapshot persistence/recovery is implemented in §1.25 and awaits T-pass proof. Transport creation/reconnect/disposal remain application-owned.
-- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.25 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [~ C] Remaining code gates: generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Durable sender recovery is implemented in §1.25 and FLD receiver staging/atomic switch in §1.26; both await T-pass proof. Transport creation/reconnect/disposal remain application-owned.
+- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.26 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
 
@@ -1991,3 +1991,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Hardened failure ordering: active transfer leases block permanent release; sender progress is retained if provider release fails; interrupted release is reconciled by pruning; stale provider snapshot tokens are removed without loading full Run payloads; generation restore/validation failures retain the persisted source generation for explicit recovery or cleanup.
 - [~ T] Verify process restart/reopen, resumed multi-recipient transfer with byte-identical manifest/digest, missing/corrupt token, index/state mismatch, concurrent metadata write conflict, dispose during transfer, release failure at each durability boundary, stale-token pruning and wrong-provider release. No build/test result is claimed.
 - [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage ordered page/run/WAL physical-format decision and final API/source/byte audit remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+## 1.26. C-pass: implement FLD-backed v3.1 FULL_REPLACE receiver staging and atomic generation switch — 2026-11-09
+
+- [x C] FLD-DB now exposes protocol-neutral durable replacement staging: ordered immutable Run pages, checksummed stage progress, bounded resumable abort, staged-page readback and atomic per-namespace manifest switch. The active FLD generation remains unchanged until the single manifest commit point.
+- [x C] The optional BIN-SYNC `FldDatabaseDataProvider` implements `IProviderFullReplace`. It maps mutations to FLD's neutral snapshot entry model, re-reads staged pages and verifies the canonical signed FULL_REPLACE digest with `ProviderFullReplaceDigestBuilder` before the FLD switch.
+- [x C] Preserved namespace isolation, WAL/Outbox/ApplyJournal state and old Run generations pinned by durable provider snapshots. Restart recovery detects a manifest switch that completed before the durable stage commit marker; orphan collection protects uncommitted staged Runs.
+- [~ T] Exact cross-repository build, receiver restart, page retry/order, lifecycle/field tombstones, v1/v2 provenance, digest tamper, manifest-switch crash boundary, old-snapshot pins, concurrent writer fencing and abort/reopen coverage remain deferred. No build/test result is claimed.
+- [~ C] Generic Storage ordered page/run/WAL physical-format decision and final public API/source/byte audit remain the remaining broad C-pass gates. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
