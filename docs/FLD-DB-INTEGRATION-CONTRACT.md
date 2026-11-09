@@ -286,7 +286,7 @@ Release in reverse order. The host passes its WAL/FLD lease factory to \`Storage
 
 ### 9.2. Complete unpublished local draft horizon
 
-\`ReadUnpublishedLocalDraftHorizon(scopeId, localReplica, namespaceId)\` must account for every durable local operation that has not yet been frozen into BIN-SYNC Metadata Store, including:
+The current FLD branch exposes this as `FldDatabase.ReadUnpublishedLocalDraftHorizon()` (the database instance is already bound to one namespace/partition). The later neutral adapter should expose it as `ReadUnpublishedLocalDraftHorizon(scopeId, localReplica, namespaceId)`. It must account for every durable local operation that has not yet been frozen into BIN-SYNC Metadata Store, including:
 
 - FLD Outbox entries after \`OutboxLog.AckedThrough\`;
 - WAL commits beyond \`OutboxLog.MaterializedThroughCommitSeq\` that have not yet been materialized into Outbox;
@@ -304,7 +304,7 @@ The scan object must implement all three reference checks:
 
 Unknown/corrupt retained records are live references. Scanner exceptions fail closed. The scanner must be partition-scoped by (scopeId, localReplica, namespaceId) and must not infer namespace from an unrelated global cursor.
 
-This is an integration contract, not an assertion that the FLD adapter already exists. Until the adapter, lock composition and cross-store crash tests are implemented, all physical GC feature flags remain false.
+This is an integration contract, not an assertion that the FLD adapter already exists. Until the adapter, lock composition and cross-store crash tests are implemented, all physical GC feature flags remain false. The current FLD `FldReferenceSnapshot` already provides the source-side queries needed by the adapter: `UnpublishedLocalDraftHorizon`, `HasChangeIdReference`, `HasRecordReference`, and `HasReceiptReference`. It is built once by `OpenReferenceSnapshot()` while `AcquireCommitGuard()` is held and owns in-memory indexes only; the wrapper should dispose it with the BIN-SYNC scan lease.
 
 
 ### 9.4 Freeze-before-stamp crash recovery and ChangeId GC
@@ -314,9 +314,9 @@ The provider feed remains a live ChangeId reference until \`CommitPublishedOrigi
 
 ### 9.5 Durable synchronized-FLD relay provenance map
 
-BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping primitive for the synchronized-FLD adapter. It is scoped by (scope, local replica) at construction and by (namespace, original author) per stream. The method names below (`ReadRelayBatchPage`, `AcknowledgeRelayBatches`, and the ChangeId resolver) describe the target neutral FLD semantic boundary; they are not a claim that the current pre-extraction FLD branch already exposes these final APIs.
+BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping primitive for the synchronized-FLD adapter. It is scoped by (scope, local replica) at construction and by (namespace, original author) per stream. The current pre-extraction FLD branch already exposes `FldDatabase.ReadRelayBatchPage(ReadOnlySpan<byte> authorNodeId, ulong afterJournalSeq, int limit)`, `FldDatabase.AcknowledgeRelayBatches(ReadOnlySpan<byte> authorNodeId, ulong safeThroughJournalSeq)`, `FldDatabase.AcquireCommitGuard()`, `FldDatabase.ReadUnpublishedLocalDraftHorizon()`, and `FldDatabase.OpenReferenceSnapshot()`. The neutral adapter should preserve these semantics after extraction. `ReadRelayBatchPage` scans whole ApplyJournal records, returns all matching relay fields for the requested original author, and advances `ScannedThroughJournalSeq` even across records with no matching author. ChangeId→OutboxSeq resolution remains a BIN-SYNC `Node.TryResolveOutboxSequences` operation, not an FLD lookup.
 
-For each FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)` result. Pages must end on complete JournalSeq boundaries: a single FLD journal transaction containing multiple ChangeIds cannot be split across pages, and `ScannedThroughJournalSeq` must mean every source journal through that boundary has been examined:
+For each page returned by FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)`. Pages end on complete JournalSeq boundaries: a single FLD journal transaction containing multiple ChangeIds cannot be split across pages, and `ScannedThroughJournalSeq` means every source journal through that boundary has been examined:
 
 1. Resolve the page's unique `(author, ChangeId)` identities through `Node.TryResolveOutboxSequences(namespaceId, identities, sequences)`. If any identity is no longer retained, stop and reconcile; never infer an OutboxSeq from current field winners.
 2. Preserve the original FLD `JournalSeq` for every resolved ChangeId. Do not substitute JournalSeq, CommitSeq or OutboxSeq for protocol `OriginSequence`.
