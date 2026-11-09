@@ -168,3 +168,8 @@ The optional adapter is intentionally only the relay/ACK/GC integration layer. I
 The Core optional capability `IProviderRemoteBatchCommitStore` and sample `FldRemoteBatchApplyStore` preserve the entire v3 batch header across PendingApply and recovery. The FLD adapter constructs `RemoteBatchCommit` with authenticated SenderPeer/transport epoch kept separate from wire IssuerNodeId/issuer epoch; it carries BatchId, cursor, previous/current digest and RecordsRoot unchanged. The v3 provider-state delta is empty because the current `Batch` wire DTO has no such member. The FLD `RelayWrites` list remains empty by design: BIN-SYNC Metadata Store owns relay copies. Record tombstones map to FLD lifecycle field 0 DeadValue, preserving original HLC/author/ChangeId.
 
 Do not mistake this capability for a full `IDataProvider` implementation. The generation-pinned full-data snapshot API, Outbox-backed local feed with an epoch/ChangeId contract, identifier resolver and crash/reopen conformance are still open C/T work.
+
+
+### Separate remote-apply capability injection
+
+The `StorageSyncCoordinator` constructor's optional `remoteBatchCommitStore` argument lets the host supply `FldRemoteBatchApplyStore` independently of the `IDataProvider` implementation. This avoids forcing a composite/decorator object to implement both contracts. The two objects must target the same FLD database and the same composed FLD commit lease; mismatched storage targets would split field state and apply receipts and are invalid. The base provider fallback remains unchanged when no separate capability is supplied.
