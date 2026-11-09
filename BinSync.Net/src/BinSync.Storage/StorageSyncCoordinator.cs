@@ -727,6 +727,7 @@ public sealed class StorageSyncCoordinator
         Action<Node> persistNode, int limit)
     {
         var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+        var recoveredPublishedOrigins = new List<ProviderPublishedOrigin>();
         ulong afterSequence = 0;
         ulong scannedThroughSequence = 0;
         ulong lastFrozenFeedSequence = 0;
@@ -789,6 +790,11 @@ public sealed class StorageSyncCoordinator
                         Digest16 actualFingerprint = ComputeMetadataFingerprint(change);
                         if (frozenFingerprint.Length != 16 || Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
+                        if (!outboundIdentityStore.TryGetOutboundChangeOrigin(
+                                _scopeId!, _node.NodeId, _namespaceId, change.ChangeId,
+                                out OperationOrigin frozenOrigin))
+                            throw new InvalidDataException("Frozen provider ChangeId has no durable immutable origin for crash recovery.");
+                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, frozenOrigin));
                         lastFrozenFeedSequence = change.Sequence;
                         // Preserve all scanned winners for Node recovery, but discard
                         // the outbound suffix because it was frozen by an earlier pass.
@@ -850,7 +856,8 @@ public sealed class StorageSyncCoordinator
             var nodeChanges = (nodeWinners ?? winners).Values
                 .OrderBy(change => change.Sequence).ToArray();
             return PublishLocalChangesToMetadataStore(
-                winners, nodeChanges, scannedThroughSequence, totalChanges, persistNode);
+                winners, nodeChanges, scannedThroughSequence, totalChanges,
+                recoveredPublishedOrigins, persistNode);
         }
 
         // Legacy/volatile providers without durable source identities retain the
@@ -882,6 +889,7 @@ public sealed class StorageSyncCoordinator
         IReadOnlyList<ProviderChange> nodeChanges,
         ulong scannedThroughSequence,
         int totalChanges,
+        IReadOnlyList<ProviderPublishedOrigin> recoveredPublishedOrigins,
         Action<Node> persistNode)
     {
         if (nodeChanges.Count > totalChanges)
@@ -925,9 +933,11 @@ public sealed class StorageSyncCoordinator
 
         if (_provider is not IProviderPublishedOriginStore originStore)
             throw new NotSupportedException("Metadata-Store-owned publication requires durable provider origin stamping.");
-        var publishedOrigins = new ProviderPublishedOrigin[published.Count];
+        var publishedOrigins = new List<ProviderPublishedOrigin>(
+            checked(recoveredPublishedOrigins.Count + published.Count));
+        publishedOrigins.AddRange(recoveredPublishedOrigins);
         for (int i = 0; i < published.Count; i++)
-            publishedOrigins[i] = new ProviderPublishedOrigin(orderedWinners[i], published[i]);
+            publishedOrigins.Add(new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance));
         originStore.CommitPublishedOrigins(publishedOrigins);
 
         // Keep Node as an application-data cache, but update it from the exact feed
