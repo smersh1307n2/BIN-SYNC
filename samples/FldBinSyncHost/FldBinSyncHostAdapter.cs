@@ -25,6 +25,7 @@ public sealed class FldBinSyncHostAdapter
     public FldBinSyncHostAdapter(
         FldDatabase database,
         FldDatabaseDataProvider dataProvider,
+        StorageMetadataStore metadataStore,
         StorageSyncCoordinator coordinator,
         StorageRelayProvenanceMap map,
         string scopeId,
@@ -32,6 +33,7 @@ public sealed class FldBinSyncHostAdapter
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         ArgumentNullException.ThrowIfNull(dataProvider);
+        ArgumentNullException.ThrowIfNull(metadataStore);
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _map = map ?? throw new ArgumentNullException(nameof(map));
         ArgumentNullException.ThrowIfNull(remoteBatchApplyStore);
@@ -42,6 +44,10 @@ public sealed class FldBinSyncHostAdapter
             throw new ArgumentException("The FLD data provider must target this exact database instance.", nameof(dataProvider));
         if (!coordinator.UsesDataProvider(dataProvider))
             throw new ArgumentException("The StorageSyncCoordinator must be constructed with this exact FldDatabaseDataProvider.", nameof(coordinator));
+        if (!dataProvider.IsBoundToMetadataStore(metadataStore))
+            throw new ArgumentException("The FLD provider publication-mode marker must use this exact Metadata Store instance.", nameof(metadataStore));
+        if (!coordinator.UsesMetadataPeerStateStore(metadataStore))
+            throw new ArgumentException("The StorageSyncCoordinator must use this exact Metadata Store instance.", nameof(coordinator));
         if (!remoteBatchApplyStore.IsBoundTo(database))
             throw new ArgumentException(
                 "The contextual remote-apply store must target this exact FLD database instance.",
