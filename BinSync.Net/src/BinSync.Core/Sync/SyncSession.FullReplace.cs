@@ -13,7 +13,7 @@ public partial class SyncSession
         FullReplaceTransferProtocol.Begin begin, ulong frameSequence = 1,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(begin);
         ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceBegin, GetFullReplaceStream(begin.NamespaceId),
@@ -24,7 +24,7 @@ public partial class SyncSession
         int namespaceId, NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
         ulong expectedFrameSequence, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(acceptedRoster);
         ArgumentNullException.ThrowIfNull(trustStore);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceBegin, ct)
@@ -42,7 +42,7 @@ public partial class SyncSession
         FullReplaceTransferProtocol.Progress progress, ulong frameSequence = 1,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(progress);
         ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceReady, GetFullReplaceStream(progress.NamespaceId),
@@ -52,7 +52,7 @@ public partial class SyncSession
     public async Task<FullReplaceTransferProtocol.Progress> ReceiveFullReplaceReadyAsync(
         int namespaceId, ulong expectedFrameSequence, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceReady, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceReady);
@@ -67,7 +67,7 @@ public partial class SyncSession
         FullReplaceTransferProtocol.Chunk chunk, ulong frameSequence,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         ArgumentNullException.ThrowIfNull(chunk);
         ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceChunk, GetFullReplaceStream(chunk.NamespaceId),
@@ -77,7 +77,7 @@ public partial class SyncSession
     public async Task<FullReplaceTransferProtocol.Chunk> ReceiveFullReplaceChunkAsync(
         int namespaceId, ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceChunk, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceChunk);
@@ -92,7 +92,7 @@ public partial class SyncSession
         FullReplaceTransferProtocol.TransferId transfer, ulong frameSequence,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceCommit, GetFullReplaceStream(transfer.NamespaceId),
             frameSequence, FullReplaceTransferProtocol.EncodeTransferId(transfer), ct).ConfigureAwait(false);
@@ -101,7 +101,7 @@ public partial class SyncSession
     public async Task<FullReplaceTransferProtocol.TransferId> ReceiveFullReplaceCommitAsync(
         int namespaceId, ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceCommit, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceCommit);
@@ -116,7 +116,7 @@ public partial class SyncSession
         FullReplaceTransferProtocol.TransferId transfer, ulong frameSequence,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         ValidateFullReplaceSequence(frameSequence);
         await SendFrameAsync(NamespaceGcFrames.FullReplaceAbort, GetFullReplaceStream(transfer.NamespaceId),
             frameSequence, FullReplaceTransferProtocol.EncodeTransferId(transfer), ct).ConfigureAwait(false);
@@ -125,7 +125,7 @@ public partial class SyncSession
     public async Task<FullReplaceTransferProtocol.TransferId> ReceiveFullReplaceAbortAsync(
         int namespaceId, ulong expectedFrameSequence = 1, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.FullReplaceV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.FullReplaceAbort, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.FullReplaceAbort);
