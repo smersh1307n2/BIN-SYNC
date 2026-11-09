@@ -12,6 +12,7 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     private IDataProvider? _provider;
     private int _activeTransfers;
     private bool _disposeRequested;
+    private bool _preserveOnDispose;
 
     internal PreparedFullReplaceSnapshot(
         IDataProvider provider,
@@ -53,6 +54,37 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     public byte[] RosterDigest => Manifest.RosterDigest.ToArray();
 
     /// <summary>
+    /// Marks this prepared generation as durably persisted. Ordinary Dispose then
+    /// detaches the in-process provider handle but preserves the snapshot files and
+    /// Metadata Store record for recovery after process restart.
+    /// </summary>
+    internal void MarkPersisted()
+    {
+        lock (_gate)
+        {
+            if (_disposeRequested || _provider is null)
+                throw new ObjectDisposedException(nameof(PreparedFullReplaceSnapshot));
+            _preserveOnDispose = true;
+        }
+    }
+
+    /// <summary>Permanently releases a persisted generation after every transfer has finished.</summary>
+    internal void ReleasePermanently()
+    {
+        IDataProvider? release;
+        lock (_gate)
+        {
+            if (_activeTransfers != 0)
+                throw new InvalidOperationException("Cannot permanently release a FULL_REPLACE snapshot while transfers are active.");
+            _disposeRequested = true;
+            _preserveOnDispose = false;
+            release = _provider;
+            _provider = null;
+        }
+        release?.ReleaseSnapshot(Snapshot.Token);
+    }
+
+    /// <summary>
     /// Retain the source provider snapshot while one transfer is using it. A concurrent
     /// Dispose is deferred until the last active transfer releases its lease.
     /// </summary>
@@ -77,7 +109,8 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
             _disposeRequested = true;
             if (_activeTransfers == 0)
             {
-                release = _provider;
+                if (!_preserveOnDispose)
+                    release = _provider;
                 _provider = null;
             }
         }
@@ -95,7 +128,8 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
             _activeTransfers--;
             if (_disposeRequested && _activeTransfers == 0)
             {
-                release = _provider;
+                if (!_preserveOnDispose)
+                    release = _provider;
                 _provider = null;
             }
         }
