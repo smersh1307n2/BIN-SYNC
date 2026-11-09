@@ -42,7 +42,7 @@ S1–S8 exercise the public in-process `Transport` helpers and core mutation API
 
 ## v3.1 host integration
 
-The authority/member control-plane round, Joining/FULL_REPLACE/Active lifecycle, one-checkpoint-per-round broadcast and application-owned scheduling are documented in [BIN-SYNC-V3.1-HOST-ORCHESTRATION.md](../docs/BIN-SYNC-V3.1-HOST-ORCHESTRATION.md). The synchronized-FLD JournalSeq provenance adapter remains a later integration gate after FLD's neutral semantic and two-DLL extraction work; see [FLD-DB-INTEGRATION-CONTRACT.md](../docs/FLD-DB-INTEGRATION-CONTRACT.md).
+The authority/member control-plane round, Joining/FULL_REPLACE/Active lifecycle, one-checkpoint-per-round broadcast and application-owned scheduling are documented in [BIN-SYNC-V3.1-HOST-ORCHESTRATION.md](../docs/BIN-SYNC-V3.1-HOST-ORCHESTRATION.md). The optional `samples/FldBinSyncHost` implements the relay/ACK/GC-reference adapter, but the full `FldDatabase`→`IDataProvider` snapshot/local-feed/remote-apply bridge remains an open C-pass item; see [FLD-DB-INTEGRATION-CONTRACT.md](../docs/FLD-DB-INTEGRATION-CONTRACT.md) §§9.6–9.8.
 
 
 `RelayProvenanceMap` is intentionally a low-level RPM3 storage-format/reopen/ACK-boundary sample. It calls `StorageRelayProvenanceMap.AppendPage` with pre-resolved sequence pairs and does not demonstrate the production FLD adapter. Production hosts must use `StorageSyncCoordinator.AppendRelayProvenancePage` under `AcquireApplicationCommitGuard`, after reading whole FLD journal batches; ChangeIds are resolved through the durable Node Outbox ledger before only the `(JournalSeq, OutboxSeq)` pairs are persisted. The host must still perform safe-ACK translation, durable FLD ACK, then map pruning in that order.
