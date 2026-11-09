@@ -149,6 +149,10 @@ Pass this scanner and `AcquireFldLease` into every BIN-SYNC physical-GC/frontier
 The guide is now implemented by the optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost). It contains the concrete adapter for relay paging, startup reconciliation, publication ceilings, safe ACK ordering and the FLD reference scanner. The sample remains outside the default BIN-SYNC solution because FLD-DB is a separate checkout; see its README for the canonical shared-Storage project build command. It does not provide a transport implementation or enable physical GC.
 
 
-### Ceiling-aware sender API
+### Local feed freeze and ceiling-aware sender API
+
+Before startup recovery and before each later outbound gate invocation, call `adapter.PublishLocalChanges(persistNode)`. This drains the provider's durable local feed into the active authority; the captured local ceiling then includes only the rows actually frozen. A provider edit that arrives after the freeze is deferred to the next gate pass and cannot leak above the current ceiling.
+
+
 
 The optional host adapter's `PublishReadyOutboxAsync` converts the captured watermark set into a per-author ceiling map and drains the peer session using the matching ceiling-aware Core overload. Before cutover it uses Node-owned `SyncSession.PushBatchAsync`; after cutover it uses the Metadata Store overload. Both paths filter local-outbound and relay pages before batch construction. The Metadata Store path also rejects any immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Authors absent from the set and zero-ceiling authors are not eligible. The captured authority-mode bit prevents a cutover race. Do not use a legacy ceiling-free overload inside this FLD publication gate.
