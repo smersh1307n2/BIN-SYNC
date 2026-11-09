@@ -1,6 +1,6 @@
 # Samples — BinSync.Core 3.0.0+
 
-The three executable samples use the current public API and target .NET 10.
+The executable samples use the current public API and target .NET 10.
 Run commands from the repository root:
 
 ```bash
