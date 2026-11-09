@@ -3560,43 +3560,27 @@ private static bool ValidateIncomingBatchForStaging(
                     break;
                 }
                 case 5:
-                case 6:
-                case 8:
-                case 9:
                 {
                     RequireLength(key, 18);
-                    var streamKey = new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
-                    if (kind is 5 or 6)
-                    {
-                        if (kind == 5 && row.Value.Length == 16)
-                        {
-                            state.RelayAck.Add(streamKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
-                            state.RelayHighWatermarks.Add(streamKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
-                        }
-                        else
-                        {
-                            RequireLength(row.Value, 8);
-                            ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
-                            if (kind == 5) state.RelayAck.Add(streamKey, value);
-                            else state.RelayHighWatermarks.Add(streamKey, value);
-                        }
-                    }
-                    else
-                    {
-                        var outboundKey = new OutboundKey(streamKey.NamespaceId, streamKey.Author);
-                        if (kind == 8 && row.Value.Length == 16)
-                        {
-                            state.OutboundAck.Add(outboundKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
-                            state.OutboundHighWatermarks.Add(outboundKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
-                        }
-                        else
-                        {
-                            RequireLength(row.Value, 8);
-                            ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
-                            if (kind == 8) state.OutboundHighWatermarks.Add(outboundKey, value);
-                            else state.OutboundAck.Add(outboundKey, value);
-                        }
-                    }
+                    RequireLength(row.Value, 16);
+                    var streamKey = new RelayKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)));
+                    state.RelayAck.Add(streamKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
+                    state.RelayHighWatermarks.Add(streamKey,
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
+                    break;
+                }
+                case 8:
+                {
+                    RequireLength(key, 18);
+                    RequireLength(row.Value, 16);
+                    var outboundKey = new OutboundKey(
+                        BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)));
+                    state.OutboundAck.Add(outboundKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
+                    state.OutboundHighWatermarks.Add(outboundKey,
+                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
                     break;
                 }
                 case 10:
