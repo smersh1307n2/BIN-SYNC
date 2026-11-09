@@ -62,6 +62,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] The byte audit now records that `StorageDatabase.EncodeBatch` sorts all mutations by StorageKey before WAL append using LINQ `OrderBy`, adding O(N log N) CPU/allocation overhead per write batch.
 - [~ O] Benchmark realistic relay-page sizes and mixed metadata batches before changing the FLD Storage serializer; compare LINQ ordering with array sort and pre-sorted mutation collection, preserving deterministic byte order and atomic commit semantics.
 
+## 0.54. C-pass: FLD Manifest and Run structural byte audit — 2026-11-09
+
+- [x C] Audited ManifestCodec: 80-byte fixed base plus 4 bytes/namespace, 64/run, 16/retain, 52+bitmap/result-client and 40/provenance-index entry.
+- [x C] Audited RunConstants: 256-byte header, 8-byte footer, 40-byte cluster header, 8-byte field descriptor, optional 24-byte HLC override and 16/32-byte structural slots/segments/refs.
+- [x C] Clarified that Run is materialized field state, not a second synchronization history; tombstone is a field-descriptor flag and GhostCount is in the Run header.
+- [x C] Added the formulas to `BIN-SYNC-METADATA-BYTE-AUDIT.md`. Full variable payload/PGM/dictionary amplification remains workload-dependent and is not presented as a fixed metadata cost.
+
 ## 0.43. C-pass: ApplyJournal and Micro-WAL byte audit — 2026-11-09
 
 - [x C] Audited FLD `ApplyJournal.cs`: 16-byte file header; each record is 20-byte header + APPLY_COMMIT payload + 4-byte CRC32C; per-author relay-ACK sidecar is 12-byte header + 24 bytes/author + CRC; sparse index is 16 bytes/256 records in memory.
