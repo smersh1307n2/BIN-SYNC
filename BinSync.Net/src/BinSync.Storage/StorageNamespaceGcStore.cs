@@ -295,6 +295,117 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         }
     }
 
+    internal TombstoneGcProofSnapshot? TryCreateTombstoneGcProofSnapshot(
+        NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
+        Guid fullReplaceGeneration, ReadOnlySpan<byte> fullReplaceDigest)
+    {
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        if (fullReplaceGeneration == Guid.Empty ||
+            fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
+            return null;
+
+        lock (_gate)
+        {
+            EnsureCurrentRoster(acceptedRoster);
+            NamespaceRetentionCheckpoint? checkpoint =
+                TryReadRetentionCheckpointCore(acceptedRoster, trustStore);
+            if (checkpoint is null ||
+                checkpoint.FullReplaceGeneration != fullReplaceGeneration ||
+                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(fullReplaceDigest) ||
+                !TryGetCommonInstalledHlcFloorCore(
+                    acceptedRoster, fullReplaceGeneration, fullReplaceDigest,
+                    out ulong installedWall, out uint installedLogical) ||
+                installedWall != checkpoint.FullReplaceHlcWallFloor ||
+                installedLogical != checkpoint.FullReplaceHlcLogicalFloor ||
+                !AreAllActiveMembersInstalledCore(
+                    acceptedRoster, fullReplaceGeneration, fullReplaceDigest))
+                return null;
+
+            NamespaceRosterMember[] activeMembers = acceptedRoster.Members
+                .Where(member => member.Status == NamespaceMemberStatus.Active).ToArray();
+            if (activeMembers.Length == 0)
+                return null;
+
+            IReadOnlyList<AppliedOriginFrontierReport> reports =
+                ReadOriginFrontiersCore(acceptedRoster);
+            var reportsByMember = reports.ToDictionary(report => report.MemberNodeId);
+            foreach (NamespaceRosterMember member in activeMembers)
+            {
+                if (!reportsByMember.TryGetValue(member.NodeId, out AppliedOriginFrontierReport? report) ||
+                    report.UnpublishedDraftCount != 0)
+                    return null;
+            }
+
+            var proofs = new Dictionary<(NodeId Author, uint Epoch), TombstoneGcOriginProof>();
+            foreach (NamespaceRetiredOriginEpoch closure in acceptedRoster.RetiredOriginEpochs)
+            {
+                proofs[(closure.OriginAuthorNodeId, closure.OriginAuthorEpoch)] =
+                    new TombstoneGcOriginProof(
+                        closure.FinalIssuedOriginSequence,
+                        closure.MaxIssuedHlcWall,
+                        closure.MaxIssuedHlcLogical,
+                        0,
+                        false);
+            }
+
+            foreach (NamespaceRosterMember member in activeMembers)
+            {
+                AppliedOriginFrontierReport report = reportsByMember[member.NodeId];
+                foreach (IssuedOriginFrontierEntry issued in report.IssuedOrigins)
+                {
+                    var key = (member.NodeId, issued.OriginAuthorEpoch);
+                    if (!proofs.ContainsKey(key))
+                        proofs.Add(key, new TombstoneGcOriginProof(
+                            issued.IssuedOriginSequence,
+                            issued.MaxIssuedHlcWall,
+                            issued.MaxIssuedHlcLogical,
+                            0,
+                            false));
+                }
+            }
+
+            var safeFrontiers = checkpoint.SafeFrontier.ToDictionary(
+                entry => (entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
+                entry => entry.SafeAppliedOriginSequence);
+            var appliedByMember = new Dictionary<NodeId, Dictionary<(NodeId Author, uint Epoch), ulong>>();
+            foreach (NamespaceRosterMember member in activeMembers)
+            {
+                AppliedOriginFrontierReport report = reportsByMember[member.NodeId];
+                var applied = new Dictionary<(NodeId Author, uint Epoch), ulong>();
+                foreach (AppliedOriginFrontierEntry entry in report.Entries)
+                    applied[(entry.OriginAuthorNodeId, entry.OriginAuthorEpoch)] =
+                        entry.ContiguousAppliedOriginSequence;
+                appliedByMember.Add(member.NodeId, applied);
+            }
+
+            foreach (var pair in proofs.ToArray())
+            {
+                ulong safe = safeFrontiers.TryGetValue(pair.Key, out ulong value) ? value : 0;
+                bool allApplied = true;
+                foreach (NamespaceRosterMember member in activeMembers)
+                {
+                    if (!appliedByMember[member.NodeId].TryGetValue(pair.Key, out ulong applied) ||
+                        applied < pair.Value.FinalIssuedSequence)
+                    {
+                        allApplied = false;
+                        break;
+                    }
+                }
+                proofs[pair.Key] = pair.Value with
+                {
+                    SafeAppliedSequence = safe,
+                    AllActiveMembersApplied = allApplied
+                };
+            }
+
+            return new TombstoneGcProofSnapshot(
+                checkpoint.FullReplaceHlcWallFloor,
+                checkpoint.FullReplaceHlcLogicalFloor,
+                proofs);
+        }
+    }
+
     public bool HasProtocolTombstoneGcProof(
         NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
         NodeId originAuthor, uint originEpoch, ulong originSequence,
