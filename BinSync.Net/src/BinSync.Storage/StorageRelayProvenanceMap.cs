@@ -72,7 +72,8 @@ public sealed class StorageRelayProvenanceMap
 
     /// <summary>
     /// Atomically persists one complete FLD relay page's identity mapping and its
-    /// ScannedThroughJournalSeq. The caller may publish/send the mapped Outbox entries
+    /// ScannedThroughJournalSeq. Pages must end on whole JournalSeq boundaries; a source
+    /// journal containing multiple operations cannot be split across pages. The caller may publish/send the mapped Outbox entries
     /// only after this method returns. JournalSeq and OutboxSeq remain separate domains.
     /// </summary>
     public void AppendPage(
