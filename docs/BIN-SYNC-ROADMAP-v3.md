@@ -1,9 +1,10 @@
 ## 1.11. Recovery point and C-pass continuation reset — 2026-11-09
 
 - [x C] Created `backup/pre-v3-code-sweep-2026-11-09` from `feature/fld-external-storage` before the next broad implementation pass.
-- [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production head is `7e763f0f5939ce2b134e0d5b7a55e92361e51b3b`, not the older roadmap pointer `946711a11b72d7c2b24b35053f037a4af14b974e`.
-- [~ C] Continue the code-only sweep for v3.0 + mandatory v3.1: complete the FLD `IDataProvider` bridge, durable FULL_REPLACE source-generation recovery, generic Storage backend/format decision, and host transport/session scheduler. Do not mark any item complete from documentation alone.
-- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `b724ec624e0cc57ddbb10c344d074fd3c0bc8c0f`; the roadmap/status checkpoint is updated after this code sweep.
+- [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
+- [~ C] Remaining code gates: durable FULL_REPLACE source-generation recovery across sender restart, FLD FULL_REPLACE receiver staging/atomic generation switch, durable publication-mode cutover for FLD provider, generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Transport creation/reconnect/disposal remain application-owned.
+- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
 
@@ -1891,7 +1892,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `SessionWire.DecodeHello` and `DecodeHelloAck` reject the same invalid dependency mask from a remote peer with `FRAME_REJECTED`, before constructing a session. Unknown future capability bits remain forward-compatible; valid v3.0 and v3.1 bitmasks retain identical wire bytes.
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-v31-hello-capability-validation` in BIN-SYNC (anchored at `7e763f0f5939ce2b134e0d5b7a55e92361e51b3b`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
 - [~ T] Add HELLO/HELLO_ACK encode/decode tests for each partial/valid capability mask, unknown bits, malformed peer advertisements and byte-for-byte valid HELLO compatibility. No exact-head CI result is claimed.
-- [~ C] Durable FULL_REPLACE source snapshot recovery, full FLD provider snapshot/local-feed/key-resolver bridge, generic Storage physical-format decision and host transport scheduler remain open.
+- [~ C] Durable FULL_REPLACE source snapshot recovery, FLD FULL_REPLACE receiver staging, durable publication-mode cutover and generic Storage physical-format decision remain open; base provider bridge and host scheduler are implemented in §§1.20–1.23.
 
 
 ## 1.16. C-pass: make Metadata Store the exclusive relay authority after cutover — 2026-11-09
@@ -1939,7 +1940,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Context-free `IDataProvider.ApplyRemoteBatch` deliberately fails closed. The host must inject the exact `FldRemoteBatchApplyStore` so sender/transport epoch/cursor/digest context is not discarded.
 - [x C] Added `StorageSyncCoordinator.UsesDataProvider` and constructor checks in `FldBinSyncHostAdapter`: the coordinator must use the exact FLD provider, the provider must use the exact FLD database, and the contextual apply store must target that same database.
 - [x C] Updated the host README with construction order and the explicit remaining boundaries. FLD runtime still has exactly two DLLs; the adapter remains optional host code.
-- [~ C] Remaining v3/v3.1 gates: durable publication-mode cutover + author-epoch closure capability, FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot generation recovery across restart, generic Storage page/run/WAL physical-format decision, and host-owned multi-session transport scheduler.
+- [~ C] Remaining v3/v3.1 gates: durable publication-mode cutover for the FLD provider, FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot generation recovery across restart, and generic Storage page/run/WAL physical-format decision. Author-epoch closure and host multi-session scheduling are implemented in §§1.21 and 1.23.
 - [~ T] Exact cross-repository sample build and provider conformance/crash tests are deferred to the dedicated T-pass. No test/build pass is claimed.
 - [~ C] Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the complete cross-store reference proof and T-pass.
 
@@ -1949,7 +1950,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `FldDatabaseDataProvider` now implements `IProviderAuthorEpochClosureStore`. An epoch closes only while holding the FLD commit guard and only when `ReadUnpublishedLocalDraftHorizon().Count == 0` and Outbox high watermark equals its acknowledged watermark.
 - [x C] Local append and epoch activation use the same FLD→provider lock order as closure, preventing a writer that passed an early check from racing into a just-closed epoch.
 - [x C] The adapter obtains the active epoch from the host's durable BIN-SYNC identity authority; it does not duplicate protocol epoch state in FLD. New epochs must be strictly greater than the last locally closed epoch.
-- [~ C] Durable publication-mode cutover and FLD FULL_REPLACE receiver staging/atomic generation switch remain open, as do sender restart snapshot recovery, generic Storage physical-format decision and host session scheduling.
+- [~ C] Durable publication-mode cutover and FLD FULL_REPLACE receiver staging/atomic generation switch remain open, as do sender restart snapshot recovery and generic Storage physical-format decision. Host session scheduling is implemented in §1.23.
 - [~ T] Verify pending drafts, unacked Outbox, replayable WAL horizon, writer-vs-close race, restart after closure, reactivation and stale-epoch rejection in the T-pass. No test/build result is claimed.
 
 
