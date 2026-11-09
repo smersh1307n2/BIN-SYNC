@@ -164,6 +164,47 @@ public sealed class StorageRelayPublicationGate
     }
 
     /// <summary>
+    /// Translate and durably apply the safe source ACK for every author that has either
+    /// unacknowledged FLD relay rows or a retained RPM3 cursor. A partial failure is
+    /// retryable: already-pruned authors disappear from the map; the remaining authors
+    /// are rediscovered on the next call.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<(NodeId Author, ulong SafeJournalSeq)>> AcknowledgeAllAsync(
+        StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
+        Func<IReadOnlyList<NodeId>> readRelayAuthors,
+        Func<IDisposable?> acquireHostCommitLease,
+        Action<NodeId, ulong> acknowledgeSource,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(readRelayAuthors);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(acknowledgeSource);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureReconciled();
+            NodeId[] authors = DiscoverAuthors(coordinator, acquireHostCommitLease, readRelayAuthors);
+            var acknowledgements = new List<(NodeId Author, ulong SafeJournalSeq)>(authors.Length);
+            foreach (NodeId author in authors)
+            {
+                ulong safeJournal = coordinator.AcknowledgeRelayProvenance(
+                    map, author, acquireHostCommitLease,
+                    sequence => acknowledgeSource(author, sequence));
+                acknowledgements.Add((author, safeJournal));
+            }
+            return acknowledgements;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// Run any other outbound batch construction/send under the same host publication
     /// gate. Do not call this from ApplyAndPublishAllAsync/RecoverAndPublishAllAsync callbacks.
     /// </summary>
