@@ -181,8 +181,8 @@ The encoded write-batch payload is:
 The Storage WAL uses the same framing sizes as the FLD Micro-WAL: 64-byte segment header; 20-byte record envelope + payload + 4-byte CRC32C + 0–7 byte alignment padding.
 
 For one AppendPage transaction with (N) mapping Puts plus one cursor Put:
-- WAL payload bytes = (4 + 109N + 137 = 141 + 109N);
-- WAL record bytes = (165 + 109N + pad(0..7)).
+- WAL payload bytes = (4 + 93N + 137 = 141 + 93N);
+- WAL record bytes = (165 + 93N + pad(0..7)).
 
 For one prune transaction deleting (N) mapping rows plus one cursor Put:
 - WAL payload bytes = (4 + 85N + 137 = 141 + 85N);
