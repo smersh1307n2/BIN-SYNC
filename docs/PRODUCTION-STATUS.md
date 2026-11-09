@@ -2,6 +2,16 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
+- Latest BIN-SYNC code-bearing commit: `7b77065bd2904943585e254d3368c99fb01a1b85` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `be4ecf83e021f3be1f2b4369f74180791cb560ee` on `fix/crash-consistency-outbox`.
+- The authoritative FLD Storage source and BIN-SYNC vendor copy now match byte-for-byte. Storage snapshots share immutable value arrays, bounded prefix cursors expose borrowed views, metadata partition reopen is paged, and provider ACK deletion is bounded/crash-resumable.
+- BIN-SYNC recovery branch: `backup/cpass-2026-11-09-storage-streaming`; prior publication-ceiling and author-ordering recovery branches remain available. FLD recovery branch: `backup/cpass-2026-11-09-publication-ceilings`.
+- No tests were run for this C-pass by design. The historical 4382c49 result remains the last code-equivalent validation baseline; current code and new Storage visitor/ACK paths are unvalidated.
+- Remaining C-pass: concrete host callback composition/reference-snapshot scanner, generic Storage/WAL compatibility seam and final public API/package audit. T-pass must prove page ACK crash boundaries, sender callback migration, concurrent local-write fencing, restart recovery and all three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+---
+
+## Current continuation checkpoint — 2026-11-09
+
 - Latest BIN-SYNC code-bearing commit: `2c7007f059c2da1878c24e64a76dec902f9e8c73` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `bf72f0d8c4e82303612f079e3aefa790d6794451` on `fix/crash-consistency-outbox`.
 - C-pass now includes allocation-free deterministic author ordering, durable per-author publication ceilings passed to every relay sender callback, and map ownership validation before all gate paths. FLD integration contract and both roadmaps are updated immediately after each slice.
 - Recovery branches: BIN-SYNC `backup/cpass-2026-11-09-nodeid-ordering` (plus prior publication-ceiling checkpoints); FLD-DB `backup/cpass-2026-11-09-publication-ceilings`.
