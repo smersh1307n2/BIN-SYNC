@@ -160,6 +160,12 @@ public sealed class StorageSyncCoordinator
             throw new ArgumentException("Original relay author must be non-zero.", nameof(originalAuthor));
         if (sourceChanges.Length > 4096)
             throw new ArgumentOutOfRangeException(nameof(sourceChanges), "Relay source page cannot exceed 4,096 changes.");
+        if (sourceChanges.IsEmpty)
+        {
+            map.AppendPage(_namespaceId, originalAuthor,
+                Array.Empty<StorageRelayProvenanceEntry>(), scannedThroughJournalSeq);
+            return true;
+        }
 
         ulong previousJournalSeq = 0;
         for (int i = 0; i < sourceChanges.Length; i++)
