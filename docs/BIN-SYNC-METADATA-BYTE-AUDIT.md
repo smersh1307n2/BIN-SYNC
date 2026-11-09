@@ -220,3 +220,43 @@ The fixed 80 bytes include Generation[8], CRC32C[4], last flushed CommitSeq[8], 
 - Structural constants: CompactSlot 16 bytes, PGM segment 32 bytes, ValueRef 16 bytes, InternEntry 16 bytes.
 
 Run files are the materialized field-state/data layer, not a second synchronization history. The header carries AliveFields and GhostCount; a tombstone is represented by the field descriptor flag, not a separate fixed-size tombstone row. Variable payload, dictionary, PGM and compaction layout costs depend on the actual run and are not added to the relay metadata totals above.
+
+
+## 12. BIN-SYNC frame registry (source audit)
+
+Sources: `BinSync.Core/Frame.cs`, `Production/NamespaceGcFrames.cs`, `Production/SessionWire.cs`, and `Sync/SyncSession.cs`.
+
+The current registry is contiguous with no gaps or duplicate IDs:
+
+| ID | Frame |
+|---:|---|
+| 0x01 | HELLO |
+| 0x02 | HELLO_ACK |
+| 0x03 | ALIAS_MAP |
+| 0x04 | SCHEMA_MAP |
+| 0x05 | MEMBERSHIP |
+| 0x06 | STATE_DIGEST |
+| 0x07 | NEED_RANGE |
+| 0x08 | NEED_KEYS |
+| 0x09 | DELTA_BATCH |
+| 0x0A | SNAPSHOT_CHUNK |
+| 0x0B | ACK |
+| 0x0C | GC_NOTICE |
+| 0x0D | ERROR |
+| 0x0E | WINDOW_UPDATE |
+| 0x0F | PING |
+| 0x10 | PONG |
+| 0x11 | KEY_ROTATION |
+| 0x12 | IBLT_REQUEST |
+| 0x13 | IBLT_RESPONSE |
+| 0x14 | NAMESPACE_ROSTER |
+| 0x15 | ORIGIN_FRONTIER |
+| 0x16 | RETENTION_CHECKPOINT |
+| 0x17 | FULL_REPLACE_BEGIN |
+| 0x18 | FULL_REPLACE_CHUNK |
+| 0x19 | FULL_REPLACE_COMMIT |
+| 0x1A | FULL_REPLACE_ACK |
+| 0x1B | FULL_REPLACE_ABORT |
+| 0x1C | FULL_REPLACE_READY |
+
+`NamespaceGcFrames` exactly matches the `FrameTypeMap`; the session parser accepts 0x04–0x1C for non-ALIAS_MAP session frames, and 0x03 is handled by the alias-map path. Frame envelope is 25-byte header, magic 0x4253, version 0x00 and CRC32C. This closes the registry inventory only; signed payload golden vectors and per-message encode/decode round trips remain T-pass items.
