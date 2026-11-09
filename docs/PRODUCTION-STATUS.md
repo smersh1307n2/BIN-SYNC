@@ -2,6 +2,16 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
+- Latest code-bearing BIN-SYNC commit: `0f46e444529b77997ce1ba190838de3c4f4ecb6d` on `feature/fld-external-storage`. Latest FLD-DB code-bearing commit: `bf72f0d8c4e82303612f079e3aefa790d6794451` on `fix/crash-consistency-outbox` (the later FLD roadmap commit records §7.75–7.76).
+- BIN-SYNC now exposes durable per-author publication ceilings to all relay sender callbacks and rejects an RPM3 map that does not match the coordinator's scope, local replica and shared StorageDatabase. The FLD integration contract requires the host to send only listed authors and cap each author at `PublishedThroughSequence`.
+- Recovery branches: BIN-SYNC `backup/cpass-2026-11-09-publication-ceilings-v2`; FLD-DB `backup/cpass-2026-11-09-publication-ceilings`.
+- No tests were run for this C-pass slice by design. The historical 4382c49 result remains the last code-equivalent validation baseline (Core 672/678, Storage Integration 91/171, Fuzz/Lab passed); current code and callback API are unvalidated. Do not treat historical results as current-head status.
+- Remaining C-pass: concrete host callback composition and generic Storage/WAL compatibility seam. T-pass must migrate callback consumers and stale provider fixtures, then prove concurrent local-write/send fencing, restart/crash ordering and all three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+---
+
+## Current continuation checkpoint — 2026-11-09
+
 - Working branch `feature/fld-external-storage` is at `701077ed9a13ce476aaa1e679d9c17f16f0ced5f`; FLD-DB `fix/crash-consistency-outbox` is at `01617ecaa06fef4bd4ec16e913f24ffd449158ae`.
 - Latest C-pass changes include allocation-free author ordering, durable per-author publication ceilings passed to all relay sender callbacks, and the mandatory host-side cap in the FLD integration contract.
 - Recovery branches exist in both repositories: `backup/cpass-2026-11-09-publication-ceilings`.
