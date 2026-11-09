@@ -34,10 +34,10 @@ public sealed class StorageRelayProvenanceMap
         public ulong AckedThroughOutboxSeq;
         public ulong AckedThroughJournalSeq;
         public readonly List<Mapping> Mappings = new();
-        public readonly HashSet<string> ChangeIds = new(StringComparer.Ordinal);
+        public readonly HashSet<BatchId> ChangeIds = new();
     }
 
-    private readonly record struct Mapping(ulong JournalSeq, byte[] ChangeId, ulong OutboxSeq);
+    private readonly record struct Mapping(ulong JournalSeq, BatchId ChangeId, ulong OutboxSeq);
 
     public StorageRelayProvenanceMap(StorageDatabase storage, string scopeId, NodeId localReplica)
     {
@@ -92,7 +92,7 @@ public sealed class StorageRelayProvenanceMap
             ulong priorOutbox = state.Mappings.Count == 0
                 ? state.AckedThroughOutboxSeq
                 : state.Mappings[^1].OutboxSeq;
-            var pageChangeIds = new HashSet<string>(StringComparer.Ordinal);
+            var pageChangeIds = new HashSet<BatchId>();
             bool firstEntry = true;
             var writes = new List<(byte[] Key, byte[] Value)>(entries.Count + 1);
             var appended = new List<Mapping>(entries.Count);
@@ -109,8 +109,8 @@ public sealed class StorageRelayProvenanceMap
                 byte[] changeId = entry.ChangeId.ToArray();
                 if (entry.OutboxSeq == 0 || entry.OutboxSeq <= priorOutbox)
                     throw new InvalidDataException("Mapped OutboxSeq values must be non-zero and strictly increasing per author.");
-                string identity = Convert.ToHexString(changeId);
-                if (state.ChangeIds.Contains(identity) || !pageChangeIds.Add(identity))
+                BatchId changeIdentity = BatchId.From(changeId);
+                if (state.ChangeIds.Contains(changeIdentity) || !pageChangeIds.Add(changeIdentity))
                     throw new InvalidDataException("A ChangeId is already mapped in this author stream or occurs more than once in the page.");
 
                 byte[] key = MappingKey(namespaceId, author, entry.OutboxSeq);
@@ -118,7 +118,7 @@ public sealed class StorageRelayProvenanceMap
                 BinaryPrimitives.WriteUInt64LittleEndian(value, entry.JournalSeq);
                 changeId.CopyTo(value, 8);
                 writes.Add((key, value));
-                appended.Add(new Mapping(entry.JournalSeq, changeId, entry.OutboxSeq));
+                appended.Add(new Mapping(entry.JournalSeq, changeIdentity, entry.OutboxSeq));
                 priorJournal = entry.JournalSeq;
                 priorOutbox = entry.OutboxSeq;
                 firstEntry = false;
@@ -145,7 +145,7 @@ public sealed class StorageRelayProvenanceMap
 
             state.Mappings.AddRange(appended);
             foreach (Mapping mapping in appended)
-                state.ChangeIds.Add(Convert.ToHexString(mapping.ChangeId));
+                state.ChangeIds.Add(mapping.ChangeId);
             state.ScannedThroughJournalSeq = scannedThroughJournalSeq;
         }
     }
@@ -218,7 +218,7 @@ public sealed class StorageRelayProvenanceMap
             foreach (Mapping mapping in state.Mappings)
             {
                 if (mapping.JournalSeq > safeThroughJournalSeq) break;
-                state.ChangeIds.Remove(Convert.ToHexString(mapping.ChangeId));
+                state.ChangeIds.Remove(mapping.ChangeId);
             }
             state.Mappings.RemoveAll(mapping => mapping.JournalSeq <= safeThroughJournalSeq);
             state.AckedThroughOutboxSeq = safeOutboxSeq;
@@ -244,7 +244,7 @@ public sealed class StorageRelayProvenanceMap
         if (cursors.Count == 1)
             DecodeCursor(cursors[0].Value, state);
 
-        var loadedChangeIds = new HashSet<string>(StringComparer.Ordinal);
+        var loadedChangeIds = new HashSet<BatchId>();
         using (StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Join(_root, MappingPrefix(namespaceId, author))))
         {
             const int pageSize = 1024;
@@ -259,8 +259,8 @@ public sealed class StorageRelayProvenanceMap
                     ulong outboxSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
                     ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
                     byte[] changeId = row.Value.AsSpan(8, ChangeIdLength).ToArray();
-                    string changeIdHex = Convert.ToHexString(changeId);
-                    if (!loadedChangeIds.Add(changeIdHex))
+                    BatchId changeIdentity = BatchId.From(changeId);
+                    if (!loadedChangeIds.Add(changeIdentity))
                         throw new InvalidDataException("A ChangeId is mapped more than once in one author stream.");
                     if (journalSeq <= state.AckedThroughJournalSeq ||
                         journalSeq > state.ScannedThroughJournalSeq ||
@@ -269,8 +269,8 @@ public sealed class StorageRelayProvenanceMap
                             (outboxSeq <= state.Mappings[^1].OutboxSeq ||
                              journalSeq < state.Mappings[^1].JournalSeq)))
                         throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
-                    state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
-                    state.ChangeIds.Add(changeIdHex);
+                    state.Mappings.Add(new Mapping(journalSeq, changeIdentity, outboxSeq));
+                    state.ChangeIds.Add(changeIdentity);
                 }
                 if (page.Count < pageSize) break;
             }
