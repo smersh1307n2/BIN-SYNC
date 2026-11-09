@@ -2790,13 +2790,16 @@ private static bool ValidateIncomingBatchForStaging(
             return true;
         byte[] root = PartitionRoot(key);
         using var snapshot = _storage.OpenSnapshot();
-        state = DecodePartition(key, root, EnumeratePartitionRows(snapshot, root), snapshot.CommitSeq)!;
-        if (state is null)
+        PartitionState? decoded = DecodePartition(
+            key, root, EnumeratePartitionRows(snapshot, root), snapshot.CommitSeq);
+        if (decoded is null)
         {
             _partitions.Remove(key);
+            state = null!;
             return false;
         }
 
+        state = decoded;
         _partitions[key] = state;
         return true;
     }
