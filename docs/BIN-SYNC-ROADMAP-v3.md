@@ -85,9 +85,9 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 ## 0.71. C-pass: remove split ACK/high-watermark persistence fallback rows — 2026-11-09
 
 - [x C] Audited `StorageMetadataStore` row writers and confirmed fresh v3 writes persist relay ACK+high-watermark together as kind 5 / 16-byte value and outbound ACK+high-watermark together as kind 8 / 16-byte value.
-- [x C] Removed decoder-only split-row kinds 6/9 and the 8-byte value fallbacks from kinds 5/8. Old split watermark layouts now fail closed instead of being silently migrated; no current writer emitted kinds 6/9.
+- [x C] Removed unreachable switch branches for split-row kinds 6/9 and 8-byte values from kinds 5/8. The earlier `DecodePartition` preflight already rejected these legacy encodings before the switch, so this is dead-code cleanup, not a behavior change; no current writer emitted kinds 6/9.
 - [x C] This aligns the parser with the audited fixed row inventory and the clean-break rule. It does not change the separate retained old receipt behavior: unknown/legacy receipt provenance remains fail-closed and non-collectable to preserve replay safety.
-- [~ T] Add exact fixtures proving canonical kind 5/8 reopen and rejection of kind 6/9 or 8-byte split values; run full Storage Integration only in the T pass.
+- [~ T] Add exact fixtures proving canonical kind 5/8 reopen and preflight rejection of kind 6/9 or 8-byte split values; run full Storage Integration only in the T pass.
 ## 0.70. C-pass: correct stale provenance byte-audit row after RPM3 cutover — 2026-11-09
 
 - [x C] Found and corrected a stale RPM2-era row in `BIN-SYNC-METADATA-BYTE-AUDIT.md`: the table still showed a 24-byte mapping value although the RPM3 implementation stores only the 8-byte JournalSeq value.
