@@ -305,3 +305,8 @@ The scan object must implement all three reference checks:
 Unknown/corrupt retained records are live references. Scanner exceptions fail closed. The scanner must be partition-scoped by (scopeId, localReplica, namespaceId) and must not infer namespace from an unrelated global cursor.
 
 This is an integration contract, not an assertion that the FLD adapter already exists. Until the adapter, lock composition and cross-store crash tests are implemented, all physical GC feature flags remain false.
+
+
+### 9.4 Freeze-before-stamp crash recovery and ChangeId GC
+
+The provider feed remains a live ChangeId reference until \`CommitPublishedOrigins\` has durably stamped the exact immutable \`OperationOrigin\` and the feed sequence is acknowledged. If a crash occurs after Metadata Store freeze but before provider stamping, retry resolves both fingerprint and origin from the durable ChangeLedger row using \`TryGetOutboundChangeIdentity\`; it must not allocate a new origin or require the outbound payload row to remain retained. ChangeId compaction also scans the provider's pending local feed and blocks every matching ChangeId. The external FLD snapshot alone is insufficient because the FLD Outbox may already have been ACKed after the provider accepted the entry.
