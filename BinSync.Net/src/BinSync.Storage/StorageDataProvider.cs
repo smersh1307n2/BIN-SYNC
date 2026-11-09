@@ -1091,6 +1091,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (!metadataStore.TryBuildLiveRecordReferenceSet(
                     scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecordReferences))
                 return 0; // Unknown payloads or pending reservations block the whole pass.
+            using IApplicationGcReferenceScan externalScan =
+                externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
             ulong examined = 0;
             int reclaimed = 0;
@@ -1133,9 +1135,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
                         checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest) ||
                     liveRecordReferences.Contains(tombstone.RecordId) ||
-                    externalReferences.HasExternalChangeIdReference(scopeId, localReplica, namespaceId, tombstone.ChangeId) ||
-                    externalReferences.HasExternalRecordReference(
-                        scopeId, localReplica, namespaceId, tombstone.RecordId, tombstone.ChangeId))
+                    externalScan.HasExternalChangeIdReference(tombstone.ChangeId) ||
+                    externalScan.HasExternalRecordReference(tombstone.RecordId, tombstone.ChangeId))
                 {
                     afterTombstoneKey = tombstoneRow.Key;
                     examined++;
