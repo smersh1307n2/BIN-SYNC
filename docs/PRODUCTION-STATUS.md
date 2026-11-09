@@ -2,6 +2,16 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
+- Latest BIN-SYNC code-bearing commit: `88de4289abaaf9b954f5c54be4d34590733f9f55` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `408399e4a465aecfa21c7dde245c297c85595191` on `fix/crash-consistency-outbox`.
+- FLD Storage and BIN-SYNC's vendor copy remain byte-identical. FLD Database now reuses Storage's cross-process writer fence before manifest/WAL recovery without replacing FLD-specific WAL/Run/Manifest formats. Provider snapshot/feed scans are bounded and use borrowed Storage views; ACK cleanup is paged and crash-resumable.
+- Matching recovery branches: `backup/cpass-2026-11-09-fl-database-lease` in both repositories; earlier storage-streaming and publication-ceiling checkpoints remain available.
+- No tests were run for this C-pass by design. The historical 4382c49 result remains the last code-equivalent validation baseline; current Storage visitor, provider ACK and FLD Database writer-lease paths are unvalidated.
+- Remaining C-pass: concrete FLD/BIN-SYNC host callback and reference-snapshot scanner composition, generic Storage/WAL compatibility ADR/backend seam and final public API/package audit. T-pass must prove two-process writer fencing, failed-open cleanup, cursor/ACK crash cuts, sender callback migration, restart recovery and the three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+---
+
+## Current continuation checkpoint — 2026-11-09
+
 - Latest BIN-SYNC code-bearing commit: `7c8e160352c08756721a278dac25c63e90e8b541` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `9087386ad2cf73c7a80d014e3a2f423315dfb18c` on `fix/crash-consistency-outbox`.
 - FLD Storage and BIN-SYNC's vendored Storage source are byte-identical. Snapshots share immutable values; bounded prefix scans expose borrowed page and single-entry views. Metadata partition recovery is paged; provider feed reads and ACK cleanup are bounded; provider snapshot merge now holds only one decoded lookahead per stream instead of copied page buffers.
 - Recovery branch: BIN-SYNC `backup/cpass-2026-11-09-provider-snapshot-streaming`; earlier storage-streaming and publication-ceiling checkpoints remain available.
