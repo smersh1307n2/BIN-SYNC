@@ -130,10 +130,12 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
-    /// Resolve an FLD relay page through the durable global ChangeId ledger and atomically
-    /// persist its compact JournalSeq↔OutboxSeq map. Call inside
-    /// <c>AcquireApplicationCommitGuard</c> while the FLD
-    /// commit lease used to read the source page is still held.
+    /// Resolve transient FLD ChangeIds against retained Node Outbox entries and atomically
+    /// persist their compact JournalSeq↔OutboxSeq map. The global ChangeId ledger remains
+    /// the identity authority; this method obtains the current OutboxSeq from the retained
+    /// Outbox projection. It fails closed if that projection has already been compacted.
+    /// Call inside <c>AcquireApplicationCommitGuard</c> while the FLD commit lease used to
+    /// read the source page is still held.
     /// </summary>
     /// <returns>
     /// False when any ChangeId is no longer retained in the Node Outbox; in that case
