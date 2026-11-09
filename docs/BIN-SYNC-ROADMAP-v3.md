@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.64. C-pass: empty relay pages avoid resolver allocations — 2026-11-09
+
+- [x C] `AppendRelayProvenancePage` now fast-paths an empty source page directly to the atomic map cursor update, avoiding zero-length identity/sequence arrays and a no-op Node ledger lookup.
+- [x C] The same application guard, map binding and zero-watermark rules remain enforced.
+
 ## 0.63. C-pass: source JournalSeq order validated before ledger work — 2026-11-09
 
 - [x C] `AppendRelayProvenancePage` now rejects zero, decreasing or beyond-scanned JournalSeq values before allocating/consulting the Node ledger; same-JournalSeq operations remain allowed as one complete source batch.
