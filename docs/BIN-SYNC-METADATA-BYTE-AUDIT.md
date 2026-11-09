@@ -132,12 +132,12 @@ The v3 body has a 139-byte fixed envelope, then:
 The 69-byte mutation header is RecordId[16] + FieldId[2] + OpKind[1] + KeyEpoch[2] + HLC wall[8] + HLC logical[4] + AuthorNodeId[16] + ChangeId[16] + value length[4]. A relay-only journal record stores exactly the relay fields in the same field-list format and omits the separate relay-index list.
 
 A normal full APPLY WAL record is therefore:
-`139 + 4 + deltaBytes + 4 + Σ(69 + valueBytes) + 4 + Σ(varuint32IndexBytes)`.
+`139 + deltaBytes + Σ(69 + valueBytes) + (4 + Σ(varuint32IndexBytes) when RelayOnly=false)`.
 
 A relay-only ApplyJournal payload is:
-`139 + 4 + deltaBytes + 4 + Σ(relayField(69 + valueBytes))`.
+`139 + deltaBytes + Σ(relayField(69 + valueBytes))`.
 
-After relay payload acknowledgement and WAL sealing, `CompactAcknowledgedRelayPayloads` can rewrite the ApplyJournal record with an empty relay field list while retaining the protocol/receipt metadata. The minimum retained record is therefore 24-byte journal framing + 143-byte empty relay-only body + ProtocolStateDelta bytes = **167 + deltaBytes**. Receipt metadata and relay payload still share one append-only ApplyJournal file; their physical retention lifetimes are not yet independent.
+After relay payload acknowledgement and WAL sealing, `CompactAcknowledgedRelayPayloads` can rewrite the ApplyJournal record with an empty relay field list while retaining the protocol/receipt metadata. The minimum retained record is therefore 24-byte journal framing + 139-byte empty relay-only body + ProtocolStateDelta bytes = **163 + deltaBytes**. Receipt metadata and relay payload still share one append-only ApplyJournal file; their physical retention lifetimes are not yet independent.
 
 ## 8. FLD Micro-WAL v2 (cross-repository source audit)
 
