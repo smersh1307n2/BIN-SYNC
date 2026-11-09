@@ -173,6 +173,18 @@ public interface IProviderAuthorEpochClosureStore
 public interface IProviderDurableSnapshotStore
 {
     bool HasPersistedSnapshot(Guid snapshotToken);
+
+    /// <summary>
+    /// Reads the source-feed watermark bound to a persisted immutable snapshot token.
+    /// Providers that cannot prove this binding must return false; restart recovery
+    /// must not trust a watermark copied only into sender metadata.
+    /// </summary>
+    bool TryGetPersistedSnapshotWatermark(Guid snapshotToken, out ulong changeFeedWatermark)
+    {
+        changeFeedWatermark = 0;
+        return false;
+    }
+
     void PruneSnapshotsExcept(IReadOnlySet<Guid> activeSnapshotTokens);
 }
 
