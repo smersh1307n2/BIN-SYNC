@@ -535,3 +535,8 @@ The authority sender computes the maximum HLC while scanning the same immutable 
 ## 10.32. Prepared FULL_REPLACE source snapshot lease protects active sends
 
 `PreparedFullReplaceSnapshot` now defers releasing the underlying provider snapshot token while one or more `SendPreparedSnapshotAsync` operations hold transfer leases. Calling `Dispose()` prevents new transfers immediately but the provider snapshot remains readable until the final active send exits, including cancellation and fault paths. The final lease release performs the one `ReleaseSnapshot` call. This removes the race in which a host could dispose a shared prepared generation while an asynchronous recipient transfer was between READY and its final CHUNK/COMMIT. The source snapshot remains in-process only; this does not create durable restart recovery.
+
+
+## 10.33. Joining-member promotion binds FRA2 to the prior RCP2 HLC floor
+
+A Joining member's signed installed ACK is not sufficient for promotion merely because generation and digest match. Before the authority writes the next roster with that member marked Active, it now also requires the ACK's `HlcWallFloor` and `HlcLogicalFloor` to equal the corresponding floors in the already accepted FULL_REPLACE-bound RCP2 for the same generation/digest. This proves that the joining copy installed the same HLC horizon as the existing Active roster, not just bytes with an identical digest under an inconsistent reported floor. A mismatch leaves the member Joining and fails closed.
