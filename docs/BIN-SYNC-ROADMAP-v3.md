@@ -1575,3 +1575,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ C] The complete host adapter contract now exists as coordinator primitives (all-author discovery, page drain, resolver, shared publication gate, safe ACK then FLD ACK then map prune, delegate reference scan). Remaining work is host application composition, restart/reconciliation policy, golden vectors/sample coverage, and full source/API audit.
 - [~ C] FLD's two-project source boundary is physically consolidated as `Fld1.Database` + `Fld1.Storage`; generic Storage backend reuse and final binary-format/package compatibility audit are still open.
 - [~ O] Benchmarks for snapshot/index build and end-to-end relay path remain pending. Physical GC remains disabled until integrated host scan plus proof tests establish safe horizons for receipts, ChangeId and tombstones.
+
+### 2026-11-09 — T inventory refresh after RPM3 build repair
+
+- [x C] The missing `ValidateNamespaceId` helper is fixed; exact-head run on the subsequent roadmap commit built successfully and entered tests.
+- [~ T] Core: 678 total, 672 passed, 6 failed. Five failures are stale OFR1/RCP1 fixtures that do not supply the v3.1 issued-origin watermark vector for locally authored applied epochs; the sixth tombstone mutation fixture omits canonical lifecycle metadata (field/key epoch zero/no value).
+- [~ T] Storage Integration: 171 total, 91 passed, 80 failed on Ubuntu, Windows and macOS. The common first failure is old provider drafts with assigned `OriginSequence` rather than deferred zero; another repeated failure is legacy test providers without `IProviderCommitGuard`. Update fixtures and adapters to the current contract; do not weaken runtime checks.
+- [x T] Fuzz/Lab (§17) passed on the same code snapshot. Coverage was 68.1%, above the 50% gate; this does not offset Core/Storage failures.
+- [~ C] The two-DLL FLD source consolidation and BIN-SYNC relay gate/author recovery/ACK primitives are in place. The remaining production integration is a concrete host composition/sample and restart reconciliation, plus final storage backend/API and metadata-cardinality audit.
+- [~ O] Performance acceptance is still pending for bounded FLD scans, author cache rebuild/update, RPM3 mapping and the full relay publish/ACK path.
