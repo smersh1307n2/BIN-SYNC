@@ -64,6 +64,90 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
 
+    /// <summary>
+    /// Reads the immutable per-namespace publication cutover marker for an FLD-backed
+    /// provider. This keyspace is separate from decoded metadata partition rows so
+    /// normal Metadata Store rewrites cannot discard the marker.
+    /// </summary>
+    public bool TryGetProviderPublicationCutover(
+        string scopeId, NodeId localReplica, int namespaceId, out ulong nodeOutboxHighWatermark)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        ushort ns = checked((ushort)namespaceId);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PublicationModeRoot(partition);
+            using var snapshot = _storage.OpenSnapshot();
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            if (!snapshot.TryGet(identityKey, out byte[]? identity))
+            {
+                nodeOutboxHighWatermark = 0;
+                return false;
+            }
+            ValidatePartitionIdentity(partition, identity!);
+            byte[] suffix = new byte[2];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, ns);
+            if (!snapshot.TryGet(StorageKey(root, 1, suffix), out byte[]? value))
+            {
+                nodeOutboxHighWatermark = 0;
+                return false;
+            }
+            if (value!.Length != sizeof(ulong))
+                throw new InvalidDataException("Provider publication cutover marker has an invalid length.");
+            nodeOutboxHighWatermark = BinaryPrimitives.ReadUInt64LittleEndian(value);
+            return true;
+        }
+    }
+
+    /// <summary>Persists an immutable per-namespace Node→Metadata Store publication cutover.</summary>
+    public void EnableProviderPublicationCutover(
+        string scopeId, NodeId localReplica, int namespaceId, ulong nodeOutboxHighWatermark)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        ushort ns = checked((ushort)namespaceId);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PublicationModeRoot(partition);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            byte[] suffix = new byte[2];
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix, ns);
+            byte[] markerKey = StorageKey(root, 1, suffix);
+            using var snapshot = _storage.OpenSnapshot();
+
+            if (snapshot.TryGet(identityKey, out byte[]? identity))
+                ValidatePartitionIdentity(partition, identity!);
+            if (snapshot.TryGet(markerKey, out byte[]? existing))
+            {
+                if (existing!.Length != sizeof(ulong) ||
+                    BinaryPrimitives.ReadUInt64LittleEndian(existing) != nodeOutboxHighWatermark)
+                    throw new InvalidOperationException("Provider publication cutover watermark is immutable.");
+                return;
+            }
+
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            if (!snapshot.TryGet(identityKey, out _))
+                batch.Put(identityKey, EncodePartitionIdentity(partition));
+            batch.Put(markerKey, EncodeUInt64(nodeOutboxHighWatermark));
+            batch.Commit();
+        }
+    }
+
+    private static byte[] PublicationModeRoot(PartitionKey partition)
+    {
+        byte[] root = PartitionRoot(partition);
+        root[0] = 0x71;
+        return root;
+    }
+
     private void RejectForgottenOrigins(PartitionState state, MetadataIncomingBatch batch)
     {
         StorageNamespaceGcStore? gcStore = _namespaceGcStore;
