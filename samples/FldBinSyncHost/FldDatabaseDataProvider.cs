@@ -424,6 +424,23 @@ public sealed class FldDatabaseDataProvider :
         return _database.AcquireCommitGuard();
     }
 
+    /// <summary>
+    /// Reclaims snapshot generations not referenced by recovered FULL_REPLACE sender
+    /// progress. The host must pass the complete durable active-token set.
+    /// </summary>
+    public void PruneSnapshotsExcept(IReadOnlySet<Guid> activeGenerations)
+    {
+        ArgumentNullException.ThrowIfNull(activeGenerations);
+        EnsureOpen();
+        _database.PruneProviderSnapshotsExcept(activeGenerations);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            foreach (Guid token in _snapshots.Keys.Where(token => !activeGenerations.Contains(token)).ToArray())
+                _snapshots.Remove(token);
+        }
+    }
+
     public void Dispose()
     {
         FldProviderSnapshot[] snapshots;
