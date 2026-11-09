@@ -91,9 +91,10 @@ public sealed class V31NamespaceGcHostOrchestrator
             AppliedOriginFrontierReport report =
                 await _coordinator.ReceiveAndAcceptOriginFrontierAsync(
                     session, cancellationToken).ConfigureAwait(false);
-            if (report.MemberNodeId != session.PeerNodeId)
+            if (report.MemberNodeId != session.PeerNodeId ||
+                report.MemberTransportEpoch != checked((uint)session.PeerEpoch))
                 throw new InvalidDataException(
-                    "The received OFR2 member identity does not match the authenticated session peer.");
+                    "The received OFR2 member identity/epoch does not match the authenticated session peer.");
             if (report.NamespaceId != _coordinator.NamespaceId)
                 throw new InvalidDataException("The received OFR2 report belongs to another namespace.");
         }
@@ -177,8 +178,9 @@ public sealed class V31NamespaceGcHostOrchestrator
                 NextSequence(authoritySession),
                 ct: cancellationToken).ConfigureAwait(false);
         if (report.MemberNodeId != _coordinator.LocalReplicaId ||
+            report.MemberTransportEpoch != localMember.TransportPeerEpoch ||
             report.RosterGeneration != roster.RosterGeneration)
-            throw new InvalidDataException("The published OFR2 report does not match the accepted local member/roster.");
+            throw new InvalidDataException("The published OFR2 report does not match the accepted local member epoch/roster.");
 
         NamespaceRetentionCheckpoint checkpoint =
             await _coordinator.ReceiveAndAcceptRetentionCheckpointAsync(
