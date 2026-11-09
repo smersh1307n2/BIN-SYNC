@@ -20,6 +20,8 @@ public sealed class FldDatabaseDataProvider :
     private readonly object _gate = new();
     private readonly FldDatabase _database;
     private readonly Func<uint> _activeAuthorEpoch;
+    private readonly Func<ReadOnlyMemory<byte>, RecordId> _recordIdResolver;
+    private readonly Func<ReadOnlyMemory<byte>, ushort> _fieldIdResolver;
     private readonly OutboxLease _outboxLease;
     private readonly Dictionary<Guid, FldProviderSnapshot> _snapshots = new();
     private readonly HashSet<ulong> _snapshotBarriers = new();
@@ -33,10 +35,16 @@ public sealed class FldDatabaseDataProvider :
         return ReferenceEquals(_database, database);
     }
 
-    public FldDatabaseDataProvider(FldDatabase database, Func<uint> activeAuthorEpoch)
+    public FldDatabaseDataProvider(
+        FldDatabase database,
+        Func<uint> activeAuthorEpoch,
+        Func<ReadOnlyMemory<byte>, RecordId>? recordIdResolver = null,
+        Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _activeAuthorEpoch = activeAuthorEpoch ?? throw new ArgumentNullException(nameof(activeAuthorEpoch));
+        _recordIdResolver = recordIdResolver ?? ResolveDirectRecordId;
+        _fieldIdResolver = fieldIdResolver ?? ResolveDirectFieldId;
         Span<byte> owner = stackalloc byte[16];
         Guid.NewGuid().TryWriteBytes(owner);
         _outboxLease = _database.AcquireOutboxLease(owner);
@@ -45,19 +53,15 @@ public sealed class FldDatabaseDataProvider :
     public RecordId ResolveRecordId(ReadOnlyMemory<byte> sourceItemKey)
     {
         EnsureOpen();
-        if (sourceItemKey.Length != 16)
-            throw new ArgumentException("FLD RecordId keys must be exactly 16 bytes.", nameof(sourceItemKey));
-        RecordId id = RecordId.From(sourceItemKey.Span);
-        if (id.IsZero) throw new ArgumentException("FLD RecordId must be non-zero.", nameof(sourceItemKey));
+        RecordId id = _recordIdResolver(sourceItemKey);
+        if (id.IsZero) throw new ArgumentException("Resolved FLD RecordId must be non-zero.", nameof(sourceItemKey));
         return id;
     }
 
     public ushort ResolveFieldId(ReadOnlyMemory<byte> sourceFieldKey)
     {
         EnsureOpen();
-        if (sourceFieldKey.Length != sizeof(ushort))
-            throw new ArgumentException("FLD FieldId keys must be exactly two little-endian bytes.", nameof(sourceFieldKey));
-        ushort fieldId = BinaryPrimitives.ReadUInt16LittleEndian(sourceFieldKey.Span);
+        ushort fieldId = _fieldIdResolver(sourceFieldKey);
         if (fieldId == FldLifecycle.FieldId)
             throw new ArgumentException("The FLD lifecycle field is reserved and is not a user field key.", nameof(sourceFieldKey));
         return fieldId;
@@ -384,6 +388,20 @@ public sealed class FldDatabaseDataProvider :
         foreach (FldProviderSnapshot snapshot in snapshots)
             snapshot.Dispose();
         _database.ReleaseOutboxLease(_outboxLease);
+    }
+
+    private static RecordId ResolveDirectRecordId(ReadOnlyMemory<byte> sourceItemKey)
+    {
+        if (sourceItemKey.Length != 16)
+            throw new ArgumentException("Default FLD RecordId keys must be exactly 16 bytes.", nameof(sourceItemKey));
+        return RecordId.From(sourceItemKey.Span);
+    }
+
+    private static ushort ResolveDirectFieldId(ReadOnlyMemory<byte> sourceFieldKey)
+    {
+        if (sourceFieldKey.Length != sizeof(ushort))
+            throw new ArgumentException("Default FLD FieldId keys must be exactly two little-endian bytes.", nameof(sourceFieldKey));
+        return BinaryPrimitives.ReadUInt16LittleEndian(sourceFieldKey.Span);
     }
 
     private static ProviderMutation? ToLocalMutation(in OutboxEntryView row, uint activeEpoch)
