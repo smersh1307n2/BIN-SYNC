@@ -16,7 +16,7 @@ var relayGate = StorageRelayPublicationGate.For(coordinator);
 IDisposable? AcquireFldLease() => fld.AcquireCommitGuard();
 ```
 
-Keep one `FldDatabase`, one `StorageSyncCoordinator`, one RPM3 map and one shared publication gate per local replica/scope/namespace. Never send directly through a session outside this gate.
+Keep one `FldDatabase`, one `StorageSyncCoordinator`, one RPM3 map and one shared publication gate per local replica/scope/namespace. Never send directly through a session outside this gate. The gate captures the local author's Metadata Store outbound high watermark together with all relay-author RPM3 ceilings under the same composed commit guard; local outbound rows do not have an FLD JournalSeq mapping.
 
 ## Relay page projection
 
@@ -68,7 +68,9 @@ ValueTask<bool> RecoverRelayAsync(CancellationToken cancellationToken) =>
         AcquireFldLease,
         fld.GetRelayJournalHighWatermark,
         ReadRelayPage,
-        async ct => await SendAllReadyOutboundAsync(ct),
+        async (ceilings, ct) =>
+            await adapter.PublishReadyOutboxAsync(
+                session, node, peerStateStore, ceilings, cancellationToken: ct),
         cancellationToken);
 ```
 
@@ -144,3 +146,8 @@ Pass this scanner and `AcquireFldLease` into every BIN-SYNC physical-GC/frontier
 ## Optional source implementation
 
 The guide is now implemented by the optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost). It contains the concrete adapter for relay paging, startup reconciliation, publication ceilings, safe ACK ordering and the FLD reference scanner. The sample remains outside the default BIN-SYNC solution because FLD-DB is a separate checkout; see its README for the canonical shared-Storage project build command. It does not provide a transport implementation or enable physical GC.
+
+
+### Ceiling-aware sender API
+
+The optional host adapter's `PublishReadyOutboxAsync` converts the captured watermark set into a per-author ceiling map and drains the peer session using the new `SyncSession.PushBatchAsync(..., IReadOnlyDictionary<NodeId, ulong> publicationCeilings, ...)` overload. That Core overload filters both local-outbound and relay pages before batch construction and rejects any immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Authors absent from the set and zero-ceiling authors are not eligible. Do not use the legacy ceiling-free overload inside this FLD publication gate.
