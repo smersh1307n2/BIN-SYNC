@@ -35,16 +35,19 @@ FLD checkout as competing type identities.
 
 1. Construct one shared BIN-SYNC `StorageDatabase`, then bind
    `StorageMetadataStore`, `StorageRelayProvenanceMap`, a conforming
-   `IDataProvider` and `StorageSyncCoordinator` to it. **The sample does not yet
-   provide the `FldDatabase`→`IDataProvider` adapter**; this remains a C-pass item.
-   Do not substitute a whole-database in-memory snapshot or a lossy remote-apply
-   mapping.
+   `FldDatabaseDataProvider` and `StorageSyncCoordinator` to it. The adapter
+   supplies stable paged snapshots, FLD Outbox feed, current-state reads, key
+   resolution, published-origin stamping and the shared FLD commit guard. Construct
+   it with the host's durable active-author-epoch resolver. Its context-free
+   `ApplyRemoteBatch` deliberately fails closed; inject the contextual
+   `FldRemoteBatchApplyStore` into the coordinator.
 2. Open one `FldDatabase` for the same namespace. Create exactly one
-   `FldRemoteBatchApplyStore` for that instance, inject that same object into the
-   `StorageSyncCoordinator(remoteBatchCommitStore: fldApply)` constructor argument,
-   and pass it to `FldBinSyncHostAdapter`. The adapter rejects a different FLD
-   database instance or a coordinator that does not use that exact capability.
-   This prevents field state and ApplyJournal receipts from landing in separate DBs.
+   `FldDatabaseDataProvider(fld, activeAuthorEpoch)` and one
+   `FldRemoteBatchApplyStore` for that instance. Construct the coordinator with
+   that exact provider and `remoteBatchCommitStore: fldApply`; pass both exact
+   instances to `FldBinSyncHostAdapter`. The adapter rejects split provider/database
+   or remote-apply identities. This prevents field state, Outbox and ApplyJournal
+   receipts from landing in separate DBs.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
    enabling any sender after process startup. It recovers durable PendingApply
    intents and freezes the local provider feed under the composed coordinator →
@@ -88,8 +91,19 @@ overload from this FLD relay path. Physical GC remains disabled.
 
 ## Explicit implementation boundary
 
-`FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The contextual `IProviderRemoteBatchCommitStore` half is now implemented independently; the remaining bridge is the generation-pinned snapshot/local-feed/key-resolver provider adapter. Do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
+`FldDatabaseDataProvider` now implements the base `IDataProvider` bridge:
+generation-pinned paged snapshots, Outbox-backed local changes, stable RecordId /
+FieldId resolution, current-state reads, published-origin stamping and a shared
+commit guard. It preserves Run v1 identity-zero materialized rows and Run v2
+ChangeId/Origin. It intentionally refuses context-free remote APPLY; the exact
+`FldRemoteBatchApplyStore` must receive the complete authenticated batch context.
 
+The remaining C-pass work is not complete: durable publication-cutover and author-
+epoch-closure capability wiring, FLD-backed FULL_REPLACE receiver staging/atomic
+generation switch, restart-durable prepared FULL_REPLACE source generations, generic
+Storage page/run/WAL physical-format decision, and the host-owned transport/session
+scheduler. The adapter is not yet a complete v3.1 receiver. Physical receipt,
+ChangeId and tombstone/Ghost GC remain disabled until the full cross-store T-pass.
 
 ## v3.1 control-plane round helper
 
