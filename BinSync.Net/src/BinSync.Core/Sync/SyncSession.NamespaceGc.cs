@@ -38,7 +38,7 @@ public partial class SyncSession
     public async Task<AppliedOriginFrontierReport> ReceiveOriginFrontierAsync(
         NamespaceRosterCertificate acceptedRoster, CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.OriginFrontierV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.OriginFrontierV31);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.OriginFrontier, ct)
             .ConfigureAwait(false);
         var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.OriginFrontier);
@@ -50,7 +50,7 @@ public partial class SyncSession
         NamespaceRetentionCheckpoint checkpoint, byte[] authoritySeed, ulong frameSequence = 1,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.OriginFrontierV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.OriginFrontierV31);
         byte[] payload = NamespaceRetentionCheckpointProtocol.Sign(checkpoint, authoritySeed);
         await SendFrameAsync(NamespaceGcFrames.RetentionCheckpoint, SessionWire.ControlStreamId,
             frameSequence, payload, ct).ConfigureAwait(false);
@@ -60,7 +60,7 @@ public partial class SyncSession
         NamespaceRosterCertificate acceptedRoster, TrustStore trustStore,
         CancellationToken ct = default)
     {
-        EnsureV31Capability(SessionCapabilities.OriginFrontierV31);
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.OriginFrontierV31);
         ArgumentNullException.ThrowIfNull(trustStore);
         byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.RetentionCheckpoint, ct)
             .ConfigureAwait(false);
