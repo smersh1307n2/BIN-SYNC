@@ -259,6 +259,8 @@ public sealed class StorageRelayProvenanceMap
                     ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
                     byte[] changeId = row.Value.AsSpan(8, ChangeIdLength).ToArray();
                     BatchId changeIdentity = BatchId.From(changeId);
+                    if (changeIdentity.IsZero)
+                        throw new InvalidDataException("Persisted relay provenance contains a zero ChangeId.");
                     if (!state.ChangeIds.Add(changeIdentity))
                         throw new InvalidDataException("A ChangeId is mapped more than once in one author stream.");
                     if (journalSeq <= state.AckedThroughJournalSeq ||
