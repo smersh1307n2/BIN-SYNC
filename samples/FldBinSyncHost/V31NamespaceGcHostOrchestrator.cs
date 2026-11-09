@@ -221,6 +221,9 @@ public sealed class V31NamespaceGcHostOrchestrator
         {
             ArgumentNullException.ThrowIfNull(authorityProvider);
             ArgumentNullException.ThrowIfNull(memberSession);
+            if (authorityProvider is not IProviderFullReplace)
+                throw new NotSupportedException(
+                    "The authority provider must expose the durable IProviderFullReplace capability.");
             ArgumentNullException.ThrowIfNull(gcStore);
             ArgumentNullException.ThrowIfNull(trustStore);
             ArgumentNullException.ThrowIfNull(authoritySeed);
@@ -358,8 +361,6 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
             if (fullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
                 throw new ArgumentException("FULL_REPLACE digest must be 32 bytes.", nameof(fullReplaceDigest));
-            if (authoritySeed.Length != 32)
-                throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
             EnsureNamespaceGcBinding(gcStore, trustStore);
 
             if (!gcStore.TryReadNamespaceRoster(
@@ -470,16 +471,28 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// <summary>Retry broadcasting the currently accepted signed roster without changing its generation.</summary>
     public async Task BroadcastAcceptedRosterAsync(
         IReadOnlyList<SyncSession> memberSessions,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
         byte[] authoritySeed,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
         ArgumentNullException.ThrowIfNull(authoritySeed);
         if (authoritySeed.Length != 32)
             throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
         await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+            if (!gcStore.TryReadNamespaceRoster(
+                    _coordinator.NamespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            if (roster.AuthorityNodeId != _coordinator.LocalReplicaId)
+                throw new InvalidOperationException("Only the local namespace authority may broadcast the accepted roster.");
             SyncSession[] sessions = ValidateSessions(memberSessions);
+            ValidateCompleteRosterSessionSet(roster, sessions);
             await BroadcastAcceptedRosterCoreAsync(
                 sessions, authoritySeed, cancellationToken).ConfigureAwait(false);
         }
