@@ -10,6 +10,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.34. C-pass: public API guide aligned with negotiated v3.1 code — 2026-11-09
+
+- [x C] Updated `docs/PUBLIC-API.md`: v3.1 roster/frontier/checkpoint/FULL_REPLACE are no longer described as merely proposed; the guide now distinguishes the v3.1 negotiated extension from the v3.0 wire baseline and keeps physical GC disabled.
+- [x C] Documented `StorageRelayProvenanceMap` RPM2 and the host-owned coordinator lifecycle/broadcast surface; linked the orchestration and FLD integration contracts.
+- [~ T] Reconcile this guide against the compiled public API XML and exact-head build during T; no API docs are considered release-final before compilation.
+
 ## 0.32. Recovery checkpoint branch created — 2026-11-09
 
 - [x C] Created `backup/pre-provenance-checksum-and-control-plane-2026-11-09` at `4026a741b8e19a0d82fe25e4c87fd47cf481852c` before continuing the C pass. Existing earlier backup branches remain intact.
