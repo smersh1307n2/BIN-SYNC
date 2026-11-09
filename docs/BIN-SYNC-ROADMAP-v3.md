@@ -1660,3 +1660,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created `backup/cpass-2026-11-09-storage-streaming` at `7b77065bd2904943585e254d3368c99fb01a1b85`.
 - [~ T] Add cursor-boundary, visitor-stop, snapshot-lifetime, >100k feed ACK, crash-between-ACK-pages, partition-reopen and exact FLD/BIN byte-parity tests. No tests were run in this C-pass.
 - [~ O] Measure snapshot open allocations, metadata partition reopen peak memory, provider ACK throughput and map recovery allocations; the sorted key index remains O(number of keys), not O(page).
+
+
+## 0.90. C-pass: zero-copy single-entry cursor and provider snapshot merge — 2026-11-09
+
+- [x C] `StorageSnapshot.PrefixCursor.TryReadNext(out StorageEntryView)` exposes one borrowed row without allocating a page, `StorageEntry` or key/value arrays. `VisitPage` is now built on this primitive; FLD authoritative source and BIN vendor remain byte-identical (blob `a28cd58fbb72a1453a3ffb04a1ab1d5ed43ddaa1`).
+- [x C] `StorageDataProvider.ProviderSnapshotState` now merges field/tombstone snapshot streams by decoding one borrowed row per cursor, removing two 1,024-row copied page buffers and the per-row `StorageEntry` copies.
+- [x C] Added span-based generation-key validation for the borrowed row path.
+- [x C] Created `backup/cpass-2026-11-09-provider-snapshot-streaming` at `7c8e160352c08756721a278dac25c63e90e8b541`.
+- [~ T] Verify merge ordering, Reset/absolute-offset behavior, cursor exhaustion/disposal, record-tombstone ordering and snapshot lifetime while commits/checkpoints advance.
+- [~ O] Benchmark snapshot sender allocations and throughput at 1k/100k/1m rows; compare against prior page-buffer implementation before claiming improvement.
