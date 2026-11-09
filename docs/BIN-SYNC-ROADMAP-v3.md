@@ -1632,3 +1632,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created `backup/cpass-2026-11-09-publication-ceilings` in BIN-SYNC at `701077ed9a13ce476aaa1e679d9c17f16f0ced5f`.
 - [x C] Created the matching FLD-DB backup branch at `01617ecaa06fef4bd4ec16e913f24ffd449158ae`.
 - [~ T] These branches preserve the current unvalidated code/API state. They are recovery points, not green baselines.
+
+
+## 0.87. C-pass: validate map ownership before every relay gate entry — 2026-11-09
+
+- [x C] Added `StorageSyncCoordinator.ValidateRelayProvenanceMap` to fail closed unless the RPM3 map matches the coordinator's metadata scope, local replica and exact durable StorageDatabase.
+- [x C] Applied this validation to APPLY/publication, startup recovery, single/all-author ACK and `RunOutboundAsync`. The no-author case can no longer bypass ownership checks and emit a misleading empty/foreign ceiling set.
+- [x C] Created recovery branch `backup/cpass-2026-11-09-publication-ceilings-v2` at `0f46e444529b77997ce1ba190838de3c4f4ecb6d`.
+- [~ T] Add wrong-scope, wrong-replica, different-StorageDatabase and empty-author-list rejection tests; migrate all callback call sites to the new ceiling-bearing API. No tests have been run for this C-pass.
