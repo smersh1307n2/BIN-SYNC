@@ -109,7 +109,7 @@ public sealed class V31NamespaceGcHostOrchestrator
         // object instead of creating a new checkpoint sequence.
         NamespaceRetentionCheckpoint checkpoint = _coordinator.PublishRetentionCheckpoint(
             authoritySeed, fullReplaceGeneration, fullReplaceDigest);
-        await BroadcastAcceptedCheckpointAsync(
+        await BroadcastAcceptedCheckpointCoreAsync(
             sessions, checkpoint, authoritySeed, cancellationToken).ConfigureAwait(false);
         return checkpoint;
         }
@@ -130,12 +130,30 @@ public sealed class V31NamespaceGcHostOrchestrator
         byte[] authoritySeed,
         CancellationToken cancellationToken = default)
     {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            SyncSession[] sessions = ValidateSessions(memberSessions);
+            await BroadcastAcceptedCheckpointCoreAsync(
+                sessions, checkpoint, authoritySeed, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    private async Task BroadcastAcceptedCheckpointCoreAsync(
+        IReadOnlyList<SyncSession> sessions,
+        NamespaceRetentionCheckpoint checkpoint,
+        byte[] authoritySeed,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(checkpoint);
         ArgumentNullException.ThrowIfNull(authoritySeed);
         if (authoritySeed.Length != 32)
             throw new ArgumentException("Ed25519 authority seed must be 32 bytes.", nameof(authoritySeed));
 
-        SyncSession[] sessions = ValidateSessions(memberSessions);
         foreach (SyncSession session in sessions)
         {
             await _coordinator.SendAcceptedRetentionCheckpointAsync(
