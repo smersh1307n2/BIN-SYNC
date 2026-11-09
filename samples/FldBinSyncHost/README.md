@@ -81,8 +81,10 @@ FLD checkout as competing type identities.
 
 7. Use `FldBinSyncSessionScheduler` for one receive owner per `SyncSession`,
    serialized outbound sends, one shared ceiling set per namespace fanout round,
-   and optional periodic outbound cadence. Run one `RunInboundLoopAsync` per
-   session and one `RunPeriodicOutboundAsync` for the namespace. The application
+   and optional periodic outbound cadence. Both outbound entry points freeze the local
+   provider feed through the supplied `persistNode` callback before capturing ceilings.
+   Run one `RunInboundLoopAsync` per session and one `RunPeriodicOutboundAsync` for
+   the namespace. The application
    still creates/reconnects/disposes transports and `SyncSession` instances.
 
 This sample binds the durable contracts, lock order and bounded sender path. The
