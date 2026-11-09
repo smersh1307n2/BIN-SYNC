@@ -45,7 +45,7 @@ The 45-byte ChangeId ledger value is: fingerprint[16] + author NodeId[16] + auth
 
 The 16-byte stream watermark is acknowledged sequence[8] + high watermark[8]. Decoder-only split-row kinds 6/9 and 8-byte ACK/high-watermark values are rejected; current writers emit only the canonical combined kind 5/8 rows. The 24-byte lease value is generation[8] + consumer Guid[16].
 
-The 46-byte peer stream base value is version[1] + ACK cursor[8] + pushed cursor[8] + stream offset[8] + issuer epoch[4] + last digest[16] + pending-present flag[1]. A pending batch adds 80 fixed bytes plus its encoded payload.
+The 46-byte peer stream base value is version[1] + ACK cursor[8] + pushed cursor[8] + stream offset[8] + issuer epoch[4] + last digest[16] + pending-present flag[1]. A pending batch adds 80 fixed bytes plus its encoded payload. `AcknowledgeOutboundBatch` clears this embedded reservation and advances ACK/digest in one atomic rewrite of the same row; there is no separate reservation row to delete.
 
 ### PendingApply dynamic value formula
 
