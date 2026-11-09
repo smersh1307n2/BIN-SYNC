@@ -1965,7 +1965,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 ## 1.23. C-pass: add host-owned multi-session send/receive scheduling — 2026-11-09
 
 - [x C] Added `FldBinSyncSessionScheduler`: one receive owner per session, serialized sends per session, concurrent fanout across peers and one captured publication-ceiling set shared by every peer in a namespace round.
-- [x C] Added one-shot receive/apply/publish, continuous inbound loop and host-cadence periodic outbound loop. A false publication-gate result stops the receive loop so the host can run reconciliation/recovery rather than silently continuing.
+- [x C] Added one-shot receive/apply/publish, continuous inbound loop and host-cadence periodic outbound loop. Both outbound paths freeze the provider local feed through the supplied Node persistence callback before capturing publication ceilings. A false publication-gate result stops the receive loop so the host can run reconciliation/recovery rather than silently continuing.
 - [x C] Scheduler shutdown clears its gate registry without disposing semaphores still held by active duplex callbacks; lock-order inversion during receive-triggered fanout is avoided.
 - [~ C] Application still owns transport/session creation, reconnection policy and final `SyncSession` disposal. Generic Storage page/run/WAL physical-format decision and durable FULL_REPLACE sender restart recovery remain open.
 - [~ T] Validate one-reader-per-session, concurrent duplex send/receive, multi-peer ceiling consistency, failure retry, cancellation and scheduler shutdown with exact-head sample tests. No build/test result is claimed.
