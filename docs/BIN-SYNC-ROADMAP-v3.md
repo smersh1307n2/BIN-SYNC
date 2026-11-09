@@ -1464,3 +1464,9 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] The supported solution surface is now `Fld1.Database` + `Fld1.Storage`; tests and benchmarks target Database, Storage-only tests/consumers target Storage.
 - [~ T] The physical consolidation has not yet passed exact-head three-OS CI. Continue to treat the FLD project graph as unverified until build/test succeeds.
 - [~ C] With the physical project boundary now established, resume the concrete host integration: complete-JournalSeq relay read, resolver/map append, immutable downstream publication, safe ACK translation, durable FLD ACK, RPM3 prune, and reference-snapshot scanner lease.
+
+### 2026-11-09 — Recovery point after relay cursor hardening
+
+- [x C] Created `backup/cpass-2026-11-09-after-relay-guards` at `7342dc7f8634d64b8911d0ab4ff93f4750127f97` before the next host-adapter/control-plane changes. Earlier `backup/pre-rpm3-compact-provenance-2026-11-09` remains intact.
+- [x C] Relay resolver now rejects first JournalSeq at/below the durable scan cursor before array allocation; same-JournalSeq entries remain valid within a page.
+- [~ T] Exact-head CI remains red on the previously observed 6 Core + 80 Storage Integration stale-fixture failures. Continue the C-pass without weakening validation; T-pass remains a separate gate.
