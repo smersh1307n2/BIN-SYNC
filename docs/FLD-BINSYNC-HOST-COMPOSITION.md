@@ -12,7 +12,12 @@ var metadata = new StorageMetadataStore(syncStorage);
 var map = new StorageRelayProvenanceMap(syncStorage, scopeId, localReplica);
 var coordinator = new StorageSyncCoordinator(node, provider, namespaceId, metadata, scopeId);
 var relayGate = StorageRelayPublicationGate.For(coordinator);
-var adapter = new FldBinSyncHostAdapter(fld, coordinator, map, scopeId);
+var fldApply = new FldRemoteBatchApplyStore(fld);
+var coordinator = new StorageSyncCoordinator(
+    node, fldDataProvider, namespaceId, metadataStore, scopeId,
+    remoteBatchCommitStore: fldApply);
+var adapter = new FldBinSyncHostAdapter(
+    fld, coordinator, map, scopeId, fldApply);
 
 IDisposable? AcquireFldLease() => fld.AcquireCommitGuard();
 ```
@@ -173,3 +178,6 @@ Do not mistake this capability for a full `IDataProvider` implementation. The ge
 ### Separate remote-apply capability injection
 
 The `StorageSyncCoordinator` constructor's optional `remoteBatchCommitStore` argument lets the host supply `FldRemoteBatchApplyStore` independently of the `IDataProvider` implementation. This avoids forcing a composite/decorator object to implement both contracts. The two objects must target the same FLD database and the same composed FLD commit lease; mismatched storage targets would split field state and apply receipts and are invalid. The base provider fallback remains unchanged when no separate capability is supplied.
+
+
+`FldRemoteBatchApplyStore` is an external host adapter; it preserves the full incoming batch header for `FldDatabase.ApplyRemoteBatch` and is not `IDataProvider`. Pass the exact same instance as `remoteBatchCommitStore` to `StorageSyncCoordinator` and to `FldBinSyncHostAdapter`; the latter rejects a mismatched instance/database. For normal inbound traffic use `ReceiveAndPublishAllAsync`, which routes through `ReceiveBatchBeforeAckAsync` so contextual FLD apply and receipt finalization complete before the sender is ACKed.
