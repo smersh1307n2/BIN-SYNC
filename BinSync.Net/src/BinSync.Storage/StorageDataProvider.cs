@@ -1148,12 +1148,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 if (high != acked)
                     throw new InvalidOperationException("Unpublished local provider changes block tombstone GC.");
 
-                foreach (StorageEntry sessionRow in snapshot.ScanPrefix(
-                    [FullReplaceSession], ReadOnlySpan<byte>.Empty, int.MaxValue))
+                using (StorageSnapshot.PrefixCursor sessionCursor =
+                    snapshot.OpenPrefixCursor([FullReplaceSession]))
                 {
-                    FullReplaceState staging = DecodeFullReplaceState(sessionRow.Value);
-                    if (!staging.IsCommitted)
-                        throw new InvalidOperationException("An uncommitted FULL_REPLACE staging generation blocks tombstone GC.");
+                    while (sessionCursor.VisitPage(256, ValidateCommittedFullReplaceSession) == 256)
+                    {
+                    }
                 }
 
                 byte[] tombstonePrefix = CurrentPrefix(CurrentRecordTombstone, activeGeneration);
@@ -1558,6 +1558,14 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             foreach (var row in page) yield return row;
             if (page.Count < pageSize) yield break;
         }
+    }
+
+    private static bool ValidateCommittedFullReplaceSession(in StorageEntryView row)
+    {
+        FullReplaceState staging = DecodeFullReplaceState(row.Value);
+        if (!staging.IsCommitted)
+            throw new InvalidOperationException("An uncommitted FULL_REPLACE staging generation blocks tombstone GC.");
+        return true;
     }
 
     private static byte[] FullReplaceSessionKey(Guid generation)
