@@ -10,6 +10,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.41. C-pass: FLD target API names not misrepresented as current — 2026-11-09
+
+- [x C] Clarified in §9.5 that `ReadRelayBatchPage`, `AcknowledgeRelayBatches` and the ChangeId resolver are target neutral semantic API names, not APIs already exposed by the current pre-extraction FLD branch.
+- [x C] The §9.6 sequencing gate remains controlling; the integration contract is a design target, not an implementation claim.
+
 ## 0.40. C-pass: source page boundaries made explicit — 2026-11-09
 
 - [x C] The map API and FLD integration contract now require relay pages to end on whole JournalSeq boundaries. A journal transaction with multiple ChangeIds cannot be split across pages; the scanned-through cursor means all source journals up to that boundary were examined.
