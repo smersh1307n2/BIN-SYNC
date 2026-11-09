@@ -18,12 +18,47 @@ public static class StorageFullReplaceSender
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        ProviderSnapshotHandle snapshot = provider.OpenSnapshot();
+        try
+        {
+            return await SendSnapshotAsync(
+                provider, snapshot, session, gcStore, trustStore, roster,
+                authorityNodeId, generation, authoritySeed, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            provider.ReleaseSnapshot(snapshot.Token);
+        }
+    }
+
+    /// <summary>
+    /// Transfer an already-open immutable provider snapshot. Hosts sending one
+    /// generation to several members should share this handle so every recipient
+    /// receives exactly the same ChangeFeedWatermark, entry count and digest even
+    /// while the live provider continues accepting later writes.
+    /// The caller owns and must release the snapshot handle.
+    /// </summary>
+    public static async Task<FullReplaceInstalledAck> SendSnapshotAsync(
+        IDataProvider provider,
+        ProviderSnapshotHandle snapshot,
+        SyncSession session,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        Guid generation,
+        byte[] authoritySeed,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(trustStore);
         ArgumentNullException.ThrowIfNull(roster);
         ArgumentNullException.ThrowIfNull(authoritySeed);
-        if (generation == Guid.Empty) throw new ArgumentException("FULL_REPLACE generation must be non-empty.", nameof(generation));
+        if (generation == Guid.Empty)
+            throw new ArgumentException("FULL_REPLACE generation must be non-empty.", nameof(generation));
         if (authorityNodeId.IsZero || authoritySeed.Length != 32)
             throw new ArgumentException("Namespace authority identity and Ed25519 seed are required.");
 
@@ -42,78 +77,70 @@ public static class StorageFullReplaceSender
             target.TransportPeerEpoch != checked((uint)session.PeerEpoch))
             throw new InvalidDataException("FULL_REPLACE target is retired or its transport epoch does not match the roster.");
 
-        ProviderSnapshotHandle snapshot = provider.OpenSnapshot();
-        try
+        byte[] digest;
+        int entryCount;
+        using (var builder = new ProviderFullReplaceDigestBuilder(generation, snapshot.ChangeFeedWatermark))
         {
-            byte[] digest;
-            int entryCount;
-            using (var builder = new ProviderFullReplaceDigestBuilder(generation, snapshot.ChangeFeedWatermark))
-            {
-                int index = 0;
-                while (true)
-                {
-                    ProviderSnapshotPage page = provider.ReadSnapshot(
-                        snapshot.Token, index, FullReplaceTransferProtocol.MaxChunkEntries);
-                    ValidatePage(page, index, FullReplaceTransferProtocol.MaxChunkEntries);
-                    builder.AppendPage(page.Entries);
-                    index = page.NextIndex;
-                    if (page.IsComplete) break;
-                }
-                entryCount = builder.EntryCount;
-                digest = builder.Complete();
-            }
-
-            var unsignedManifest = new FullReplaceTransferProtocol.Begin(
-                roster.NamespaceId, generation, roster.RosterGeneration,
-                NamespaceRosterProtocol.ComputeDigest(roster), snapshot.ChangeFeedWatermark,
-                entryCount, digest, Array.Empty<byte>());
-            FullReplaceTransferProtocol.Begin manifest =
-                FullReplaceTransferProtocol.SignBegin(unsignedManifest, authoritySeed);
-            FullReplaceTransferProtocol.VerifyBegin(manifest, roster, trustStore);
-
-            await session.SendFullReplaceBeginAsync(manifest, frameSequence: 1, ct).ConfigureAwait(false);
-            FullReplaceTransferProtocol.Progress progress =
-                await session.ReceiveFullReplaceReadyAsync(roster.NamespaceId,
-                    expectedFrameSequence: 1, ct).ConfigureAwait(false);
-            ValidateProgress(progress, manifest);
-
-            int nextIndex = progress.NextIndex;
-            ulong frameSequence = progress.NextFrameSequence;
-            while (nextIndex < entryCount)
+            int index = 0;
+            while (true)
             {
                 ProviderSnapshotPage page = provider.ReadSnapshot(
-                    snapshot.Token, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
-                ValidatePage(page, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
-                if (page.Entries.Count == 0 || page.NextIndex > entryCount ||
-                    page.IsComplete != (page.NextIndex == entryCount))
-                    throw new InvalidDataException("Provider snapshot changed or ended before the signed entry count.");
-                await session.SendFullReplaceChunkAsync(
-                    new FullReplaceTransferProtocol.Chunk(roster.NamespaceId, generation, nextIndex, page.Entries),
-                    frameSequence, ct).ConfigureAwait(false);
-                nextIndex = page.NextIndex;
-                frameSequence = checked(frameSequence + 1);
+                    snapshot.Token, index, FullReplaceTransferProtocol.MaxChunkEntries);
+                ValidatePage(page, index, FullReplaceTransferProtocol.MaxChunkEntries);
+                builder.AppendPage(page.Entries);
+                index = page.NextIndex;
+                if (page.IsComplete) break;
             }
-
-            await session.SendFullReplaceCommitAsync(
-                new FullReplaceTransferProtocol.TransferId(roster.NamespaceId, generation),
-                frameSequence, ct).ConfigureAwait(false);
-
-            FullReplaceInstalledAck acknowledgement =
-                await session.ReceiveFullReplaceInstalledAckAsync(roster, ct).ConfigureAwait(false);
-            if (acknowledgement.Generation != generation ||
-                !acknowledgement.Digest.AsSpan().SequenceEqual(digest) ||
-                acknowledgement.MemberNodeId != session.PeerNodeId ||
-                acknowledgement.MemberTransportEpoch != checked((uint)session.PeerEpoch))
-                throw new InvalidDataException("FULL_REPLACE installed ACK does not match the target, generation or digest.");
-
-            gcStore.AcceptFullReplaceInstalledAck(
-                FullReplaceInstalledAckProtocol.EncodeSigned(acknowledgement), roster);
-            return acknowledgement;
+            entryCount = builder.EntryCount;
+            digest = builder.Complete();
         }
-        finally
+
+        var unsignedManifest = new FullReplaceTransferProtocol.Begin(
+            roster.NamespaceId, generation, roster.RosterGeneration,
+            NamespaceRosterProtocol.ComputeDigest(roster), snapshot.ChangeFeedWatermark,
+            entryCount, digest, Array.Empty<byte>());
+        FullReplaceTransferProtocol.Begin manifest =
+            FullReplaceTransferProtocol.SignBegin(unsignedManifest, authoritySeed);
+        FullReplaceTransferProtocol.VerifyBegin(manifest, roster, trustStore);
+
+        await session.SendFullReplaceBeginAsync(manifest, frameSequence: 1, ct).ConfigureAwait(false);
+        FullReplaceTransferProtocol.Progress progress =
+            await session.ReceiveFullReplaceReadyAsync(roster.NamespaceId,
+                expectedFrameSequence: 1, ct).ConfigureAwait(false);
+        ValidateProgress(progress, manifest);
+
+        int nextIndex = progress.NextIndex;
+        ulong frameSequence = progress.NextFrameSequence;
+        while (nextIndex < entryCount)
         {
-            provider.ReleaseSnapshot(snapshot.Token);
+            ProviderSnapshotPage page = provider.ReadSnapshot(
+                snapshot.Token, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
+            ValidatePage(page, nextIndex, FullReplaceTransferProtocol.MaxChunkEntries);
+            if (page.Entries.Count == 0 || page.NextIndex > entryCount ||
+                page.IsComplete != (page.NextIndex == entryCount))
+                throw new InvalidDataException("Provider snapshot changed or ended before the signed entry count.");
+            await session.SendFullReplaceChunkAsync(
+                new FullReplaceTransferProtocol.Chunk(roster.NamespaceId, generation, nextIndex, page.Entries),
+                frameSequence, ct).ConfigureAwait(false);
+            nextIndex = page.NextIndex;
+            frameSequence = checked(frameSequence + 1);
         }
+
+        await session.SendFullReplaceCommitAsync(
+            new FullReplaceTransferProtocol.TransferId(roster.NamespaceId, generation),
+            frameSequence, ct).ConfigureAwait(false);
+
+        FullReplaceInstalledAck acknowledgement =
+            await session.ReceiveFullReplaceInstalledAckAsync(roster, ct).ConfigureAwait(false);
+        if (acknowledgement.Generation != generation ||
+            !acknowledgement.Digest.AsSpan().SequenceEqual(digest) ||
+            acknowledgement.MemberNodeId != session.PeerNodeId ||
+            acknowledgement.MemberTransportEpoch != checked((uint)session.PeerEpoch))
+            throw new InvalidDataException("FULL_REPLACE installed ACK does not match the target, generation or digest.");
+
+        gcStore.AcceptFullReplaceInstalledAck(
+            FullReplaceInstalledAckProtocol.EncodeSigned(acknowledgement), roster);
+        return acknowledgement;
     }
 
     private static void ValidatePage(ProviderSnapshotPage page, int expectedStart, int limit)
