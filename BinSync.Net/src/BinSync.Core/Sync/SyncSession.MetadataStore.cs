@@ -125,7 +125,8 @@ public partial class SyncSession
                     {
                         var first = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
                             PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 1);
-                        if (first.Items.Count == 0) continue;
+                        if (first.Items.Count == 0 ||
+                            first.Items[0].Sequence > candidateCeiling) continue;
                         firstSequence = first.Items[0].Sequence;
                     }
 
