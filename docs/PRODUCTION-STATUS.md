@@ -1,5 +1,11 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+## C-pass continuation update — 2026-11-10
+
+- Latest production-code slice: `47be8895046662a06481ac097229c59e2cb2ed47` hardens durable OFR2 acceptance so a member cannot lower or omit a previously reported issued-origin epoch, issued sequence, or maximum HLC while keeping its applied-origin vector monotonic.
+- Roadmap progress recorded in `d180a33dd2a18292b2ed823c842e0c693d4c57f2`.
+- This is implementation-only C-pass work. No tests/build were run for this slice; historical CI evidence below does not validate it. Receipt, ChangeId and tombstone/Ghost physical GC remain disabled.
+
 ## Current continuation checkpoint — 2026-11-09
 
 - BIN-SYNC `feature/fld-external-storage` latest C-pass source head: `73571b8210bf67ad7e53ba6f29bf6aa4c1056043`; latest roadmap commit: `a37c4a0bbd61c756539cbba8dca87afa9db67a2d`. The optional FLD host provider now implements the full `IProviderFullReplace` receiver capability: durable staged pages, canonical digest re-read/verification and atomic FLD namespace generation switch. Durable sender-side FULL_REPLACE snapshot persistence/restart recovery is also implemented. This is C-pass source, not a validated release.
