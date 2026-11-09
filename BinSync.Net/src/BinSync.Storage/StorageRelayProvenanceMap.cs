@@ -87,7 +87,7 @@ public sealed class StorageRelayProvenanceMap
     {
         ValidateNamespaceId(namespaceId);
         byte[] prefix = Join(_root, CursorNamespacePrefix(namespaceId));
-        var authors = new SortedDictionary<string, NodeId>(StringComparer.Ordinal);
+        var authors = new List<NodeId>();
         using var snapshot = _storage.OpenSnapshot();
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
         const int pageSize = 1024;
@@ -101,12 +101,13 @@ public sealed class StorageRelayProvenanceMap
                 NodeId author = NodeId.From(row.Key.AsSpan(RootLength + 3, 16));
                 if (author.IsZero)
                     throw new InvalidDataException("RPM3 cursor contains a zero author identity.");
-                authors.TryAdd(author.ToString(), author);
+                authors.Add(author);
             }
             if (page.Count < pageSize)
                 break;
         }
-        return authors.Values.ToArray();
+        authors.Sort(NodeIdCanonicalComparer.Instance);
+        return authors.ToArray();
     }
 
     public StorageRelayProvenanceCursor ReadCursor(int namespaceId, NodeId author)
