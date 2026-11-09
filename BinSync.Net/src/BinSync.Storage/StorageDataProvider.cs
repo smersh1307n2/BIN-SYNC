@@ -26,6 +26,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private const byte ClosedAuthorEpoch = 0x27;
     private const byte ClosedAuthorIdentity = 0x28;
     private const byte ActiveAuthorEpoch = 0x29;
+    private const byte RetiredFinalAuthorEpoch = 0x2A;
     private const byte ActiveGeneration = 0x26;
     private const byte FullReplaceSession = 0x41;
     private const byte ApplyReceipt = 0x30;
@@ -34,7 +35,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
          LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
          ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt, ClosedAuthorEpoch,
-         ClosedAuthorIdentity, ActiveAuthorEpoch];
+         ClosedAuthorIdentity, ActiveAuthorEpoch, RetiredFinalAuthorEpoch];
 
     private readonly object _gate;
     private readonly StorageDatabase _storage;
@@ -335,8 +336,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         }
     }
 
-    public void CloseLocalAuthorIdentity()
+    public void CloseLocalAuthorIdentity(uint finalAuthorEpoch)
     {
+        if (finalAuthorEpoch == 0) throw new ArgumentOutOfRangeException(nameof(finalAuthorEpoch));
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -344,16 +346,22 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             {
                 if (_storage.TryGet(ActiveAuthorEpochKey(), out _))
                     throw new InvalidDataException("Retired author identity unexpectedly retains an active epoch marker.");
+                if (!_storage.TryGet(RetiredFinalAuthorEpochKey(), out byte[]? retiredEpochBytes) ||
+                    retiredEpochBytes!.Length != 4 ||
+                    BinaryPrimitives.ReadUInt32LittleEndian(retiredEpochBytes) != finalAuthorEpoch)
+                    throw new InvalidOperationException("Retried terminal retirement must name the exact previously retired final author epoch.");
                 return;
             }
-            if (_storage.TryGet(ActiveAuthorEpochKey(), out byte[]? activeEpochBytes))
-            {
-                if (activeEpochBytes!.Length != 4)
-                    throw new InvalidDataException("Active author epoch marker is malformed.");
-                uint activeEpoch = BinaryPrimitives.ReadUInt32LittleEndian(activeEpochBytes);
-                if (!_storage.TryGet(ClosedAuthorEpochKey(activeEpoch), out _))
-                    throw new InvalidOperationException("The active author epoch must be durably closed before retiring the author identity.");
-            }
+
+            if (!_storage.TryGet(ActiveAuthorEpochKey(), out byte[]? activeEpochBytes) ||
+                activeEpochBytes!.Length != 4)
+                throw new InvalidDataException("Active author identity is missing or has a malformed epoch marker.");
+            uint activeEpoch = BinaryPrimitives.ReadUInt32LittleEndian(activeEpochBytes);
+            if (activeEpoch != finalAuthorEpoch)
+                throw new InvalidOperationException("Final author report epoch does not match the provider's active author epoch.");
+            if (!_storage.TryGet(ClosedAuthorEpochKey(activeEpoch), out _))
+                throw new InvalidOperationException("The active author epoch must be durably closed before retiring the author identity.");
+
             using StorageSnapshot snapshot = _storage.OpenSnapshot();
             using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Prefixed(LocalChange, ReadOnlySpan<byte>.Empty));
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(1);
@@ -361,10 +369,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new InvalidOperationException("Cannot retire the local author identity while provider feed drafts remain.");
             using var batch = _storage.BeginWriteBatch();
             batch.Put(ClosedAuthorIdentityKey(), Array.Empty<byte>());
+            batch.Put(RetiredFinalAuthorEpochKey(), EncodeUInt32(finalAuthorEpoch));
             batch.Delete(ActiveAuthorEpochKey());
             batch.Commit();
         }
     }
+
 
     public void ActivateLocalAuthorEpoch(uint authorEpoch)
     {
@@ -1614,6 +1624,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static byte[] ClosedAuthorIdentityKey() => [ClosedAuthorIdentity];
 
     private static byte[] ActiveAuthorEpochKey() => [ActiveAuthorEpoch];
+
+    private static byte[] RetiredFinalAuthorEpochKey() => [RetiredFinalAuthorEpoch];
 
     private static byte[] EncodeUInt32(uint value)
     {
