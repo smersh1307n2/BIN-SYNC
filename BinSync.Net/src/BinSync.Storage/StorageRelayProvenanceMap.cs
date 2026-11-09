@@ -244,7 +244,6 @@ public sealed class StorageRelayProvenanceMap
         if (cursors.Count == 1)
             DecodeCursor(cursors[0].Value, state);
 
-        var loadedChangeIds = new HashSet<BatchId>();
         using (StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Join(_root, MappingPrefix(namespaceId, author))))
         {
             const int pageSize = 1024;
@@ -260,7 +259,7 @@ public sealed class StorageRelayProvenanceMap
                     ulong journalSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
                     byte[] changeId = row.Value.AsSpan(8, ChangeIdLength).ToArray();
                     BatchId changeIdentity = BatchId.From(changeId);
-                    if (!loadedChangeIds.Add(changeIdentity))
+                    if (!state.ChangeIds.Add(changeIdentity))
                         throw new InvalidDataException("A ChangeId is mapped more than once in one author stream.");
                     if (journalSeq <= state.AckedThroughJournalSeq ||
                         journalSeq > state.ScannedThroughJournalSeq ||
@@ -270,7 +269,6 @@ public sealed class StorageRelayProvenanceMap
                              journalSeq < state.Mappings[^1].JournalSeq)))
                         throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
                     state.Mappings.Add(new Mapping(journalSeq, changeIdentity, outboxSeq));
-                    state.ChangeIds.Add(changeIdentity);
                 }
                 if (page.Count < pageSize) break;
             }
