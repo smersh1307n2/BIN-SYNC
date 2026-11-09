@@ -56,6 +56,31 @@ NamespaceRetentionCheckpoint checkpoint =
 
 The host should schedule another round only after the prior per-session control exchange has completed or been explicitly cancelled/retried.
 
+## 3.1 One FULL_REPLACE generation across all recipients
+
+When the authority must install one generation on every non-retired remote roster member, use `V31NamespaceGcHostOrchestrator.TransferFullReplaceToMembersAsync`. It validates the complete session set, sends the accepted roster, captures one immutable provider snapshot, computes/signs one manifest and streams that exact source generation to each recipient. Do not call the old one-recipient `TransferFullReplaceToMemberAsync` repeatedly when the recipients must share one digest: each standalone call opens its own source snapshot.
+
+For a large fanout with partial failures, split preparation from transfer:
+
+```csharp
+using PreparedFullReplaceSnapshot prepared =
+    orchestrator.PrepareFullReplaceSnapshot(
+        authorityProvider, gcStore, trustStore, authoritySeed, generation);
+
+foreach (SyncSession missingRecipient in recipientsStillNeedingInstall)
+{
+    await orchestrator.TransferPreparedFullReplaceToMemberAsync(
+        prepared, missingRecipient, gcStore, trustStore, authoritySeed,
+        cancellationToken);
+}
+
+// Bind the exact shared generation and digest into the next RCP2 only
+// after all required installed acknowledgements have been durably accepted.
+NamespaceRetentionCheckpoint checkpoint = coordinator.PublishRetentionCheckpoint(
+    authoritySeed, prepared.Generation, prepared.Digest);
+```
+
+Keep `prepared` alive until the intended recipient set is complete or the generation is abandoned. The prepared token is an in-process immutable snapshot lease; it is not a durable restart token. After process loss, do not reconstruct the same generation from a newer live provider state. A crash-resumable source generation requires a durable provider snapshot capability and remains a C-pass item.
 ## 3. Joining member and FULL_REPLACE activation
 
 1. Authority publishes a roster with the new member in Joining state and sends it.
