@@ -158,6 +158,8 @@ public sealed class StorageSyncCoordinator
                 "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
         if (originalAuthor.IsZero)
             throw new ArgumentException("Original relay author must be non-zero.", nameof(originalAuthor));
+        if (sourceChanges.Length > 4096)
+            throw new ArgumentOutOfRangeException(nameof(sourceChanges), "Relay source page cannot exceed 4,096 changes.");
 
         var identities = new OutboxChangeIdentity[sourceChanges.Length];
         var outboxSequences = new long[sourceChanges.Length];
