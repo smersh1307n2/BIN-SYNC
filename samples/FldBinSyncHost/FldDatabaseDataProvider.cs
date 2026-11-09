@@ -188,6 +188,7 @@ public sealed class FldDatabaseDataProvider :
     public ProviderSnapshotHandle OpenSnapshot()
     {
         EnsureOpen();
+        using IDisposable commitLease = _database.AcquireCommitGuard();
         lock (_gate)
         {
             ThrowIfDisposed();
