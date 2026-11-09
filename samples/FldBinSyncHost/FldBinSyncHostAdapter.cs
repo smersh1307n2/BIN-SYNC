@@ -122,23 +122,32 @@ public sealed class FldBinSyncHostAdapter
 
             IDisposable lease = _database.AcquireReferenceSnapshotGuard(
                 out FldReferenceSnapshot snapshot);
-            FldDraftHorizon drafts = snapshot.UnpublishedLocalDraftHorizon;
-            return new DelegateApplicationGcReferenceScan(
-                lease,
-                snapshot,
-                new ApplicationDraftHorizon(
-                    drafts.Count, drafts.MaxHlcWall, drafts.MaxHlcLogical),
-                (sender, authorEpoch, transportEpoch, batch) =>
-                    snapshot.HasReceiptReference(
-                        sender.ToArray(),
-                        authorEpoch,
-                        transportEpoch,
-                        checked((ushort)namespaceId),
-                        batch.ToArray()),
-                changeId => snapshot.HasChangeIdReference(changeId.ToArray()),
-                (recordId, tombstoneChangeId) =>
-                    snapshot.HasRecordReference(
-                        recordId.ToArray(), tombstoneChangeId.ToArray()));
+            try
+            {
+                FldDraftHorizon drafts = snapshot.UnpublishedLocalDraftHorizon;
+                return new DelegateApplicationGcReferenceScan(
+                    lease,
+                    snapshot,
+                    new ApplicationDraftHorizon(
+                        drafts.Count, drafts.MaxHlcWall, drafts.MaxHlcLogical),
+                    (sender, authorEpoch, transportEpoch, batch) =>
+                        snapshot.HasReceiptReference(
+                            sender.ToArray(),
+                            authorEpoch,
+                            transportEpoch,
+                            checked((ushort)namespaceId),
+                            batch.ToArray()),
+                    changeId => snapshot.HasChangeIdReference(changeId.ToArray()),
+                    (recordId, tombstoneChangeId) =>
+                        snapshot.HasRecordReference(
+                            recordId.ToArray(), tombstoneChangeId.ToArray()));
+            }
+            catch
+            {
+                snapshot.Dispose();
+                lease.Dispose();
+                throw;
+            }
         });
 
     private IReadOnlyList<NodeId> ReadRelayAuthors()
