@@ -34,7 +34,7 @@ foreach (SyncSession memberSession in activeMemberSessions)
 }
 ```
 
-A host may pipeline the per-session operations across different sessions, but must keep one reader per session and preserve the publish-before-send ordering.
+A host may pipeline the per-session operations across different sessions, but must keep one reader per session and preserve the publish-before-send ordering. Serialize authority rounds at the host: do not publish a newer checkpoint until the current accepted checkpoint has been sent to every intended member. The send helper revalidates the currently accepted sequence/digest on every destination and fails closed if another round supersedes it.
 
 ## 2. Active member round
 
