@@ -312,6 +312,14 @@ public sealed class FldDatabaseDataProvider :
 
         byte[] authorBytes = resolved.AuthorNodeId ?? _database.LocalAuthor.ToArray();
         byte[] changeBytes = resolved.ChangeId is { Length: 16 } ? resolved.ChangeId : Array.Empty<byte>();
+        uint originEpoch = resolved.OriginAuthorEpoch;
+        if (originEpoch == 0 && changeBytes.Length == 16 &&
+            NodeId.From(authorBytes) == NodeId.From(_database.LocalAuthor))
+        {
+            originEpoch = _activeAuthorEpoch();
+            if (originEpoch == 0)
+                throw new InvalidOperationException("The local FLD draft has a ChangeId but no active author epoch.");
+        }
         mutation = new ProviderMutation
         {
             RecordId = recordId,
@@ -324,7 +332,7 @@ public sealed class FldDatabaseDataProvider :
             KeyEpoch = recordTombstone ? (ushort)0 : resolved.KeyEpoch,
             Value = value,
             ChangeId = changeBytes.Length == 16 ? BatchId.From(changeBytes) : default,
-            OriginAuthorEpoch = resolved.OriginAuthorEpoch,
+            OriginAuthorEpoch = originEpoch,
             OriginSequence = resolved.OriginSequence
         };
         return true;
@@ -425,8 +433,18 @@ public sealed class FldDatabaseDataProvider :
         };
     }
 
-    private static ProviderMutation ToProviderMutation(FldProviderSnapshotEntry entry)
-        => new()
+    private ProviderMutation ToProviderMutation(FldProviderSnapshotEntry entry)
+    {
+        NodeId author = NodeId.From(entry.AuthorNodeId);
+        BatchId changeId = entry.ChangeId.Length == 16 ? BatchId.From(entry.ChangeId) : default;
+        uint originEpoch = entry.OriginAuthorEpoch;
+        if (originEpoch == 0 && !changeId.IsZero && author == NodeId.From(_database.LocalAuthor))
+        {
+            originEpoch = _activeAuthorEpoch();
+            if (originEpoch == 0)
+                throw new InvalidOperationException("The local FLD snapshot draft has a ChangeId but no active author epoch.");
+        }
+        return new ProviderMutation
         {
             RecordId = RecordId.From(entry.RecordId),
             FieldId = entry.FieldId,
@@ -434,13 +452,14 @@ public sealed class FldDatabaseDataProvider :
             IsRecordTombstone = entry.IsRecordTombstone,
             HlcWall = entry.HlcWall,
             HlcLogical = entry.HlcLogical,
-            AuthorNodeId = NodeId.From(entry.AuthorNodeId),
+            AuthorNodeId = author,
             KeyEpoch = entry.KeyEpoch,
             Value = entry.Value,
-            ChangeId = entry.ChangeId.Length == 16 ? BatchId.From(entry.ChangeId) : default,
-            OriginAuthorEpoch = entry.OriginAuthorEpoch,
+            ChangeId = changeId,
+            OriginAuthorEpoch = originEpoch,
             OriginSequence = entry.OriginSequence
         };
+    }
 
     private void EnsureOpen()
     {
