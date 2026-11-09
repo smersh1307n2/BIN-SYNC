@@ -12,6 +12,7 @@ public sealed class StorageRelayPublicationGate
     private static readonly ConditionalWeakTable<StorageSyncCoordinator, StorageRelayPublicationGate> Gates = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private bool _reconciliationRequired = true;
+    private bool _metadataReconciliationRequired = true;
 
     private StorageRelayPublicationGate() { }
 
@@ -138,6 +139,168 @@ public sealed class StorageRelayPublicationGate
                     coordinator, map, authors, acquireHostCommitLease);
             await publishReadyOutbox(publicationWatermarks, cancellationToken).ConfigureAwait(false);
             return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Startup path after Metadata Store becomes the publication authority. The durable
+    /// relay rows and author sequences are already in Metadata Store; no FLD JournalSeq
+    /// scan or RPM3 translation is performed. PendingApply recovery must complete before
+    /// the caller invokes this method.
+    /// </summary>
+    public async ValueTask<bool> RecoverMetadataOwnedAndPublishAsync(
+        StorageSyncCoordinator coordinator,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publishReadyOutbox,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+        if (!coordinator.IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata-owned recovery cannot run before provider-authoritative cutover.");
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<StorageRelayAuthorPublicationWatermark> watermarks =
+                coordinator.CaptureMetadataOwnedPublicationWatermarks(acquireHostCommitLease);
+            _metadataReconciliationRequired = false;
+            await publishReadyOutbox(watermarks, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            _metadataReconciliationRequired = true;
+            throw;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Serialize one metadata-authoritative remote APPLY and the following send.
+    /// Finalized PendingApply rows atomically create relay payload in Metadata Store;
+    /// there is intentionally no second FLD relay journal or RPM3 translation here.
+    /// </summary>
+    public async ValueTask<bool> ApplyAndPublishMetadataOwnedAsync(
+        StorageSyncCoordinator coordinator,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<CancellationToken, ValueTask> applyRemoteBatch,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publishReadyOutbox,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(applyRemoteBatch);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+        if (!coordinator.IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata-owned APPLY requires provider-authoritative cutover.");
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            try
+            {
+                await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                _metadataReconciliationRequired = true;
+                throw;
+            }
+
+            IReadOnlyList<StorageRelayAuthorPublicationWatermark> watermarks;
+            try
+            {
+                watermarks = coordinator.CaptureMetadataOwnedPublicationWatermarks(
+                    acquireHostCommitLease);
+                _metadataReconciliationRequired = false;
+            }
+            catch
+            {
+                _metadataReconciliationRequired = true;
+                throw;
+            }
+
+            await publishReadyOutbox(watermarks, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Run a later metadata-owned outbound pass. Startup recovery is mandatory first;
+    /// capture current local and relay high watermarks under the composed commit guard.
+    /// </summary>
+    public async ValueTask RunMetadataOwnedAsync(
+        StorageSyncCoordinator coordinator,
+        Func<IDisposable?> acquireHostCommitLease,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publish,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        ArgumentNullException.ThrowIfNull(publish);
+        if (!coordinator.IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata-owned outbound requires provider-authoritative cutover.");
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_metadataReconciliationRequired)
+                throw new InvalidOperationException(
+                    "Metadata-owned outbound is closed until startup/pending-apply recovery completes.");
+            IReadOnlyList<StorageRelayAuthorPublicationWatermark> watermarks =
+                coordinator.CaptureMetadataOwnedPublicationWatermarks(acquireHostCommitLease);
+            await publish(watermarks, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Compact relay payload only through the minimum durable ACK across all interested
+    /// peers. Per-peer ACKs are committed by SyncSession; FLD ApplyJournal relay ACK and
+    /// RPM3 are not involved in Metadata Store-owned publication.
+    /// </summary>
+    public async ValueTask<IReadOnlyList<(NodeId Author, ulong SafeThroughSequence)>>
+        CompactMetadataOwnedAcknowledgedAsync(
+            StorageSyncCoordinator coordinator,
+            Func<IDisposable?> acquireHostCommitLease,
+            CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        if (!coordinator.IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata-owned relay compaction requires provider-authoritative cutover.");
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_metadataReconciliationRequired)
+                throw new InvalidOperationException(
+                    "Metadata-owned relay compaction is closed until startup recovery completes.");
+            return coordinator.CompactAcknowledgedMetadataRelayPayloads(
+                acquireHostCommitLease);
         }
         finally
         {
