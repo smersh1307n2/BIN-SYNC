@@ -167,18 +167,23 @@ public sealed class StorageRelayPublicationGate
                 "Metadata-owned recovery cannot run before provider-authoritative cutover.");
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<StorageRelayAuthorPublicationWatermark> watermarks;
         try
         {
-            IReadOnlyList<StorageRelayAuthorPublicationWatermark> watermarks =
-                coordinator.CaptureMetadataOwnedPublicationWatermarks(acquireHostCommitLease);
+            watermarks = coordinator.CaptureMetadataOwnedPublicationWatermarks(
+                acquireHostCommitLease);
             _metadataReconciliationRequired = false;
-            await publishReadyOutbox(watermarks, cancellationToken).ConfigureAwait(false);
-            return true;
         }
         catch
         {
             _metadataReconciliationRequired = true;
             throw;
+        }
+
+        try
+        {
+            await publishReadyOutbox(watermarks, cancellationToken).ConfigureAwait(false);
+            return true;
         }
         finally
         {
