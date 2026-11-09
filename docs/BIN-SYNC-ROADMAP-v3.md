@@ -1584,3 +1584,16 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x T] Fuzz/Lab (§17) passed on the same code snapshot. Coverage was 68.1%, above the 50% gate; this does not offset Core/Storage failures.
 - [~ C] The two-DLL FLD source consolidation and BIN-SYNC relay gate/author recovery/ACK primitives are in place. The remaining production integration is a concrete host composition/sample and restart reconciliation, plus final storage backend/API and metadata-cardinality audit.
 - [~ O] Performance acceptance is still pending for bounded FLD scans, author cache rebuild/update, RPM3 mapping and the full relay publish/ACK path.
+
+### 2026-11-09 — progress estimate and next C-pass boundary
+
+Estimated completion (engineering assessment, not CI pass percentage):
+
+- Protocol/core v3 and durable metadata invariants: **~90%**.
+- RPM3 relay mapping, publication gate, all-author recovery and ACK primitives: **~85%**.
+- FLD two-project split and durable scan primitives: **~80%** (physical project split done; generic backend integration and compatibility audit remain).
+- End-to-end host composition: **~65%** (callbacks and ordering contract exist; concrete host binding/restart scheduler still open).
+- T-pass/conformance/CI: **~45%** (Core 672/678; Storage Integration 91/171; Fuzz/Lab passed; coverage 68.1% on the last completed code-equivalent run).
+- Benchmarks and final acceptance: **~25%**.
+
+Overall estimate: **~75–80%**. Remaining C-pass is not a rewrite of BIN-SYNC v3: it is primarily the concrete host composition, generic Storage backend/API audit, end-to-end sample, and final metadata/format audit. After that, switch to T-pass, then O/F. Physical GC remains disabled until safe horizons for receipts, ChangeId and tombstones are proven end-to-end.
