@@ -104,6 +104,32 @@ await v31.RunActiveMemberRoundAsync(authoritySession, memberSeed);
 The helper sends the accepted roster before receiving reports, binds every received OFR2 identity/epoch to its authenticated session peer, publishes one checkpoint after the supplied sessions have reported, and broadcasts that same checkpoint. If a broadcast fails part-way, retry `BroadcastAcceptedCheckpointAsync` with the same checkpoint; it does not mint another sequence. `ResendAcceptedFrontierAsync` similarly retransmits the already-durable OFR2. Sessions, cancellation, timers/cadence and frame-sequence persistence remain application-owned. A missing Active member contributes frontier zero; this helper never assumes that a connected-session list is the entire roster.
 
 
+## v3.1 FULL_REPLACE authority fanout
+
+For a one-generation install across every non-retired remote roster member, call
+`V31NamespaceGcHostOrchestrator.TransferFullReplaceToMembersAsync`. It captures
+one immutable provider snapshot and one signed manifest, then sends identical
+watermark/count/digest to each recipient.
+
+For partial fanout failures, prepare once and retain the returned lease while
+retrying only recipients that have not installed:
+
+```csharp
+using PreparedFullReplaceSnapshot prepared =
+    v31.PrepareFullReplaceSnapshot(
+        authorityProvider, gcStore, trustStore, authoritySeed, generation);
+
+foreach (SyncSession missing in missingRecipients)
+{
+    await v31.TransferPreparedFullReplaceToMemberAsync(
+        prepared, missing, gcStore, trustStore, authoritySeed, cancellationToken);
+}
+```
+
+Dispose the prepared object after the intended fanout completes or is abandoned.
+This retry token is in-process only; a durable sender snapshot that survives a
+process restart remains open work and must not be simulated by taking a new live
+snapshot under the old generation.
 ## Full remote-apply context adapter
 
 `FldRemoteBatchApplyStore` implements the optional Core capability `IProviderRemoteBatchCommitStore`. Create it once for the target `FldDatabase`, pass that exact instance as `remoteBatchCommitStore` to `StorageSyncCoordinator`, and pass it again to `FldBinSyncHostAdapter`. The adapter fails closed if the capability/database identities differ. On the receive-before-ACK path, Core passes the exact authenticated sender/transport epoch, wire issuer/epoch, BatchId, cursor range, previous/current digest, records root and immutable provider mutations. The FLD capability maps those fields to `RemoteBatchCommit` and calls `FldDatabase.ApplyRemoteBatch`.
