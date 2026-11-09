@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using BinSync;
+using BinSync.Storage;
 using Fld1.Engine.Db;
 using Fld1.Engine.Outbox;
 using Fld1.Engine.Storage;
@@ -15,13 +16,15 @@ public sealed class FldDatabaseDataProvider :
     IDataProvider,
     IProviderPublishedOriginStore,
     IProviderCommitGuard,
-    IProviderAuthorEpochClosureStore
+    IProviderAuthorEpochClosureStore,
+    IProviderPublicationMode
 {
     private readonly object _gate = new();
     private readonly FldDatabase _database;
     private readonly Func<uint> _activeAuthorEpoch;
     private readonly Func<ReadOnlyMemory<byte>, RecordId> _recordIdResolver;
     private readonly Func<ReadOnlyMemory<byte>, ushort> _fieldIdResolver;
+    private readonly IProviderPublicationMode? _publicationMode;
     private readonly OutboxLease _outboxLease;
     private readonly Dictionary<Guid, FldProviderSnapshot> _snapshots = new();
     private readonly HashSet<ulong> _snapshotBarriers = new();
@@ -39,12 +42,14 @@ public sealed class FldDatabaseDataProvider :
         FldDatabase database,
         Func<uint> activeAuthorEpoch,
         Func<ReadOnlyMemory<byte>, RecordId>? recordIdResolver = null,
-        Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver = null)
+        Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver = null,
+        IProviderPublicationMode? publicationMode = null)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
         _activeAuthorEpoch = activeAuthorEpoch ?? throw new ArgumentNullException(nameof(activeAuthorEpoch));
         _recordIdResolver = recordIdResolver ?? ResolveDirectRecordId;
         _fieldIdResolver = fieldIdResolver ?? ResolveDirectFieldId;
+        _publicationMode = publicationMode;
         Span<byte> owner = stackalloc byte[16];
         Guid.NewGuid().TryWriteBytes(owner);
         _outboxLease = _database.AcquireOutboxLease(owner);
@@ -170,6 +175,36 @@ public sealed class FldDatabaseDataProvider :
             _snapshotBarriers.RemoveWhere(barrier => barrier <= _highestReadSequence);
         }
         return new ProviderChangePage(changes, scannedThrough);
+    }
+
+    public bool IsBoundToMetadataStore(StorageMetadataStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        return _publicationMode is StorageMetadataPublicationMode mode && mode.IsBoundTo(store);
+    }
+
+    public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark)
+    {
+        EnsureOpen();
+        if (_publicationMode is null)
+        {
+            nodeOutboxHighWatermark = 0;
+            return false;
+        }
+        return _publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
+    }
+
+    public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark)
+    {
+        EnsureOpen();
+        if (_publicationMode is null)
+            throw new NotSupportedException("FLD provider requires a durable StorageMetadataPublicationMode for Metadata Store cutover.");
+        using IDisposable commitLease = _database.AcquireCommitGuard();
+        FldDraftHorizon drafts = _database.ReadUnpublishedLocalDraftHorizon();
+        if (drafts.Count != 0 ||
+            _database.GetOutboxHighWatermark() != _database.GetOutboxWatermark())
+            throw new InvalidOperationException("FLD local drafts and Outbox entries must be fully published and acknowledged before Metadata Store cutover.");
+        _publicationMode.EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
     }
 
     public bool TryCloseLocalAuthorEpoch(uint authorEpoch)
