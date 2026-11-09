@@ -265,15 +265,21 @@ public sealed class StorageRelayPublicationGate
         // so the sender cannot leak a not-yet-mapped operation.
         using IDisposable commitGuard =
             coordinator.AcquireApplicationCommitGuard(acquireHostCommitLease);
+        bool metadataStoreOwnedPublication = coordinator.IsMetadataStoreOwnedPublication;
         var watermarks = new StorageRelayAuthorPublicationWatermark[relayAuthors.Count + 1];
-        watermarks[0] = coordinator.ReadLocalPublicationWatermark();
+        watermarks[0] = coordinator.ReadLocalPublicationWatermark(
+            metadataStoreOwnedPublication);
         for (int i = 0; i < relayAuthors.Count; i++)
         {
             NodeId author = relayAuthors[i];
             if (author == coordinator.LocalReplicaId || author.IsZero)
                 throw new InvalidDataException("Relay publication watermark contains a zero or local relay author.");
-            watermarks[i + 1] = map.ReadPublicationWatermark(
-                coordinator.NamespaceId, author);
+            StorageRelayAuthorPublicationWatermark relayWatermark =
+                map.ReadPublicationWatermark(coordinator.NamespaceId, author);
+            watermarks[i + 1] = relayWatermark with
+            {
+                IsMetadataStoreOwnedPublication = metadataStoreOwnedPublication
+            };
         }
         return watermarks;
     }
