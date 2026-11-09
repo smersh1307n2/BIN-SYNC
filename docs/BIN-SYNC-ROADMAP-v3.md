@@ -1904,3 +1904,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Updated the sample README, host composition guide and FLD integration contract to distinguish the two publication authorities and their independent ACK/compaction rules.
 - [~ T] Add focused tests for metadata relay-author discovery, local/relay high-watermark capture, exact Metadata Store identity, startup recovery gating, send failure/retry, per-peer minimum ACK, compaction restart and legacy-mode non-regression. The current run at `513188e` is still in progress; Storage Integration on Ubuntu is red on existing provider/origin fixture migrations (91/171), not a test pass for the new relay path.
 - [~ C] Full `FldDatabase`→`IDataProvider` bridge remains open: generation-pinned paged snapshot, stable current-state ChangeId/origin mapping, Outbox-backed local feed/author-epoch contract, key resolver and `TryReadCurrent`. Generic Storage page/run/WAL format decision and host transport scheduler also remain. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+
+## 1.17. C-pass: add indexed immutable-run access for the FLD provider snapshot — 2026-11-09
+
+- [x C] FLD-DB now exposes `RunReader.TryReadRecordIdAt(uint, Span<byte>)` in `fix/crash-consistency-outbox` (commit `a6e20ce15c7d13ed63579db019d00e52b7b7e63f`). It reads a canonical run slot by index without allocating or scanning earlier clusters.
+- [x C] Verified against `RunBuilder`: immutable run cluster slots are emitted in canonical RecordId order, enabling a bounded k-way merge across run generations.
+- [~ C] Continue the FLD generation-pinned paged snapshot over captured immutable run buffers and a bounded overlay snapshot; then implement the complete `IDataProvider` current-state, local-feed and key-resolution bridge. No whole-database RAM materialization.
+- [~ T] FLD RunReader index-boundary/order tests and cross-repository snapshot/compaction stability tests remain deferred to the dedicated T-pass. No build or test pass is claimed.
+- [~ C] Durable FULL_REPLACE source snapshot recovery across sender restart, generic Storage page/run/WAL format decision and host transport/session scheduler remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
