@@ -1,10 +1,10 @@
 ## 1.11. Recovery point and C-pass continuation reset — 2026-11-09
 
 - [x C] Created `backup/pre-v3-code-sweep-2026-11-09` from `feature/fld-external-storage` before the next broad implementation pass.
-- [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `b724ec624e0cc57ddbb10c344d074fd3c0bc8c0f`; the roadmap/status checkpoint is updated after this code sweep.
+- [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `bfa30e69ecd7bd8cef397e39c202462f75e4dd86`; the source-snapshot recovery pass is recorded in §1.25.
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
-- [~ C] Remaining code gates: durable FULL_REPLACE source-generation recovery across sender restart, FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Transport creation/reconnect/disposal remain application-owned.
-- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [~ C] Remaining code gates: FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Durable sender snapshot persistence/recovery is implemented in §1.25 and awaits T-pass proof. Transport creation/reconnect/disposal remain application-owned.
+- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.25 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
 
@@ -1979,4 +1979,15 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `FldDatabaseDataProvider` delegates publication-mode reads/writes to that wrapper and refuses cutover while FLD dirty/replayable drafts or unacknowledged Outbox entries remain.
 - [x C] `FldBinSyncHostAdapter` now requires exact provider/FLD database/Metadata Store/scope/local-replica/namespace/remote-apply identities; a provider cutover marker cannot silently point at a different namespace or Metadata Store.
 - [~ T] Add reopen/restart, concurrent metadata-write conflict, immutable marker mismatch, missing/corrupt identity row, namespace isolation, exact-composition and cutover crash-boundary tests. No build/test result is claimed.
-- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot recovery across process restart, generic Storage physical-format decision and final API/source/byte audit remain open.
+- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage physical-format decision and final API/source/byte audit remain open. Durable sender snapshot recovery is implemented in §1.25 and awaits T-pass proof.
+
+
+## 1.25. C-pass: persist and restore FULL_REPLACE sender source generations across restart — 2026-11-09
+
+- [x C] Added a bounded, versioned durable state record for each prepared source generation: generation ID, provider snapshot token, source-feed watermark, HLC floor and exact signed FULL_REPLACE_BEGIN bytes. The record has a SHA-256 integrity checksum and is indexed by scope/local replica/namespace in a dedicated Storage keyspace.
+- [x C] Added idempotent immutable save, indexed lookup/list and conflict-checked deletion. Index/state disagreement, malformed lengths, invalid checksums, duplicate generations and missing indexed rows fail closed.
+- [x C] Added `PrepareSnapshotAndPersist`, `RestorePreparedSnapshot`, `ReleasePreparedSnapshot` and `PruneUnreferencedPreparedSnapshots`. Restore checks the durable provider token, snapshot page shape/count, signed manifest, current accepted roster/authority and source watermark before returning a sendable handle.
+- [x C] Added `IProviderDurableSnapshotStore`; the FLD host provider delegates token-presence and pruning to FLD's persisted provider-snapshot generations. Prepared handles detach on ordinary Dispose while durable state remains; permanent release requires the exact original provider instance and removes sender progress after provider release.
+- [x C] Hardened failure ordering: active transfer leases block permanent release; sender progress is retained if provider release fails; interrupted release is reconciled by pruning; stale provider snapshot tokens are removed without loading full Run payloads; generation restore/validation failures retain the persisted source generation for explicit recovery or cleanup.
+- [~ T] Verify process restart/reopen, resumed multi-recipient transfer with byte-identical manifest/digest, missing/corrupt token, index/state mismatch, concurrent metadata write conflict, dispose during transfer, release failure at each durability boundary, stale-token pruning and wrong-provider release. No build/test result is claimed.
+- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage ordered page/run/WAL physical-format decision and final API/source/byte audit remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
