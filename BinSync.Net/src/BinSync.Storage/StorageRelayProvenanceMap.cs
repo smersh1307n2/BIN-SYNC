@@ -164,6 +164,9 @@ public sealed class StorageRelayProvenanceMap
             if (safeOutboxSeq == state.AckedThroughOutboxSeq)
                 return state.AckedThroughJournalSeq;
 
+            if (state.Mappings.Count == 0 || safeOutboxSeq > state.Mappings[^1].OutboxSeq)
+                throw new InvalidDataException("Safe Outbox ACK exceeds the last mapped sequence; scan/resolution must catch up before translating it.");
+
             int index = FindFirstOutboxSequenceGreaterThan(state.Mappings, safeOutboxSeq);
             if (index < state.Mappings.Count)
                 return Math.Max(state.AckedThroughJournalSeq, state.Mappings[index].JournalSeq - 1);
