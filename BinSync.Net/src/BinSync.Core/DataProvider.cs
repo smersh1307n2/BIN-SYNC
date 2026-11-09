@@ -110,7 +110,7 @@ public sealed record ProviderChange(ulong Sequence, ProviderMutation Mutation)
 }
 public sealed record ProviderChangePage(IReadOnlyList<ProviderChange> Changes, ulong ScannedThroughSequence);
 
-/// <summary>One local feed entry paired with its immutable Metadata Store publication identity.</summary>
+/// <summary>One local feed entry paired with its immutable Metadata Store OperationOrigin.</summary>
 public sealed record ProviderPublishedOrigin(ProviderChange Change, OperationOrigin Origin);
 
 /// <summary>
