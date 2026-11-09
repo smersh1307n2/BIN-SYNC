@@ -100,6 +100,10 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 
 **Resource bounds:** `ResourceLimits`, `BoundedNode.WriteField(Node, ResourceLimits, ns, RecordId, …)`.
 
+### Optional contextual provider APPLY capability
+
+`IProviderRemoteBatchCommitStore` is an optional capability kept separate from `IDataProvider`. It receives `ProviderRemoteBatchCommit` with the authenticated sender and transport epoch, wire issuer and author epoch, namespace, BatchId, cursor range, digest chain, records root, protocol-state delta and immutable provider mutations. Use `StorageSyncCoordinator(..., remoteBatchCommitStore: capability)` for adapters such as FLD that need a durable source-specific ApplyJournal. The capability is invoked by the Metadata-Store-owned `ReceiveBatchBeforeAckAsync`/PendingApply path and during PendingApply recovery; the legacy provider-only path remains source-compatible. A host must preserve the same capability instance and underlying database across coordinator and host adapter composition.
+
 ### Apply result — `BatchResult` (**struct**)
 
 | Property | Role |
