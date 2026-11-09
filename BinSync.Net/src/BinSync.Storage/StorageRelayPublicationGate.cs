@@ -210,6 +210,9 @@ public sealed class StorageRelayPublicationGate
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            if (_metadataReconciliationRequired)
+                throw new InvalidOperationException(
+                    "Metadata-owned APPLY is closed until startup/PendingApply recovery completes.");
             try
             {
                 await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
