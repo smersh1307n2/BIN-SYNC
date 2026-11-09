@@ -3,12 +3,15 @@ namespace BinSync.Storage;
 /// <summary>
 /// One immutable provider snapshot and its signed FULL_REPLACE manifest, prepared once
 /// and reusable for every recipient in the same namespace generation. The instance owns
-/// the provider snapshot token and releases it when disposed.
-/// Do not dispose while a SendPreparedSnapshotAsync call is in progress.
+/// the provider snapshot token. Dispose requests release; active send leases keep the
+/// token alive until their transfer exits, including on cancellation or failure.
 /// </summary>
 public sealed class PreparedFullReplaceSnapshot : IDisposable
 {
+    private readonly object _gate = new();
     private IDataProvider? _provider;
+    private int _activeTransfers;
+    private bool _disposeRequested;
 
     internal PreparedFullReplaceSnapshot(
         IDataProvider provider,
@@ -25,8 +28,14 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     }
 
     internal IDataProvider Provider
-        => Volatile.Read(ref _provider)
-            ?? throw new ObjectDisposedException(nameof(PreparedFullReplaceSnapshot));
+    {
+        get
+        {
+            lock (_gate)
+                return _provider
+                    ?? throw new ObjectDisposedException(nameof(PreparedFullReplaceSnapshot));
+        }
+    }
 
     internal ProviderSnapshotHandle Snapshot { get; }
 
@@ -43,9 +52,64 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     public byte[] Digest => Manifest.ExpectedDigest.ToArray();
     public byte[] RosterDigest => Manifest.RosterDigest.ToArray();
 
+    /// <summary>
+    /// Retain the source provider snapshot while one transfer is using it. A concurrent
+    /// Dispose is deferred until the last active transfer releases its lease.
+    /// </summary>
+    internal IDisposable AcquireTransferLease()
+    {
+        lock (_gate)
+        {
+            if (_disposeRequested || _provider is null)
+                throw new ObjectDisposedException(nameof(PreparedFullReplaceSnapshot));
+            _activeTransfers = checked(_activeTransfers + 1);
+            return new TransferLease(this);
+        }
+    }
+
     public void Dispose()
     {
-        IDataProvider? provider = Interlocked.Exchange(ref _provider, null);
-        provider?.ReleaseSnapshot(Snapshot.Token);
+        IDataProvider? release = null;
+        lock (_gate)
+        {
+            if (_disposeRequested)
+                return;
+            _disposeRequested = true;
+            if (_activeTransfers == 0)
+            {
+                release = _provider;
+                _provider = null;
+            }
+        }
+
+        release?.ReleaseSnapshot(Snapshot.Token);
+    }
+
+    private void ReleaseTransferLease()
+    {
+        IDataProvider? release = null;
+        lock (_gate)
+        {
+            if (_activeTransfers <= 0)
+                throw new InvalidOperationException("FULL_REPLACE transfer lease underflow.");
+            _activeTransfers--;
+            if (_disposeRequested && _activeTransfers == 0)
+            {
+                release = _provider;
+                _provider = null;
+            }
+        }
+
+        release?.ReleaseSnapshot(Snapshot.Token);
+    }
+
+    private sealed class TransferLease : IDisposable
+    {
+        private PreparedFullReplaceSnapshot? _owner;
+
+        public TransferLease(PreparedFullReplaceSnapshot owner) => _owner = owner;
+
+        public void Dispose()
+            => Interlocked.Exchange(ref _owner, null)?.ReleaseTransferLease();
     }
 }
