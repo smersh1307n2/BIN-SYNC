@@ -1923,3 +1923,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ C] Bind this snapshot to BIN-SYNC `IDataProvider`, including FLD Outbox local feed, durable published-origin stamping, key resolution and current-state lookup. Durable FULL_REPLACE source-generation recovery across sender restart remains open.
 - [~ T] Snapshot/compaction concurrency, ordered page retry, tombstone mapping, mixed Run v1/v2, release-on-dispose and cross-repository host build tests remain deferred. No build/test result is claimed.
 - [~ C] Generic Storage page/run/WAL physical-format decision and host transport/session scheduler remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+
+## 1.19. C-pass: permit identity-zero legacy record tombstones only as snapshot state — 2026-11-09
+
+- [x C] Relaxed `ProviderMutationCodec.Validate` so a canonical lifecycle tombstone with zero ChangeId/Origin can represent a legacy materialized Run v1 snapshot row. This aligns the codec with the FLD snapshot ADR: legacy state is retained without inventing identity.
+- [x C] `ValidatePublished` remains strict and still rejects identity-zero record tombstones from outbound freeze or remote APPLY; immutable operations continue to require complete ChangeId/Origin.
+- [~ T] Add explicit codec/digest/FULL_REPLACE vectors for legacy record tombstones and negative tests proving `ValidatePublished` rejects them. No test/build result is claimed.
+- [~ C] Complete the BIN-SYNC `IDataProvider` host adapter and source-feed/key-resolution bridge; durable FULL_REPLACE sender restart recovery, generic Storage physical-format decision and host session scheduler remain open.
