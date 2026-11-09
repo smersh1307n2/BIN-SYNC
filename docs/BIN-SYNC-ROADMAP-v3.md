@@ -1621,7 +1621,9 @@ BIN-SYNC code commit: `9d187f6cbe6c496ec013d1d39c969f8820ed1dab`. Current C-pass
 ## 0.85. C-pass: enforce per-author publication ceilings at every sender callback — 2026-11-09
 
 - [x C] `StorageRelayProvenanceMap.ReadPublicationWatermark` exposes the highest per-author sequence backed by durable RPM3 mappings (or the already-ACKed lower bound when no rows remain).
-- [x C] `ApplyAndPublishAllAsync`, `RecoverAndPublishAllAsync` and `RunOutboundAsync` now pass the complete author-specific ceiling set to the host sender callback. The host must send only listed authors and cap each stream at `PublishedThroughSequence`; absent authors have ceiling zero. This closes the gap where an FLD local commit could append an unmapped Outbox row after the page guard was released but before the sender callback ran.
+- [x C] `ApplyAndPublishAllAsync`, `RecoverAndPublishAllAsync` and `RunOutboundAsync` capture both the local Metadata Store outbound high watermark and every FLD relay author's RPM3 ceiling under one composed application commit guard. The local author is included explicitly even though it has no FLD JournalSeq map.
+- [x C] Added the ceiling-aware `SyncSession.PushBatchAsync(..., IReadOnlyDictionary<NodeId, ulong> publicationCeilings, ...)` overload. It filters eligible authors, trims local/relay pages before batch construction and rejects any immutable pending reservation whose absolute sequence exceeds its author's captured ceiling. The old overload preserves its original behavior.
+- [x C] The optional `FldBinSyncHostAdapter.PublishReadyOutboxAsync` converts the complete watermark set and drains a peer session only through the enforcing Core overload. The callback no longer has to reimplement the sequence-cap logic.
 - [x C] Updated `docs/FLD-DB-INTEGRATION-CONTRACT.md` to make the cap mandatory and distinguish it from the adapter async gate.
 - [~ T] Migrate host callback implementations and test concurrent local commit between final page commit and send, unknown/new author exclusion, zero ceiling, metadata-owned cutover and ACKed-tail behavior. API migration is intentionally deferred until C-pass closure.
 - [~ O] Measure the added per-author map lookup/array cost against the safety benefit; do not remove the ceiling without an equivalent enforceable publication fence.
@@ -1701,4 +1703,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] BIN-SYNC `BinSync.Storage` and FLD `Fld1.Database` now both accept `Fld1StorageProject`, allowing the host sample to resolve one canonical FLD Storage project instead of duplicate vendor/authoritative assembly identities.
 - [x C] Created matching pre-adapter recovery branches `backup/cpass-2026-11-09-host-adapter-prep` in both repositories (BIN-SYNC at `ef410ca05d8230618273c2907c52b106ba51d671`; FLD-DB at `cf4c454d539f96766ef66febb3d117c9a7c5965b`).
 - [~ T] Compile the optional sample against the sibling FLD checkout; verify the shared Storage project resolves once, then add host crash/reopen tests for recovery, publication ceilings, multi-author drain, ACK-before-prune and scanner disposal/lock order. No test/build claim is made for this sample yet.
-- [~ C] Transport/session construction, the actual host send callback and process-level startup scheduler remain application responsibilities. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [~ C] Transport/session construction and process-level startup scheduler remain application responsibilities; the sample now supplies the safe sender drain helper. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+
+## 0.94. C-pass: enforce publication ceilings inside the Core sender — 2026-11-09
+
+- [x C] The publication gate now captures the local author's durable Metadata Store outbound high watermark alongside all relay-author RPM3 watermarks under one composed application commit guard. Local outbound changes are not incorrectly omitted merely because they have no FLD JournalSeq map.
+- [x C] Added a ceiling-aware durable Metadata Store `SyncSession.PushBatchAsync` overload. It excludes absent/zero-ceiling authors, trims local and relay pages before constructing a batch, and rejects immutable pending reservations above the captured absolute sequence (`CursorEnd + StreamOffset`). The legacy overload retains its prior behavior.
+- [x C] `FldBinSyncHostAdapter.PublishReadyOutboxAsync` converts the gate watermark list into the Core ceiling map and drains a peer session only through the enforcing overload.
+- [~ T] Verify local and relay streams at zero/exact/above-ceiling boundaries, pending-reservation replay, page truncation and concurrent local freeze between ceiling capture and send. No tests/build have been run for this C-pass.
+- [~ C] The host still owns session creation, transport lifecycle, multi-peer scheduling and ensuring every send uses the gated helper. Physical GC remains disabled.
