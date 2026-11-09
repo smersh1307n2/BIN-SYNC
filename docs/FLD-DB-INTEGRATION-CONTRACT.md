@@ -431,7 +431,7 @@ Keep the two database runtime DLLs exactly `Fld1.Storage.dll` and `Fld1.Database
 
 ## 9.8 Remaining `FldDatabase` provider/remote-apply bridge
 
-The optional host sample currently binds the relay-page/RPM3/publication/ACK/reference-scan side only. It accepts an already constructed `StorageSyncCoordinator` and a host-supplied remote-apply callback; it does not make `FldDatabase` an `IDataProvider`. The base `IDataProvider.ApplyRemoteBatch(applyToken, mutations)` contract omits the full FLD remote-batch receipt context, and `FldDatabase` still needs a generation-pinned paged full-data snapshot API. The next C-pass must define a neutral provider snapshot/apply-context seam and implement it in an external adapter without adding a BIN-SYNC dependency to FLD or synthesizing sender/ChangeId identity. Do not use whole-database in-memory materialization as a shortcut.
+The optional host sample now binds relay-page/RPM3/publication/ACK/reference scanning and the lossless contextual remote-apply capability. `FldRemoteBatchApplyStore` preserves the complete incoming header across PendingApply and FLD `RemoteBatchCommit`; the host injects the same store instance into both `StorageSyncCoordinator` and `FldBinSyncHostAdapter`, which verifies the database/capability identities. `ReceiveAndPublishAllAsync` routes through `ReceiveBatchBeforeAckAsync`, so FLD ApplyJournal and Metadata receipt finalization occur before the source ACK. This still does not make `FldDatabase` an `IDataProvider`: a generation-pinned paged full-data snapshot, Outbox-backed local feed/author-epoch mapping and record/field key resolver remain open. Do not use whole-database in-memory materialization as a shortcut.
 
 
 ## 9.9 Contextual remote-apply capability wiring
