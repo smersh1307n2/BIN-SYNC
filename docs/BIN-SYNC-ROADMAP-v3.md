@@ -1868,3 +1868,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-joining-hlc-promotion` in BIN-SYNC (anchored at `10a4e17492641a3911acdbdf8e4aadc865dad371`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
 - [~ T] Add promotion rejection tests for HLC wall mismatch, logical mismatch at equal wall, wrong prior roster generation, stale transport epoch, wrong digest and valid matching ACK. No exact-head CI result is claimed.
 - [~ C] Durable prepared FULL_REPLACE snapshot recovery across process restart and the complete FLD provider snapshot/local-feed/key-resolver bridge remain open.
+
+## 1.14. C-pass: enforce v3.1 capability dependencies symmetrically
+
+- [x C] OFR2 send and receive now both require `NamespaceRosterV31 | OriginFrontierV31`; RCP2 send and receive require the same pair because a frontier/checkpoint is meaningful only under the accepted roster context.
+- [x C] All FULL_REPLACE transport frames now require `NamespaceRosterV31 | FullReplaceV31`. FRA2 send and receive use the same dependency; a peer cannot advertise FULL_REPLACE support while omitting the roster capability needed to authenticate member identity/epoch.
+- [x C] v3.1 capability negotiation remains independent of v3.0 frame behavior. Partial capability sets can establish a session, but dependent v3.1 operations fail closed before sending/receiving frames.
+- [x C] Created matching recovery branches `backup/cpass-2026-11-09-v31-capability-dependencies` in BIN-SYNC (anchored at `7a8c7f2eea341b879d6f39b747e19d3b3e5c0357`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
+- [~ T] Add asymmetric capability-matrix tests for every v3.1 send/receive API, exact negotiated intersections, partial peers and v3.0-only interoperability. No exact-head CI result is claimed.
+- [~ C] Durable FULL_REPLACE source snapshot recovery, complete FLD provider snapshot/local-feed/key-resolver bridge, generic Storage physical format decision and host transport scheduler remain open.
