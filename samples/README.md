@@ -17,7 +17,7 @@ dotnet run --project samples/ScenarioHarness -c Release -- --soak 10
 | **TwoNodeLoopback** | Transport-independent `SyncSession` over paired `PipeTransport` endpoints, symmetric handshake, concurrent bidirectional batch exchange, ACKs and `BatchApplied` events |
 | **TwoNodeTcp** | `TcpSyncListener` + `TcpSync.ConnectAsync`; both endpoints receive the same generic `SyncSession` abstraction and exchange batches in both directions |
 | **StorageArrayTcpSync** | Two durable Storage-backed array replicas over real TCP; provider, Metadata Store and Node checkpoints survive reopen, with update and record tombstone propagation |
-| **RelayProvenanceMap** | Durable FLD JournalSeq→ChangeId→OutboxSeq mapping, multi-operation source-journal ACK boundary, restart reconstruction and fail-closed unmapped watermark handling |
+| **RelayProvenanceMap** | Durable FLD JournalSeq↔BIN-SYNC OutboxSeq mapping with ChangeId kept only in the global ledger; multi-operation source-journal ACK boundary, RPM3 checksum, restart reconstruction and fail-closed unmapped watermark handling |
 | **ScenarioHarness** | Ten integration scenarios: bidirectional sync, three-node relay, LWW, tombstones, persistence/resume, sneakernet, idempotent replay, concurrent writers, TCP, and optional soak |
 
 ## ScenarioHarness matrix
