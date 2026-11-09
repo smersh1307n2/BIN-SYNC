@@ -525,3 +525,8 @@ ChangeId compaction now builds its live set from the provider's pending local fe
 ## Implementation status update — shared FULL_REPLACE source generation
 
 The host implementation now prepares one immutable provider snapshot and one signed manifest for recipient fanout. `PreparedFullReplaceSnapshot` is an in-process lease; it can be retained while retrying failed recipients and is validated against the accepted roster and authority signature before any retry network send. Convenience single-recipient and all-member methods also perform snapshot/manifest preflight before roster broadcast. This improves source-generation consistency but does not yet provide a durable snapshot token across sender process restart. The exact-head build/retry matrix remains a T-pass requirement; physical GC remains disabled.
+
+
+## 10.31. Sender independently validates receiver FRA2 HLC floor against the source snapshot (2026-11-09)
+
+The authority sender computes the maximum HLC while scanning the same immutable provider snapshot that feeds the signed FULL_REPLACE digest. The prepared snapshot retains this pair through multi-recipient fanout/retry. On receiving FRA2, the sender validates the member signature and all target/roster/generation/digest fields, then requires exact equality of both HLC wall and logical components with the locally computed source floor before persisting the ACK. This prevents an otherwise valid member signature from substituting a larger or smaller reported HLC horizon. The RCP2 publisher therefore aggregates ACKs that have each been checked against the same immutable source generation, not merely ACKs that happen to agree with one another.
