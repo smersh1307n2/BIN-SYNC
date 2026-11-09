@@ -1835,3 +1835,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The convenience all-member fanout remains available; the explicit prepare/retry API is the resumable in-process path. The caller owns and must dispose the prepared snapshot only after the intended fanout is complete or abandoned.
 - [~ T] Verify partial failure after each recipient, repeat send to already-installed receiver, accepted-roster change during retry, and snapshot disposal after cancellation. No exact-head test result is claimed.
 - [~ C] In-process prepared snapshot lifetime does not yet survive process restart; crash-resumable fanout requires a durable provider snapshot generation. The missing FLD provider adapter must supply that without synthesizing ChangeId/origin metadata.
+
+## 1.10. C-pass: fail-fast FULL_REPLACE manifest/roster preflight — 2026-11-09
+
+- [x C] Added `StorageFullReplaceSender.ValidatePreparedSnapshot` to verify the prepared snapshot watermark, accepted roster generation/digest, authority identity and Ed25519 manifest signature before a sender callback can touch the network.
+- [x C] `TransferPreparedFullReplaceToMemberAsync` now validates the retained manifest against the current accepted roster before sending a roster or FULL_REPLACE frame. A stale roster or invalid authority key fails locally.
+- [x C] The convenience single-recipient and all-member fanout paths now capture and verify the provider snapshot/manifest before broadcasting the roster. This avoids partial remote state changes when the source snapshot or authority signature is invalid.
+- [~ T] Validate no network frame is sent on invalid seed, wrong authority, stale roster, disposed snapshot, corrupt page, and wrong target epoch; verify partial retry after a successful preflight. CI for the newest code head is pending.
+- [~ C] Prepared source snapshot survives retries only while retained in process memory. Durable FULL_REPLACE source generation recovery after process restart remains open; no physical GC is enabled.
