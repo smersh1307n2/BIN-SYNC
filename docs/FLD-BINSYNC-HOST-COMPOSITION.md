@@ -161,3 +161,10 @@ The optional host adapter's `PublishReadyOutboxAsync` converts the captured wate
 ### Remaining provider bridge (still C-pass)
 
 The optional adapter is intentionally only the relay/ACK/GC integration layer. It accepts a preconstructed `StorageSyncCoordinator` and a host-supplied remote-apply callback. It does not yet implement `IDataProvider` over `FldDatabase`: FLD needs a generation-pinned, paged full-data snapshot API, and the neutral provider apply contract must carry the complete remote batch context (sender peer/epoch, issuer, cursor, batch identity/digests and relay writes) so FLD can persist the correct `RemoteBatchCommit` without synthetic identities. This is a separate remaining C-pass item, not a test-only task.
+
+
+### Full remote APPLY context
+
+The Core optional capability `IProviderRemoteBatchCommitStore` and sample `FldRemoteBatchApplyStore` preserve the entire v3 batch header across PendingApply and recovery. The FLD adapter constructs `RemoteBatchCommit` with authenticated SenderPeer/transport epoch kept separate from wire IssuerNodeId/issuer epoch; it carries BatchId, cursor, previous/current digest and RecordsRoot unchanged. The v3 provider-state delta is empty because the current `Batch` wire DTO has no such member. The FLD `RelayWrites` list remains empty by design: BIN-SYNC Metadata Store owns relay copies. Record tombstones map to FLD lifecycle field 0 DeadValue, preserving original HLC/author/ChangeId.
+
+Do not mistake this capability for a full `IDataProvider` implementation. The generation-pinned full-data snapshot API, Outbox-backed local feed with an epoch/ChangeId contract, identifier resolver and crash/reopen conformance are still open C/T work.
