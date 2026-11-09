@@ -784,16 +784,13 @@ public sealed class StorageSyncCoordinator
                     else
                         AddCoalescedPendingLocalChange(nodeWinners, change);
 
-                    if (outboundIdentityStore!.TryGetOutboundChangeFingerprint(
-                        _scopeId!, _node.NodeId, _namespaceId, change.ChangeId, out ReadOnlyMemory<byte> frozenFingerprint))
+                    if (outboundIdentityStore!.TryGetOutboundChangeIdentity(
+                        _scopeId!, _node.NodeId, _namespaceId, change.ChangeId,
+                        out ReadOnlyMemory<byte> frozenFingerprint, out OperationOrigin frozenOrigin))
                     {
                         Digest16 actualFingerprint = ComputeMetadataFingerprint(change);
                         if (frozenFingerprint.Length != 16 || Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
-                        if (!outboundIdentityStore.TryGetOutboundChangeOrigin(
-                                _scopeId!, _node.NodeId, _namespaceId, change.ChangeId,
-                                out OperationOrigin frozenOrigin))
-                            throw new InvalidDataException("Frozen provider ChangeId has no durable immutable origin for crash recovery.");
                         recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, frozenOrigin));
                         lastFrozenFeedSequence = change.Sequence;
                         // Preserve all scanned winners for Node recovery, but discard
