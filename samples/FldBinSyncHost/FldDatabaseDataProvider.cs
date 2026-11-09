@@ -22,6 +22,12 @@ public sealed class FldDatabaseDataProvider :
     private readonly Dictionary<Guid, FldProviderSnapshot> _snapshots = new();
     private bool _disposed;
 
+    public bool IsBoundTo(FldDatabase database)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        return ReferenceEquals(_database, database);
+    }
+
     public FldDatabaseDataProvider(FldDatabase database, Func<uint> activeAuthorEpoch)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
