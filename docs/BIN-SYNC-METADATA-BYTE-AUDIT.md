@@ -262,3 +262,35 @@ The current registry is contiguous with no gaps or duplicate IDs:
 | 0x1C | FULL_REPLACE_READY |
 
 `NamespaceGcFrames` exactly matches the `FrameTypeMap`; the session parser accepts 0x04–0x1C for non-ALIAS_MAP session frames, and 0x03 is handled by the alias-map path. Frame envelope is 25-byte header, magic 0x4253, version 0x00 and CRC32C. This closes the registry inventory only; signed payload golden vectors and per-message encode/decode round trips remain T-pass items.
+
+## 13. NodePersistence v17 checkpoint layout (source audit)
+
+Source: `BinSync.Core/Production/NodePersistence.cs`.
+
+### File envelope
+
+- Magic: 4 bytes (`BSNS`, big-endian numeric constant).
+- State version: 2 bytes, exactly 17.
+- Body length: 8 bytes.
+- Tagged BLAKE3 digest: 32 bytes (`BIN-SYNC/NODESTATE/v17`).
+- Fixed file envelope: **46 bytes**, followed by the body.
+- `LoadFromBytes` rejects every version other than 17 before digest/body decoding. The unreachable old digest-tag alternatives were removed; there is no old state-version fallback.
+
+### Body prefix and section formulas
+
+Let `V(n)` be the unsigned-varint encoded length of `n`; `Bytes(x)` is `V(x.Length) + x.Length`.
+
+- Prefix: NodeId[16] + V(Epoch) + HLC wall[8] + HLC logical[4].
+- Storage: V(namespaceCount) + Σ(V(namespaceId) + V(recordCount) + Σ(recordBytes)). A record is RecordId[16] + V(namespaceId) + lifecycle[1] + hasLifecycleHlc[1] + optional (HLC[12] + lifecycleAuthor[16]) + V(fieldCount) + Σ(fieldState) + V(fieldTombCount) + Σ(fieldTombState). A field state is FieldId[2] + HLC[12] + AuthorNodeId[16] + KeyEpoch[2] + Bytes(value).
+- Outbox: V(namespaceCount) + Σ(V(namespaceId) + V(entryCount) + V(authorCount) + 16×authorCount + Σ(entry)). Each entry is V(authorIndex) + V(OutboxSeq) + ChangeId[16] + OriginAuthorEpoch[4] + OriginSequence[8] + Bytes(canonicalPayload) + optional RecordId[16] (omitted for record tombstones) + V(CreatedAt) + V(causalDependencyCount) + 16×dependencyCount. Author IDs are stored once per namespace, not once per Outbox entry.
+- Outbox sequence counters: V(count) + Σ(NodeId[16] + V(namespaceId) + V(sequence)).
+- Inbox receipts: V(groupCount) + groups keyed by issuer[16]/namespace/epoch. Each group chooses flat or DurableAuthor-subgroup encoding based on the measured byte formula at serialization time; each receipt stores BatchId[16], DurableAuthor[16] (flat form) and flags + optional cursor varint + optional fingerprint[16] + AppliedAt varint + optional expiry varint. Grouped form stores DurableAuthor[16] once per subgroup.
+- Batch digest chains: V(count) + Σ(issuer[16] + V(namespace) + V(epoch) + digest[16]). Last-stream digests add peer[16] per entry.
+- Aliases: V(peerCount) + peer[16] + V(aliasCount) + Σ(V(alias) + NodeId[16] + V(epoch)). The reverse NodeId→alias index is derived and not persisted.
+- Durable authors: V(count) + Σ(NodeId[16] + V(epoch)).
+- Peer states: V(count) + Σ(peer[16] + V(namespace) + V(lastPushed) + V(lastReceived) + flags[1] + V(membershipEpoch) + V(lastSeen) + V(receivedStreamCount) + received-stream entries + V(authorProgressCount) + author-progress entries + V(replayRangeCount) + replay-range entries). Each received-stream entry is peer[16] + V(epoch) + author[16] + V(cursor); each author-progress entry is author[16] + flags[1] + optional ACK/pushed/offset varints; each replay-range entry is author[16] + V(start) + V(end) + BatchId[16] + previousDigest[16].
+- SeenChanges WAL replay markers: V(count) + Σ(V(namespace) + ChangeId[16]); these remain distinct from the global ChangeId ledger.
+- Node-local GlobalChangeLedger: V(namespaceGroupCount) + Σ(V(namespace) + V(entryCount) + Σ(ChangeId[16] + knownFlag[1] + optional fingerprint[16])). In MetadataStore-owned publication mode this Node-local ledger is dropped at cutover; Metadata Store is the sole immutable-origin identity owner.
+- LastStreamAuthor, KnownEpochs, PeerSessionEpochs, Quarantined, ForbiddenNamespaces, SchemaVersions and session peer IDs are each count-prefixed; keys use NodeId[16] plus the relevant varints, or NodeId[16] alone for set members.
+
+All maps/sets are serialized in deterministic order. This is a byte-layout formula, not a total-size estimate: actual cost depends on varint widths, value/payload sizes, dependency counts, peer/author cardinalities and the adaptive receipt grouping choice. Managed dictionary/object overhead is not persisted.
