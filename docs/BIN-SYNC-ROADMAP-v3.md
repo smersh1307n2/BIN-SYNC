@@ -1,5 +1,6 @@
 ## 1.13. C-pass: generic Storage blob publication/cleanup source audit — 2026-11-10
 
+- [x C] Created recovery branch `backup/cpass-2026-11-10-issued-origin-monotonicity` from the current feature branch before continuing the remaining C-pass audit.
 - [x C] Re-read FLD-DB `StorageBlobStore` end-to-end. Immutable blob publication is ordered as pending catalog row → atomic page-file writes → page-directory fsync → complete catalog marker; readers pin the immutable generation and validate page geometry plus whole-blob SHA-256 when streaming.
 - [x C] Confirmed deletion removes the catalog row before page-directory cleanup; interrupted cleanup is recoverable through orphan pruning. Pending catalog generations remain protected by catalog presence, and reader pins block deletion.
 - [x C] Confirmed persisted page geometry is authoritative for existing generations; changing the configured default page size affects only new blobs. Metadata decode validates page count without overflow-prone round-up arithmetic.
