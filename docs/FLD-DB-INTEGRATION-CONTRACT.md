@@ -296,7 +296,7 @@ The scanner returns a conservative \`(Count, MaxHlcWall, MaxHlcLogical)\`. The W
 
 ### 9.3. Live references for physical reclamation
 
-The same adapter must implement all three reference checks:
+The scan object must implement all three reference checks:
 
 - \`HasExternalReceiptReference\`: inspect durable apply/retry/relay state that still names (namespace, sender, transport epoch, author epoch, batch id);
 - \`HasExternalChangeIdReference\`: inspect WAL, Outbox and any durable local/remote intent that still names the ChangeId;
