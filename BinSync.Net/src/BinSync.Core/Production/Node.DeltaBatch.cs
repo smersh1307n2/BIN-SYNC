@@ -55,7 +55,8 @@ public sealed partial class Node
         NodeId targetPeer, int namespaceId, NodeId? filterAuthorNodeId = null,
         int schemaId = 0, int schemaVersion = 1,
         IReadOnlyList<OutboxEntry>? sourceEntries = null,
-        MetadataPeerStreamState? durableProgress = null)
+        MetadataPeerStreamState? durableProgress = null,
+        IReadOnlyDictionary<NodeId, ulong>? publicationCeilings = null)
     {
         lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
@@ -96,6 +97,10 @@ public sealed partial class Node
                 {
                     foreach (var e in all)
                     {
+                        if (publicationCeilings is not null &&
+                            (!publicationCeilings.TryGetValue(e.AuthorNodeId, out ulong authorCeiling) ||
+                             authorCeiling == 0 || (ulong)e.Seq > authorCeiling))
+                            continue;
                         long offset = ps!.TryGetStreamOffset(e.AuthorNodeId, out var savedOffset) ? savedOffset : 0;
                         long localAck = checked(ps!.AckedFor(e.AuthorNodeId) + offset);
                         if (e.Seq > localAck &&
@@ -141,6 +146,12 @@ public sealed partial class Node
                 ps!.SetStreamOffset(stream, streamOffset);
             }
 
+            ulong streamPublicationCeiling = ulong.MaxValue;
+            if (publicationCeilings is not null &&
+                (!publicationCeilings.TryGetValue(stream, out streamPublicationCeiling) ||
+                 streamPublicationCeiling == 0))
+                return null;
+
             long localWm = checked(wm + streamOffset);
             int selectedCount = 0;
             long cursorStart = 0, cursorEnd = 0;
@@ -149,7 +160,9 @@ public sealed partial class Node
                 for (int i = 0; i < all.Count; i++)
                 {
                     var source = all[i];
-                    if (source.AuthorNodeId != stream || source.Seq <= localWm) continue;
+                    if (source.AuthorNodeId != stream || source.Seq <= localWm ||
+                        (publicationCeilings is not null && (ulong)source.Seq > streamPublicationCeiling))
+                        continue;
                     long seq = checked(source.Seq - streamOffset);
                     if (selectedCount == 0) cursorStart = seq;
                     cursorEnd = seq;
@@ -191,7 +204,9 @@ public sealed partial class Node
                 for (int i = 0; i < all.Count; i++)
                 {
                     var e = all[i];
-                    if (e.AuthorNodeId != stream || e.Seq <= localWm) continue;
+                    if (e.AuthorNodeId != stream || e.Seq <= localWm ||
+                        (publicationCeilings is not null && (ulong)e.Seq > streamPublicationCeiling))
+                        continue;
 
                     ReadOnlyMemory<byte> wirePayload;
                     var stamped = Ops.TryCloneWithOriginShared(e.Payload, origin);
