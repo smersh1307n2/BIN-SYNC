@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.74. C-pass: reject unsafe Inbox/receive-state row consolidation — 2026-11-09
+
+- [x C] Documented why the Inbox receipt (sender/transport epoch/namespace/BatchId), receive cursor (same sender context plus author stream) and digest-chain tail (sender/transport epoch/namespace) remain three separate row kinds.
+- [x C] A single per-batch receipt would duplicate shared cursor/digest state; a single stream row would lose per-BatchId duplicate-replay identity. The current layout keeps each fact once at its natural cardinality.
+- [~ O] Only revisit a merged encoding if measured real workloads show a net byte/index win and a proof preserves independent retry, contiguous cursor and digest-chain semantics.
 ## 0.73. C-pass: verify outbound reservation retirement is one atomic peer-stream write — 2026-11-09
 
 - [x C] Source audit confirmed `AcknowledgeOutboundBatch` clears `PendingBatch` in the same `PersistPeerStreamState` commit that advances `AckedCursor` and `LastBatchDigest`, after validating exact pushed reservation identity.
@@ -526,7 +531,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x] Node global ChangeId ledger stores a fixed 16-byte BLAKE3 identity digest that binds semantic mutation + immutable Origin tuple in one hash pass; no separate 29-byte Origin suffix is stored in the ledger value. [~] Storage metadata identity-row cardinality and cross-store duplication still require a byte-level audit and benchmark.
 - [ ] Collapse repeated author IDs in ACK/pushed/offset maps into one sparse progress row only if benchmarks prove a win.
 - [x C] `AcknowledgeOutboundBatch` validates the exact pushed reservation (peer/epoch/namespace/author stream, BatchId, cursor end and digest), then persists `AckedCursor`, digest-chain tail and `PendingBatch=null` together in the single peer-stream row/Storage batch. No separate reservation-delete transaction exists. [~ T] Inject crash/reopen around this commit and prove exact retry/duplicate ACK behavior.
-- [ ] Consolidate Inbox/InboxAuthors/ReceivedStreams only when one receipt preserves all retry/ACK/cursor/digest semantics.
+- [x C] Audited Inbox receipt, per-author receive cursor and per-sender/epoch/namespace digest-chain tail: their keys/cardinalities and retry/ACK semantics differ (per BatchId vs per author stream vs per sender stream). A single receipt cannot replace these without duplicating stream state per batch or losing digest/cursor boundaries; keep the three compact row kinds separate. [~ O] Revisit only with measured cardinality/byte evidence and a proof preserving all three semantics.
 - [ ] Remove duplicate relay payload copies and unnecessary WAL/ApplyJournal duplication only after recovery proof.
 - [~ C] On Metadata-Store-owned publication cutover, Node now drops its namespace-local `GlobalChangeLedger`; Metadata Store remains the only ChangeId authority. `SeenChanges` WAL replay markers are deliberately retained as a separate recovery concern. Cutover/restart assertions added; exact-head CI pending.
 - [~] Record before/after bytes/op, bytes/peer-author, allocations, mutation latency and compaction CPU at 500/10k/100k/1m rows. Exact row saving is 12 bytes per retained relay/outbound operation (32+payload → 20+payload); the durable benchmark completed successfully: 10k rows 408.4 µs / 8.14 KB, 100k rows 375.9 µs / 10.34 KB, 1M rows (1,024-operation freeze) 196.9 µs / 7.77 KB. Against the prior recorded baselines (449.2 µs at 10k, 434.1 µs / 10,944 B at 100k, 232.8 µs / 7.84 KB at 1M), these measurements are faster with slightly lower allocation; compare only as same-workflow directional evidence, not as a cross-machine guarantee.
