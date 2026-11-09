@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using System.Runtime.CompilerServices;
 using Fld1.Storage.Engine;
 
 namespace BinSync.Storage;
@@ -22,13 +23,13 @@ public sealed class StorageRelayProvenanceMap
     private readonly StorageDatabase _storage;
     private readonly object _gate;
     private readonly byte[] _root;
-    private readonly Dictionary<StreamKey, StreamState> _states = new();
+    private static readonly ConditionalWeakTable<StorageDatabase, Dictionary<StreamKey, StreamState>> SharedStates = new();
+    private readonly Dictionary<StreamKey, StreamState> _states;
 
-    private readonly record struct StreamKey(int NamespaceId, string AuthorHex);
+    private readonly record struct StreamKey(string RootHex, int NamespaceId, string AuthorHex);
 
     private sealed class StreamState
     {
-        public ulong StorageCommitSeq;
         public ulong ScannedThroughJournalSeq;
         public ulong AckedThroughOutboxSeq;
         public ulong AckedThroughJournalSeq;
@@ -45,6 +46,7 @@ public sealed class StorageRelayProvenanceMap
             throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
 
         _gate = StorageDatabaseTransactionGate.For(storage);
+        _states = SharedStates.GetValue(storage, static _ => new Dictionary<StreamKey, StreamState>());
         byte[] scopeHash = SHA256.HashData(Encoding.UTF8.GetBytes(scopeId));
         _root = new byte[RootLength];
         _root[0] = RootKind;
@@ -139,7 +141,6 @@ public sealed class StorageRelayProvenanceMap
 
             state.Mappings.AddRange(appended);
             state.ScannedThroughJournalSeq = scannedThroughJournalSeq;
-            state.StorageCommitSeq = _storage.LastCommitSeq;
         }
     }
 
@@ -209,7 +210,6 @@ public sealed class StorageRelayProvenanceMap
             state.Mappings.RemoveAll(mapping => mapping.JournalSeq <= safeThroughJournalSeq);
             state.AckedThroughOutboxSeq = safeOutboxSeq;
             state.AckedThroughJournalSeq = safeThroughJournalSeq;
-            state.StorageCommitSeq = _storage.LastCommitSeq;
         }
     }
 
@@ -218,12 +218,12 @@ public sealed class StorageRelayProvenanceMap
         byte[] authorBytes = new byte[16];
         author.WriteTo(authorBytes);
         string authorHex = Convert.ToHexString(authorBytes);
-        var key = new StreamKey(namespaceId, authorHex);
-        ulong commitSeq = _storage.LastCommitSeq;
-        if (_states.TryGetValue(key, out StreamState? cached) && cached.StorageCommitSeq == commitSeq)
+        string rootHex = Convert.ToHexString(_root);
+        var key = new StreamKey(rootHex, namespaceId, authorHex);
+        if (_states.TryGetValue(key, out StreamState? cached))
             return cached;
 
-        var state = new StreamState { StorageCommitSeq = commitSeq };
+        var state = new StreamState();
         using var snapshot = _storage.OpenSnapshot();
         IReadOnlyList<StorageEntry> cursors = snapshot.ScanPrefix(_root, CursorSuffix(namespaceId, author), 2);
         if (cursors.Count > 1)
