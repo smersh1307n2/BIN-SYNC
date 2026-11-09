@@ -229,20 +229,28 @@ public sealed class StorageRelayProvenanceMap
         if (cursors.Count == 1)
             DecodeCursor(cursors[0].Value, state);
 
-        IReadOnlyList<StorageEntry> rows = snapshot.ScanPrefix(_root, MappingPrefix(namespaceId, author), int.MaxValue);
-        foreach (StorageEntry row in rows)
+        using (StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Join(_root, MappingPrefix(namespaceId, author))))
         {
-            if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 + ChangeIdLength ||
-                row.Value.Length != 8)
-                throw new InvalidDataException("Malformed relay provenance mapping row.");
-            ulong journalSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
-            byte[] changeId = row.Key.AsSpan(row.Key.Length - ChangeIdLength).ToArray();
-            ulong outboxSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
-            if (journalSeq <= state.AckedThroughJournalSeq ||
-                journalSeq > state.ScannedThroughJournalSeq ||
-                outboxSeq <= state.AckedThroughOutboxSeq)
-                throw new InvalidDataException("Relay provenance mapping is outside its durable cursor.");
-            state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
+            const int pageSize = 1024;
+            while (true)
+            {
+                IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+                foreach (StorageEntry row in page)
+                {
+                    if (row.Key.Length != RootLength + 1 + 2 + 16 + 8 + ChangeIdLength ||
+                        row.Value.Length != 8)
+                        throw new InvalidDataException("Malformed relay provenance mapping row.");
+                    ulong journalSeq = BinaryPrimitives.ReadUInt64BigEndian(row.Key.AsSpan(RootLength + 1 + 2 + 16, 8));
+                    byte[] changeId = row.Key.AsSpan(row.Key.Length - ChangeIdLength).ToArray();
+                    ulong outboxSeq = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                    if (journalSeq <= state.AckedThroughJournalSeq ||
+                        journalSeq > state.ScannedThroughJournalSeq ||
+                        outboxSeq <= state.AckedThroughOutboxSeq)
+                        throw new InvalidDataException("Relay provenance mapping is outside its durable cursor.");
+                    state.Mappings.Add(new Mapping(journalSeq, changeId, outboxSeq));
+                }
+                if (page.Count < pageSize) break;
+            }
         }
         state.Mappings.Sort(static (left, right) => left.OutboxSeq.CompareTo(right.OutboxSeq));
         for (int i = 1; i < state.Mappings.Count; i++)
