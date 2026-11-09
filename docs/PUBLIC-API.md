@@ -299,3 +299,8 @@ Blind merge compares ciphertext with open HLC + author.
 - Guaranteed allocation-free paths under all policies (hot paths optimised; domain objects still allocate)
 - Public mutable access to `Storage` / `Outbox` / `Inbox` maps (internal by design in 2.2)
 - NuGet.org publish automation (use `scripts/pack-nupkg.sh`)
+
+
+### Optional full provider remote-apply context
+
+Providers that maintain a source-specific durable apply journal may implement `IProviderRemoteBatchCommitStore`. `StorageSyncCoordinator` then supplies `ProviderRemoteBatchCommit`, preserving transport sender/epoch separately from wire issuer/epoch plus BatchId, cursor range, previous/current digest, records root and immutable provider mutations across PendingApply and restart recovery. Providers that do not need this context continue to use the base `IDataProvider.ApplyRemoteBatch(applyToken, mutations)` contract. This capability does not replace the separate v3.1 roster/frontier/FULL_REPLACE release gates or authorize physical GC.
