@@ -1,3 +1,5 @@
+using BinSync;
+
 namespace BinSync.Storage;
 
 internal readonly record struct TombstoneGcOriginProof(
