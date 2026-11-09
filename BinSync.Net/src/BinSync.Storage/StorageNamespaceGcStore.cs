@@ -319,9 +319,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     acceptedRoster, fullReplaceGeneration, fullReplaceDigest,
                     out ulong installedWall, out uint installedLogical) ||
                 installedWall != checkpoint.FullReplaceHlcWallFloor ||
-                installedLogical != checkpoint.FullReplaceHlcLogicalFloor ||
-                !AreAllActiveMembersInstalledCore(
-                    acceptedRoster, fullReplaceGeneration, fullReplaceDigest))
+                installedLogical != checkpoint.FullReplaceHlcLogicalFloor)
                 return null;
 
             NamespaceRosterMember[] activeMembers = acceptedRoster.Members
