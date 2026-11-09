@@ -11,6 +11,7 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
 {
     private readonly object _gate = new();
     private IDataProvider? _provider;
+    private readonly IDataProvider _ownerProvider;
     private int _activeTransfers;
     private bool _disposeRequested;
     private bool _preserveOnDispose;
@@ -23,6 +24,7 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
         uint hlcLogicalFloor)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
+        _ownerProvider = provider;
         Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
         Manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
         HlcWallFloor = hlcWallFloor;
@@ -73,6 +75,8 @@ public sealed class PreparedFullReplaceSnapshot : IDisposable
     internal void ReleasePermanently(IDataProvider provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        if (!ReferenceEquals(provider, _ownerProvider))
+            throw new ArgumentException("Prepared snapshot must be released through its original provider instance.", nameof(provider));
         lock (_gate)
         {
             if (_activeTransfers != 0)
