@@ -34,8 +34,11 @@ FLD checkout as competing type identities.
 ## Required host lifecycle
 
 1. Construct one shared BIN-SYNC `StorageDatabase`, then bind
-   `StorageMetadataStore`, `StorageRelayProvenanceMap`, provider and
-   `StorageSyncCoordinator` to it.
+   `StorageMetadataStore`, `StorageRelayProvenanceMap`, a conforming
+   `IDataProvider` and `StorageSyncCoordinator` to it. **The sample does not yet
+   provide the `FldDatabase`→`IDataProvider` adapter**; this remains a C-pass item.
+   Do not substitute a whole-database in-memory snapshot or a lossy remote-apply
+   mapping.
 2. Open one `FldDatabase` for the same namespace and construct
    `FldBinSyncHostAdapter` with the stable metadata scope.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
@@ -46,7 +49,10 @@ FLD checkout as competing type identities.
    `PublishReadyOutboxAsync` in the callback; it selects the matching ceiling-aware
    `SyncSession.PushBatchAsync` overload from the mode captured with the ceilings.
 4. Route remote APPLY through the `ApplyAndPublishAllAsync(persistNode, ...)`
-   overload; route subsequent outbound sends through `RunOutboundAsync(persistNode, ...)`.
+   overload with a durable FLD apply callback that preserves the full incoming
+   batch context. The sample wraps this callback but does not implement the
+   `IDataProvider`/`RemoteBatchCommit` bridge yet. Route subsequent outbound sends
+   through `RunOutboundAsync(persistNode, ...)`.
    These overloads freeze newly pending local feed entries before each gate invocation.
 5. Route safe ACK through `AcknowledgeAllAsync`. FLD's durable ACK occurs
    before RPM3 pruning.
@@ -63,3 +69,8 @@ Node-owned Outbox transport; after cutover it uses Metadata Store-owned transpor
 The mode bit is captured under the same commit barrier as the ceilings, preventing
 a cutover race from mixing sequence authorities. Do not call a legacy ceiling-free
 overload from this FLD relay path. Physical GC remains disabled.
+
+
+## Explicit implementation boundary
+
+`FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The next C-pass must add a neutral provider snapshot/apply-context seam and a generation-pinned FLD snapshot; do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
