@@ -130,6 +130,41 @@ public sealed class FldBinSyncHostAdapter
             publishReadyOutbox,
             cancellationToken);
 
+    /// <summary>
+    /// Receive one durable batch through the coordinator's PendingApply protocol,
+    /// apply it to Node and the configured contextual FLD ApplyJournal store, then
+    /// drain all resulting FLD relay pages and publish downstream through the same
+    /// namespace gate. This is the lossless FLD receive path; do not substitute
+    /// ApplyRemoteBatch(Batch) or a provider-only callback.
+    /// </summary>
+    public ValueTask<bool> ReceiveAndPublishAllAsync(
+        SyncSession inboundSession,
+        Action<Node> persistNode,
+        Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
+            CancellationToken, ValueTask> publishReadyOutbox,
+        int limit = 1024,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(inboundSession);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+        if (inboundSession.NamespaceId != _coordinator.NamespaceId)
+            throw new ArgumentException(
+                "Inbound session namespace does not match this FLD host adapter.",
+                nameof(inboundSession));
+
+        return ApplyAndPublishAllAsync(
+            persistNode,
+            async token =>
+            {
+                _ = await _coordinator.ReceiveBatchBeforeAckAsync(
+                    inboundSession, persistNode, token).ConfigureAwait(false);
+            },
+            publishReadyOutbox,
+            limit,
+            cancellationToken);
+    }
+
     /// <summary>Run a later outbound send through the same reconciled namespace gate.</summary>
     /// <summary>Freeze current local changes, then run an outbound send through the shared gate.</summary>
     public async ValueTask RunOutboundAsync(
