@@ -211,15 +211,34 @@ public partial class SyncSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Push one pending delta and wait for its ACK.</summary>
-    public async Task<bool> PushBatchAsync(Node sender, int namespaceId, int schemaVersion = 1, CancellationToken ct = default)
+    /// <summary>Push one pending Node-owned delta and wait for its ACK.</summary>
+    public Task<bool> PushBatchAsync(Node sender, int namespaceId,
+        int schemaVersion = 1, CancellationToken ct = default)
+        => PushBatchCoreAsync(sender, namespaceId, publicationCeilings: null, schemaVersion, ct);
+
+    /// <summary>
+    /// Push one Node-owned delta while enforcing the captured per-author publication
+    /// ceilings. Authors absent from the map or with a zero ceiling cannot be selected.
+    /// </summary>
+    public Task<bool> PushBatchAsync(Node sender, int namespaceId,
+        IReadOnlyDictionary<NodeId, ulong> publicationCeilings,
+        int schemaVersion = 1, CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(publicationCeilings);
+        return PushBatchCoreAsync(sender, namespaceId, publicationCeilings, schemaVersion, ct);
+    }
+
+    private async Task<bool> PushBatchCoreAsync(Node sender, int namespaceId,
+        IReadOnlyDictionary<NodeId, ulong>? publicationCeilings,
+        int schemaVersion, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(sender);
         await _pushGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
         await EnsureRemoteAliasesAsync(ct).ConfigureAwait(false);
         var batch = sender.CreateDeltaBatchPayloadForTransport(PeerNodeId, namespaceId,
-            schemaVersion: schemaVersion);
+            schemaVersion: schemaVersion, publicationCeilings: publicationCeilings);
         if (batch is null) return false;
         await SendFrameAsync(0x09, 0x0001_0000u | (uint)namespaceId, 1,
             batch.Value.Payload, ct).ConfigureAwait(false);
