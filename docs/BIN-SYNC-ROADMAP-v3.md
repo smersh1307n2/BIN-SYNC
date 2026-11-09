@@ -1951,3 +1951,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The adapter obtains the active epoch from the host's durable BIN-SYNC identity authority; it does not duplicate protocol epoch state in FLD. New epochs must be strictly greater than the last locally closed epoch.
 - [~ C] Durable publication-mode cutover and FLD FULL_REPLACE receiver staging/atomic generation switch remain open, as do sender restart snapshot recovery, generic Storage physical-format decision and host session scheduling.
 - [~ T] Verify pending drafts, unacked Outbox, replayable WAL horizon, writer-vs-close race, restart after closure, reactivation and stale-epoch rejection in the T-pass. No test/build result is claimed.
+
+
+## 1.22. C-pass: preserve pre-freeze ChangeId while binding the active local epoch at the provider edge — 2026-11-09
+
+- [x C] `ProviderMutationCodec.Validate` now accepts a stable ChangeId with an unassigned Origin tuple (epoch/sequence both zero) for a materialized or unpublished provider row. It still rejects half-populated Origin tuples and Origin without ChangeId.
+- [x C] `ValidatePublished` remains strict: outbound freeze and remote APPLY still require nonzero ChangeId, OriginAuthorEpoch and OriginSequence.
+- [x C] `FldDatabaseDataProvider` binds the host's durable active author epoch to local ChangeId-bearing current-state/snapshot rows whose FLD Run provenance has not yet been stamped. Legacy Run v1 rows with zero ChangeId remain identity-zero and receive no synthetic identity.
+- [x C] The local Outbox feed similarly binds the active epoch while keeping OriginSequence deferred until Metadata Store freeze; author-epoch closure prevents a feed from crossing epoch transitions.
+- [~ T] Add codec/digest vectors for ChangeId-without-Origin, published-operation rejection, local epoch binding, legacy Run v1 rows, stamp-before/after-supersede and restart after epoch closure. No build/test result is claimed.
