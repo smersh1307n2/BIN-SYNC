@@ -1444,3 +1444,10 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Fuzz/Lab passed on this exact head. This does not substitute for Core or Storage Integration success.
 - [~ C] Continue finishing the host integration and control-plane code; the coordinator resolver is still only one layer of the FLD adapter. The actual FLD project has begun the approved two-runtime-assembly extraction; exact compile/test verification is pending.
 - [~ T] Exact-head CI is red; broad test migration remains deferred until C-pass closes. The known failures are now enumerated rather than represented as a generic red status.
+
+### 2026-11-09 — C-pass refresh: FLD two-DLL scaffold
+
+- [x C] FLD-DB now has a consolidated `Fld1.Database.csproj` linking Core/Run/WAL/Manifest/Engine source and referencing the independent generic `Fld1.Storage` project. The solution now exposes only these two runtime source projects; Core/Engine/etc. folders remain code-organization boundaries.
+- [~ T] FLD exact-head CI on `a0ea90b9490cc1d93eafd048008327a5bcb4a54f` failed on all three OS jobs, but diagnostic log retrieval returned unavailable blobs. The consolidation has not been accepted as built until actionable errors are inspected and Ubuntu/macOS/Windows pass.
+- [~ C] This does not yet supply the cross-repository host adapter. The FLD host must still read complete JournalSeq pages, hold the FLD commit guard while invoking the BIN-SYNC coordinator resolver, send immutable OutboxSeq batches, translate safe ACK back to FLD RelayJournalBatch ACK, then prune RPM3 map rows. The host GC scanner must bind one FLD reference snapshot under the same composed guard.
+- [~ T] BIN-SYNC exact-head `29eea904621768175d1021f2de487d144c7d2d50` remains red: 6/678 Core tests and 80/171 Storage Integration tests fail for known stale fixture/provider-contract reasons; Fuzz/Lab passes. Do not relax production checks.
