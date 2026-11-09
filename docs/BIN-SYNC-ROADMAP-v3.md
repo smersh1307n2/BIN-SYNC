@@ -2019,3 +2019,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ T] Exact-head FLD build, blob catalog/page crash cuts, pending-write resume, corrupt/missing page, same-ID conflict, reader/delete pin, cross-namespace Run ID, stage restart/collision, compaction pin and directory-fsync fault coverage remain deferred. No build/test result is claimed.
 - [~ C] Remaining physical-storage C-pass: audit blob catalog/page failure ordering and restart cleanup end-to-end; verify every Run publication path uses the shared allocator/blob/mirror contract; finish generic Storage API boundary and public API/source/byte audit. WAL itself remains Database-owned in this migration step; do not move it into generic Storage without a separate bounded migration decision.
 - [~ C] Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the independent v3.1 reference-horizon proofs and exact-head T-pass.
+
+## 1.29. C-pass: make FLD provider snapshot generations directory-durable — 2026-11-09
+
+- [x C] `OpenProviderSnapshot` now creates the generation directory through `StorageDirectorySync.CreateDirectoryDurable`, flushing newly created parent entries on Linux/macOS.
+- [x C] Overlay Run bytes and temporary snapshot manifest files are flushed to disk and their containing directory entries are synced; the final manifest rename is followed by a directory fsync. A snapshot token is therefore not returned before its durable manifest publication completes.
+- [x C] Snapshot release and stale-generation pruning flush the snapshot-root directory after deleting generation directories. A failed Unix directory sync propagates instead of being silently ignored.
+- [~ T] Verify process-kill/reopen at every boundary: generation mkdir, overlay file, temp manifest, final rename, release and prune; verify Windows remains explicitly outside the directory-entry durability claim. No exact-head build/test result is claimed.
+- [~ C] Continue the full Run/blob/snapshot pin audit, generic Storage API boundary and final v3/v3.1 source/byte audit. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
