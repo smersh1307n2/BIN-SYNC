@@ -148,11 +148,6 @@ public sealed class FldBinSyncHostAdapter
         ArgumentNullException.ThrowIfNull(inboundSession);
         ArgumentNullException.ThrowIfNull(persistNode);
         ArgumentNullException.ThrowIfNull(publishReadyOutbox);
-        if (inboundSession.NamespaceId != _coordinator.NamespaceId)
-            throw new ArgumentException(
-                "Inbound session namespace does not match this FLD host adapter.",
-                nameof(inboundSession));
-
         return ApplyAndPublishAllAsync(
             persistNode,
             async token =>
