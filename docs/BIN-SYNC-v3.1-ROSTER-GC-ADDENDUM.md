@@ -1,9 +1,13 @@
 # BIN-SYNC v3.1 Addendum — Signed Namespace Roster and Safe GC
 
-**Status:** v3.1 C-pass substantially implemented, but not production-complete and not part of v3.0 wire conformance. Signed roster/frontier/checkpoint/installed-ACK codecs and durable stores, FULL_REPLACE transfer/receiver, explicit coordinator send/receive APIs, author-issued/retired-origin/HLC horizons, provider epoch closure, composed host commit-lease API, and mandatory host reference-scanner contracts are present. The coordinator exposes one-message operations; the host still owns member lifecycle scheduling and periodic exchange. BIN-SYNC now has a durable `StorageRelayProvenanceMap` primitive for JournalSeq→ChangeId→OutboxSeq, but the synchronized-FLD page/publication/ACK adapter and concrete FLD scanner remain open. Exact-head CI is red/unknown for later C commits; Phase T fixture migration, crash/race proof, frame-registry audit, golden vectors, metadata byte audit and performance validation remain open. All physical GC flags remain false.  
+**Status:** v3.1 C-pass substantially implemented, but not production-complete and not part of v3.0 wire conformance. Signed roster/frontier/checkpoint/installed-ACK codecs and durable stores, FULL_REPLACE transfer/receiver, explicit coordinator send/receive APIs, author-issued/retired-origin/HLC horizons, provider epoch closure, composed host commit-lease API, and mandatory host reference-scanner contracts are present. The coordinator exposes one-message operations; the host still owns member lifecycle scheduling and periodic exchange. BIN-SYNC now has a durable `StorageRelayProvenanceMap` primitive for JournalSeq→ChangeId→OutboxSeq, but the synchronized-FLD page/publication/ACK adapter and concrete FLD scanner remain open. Exact-head CI is red/unknown for later C commits; Phase T fixture migration, crash/race proof, frame-registry inventory and deterministic signed payload vectors are now documented; C# byte/signature cross-checks, full frame-envelope vectors, metadata byte audit completion and performance validation remain open. All physical GC flags remain false.  
 **Last green pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). This is historical, not current-head validation.
 
 This addendum closes the missing proof needed before enabling global ChangeId GC and tombstone/Ghost GC. It deliberately does not weaken the current fail-closed behavior.
+
+
+
+**Deterministic vectors:** `docs/BIN-SYNC-v3.1-GOLDEN-VECTORS.md` now records NRS2, OFR2, RCP2, FRA2 and FULL_REPLACE_BEGIN payload/signature vectors using a public-only test key. Exact C# encoder/decoder cross-check and negative tamper vectors remain Phase T; these vectors do not enable physical GC.
 
 ## 1. Problem and invariants
 
