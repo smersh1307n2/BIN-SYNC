@@ -1,5 +1,15 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+## Current continuation checkpoint — 2026-11-09
+
+- Working branch `feature/fld-external-storage` is at `701077ed9a13ce476aaa1e679d9c17f16f0ced5f`; FLD-DB `fix/crash-consistency-outbox` is at `01617ecaa06fef4bd4ec16e913f24ffd449158ae`.
+- Latest C-pass changes include allocation-free author ordering, durable per-author publication ceilings passed to all relay sender callbacks, and the mandatory host-side cap in the FLD integration contract.
+- Recovery branches exist in both repositories: `backup/cpass-2026-11-09-publication-ceilings`.
+- No tests were run for this C-pass slice by design. The historical 4382c49 CI result remains the last code-equivalent test baseline (Core 672/678, Storage Integration 91/171, Fuzz/Lab passed); current HEAD and the new sender callback API are unvalidated. Do not interpret the old results as current-head status.
+- Next C-pass work remains the concrete host callback composition and generic Storage/WAL compatibility seam. T-pass must later migrate callback consumers and stale provider fixtures; physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+---
+
 **Package:** BinSync.Core 3.0.0 · **Target:** net10.0  
 **Branch:** feature/fld-external-storage · **PR:** #16 (open, Draft; not merged) · **Normative spec:** BIN-SYNC CORE v3.0.0 DRAFT + separately negotiated v3.1 Roster/GC addendum
 
