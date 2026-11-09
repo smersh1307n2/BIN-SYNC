@@ -292,12 +292,12 @@ Tombstone responsibility is split deliberately. Storage must durably store the o
 
 ## 9.7 Enforce publication ceilings in the sender, including local outbound
 
-The publication gate's watermark set contains two kinds of ceilings, captured under one composed application commit guard:
+The publication gate's watermark set contains two kinds of ceilings, captured under one composed application commit guard and tagged with the active publication authority:
 
-- the local author's published outbound high watermark from `IMetadataStore.GetOutboundHighWatermark` (local provider-feed operations have no FLD JournalSeq/RPM3 mapping);
-- each remote relay author's published OutboxSeq ceiling from RPM3 after every source page through the FLD high watermark has been mapped.
+- before provider-authoritative cutover, the local author's high watermark comes from Node Outbox; after cutover it comes from `IMetadataStore.GetOutboundHighWatermark`;
+- each remote relay author's published sequence ceiling comes from RPM3 after every source page through the FLD high watermark has been mapped. Before cutover this resolves to Node OutboxSeq; after cutover it resolves to Metadata Store relay sequence.
 
-The durable Metadata Store `SyncSession.PushBatchAsync` overload accepting `IReadOnlyDictionary<NodeId, ulong> publicationCeilings` is the enforcement point. It excludes authors absent from the map or with ceiling zero, trims both local-outbound and relay pages before building a batch, and rejects an immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. The legacy ceiling-free overload must not be used inside the synchronized-FLD publication gate.
+The ceiling-aware Core `SyncSession.PushBatchAsync` overload is the enforcement point in both modes. The Node-owned path filters Node Outbox entries to each author's captured ceiling; the Metadata Store-owned path filters outbound/relay pages and rejects an immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Both exclude authors absent from the map or with ceiling zero. The captured authority-mode bit is read under the same commit guard and selects the matching sequence source; a host must never dynamically switch modes after capture. The legacy ceiling-free overloads must not be used inside the synchronized-FLD publication gate.
 
 The optional `samples/FldBinSyncHost` implementation exposes `PublishReadyOutboxAsync`: it converts the gate's complete watermark list to the Core ceiling map and drains one peer's `SyncSession` only through the enforcing overload. The host still owns session creation, peer scheduling and transport lifecycle; it must invoke this helper only from `RecoverAndPublishAllAsync`, `ApplyAndPublishAllAsync` or `RunOutboundAsync` callbacks. A newly arriving local freeze can only be sent through the captured local high watermark; a newly arriving/unmapped relay operation remains above the captured RPM3 ceiling and is not sent.
 
