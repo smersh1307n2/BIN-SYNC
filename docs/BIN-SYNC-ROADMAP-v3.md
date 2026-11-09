@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.80. Recovery checkpoints refreshed after persistence and sample C slices — 2026-11-09
+
+- [x C] Created BIN-SYNC `backup/cpass-2026-11-09-0915` at `bf277d14aea91977feb5ea4ba57ce3234a681baa`.
+- [x C] Created FLD-DB `backup/cpass-2026-11-09-0915` at `94fd1ebdfa15b95b55184a8eee92a5ebea0a4d5e`.
+- [x C] Exact-head BIN-SYNC CI remains unverified: workflows triggered by the earlier code commit were cancelled by subsequent rapid documentation pushes. FLD-DB `.NET CI` is green at code-equivalent HEAD `d49f710c1e2992f753278836d521157813d8b503`; latest FLD changes since then are documentation-only.
 ## 0.79. C/T/O boundary refreshed after orchestration, vector and byte-audit completion — 2026-11-09
 
 - [x C] Reclassified authority/member orchestration as complete at the protocol/host-recipe boundary; recurring scheduling is intentionally application-owned and must not become a protocol-core timer.
