@@ -43,10 +43,6 @@ public interface IMetadataOutboundChangeIdentityStore
     bool TryGetOutboundChangeFingerprint(string scopeId, NodeId localReplica, int namespaceId,
         BatchId changeId, out ReadOnlyMemory<byte> fingerprint);
 
-    /// <summary>Returns the immutable origin already assigned to a frozen local ChangeId.</summary>
-    bool TryGetOutboundChangeOrigin(string scopeId, NodeId localReplica, int namespaceId,
-        BatchId changeId, out OperationOrigin origin);
-
     /// <summary>Returns the durable fingerprint and immutable origin in one partition lookup.</summary>
     bool TryGetOutboundChangeIdentity(string scopeId, NodeId localReplica, int namespaceId,
         BatchId changeId, out ReadOnlyMemory<byte> fingerprint, out OperationOrigin origin);
