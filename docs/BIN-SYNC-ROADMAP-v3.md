@@ -10,6 +10,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.35. C-pass: production status no longer overstates current CI — 2026-11-09
+
+- [x C] Updated `docs/PRODUCTION-STATUS.md` to distinguish the historical fully verified v3.0 baseline from the current v3.1 C-pass head. It explicitly states that new v3.1 code, RPM2 mapping/checksum, new sample and checkpoint-broadcast changes are not yet built/tested.
+- [x C] Updated the public sample status: three pre-v3.1 samples were in the historical baseline; five current executable samples are not yet verified on the current branch.
+- [x C] Kept physical ChangeId and tombstone/Ghost GC disabled. No green CI claim is made for the current head.
+- [~ T] Exact-head build, full test matrix and sample execution remain deferred until C-pass closure.
+
 ## 0.34. C-pass: public API guide aligned with negotiated v3.1 code — 2026-11-09
 
 - [x C] Updated `docs/PUBLIC-API.md`: v3.1 roster/frontier/checkpoint/FULL_REPLACE are no longer described as merely proposed; the guide now distinguishes the v3.1 negotiated extension from the v3.0 wire baseline and keeps physical GC disabled.
