@@ -92,6 +92,51 @@ public sealed class FldBinSyncHostAdapter
             cancellationToken);
 
     /// <summary>
+    /// Drain one peer's Metadata Store outbound streams using the exact ceilings
+    /// captured by the publication gate. Invoke this from the gate's publish callback;
+    /// it cannot independently discover or widen the eligible author set.
+    /// </summary>
+    public async ValueTask PublishReadyOutboxAsync(
+        SyncSession session,
+        Node sender,
+        IMetadataPeerStateStore peerStateStore,
+        IReadOnlyList<StorageRelayAuthorPublicationWatermark> publicationWatermarks,
+        int schemaVersion = 1,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(sender);
+        ArgumentNullException.ThrowIfNull(peerStateStore);
+        ArgumentNullException.ThrowIfNull(publicationWatermarks);
+        if (sender.NodeId != _coordinator.LocalReplicaId)
+            throw new ArgumentException("Sender does not match the coordinated local replica.", nameof(sender));
+
+        var ceilings = new Dictionary<NodeId, ulong>(publicationWatermarks.Count);
+        bool localAuthorPresent = false;
+        foreach (StorageRelayAuthorPublicationWatermark watermark in publicationWatermarks)
+        {
+            if (watermark.Author.IsZero || !ceilings.TryAdd(
+                    watermark.Author, watermark.PublishedThroughSequence))
+                throw new InvalidDataException("Publication ceilings contain a zero or duplicate author.");
+            if (watermark.Author == _coordinator.LocalReplicaId)
+                localAuthorPresent = true;
+        }
+        if (!localAuthorPresent)
+            throw new InvalidDataException("Publication gate omitted the local author's durable outbound ceiling.");
+
+        while (await session.PushBatchAsync(
+            sender,
+            _coordinator.NamespaceId,
+            peerStateStore,
+            _scopeId,
+            ceilings,
+            schemaVersion,
+            cancellationToken).ConfigureAwait(false))
+        {
+        }
+    }
+
+    /// <summary>
     /// Persist the safe source ACK in FLD first. The publication gate prunes RPM3
     /// only after this idempotent durable callback returns successfully.
     /// </summary>
