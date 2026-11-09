@@ -282,7 +282,7 @@ All operations that publish an OFR2 frontier, commit FULL_REPLACE, or physically
 3. FLD/WAL transaction or writer gate;
 4. shared BIN-SYNC Storage transaction gate.
 
-Release in reverse order. The host passes its WAL/FLD lease factory to \`StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\`. For GC, pass \`() => coordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\` as the \`acquireGcLease\` callback. For FULL_REPLACE, use the same composed callback as the receiver's commit-guard factory. Do not acquire the shared Storage gate and then wait for the FLD/WAL gate: that reverses the order and can deadlock with a normal FLD commit.
+Release in reverse order. The host passes its WAL/FLD lease factory to \`StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\`. For GC, pass \`() => coordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\` as the \`acquireGcLease\` callback. For FULL_REPLACE, use the same composed callback as the receiver's commit-guard factory. `StorageFullReplaceReceiver` also requires the host scanner and refuses to switch while the host draft horizon or provider feed is non-zero. Do not acquire the shared Storage gate and then wait for the FLD/WAL gate: that reverses the order and can deadlock with a normal FLD commit.
 
 ### 9.2. Complete unpublished local draft horizon
 
