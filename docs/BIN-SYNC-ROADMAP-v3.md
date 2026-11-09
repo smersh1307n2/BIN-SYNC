@@ -1,3 +1,10 @@
+## 1.12. C-pass: preserve issued-origin maxima across signed frontier reports — 2026-11-10
+
+- [x C] Hardened `StorageNamespaceGcStore.AcceptOriginFrontier`: every previously reported author epoch must remain present, and its issued sequence plus maximum HLC (wall/logical tuple) may not regress in a later signed report. The applied-origin vector was already monotonic; the issued-origin vector is independently consumed by tombstone/GC proof construction and must be monotonic as well.
+- [x C] Production fix committed as `47be8895046662a06481ac097229c59e2cb2ed47`.
+- [~ T] Add adversarial Storage restart/conformance cases for decreasing issued sequence, decreasing HLC wall, decreasing HLC logical at equal wall, dropped epoch, and unchanged/increased values. No tests were run in this C slice; physical GC remains disabled.
+- [~ C] Continue the final v3/v3.1 production-source/API/byte audit and close remaining implementation-only gaps before the T-pass.
+
 ## 1.11. Recovery point and C-pass continuation reset — 2026-11-09
 
 - [x C] Created `backup/pre-v3-code-sweep-2026-11-09` from `feature/fld-external-storage` before the next broad implementation pass.
