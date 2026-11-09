@@ -18,7 +18,7 @@ public sealed class StorageRelayProvenanceMap
     private const byte MappingKind = 0x02;
     private const int RootLength = 49;
     private const int ChangeIdLength = 16;
-    private const int CursorValueLength = 28;
+    private const int CursorValueLength = 60;
 
     private readonly StorageDatabase _storage;
     private readonly object _gate;
@@ -33,6 +33,7 @@ public sealed class StorageRelayProvenanceMap
         public ulong ScannedThroughJournalSeq;
         public ulong AckedThroughOutboxSeq;
         public ulong AckedThroughJournalSeq;
+        public byte[] MappingSetDigest = new byte[32];
         public readonly List<Mapping> Mappings = new();
         public readonly HashSet<BatchId> ChangeIds = new();
     }
@@ -95,6 +96,7 @@ public sealed class StorageRelayProvenanceMap
             var pageChangeIds = new HashSet<BatchId>();
             bool firstEntry = true;
             var writes = new List<(byte[] Key, byte[] Value)>(entries.Count + 1);
+            byte[] nextDigest = state.MappingSetDigest.ToArray();
             var appended = new List<Mapping>(entries.Count);
 
             foreach (StorageRelayProvenanceEntry entry in entries)
@@ -117,6 +119,7 @@ public sealed class StorageRelayProvenanceMap
                 byte[] value = new byte[8 + ChangeIdLength];
                 BinaryPrimitives.WriteUInt64LittleEndian(value, entry.JournalSeq);
                 changeId.CopyTo(value, 8);
+                XorRowDigest(nextDigest, key, value);
                 writes.Add((key, value));
                 appended.Add(new Mapping(entry.JournalSeq, changeIdentity, entry.OutboxSeq));
                 priorJournal = entry.JournalSeq;
@@ -137,7 +140,8 @@ public sealed class StorageRelayProvenanceMap
             byte[] cursorValue = EncodeCursor(
                 scannedThroughJournalSeq,
                 state.AckedThroughOutboxSeq,
-                state.AckedThroughJournalSeq);
+                state.AckedThroughJournalSeq,
+                nextDigest);
             using var batch = _storage.BeginWriteBatch();
             foreach (var write in writes) batch.Put(write.Key, write.Value);
             batch.Put(cursorKey, cursorValue);
@@ -147,6 +151,7 @@ public sealed class StorageRelayProvenanceMap
             foreach (Mapping mapping in appended)
                 state.ChangeIds.Add(mapping.ChangeId);
             state.ScannedThroughJournalSeq = scannedThroughJournalSeq;
+            state.MappingSetDigest = nextDigest;
         }
     }
 
@@ -202,13 +207,19 @@ public sealed class StorageRelayProvenanceMap
                 safeThroughJournalSeq == state.AckedThroughJournalSeq)
                 return;
 
-            var deletes = state.Mappings
-                .Where(mapping => mapping.JournalSeq <= safeThroughJournalSeq)
-                .Select(mapping => MappingKey(namespaceId, author, mapping.OutboxSeq))
-                .ToArray();
+            var deletes = new List<byte[]>();
+            byte[] nextDigest = state.MappingSetDigest.ToArray();
+            foreach (Mapping mapping in state.Mappings)
+            {
+                if (mapping.JournalSeq > safeThroughJournalSeq) break;
+                byte[] key = MappingKey(namespaceId, author, mapping.OutboxSeq);
+                byte[] value = EncodeMappingValue(mapping);
+                XorRowDigest(nextDigest, key, value);
+                deletes.Add(key);
+            }
             byte[] cursorKey = CursorKey(namespaceId, author);
             byte[] cursorValue = EncodeCursor(
-                state.ScannedThroughJournalSeq, safeOutboxSeq, safeThroughJournalSeq);
+                state.ScannedThroughJournalSeq, safeOutboxSeq, safeThroughJournalSeq, nextDigest);
 
             using var batch = _storage.BeginWriteBatch();
             foreach (byte[] key in deletes) batch.Delete(key);
@@ -223,6 +234,7 @@ public sealed class StorageRelayProvenanceMap
             state.Mappings.RemoveAll(mapping => mapping.JournalSeq <= safeThroughJournalSeq);
             state.AckedThroughOutboxSeq = safeOutboxSeq;
             state.AckedThroughJournalSeq = safeThroughJournalSeq;
+            state.MappingSetDigest = nextDigest;
         }
     }
 
@@ -244,6 +256,7 @@ public sealed class StorageRelayProvenanceMap
         if (cursors.Count == 1)
             DecodeCursor(cursors[0].Value, state);
 
+        byte[] computedDigest = new byte[32];
         using (StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(Join(_root, MappingPrefix(namespaceId, author))))
         {
             const int pageSize = 1024;
@@ -271,12 +284,36 @@ public sealed class StorageRelayProvenanceMap
                              journalSeq < state.Mappings[^1].JournalSeq)))
                         throw new InvalidDataException("Relay provenance mapping is outside its durable cursor or not monotonic.");
                     state.Mappings.Add(new Mapping(journalSeq, changeIdentity, outboxSeq));
+                    XorRowDigest(computedDigest, row.Key, row.Value);
                 }
                 if (page.Count < pageSize) break;
             }
         }
+        if (!CryptographicOperations.FixedTimeEquals(computedDigest, state.MappingSetDigest))
+            throw new InvalidDataException("Relay provenance mapping-set checksum does not match its durable cursor.");
         _states[key] = state;
         return state;
+    }
+
+    private static byte[] EncodeMappingValue(Mapping mapping)
+    {
+        byte[] value = new byte[8 + ChangeIdLength];
+        BinaryPrimitives.WriteUInt64LittleEndian(value, mapping.JournalSeq);
+        mapping.ChangeId.WriteTo(value.AsSpan(8));
+        return value;
+    }
+
+    private static void XorRowDigest(Span<byte> aggregate, ReadOnlySpan<byte> key, ReadOnlySpan<byte> value)
+    {
+        if (aggregate.Length != 32)
+            throw new ArgumentException("Mapping-set digest must be 32 bytes.", nameof(aggregate));
+        Span<byte> row = stackalloc byte[key.Length + value.Length];
+        key.CopyTo(row);
+        value.CopyTo(row[key.Length..]);
+        Span<byte> hash = stackalloc byte[32];
+        _ = SHA256.HashData(row, hash);
+        for (int i = 0; i < aggregate.Length; i++)
+            aggregate[i] ^= hash[i];
     }
 
     private static int FindFirstOutboxSequenceGreaterThan(List<Mapping> mappings, ulong sequence)
@@ -324,23 +361,28 @@ public sealed class StorageRelayProvenanceMap
         return Join(_root, suffix);
     }
 
-    private static byte[] EncodeCursor(ulong scanned, ulong ackedOutbox, ulong ackedJournal)
+    private static byte[] EncodeCursor(
+        ulong scanned, ulong ackedOutbox, ulong ackedJournal, ReadOnlySpan<byte> mappingSetDigest)
     {
+        if (mappingSetDigest.Length != 32)
+            throw new ArgumentException("Mapping-set digest must be 32 bytes.", nameof(mappingSetDigest));
         byte[] value = new byte[CursorValueLength];
-        "RPM1"u8.CopyTo(value);
+        "RPM2"u8.CopyTo(value);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(4), scanned);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(12), ackedOutbox);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(20), ackedJournal);
+        mappingSetDigest.CopyTo(value.AsSpan(28));
         return value;
     }
 
     private static void DecodeCursor(byte[] value, StreamState state)
     {
-        if (value.Length != CursorValueLength || !value.AsSpan(0, 4).SequenceEqual("RPM1"u8))
+        if (value.Length != CursorValueLength || !value.AsSpan(0, 4).SequenceEqual("RPM2"u8))
             throw new InvalidDataException("Relay provenance cursor marker or length is invalid.");
         state.ScannedThroughJournalSeq = BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(4));
         state.AckedThroughOutboxSeq = BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(12));
         state.AckedThroughJournalSeq = BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(20));
+        value.AsSpan(28, 32).CopyTo(state.MappingSetDigest);
         if (state.AckedThroughJournalSeq > state.ScannedThroughJournalSeq)
             throw new InvalidDataException("Relay provenance ACK cursor exceeds the scanned-through cursor.");
     }
