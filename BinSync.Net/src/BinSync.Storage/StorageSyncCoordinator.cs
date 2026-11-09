@@ -24,6 +24,9 @@ public sealed class StorageSyncCoordinator
     private TrustStore? _namespaceGcTrustStore;
     private readonly object _gate = new();
 
+    /// <summary>The immutable namespace coordinated by this instance.</summary>
+    public int NamespaceId => _namespaceId;
+
     public StorageSyncCoordinator(Node node, IDataProvider provider, int namespaceId,
         IMetadataStore? metadataStore = null, string? scopeId = null)
     {
