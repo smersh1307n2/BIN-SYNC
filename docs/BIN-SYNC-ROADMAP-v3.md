@@ -10,7 +10,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Extended `samples/RelayProvenanceMap` to inspect its actual Storage snapshot and compare the three persisted mapping rows, cursor marker/watermarks, endian order, ChangeIds and recomputed SHA-256/XOR mapping-set digest against the deterministic fixture.
 - [x C] The sample now checks the durable row representation rather than only the public translation behavior.
-- [~ T] Execute the sample and verify its actual bytes match `docs/golden/RELAY-PROVENANCE-MAP-v1.txt`; the code has not been run on this C-pass head.
+- [~ T] Execute the sample and verify its actual bytes match `docs/golden/RELAY-PROVENANCE-MAP-v2.txt`; the code has not been run on this C-pass head.
 
 ## 0.24. C-pass: versioned mapping-set checksum and atomic cursor boundary — 2026-11-09
 
@@ -54,7 +54,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 ## 0.18. C-pass: relay provenance storage golden vector — 2026-11-09
 
-- [x C] Added `docs/golden/RELAY-PROVENANCE-MAP-v1.txt` with deterministic root, cursor key/value and OutboxSeq-ordered mapping key/value bytes, including exact lengths and endian rules.
+- [x C] Added `docs/golden/RELAY-PROVENANCE-MAP-v2.txt` with deterministic root, cursor key/value and OutboxSeq-ordered mapping key/value bytes, including exact lengths and endian rules.
 - [~ T] The vector is a source-derived fixture, not yet compared with actual persisted rows. T must run the sample against a temporary StorageDatabase and compare byte-for-byte; do not mark storage/wire golden-vector coverage complete from the document alone.
 - [~ C] Signed v3.1 NRS2/OFR2/RCP2/FRA2 and FULL_REPLACE wire vectors remain open until the complete production frame registry is audited and the canonical signed payload encoders are exercised.
 
