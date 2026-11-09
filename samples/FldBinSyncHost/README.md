@@ -106,3 +106,21 @@ The helper sends the accepted roster before receiving reports, binds every recei
 The adapter maps BIN-SYNC record tombstones to FLD's canonical lifecycle field (`FieldId=0`, `DeadValue`) with the original HLC, author and ChangeId. Field tombstones stay field tombstones. Its `RelayWrites` list is intentionally empty: v3 assigns relay payload and delivery retention to the BIN-SYNC Metadata Store, not a second FLD relay history. Current v3 DELTA_BATCH has no separate provider protocol-state delta, so the adapter passes an empty delta rather than synthesizing protocol state.
 
 This is the lossless FLD ApplyJournal boundary, not yet a complete `IDataProvider`: the full adapter still needs stable generation-pinned paged snapshots, FLD local Outbox→provider feed/author-epoch mapping, record/field key resolver policy and the associated crash/reopen matrix.
+
+
+### Injecting the FLD contextual remote-apply store
+
+`StorageSyncCoordinator` accepts an optional final `remoteBatchCommitStore` argument. The FLD remote-apply capability is kept separate from the provider's snapshot/feed interface so the host can compose both over the same durable `FldDatabase` without adding BIN-SYNC types to either FLD runtime DLL:
+
+```csharp
+var fldApply = new FldRemoteBatchApplyStore(fld);
+var coordinator = new StorageSyncCoordinator(
+    node,
+    fldDataProvider,       // still must target the same FLD database
+    namespaceId,
+    metadataStore,
+    scopeId,
+    remoteBatchCommitStore: fldApply);
+```
+
+The host must ensure `fldDataProvider` and `fldApply` operate on the same durable FLD state and participate in the same `fld.AcquireCommitGuard()` outer lease. The full `fldDataProvider` implementation is still open; do not substitute an unrelated in-memory or second durable database.
