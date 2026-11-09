@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Runtime.CompilerServices;
 using Fld1.Storage.Engine;
 
 namespace BinSync.Storage;
@@ -91,14 +91,17 @@ public sealed class StorageRelayProvenanceMap
             ulong priorOutbox = state.Mappings.Count == 0
                 ? state.AckedThroughOutboxSeq
                 : state.Mappings[^1].OutboxSeq;
-            var seen = new HashSet<string>(state.Mappings.Select(mapping => Convert.ToHexString(mapping.ChangeId)), StringComparer.Ordinal);
+            var seen = new HashSet<string>(
+                state.Mappings.Select(mapping => Convert.ToHexString(mapping.ChangeId)), StringComparer.Ordinal);
             bool firstEntry = true;
             var writes = new List<(byte[] Key, byte[] Value)>(entries.Count + 1);
             var appended = new List<Mapping>(entries.Count);
 
             foreach (StorageRelayProvenanceEntry entry in entries)
             {
-                if ((firstEntry && entry.JournalSeq <= priorJournal) || (!firstEntry && entry.JournalSeq < priorJournal) || entry.JournalSeq > scannedThroughJournalSeq)
+                if ((firstEntry && entry.JournalSeq <= priorJournal) ||
+                    (!firstEntry && entry.JournalSeq < priorJournal) ||
+                    entry.JournalSeq > scannedThroughJournalSeq)
                     throw new InvalidDataException("Every new relay mapping must be after the prior scan cursor and at/before the new scan cursor.");
                 if (entry.ChangeId is null || entry.ChangeId.Length != ChangeIdLength ||
                     IsZero(entry.ChangeId))
