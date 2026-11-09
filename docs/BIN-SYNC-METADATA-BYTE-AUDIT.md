@@ -197,7 +197,7 @@ The compacted snapshot stores only live rows; deletes are represented in the WAL
 
 ## 11. FLD Manifest and Run structural overhead (cross-repository source audit)
 
-Sources: FLD-DB `src/Fld1.Manifest/Format/ManifestCodec.cs`, `ManifestModel.cs`, `AtomicManifestStore.cs`, and `src/Fld1.Run/Format/RunConstants.cs`.
+Sources: FLD-DB `src/Fld1.Database/Fld1.Manifest/Format/ManifestCodec.cs`, `ManifestModel.cs`, `AtomicManifestStore.cs`, and `src/Fld1.Database/Fld1.Run/Format/RunConstants.cs`.
 
 ### Manifest
 
@@ -261,7 +261,7 @@ The current registry is contiguous with no gaps or duplicate IDs:
 | 0x1B | FULL_REPLACE_ABORT |
 | 0x1C | FULL_REPLACE_READY |
 
-`NamespaceGcFrames` exactly matches the `FrameTypeMap`; the session parser accepts 0x04–0x1C for non-ALIAS_MAP session frames, and 0x03 is handled by the alias-map path. Frame envelope is 25-byte header, magic 0x4253, version 0x00 and CRC32C. This closes the registry inventory only; signed payload golden vectors and per-message encode/decode round trips remain T-pass items.
+`NamespaceGcFrames` exactly matches the `FrameTypeMap`; the session parser accepts 0x04–0x1C for non-ALIAS_MAP session frames, and 0x03 is handled by the alias-map path. Frame envelope is 25-byte header, magic 0x4253, version 0x00 and CRC32C. This closes the registry inventory. Checked-in vectors now cover NRS2/OFR2/RCP2/FRA2 plus FULL_REPLACE_BEGIN/CHUNK/READY/COMMIT/ABORT in `samples/V31ControlPlaneVectors`; sample execution and explicit decode/re-encode round trips remain T-pass items.
 
 ## 13. NodePersistence v17 checkpoint layout (source audit)
 
