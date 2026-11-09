@@ -33,21 +33,21 @@ FLD checkout as competing type identities.
 
 ## Required host lifecycle
 
-1. Construct one shared BIN-SYNC `StorageDatabase`, then bind
-   `StorageMetadataStore`, `StorageRelayProvenanceMap`, a conforming
-   `FldDatabaseDataProvider` and `StorageSyncCoordinator` to it. The adapter
-   supplies stable paged snapshots, FLD Outbox feed, current-state reads, key
-   resolution, published-origin stamping and the shared FLD commit guard. Construct
-   it with the host's durable active-author-epoch resolver. Its context-free
-   `ApplyRemoteBatch` deliberately fails closed; inject the contextual
-   `FldRemoteBatchApplyStore` into the coordinator.
+1. Construct one shared BIN-SYNC `StorageDatabase` and bind one
+   `StorageMetadataStore`, `StorageRelayProvenanceMap` and
+   `StorageMetadataPublicationMode(metadataStore, scopeId, localReplica, namespaceId)`
+   to it. The publication-mode wrapper stores the immutable Node→Metadata Store
+   cutover marker in a dedicated durable keyspace of that exact Metadata Store.
 2. Open one `FldDatabase` for the same namespace. Create exactly one
-   `FldDatabaseDataProvider(fld, activeAuthorEpoch)` and one
-   `FldRemoteBatchApplyStore` for that instance. Construct the coordinator with
-   that exact provider and `remoteBatchCommitStore: fldApply`; pass both exact
-   instances to `FldBinSyncHostAdapter`. The adapter rejects split provider/database
-   or remote-apply identities. This prevents field state, Outbox and ApplyJournal
-   receipts from landing in separate DBs.
+   `FldDatabaseDataProvider(fld, activeAuthorEpoch, recordIdResolver, fieldIdResolver, publicationMode)`
+   and one `FldRemoteBatchApplyStore` for that instance. The optional resolvers map
+   application-specific item/field keys to FLD's stable RecordId/FieldId model;
+   omit them for direct 16-byte/2-byte key encoding. Construct the coordinator with
+   that exact provider, the exact `StorageMetadataStore` and
+   `remoteBatchCommitStore: fldApply`; pass the exact provider, Metadata Store and
+   apply store to `FldBinSyncHostAdapter`. The adapter rejects split
+   provider/database/metadata/apply identities. This prevents field state, Outbox,
+   publication cutover and ApplyJournal receipts from landing in separate stores.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
    enabling any sender after process startup. It recovers durable PendingApply
    intents and freezes the local provider feed under the composed coordinator →
@@ -106,11 +106,14 @@ commit guard. It preserves Run v1 identity-zero materialized rows and Run v2
 ChangeId/Origin. It intentionally refuses context-free remote APPLY; the exact
 `FldRemoteBatchApplyStore` must receive the complete authenticated batch context.
 
-The remaining C-pass work is not complete: durable publication-cutover and author-
-epoch-closure capability wiring, FLD-backed FULL_REPLACE receiver staging/atomic
-generation switch, restart-durable prepared FULL_REPLACE source generations, generic
-Storage page/run/WAL physical-format decision, and the host-owned transport/session
-scheduler. The adapter is not yet a complete v3.1 receiver. Physical receipt,
+The provider now implements durable Metadata Store publication cutover and author-
+epoch closure (the active epoch itself is read from the host's durable identity
+authority). The remaining C-pass work is FLD-backed FULL_REPLACE receiver
+staging/atomic generation switch, restart-durable prepared FULL_REPLACE source
+generations, generic Storage page/run/WAL physical-format decision and final public
+API/source/byte audit. The optional sample supplies a multi-session scheduler, but
+the application still owns transport creation/reconnect/disposal. The adapter is
+not yet a complete v3.1 receiver. Physical receipt,
 ChangeId and tombstone/Ghost GC remain disabled until the full cross-store T-pass.
 
 ## v3.1 control-plane round helper
