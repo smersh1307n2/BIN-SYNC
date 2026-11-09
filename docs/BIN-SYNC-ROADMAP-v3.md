@@ -15,6 +15,10 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Updated `docs/PRODUCTION-STATUS.md` to identify the compact RPM3 implementation/sample commits and the current unvalidated branch head.
 - [x C] The historical green v3.0 baseline remains explicitly separate from all current C-pass work.
 
+## 0.52. C-pass: production-status pointer refreshed for latest RPM3 behavior — 2026-11-09
+
+- [x C] Updated `docs/PRODUCTION-STATUS.md` with the empty-tail ACK code commit and the expanded RPM3 sample commit; current-head test status remains explicitly unvalidated.
+
 ## 0.51. C-pass: empty-tail ACK semantics documented at API surface — 2026-11-09
 
 - [x C] Added XML documentation to `TranslateSafeOutboxSequence` for positive prior ACK + empty scanned tail progression and the zero-watermark prohibition.
