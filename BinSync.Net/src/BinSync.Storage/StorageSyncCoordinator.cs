@@ -586,6 +586,54 @@ public sealed class StorageSyncCoordinator
             trustStore);
     }
 
+    /// <summary>
+    /// Resend the latest locally accepted durable OFR2 report without minting a new
+    /// report sequence. Use after transport failure so retries preserve the same signed
+    /// report identity and do not create artificial frontier history.
+    /// </summary>
+    public async Task<AppliedOriginFrontierReport> SendAcceptedAppliedOriginFrontierAsync(
+        SyncSession session, byte[] memberSeed, ulong frameSequence = 1,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(memberSeed);
+        if (memberSeed.Length != 32)
+            throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(memberSeed));
+
+        StorageNamespaceGcStore gcStore;
+        TrustStore trustStore;
+        NamespaceRosterCertificate roster;
+        lock (_gate)
+        {
+            gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the namespace-GC store before frontier resend.");
+            trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? accepted) ||
+                accepted is null)
+                throw new InvalidOperationException("No accepted namespace roster is available.");
+            roster = accepted;
+        }
+
+        AppliedOriginFrontierReport? report = gcStore.ReadOriginFrontiers(roster)
+            .Where(item => item.MemberNodeId == _node.NodeId &&
+                item.NamespaceId == _namespaceId &&
+                item.RosterGeneration == roster.RosterGeneration)
+            .OrderByDescending(item => item.MemberTransportEpoch)
+            .ThenByDescending(item => item.ReportSequence)
+            .FirstOrDefault();
+        if (report is null)
+            throw new InvalidOperationException("No durable local applied-origin frontier report is available to resend.");
+
+        byte[] encoded = EncodeSignedPayload(
+            OriginFrontierProtocol.EncodePayload(report), report.Signature);
+        AppliedOriginFrontierReport verified =
+            OriginFrontierProtocol.DecodeAndVerify(encoded, roster);
+        await session.SendOriginFrontierAsync(verified, memberSeed, frameSequence, ct)
+            .ConfigureAwait(false);
+        return verified;
+    }
+
     /// <summary>Publish and persist the local OFR2 report before sending it to the authority peer.</summary>
     public async Task<AppliedOriginFrontierReport> PublishAndSendAppliedOriginFrontierAsync(
         SyncSession session, byte[] memberSeed,
