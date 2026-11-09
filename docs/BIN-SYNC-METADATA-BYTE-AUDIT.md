@@ -23,14 +23,14 @@ Partition identity row:
 | Kind | Row | Key bytes | Value bytes | Cardinality / ownership |
 |---:|---|---:|---:|---|
 | 0 | Partition identity | 50 | 8 + scope bytes | Exactly 1 per persisted partition |
-| 1 | Inbox receipt | 88 | Canonical 96; older accepted encodings 76/80/92 | One per retained (sender, transport epoch, namespace, BatchId) |
+| 1 | Inbox receipt | 88 | 76 + optional header fingerprint[16] + optional transport epoch[4] = 76/80/92/96 | One per retained (sender, transport epoch, namespace, BatchId) |
 | 2 | Receive cursor | 88 | 8 | One per (sender, sender epoch, namespace, author stream) |
 | 3 | Global ChangeId ledger | 68 | 45 | One per retained (namespace, ChangeId), shared across all peers |
 | 5 | Relay ACK + high watermark | 68 | 16 | One per (namespace, original author); canonical combined row only |
 | 8 | Outbound ACK + high watermark | 68 | 16 | One per (namespace, local author); canonical combined row only |
 | 10 | Outbound lease | 68 | 24 | At most one active lease per (namespace, local author) |
 | 12 | PendingApply | 66 | Dynamic | One per unresolved apply token; removed on completion |
-| 13 | CompletedApply receipt | 66 | Canonical 85; older accepted encoding 69 | One per completed apply token while retained |
+| 13 | CompletedApply receipt | 66 | 69 + optional header fingerprint[16] = 69/85 | One per completed apply token while retained |
 | 14 | Receive digest-chain tail | 72 | 16 | One per (sender, sender epoch, namespace); retained as replay fence |
 | 15 | Peer/author stream state | 88 | 46 + (pending batch ? 80 + pending payload bytes : 0) | One per (peer, peer epoch, namespace, author stream) |
 | 16 | Required peer stream | 88 | 0 | One per required (peer, epoch, namespace, author stream) |
@@ -40,6 +40,8 @@ Partition identity row:
 | 20 | Relay payload | 76 | 20 + payload bytes | One per retained (namespace, author, OutboxSeq); shared across all destination peers |
 | 21 | Outbound payload | 76 | 20 + payload bytes | One per retained local (namespace, author, OutboxSeq) |
 | 22 | Issued-origin watermark | 72 | 20 | One per (namespace, author, author epoch) |
+
+Inbox receipt values always contain the 8-byte maximum OriginSequence; the 16-byte header fingerprint and 4-byte TransportPeerEpoch are independently optional, producing 76/80/92/96-byte values. Receipt GC remains fail-closed unless TransportPeerEpoch and OriginSequence are both non-zero and the signed retirement/frontier/reference checks pass. CompletedApply values similarly add the 16-byte header fingerprint only when present; these lengths are field-presence variants, not a v2 migration decoder.
 
 The 45-byte ChangeId ledger value is: fingerprint[16] + author NodeId[16] + author epoch[4] + OriginSequence[8] + local-outbound flag[1]. The 20-byte payload-row envelope is ChangeId[16] + payload length[4]. Immutable origin is deliberately not duplicated in relay/outbound payload rows; it is hydrated from the global ChangeId ledger.
 
