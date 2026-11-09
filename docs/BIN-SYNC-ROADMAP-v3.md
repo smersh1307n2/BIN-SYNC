@@ -78,6 +78,12 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.75. C-pass: correct receipt row byte variants and GC interpretation — 2026-11-09
+
+- [x C] Re-read `EncodeReceiptValue` / `DecodePartition`: the 76/80/92/96-byte receipt lengths are combinations of always-present OriginSequence plus optional 16-byte HeaderFingerprint and optional 4-byte TransportPeerEpoch; they are not alternate v2 migration encodings.
+- [x C] Re-read `EncodeCompleted` / `DecodeCompleted`: 69/85 bytes are the base completed-apply receipt plus optional 16-byte HeaderFingerprint.
+- [x C] Corrected the byte-audit table and documented the GC gate: missing/zero TransportPeerEpoch or OriginSequence prevents receipt reclamation; existing replay cursor/digest state remains the durable fence.
+- [~ T] Add round-trip fixtures for all supported field-presence combinations and explicit no-GC cases when TransportPeerEpoch is absent.
 ## 0.74. C-pass: reject unsafe Inbox/receive-state row consolidation — 2026-11-09
 
 - [x C] Documented why the Inbox receipt (sender/transport epoch/namespace/BatchId), receive cursor (same sender context plus author stream) and digest-chain tail (sender/transport epoch/namespace) remain three separate row kinds.
@@ -96,7 +102,7 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Audited `StorageMetadataStore` row writers and confirmed fresh v3 writes persist relay ACK+high-watermark together as kind 5 / 16-byte value and outbound ACK+high-watermark together as kind 8 / 16-byte value.
 - [x C] Removed unreachable switch branches for split-row kinds 6/9 and 8-byte values from kinds 5/8. The earlier `DecodePartition` preflight already rejected these legacy encodings before the switch, so this is dead-code cleanup, not a behavior change; no current writer emitted kinds 6/9.
-- [x C] This aligns the parser with the audited fixed row inventory and the clean-break rule. It does not change the separate retained old receipt behavior: unknown/legacy receipt provenance remains fail-closed and non-collectable to preserve replay safety.
+- [x C] This aligns the parser with the audited fixed row inventory and the clean-break rule. It does not change receipt semantics: the 76/80/92/96-byte receipt values are same-v3 field-presence variants (OriginSequence is always encoded; header fingerprint and transport epoch are optional). Receipt GC still requires non-zero transport epoch and OriginSequence plus all signed retirement/frontier/reference checks.
 - [~ T] Add exact fixtures proving canonical kind 5/8 reopen and preflight rejection of kind 6/9 or 8-byte split values; run full Storage Integration only in the T pass.
 ## 0.70. C-pass: correct stale provenance byte-audit row after RPM3 cutover — 2026-11-09
 
