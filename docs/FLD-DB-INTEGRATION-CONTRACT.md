@@ -123,7 +123,7 @@ The source-level integration boundary now has concrete BIN-SYNC coordinator orch
 
 **Required host sequence:**
 
-1. Route remote APPLY and all outbound batch construction/send for the namespace through one `StorageRelayPublicationGate` instance. For normal receive, use `ApplyAndPublishPageAsync`; for startup recovery, keep the sender closed and use `PublishPageAsync` to reconcile already durable source pages before opening it.
+1. Route remote APPLY and all outbound batch construction/send for the namespace through one `StorageRelayPublicationGate` instance. For normal receive, use `ApplyAndPublishPageAsync`; at startup, keep the sender closed and use `RecoverAndPublishPageAsync` with `fld.GetRelayJournalHighWatermark()` and `fld.ReadRelayBatchPage(...)` callbacks before opening it.
 2. The gate calls `ReadAndAppendRelayProvenancePage` with `() => fld.AcquireCommitGuard()` and a synchronous callback that calls `ReadRelayBatchPage`, flattens each complete batch's `RelayWrites` into ordered `StorageRelaySourceChange(JournalSeq, ChangeId)` entries, and returns the page cursor. Preserve original author and JournalSeq order; do not use CommitSeq or feed OutboxSeq as OriginSequence.
 3. If the helper returns false, keep the namespace publication-gated and reconcile from retained source/Node state; never reconstruct OutboxSeq from current field winners. Do not expose Outbox entries to `CreateDeltaBatch`, a lease or transport before the map+cursor commit succeeds.
 4. The helper releases the composed FLD/Node/Storage commit lease after the provenance page is durable. Only then may the publication gate invoke the downstream sender. The adapter's async gate—not the Node or FLD internal lock—serializes remote APPLY, mapping commit and outbound scheduling.
