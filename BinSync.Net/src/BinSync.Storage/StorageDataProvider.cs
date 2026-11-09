@@ -1088,6 +1088,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
                 return 0;
 
+            if (!metadataStore.TryBuildLiveRecordReferenceSet(
+                    scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecordReferences))
+                return 0; // Unknown payloads or pending reservations block the whole pass.
+
             ulong examined = 0;
             int reclaimed = 0;
             byte[]? afterTombstoneKey = null;
@@ -1128,7 +1132,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         roster, trustStore, tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
                         tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical,
                         checkpoint.FullReplaceGeneration.Value, checkpoint.FullReplaceDigest) ||
-                    metadataStore.HasLiveRecordReference(scopeId, localReplica, namespaceId, tombstone.RecordId) ||
+                    liveRecordReferences.Contains(tombstone.RecordId) ||
                     externalReferences.HasExternalChangeIdReference(scopeId, localReplica, namespaceId, tombstone.ChangeId) ||
                     externalReferences.HasExternalRecordReference(
                         scopeId, localReplica, namespaceId, tombstone.RecordId, tombstone.ChangeId))
