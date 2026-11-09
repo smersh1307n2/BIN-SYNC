@@ -108,9 +108,13 @@ ChangeId/Origin. It intentionally refuses context-free remote APPLY; the exact
 
 The provider now implements durable Metadata Store publication cutover and author-
 epoch closure (the active epoch itself is read from the host's durable identity
-authority). The remaining C-pass work is FLD-backed FULL_REPLACE receiver
-staging/atomic generation switch, generic Storage page/run/WAL physical-format
-decision and final public API/source/byte audit. Durable sender-side prepared
+authority). FLD-backed FULL_REPLACE receiver staging and atomic namespace generation switch are
+now implemented in the FLD engine and host provider adapter. The receiver stages
+bounded immutable Run pages outside the active manifest, re-reads them through the
+provider adapter to recompute the canonical signed digest, then performs one atomic
+manifest switch while retaining old Runs pinned by durable snapshots. Remaining
+C-pass work is the generic Storage page/run/WAL physical-format decision and final
+public API/source/byte audit. Durable sender-side prepared
 FULL_REPLACE source generations are now implemented: use
 `StorageFullReplaceSender.PrepareSnapshotAndPersist` before transfer,
 `RestorePreparedSnapshot` after process restart, and
