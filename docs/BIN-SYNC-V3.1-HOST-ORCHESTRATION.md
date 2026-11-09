@@ -119,3 +119,8 @@ This is an orchestration recipe, not a background scheduler implementation. The 
 ## FULL_REPLACE sender HLC confirmation
 
 The authority computes the source snapshot HLC floor during the same digest pass, retains it in `PreparedFullReplaceSnapshot`, and checks every receiver FRA2 wall/logical pair against that exact source floor before persisting the ACK. A signature alone proves which member made the claim; this equality check proves that the claim matches the authority's source generation. Do not accept an ACK that reports a higher/lower floor or only compare recipients with each other.
+
+
+### Prepared source snapshot lifetime
+
+A host may retain one `PreparedFullReplaceSnapshot` for multi-recipient fanout/retry. `SendPreparedSnapshotAsync` takes an internal transfer lease before preflight and holds it until the asynchronous send completes. The owner may call `Dispose` from a cancellation/failure cleanup path without invalidating an in-flight read; it prevents new sends and defers the provider token release until the last transfer exits. Still keep ownership explicit and dispose after intended fanout; this lease is process-local and is not a restart token.
