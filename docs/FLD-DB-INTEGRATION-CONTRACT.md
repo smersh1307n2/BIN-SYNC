@@ -101,7 +101,7 @@ This gate is a correctness requirement for the future adapter, not an API curren
 
 ### 3.1.3 Current concrete API surface (2026-11-09)
 
-The source-level integration boundary is now identified; a production host adapter is still not present. The approved physical FLD project layout is `Fld1.Storage.dll` plus `Fld1.Database.dll`. The adapter must be a host/integration layer depending on both products; neither FLD Database nor the generic Storage project may reference BIN-SYNC protocol types.
+The source-level integration boundary now has concrete BIN-SYNC coordinator orchestration primitives and reusable host adapters. The application still has to compose them with its concrete FldDatabase callbacks and route every namespace sender through the same publication gate; no direct FLD project dependency is introduced into BIN-SYNC. The approved physical FLD project layout is `Fld1.Storage.dll` plus `Fld1.Database.dll`. The adapter must be a host/integration layer depending on both products; neither FLD Database nor the generic Storage project may reference BIN-SYNC protocol types.
 
 **FLD Database APIs (in `Fld1.Database`):**
 
@@ -117,7 +117,9 @@ The source-level integration boundary is now identified; a production host adapt
 - `StorageSyncCoordinator.AppendRelayProvenancePage(map, originalAuthor, sourceChanges, scannedThroughJournalSeq)` — the lower-level variant for callers already holding the composed application guard. It resolves each transient `(JournalSeq, ChangeId)` through `Node.TryResolveOutboxSequences` and atomically persists only `(JournalSeq, OutboxSeq)` plus the scan cursor. It returns false without cursor advancement if any ChangeId is no longer in the retained Node Outbox.
 - `StorageRelayProvenanceMap.TranslateSafeOutboxSequence(namespaceId, author, safeOutboxSeq)` — translates the minimum downstream-safe Node Outbox watermark to a whole-source-JournalSeq watermark.
 - `StorageRelayProvenanceMap.CommitAfterFldRelayAck(...)` — persists the translated ACK and prunes map rows only after FLD has durably accepted `AcknowledgeRelayBatches`.
-- `StorageSyncCoordinator.AcknowledgeRelayProvenance(map, originalAuthor, hostLeaseFactory, acknowledgeSource)` — now provides the complete safe-ACK ordering helper. It acquires the composed application guard, reads `Node.GetSafeOutboxAckedThrough`, translates through RPM3, invokes the host's durable FLD ACK callback, and prunes map rows only after that callback returns successfully.
+- `StorageSyncCoordinator.AcknowledgeRelayProvenance(map, originalAuthor, hostLeaseFactory, acknowledgeSource)` — provides the complete safe-ACK ordering helper. It acquires the composed application guard, reads `Node.GetSafeOutboxAckedThrough`, translates through RPM3, invokes the host's durable FLD ACK callback, and prunes map rows only after that callback returns successfully.
+- `StorageRelayPublicationGate` — serializes page publication, downstream send scheduling and safe-ACK work. `PublishPageAsync` commits the source page's RPM3 mapping before invoking the sender callback; `AcknowledgeAsync` performs the FLD ACK before RPM3 pruning. All other outbound send/build paths for the namespace must use `RunOutboundAsync` or the same host gate; bypassing it violates the publication fence.
+- `DelegateApplicationGcReferenceScanner` / `DelegateApplicationGcReferenceScan` — adapt a host-created immutable snapshot to `IApplicationGcReferenceScanner` without adding FLD types to BIN-SYNC. The scan wrapper owns both the snapshot and FLD commit lease and releases the snapshot before the lease.
 
 **Required host sequence:**
 
@@ -130,7 +132,7 @@ The source-level integration boundary is now identified; a production host adapt
 
 **Reference scanner implementation boundary:** under the same composed application guard, open exactly one `FldReferenceSnapshot` and keep the FLD commit lease held for the entire GC/frontier operation. Its concrete public members are `UnpublishedLocalDraftHorizon` (`Count`, `MaxHlcWall`, `MaxHlcLogical`), `HasChangeIdReference(changeId)`, `HasRecordReference(recordId, tombstoneChangeId)`, and `HasReceiptReference(senderPeer, authorEpoch, transportPeerEpoch, namespaceId, batchId)`. Map these to `IApplicationGcReferenceScan` and keep both the snapshot and FLD lease alive until the scan wrapper is disposed. `FldReferenceSnapshot.Dispose()` releases only its in-memory indexes; the host wrapper must also dispose the acquired FLD commit lease. A per-candidate rescan is not acceptable. The adapter must fail closed if snapshot creation or any reference query fails.
 
-This section records the actual API names and lock/order contract, not a claim that the adapter has been implemented or tested. The cross-repository adapter, publication scheduler gate and scanner wrapper remain open C-pass items.
+This section records the actual API names and lock/order contract, not a claim that the adapter has been implemented or tested. The coordinator-level page/ACK orchestration, serialized publication gate and delegate-based reference-snapshot adapter are now implemented. The remaining integration work is application composition against the actual `FldDatabase` methods, startup cursor reconciliation before opening the sender, routing every namespace sender through the gate, and wiring `FldReferenceSnapshot` predicates into the delegate scan. These host-specific callbacks cannot live in either runtime DLL without creating a forbidden dependency.
 
 
 ### 3.2 Семантика ApplyRemoteBatch
