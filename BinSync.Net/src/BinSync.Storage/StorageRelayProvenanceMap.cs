@@ -442,10 +442,15 @@ public sealed class StorageRelayProvenanceMap
         return result;
     }
 
-    private static void ValidateStream(int namespaceId, NodeId author)
+    private static void ValidateNamespaceId(int namespaceId)
     {
         if (namespaceId < 0 || namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
+    }
+
+    private static void ValidateStream(int namespaceId, NodeId author)
+    {
+        ValidateNamespaceId(namespaceId);
         if (author.IsZero)
             throw new ArgumentException("Original author identity must be non-zero.", nameof(author));
     }
