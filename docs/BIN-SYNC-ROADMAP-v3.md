@@ -1212,7 +1212,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 ### 2026-11-08 — C-pass: bounded provider snapshot enumeration
 
 - [x C] Replaced the second full `StorageEntry[]` materialization in `StorageDataProvider.OpenSnapshot` with a pinned `StorageSnapshot` and two sorted 4096-row keyset cursors (fields + record tombstones). `ReadSnapshot` streams merged canonical order, supports sequential pages and absolute-offset reset/skip, and disposes the pinned snapshot on release/provider shutdown.
-- [~ C] The provider no longer duplicates every current row in a second array, but `StorageDatabase.OpenSnapshot` itself still clones the underlying partition. Fully bounded memory requires a storage-engine immutable-root/iterator snapshot API; do not claim O(page) total memory yet.
+- [x C] `StorageDatabase.OpenSnapshot` no longer clones every value array: it shares immutable values and caches one sorted key/reference index per commit epoch. Repeated snapshots in an unchanged epoch reuse that index in O(1). [~ C] The first snapshot after a write still builds an O(number-of-keys) index; a persistent immutable root/MVCC tree would be required for O(page) total snapshot memory.
 - [~ T] Exact paging boundary, random/backward seek, release/dispose, snapshot stability under concurrent writes, and fullreplace two-pass digest consistency remain untested on current HEAD.
 
 
@@ -1314,7 +1314,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] Added internal shared-database identity checks without exposing storage handles through the public provider API.
 - [x C] Audited `StorageNodePersistence.Save` against the new lock order and changed it to acquire Node `Storage→Outbox→Meta` gates before the shared Storage transaction gate. This prevents the inverse Storage→Node order from deadlocking against FULL_REPLACE/GC commit guards.
 - [~ T] Verify parallel Node writes, Node checkpoint saves, provider appends, metadata commits and FULL_REPLACE commit under contention; add deterministic deadlock/race tests during T-pass.
-- [~ C] Snapshot-memory audit remains open: StorageDataProvider pages through StorageSnapshot cursors, but StorageDatabase.OpenSnapshot still clones its partition. Physical GC remains disabled until host WAL/FLD and PendingApply/relay/reservation/snapshot references are proven under the composed lease.
+- [x C] Snapshot values are shared immutably and the sorted index is cached per commit epoch; provider scans use borrowed single-entry/page cursors. [~ C] First snapshot after a write still materializes an O(number-of-keys) index. Physical GC remains disabled until host WAL/FLD and PendingApply/relay/reservation/snapshot references are proven under the composed lease.
 
 
 ### 2026-11-09 — C-pass: repair OFR2 decoder and align canonical documents
@@ -1385,7 +1385,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 ### 2026-11-09 — C-pass: reduce snapshot payload duplication
 
 - [x C] `StorageDatabase.OpenSnapshot` now clones the sorted key index but shares the immutable stored value arrays. `Commit` copies caller-owned buffers on publication and later commits replace references rather than mutating arrays; snapshot reads still return owned copies through `TryGet`/bounded cursor pages.
-- [~ C] Snapshot creation still allocates an O(number-of-keys) sorted-index copy. A persistent immutable index/root or MVCC tree would be needed to reach O(page) total snapshot memory; do not claim that bound yet.
+- [x C] Repeated snapshots now share a cached immutable sorted index for the current commit epoch; successful commits invalidate the cache while old snapshots retain their previous index. [~ C] The first snapshot after each commit epoch still allocates O(number-of-keys) index storage; persistent immutable root/MVCC remains a future option, not a current O(page) claim.
 - [~ T] Verify snapshot stability across replace/delete/reopen, concurrent commit and cursor paging; benchmark allocations/RSS with large values and 1M rows.
 
 
@@ -1680,3 +1680,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-fl-database-lease` in both repositories (BIN-SYNC `88de4289abaaf9b954f5c54be4d34590733f9f55`, FLD-DB `408399e4a465aecfa21c7dde245c297c85595191`).
 - [~ T] Verify same-root second process/second namespace rejection, release after failed open, release after disposal from another thread, abandoned-owner recovery and no generic WAL files/format mutation.
 - [~ C] This is the first shared ownership seam, not a completed `FldDatabase` migration to `StorageDatabase`. FLD-specific WAL/Run/Manifest encoding remains authoritative and unchanged pending a separate format/recovery ADR.
+
+
+## 0.92. C-pass: cache immutable Storage snapshot index per commit epoch — 2026-11-09
+
+- [x C] `StorageDatabase.OpenSnapshot` now caches the immutable `SortedList` index for the current commit epoch. Multiple snapshots with no intervening write share the same index and immutable value arrays in O(1), rather than rebuilding O(number-of-keys) arrays on every snapshot.
+- [x C] Every successful commit invalidates the live cache after publishing the new values. Existing snapshots retain their previous sorted index and values; the next snapshot builds the new epoch index once.
+- [x C] FLD authoritative source and BIN-SYNC vendor are byte-identical at blob `d5fee8be06b9193a294ce4f7c37ba84b5f37da15`.
+- [x C] Matching recovery branches `backup/cpass-2026-11-09-snapshot-index-cache` exist in both repositories (BIN-SYNC `f1232647518ff2801c96a2c7a8af3e1e2e47a08c`, FLD-DB `9869aa81f2cbe964163d21922e1949f470496e42`).
+- [~ T] Verify snapshots opened in one epoch remain stable across later commits/checkpoints/deletes and that cache invalidation happens only after durable publication. No test/benchmark claim yet.
+- [~ O] Measure repeated snapshot creation in unchanged epochs and first snapshot after commit; O(number-of-keys) index creation remains on a new epoch.
