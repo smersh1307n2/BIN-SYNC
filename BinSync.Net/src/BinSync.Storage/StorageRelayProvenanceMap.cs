@@ -385,6 +385,8 @@ public sealed class StorageRelayProvenanceMap
         value.AsSpan(28, 32).CopyTo(state.MappingSetDigest);
         if (state.AckedThroughJournalSeq > state.ScannedThroughJournalSeq)
             throw new InvalidDataException("Relay provenance ACK cursor exceeds the scanned-through cursor.");
+        if (state.AckedThroughOutboxSeq == 0 && state.AckedThroughJournalSeq != 0)
+            throw new InvalidDataException("A positive FLD relay ACK cannot exist without a positive BIN-SYNC Outbox watermark.");
     }
 
     private static byte[] Join(byte[] left, byte[] right)
