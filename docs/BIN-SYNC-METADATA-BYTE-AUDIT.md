@@ -1,0 +1,97 @@
+# BIN-SYNC v3 durable metadata byte audit
+
+**Status:** source-derived layout inventory; not a benchmark and not a complete cross-store total.  
+**Scope:** `BinSync.Storage.StorageMetadataStore` and `StorageRelayProvenanceMap`.  
+**Rule:** fixed key/value byte counts below are encoded payload sizes. Storage engine page headers, key-index entries, allocator slack, WAL records, filesystem block rounding and CLR object overhead are excluded unless stated.
+
+## 1. Partition key framing
+
+`StorageMetadataStore.PartitionRoot` is 49 bytes:
+
+- root kind: 1 byte (`0x70`);
+- SHA-256(UTF-8 ScopeId): 32 bytes;
+- LocalReplica NodeId: 16 bytes.
+
+Every metadata row key is `root[49] + kind[1] + suffix`. Therefore a row's fixed key cost is 50 bytes plus the suffix shown below. Partition identity is stored once per partition, not repeated in each row.
+
+Partition identity row:
+- key: 50 bytes;
+- value: 8 + UTF-8 ScopeId byte length (magic u32 + scope length i32 + bytes).
+
+## 2. StorageMetadataStore row inventory
+
+| Kind | Row | Key bytes | Value bytes | Cardinality / ownership |
+|---:|---|---:|---:|---|
+| 0 | Partition identity | 50 | 8 + scope bytes | Exactly 1 per persisted partition |
+| 1 | Inbox receipt | 88 | Canonical 96; older accepted encodings 76/80/92 | One per retained (sender, transport epoch, namespace, BatchId) |
+| 2 | Receive cursor | 88 | 8 | One per (sender, sender epoch, namespace, author stream) |
+| 3 | Global ChangeId ledger | 68 | 45 | One per retained (namespace, ChangeId), shared across all peers |
+| 5 | Relay ACK + high watermark | 68 | 16 | One per (namespace, original author) |
+| 8 | Outbound ACK + high watermark | 68 | 16 | One per (namespace, local author) |
+| 10 | Outbound lease | 68 | 24 | At most one active lease per (namespace, local author) |
+| 12 | PendingApply | 66 | Dynamic | One per unresolved apply token; removed on completion |
+| 13 | CompletedApply receipt | 66 | Canonical 85; older accepted encoding 69 | One per completed apply token while retained |
+| 14 | Receive digest-chain tail | 72 | 16 | One per (sender, sender epoch, namespace); retained as replay fence |
+| 15 | Peer/author stream state | 88 | 46 + (pending batch ? 80 + pending payload bytes : 0) | One per (peer, peer epoch, namespace, author stream) |
+| 16 | Required peer stream | 88 | 0 | One per required (peer, epoch, namespace, author stream) |
+| 17 | Interested peer | 72 | 0 | One per (peer, epoch, namespace) |
+| 18 | Retired peer epoch fence | 68 | 4 | One per (namespace, peer) |
+| 19 | Completed peer baseline | 72 | 0 | One per (peer, epoch, namespace) |
+| 20 | Relay payload | 76 | 20 + payload bytes | One per retained (namespace, author, OutboxSeq); shared across all destination peers |
+| 21 | Outbound payload | 76 | 20 + payload bytes | One per retained local (namespace, author, OutboxSeq) |
+| 22 | Issued-origin watermark | 72 | 20 | One per (namespace, author, author epoch) |
+
+The 45-byte ChangeId ledger value is: fingerprint[16] + author NodeId[16] + author epoch[4] + OriginSequence[8] + local-outbound flag[1]. The 20-byte payload-row envelope is ChangeId[16] + payload length[4]. Immutable origin is deliberately not duplicated in relay/outbound payload rows; it is hydrated from the global ChangeId ledger.
+
+The 16-byte stream watermark is acknowledged sequence[8] + high watermark[8]. The 24-byte lease value is generation[8] + consumer Guid[16].
+
+The 46-byte peer stream base value is version[1] + ACK cursor[8] + pushed cursor[8] + stream offset[8] + issuer epoch[4] + last digest[16] + pending-present flag[1]. A pending batch adds 80 fixed bytes plus its encoded payload.
+
+### PendingApply dynamic value formula
+
+The v3 PendingApply encoder has a fixed 140-byte envelope plus UTF-8 scope bytes, wire payload bytes, operation records and optional header fingerprint:
+
+`140 + scopeBytes + wirePayloadBytes + Σ(65 + operationPayloadBytes) + (headerFingerprintPresent ? 16 : 0)`.
+
+Each operation's 65-byte fixed part is author[16] + ChangeId[16] + author epoch[4] + OriginSequence[8] + fingerprint[16] + relayEligible[1] + payload length[4]. The encoder also writes the operation count and both receive-state/header-fingerprint booleans; these are included in the 140-byte fixed envelope. PendingApply is temporary intent, not a second long-lived payload journal.
+
+## 3. Relay provenance mapping primitive
+
+`StorageRelayProvenanceMap` uses a separate root kind (`0x6D`) and the same 49-byte root framing (scope hash + local replica). It does not collide with MetadataStore's `0x70` root.
+
+| Row | Key bytes | Value bytes | Cardinality |
+|---|---:|---:|---|
+| Per-author scan/ACK cursor | 68 | 28 | One per (namespace, original author) that has been scanned |
+| JournalSeq/ChangeId/OutboxSeq mapping | 76 | 24 | One per unacknowledged relayed ChangeId |
+
+The mapping key is root[49] + kind[1] + namespace[2] + author[16] + big-endian OutboxSeq[8]. The value is JournalSeq[8] + ChangeId[16]. The cursor value is marker[4] + scanned JournalSeq[8] + ACKed OutboxSeq[8] + ACKed JournalSeq[8].
+
+The mapping index is intentionally proportional to unacknowledged relay mappings. It is not a per-peer copy and contains no operation payload, fingerprint, receipt or OriginSequence. ACK translation is lower-bound O(log N); restart reads mapping rows in OutboxSeq order through 1,024-entry pages. Mapping rows are deleted only after FLD durably accepts the translated JournalSeq ACK.
+
+## 4. Cardinality model and non-duplication invariants
+
+For a namespace with:
+- (R) retained inbox receipts;
+- (C) retained global ChangeIds;
+- (L) retained relay payloads;
+- (O) retained outbound payloads;
+- (P) peer/author streams;
+- (Q) required peer streams;
+- (M) retained member records;
+- (A) unresolved PendingApply records;
+- (X) unacknowledged synchronized-FLD relay mappings;
+
+the fixed row overhead is linear in these row counts. Payload bytes are counted once in the relevant relay/outbound row; the same operation is not copied per destination peer. ChangeId provenance is counted once in the global ledger. Per-peer progress is stream-granular, not a per-operation ACK bitmap.
+
+No total byte estimate is asserted without the actual cardinalities, payload-size distribution, storage-engine page/index overhead and WAL amplification. The C-pass does not enable physical receipt, ChangeId or tombstone/Ghost GC.
+
+## 5. Remaining cross-store measurement
+
+Still required in O/T:
+- actual row cardinalities and average/max payload distributions from representative FLD workloads;
+- Fld1.Storage key-index/page overhead and write amplification;
+- FLD Outbox and ApplyJournal row bytes, including unsealed WAL/checkpoint behavior;
+- cold-start mapping index memory, hot append/translation allocations and mapping retention horizon;
+- before/after metadata footprint under multiple peers, multiple authors and sparse ACK progress.
+
+Do not add another pending journal or per-source/per-peer duplicate payload table to improve the apparent accounting. Preserve the contract: WAL is recovery, FLD Outbox is unpublished local intent, BIN-SYNC is published-operation identity and delivery progress.
