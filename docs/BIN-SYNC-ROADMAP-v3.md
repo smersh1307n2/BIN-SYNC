@@ -1625,3 +1625,10 @@ BIN-SYNC code commit: `9d187f6cbe6c496ec013d1d39c969f8820ed1dab`. Current C-pass
 - [~ O] Measure the added per-author map lookup/array cost against the safety benefit; do not remove the ceiling without an equivalent enforceable publication fence.
 
 BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a84f8cbc93ce4f53be90dfd3`, `97609fb3c91e15aac27ff8d2eccf576381993c1c`, contract `87a8b7a0d364f80982696f1b748294bf042424a4`. Exact-head CI is not yet run; do not mark T complete.
+
+
+## 0.86. Recovery checkpoints after publication-ceiling C slice — 2026-11-09
+
+- [x C] Created `backup/cpass-2026-11-09-publication-ceilings` in BIN-SYNC at `701077ed9a13ce476aaa1e679d9c17f16f0ced5f`.
+- [x C] Created the matching FLD-DB backup branch at `01617ecaa06fef4bd4ec16e913f24ffd449158ae`.
+- [~ T] These branches preserve the current unvalidated code/API state. They are recovery points, not green baselines.
