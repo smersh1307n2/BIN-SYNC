@@ -99,14 +99,13 @@ public sealed class FldBinSyncHostAdapter
     public async ValueTask PublishReadyOutboxAsync(
         SyncSession session,
         Node sender,
-        IMetadataPeerStateStore peerStateStore,
+        IMetadataPeerStateStore? peerStateStore,
         IReadOnlyList<StorageRelayAuthorPublicationWatermark> publicationWatermarks,
         int schemaVersion = 1,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(sender);
-        ArgumentNullException.ThrowIfNull(peerStateStore);
         ArgumentNullException.ThrowIfNull(publicationWatermarks);
         if (sender.NodeId != _coordinator.LocalReplicaId)
             throw new ArgumentException("Sender does not match the coordinated local replica.", nameof(sender));
@@ -124,15 +123,32 @@ public sealed class FldBinSyncHostAdapter
         if (!localAuthorPresent)
             throw new InvalidDataException("Publication gate omitted the local author's durable outbound ceiling.");
 
-        while (await session.PushBatchAsync(
-            sender,
-            _coordinator.NamespaceId,
-            peerStateStore,
-            _scopeId,
-            ceilings,
-            schemaVersion,
-            cancellationToken).ConfigureAwait(false))
+        if (_coordinator.IsMetadataStoreOwnedPublication)
         {
+            if (peerStateStore is null)
+                throw new ArgumentNullException(nameof(peerStateStore),
+                    "Metadata Store-owned publication requires the durable peer-state adapter.");
+            while (await session.PushBatchAsync(
+                sender,
+                _coordinator.NamespaceId,
+                peerStateStore,
+                _scopeId,
+                ceilings,
+                schemaVersion,
+                cancellationToken).ConfigureAwait(false))
+            {
+            }
+        }
+        else
+        {
+            while (await session.PushBatchAsync(
+                sender,
+                _coordinator.NamespaceId,
+                ceilings,
+                schemaVersion,
+                cancellationToken).ConfigureAwait(false))
+            {
+            }
         }
     }
 
