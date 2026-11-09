@@ -177,10 +177,15 @@ public sealed class FldDatabaseDataProvider :
         return new ProviderChangePage(changes, scannedThrough);
     }
 
-    public bool IsBoundToMetadataStore(StorageMetadataStore store)
+    public bool IsBoundToMetadataStore(
+        StorageMetadataStore store,
+        string scopeId,
+        NodeId localReplica,
+        int namespaceId)
     {
         ArgumentNullException.ThrowIfNull(store);
-        return _publicationMode is StorageMetadataPublicationMode mode && mode.IsBoundTo(store);
+        return _publicationMode is StorageMetadataPublicationMode mode &&
+            mode.IsBoundTo(store, scopeId, localReplica, namespaceId);
     }
 
     public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark)
