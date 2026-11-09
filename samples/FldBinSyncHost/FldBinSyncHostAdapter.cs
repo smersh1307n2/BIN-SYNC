@@ -72,15 +72,24 @@ public sealed class FldBinSyncHostAdapter
         ArgumentNullException.ThrowIfNull(persistNode);
         if (_coordinator.IsMetadataStoreOwnedPublication)
         {
-            using IDisposable recoveryGuard =
-                _coordinator.AcquireApplicationCommitGuard(_database.AcquireCommitGuard);
-            _ = _coordinator.RecoverPendingApplies(persistNode);
-            PublishLocalChanges(persistNode, limit);
+            using (IDisposable recoveryGuard =
+                _coordinator.AcquireApplicationCommitGuard(_database.AcquireCommitGuard))
+            {
+                _ = _coordinator.RecoverPendingApplies(persistNode);
+                PublishLocalChanges(persistNode, limit);
+            }
+
+            // Metadata Store already owns relay payload and per-author sequences.
+            // Startup must reconcile that authority directly; the RPM3/FLD JournalSeq
+            // recovery path is exclusively for legacy Node-owned publication.
+            return await _publicationGate.RecoverMetadataOwnedAndPublishAsync(
+                _coordinator,
+                _database.AcquireCommitGuard,
+                publishReadyOutbox,
+                cancellationToken).ConfigureAwait(false);
         }
-        else
-        {
-            PublishLocalChanges(persistNode, limit);
-        }
+
+        PublishLocalChanges(persistNode, limit);
         return await RecoverAndPublishAllAsync(
             publishReadyOutbox, cancellationToken).ConfigureAwait(false);
     }
