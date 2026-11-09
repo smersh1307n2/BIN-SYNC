@@ -160,13 +160,19 @@ public partial class SyncSession
                 {
                     var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
-                    pageItems = ProjectWithinPublicationCeiling(page, selectedPublicationCeiling);
+                    pageItems = publicationCeilings is null
+                        ? page.Items.Select(item => (item.Sequence, item.ChangeId,
+                            item.OriginAuthorEpoch, item.OriginSequence, item.Payload)).ToArray()
+                        : ProjectWithinPublicationCeiling(page, selectedPublicationCeiling);
                 }
                 else
                 {
                     var page = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
-                    pageItems = ProjectWithinPublicationCeiling(page, selectedPublicationCeiling);
+                    pageItems = publicationCeilings is null
+                        ? page.Items.Select(item => (item.Sequence, item.ChangeId,
+                            item.OriginAuthorEpoch, item.OriginSequence, item.Payload)).ToArray()
+                        : ProjectWithinPublicationCeiling(page, selectedPublicationCeiling);
                 }
 
                 if (pageItems.Count == 0) return false;
