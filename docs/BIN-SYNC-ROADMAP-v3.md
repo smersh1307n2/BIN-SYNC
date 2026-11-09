@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.69. C-pass: deterministic signed v3.1 payload vectors authored — 2026-11-09
+
+- [x C] Added `docs/BIN-SYNC-v3.1-GOLDEN-VECTORS.md` with deterministic NRS2, OFR2, RCP2, FRA2 and FULL_REPLACE_BEGIN payload/signature vectors, one shared roster digest, fixed test-only Ed25519 key and canonical field descriptions.
+- [x C] Vectors cover the new signed authority/member control-plane messages and FULL_REPLACE manifest domain; the test seed is explicitly marked public-only and must never be used in production.
+- [~ T] Cross-check every byte/signature against the actual C# encoders, `DecodeAndVerify`/`VerifyBegin`, trust-store binding and negative tamper/truncation cases. These are signed payload vectors, not full frame-envelope vectors.
 ## 0.68. C-pass: two-DLL FLD extraction dependency audit synchronized — 2026-11-09
 
 - [x C] Cross-checked FLD source graph against `FLD-STORAGE-CORE-ARCHITECTURE.md`: `Fld1.Storage` is already a separate opaque byte-key/value engine, but `FldDatabase` still uses `Fld1.Engine` + FLD-specific `Fld1.Run`, `Fld1.Manifest`, `Fld1.Wal` and mixed `Fld1.Core` assemblies.
