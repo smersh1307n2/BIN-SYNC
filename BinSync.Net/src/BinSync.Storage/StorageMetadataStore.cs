@@ -390,6 +390,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
+            var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
 
             var pendingReceiptKeys = new HashSet<ReceiptKey>();
             foreach (PendingApplyValue pending in current.PendingApplies.Values)
@@ -407,9 +408,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
                     key.Epoch == 0 || receipt.OriginSequence == 0)
                     continue;
-                NamespaceRosterMember? senderMember = roster.Members.FirstOrDefault(member =>
-                    member.NodeId == key.Sender);
-                if (senderMember is null || senderMember.Status != NamespaceMemberStatus.Retired ||
+                if (!rosterMembers.TryGetValue(key.Sender, out NamespaceRosterMember? senderMember) ||
+                    senderMember.Status != NamespaceMemberStatus.Retired ||
                     receipt.TransportPeerEpoch == 0 ||
                     receipt.TransportPeerEpoch > senderMember.RetiredThroughEpoch)
                     continue;
