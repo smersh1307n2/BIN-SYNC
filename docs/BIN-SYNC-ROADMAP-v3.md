@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.82. C-pass: document exact Outbox projection dependency of RPM3 resolver — 2026-11-09
+
+- [x C] Corrected the coordinator XML contract: `AppendRelayProvenancePage` resolves transient ChangeIds against **retained Node Outbox entries** to obtain OutboxSeq; the global ChangeId ledger remains the identity authority but is not itself a sequence index.
+- [x C] The helper deliberately fails closed when an Outbox entry was already compacted; it writes no map row or source cursor. The host must acquire the composed application guard before reading the FLD page and must not send until the RPM3 map commit succeeds.
+- [~ T] Prove resolver behavior before/after Outbox compaction, including that a missing retained projection never guesses a sequence from current field winners or ledger identity alone.
 ## 0.81. C-pass: legacy TCP session API search closed — 2026-11-09
 
 - [x C] Searched the current BIN-SYNC repository for `TcpSyncSession`, `TcpSyncClient` and `LegacyTcp`; no remaining source references were returned.
