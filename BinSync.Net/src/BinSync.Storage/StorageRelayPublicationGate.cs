@@ -50,7 +50,7 @@ public sealed class StorageRelayPublicationGate
             try
             {
                 await applyRemoteBatch(cancellationToken).ConfigureAwait(false);
-                foreach (NodeId author in DiscoverAuthors(coordinator, acquireHostCommitLease, readRelayAuthors))
+                foreach (NodeId author in DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors))
                 {
                     if (!DrainAllPages(
                         coordinator, map, author, acquireHostCommitLease,
@@ -102,7 +102,7 @@ public sealed class StorageRelayPublicationGate
         {
             try
             {
-                NodeId[] authors = DiscoverAuthors(coordinator, acquireHostCommitLease, readRelayAuthors);
+                NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
                 foreach (NodeId author in authors)
                 {
                     coordinator.ValidateRelayProvenanceRecovery(
@@ -187,7 +187,7 @@ public sealed class StorageRelayPublicationGate
         try
         {
             EnsureReconciled();
-            NodeId[] authors = DiscoverAuthors(coordinator, acquireHostCommitLease, readRelayAuthors);
+            NodeId[] authors = DiscoverAuthors(coordinator, map, acquireHostCommitLease, readRelayAuthors);
             var acknowledgements = new List<(NodeId Author, ulong SafeJournalSeq)>(authors.Length);
             foreach (NodeId author in authors)
             {
@@ -244,6 +244,7 @@ public sealed class StorageRelayPublicationGate
 
     private static NodeId[] DiscoverAuthors(
         StorageSyncCoordinator coordinator,
+        StorageRelayProvenanceMap map,
         Func<IDisposable?> acquireHostCommitLease,
         Func<IReadOnlyList<NodeId>> readRelayAuthors)
     {
@@ -251,15 +252,21 @@ public sealed class StorageRelayPublicationGate
             coordinator.AcquireApplicationCommitGuard(acquireHostCommitLease);
         IReadOnlyList<NodeId> discovered = readRelayAuthors()
             ?? throw new InvalidDataException("Host relay-author discovery returned null.");
+        IReadOnlyList<NodeId> mappedAuthors = map.ReadAuthors(coordinator.NamespaceId);
         var seen = new HashSet<NodeId>();
-        var authors = new List<NodeId>(discovered.Count);
-        foreach (NodeId author in discovered)
+        var authors = new List<NodeId>(discovered.Count + mappedAuthors.Count);
+        AddAuthors(discovered);
+        AddAuthors(mappedAuthors);
+
+        void AddAuthors(IReadOnlyList<NodeId> source)
         {
-            if (author.IsZero || author == coordinator.LocalReplicaId)
-                throw new InvalidDataException("Relay author discovery returned a zero or local author identity.");
-            if (!seen.Add(author))
-                throw new InvalidDataException("Relay author discovery returned a duplicate identity.");
-            authors.Add(author);
+            foreach (NodeId author in source)
+            {
+                if (author.IsZero || author == coordinator.LocalReplicaId)
+                    throw new InvalidDataException("Relay author discovery returned a zero or local author identity.");
+                if (seen.Add(author))
+                    authors.Add(author);
+            }
         }
         authors.Sort(static (left, right) =>
             StringComparer.Ordinal.Compare(left.ToString(), right.ToString()));
