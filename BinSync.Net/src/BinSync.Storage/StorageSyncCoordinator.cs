@@ -202,6 +202,14 @@ public sealed class StorageSyncCoordinator
 
             if (pageSize <= 0 || pageSize > 4096)
                 throw new ArgumentOutOfRangeException(nameof(pageSize));
+            ApplicationDraftHorizon hostDrafts =
+                externalState.ReadUnpublishedLocalDraftHorizon(_scopeId, _node.NodeId, _namespaceId);
+            if (hostDrafts.Count == 0 &&
+                (hostDrafts.MaxHlcWall != 0 || hostDrafts.MaxHlcLogical != 0))
+                throw new InvalidDataException("Host draft scanner returned an HLC maximum for an empty draft set.");
+
+            if (finalForAuthor && hostDrafts.Count != 0)
+                throw new InvalidOperationException("Cannot close the local author identity while host WAL/FLD drafts remain unpublished.");
             if (finalForAuthor)
             {
                 if (finalAuthorEpoch == 0 ||
@@ -218,12 +226,6 @@ public sealed class StorageSyncCoordinator
             {
                 throw new ArgumentException("finalAuthorEpoch is only valid when finalForAuthor is true.", nameof(finalAuthorEpoch));
             }
-
-            ApplicationDraftHorizon hostDrafts =
-                externalState.ReadUnpublishedLocalDraftHorizon(_scopeId, _node.NodeId, _namespaceId);
-            if (hostDrafts.Count == 0 &&
-                (hostDrafts.MaxHlcWall != 0 || hostDrafts.MaxHlcLogical != 0))
-                throw new InvalidDataException("Host draft scanner returned an HLC maximum for an empty draft set.");
 
             ulong unpublishedDraftCount = hostDrafts.Count;
             ulong maxDraftHlcWall = hostDrafts.MaxHlcWall;
