@@ -2,6 +2,16 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
+- Latest BIN-SYNC code-bearing commit: `7c8e160352c08756721a278dac25c63e90e8b541` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `9087386ad2cf73c7a80d014e3a2f423315dfb18c` on `fix/crash-consistency-outbox`.
+- FLD Storage and BIN-SYNC's vendored Storage source are byte-identical. Snapshots share immutable values; bounded prefix scans expose borrowed page and single-entry views. Metadata partition recovery is paged; provider feed reads and ACK cleanup are bounded; provider snapshot merge now holds only one decoded lookahead per stream instead of copied page buffers.
+- Recovery branch: BIN-SYNC `backup/cpass-2026-11-09-provider-snapshot-streaming`; earlier storage-streaming and publication-ceiling checkpoints remain available.
+- No tests were run for this C-pass by design. The historical 4382c49 result remains the last code-equivalent validation baseline; all new visitor, ACK and merge paths are unvalidated.
+- Remaining C-pass: concrete host callback composition/reference-snapshot scanner, generic Storage/WAL compatibility seam and final public API/package audit. T-pass must prove cursor boundaries, large-feed ACK crash cuts, provider snapshot merge ordering, callback migration, restart recovery and the three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+---
+
+## Current continuation checkpoint — 2026-11-09
+
 - Latest BIN-SYNC code-bearing commit: `7b77065bd2904943585e254d3368c99fb01a1b85` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `be4ecf83e021f3be1f2b4369f74180791cb560ee` on `fix/crash-consistency-outbox`.
 - The authoritative FLD Storage source and BIN-SYNC vendor copy now match byte-for-byte. Storage snapshots share immutable value arrays, bounded prefix cursors expose borrowed views, metadata partition reopen is paged, and provider ACK deletion is bounded/crash-resumable.
 - BIN-SYNC recovery branch: `backup/cpass-2026-11-09-storage-streaming`; prior publication-ceiling and author-ordering recovery branches remain available. FLD recovery branch: `backup/cpass-2026-11-09-publication-ceilings`.
