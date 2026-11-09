@@ -3,7 +3,7 @@
 - [x C] Created `backup/pre-v3-code-sweep-2026-11-09` from `feature/fld-external-storage` before the next broad implementation pass.
 - [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `b724ec624e0cc57ddbb10c344d074fd3c0bc8c0f`; the roadmap/status checkpoint is updated after this code sweep.
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
-- [~ C] Remaining code gates: durable FULL_REPLACE source-generation recovery across sender restart, FLD FULL_REPLACE receiver staging/atomic generation switch, durable publication-mode cutover for FLD provider, generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Transport creation/reconnect/disposal remain application-owned.
+- [~ C] Remaining code gates: durable FULL_REPLACE source-generation recovery across sender restart, FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage page/run/WAL physical-format decision and final public API/source/byte audit. Transport creation/reconnect/disposal remain application-owned.
 - [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
@@ -1940,7 +1940,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Context-free `IDataProvider.ApplyRemoteBatch` deliberately fails closed. The host must inject the exact `FldRemoteBatchApplyStore` so sender/transport epoch/cursor/digest context is not discarded.
 - [x C] Added `StorageSyncCoordinator.UsesDataProvider` and constructor checks in `FldBinSyncHostAdapter`: the coordinator must use the exact FLD provider, the provider must use the exact FLD database, and the contextual apply store must target that same database.
 - [x C] Updated the host README with construction order and the explicit remaining boundaries. FLD runtime still has exactly two DLLs; the adapter remains optional host code.
-- [~ C] Remaining v3/v3.1 gates: durable publication-mode cutover for the FLD provider, FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot generation recovery across restart, and generic Storage page/run/WAL physical-format decision. Author-epoch closure and host multi-session scheduling are implemented in §§1.21 and 1.23.
+- [~ C] Remaining v3/v3.1 gates: FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot generation recovery across restart, and generic Storage page/run/WAL physical-format decision. Author-epoch closure and host multi-session scheduling are implemented in §§1.21 and 1.23.
 - [~ T] Exact cross-repository sample build and provider conformance/crash tests are deferred to the dedicated T-pass. No test/build pass is claimed.
 - [~ C] Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the complete cross-store reference proof and T-pass.
 
@@ -1970,3 +1970,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Scheduler shutdown clears its gate registry without disposing semaphores still held by active duplex callbacks; lock-order inversion during receive-triggered fanout is avoided.
 - [~ C] Application still owns transport/session creation, reconnection policy and final `SyncSession` disposal. Generic Storage page/run/WAL physical-format decision and durable FULL_REPLACE sender restart recovery remain open.
 - [~ T] Validate one-reader-per-session, concurrent duplex send/receive, multi-peer ceiling consistency, failure retry, cancellation and scheduler shutdown with exact-head sample tests. No build/test result is claimed.
+
+
+## 1.24. C-pass: persist FLD provider publication cutover in the exact Metadata Store keyspace — 2026-11-09
+
+- [x C] Added `StorageMetadataPublicationMode`, a namespace-scoped `IProviderPublicationMode` view over the exact `StorageMetadataStore` instance used by the coordinator.
+- [x C] The immutable cutover marker is persisted under a dedicated root (0x71) and namespace key, separate from decoded metadata partition rows so ordinary metadata rewrites cannot erase it. Identity row, marker length, immutable watermark and Storage commit-sequence conflict are validated.
+- [x C] `FldDatabaseDataProvider` delegates publication-mode reads/writes to that wrapper and refuses cutover while FLD dirty/replayable drafts or unacknowledged Outbox entries remain.
+- [x C] `FldBinSyncHostAdapter` now requires exact provider/FLD database/Metadata Store/scope/local-replica/namespace/remote-apply identities; a provider cutover marker cannot silently point at a different namespace or Metadata Store.
+- [~ T] Add reopen/restart, concurrent metadata-write conflict, immutable marker mismatch, missing/corrupt identity row, namespace isolation, exact-composition and cutover crash-boundary tests. No build/test result is claimed.
+- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, durable sender snapshot recovery across process restart, generic Storage physical-format decision and final API/source/byte audit remain open.
