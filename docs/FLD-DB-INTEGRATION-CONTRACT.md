@@ -98,6 +98,39 @@ The ordering above requires an adapter-level publication gate; the requirement c
 This gate is a correctness requirement for the future adapter, not an API currently enforced inside `BinSync.Core`. Keeping the source JournalSeq mapping outside the protocol core avoids leaking FLD-specific journal coordinates into BIN-SYNC's peer/author stream model.
 
 
+
+### 3.1.3 Current concrete API surface (2026-11-09)
+
+The source-level integration boundary is now identified; a production host adapter is still not present. The approved physical FLD project layout is `Fld1.Storage.dll` plus `Fld1.Database.dll`. The adapter must be a host/integration layer depending on both products; neither FLD Database nor the generic Storage project may reference BIN-SYNC protocol types.
+
+**FLD Database APIs (in `Fld1.Database`):**
+
+- `FldDatabase.AcquireCommitGuard()` — serializes local commits, remote apply, checkpoint/recovery-sensitive operations and reference snapshots.
+- `FldDatabase.ReadRelayBatchPage(author, afterJournalSeq, limit)` — returns complete journal batches plus `ScannedThroughJournalSeq`. The page is now bounded to 4,096 matching operations in aggregate and never splits a JournalSeq group.
+- `FldDatabase.AcknowledgeRelayBatches(author, safeThroughJournalSeq)` — durably acknowledges a per-original-author source prefix; physical removal still waits for the FLD checkpoint/compaction path.
+- `FldDatabase.OpenReferenceSnapshot()` — builds one immutable index of host-side ChangeId, RecordId and receipt references plus the unpublished-draft horizon. It must be opened while the composed application commit lease is held.
+
+**BIN-SYNC APIs (in `BinSync.Storage`):**
+
+- `StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)` — composes coordinator, Node, host FLD and shared Storage gates in the documented lock order.
+- `StorageSyncCoordinator.AppendRelayProvenancePage(map, originalAuthor, sourceChanges, scannedThroughJournalSeq)` — resolves each transient `(JournalSeq, ChangeId)` through `Node.TryResolveOutboxSequences` and atomically persists only `(JournalSeq, OutboxSeq)` plus the scan cursor. It requires the composed application guard and returns false without cursor advancement if any ChangeId is no longer in the retained Node Outbox.
+- `StorageRelayProvenanceMap.TranslateSafeOutboxSequence(namespaceId, author, safeOutboxSeq)` — translates the minimum downstream-safe Node Outbox watermark to a whole-source-JournalSeq watermark.
+- `StorageRelayProvenanceMap.CommitAfterFldRelayAck(...)` — persists the translated ACK and prunes map rows only after FLD has durably accepted `AcknowledgeRelayBatches`.
+
+**Required host sequence:**
+
+1. Hold the host's per-namespace publication gate. Acquire `AcquireApplicationCommitGuard(() => fld.AcquireCommitGuard())` before reading the FLD relay page.
+2. Read one `RelayBatchPage`; flatten each complete batch's `RelayWrites` into ordered `StorageRelaySourceChange(JournalSeq, ChangeId)` entries. Preserve original author and JournalSeq order; do not use CommitSeq or feed OutboxSeq as OriginSequence.
+3. Call `AppendRelayProvenancePage`. On false, keep the namespace publication-gated and reconcile from retained source/Node state; never reconstruct OutboxSeq from current field winners. Do not expose Outbox entries to `CreateDeltaBatch`, a lease or transport before the map+cursor commit succeeds.
+4. Only after the provenance page is durable may the host release the source read/commit lease and allow downstream publication. The adapter's publication gate—not the Node or FLD internal lock—serializes this boundary with outbound scheduling.
+5. After downstream ACK aggregation, read the safe per-author Node Outbox watermark. Under the same composed application guard, call `TranslateSafeOutboxSequence`, durably call `fld.AcknowledgeRelayBatches(author, safeJournalSeq)`, then call `CommitAfterFldRelayAck`. Never prune the map before FLD's ACK sidecar is durable.
+6. On restart, reconcile the persisted RPM3 cursor with the FLD journal and retained Node Outbox before opening publication. A crash after FLD ACK but before map pruning is harmless: replay the same FLD ACK, then prune.
+
+**Reference scanner implementation boundary:** under the same composed application guard, open exactly one `FldReferenceSnapshot` and keep it alive for the entire GC/frontier operation. Map its immutable draft horizon and ChangeId/RecordId/receipt indexes to `IApplicationGcReferenceScan`; disposal releases the snapshot and FLD guard. A per-candidate rescan is not acceptable. The adapter must fail closed if snapshot creation or any reference query fails.
+
+This section records the actual API names and lock/order contract, not a claim that the adapter has been implemented or tested. The cross-repository adapter, publication scheduler gate and scanner wrapper remain open C-pass items.
+
+
 ### 3.2 Семантика ApplyRemoteBatch
 
 `ApplyRemoteBatch` обязана выполнять атомарно:
