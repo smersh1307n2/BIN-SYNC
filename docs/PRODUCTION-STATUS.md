@@ -2,6 +2,16 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
+- Latest BIN-SYNC code-bearing commit: `f1232647518ff2801c96a2c7a8af3e1e2e47a08c` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `9869aa81f2cbe964163d21922e1949f470496e42` on `fix/crash-consistency-outbox`.
+- FLD Storage and BIN-SYNC vendor are byte-identical. Storage snapshots share immutable values and reuse one sorted index per commit epoch; borrowed single-entry/page cursors are used by provider snapshot merge, RPM3 recovery and local feed paths. Metadata partition reopen and provider ACK cleanup are bounded.
+- Recovery branches: `backup/cpass-2026-11-09-snapshot-index-cache` in both repositories, plus earlier writer-lease, provider-streaming and publication-ceiling checkpoints.
+- No tests were run for this C-pass by design. The historical 4382c49 result remains the last code-equivalent validation baseline; all new Storage cache, visitor, ACK and FLD lease paths remain unvalidated.
+- Remaining C-pass: concrete host callback/reference-snapshot composition, end-to-end host sample, public API/package audit and a decision on persistent immutable-root/WAL compatibility. T-pass must prove snapshot generation stability, provider ACK crash cuts, two-process writer fencing, sender callback migration and the three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+---
+
+## Current continuation checkpoint — 2026-11-09
+
 - Latest BIN-SYNC code-bearing commit: `88de4289abaaf9b954f5c54be4d34590733f9f55` on `feature/fld-external-storage`; latest FLD-DB code-bearing commit: `408399e4a465aecfa21c7dde245c297c85595191` on `fix/crash-consistency-outbox`.
 - FLD Storage and BIN-SYNC's vendor copy remain byte-identical. FLD Database now reuses Storage's cross-process writer fence before manifest/WAL recovery without replacing FLD-specific WAL/Run/Manifest formats. Provider snapshot/feed scans are bounded and use borrowed Storage views; ACK cleanup is paged and crash-resumable.
 - Matching recovery branches: `backup/cpass-2026-11-09-fl-database-lease` in both repositories; earlier storage-streaming and publication-ceiling checkpoints remain available.
