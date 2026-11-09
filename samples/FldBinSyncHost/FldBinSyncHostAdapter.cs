@@ -17,7 +17,6 @@ public sealed class FldBinSyncHostAdapter
     private const int MaximumSourceChangesPerPage = 4096;
 
     private readonly FldDatabase _database;
-    private readonly FldDatabaseDataProvider _dataProvider;
     private readonly StorageSyncCoordinator _coordinator;
     private readonly StorageRelayProvenanceMap _map;
     private readonly StorageRelayPublicationGate _publicationGate;
@@ -32,7 +31,7 @@ public sealed class FldBinSyncHostAdapter
         FldRemoteBatchApplyStore remoteBatchApplyStore)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
-        _dataProvider = dataProvider ?? throw new ArgumentNullException(nameof(dataProvider));
+        ArgumentNullException.ThrowIfNull(dataProvider);
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _map = map ?? throw new ArgumentNullException(nameof(map));
         ArgumentNullException.ThrowIfNull(remoteBatchApplyStore);
