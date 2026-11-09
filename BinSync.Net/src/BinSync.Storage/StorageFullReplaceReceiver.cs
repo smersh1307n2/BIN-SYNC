@@ -73,6 +73,10 @@ public sealed class StorageFullReplaceReceiver
         _localMemberSeed = localMemberSeed.ToArray();
     }
 
+    /// <summary>True only when the receiver is composed with these exact durable trust dependencies.</summary>
+    public bool IsBoundTo(IMetadataNamespaceGcStore gcStore, TrustStore trustStore)
+        => ReferenceEquals(_gcStore, gcStore) && ReferenceEquals(_trustStore, trustStore);
+
     /// <summary>Verify authority/roster binding, then begin or resume durable staging.</summary>
     public ProviderFullReplaceProgress Begin(FullReplaceTransferProtocol.Begin manifest)
     {
