@@ -474,38 +474,36 @@ public sealed class StorageSyncCoordinator
         if (authoritySeed.Length != 32)
             throw new ArgumentException("Ed25519 namespace authority seed must be 32 bytes.", nameof(authoritySeed));
 
-        StorageNamespaceGcStore gcStore;
-        TrustStore trustStore;
-        NamespaceRosterCertificate roster;
+        NamespaceRetentionCheckpoint verified;
         lock (_gate)
         {
-            gcStore = _namespaceGcStore
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
                 ?? throw new InvalidOperationException("Attach the signed namespace-GC store before checkpoint broadcast.");
-            trustStore = _namespaceGcTrustStore
+            TrustStore trustStore = _namespaceGcTrustStore
                 ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
-            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? acceptedRoster) ||
-                acceptedRoster is null)
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available.");
-            roster = acceptedRoster;
+
+            if (roster.AuthorityNodeId != _node.NodeId ||
+                checkpoint.NamespaceId != _namespaceId ||
+                checkpoint.RosterGeneration != roster.RosterGeneration)
+                throw new InvalidOperationException("Only this namespace authority may broadcast its accepted checkpoint.");
+
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? accepted) ||
+                accepted is null ||
+                accepted.CheckpointSequence != checkpoint.CheckpointSequence ||
+                !NamespaceRetentionCheckpointProtocol.ComputeDigest(accepted).AsSpan()
+                    .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(checkpoint)))
+                throw new InvalidDataException("Only the currently durable accepted checkpoint can be broadcast.");
+
+            byte[] signed = NamespaceRetentionCheckpointProtocol.Sign(accepted, authoritySeed);
+            verified = gcStore.AcceptRetentionCheckpoint(signed, roster, trustStore);
+            if (!NamespaceRetentionCheckpointProtocol.ComputeDigest(verified).AsSpan()
+                    .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(accepted)))
+                throw new InvalidDataException("Checkpoint signing did not preserve the accepted durable checkpoint.");
         }
 
-        if (roster.AuthorityNodeId != _node.NodeId ||
-            checkpoint.NamespaceId != _namespaceId ||
-            checkpoint.RosterGeneration != roster.RosterGeneration)
-            throw new InvalidOperationException("Only this namespace authority may broadcast its accepted checkpoint.");
-
-        if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? accepted) ||
-            accepted is null ||
-            accepted.CheckpointSequence != checkpoint.CheckpointSequence ||
-            !NamespaceRetentionCheckpointProtocol.ComputeDigest(accepted).AsSpan()
-                .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(checkpoint)))
-            throw new InvalidDataException("Only the currently durable accepted checkpoint can be broadcast.");
-
-        byte[] signed = NamespaceRetentionCheckpointProtocol.Sign(accepted, authoritySeed);
-        NamespaceRetentionCheckpoint verified = gcStore.AcceptRetentionCheckpoint(signed, roster, trustStore);
-        if (!NamespaceRetentionCheckpointProtocol.ComputeDigest(verified).AsSpan()
-                .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(accepted)))
-            throw new InvalidDataException("Checkpoint signing did not preserve the accepted durable checkpoint.");
         await session.SendRetentionCheckpointAsync(verified, authoritySeed, frameSequence, ct)
             .ConfigureAwait(false);
     }
