@@ -1435,3 +1435,12 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [~ T] Exact-head `1acdfa65979a4338e9206c5617c3696c3fee4e75` is red. Core does not compile: `VolatileMetadataStoreAdapter` is missing `IMetadataOutboundChangeIdentityStore.TryGetOutboundChangeIdentity(...)`. Storage Integration has 80 failures, predominantly fixtures that still append provider drafts with assigned `OriginSequence` rather than zero/deferred origin, plus a few legacy providers that do not implement `IProviderCommitGuard`. Durable Metadata Bench passed; Metadata Retry Comparison failed. These are test adapter/fixture migrations; do not weaken production validation.
 - [~ C] Concrete BIN-SYNC↔FLD host adapter that supplies the FLD scan snapshot and commit lease is still outstanding. FLD provides the neutral draft/reference scan primitives and remains protocol-neutral.
 - [~ O] Measure the combined ledger lookup, indexed host scans and proof-snapshot build cost before accepting optimizations; do not infer improvement from code shape alone.
+
+### 2026-11-09 — C-pass refresh: exact HEAD and concrete red test inventory
+
+- [x C] Current branch HEAD is `29eea904621768175d1021f2de487d144c7d2d50`. Latest completed workflows on this exact HEAD: BinSync.Net and FLD Storage Integration both failed; Fuzz/Lab job passed.
+- [~ T] Core test run: 678 total, 672 passed, 6 failed. Five OFR1/RCP1 tests use legacy member reports without the issued-watermark vector required for locally authored applied epochs; one provider mutation codec test builds a record tombstone without canonical lifecycle field/key-epoch-zero/no-value metadata. These are fixture migrations; keep production validation strict.
+- [~ T] Storage Integration: 171 total, 91 passed, 80 failed. Failures are concentrated in old provider-draft fixtures supplying assigned OriginSequence instead of deferred zero, and test providers missing `IProviderCommitGuard`. Update fixtures/adapters to current provider contract; do not relax production guards.
+- [x C] Fuzz/Lab passed on this exact head. This does not substitute for Core or Storage Integration success.
+- [~ C] Continue finishing the host integration and control-plane code; the coordinator resolver is still only one layer of the FLD adapter. The actual FLD project has begun the approved two-runtime-assembly extraction; exact compile/test verification is pending.
+- [~ T] Exact-head CI is red; broad test migration remains deferred until C-pass closes. The known failures are now enumerated rather than represented as a generic red status.
