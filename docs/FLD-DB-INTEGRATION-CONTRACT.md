@@ -290,6 +290,17 @@ Tombstone responsibility is split deliberately. Storage must durably store the o
 Следующий этап — согласовать общую Metadata Store архитектуру, определить нейтральные semantic operations и conformance tests, затем спроектировать Storage-only роль FLD и вынести durable state BIN-SYNC за storage boundary. Уже реализованные FLD primitives (ApplyRemoteBatch, apply journal, Outbox lease) следует переиспользовать и довести, а не переписывать. До появления единой транзакционной границы не подключать FLD к Node набором точечных callback-ов.
 
 
+## 9.7 Enforce publication ceilings in the sender, including local outbound
+
+The publication gate's watermark set contains two kinds of ceilings, captured under one composed application commit guard:
+
+- the local author's published outbound high watermark from `IMetadataStore.GetOutboundHighWatermark` (local provider-feed operations have no FLD JournalSeq/RPM3 mapping);
+- each remote relay author's published OutboxSeq ceiling from RPM3 after every source page through the FLD high watermark has been mapped.
+
+The durable Metadata Store `SyncSession.PushBatchAsync` overload accepting `IReadOnlyDictionary<NodeId, ulong> publicationCeilings` is the enforcement point. It excludes authors absent from the map or with ceiling zero, trims both local-outbound and relay pages before building a batch, and rejects an immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. The legacy ceiling-free overload must not be used inside the synchronized-FLD publication gate.
+
+The optional `samples/FldBinSyncHost` implementation exposes `PublishReadyOutboxAsync`: it converts the gate's complete watermark list to the Core ceiling map and drains one peer's `SyncSession` only through the enforcing overload. The host still owns session creation, peer scheduling and transport lifecycle; it must invoke this helper only from `RecoverAndPublishAllAsync`, `ApplyAndPublishAllAsync` or `RunOutboundAsync` callbacks. A newly arriving local freeze can only be sent through the captured local high watermark; a newly arriving/unmapped relay operation remains above the captured RPM3 ceiling and is not sent.
+
 ## 10. History-storage audit reference
 
 The cross-layer code audit is maintained in [FLD-DB: Sync History Storage Audit](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-HISTORY-STORAGE-AUDIT.md). It confirms that BIN-SYNC already shares one Outbox operation across peers and owns per-peer/per-author progress; FLD must not duplicate this progress model. The FLD APPLY payload duplication has been reduced with ApplyCommitCodec v3 and relay-only ApplyJournal materialization; remaining work is independent receipt/relay retention and bounded indexes.
