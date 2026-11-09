@@ -131,27 +131,32 @@ public interface IProviderPublishedOriginStore
 public readonly record struct ApplicationDraftHorizon(
     ulong Count, ulong MaxHlcWall, uint MaxHlcLogical);
 
+/// <summary>
+/// Host-owned factory for one stable, partition-scoped reference snapshot. Call only
+/// while the composed application commit lease is held. Implementations should scan
+/// each durable host source once and index candidates; per-candidate rescans are
+/// needlessly quadratic for bounded GC batches.
+/// </summary>
 public interface IApplicationGcReferenceScanner
 {
-    /// <summary>
-    /// Return all host-local operations not yet frozen into BIN-SYNC immutable
-    /// outbound metadata. Include WAL commits beyond the Outbox materialization
-    /// watermark and unacknowledged FLD Outbox entries; never use WAL CommitSeq,
-    /// JournalSeq or OutboxSeq as BIN-SYNC OriginSequence.
-    /// </summary>
-    ApplicationDraftHorizon ReadUnpublishedLocalDraftHorizon(
+    IApplicationGcReferenceScan OpenScan(
         string scopeId, NodeId localReplica, int namespaceId);
+}
+
+/// <summary>
+/// Stable host-side view for one GC/frontier operation. Dispose releases any pinned
+/// host snapshots or scan resources. Exceptions fail closed.
+/// </summary>
+public interface IApplicationGcReferenceScan : IDisposable
+{
+    ApplicationDraftHorizon UnpublishedLocalDraftHorizon { get; }
 
     bool HasExternalReceiptReference(
-        string scopeId, NodeId localReplica, int namespaceId,
         NodeId senderPeer, uint authorEpoch, uint transportPeerEpoch, BatchId batchId);
 
-    bool HasExternalChangeIdReference(
-        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId);
+    bool HasExternalChangeIdReference(BatchId changeId);
 
-    bool HasExternalRecordReference(
-        string scopeId, NodeId localReplica, int namespaceId,
-        RecordId recordId, BatchId tombstoneChangeId);
+    bool HasExternalRecordReference(RecordId recordId, BatchId tombstoneChangeId);
 }
 
 /// <summary>Durable provider capability for terminally closing one local author epoch.</summary>
