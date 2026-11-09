@@ -1809,3 +1809,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] README and host/integration guides now show construction order and use the lossless receive method; public API docs describe the optional contextual capability.
 - [~ C] The full `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver bridge, generic Storage ordered page/run backend decision and host-owned transport scheduler remain.
 - [~ T] Cross-repository build still needs an authenticated FLD checkout; add wrong-instance, duplicate ApplyToken and crash-cut ordering coverage before T-pass closure. Physical GC remains disabled.
+
+
+## 1.07. C-pass: serialize v3.1 checkpoint retry and preflight round inputs — 2026-11-09
+
+- [x C] Public `BroadcastAcceptedCheckpointAsync` now acquires the same one-shot `_roundGate` as authority/member rounds. `RunAuthorityRoundAsync` uses a private already-gated core so it does not deadlock; partial broadcast retry remains bound to the exact current durable RCP2 and cannot mint another checkpoint sequence.
+- [x C] `PublishAuthorityMemberFrontier` uses a non-blocking gate acquisition and fails closed if another namespace round is active, rather than racing its issued/applied frontier with checkpoint publication.
+- [x C] Authority round validates authority/member Ed25519 seed lengths, page bounds, FULL_REPLACE generation/digest pairing and session identities before sending the accepted roster; invalid input no longer partially mutates remote sessions before failing.
+- [x C] Created recovery branch `backup/cpass-2026-11-09-contextual-receive-v31-gate` at `3c256b0cd9d7df778874659cf5482519889cd476`.
+- [~ T] Verify concurrent authority-round + checkpoint-retry exclusion, partial-broadcast recovery, cancellation at each session boundary, non-member/Joining session rejection, durable frame-sequence monotonicity and same-checkpoint digest identity. Latest CI for `3c256b0` was queued/in progress at this update; no result is claimed.
+- [~ C] The `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver bridge and generic Storage backend/format strategy remain open. Physical receipt, ChangeId and tombstone/Ghost GC stay disabled.
