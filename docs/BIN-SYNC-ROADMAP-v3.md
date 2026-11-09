@@ -1852,3 +1852,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-fullreplace-hlc-ack` in BIN-SYNC and FLD-DB (BIN-SYNC anchored at `d4ad36fe4fc1a3660c43cc4209a71f400ed224fe`, FLD-DB at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
 - [~ T] Add tests for exact wall/logical equality, wall mismatch, logical mismatch at equal wall, empty snapshot `(0,0)`, source changes after snapshot, signed inconsistent FRA2 from a custom peer and retry after a rejected ACK. No tests were changed or claimed in this C slice.
 - [~ C] Durable FULL_REPLACE source snapshot recovery across sender process restart remains open; this code only guarantees process-local immutable snapshot identity. `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver bridge also remains open.
+
+## 1.12. C-pass: make prepared FULL_REPLACE snapshot disposal safe during async fanout
+
+- [x C] `PreparedFullReplaceSnapshot` now tracks active transfer leases. `Dispose()` requests release immediately but defers `IDataProvider.ReleaseSnapshot` until the final in-flight transfer exits; release remains exactly-once and is safe after cancellation/failure.
+- [x C] `StorageFullReplaceSender.SendPreparedSnapshotAsync` acquires the transfer lease before preflight and holds it across the awaited network transfer. A concurrent dispose can no longer invalidate provider pages after BEGIN/READY or between CHUNK frames. New transfer attempts after disposal are rejected.
+- [x C] Created matching recovery branches `backup/cpass-2026-11-09-fullreplace-send-lease` in BIN-SYNC (anchored at `545041f4d35a9e9ed5414d1619ffedba6559312d`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
+- [~ T] Verify dispose-before-send rejection, dispose during READY wait, dispose mid-chunk, cancellation, concurrent transfers and exactly-once ReleaseSnapshot. No exact-head CI result exists for these commits.
+- [~ C] Prepared snapshots remain process-local; restart-resumable source generation persistence is still open.
