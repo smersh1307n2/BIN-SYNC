@@ -74,3 +74,26 @@ overload from this FLD relay path. Physical GC remains disabled.
 ## Explicit implementation boundary
 
 `FldBinSyncHostAdapter` is the relay-publication, ACK-translation and GC-reference adapter, not yet a complete `FldDatabase` data-provider implementation. `FldDatabase` currently exposes relay/outbox/reference operations but no stable paged full-data snapshot API, while BIN-SYNC's base `IDataProvider` apply method omits the full FLD remote-batch receipt context. The next C-pass must add a neutral provider snapshot/apply-context seam and a generation-pinned FLD snapshot; do not bridge by copying the entire database into RAM or synthesizing sender/receipt identity.
+
+
+## v3.1 control-plane round helper
+
+The optional `V31NamespaceGcHostOrchestrator` is a one-shot host helper in this sample. Construct it with the shared `StorageSyncCoordinator`, the FLD/BIN-SYNC external reference scanner, the composed FLD commit-lease factory and the application's durable per-session frame-sequence allocator:
+
+```csharp
+var v31 = new V31NamespaceGcHostOrchestrator(
+    coordinator, adapter.CreateReferenceScanner(),
+    fld.AcquireCommitGuard,
+    NextFrameSequence);
+
+// If this authority is also an Active roster member, persist its own OFR2 first.
+// Then perform one authority round and broadcast one identical durable RCP2.
+var checkpoint = await v31.RunAuthorityRoundAsync(
+    activeMemberSessions, authoritySeed,
+    authorityMemberSeed: authorityMemberSeed);
+
+// On a member node:
+await v31.RunActiveMemberRoundAsync(authoritySession, memberSeed);
+```
+
+The helper sends the accepted roster before receiving reports, binds every received OFR2 identity/epoch to its authenticated session peer, publishes one checkpoint after the supplied sessions have reported, and broadcasts that same checkpoint. If a broadcast fails part-way, retry `BroadcastAcceptedCheckpointAsync` with the same checkpoint; it does not mint another sequence. `ResendAcceptedFrontierAsync` similarly retransmits the already-durable OFR2. Sessions, cancellation, timers/cadence and frame-sequence persistence remain application-owned. A missing Active member contributes frontier zero; this helper never assumes that a connected-session list is the entire roster.
