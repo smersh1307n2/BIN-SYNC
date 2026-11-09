@@ -1744,8 +1744,8 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 ## 0.99. C-pass correction: relay/GC adapter is not the full IDataProvider bridge — 2026-11-09
 
 - [x C] The optional sample does implement the FLD relay-page/RPM3/publication/ACK/reference-scan side and both Node-owned/Metadata-Store-owned ceiling-enforced sender paths.
-- [~ C] It does **not** yet adapt `FldDatabase` to BIN-SYNC's `IDataProvider`. `FldDatabase` does not currently implement that interface; its public surface has no stable paged data snapshot handle, and `IDataProvider.ApplyRemoteBatch(applyToken, mutations)` does not carry the complete FLD `RemoteBatchCommit` sender/epoch/cursor/receipt context. Do not invent a lossy adapter or materialize the entire database into RAM as a shortcut.
-- [~ C] Next code step is a neutral provider-snapshot/apply-context contract plus a generation-pinned FLD snapshot implementation and an adapter that preserves original ChangeId/HLC/author identity and full remote relay metadata. The adapter must keep FLD protocol-neutral and must not introduce a third FLD runtime DLL.
+- [x C] The full remote-apply-context half is now implemented separately by `IProviderRemoteBatchCommitStore` + `FldRemoteBatchApplyStore` (§§1.04–1.05); this preserves the FLD `RemoteBatchCommit` header without forcing it into `IDataProvider`.
+- [~ C] It does **not** yet adapt `FldDatabase` to BIN-SYNC's `IDataProvider`. `FldDatabase` still lacks a generation-pinned paged full-data snapshot handle, Outbox-backed local feed/author-epoch mapping, record/field key-resolver policy and current-state `TryReadCurrent` semantics. Do not invent a lossy adapter or materialize the entire database into RAM as a shortcut.
 - [~ T] After that contract/code is complete, build the optional sample and test snapshot stability, remote-apply idempotency, local feed identity, cutover, crash recovery and GC horizons. Physical GC remains disabled.
 
 
@@ -1795,7 +1795,17 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 ## 1.05. C-pass: inject remote-apply capability separately from IDataProvider — 2026-11-09
 
-- [x C] `StorageSyncCoordinator` now accepts an optional `IProviderRemoteBatchCommitStore` dependency separate from `IDataProvider`. Contextual remote APPLY and PendingApply recovery use the explicit capability first, then a provider-implemented capability, then the compatibility fallback.
-- [x C] This allows `FldRemoteBatchApplyStore` to be composed over the same FLD database without requiring a not-yet-complete FLD snapshot/feed provider to masquerade as an all-in-one decorator. Host must guarantee both adapters use the same database and composed commit lease.
-- [~ C] The full `FldDatabase`→`IDataProvider` snapshot/local-feed/key-resolver bridge remains open; this dependency split only closes the lossless remote-apply half.
-- [~ T] Verify recovery calls use the injected adapter after process reopen, adapter/database identity is consistent, duplicate ApplyToken is idempotent, and Node/FLD/Metadata finalize order survives each crash cut.
+- [x C] `StorageSyncCoordinator` accepts an optional `IProviderRemoteBatchCommitStore` dependency separate from `IDataProvider`. Contextual remote APPLY and PendingApply recovery use the explicit capability first, then a provider-implemented capability, then the compatibility fallback.
+- [x C] Added `UsesRemoteBatchCommitStore` and `FldRemoteBatchApplyStore.IsBoundTo`; `FldBinSyncHostAdapter` requires and verifies the exact same capability instance and exact same `FldDatabase` instance, failing closed during construction on split-brain wiring.
+- [x C] Added `FldBinSyncHostAdapter.ReceiveAndPublishAllAsync`, which routes inbound frames through `ReceiveBatchBeforeAckAsync`: PendingApply → Node checkpoint → contextual FLD `RemoteBatchCommit`/ApplyJournal → Metadata receipt finalization → incoming ACK → all-author relay mapping/publication. Host guides now use this entry point rather than a generic/lossy provider callback.
+- [~ C] The full `FldDatabase`→`IDataProvider` snapshot/local-feed/key-resolver bridge remains open; this dependency split closes only the lossless remote-apply half.
+- [~ T] Verify recovery calls use the injected adapter after process reopen, wrong-store/wrong-database construction is rejected, duplicate ApplyToken is idempotent, and Node/FLD/Metadata finalize order survives each crash cut. The current cross-repository build job skipped the private FLD checkout because no read credential was available.
+
+
+## 1.06. C-pass: exact FLD contextual apply-store identity and receive gate — 2026-11-09
+
+- [x C] Added `StorageSyncCoordinator.UsesRemoteBatchCommitStore` and `FldRemoteBatchApplyStore.IsBoundTo`; the host adapter now requires the same capability object to be injected into the coordinator and the same exact `FldDatabase` instance to be held by the adapter. Split-brain/wrong-instance setup fails before any network work.
+- [x C] Added `ReceiveAndPublishAllAsync` so the concrete host receives through `StorageSyncCoordinator.ReceiveBatchBeforeAckAsync`, ensuring the authenticated PendingApply context is delivered to `FldRemoteBatchApplyStore` before the source ACK; relay pages are drained only after that receive transaction returns.
+- [x C] README and host/integration guides now show construction order and use the lossless receive method; public API docs describe the optional contextual capability.
+- [~ C] The full `FldDatabase`→`IDataProvider` generation-pinned snapshot/local-feed/key-resolver bridge, generic Storage ordered page/run backend decision and host-owned transport scheduler remain.
+- [~ T] Cross-repository build still needs an authenticated FLD checkout; add wrong-instance, duplicate ApplyToken and crash-cut ordering coverage before T-pass closure. Physical GC remains disabled.
