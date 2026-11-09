@@ -140,20 +140,15 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        if (_disposed) return ValueTask.CompletedTask;
         _disposed = true;
-        var gates = _sessionGates.Values.ToArray();
-        foreach (SessionGates gate in gates)
-        {
-            await gate.Send.WaitAsync().ConfigureAwait(false);
-            await gate.Receive.WaitAsync().ConfigureAwait(false);
-            gate.Receive.Release();
-            gate.Send.Release();
-            gate.Dispose();
-        }
+        // Do not dispose per-session semaphores while an inbound callback may be
+        // waiting for that same session's send gate. Active calls retain their gate
+        // objects until completion; clearing the registry releases idle gates to GC.
         _sessionGates.Clear();
+        return ValueTask.CompletedTask;
     }
 
     private async ValueTask PublishToPeersAsync(
