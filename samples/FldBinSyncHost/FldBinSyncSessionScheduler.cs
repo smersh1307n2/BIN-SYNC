@@ -213,5 +213,8 @@ public sealed class FldBinSyncSessionScheduler : IAsyncDisposable
     }
 
     private void ThrowIfDisposed()
-        => ObjectDisposedException.ThrowIf(_disposed, this);
+    {
+        lock (_lifecycleGate)
+            ObjectDisposedException.ThrowIf(_disposed, this);
+    }
 }
