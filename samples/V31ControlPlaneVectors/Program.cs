@@ -320,7 +320,7 @@ static void ExpectReject(Action action, string name)
         action();
     }
     catch (Exception exception) when (exception is InvalidDataException
-        or CryptographicException or ArgumentException)
+        or EndOfStreamException or CryptographicException or ArgumentException)
     {
         return;
     }
