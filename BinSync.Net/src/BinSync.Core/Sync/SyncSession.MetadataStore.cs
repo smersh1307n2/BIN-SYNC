@@ -10,9 +10,31 @@ public partial class SyncSession
     /// Push one batch using durable per-peer Metadata Store progress. The legacy overload
     /// remains available for in-memory sessions and compatibility.
     /// </summary>
-    public async Task<bool> PushBatchAsync(Node sender, int namespaceId,
+    public Task<bool> PushBatchAsync(Node sender, int namespaceId,
         IMetadataPeerStateStore peerStateStore, string scopeId,
         int schemaVersion = 1, CancellationToken ct = default)
+        => PushBatchCoreAsync(sender, namespaceId, peerStateStore, scopeId,
+            publicationCeilings: null, schemaVersion, ct);
+
+    /// <summary>
+    /// Push using an explicit per-author durable publication ceiling. Authors absent
+    /// from the map and authors with a zero ceiling are ineligible; a pending immutable
+    /// reservation above its author's ceiling fails closed instead of being sent.
+    /// </summary>
+    public Task<bool> PushBatchAsync(Node sender, int namespaceId,
+        IMetadataPeerStateStore peerStateStore, string scopeId,
+        IReadOnlyDictionary<NodeId, ulong> publicationCeilings,
+        int schemaVersion = 1, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(publicationCeilings);
+        return PushBatchCoreAsync(sender, namespaceId, peerStateStore, scopeId,
+            publicationCeilings, schemaVersion, ct);
+    }
+
+    private async Task<bool> PushBatchCoreAsync(Node sender, int namespaceId,
+        IMetadataPeerStateStore peerStateStore, string scopeId,
+        IReadOnlyDictionary<NodeId, ulong>? publicationCeilings,
+        int schemaVersion, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(sender);
         ValidateLocalNode(sender);
@@ -46,22 +68,31 @@ public partial class SyncSession
             {
                 authorStream = pending.AuthorStream;
                 reservation = pending.State.PendingBatch!;
+                ValidatePublicationCeiling(authorStream, reservation, publicationCeilings);
             }
             else
             {
                 var authors = peerStateStore.ReadOutboundAuthors(scopeId, sender.NodeId, namespaceId)
                     .Concat(peerStateStore.ReadRelayAuthors(scopeId, sender.NodeId, namespaceId))
                     .Distinct()
+                    .Where(author => publicationCeilings is null ||
+                        (publicationCeilings.TryGetValue(author, out ulong ceiling) && ceiling != 0))
                     .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
                     .ToArray();
                 NodeId? selectedAuthor = null;
                 MetadataPeerStreamState selectedState = default!;
                 ulong selectedSequence = ulong.MaxValue;
                 bool selectedIsContiguous = false;
+                ulong selectedPublicationCeiling = ulong.MaxValue;
 
                 foreach (NodeId candidateAuthor in authors)
                 {
                     if (candidateAuthor == PeerNodeId) continue;
+                    ulong candidateCeiling = ulong.MaxValue;
+                    if (publicationCeilings is not null &&
+                        (!publicationCeilings.TryGetValue(candidateAuthor, out candidateCeiling) ||
+                         candidateCeiling == 0))
+                        continue;
                     var saved = peerStateStore.GetPeerStreamState(
                         scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, candidateAuthor);
                     bool pristine = saved.AckedCursor == 0 && saved.PushedCursor == 0 &&
@@ -86,7 +117,8 @@ public partial class SyncSession
                     {
                         var first = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
                             PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 1);
-                        if (first.Items.Count == 0) continue;
+                        if (first.Items.Count == 0 ||
+                            first.Items[0].Sequence > candidateCeiling) continue;
                         firstSequence = first.Items[0].Sequence;
                     }
                     else
@@ -107,6 +139,7 @@ public partial class SyncSession
                             selectedState = saved;
                             selectedSequence = firstSequence;
                             selectedIsContiguous = true;
+                            selectedPublicationCeiling = candidateCeiling;
                         }
                     }
                     else if (!selectedIsContiguous && firstSequence < selectedSequence)
@@ -116,6 +149,7 @@ public partial class SyncSession
                         selectedAuthor = candidateAuthor;
                         selectedState = saved;
                         selectedSequence = firstSequence;
+                        selectedPublicationCeiling = candidateCeiling;
                     }
                 }
 
@@ -126,13 +160,13 @@ public partial class SyncSession
                 {
                     var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
-                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload)).ToArray();
+                    pageItems = ProjectWithinPublicationCeiling(page, selectedPublicationCeiling);
                 }
                 else
                 {
                     var page = peerStateStore.ReadRelayForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
-                    pageItems = page.Items.Select(item => (item.Sequence, item.ChangeId, item.OriginAuthorEpoch, item.OriginSequence, item.Payload)).ToArray();
+                    pageItems = ProjectWithinPublicationCeiling(page, selectedPublicationCeiling);
                 }
 
                 if (pageItems.Count == 0) return false;
@@ -156,6 +190,7 @@ public partial class SyncSession
                 };
                 reservation = peerStateStore.ReserveOutboundBatch(
                     scopeId, sender.NodeId, PeerNodeId, peerEpoch, namespaceId, authorStream, candidate);
+                ValidatePublicationCeiling(authorStream, reservation, publicationCeilings);
             }
 
             if (reservation.IssuerEpoch != 0)
@@ -189,6 +224,53 @@ public partial class SyncSession
         {
             _pushGate.Release();
         }
+    }
+
+
+    private static void ValidatePublicationCeiling(
+        NodeId author,
+        MetadataOutboundBatchReservation reservation,
+        IReadOnlyDictionary<NodeId, ulong>? publicationCeilings)
+    {
+        if (publicationCeilings is null)
+            return;
+        if (!publicationCeilings.TryGetValue(author, out ulong ceiling) ||
+            checked(reservation.CursorEnd + reservation.StreamOffset) > ceiling)
+            throw new InvalidDataException(
+                "An immutable outbound reservation exceeds the captured per-author publication ceiling.");
+    }
+
+    private static IReadOnlyList<(ulong Sequence, BatchId ChangeId,
+        uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)> ProjectWithinPublicationCeiling(
+        MetadataOutboundPage page, ulong ceiling)
+    {
+        int count = 0;
+        ulong previous = 0;
+        bool ceilingReached = false;
+        foreach (MetadataOutboundItem item in page.Items)
+        {
+            if (item.Sequence == 0 || (previous != 0 && item.Sequence <= previous))
+                throw new InvalidDataException("Metadata outbound page is not strictly sequence ordered.");
+            previous = item.Sequence;
+            if (item.Sequence > ceiling)
+                ceilingReached = true;
+            else if (ceilingReached)
+                throw new InvalidDataException("Metadata outbound page is not ordered at the publication ceiling.");
+            else
+                count++;
+        }
+
+        if (count == 0)
+            return Array.Empty<(ulong, BatchId, uint, ulong, byte[])>();
+        var result = new (ulong Sequence, BatchId ChangeId,
+            uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)[count];
+        for (int i = 0; i < count; i++)
+        {
+            MetadataOutboundItem item = page.Items[i];
+            result[i] = (item.Sequence, item.ChangeId,
+                item.OriginAuthorEpoch, item.OriginSequence, item.Payload);
+        }
+        return result;
     }
 
 }
