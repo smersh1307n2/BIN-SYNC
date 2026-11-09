@@ -520,3 +520,8 @@ FLD exposes the neutral \`FldDatabase.OpenReferenceSnapshot()\` / \`FldReference
 The provider publication boundary now treats the durable ChangeLedger identity as sufficient to finish a provider stamp even if the outbound payload row has already been acknowledged/compacted. \`TryGetOutboundChangeIdentity\` returns fingerprint and immutable \`OperationOrigin\` in one ledger lookup. \`PublishLocalChangesCore\` collects already-frozen feed rows and replays their origin stamps before Node persistence and provider-feed ACK. \`ProviderPublishedOrigin\` carries the origin tuple directly; it no longer requires retaining a \`MetadataOutboundItem\`.
 
 ChangeId compaction now builds its live set from the provider's pending local feed as well as relay/outbound/PendingApply state and the host \`IApplicationGcReferenceScan\`. Thus a crash after freeze but before provider stamp cannot lose the origin mapping to GC while the provider feed remains pending. A dedicated crash-window test belongs in Phase T.
+
+
+## Implementation status update — shared FULL_REPLACE source generation
+
+The host implementation now prepares one immutable provider snapshot and one signed manifest for recipient fanout. `PreparedFullReplaceSnapshot` is an in-process lease; it can be retained while retrying failed recipients and is validated against the accepted roster and authority signature before any retry network send. Convenience single-recipient and all-member methods also perform snapshot/manifest preflight before roster broadcast. This improves source-generation consistency but does not yet provide a durable snapshot token across sender process restart. The exact-head build/retry matrix remains a T-pass requirement; physical GC remains disabled.
