@@ -95,3 +95,18 @@ Still required in O/T:
 - before/after metadata footprint under multiple peers, multiple authors and sparse ACK progress.
 
 Do not add another pending journal or per-source/per-peer duplicate payload table to improve the apparent accounting. Preserve the contract: WAL is recovery, FLD Outbox is unpublished local intent, BIN-SYNC is published-operation identity and delivery progress.
+
+
+## 6. FLD synchronized-database Outbox (cross-repository source audit)
+
+Source: FLD-DB `src/Fld1.Engine/Outbox/OutboxLog.cs` on `fix/crash-consistency-outbox`.
+
+- Per-namespace Outbox file header: 16 bytes.
+- Each Outbox record: fixed part 88 bytes + value payload bytes + CRC32C 4 bytes = **92 + valueBytes**.
+- Fixed 88-byte record fields: OutboxSeq[8] + CommitSeq[8] + ChangeId[16] + RecordId[16] + FieldId[2] + OpKind[1] + reserved[1] + AuthorNodeId[16] + HLC wall[8] + HLC logical[4] + KeyEpoch[2] + reserved[2] + value length[4].
+- Sidecars per namespace: ACK 12 bytes; materialized-state watermark 20 bytes; consumer lease 36 bytes.
+- In-memory sparse index stride: one (OutboxSeq[8], file offset[8]) point per 64 records, excluding collection/runtime overhead.
+
+The FLD Outbox is the unpublished local-intent source and already carries ChangeId, RecordId, author and HLC with the payload. The BIN-SYNC provenance map adds only the 100-byte key/value row per unacknowledged relay identity plus one 60-byte per-author cursor; it must not copy the payload or replace the Outbox. FLD's Outbox compaction still depends on the WAL seal/checkpoint horizon and is independent of BIN-SYNC mapping pruning.
+
+**Not included:** ApplyJournal record sizes, WAL record/segment framing, manifest/run overhead and Fld1.Storage page/index/write amplification. Those require a source-complete audit of the corresponding FLD formats; do not infer them from Outbox sizes.
