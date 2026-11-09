@@ -424,6 +424,12 @@ public sealed class FldDatabaseDataProvider :
         return _database.AcquireCommitGuard();
     }
 
+    public bool HasPersistedSnapshot(Guid snapshotToken)
+    {
+        EnsureOpen();
+        return _database.HasProviderSnapshot(snapshotToken);
+    }
+
     /// <summary>
     /// Reclaims snapshot generations not referenced by recovered FULL_REPLACE sender
     /// progress. The host must pass the complete durable active-token set.
