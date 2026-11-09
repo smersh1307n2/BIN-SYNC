@@ -53,10 +53,12 @@ public static class StorageFullReplaceSender
         ProviderSnapshotHandle snapshot = provider.OpenSnapshot();
         try
         {
-            FullReplaceTransferProtocol.Begin manifest = CreateManifest(
+            PreparedManifest prepared = CreateManifest(
                 provider, snapshot, trustStore, roster, authorityNodeId,
                 generation, authoritySeed);
-            return new PreparedFullReplaceSnapshot(provider, snapshot, manifest);
+            return new PreparedFullReplaceSnapshot(
+                provider, snapshot, prepared.Manifest,
+                prepared.HlcWallFloor, prepared.HlcLogicalFloor);
         }
         catch
         {
@@ -139,15 +141,20 @@ public static class StorageFullReplaceSender
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(snapshot);
-        FullReplaceTransferProtocol.Begin manifest = CreateManifest(
+        PreparedManifest prepared = CreateManifest(
             provider, snapshot, trustStore, roster, authorityNodeId,
             generation, authoritySeed);
         return SendSnapshotCoreAsync(
-            provider, snapshot, manifest, session, gcStore, trustStore,
+            provider, snapshot, prepared.Manifest, session, gcStore, trustStore,
             roster, authorityNodeId, authoritySeed, ct);
     }
 
-    private static FullReplaceTransferProtocol.Begin CreateManifest(
+    private sealed record PreparedManifest(
+        FullReplaceTransferProtocol.Begin Manifest,
+        ulong HlcWallFloor,
+        uint HlcLogicalFloor);
+
+    private static PreparedManifest CreateManifest(
         IDataProvider provider,
         ProviderSnapshotHandle snapshot,
         TrustStore trustStore,
@@ -166,6 +173,8 @@ public static class StorageFullReplaceSender
 
         byte[] digest;
         int entryCount;
+        ulong maxHlcWall = 0;
+        uint maxHlcLogical = 0;
         using (var builder = new ProviderFullReplaceDigestBuilder(
             generation, snapshot.ChangeFeedWatermark))
         {
@@ -175,6 +184,17 @@ public static class StorageFullReplaceSender
                 ProviderSnapshotPage page = provider.ReadSnapshot(
                     snapshot.Token, index, FullReplaceTransferProtocol.MaxChunkEntries);
                 ValidatePage(page, index, FullReplaceTransferProtocol.MaxChunkEntries);
+                foreach (ProviderMutation mutation in page.Entries)
+                {
+                    if (mutation is null)
+                        throw new InvalidDataException("FULL_REPLACE source snapshot contains a null mutation.");
+                    if (mutation.HlcWall > maxHlcWall ||
+                        (mutation.HlcWall == maxHlcWall && mutation.HlcLogical > maxHlcLogical))
+                    {
+                        maxHlcWall = mutation.HlcWall;
+                        maxHlcLogical = mutation.HlcLogical;
+                    }
+                }
                 builder.AppendPage(page.Entries);
                 index = page.NextIndex;
                 if (page.IsComplete)
@@ -197,7 +217,7 @@ public static class StorageFullReplaceSender
         FullReplaceTransferProtocol.Begin manifest =
             FullReplaceTransferProtocol.SignBegin(unsignedManifest, authoritySeed);
         FullReplaceTransferProtocol.VerifyBegin(manifest, roster, trustStore);
-        return manifest;
+        return new PreparedManifest(manifest, maxHlcWall, maxHlcLogical);
     }
 
     private static async Task<FullReplaceInstalledAck> SendSnapshotCoreAsync(
