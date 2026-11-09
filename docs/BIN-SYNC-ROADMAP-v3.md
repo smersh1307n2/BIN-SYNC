@@ -1,3 +1,9 @@
+## 0.74. Recovery branches created before the next integration slice — 2026-11-09
+
+- [x C] Created `backup/cpass-2026-11-09-relay-gate-metadata-mode` at `1c7fcd82edbf2656f1e6af1ab0d4ed7eab94517c` before continuing with the cross-store host integration and metadata-backend audit.
+- [x C] Retained earlier checkpoints `backup/pre-rpm3-compact-provenance-2026-11-09` and `backup/cpass-2026-11-09-after-relay-guards`.
+- [~ T] Backup point contains unvalidated C-pass changes; it is a recovery branch, not a passing release candidate.
+
 # BIN-SYNC v3.0 — implementation roadmap
 **Дата:** 2026-11-09  
 **Статус:** active; execution checklist is authoritative.  
