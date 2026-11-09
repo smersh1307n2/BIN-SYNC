@@ -318,12 +318,44 @@ BIN-SYNC's `BinSync.Storage.StorageRelayProvenanceMap` is the durable mapping pr
 
 For each page returned by FLD `ReadRelayBatchPage(author, afterJournalSeq, limit)`. Pages end on complete JournalSeq boundaries: a single FLD journal transaction containing multiple ChangeIds cannot be split across pages, and `ScannedThroughJournalSeq` means every source journal through that boundary has been examined:
 
-1. Resolve the page's unique `(author, ChangeId)` identities through `Node.TryResolveOutboxSequences(namespaceId, identities, sequences)`. If any identity is no longer retained, stop and reconcile; never infer an OutboxSeq from current field winners.
+1. Materialize the page's unique `(author, ChangeId)` identities from each `RelayJournalBatch.Batch.RelayWrites`. Do not infer OutboxSeq from current field winners; the coordinator helper performs the durable Node-ledger resolution.
 2. Preserve the original FLD `JournalSeq` for every resolved ChangeId. Do not substitute JournalSeq, CommitSeq or OutboxSeq for protocol `OriginSequence`.
 3. Call `StorageSyncCoordinator.AppendRelayProvenancePage(map, author, sourceChanges, ScannedThroughJournalSeq)` while the same application commit guard is still held. The coordinator resolves every transient `(JournalSeq, ChangeId)` through `Node.TryResolveOutboxSequences`, builds only `(JournalSeq, resolved OutboxSeq)` entries, and calls the map. ChangeId is never copied into the map. If any ChangeId is no longer retained, the method returns false and writes neither mappings nor scan cursor. The complete page mapping, RPM3 mapping-set digest and scan cursor commit in one Storage transaction. Empty author pages still advance the cursor. On restart the map recomputes XOR(SHA-256(key || value)) over retained mapping rows through bounded prefix pages and fails closed if the checksum differs from the cursor.
 4. Only after the mapping commit may the host open the corresponding BIN-SYNC outbound publication path. The adapter-level namespace gate must serialize this boundary against inbound relay publication and outbound batching.
 5. Compute BIN-SYNC's per-author safe `OutboxSeq` with `Node.GetSafeOutboxAckedThrough`; translate it with `TranslateSafeOutboxSequence`. The first JournalSeq containing any OutboxSeq above the safe watermark is retained in full.
 6. Call FLD `AcknowledgeRelayBatches(author, safeThroughJournalSeq)` and wait for its durable return. Only then call `CommitAfterFldRelayAck` to persist both translated ACK watermarks and prune mapping rows.
+
+Concrete current-API shape (the adapter assembly remains deferred until FLD extraction):
+
+```csharp
+using IDisposable commitGuard =
+    coordinator.AcquireApplicationCommitGuard(database.AcquireCommitGuard);
+
+RelayBatchPage page = database.ReadRelayBatchPage(author.ToArray(), afterJournalSeq, 256);
+int changeCount = 0;
+foreach (RelayJournalBatch batch in page.Batches)
+    changeCount = checked(changeCount + batch.Batch.RelayWrites.Count);
+
+var sourceChanges = new StorageRelaySourceChange[changeCount];
+int writeIndex = 0;
+foreach (RelayJournalBatch batch in page.Batches)
+{
+    foreach (RemoteFieldWrite write in batch.Batch.RelayWrites)
+        sourceChanges[writeIndex++] =
+            new StorageRelaySourceChange(batch.JournalSeq, BatchId.From(write.ChangeId));
+}
+
+if (!coordinator.AppendRelayProvenancePage(
+        map, author, sourceChanges, page.ScannedThroughJournalSeq))
+{
+    // A ChangeId is no longer retained in Node Outbox: do not send and do not
+    // advance the FLD scan cursor. Recover the publication gap first.
+    throw new InvalidOperationException("Relay provenance could not be resolved.");
+}
+```
+
+Keep the application guard alive across the FLD page read and coordinator append. The guard acquires coordinator → Node → FLD commit gate → shared Storage gate in the documented order. The sample uses one bounded array of transient source identities; durable RPM3 rows contain only sequence pairs.
+
 
 Crash behavior is intentionally asymmetric: a crash before mapping commit rereads the same FLD page; a crash after mapping commit reuses the durable mapping and cursor; a crash after FLD ACK but before map pruning replays the same idempotent FLD ACK and then prunes. Never prune the mapping before FLD confirms its relay ACK is durable.
 
