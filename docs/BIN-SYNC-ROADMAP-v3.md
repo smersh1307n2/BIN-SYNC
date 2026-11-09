@@ -2060,6 +2060,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 ## 1.33. C-pass: preserve immutable blob geometry across Storage configuration changes — 2026-11-09
 
 - [x C] The configured page size now applies only when creating a new blob. Existing pending/complete catalog rows retain their persisted page size for resume, verification and reads, so a later process can change its default page size without making older blobs unreadable.
+- [x C] Public reader API documentation now distinguishes per-page length validation from whole-blob SHA-256 verification and warns that a streaming destination can contain partial bytes if I/O or final integrity validation fails.
 - [x C] Immutable identity is the blob length plus SHA-256 content digest; reusing the ID with identical bytes is idempotent even if the caller's current default page size differs. Existing page files are verified using their original durable geometry.
 - [x C] `ContainsBlob` and `TryOpenRead` no longer reject valid generations merely because the current writer's preferred page size changed.
 - [x C] Blob page file contents are flushed individually, but directory entries are now fsynced once per completed blob generation rather than once per page. The pending catalog row remains authoritative until that single directory flush succeeds, so interrupted writes remain resumable while avoiding thousands of redundant directory fsyncs.
