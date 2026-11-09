@@ -321,12 +321,13 @@ public sealed class StorageSyncCoordinator
             throw new InvalidOperationException(
                 "Relay provenance map must share this coordinator's scope, local replica and StorageDatabase.");
 
-        ulong safeOutbox;
+        StorageRelayProvenanceCursor priorCursor = map.ReadCursor(_namespaceId, originalAuthor);
+        ulong currentSafeOutbox;
         bool metadataOwnsOutbound = _provider is IProviderPublicationMode publicationMode &&
             publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _);
         if (metadataOwnsOutbound)
         {
-            safeOutbox = metadataStore.GetSafePeerStreamCompactionCursor(
+            currentSafeOutbox = metadataStore.GetSafePeerStreamCompactionCursor(
                 _scopeId!, _node.NodeId, _namespaceId, originalAuthor);
         }
         else
@@ -334,8 +335,14 @@ public sealed class StorageSyncCoordinator
             long safeOutboxSequence = _node.GetSafeOutboxAckedThrough(_namespaceId, originalAuthor);
             if (safeOutboxSequence < 0)
                 throw new InvalidDataException("Node returned a negative safe Outbox watermark.");
-            safeOutbox = checked((ulong)safeOutboxSequence);
+            currentSafeOutbox = checked((ulong)safeOutboxSequence);
         }
+
+        // The durable map ACK is itself a previously proven safe lower bound.
+        // Peer registration/retirement can temporarily make the current aggregate
+        // report zero (for example while a replacement peer completes its baseline);
+        // it must never regress an already committed source ACK.
+        ulong safeOutbox = Math.Max(priorCursor.AckedThroughOutboxSeq, currentSafeOutbox);
         ulong safeJournal = map.TranslateSafeOutboxSequence(
             _namespaceId, originalAuthor, safeOutbox);
 
