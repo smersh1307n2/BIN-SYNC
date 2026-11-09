@@ -69,6 +69,9 @@ public sealed class FldBinSyncHostAdapter
         int limit = 1024,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (_coordinator.IsMetadataStoreOwnedPublication)
+            _ = _coordinator.RecoverPendingApplies(persistNode);
         PublishLocalChanges(persistNode, limit);
         return await RecoverAndPublishAllAsync(
             publishReadyOutbox, cancellationToken).ConfigureAwait(false);
@@ -83,7 +86,12 @@ public sealed class FldBinSyncHostAdapter
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
             CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
-        => _publicationGate.RecoverAndPublishAllAsync(
+    {
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+        if (_coordinator.IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Metadata-owned startup recovery requires the overload that supplies the Node checkpoint callback.");
+        return _publicationGate.RecoverAndPublishAllAsync(
             _coordinator,
             _map,
             ReadRelayAuthors,
@@ -92,6 +100,7 @@ public sealed class FldBinSyncHostAdapter
             ReadRelayPage,
             publishReadyOutbox,
             cancellationToken);
+    }
 
     /// <summary>
     /// Serialize a durable remote APPLY with relay mapping and the following
@@ -120,7 +129,17 @@ public sealed class FldBinSyncHostAdapter
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
             CancellationToken, ValueTask> publishReadyOutbox,
         CancellationToken cancellationToken = default)
-        => _publicationGate.ApplyAndPublishAllAsync(
+    {
+        ArgumentNullException.ThrowIfNull(applyRemoteBatch);
+        ArgumentNullException.ThrowIfNull(publishReadyOutbox);
+        if (_coordinator.IsMetadataStoreOwnedPublication)
+            return _publicationGate.ApplyAndPublishMetadataOwnedAsync(
+                _coordinator,
+                _database.AcquireCommitGuard,
+                applyRemoteBatch,
+                publishReadyOutbox,
+                cancellationToken);
+        return _publicationGate.ApplyAndPublishAllAsync(
             _coordinator,
             _map,
             ReadRelayAuthors,
@@ -129,6 +148,7 @@ public sealed class FldBinSyncHostAdapter
             ReadRelayPage,
             publishReadyOutbox,
             cancellationToken);
+    }
 
     /// <summary>
     /// Receive one durable batch through the coordinator's PendingApply protocol,
@@ -177,13 +197,22 @@ public sealed class FldBinSyncHostAdapter
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
             CancellationToken, ValueTask> publish,
         CancellationToken cancellationToken = default)
-        => _publicationGate.RunOutboundAsync(
+    {
+        ArgumentNullException.ThrowIfNull(publish);
+        if (_coordinator.IsMetadataStoreOwnedPublication)
+            return _publicationGate.RunMetadataOwnedAsync(
+                _coordinator,
+                _database.AcquireCommitGuard,
+                publish,
+                cancellationToken);
+        return _publicationGate.RunOutboundAsync(
             _coordinator,
             _map,
             ReadRelayAuthors,
             _database.AcquireCommitGuard,
             publish,
             cancellationToken);
+    }
 
     /// <summary>
     /// Drain one peer's active outbound streams using the exact ceilings
@@ -258,7 +287,13 @@ public sealed class FldBinSyncHostAdapter
     /// </summary>
     public ValueTask<IReadOnlyList<(NodeId Author, ulong SafeJournalSeq)>> AcknowledgeAllAsync(
         CancellationToken cancellationToken = default)
-        => _publicationGate.AcknowledgeAllAsync(
+    {
+        if (_coordinator.IsMetadataStoreOwnedPublication)
+            return _publicationGate.CompactMetadataOwnedAcknowledgedAsync(
+                _coordinator,
+                _database.AcquireCommitGuard,
+                cancellationToken);
+        return _publicationGate.AcknowledgeAllAsync(
             _coordinator,
             _map,
             ReadRelayAuthors,
@@ -266,6 +301,7 @@ public sealed class FldBinSyncHostAdapter
             (author, safeJournalSeq) =>
                 _database.AcknowledgeRelayBatches(author.ToArray(), safeJournalSeq),
             cancellationToken);
+    }
 
     /// <summary>
     /// Create the host reference scanner used by BIN-SYNC's ChangeId, receipt,
