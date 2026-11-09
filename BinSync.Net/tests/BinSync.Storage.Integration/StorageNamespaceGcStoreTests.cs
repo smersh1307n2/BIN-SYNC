@@ -19,7 +19,8 @@ public sealed class StorageNamespaceGcStoreTests
     private static NamespaceRosterCertificate Roster(
         int generation, byte[] previousDigest,
         (byte[] Seed, byte[] PublicKey)[] keys,
-        NamespaceMemberStatus[]? statuses = null)
+        NamespaceMemberStatus[]? statuses = null,
+        IReadOnlyList<NamespaceRetiredOriginEpoch>? retiredOrigins = null)
     {
         statuses ??= Enumerable.Repeat(NamespaceMemberStatus.Active, keys.Length).ToArray();
         var members = new NamespaceRosterMember[keys.Length];
@@ -40,7 +41,8 @@ public sealed class StorageNamespaceGcStoreTests
             RosterGeneration = (ulong)generation,
             PreviousRosterDigest = previousDigest,
             AuthorityNodeId = NodeId.From(Id(1)),
-            Members = members
+            Members = members,
+            RetiredOriginEpochs = retiredOrigins ?? Array.Empty<NamespaceRetiredOriginEpoch>()
         };
     }
 
@@ -94,7 +96,18 @@ public sealed class StorageNamespaceGcStoreTests
         var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
         var trust = new TrustStore();
         trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
-        var roster = Roster(1, new byte[32], keys);
+        var roster = Roster(1, new byte[32], keys,
+            retiredOrigins: new[]
+            {
+                new NamespaceRetiredOriginEpoch
+                {
+                    OriginAuthorNodeId = NodeId.From(Id(9)),
+                    OriginAuthorEpoch = 3,
+                    FinalIssuedOriginSequence = 90,
+                    MaxIssuedHlcWall = 100,
+                    MaxIssuedHlcLogical = 2
+                }
+            });
         byte[] rosterBytes = NamespaceRosterProtocol.Sign(roster, keys[0].Seed);
         Guid generation = Guid.Parse("12345678-1234-5678-9abc-def012345678");
         byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("authoritative snapshot"));
