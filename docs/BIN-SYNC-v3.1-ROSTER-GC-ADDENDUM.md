@@ -491,3 +491,8 @@ The protocol tombstone proof rejects a candidate whose HLC exceeds the signed ma
 \`IApplicationGcReferenceScanner\` now also exposes \`ReadUnpublishedLocalDraftHorizon(scopeId, localReplica, namespaceId)\`. OFR2 publication requires both the scanner and a host lease factory; it combines host WAL/Outbox drafts with provider-feed drafts and carries the maximum HLC. A final-author report is rejected while host drafts remain, before any provider epoch is closed. The count is conservative; zero is the only authorization signal. The host adapter must account for WAL commits beyond the Outbox materialization watermark and unacknowledged Outbox entries without mapping source-local cursors into OriginSequence.
 
 This closes the protocol-side gap where a zero provider-feed count could miss a local WAL commit not yet materialized into the provider. It does not claim that the FLD-specific adapter already exists. Update the host implementation and crash/race tests before any physical GC flag is enabled.
+
+
+## 10.27. Final-author retirement binds the exact active epoch (2026-11-09)
+
+The provider terminal-retirement operation now takes the declared final author epoch. It compares that value with the persisted active-epoch marker, requires the same epoch's durable closure marker, and persists the exact final epoch alongside the terminal identity marker. A retry after a crash must repeat the same final epoch; a different historical closed epoch cannot be substituted. Rejoin still requires a monotonically fresh epoch and an accepted Active roster entry.
