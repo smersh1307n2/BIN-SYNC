@@ -78,6 +78,11 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] `StorageRelayProvenanceMap.AppendPage` independently enforces the same 4,096-row maximum as the coordinator resolver, so callers cannot bypass the allocation bound through the lower-level API.
 
+## 0.77. C-pass: executable v3.1 signed-vector sample added — 2026-11-09
+
+- [x C] Added `samples/V31ControlPlaneVectors` to construct the deterministic NRS2/OFR2/RCP2/FRA2/FULL_REPLACE_BEGIN objects, compare payload and signed bytes against the checked-in vectors, and verify Ed25519 signatures.
+- [x C] Added the sample command and description to `samples/README.md`; it uses the public `BinSync.Core` API and the documented test-only seed.
+- [~ T] Execute the sample on the exact branch head, add trust-store `DecodeAndVerify` assertions and negative mutation/truncation cases. The sample is authored but not yet run.
 ## 0.76. C-pass: NodePersistence v17 checkpoint byte layout audited — 2026-11-09
 
 - [x C] Audited the 46-byte Node state envelope (magic/version/body length/tagged BLAKE3) and documented deterministic body section formulas for records/field states, Outbox, grouped authors, adaptive receipts, stream digests, peer progress/reservations, SeenChanges and compact Node ChangeId fingerprints.
