@@ -1860,3 +1860,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created matching recovery branches `backup/cpass-2026-11-09-fullreplace-send-lease` in BIN-SYNC (anchored at `545041f4d35a9e9ed5414d1619ffedba6559312d`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
 - [~ T] Verify dispose-before-send rejection, dispose during READY wait, dispose mid-chunk, cancellation, concurrent transfers and exactly-once ReleaseSnapshot. No exact-head CI result exists for these commits.
 - [~ C] Prepared snapshots remain process-local; restart-resumable source generation persistence is still open.
+
+## 1.13. C-pass: Joining promotion requires the exact RCP2 FULL_REPLACE HLC floor
+
+- [x C] `V31NamespaceGcHostOrchestrator.PromoteInstalledJoiningMemberAsync` now checks the Joining member's durable FRA2 `HlcWallFloor` and `HlcLogicalFloor` against the already accepted prior-roster RCP2 before changing the member to Active.
+- [x C] Promotion now requires agreement on the exact generation, digest, roster generation, transport epoch, installed state and both HLC floor components. A signed ACK for the same digest but a different HLC horizon cannot activate the member.
+- [x C] Created matching recovery branches `backup/cpass-2026-11-09-joining-hlc-promotion` in BIN-SYNC (anchored at `10a4e17492641a3911acdbdf8e4aadc865dad371`) and FLD-DB (anchored at `d432d0a1f30720a352dacff76bfd7ffee4edd55f`).
+- [~ T] Add promotion rejection tests for HLC wall mismatch, logical mismatch at equal wall, wrong prior roster generation, stale transport epoch, wrong digest and valid matching ACK. No exact-head CI result is claimed.
+- [~ C] Durable prepared FULL_REPLACE snapshot recovery across process restart and the complete FLD provider snapshot/local-feed/key-resolver bridge remain open.
