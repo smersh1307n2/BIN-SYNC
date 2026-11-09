@@ -62,6 +62,13 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] The byte audit now records that `StorageDatabase.EncodeBatch` sorts all mutations by StorageKey before WAL append using LINQ `OrderBy`, adding O(N log N) CPU/allocation overhead per write batch.
 - [~ O] Benchmark realistic relay-page sizes and mixed metadata batches before changing the FLD Storage serializer; compare LINQ ordering with array sort and pre-sorted mutation collection, preserving deterministic byte order and atomic commit semantics.
 
+## 0.55. C-pass: coordinator resolves ChangeIds before RPM3 append — 2026-11-09
+
+- [x C] Added `StorageSyncCoordinator.AppendRelayProvenancePage`: accepts transient `(JournalSeq, ChangeId)` source entries, resolves all ChangeIds through `Node.TryResolveOutboxSequences`, converts positive local OutboxSeq values to compact sequence-pair entries and appends mapping+RPM3 cursor atomically.
+- [x C] It requires the coordinator application-commit gate, validates the map's scope/local replica/shared StorageDatabase binding, and returns false without writing anything if any ChangeId is no longer retained.
+- [x C] The helper stores no ChangeId bytes; global ChangeId ledger remains the sole identity authority. Updated the FLD integration contract, public API guide and changelog.
+- [~ T] Test missing ChangeId rollback/no cursor advance, duplicate ChangeId rejection, mismatched map binding, correct lock-order usage, and concurrent source ACK/compaction under the host lease.
+
 ## 0.54. C-pass: FLD Manifest and Run structural byte audit — 2026-11-09
 
 - [x C] Audited ManifestCodec: 80-byte fixed base plus 4 bytes/namespace, 64/run, 16/retain, 52+bitmap/result-client and 40/provenance-index entry.
