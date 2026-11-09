@@ -290,16 +290,27 @@ Tombstone responsibility is split deliberately. Storage must durably store the o
 Следующий этап — согласовать общую Metadata Store архитектуру, определить нейтральные semantic operations и conformance tests, затем спроектировать Storage-only роль FLD и вынести durable state BIN-SYNC за storage boundary. Уже реализованные FLD primitives (ApplyRemoteBatch, apply journal, Outbox lease) следует переиспользовать и довести, а не переписывать. До появления единой транзакционной границы не подключать FLD к Node набором точечных callback-ов.
 
 
-## 9.7 Enforce publication ceilings in the sender, including local outbound
+## 9.7 Publication authority, relay payload ownership and ACK/compaction
 
-Before each publication-gate invocation, the host uses a `FldBinSyncHostAdapter` overload that accepts `persistNode` (or explicitly calls `PublishLocalChanges`) to freeze the provider's current local feed into the active authority. The publication gate then captures two kinds of ceilings under one composed application commit guard and tags them with the active publication authority:
+Before each publication-gate invocation, the host uses a `FldBinSyncHostAdapter` overload that accepts `persistNode` (or explicitly calls `PublishLocalChanges`) to freeze the provider's current local feed into the active outbound authority. The publication mode and all author ceilings are captured under the composed application commit guard. The mode selects two deliberately separate paths:
 
-- before provider-authoritative cutover, the local author's high watermark comes from Node Outbox; after cutover it comes from `IMetadataStore.GetOutboundHighWatermark`;
-- each remote relay author's published sequence ceiling comes from RPM3 after every source page through the FLD high watermark has been mapped. Before cutover this resolves to Node OutboxSeq; after cutover it resolves to Metadata Store relay sequence.
+**Legacy Node-owned mode (before provider-authoritative cutover):**
 
-The ceiling-aware Core `SyncSession.PushBatchAsync` overload is the enforcement point in both modes. The Node-owned path filters Node Outbox entries to each author's captured ceiling; the Metadata Store-owned path filters outbound/relay pages and rejects an immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Both exclude authors absent from the map or with ceiling zero. The captured authority-mode bit is read under the same commit guard and selects the matching sequence source; a host must never dynamically switch modes after capture. The legacy ceiling-free overloads must not be used inside the synchronized-FLD publication gate.
+- The local author's publication ceiling comes from Node Outbox.
+- Each remote relay author's published sequence comes from RPM3, after the corresponding FLD JournalSeq page has been resolved through the retained Node Outbox ChangeId identity and its sequence-pair mapping is committed.
+- Startup recovery validates source JournalSeq cursors and drains complete FLD source pages before sending. Safe ACK order is downstream-safe Node Outbox sequence → RPM3 translation → durable FLD `AcknowledgeRelayBatches` → RPM3 prune.
 
-The optional `samples/FldBinSyncHost` implementation exposes `PublishReadyOutboxAsync`: it converts the gate's complete watermark list to the Core ceiling map and drains one peer's `SyncSession` only through the enforcing overload. The host still owns session creation, peer scheduling and transport lifecycle; it must invoke this helper only from `RecoverAndPublishAllAsync`, `ApplyAndPublishAllAsync` or `RunOutboundAsync` callbacks. A newly arriving local freeze can only be sent through the captured local high watermark; a newly arriving/unmapped relay operation remains above the captured RPM3 ceiling and is not sent.
+**Metadata Store-owned mode (after provider-authoritative cutover):**
+
+- The local author's publication ceiling comes from `IMetadataStore.GetOutboundHighWatermark`.
+- Remote relay authors come from `IMetadataPeerStateStore.ReadRelayAuthors`; their published ceilings come directly from `IMetadataStore.GetRelayHighWatermark`. No FLD JournalSeq scan, ChangeId→OutboxSeq resolution or RPM3 mapping is performed.
+- The contextual `FldRemoteBatchApplyStore` passes an empty `RelayWrites` subset into FLD `RemoteBatchCommit` by design. `StorageMetadataStore.FinalizePendingApplyDelta` is the sole owner of relay payload and per-author relay sequence; it inserts only newly accepted, relay-eligible ChangeIds. FLD ApplyJournal retains its contextual receipt/recovery record but does not keep a second copy of relay payload.
+- `SyncSession.PushBatchAsync` commits the per-peer ACK and immutable reservation state in the Metadata Store peer-state store. After ACK, `CompactAcknowledgedRelayPayloadsAsync` computes the minimum durable safe cursor across all interested peers and calls `IMetadataStore.CompactRelayThrough` under the composed application commit guard. A missing/incomplete peer keeps the safe cursor at zero.
+- Metadata-owned startup uses `RecoverMetadataOwnedAndPublishAsync` after `RecoverPendingApplies` and the local-feed freeze. Metadata-owned APPLY uses `ApplyAndPublishMetadataOwnedAsync`; later sends use `RunMetadataOwnedAsync`. These paths capture the current Metadata Store watermarks directly and never call the legacy FLD/RPM3 page or ACK path.
+
+The ceiling-aware `SyncSession.PushBatchAsync` overload is the enforcement point in both modes. The Node-owned path filters Node Outbox entries to each author's captured ceiling; the Metadata Store-owned path filters Metadata outbound/relay pages and rejects an immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Both exclude authors absent from the set or with ceiling zero. The captured authority-mode bit is read under the same commit guard and selects the matching sequence source; a host must never dynamically switch modes after capture. Legacy ceiling-free overloads must not be used inside this synchronized-FLD publication gate.
+
+The optional `samples/FldBinSyncHost` adapter exposes `PublishReadyOutboxAsync` and validates that the supplied `IMetadataPeerStateStore` is the exact Metadata Store instance owned by the coordinator. The host still owns session creation, peer scheduling and transport lifecycle; it must invoke the helper only from the shared adapter/gate callbacks. Do not invoke both ACK/compaction authorities or recreate FLD relay payload after Metadata Store cutover.
 
 ## 10. History-storage audit reference
 
