@@ -292,7 +292,7 @@ Tombstone responsibility is split deliberately. Storage must durably store the o
 
 ## 9.7 Enforce publication ceilings in the sender, including local outbound
 
-Before each publication-gate invocation, the host calls `FldBinSyncHostAdapter.PublishLocalChanges(persistNode)` to freeze the provider's current local feed into the active authority. The publication gate then captures two kinds of ceilings under one composed application commit guard and tags them with the active publication authority:
+Before each publication-gate invocation, the host uses a `FldBinSyncHostAdapter` overload that accepts `persistNode` (or explicitly calls `PublishLocalChanges`) to freeze the provider's current local feed into the active authority. The publication gate then captures two kinds of ceilings under one composed application commit guard and tags them with the active publication authority:
 
 - before provider-authoritative cutover, the local author's high watermark comes from Node Outbox; after cutover it comes from `IMetadataStore.GetOutboundHighWatermark`;
 - each remote relay author's published sequence ceiling comes from RPM3 after every source page through the FLD high watermark has been mapped. Before cutover this resolves to Node OutboxSeq; after cutover it resolves to Metadata Store relay sequence.
