@@ -2,14 +2,14 @@
 
 ## Current continuation checkpoint — 2026-11-09
 
-- BIN-SYNC `feature/fld-external-storage` latest code head: `7a8c7f2eea341b879d6f39b747e19d3b3e5c0357`. v3.1 capability dependencies are now checked symmetrically on sender and receiver: NRS2; OFR2/RCP2 with roster+frontier; FULL_REPLACE/FRA2 with roster+full-replace.
-- FLD-DB `fix/crash-consistency-outbox` latest inspected head: `d432d0a1f30720a352dacff76bfd7ffee4edd55f`; no FLD source change in these slices.
-- Latest completed BIN-SYNC CI evidence is still for code head `d4ad36fe4fc1a3660c43cc4209a71f400ed224fe`: Build passed; v3.1 signed control-plane golden-vector job passed; Fuzz/Lab passed; Core tests failed 6/678; Storage Integration failed 80/171 on Ubuntu/macOS/Windows. Core failures are legacy OFR1/RCP1 fixtures and an incomplete record-tombstone fixture. Integration failures are stale provider draft/provenance fixtures and fake-provider commit-guard/shared-Storage contract gaps. Production checks remain strict.
-- The cross-repository FLD host job at that run skipped private FLD checkout/build because `FLD_DB_READ_TOKEN` was empty; it is not a real compile pass.
-- Code changes after `d4ad36f` (`d0b301b`, `545041f`, `10a4e17`, `b211979`, `9478589`, `7a8c7f2`) have not yet had exact-head CI. Do not carry forward earlier Build/vector/Fuzz success as proof for current HEAD.
-- Implemented source currently includes contextual receive-before-ACK, relay/RPM3 publication, dual-mode ceilings, v3.1 authority/member orchestration, source-bound FRA2 HLC, prepared FULL_REPLACE fanout/retry lease, Joining promotion HLC equality and symmetric capability dependency gates.
-- **Remaining C-pass:** generation-pinned FLD snapshot/local ChangeId+origin mapping, durable FULL_REPLACE source snapshot recovery across sender restart, generic Storage ordered page/run/WAL format decision, final public/package/source/byte audit and host transport/session scheduler.
-- **Next T-pass:** exact-head build; v3.1 capability matrix; FULL_REPLACE HLC/fanout/dispose/retry/restart; Joining promotion mismatch cases; stale Core/Storage fixture migration; authority/member/rejoin; crash cuts and three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- BIN-SYNC `feature/fld-external-storage` latest code head: `7e763f0f5939ce2b134e0d5b7a55e92361e51b3b`. The v3.1 session capability dependency matrix is now enforced at both frame APIs and HELLO/HELLO_ACK encode/decode.
+- FLD-DB `fix/crash-consistency-outbox` latest inspected head: `d432d0a1f30720a352dacff76bfd7ffee4edd55f`; no FLD source code change in these slices.
+- Latest completed BIN-SYNC CI evidence remains for code head `d4ad36fe4fc1a3660c43cc4209a71f400ed224fe`: Build passed; v3.1 golden vectors passed; Fuzz/Lab passed; Core tests 672/678 with 6 stale OFR1/RCP1/record-tombstone fixtures; Storage Integration 91/171 with 80 stale provider/provenance/guard fixtures across Ubuntu/macOS/Windows. Production validation remains strict.
+- Cross-repository FLD host compile was skipped because `FLD_DB_READ_TOKEN` was empty; it is not counted as a build success.
+- Code changes after `d4ad36f` (`d0b301b`, `545041f`, `10a4e17`, `b211979`, `9478589`, `7a8c7f2`, `7e763f0`) have not yet had exact-head CI. Earlier results do not validate current HEAD.
+- Implemented source includes source-bound FRA2 HLC confirmation, prepared FULL_REPLACE transfer leases, Joining promotion HLC equality and symmetric v3.1 capability dependencies.
+- **Remaining C-pass:** generation-pinned FLD snapshot/local ChangeId+origin mapping, durable FULL_REPLACE source snapshot recovery across sender restart, generic Storage ordered page/run/WAL format decision, final API/source/byte audit and host transport/session scheduler.
+- **Next T-pass:** exact-head build; HELLO capability matrix and frame capability matrix; FRA2/Joining floor mismatches; concurrent snapshot disposal; fanout/retry/restart; authority/member/rejoin; stale Core/Storage fixture migration; crash cuts and three independent GC horizons. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ---
 
