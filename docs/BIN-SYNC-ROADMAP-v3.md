@@ -2056,3 +2056,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Created current recovery points before further C-pass work: BIN-SYNC `backup/cpass-2026-11-09-storage-blob-roadmap` at `998a41d51e3b64dbf40735b5bdc3efa4f1c1c1c1` and FLD-DB `backup/cpass-2026-11-09-storage-blob` at `f4f850a6ca35a998a5625482ec83f70946b8a6f2`.
 - [~ T] Add crash cuts before/after final manifest rename, restart cleanup of temp-only generations, preservation of valid token generations, corrupt-manifest fail-closed and interaction with sender progress pruning. No exact-head build/test result is claimed.
 - [~ C] Continue final source/API/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
+## 1.33. C-pass: preserve immutable blob geometry across Storage configuration changes — 2026-11-09
+
+- [x C] The configured page size now applies only when creating a new blob. Existing pending/complete catalog rows retain their persisted page size for resume, verification and reads, so a later process can change its default page size without making older blobs unreadable.
+- [x C] Immutable identity is the blob length plus SHA-256 content digest; reusing the ID with identical bytes is idempotent even if the caller's current default page size differs. Existing page files are verified using their original durable geometry.
+- [x C] `ContainsBlob` and `TryOpenRead` no longer reject valid generations merely because the current writer's preferred page size changed.
+- [~ T] Verify reopen/read/resume with page sizes 4 KiB, 1 MiB and 4 MiB across process versions, same-ID same-content different geometry, same-ID different-content rejection and partial pending-write recovery. No exact-head build/test result is claimed.
+- [~ C] Continue final public API/source/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
