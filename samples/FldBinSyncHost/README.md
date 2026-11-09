@@ -79,6 +79,12 @@ FLD checkout as competing type identities.
    `StorageSyncCoordinator.AcquireApplicationCommitGuard(fld.AcquireCommitGuard)`
    lease factory.
 
+7. Use `FldBinSyncSessionScheduler` for one receive owner per `SyncSession`,
+   serialized outbound sends, one shared ceiling set per namespace fanout round,
+   and optional periodic outbound cadence. Run one `RunInboundLoopAsync` per
+   session and one `RunPeriodicOutboundAsync` for the namespace. The application
+   still creates/reconnects/disposes transports and `SyncSession` instances.
+
 This sample binds the durable contracts, lock order and bounded sender path. The
 application still creates/owns its `SyncSession` instances and transport lifecycle.
 Before cutover the Node-owned sender uses the RPM3-mapped per-author ceiling. After
