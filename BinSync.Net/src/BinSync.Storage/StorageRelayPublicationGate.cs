@@ -104,6 +104,7 @@ public sealed class StorageRelayPublicationGate
         CancellationToken cancellationToken = default)
     {
         ValidateArguments(coordinator, map, readRelayAuthors, acquireHostCommitLease, readSourcePage, publishReadyOutbox);
+        coordinator.ValidateRelayProvenanceMap(map);
         ArgumentNullException.ThrowIfNull(readSourceJournalHighWatermark);
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
