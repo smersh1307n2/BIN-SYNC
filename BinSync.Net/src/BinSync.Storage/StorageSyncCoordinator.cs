@@ -86,9 +86,25 @@ public sealed class StorageSyncCoordinator
     /// Dispose on the acquiring thread.
     /// </summary>
     public IDisposable AcquireApplicationCommitGuard()
+        => AcquireApplicationCommitGuardCore(null);
+
+    /// <summary>
+    /// Acquire the application barrier in the required lock order:
+    /// coordinator → Node gates → host WAL/FLD gate → shared BIN-SYNC Storage gate.
+    /// Use this overload for FULL_REPLACE and every physical GC operation when the
+    /// host has durable state outside the shared Storage database.
+    /// </summary>
+    public IDisposable AcquireApplicationCommitGuard(Func<IDisposable?> acquireHostCommitLease)
+    {
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        return AcquireApplicationCommitGuardCore(acquireHostCommitLease);
+    }
+
+    private IDisposable AcquireApplicationCommitGuardCore(Func<IDisposable?>? acquireHostCommitLease)
     {
         Monitor.Enter(_gate);
         IDisposable? nodeLease = null;
+        IDisposable? hostLease = null;
         try
         {
             nodeLease = _node.EnterAllGates();
@@ -98,11 +114,15 @@ public sealed class StorageSyncCoordinator
                 throw new InvalidOperationException("The durable Metadata Store and Data Provider must share the same StorageDatabase for the application commit barrier.");
             if (_provider is not IProviderCommitGuard providerGuard)
                 throw new NotSupportedException("The attached provider does not expose an exclusive commit guard.");
+            if (acquireHostCommitLease is not null)
+                hostLease = acquireHostCommitLease()
+                    ?? throw new InvalidOperationException("The host WAL/FLD commit lease is unavailable; the application barrier cannot be acquired.");
             return new ApplicationCommitLease(
-                providerGuard.AcquireCommitGuard(), nodeLease, _gate);
+                providerGuard.AcquireCommitGuard(), hostLease, nodeLease, _gate);
         }
         catch
         {
+            hostLease?.Dispose();
             nodeLease?.Dispose();
             Monitor.Exit(_gate);
             throw;
@@ -112,27 +132,35 @@ public sealed class StorageSyncCoordinator
     private sealed class ApplicationCommitLease : IDisposable
     {
         private IDisposable? _providerLease;
+        private IDisposable? _hostLease;
         private IDisposable? _nodeLease;
         private object? _coordinatorGate;
         public ApplicationCommitLease(
-            IDisposable providerLease, IDisposable nodeLease, object coordinatorGate)
+            IDisposable providerLease, IDisposable? hostLease,
+            IDisposable nodeLease, object coordinatorGate)
         {
             _providerLease = providerLease;
+            _hostLease = hostLease;
             _nodeLease = nodeLease;
             _coordinatorGate = coordinatorGate;
         }
         public void Dispose()
         {
             IDisposable? providerLease = Interlocked.Exchange(ref _providerLease, null);
+            IDisposable? hostLease = Interlocked.Exchange(ref _hostLease, null);
             IDisposable? nodeLease = Interlocked.Exchange(ref _nodeLease, null);
             object? coordinatorGate = Interlocked.Exchange(ref _coordinatorGate, null);
             try { providerLease?.Dispose(); }
             finally
             {
-                try { nodeLease?.Dispose(); }
+                try { hostLease?.Dispose(); }
                 finally
                 {
-                    if (coordinatorGate is not null) Monitor.Exit(coordinatorGate);
+                    try { nodeLease?.Dispose(); }
+                    finally
+                    {
+                        if (coordinatorGate is not null) Monitor.Exit(coordinatorGate);
+                    }
                 }
             }
         }
