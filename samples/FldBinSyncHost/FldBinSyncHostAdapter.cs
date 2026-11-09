@@ -44,6 +44,15 @@ public sealed class FldBinSyncHostAdapter
     /// any namespace sender. The callback must enforce every supplied per-author
     /// PublishedThroughSequence ceiling when reading durable outbound payload.
     /// </summary>
+    /// <summary>
+    /// Freeze the provider's currently pending local feed into the active outbound
+    /// authority (Node Outbox before cutover, Metadata Store after cutover). Call
+    /// before startup recovery/publication and before each later outbound gate run.
+    /// </summary>
+    public int PublishLocalChanges(Action<Node> persistNode, int limit = 1024)
+        => _coordinator.PublishLocalChanges(
+            persistNode ?? throw new ArgumentNullException(nameof(persistNode)), limit);
+
     public ValueTask<bool> RecoverAndPublishAllAsync(
         Func<IReadOnlyList<StorageRelayAuthorPublicationWatermark>,
             CancellationToken, ValueTask> publishReadyOutbox,
