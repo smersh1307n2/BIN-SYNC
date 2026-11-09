@@ -186,7 +186,7 @@ public static class StorageFullReplaceSender
 
     /// <summary>Reclaims provider snapshot generations not present in durable sender progress.</summary>
     public static void PruneUnreferencedPreparedSnapshots(
-        FldDatabaseDataProvider provider,
+        IDataProvider provider,
         StorageMetadataStore metadataStore,
         string scopeId,
         NodeId localReplica,
@@ -194,6 +194,8 @@ public static class StorageFullReplaceSender
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(metadataStore);
+        if (provider is not IProviderDurableSnapshotStore durableSnapshots)
+            throw new NotSupportedException("The provider does not expose durable snapshot presence/pruning.");
         IReadOnlyList<Guid> generations = metadataStore.ListPreparedFullReplaceSnapshotGenerations(
             scopeId, localReplica, namespaceId);
         var activeSnapshotTokens = new HashSet<Guid>();
@@ -203,13 +205,13 @@ public static class StorageFullReplaceSender
                     scopeId, localReplica, namespaceId, generation, out PreparedFullReplaceSnapshotState? state) ||
                 state is null)
                 throw new InvalidDataException("Prepared FULL_REPLACE index references a missing source generation.");
-            if (provider.HasPersistedSnapshot(state.SnapshotToken))
+            if (durableSnapshots.HasPersistedSnapshot(state.SnapshotToken))
                 activeSnapshotTokens.Add(state.SnapshotToken);
             else
                 // Provider generation was released before a crash interrupted metadata cleanup.
                 metadataStore.DeletePreparedFullReplaceSnapshot(scopeId, localReplica, namespaceId, generation);
         }
-        provider.PruneSnapshotsExcept(activeSnapshotTokens);
+        durableSnapshots.PruneSnapshotsExcept(activeSnapshotTokens);
     }
 
     /// <summary>
