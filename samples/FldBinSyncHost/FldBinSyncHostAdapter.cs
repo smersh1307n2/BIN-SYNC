@@ -44,8 +44,9 @@ public sealed class FldBinSyncHostAdapter
             throw new ArgumentException("The FLD data provider must target this exact database instance.", nameof(dataProvider));
         if (!coordinator.UsesDataProvider(dataProvider))
             throw new ArgumentException("The StorageSyncCoordinator must be constructed with this exact FldDatabaseDataProvider.", nameof(coordinator));
-        if (!dataProvider.IsBoundToMetadataStore(metadataStore))
-            throw new ArgumentException("The FLD provider publication-mode marker must use this exact Metadata Store instance.", nameof(metadataStore));
+        if (!dataProvider.IsBoundToMetadataStore(
+                metadataStore, scopeId, NodeId.From(database.LocalAuthor), checked((int)database.NamespaceId)))
+            throw new ArgumentException("The FLD provider publication-mode marker must use this exact Metadata Store, scope, local replica and namespace.", nameof(metadataStore));
         if (!coordinator.UsesMetadataPeerStateStore(metadataStore))
             throw new ArgumentException("The StorageSyncCoordinator must use this exact Metadata Store instance.", nameof(coordinator));
         if (!remoteBatchApplyStore.IsBoundTo(database))
