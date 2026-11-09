@@ -2696,7 +2696,7 @@ private static bool ValidateIncomingBatchForStaging(
             }
 
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state) ||
-                !state.Relay.TryGetValue(new RelayKey(namespaceId, originalAuthor), out var entries))
+                !state.Relay.ContainsKey(new RelayKey(namespaceId, originalAuthor)))
                 return false;
 
             Dictionary<RelayIdentityKey, ulong> index;
@@ -2705,12 +2705,18 @@ private static bool ValidateIncomingBatchForStaging(
                 index = new Dictionary<RelayIdentityKey, ulong>();
                 foreach (var relayStream in state.Relay)
                 {
+                    ulong previousSequence = 0;
+                    ulong highWatermark = state.RelayHighWatermarks.TryGetValue(relayStream.Key, out ulong high)
+                        ? high : 0;
                     foreach (MetadataRelayItem item in relayStream.Value)
                     {
-                        if (item.OriginalAuthor != relayStream.Key.Author || item.Sequence == 0 ||
+                        if (item.OriginalAuthor != relayStream.Key.Author ||
+                            item.Sequence == 0 || item.Sequence <= previousSequence ||
+                            item.Sequence > highWatermark ||
                             !index.TryAdd(new RelayIdentityKey(
                                 relayStream.Key.NamespaceId, relayStream.Key.Author, item.ChangeId), item.Sequence))
-                            throw new InvalidDataException("Metadata relay contains a duplicate or conflicting ChangeId identity.");
+                            throw new InvalidDataException("Metadata relay contains a duplicate, conflicting or non-monotonic ChangeId identity.");
+                        previousSequence = item.Sequence;
                     }
                 }
                 state.RelaySequenceIndex = index;
