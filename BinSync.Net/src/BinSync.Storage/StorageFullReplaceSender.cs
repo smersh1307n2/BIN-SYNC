@@ -179,9 +179,9 @@ public static class StorageFullReplaceSender
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        prepared.ReleasePermanently(provider);
         metadataStore.DeletePreparedFullReplaceSnapshot(
             scopeId, localReplica, prepared.NamespaceId, prepared.Generation);
-        prepared.ReleasePermanently(provider);
     }
 
     /// <summary>Reclaims provider snapshot generations not present in durable sender progress.</summary>
