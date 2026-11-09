@@ -10,6 +10,19 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 
 - [x C] Created `smersh1307n2/FLD-DB:backup/pre-binsync-provenance-map-2026-11-09` at `a962371ec293708f61f02453f9bc7c441eafa015` before further cross-repository work. FLD roadmap §7.46 records the same checkpoint.
 
+## 0.38. T-pass backlog consolidated (execution still deferred) — 2026-11-09
+
+The following is a test plan only; no tests are run in this C pass.
+
+1. **Compile/API:** build Core, Storage, all five samples, XML docs and analyzers on net10.0; resolve any new API/type/nullability/analyzer failures without weakening invariants.
+2. **RPM2 persistence:** compare actual rows with `RELAY-PROVENANCE-MAP-v2.txt`; reopen/reconstruct; append empty and multi-entry pages; verify digest stability after append/prune; corrupt cursor marker/length/digest, row key/value, zero/duplicate ChangeId, and non-monotonic coordinates.
+3. **Relay ACK translation:** no mapping, safe=acked, below-first, exact sequence, within same JournalSeq group, between groups, exact-last, above-last, after partial prune, after full prune; verify zero Outbox ACK never advances positive FLD JournalSeq.
+4. **Crash ordering:** crash before map batch, after map+cursor batch, after durable FLD ACK but before map prune, during map prune batch; replay must be idempotent and never over-ACK.
+5. **Coordinator broadcast:** publish one checkpoint and send to N sessions; wrong authority seed, stale checkpoint, roster generation mismatch, superseding checkpoint between member sends, and cancellation/retry.
+6. **Existing red integration fixtures:** migrate provider-draft OriginSequence to deferred `OriginSequence=0`; update providers for `IProviderCommitGuard`; test freeze-before-stamp and exact-head CI.
+7. **GC proof:** adversarial live-reference scanner, lease ordering, membership retirement/rejoin, and independent safe horizons for receipts, ChangeId and tombstone/Ghost. Physical GC stays disabled until all proofs pass.
+8. **O-pass:** benchmark metadata row/cardinality footprint, RPM2 cold recovery and hot append/translation, HashSet memory cost, provider snapshot memory, and checkpoint broadcast overhead; revert any regression.
+
 ## 0.37. C-pass: production-status head refreshed — 2026-11-09
 
 - [x C] Updated `docs/PRODUCTION-STATUS.md` with the current unvalidated head and the latest coordinator/provenance/sample implementation commits.
