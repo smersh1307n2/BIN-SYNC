@@ -12,8 +12,11 @@
     <Version>0.1.0-alpha</Version>
     <Description>Durable BIN-SYNC adapters for Fld1.Storage.</Description>
   </PropertyGroup>
+  <PropertyGroup>
+    <Fld1StorageProject Condition="'$(Fld1StorageProject)' == ''">$(MSBuildThisFileDirectory)../../../external/Fld1.Storage/Fld1.Storage.csproj</Fld1StorageProject>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../BinSync.Core/BinSync.Core.csproj" />
-    <ProjectReference Include="../../../external/Fld1.Storage/Fld1.Storage.csproj" />
+    <ProjectReference Include="$(Fld1StorageProject)" />
   </ItemGroup>
 </Project>
