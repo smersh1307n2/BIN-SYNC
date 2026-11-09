@@ -1565,3 +1565,13 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 - [x C] Expanded `samples/V31ControlPlaneVectors` with exact canonical vectors and encode/decode round-trips for FULL_REPLACE_CHUNK, READY, COMMIT and ABORT in addition to signed BEGIN. The sample now covers all four transfer frame payload forms alongside NRS2/OFR2/RCP2/FRA2.
 - [~ T] The sample has not yet been run on the current branch; validate the fixed bytes and signature vectors in the dedicated T pass and include it in CI sample execution.
+
+### 2026-11-09 — exact-head CI triage and RPM3 namespace validator repair
+
+- [x C] Current branch HEAD before this fix was `45160c1fbb07d9ac408c67ff49e857ffa5423015`. The latest completed Core and Storage Integration workflows both stopped at build, not tests.
+- [x C] Root cause from both runner logs: `StorageRelayProvenanceMap.ReadAuthors` called missing `ValidateNamespaceId` (CS0103 at line 80). Added the private validator and reused it from `ValidateStream`; code fix `66ae3ac50833db9f4226f33490c780176bac0b14`.
+- [~ T] Exact-head CI after `66ae3ac` has not yet completed. No test pass/fail counts are available for `45160c1f` because build failed before test execution.
+- [~ T] The older 6/678 Core and 80/171 Storage Integration fixture failures remain historical evidence only; do not carry those counts forward as current-head results.
+- [~ C] The complete host adapter contract now exists as coordinator primitives (all-author discovery, page drain, resolver, shared publication gate, safe ACK then FLD ACK then map prune, delegate reference scan). Remaining work is host application composition, restart/reconciliation policy, golden vectors/sample coverage, and full source/API audit.
+- [~ C] FLD's two-project source boundary is physically consolidated as `Fld1.Database` + `Fld1.Storage`; generic Storage backend reuse and final binary-format/package compatibility audit are still open.
+- [~ O] Benchmarks for snapshot/index build and end-to-end relay path remain pending. Physical GC remains disabled until integrated host scan plus proof tests establish safe horizons for receipts, ChangeId and tombstones.
