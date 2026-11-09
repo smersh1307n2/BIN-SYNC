@@ -14,6 +14,8 @@ public sealed class StorageFullReplaceReceiver
     private readonly IMetadataNamespaceGcStore _gcStore;
     private readonly TrustStore _trustStore;
     private readonly int _namespaceId;
+    private readonly string _scopeId;
+    private readonly IApplicationGcReferenceScanner _externalState;
     private readonly NodeId _authorityPeer;
     private readonly uint _authorityPeerEpoch;
     private readonly NodeId _localMember;
@@ -34,6 +36,8 @@ public sealed class StorageFullReplaceReceiver
         NodeId localMember,
         uint localMemberEpoch,
         byte[] localMemberSeed,
+        string scopeId,
+        IApplicationGcReferenceScanner externalState,
         Func<IDisposable?> acquireCommitGuard,
         Action<ulong, uint> advanceHlcAndRefresh)
     {
@@ -55,6 +59,9 @@ public sealed class StorageFullReplaceReceiver
         ArgumentNullException.ThrowIfNull(localMemberSeed);
         if (localMemberSeed.Length != 32)
             throw new ArgumentException("Ed25519 member seed must be 32 bytes.", nameof(localMemberSeed));
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        _externalState = externalState ?? throw new ArgumentNullException(nameof(externalState));
+        _scopeId = scopeId;
         _acquireCommitGuard = acquireCommitGuard
             ?? throw new ArgumentNullException(nameof(acquireCommitGuard));
         _advanceHlcAndRefresh = advanceHlcAndRefresh ?? throw new ArgumentNullException(nameof(advanceHlcAndRefresh));
@@ -193,6 +200,10 @@ public sealed class StorageFullReplaceReceiver
                 throw new InvalidOperationException("Cross-store FULL_REPLACE commit proof is unavailable; provider state was not switched.");
             using (commitGuard)
             {
+                using IApplicationGcReferenceScan hostScan =
+                    _externalState.OpenScan(_scopeId, _localMember, _namespaceId);
+                if (hostScan.UnpublishedLocalDraftHorizon.Count != 0)
+                    throw new InvalidOperationException("Drain FLD/WAL and host-local drafts before committing FULL_REPLACE; the composed application commit guard keeps this horizon stable.");
                 ProviderChangePage pendingLocal = _provider.ReadLocalChanges(0, 1);
                 if (pendingLocal.Changes.Count != 0)
                     throw new InvalidOperationException("Drain and acknowledge local provider drafts before committing FULL_REPLACE; the application commit guard prevents new drafts during the switch.");
