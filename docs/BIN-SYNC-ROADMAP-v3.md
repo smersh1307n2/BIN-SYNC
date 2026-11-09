@@ -15,6 +15,10 @@ Mark [x] only after code, tests and exact-head CI prove it; [~] means active/par
 - [x C] Updated `docs/PRODUCTION-STATUS.md` to identify the compact RPM3 implementation/sample commits and the current unvalidated branch head.
 - [x C] The historical green v3.0 baseline remains explicitly separate from all current C-pass work.
 
+## 0.53. Recovery checkpoint branch created before further RPM3 work — 2026-11-09
+
+- [x C] Created `backup/pre-rpm3-compact-provenance-2026-11-09` at `93a1cbd82c076ea5002d0e0a7eecccde5f856eed`, preserving the compact RPM3 map, sequence-only rows, empty-tail ACK behavior and current documentation state.
+
 ## 0.52. C-pass: production-status pointer refreshed for latest RPM3 behavior — 2026-11-09
 
 - [x C] Updated `docs/PRODUCTION-STATUS.md` with the empty-tail ACK code commit and the expanded RPM3 sample commit; current-head test status remains explicitly unvalidated.
