@@ -167,8 +167,21 @@ public abstract class DataProviderConformanceSuite
             HlcWall = 100UL + value,
             HlcLogical = 0,
             KeyEpoch = 0,
-            Value = new[] { value }
+            Value = new[] { value },
+            ChangeId = author == 1 ? default : ChangeId(record, field, author),
+            OriginAuthorEpoch = 1,
+            OriginSequence = author == 1 ? 0UL : value
         };
+
+    private static BatchId ChangeId(byte record, ushort field, byte author)
+    {
+        byte[] bytes = new byte[16];
+        bytes[0] = record;
+        bytes[1] = author;
+        bytes[2] = (byte)field;
+        bytes[3] = (byte)(field >> 8);
+        return BatchId.From(bytes);
+    }
 
     protected static RecordId Record(byte seed) => RecordId.From(Bytes(seed));
     protected static NodeId Node(byte seed) => NodeId.From(Bytes(seed));
