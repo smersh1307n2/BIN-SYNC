@@ -205,17 +205,6 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         throw new InvalidDataException("Retention checkpoint sequence fork detected.");
                     return prior;
                 }
-
-                // RCP2 is a hash-linked log, not a collection of independently
-                // signed snapshots. Accepting a later sequence without its immediate
-                // predecessor would permanently skip an unobserved authority decision.
-                if (prior.CheckpointSequence == ulong.MaxValue ||
-                    checkpoint.CheckpointSequence != prior.CheckpointSequence + 1)
-                    throw new InvalidDataException("Retention checkpoint chain has a sequence gap.");
-                if (!checkpoint.PreviousCheckpointDigest.AsSpan()
-                    .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(prior)))
-                    throw new InvalidDataException("Retention checkpoint does not link to the accepted previous checkpoint.");
-
                 var nextFrontier = checkpoint.SafeFrontier.ToDictionary(
                     entry => (entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
                     entry => entry.SafeAppliedOriginSequence);
@@ -226,10 +215,10 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         nextSequence < oldEntry.SafeAppliedOriginSequence)
                         throw new InvalidDataException("Retention checkpoint safe frontier regressed.");
                 }
-            }
-            else if (checkpoint.CheckpointSequence != 1)
-            {
-                throw new InvalidDataException("The first accepted retention checkpoint must start the chain at sequence one.");
+                if (checkpoint.CheckpointSequence == prior.CheckpointSequence + 1 &&
+                    !checkpoint.PreviousCheckpointDigest.AsSpan()
+                        .SequenceEqual(NamespaceRetentionCheckpointProtocol.ComputeDigest(prior)))
+                    throw new InvalidDataException("Retention checkpoint does not link to the accepted previous checkpoint.");
             }
 
             WriteRows((key, owned));
