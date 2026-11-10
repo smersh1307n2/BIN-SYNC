@@ -514,7 +514,8 @@ public sealed class StorageSyncCoordinatorTests
         var peerReconcile = acceptor.AutoReconcileAsync(peer, 1, initiate: false);
         var localReconcile = coordinator.AutoReconcileWithMetadataAsync(
             session, _ => { }, initiate: true);
-        await Task.WhenAll(peerReconcile, localReconcile);
+        await Task.WhenAll(peerReconcile, localReconcile)
+            .WaitAsync(TimeSpan.FromSeconds(30));
 
         var newEpochState = metadata.GetPeerStreamState(scope, local.NodeId,
             peer.NodeId, 2, 1, local.NodeId);
@@ -756,7 +757,8 @@ public sealed class StorageSyncCoordinatorTests
 
         await Task.WhenAll(
             coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
-            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false));
+            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false))
+            .WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.False(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         Assert.False(nodeB.TryGetField(1, staleRecord, 0x0822, out _));
@@ -2499,7 +2501,7 @@ public sealed class StorageSyncCoordinatorTests
                     signalAndBlock();
             });
             Task<bool> send = initiator.PushBatchAsync(sender, 1);
-            await Task.WhenAll(receive, send);
+            await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
         }
     }
 
