@@ -2283,6 +2283,7 @@ public sealed class StorageSyncCoordinatorTests
         using var metadata = new StorageMetadataStore(storage);
         using var local = NewNode(80);
         using var peer = NewNode(81);
+        using var relayAuthor = NewNode(84);
         var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
         var trust = new TrustStore();
         var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
@@ -2293,7 +2294,7 @@ public sealed class StorageSyncCoordinatorTests
             new[]
             {
                 new MetadataPeerStreamBaseline(local.NodeId, 0, 3),
-                new MetadataPeerStreamBaseline(peer.NodeId, 0, 3)
+                new MetadataPeerStreamBaseline(relayAuthor.NodeId, 0, 3)
             });
         var reservation = new MetadataOutboundBatchReservation
         {
@@ -2318,9 +2319,9 @@ public sealed class StorageSyncCoordinatorTests
         metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1, local.NodeId, reservation);
         metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 7, 1,
             local.NodeId, reservation.BatchId);
-        metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1, peer.NodeId, relayReservation);
+        metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1, relayAuthor.NodeId, relayReservation);
         metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 7, 1,
-            peer.NodeId, relayReservation.BatchId);
+            relayAuthor.NodeId, relayReservation.BatchId);
 
         int hostAcquires = 0;
         int hostReleases = 0;
@@ -2339,7 +2340,7 @@ public sealed class StorageSyncCoordinatorTests
         MetadataPeerStreamSnapshot pendingOutbound = Assert.Single(
             pendingStreams, stream => stream.AuthorStream == local.NodeId);
         MetadataPeerStreamSnapshot pendingRelay = Assert.Single(
-            pendingStreams, stream => stream.AuthorStream == peer.NodeId);
+            pendingStreams, stream => stream.AuthorStream == relayAuthor.NodeId);
         Assert.Equal(0UL, pendingOutbound.State.AckedCursor);
         Assert.Equal(1UL, pendingOutbound.State.PushedCursor);
         Assert.NotNull(pendingOutbound.State.PendingBatch);
@@ -2350,7 +2351,7 @@ public sealed class StorageSyncCoordinatorTests
         metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
             local.NodeId, reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest.ToArray());
         metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
-            peer.NodeId, relayReservation.BatchId, relayReservation.CursorEnd,
+            relayAuthor.NodeId, relayReservation.BatchId, relayReservation.CursorEnd,
             relayReservation.BatchDigest.ToArray());
         using (coordinator.AcquireFullReplaceCommitGuard(() =>
         {
