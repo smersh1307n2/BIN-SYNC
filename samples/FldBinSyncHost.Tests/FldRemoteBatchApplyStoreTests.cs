@@ -230,6 +230,69 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         Assert.Equal(valueA, currentB!.Value);
     }
 
+    [Fact]
+    public void Remote_record_and_field_tombstones_keep_distinct_fld_lifecycle_semantics()
+    {
+        const uint namespaceId = 9;
+        byte[] localAuthor = Id(0x91);
+        byte[] issuer = Id(0x92);
+        byte[] recordTombstoneId = Id(0x93);
+        byte[] fieldTombstoneId = Id(0x94);
+        var mutations = new[]
+        {
+            new ProviderMutation
+            {
+                RecordId = RecordId.From(recordTombstoneId),
+                FieldId = 0,
+                IsRecordTombstone = true,
+                HlcWall = 2001,
+                AuthorNodeId = NodeId.From(issuer),
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0x95)),
+                OriginAuthorEpoch = 3,
+                OriginSequence = 1
+            },
+            new ProviderMutation
+            {
+                RecordId = RecordId.From(fieldTombstoneId),
+                FieldId = 0x0401,
+                IsTombstone = true,
+                HlcWall = 2002,
+                AuthorNodeId = NodeId.From(issuer),
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0x96)),
+                OriginAuthorEpoch = 3,
+                OriginSequence = 2
+            }
+        };
+        var batch = new ProviderRemoteBatchCommit(
+            Guid.NewGuid(),
+            NodeId.From(Id(0x97)),
+            senderTransportEpoch: 2,
+            namespaceId: checked((int)namespaceId),
+            NodeId.From(issuer),
+            issuerEpoch: 3,
+            BatchId.From(Id(0x98)),
+            cursorStart: 1,
+            cursorEnd: 2,
+            new byte[16],
+            Id(0x99),
+            Id(0x9A),
+            protocolStateDelta: Array.Empty<byte>(),
+            mutations);
+
+        using var database = FldDatabase.Open(_directory, namespaceId, localAuthor);
+        var adapter = new FldRemoteBatchApplyStore(database);
+        Assert.False(adapter.ApplyRemoteBatch(batch).IsDuplicate);
+
+        Assert.True(database.TryGetBytes(
+            recordTombstoneId, FldLifecycle.FieldId, out byte[]? lifecycle));
+        Assert.Equal(FldLifecycle.DeadValue.ToArray(), lifecycle);
+        Assert.True(database.TryResolve(fieldTombstoneId, 0x0401, out var field));
+        Assert.True(field.Found);
+        Assert.True(field.IsTombstone);
+    }
+
     private static byte[] Id(byte first)
     {
         byte[] bytes = new byte[16];

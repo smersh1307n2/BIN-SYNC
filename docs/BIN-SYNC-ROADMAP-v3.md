@@ -1,3 +1,8 @@
+## 1.67. T-pass: preserve FLD record-vs-field tombstone semantics through remote APPLY — 2026-11-10
+
+- [x T] Added a contextual remote batch containing both a record tombstone and an ordinary field tombstone. The host adapter must map the former to FLD lifecycle field `0x0000 = Dead`, while preserving the latter as a tombstoned user field.
+- [x C] This guards against collapsing record deletion and field deletion into one representation at the BIN-SYNC/FLD boundary. Exact-head execution remains pending until the private FLD checkout credential is configured.
+
 ## 1.66. T-pass: add two-FLD-node BIN-SYNC session round-trip — 2026-11-10
 
 - [x T] Added an end-to-end integration scenario with two independent FLD databases, two BIN-SYNC Nodes, independent durable Storage/Metadata stores and a real paired `SyncSession`.
