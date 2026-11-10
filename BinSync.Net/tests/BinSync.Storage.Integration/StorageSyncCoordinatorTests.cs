@@ -2141,7 +2141,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(second.ChangeId, outbound[1].ChangeId);
     }
 
-    private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode, IProviderCommitGuard
+    private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode, IProviderCommitGuard, IProviderPublishedOriginStore
     {
         private readonly IDataProvider _inner;
         private readonly Func<ProviderChange, ProviderChange>? _changeTransform;
@@ -2179,6 +2179,8 @@ public sealed class StorageSyncCoordinatorTests
             ((IProviderPublicationMode)_inner).EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
         public IDisposable AcquireCommitGuard() =>
             ((IProviderCommitGuard)_inner).AcquireCommitGuard();
+        public void CommitPublishedOrigins(IReadOnlyList<ProviderPublishedOrigin> published) =>
+            ((IProviderPublishedOriginStore)_inner).CommitPublishedOrigins(published);
 
         public void AcknowledgeLocalChanges(ulong safeThroughSequence)
         {
