@@ -144,16 +144,27 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task Two_fld_databases_exchange_local_changes_through_binsync_sessions()
+    public async Task Two_fld_databases_resume_bidirectional_sync_after_full_process_restart()
+    {
+        // First exchange creates and checkpoints both peers. The helper closes every
+        // FLD, BIN-SYNC Storage, Node and SyncSession handle before returning.
+        await ExchangeRoundAsync(restoreNodes: false, recordASeed: 0xA2, recordBSeed: 0xB2,
+            scope: "fld-host-two-node-roundtrip");
+        // Reopen every durable component from disk, including the complete Node image
+        // and metadata stores, then reconnect and exchange a second pair of changes.
+        await ExchangeRoundAsync(restoreNodes: true, recordASeed: 0xC2, recordBSeed: 0xD2,
+            scope: "fld-host-two-node-roundtrip");
+    }
+
+    private async Task ExchangeRoundAsync(bool restoreNodes, byte recordASeed, byte recordBSeed, string scope)
     {
         const int namespaceId = 7;
-        const string scope = "fld-host-two-node-roundtrip";
         byte[] authorA = Id(0xA1);
         byte[] authorB = Id(0xB1);
-        byte[] recordA = Id(0xA2);
-        byte[] recordB = Id(0xB2);
-        byte[] valueA = "from-fld-a"u8.ToArray();
-        byte[] valueB = "from-fld-b"u8.ToArray();
+        byte[] recordA = Id(recordASeed);
+        byte[] recordB = Id(recordBSeed);
+        byte[] valueA = new[] { recordASeed, (byte)0x51, (byte)0x61 };
+        byte[] valueB = new[] { recordBSeed, (byte)0x52, (byte)0x62 };
 
         using var fldA = FldDatabase.Open(Path.Combine(_directory, "fld-a"), (uint)namespaceId, authorA);
         using var fldB = FldDatabase.Open(Path.Combine(_directory, "fld-b"), (uint)namespaceId, authorB);
@@ -163,8 +174,12 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         using var storageB = StorageDatabase.Open(Path.Combine(_directory, "binsync-b"), 702);
         using var metadataA = new StorageMetadataStore(storageA);
         using var metadataB = new StorageMetadataStore(storageB);
-        using var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build();
-        using var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build();
+        using var nodeA = restoreNodes
+            ? StorageNodePersistence.Load(storageA, NodeId.From(authorA))
+            : new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build();
+        using var nodeB = restoreNodes
+            ? StorageNodePersistence.Load(storageB, NodeId.From(authorB))
+            : new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build();
 
         var coordinatorA = new StorageSyncCoordinator(
             nodeA, providerA, namespaceId, metadataA, scope,
@@ -177,22 +192,22 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         {
             RecordId = RecordId.From(recordA),
             FieldId = 0x0301,
-            HlcWall = 1001,
+            HlcWall = 1001 + recordASeed,
             AuthorNodeId = NodeId.From(authorA),
             KeyEpoch = 0,
             Value = valueA,
-            ChangeId = BatchId.From(Id(0xA3)),
+            ChangeId = BatchId.From(Id((byte)(recordASeed + 1))),
             OriginAuthorEpoch = 1
         });
         providerB.AppendLocalChange(new ProviderMutation
         {
             RecordId = RecordId.From(recordB),
             FieldId = 0x0301,
-            HlcWall = 1002,
+            HlcWall = 1002 + recordBSeed,
             AuthorNodeId = NodeId.From(authorB),
             KeyEpoch = 0,
             Value = valueB,
-            ChangeId = BatchId.From(Id(0xB3)),
+            ChangeId = BatchId.From(Id((byte)(recordBSeed + 1))),
             OriginAuthorEpoch = 1
         });
 
