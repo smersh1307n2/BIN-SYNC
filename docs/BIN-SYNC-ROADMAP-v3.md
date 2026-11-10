@@ -1,3 +1,12 @@
+## 1.14. C-pass: enforce contiguous signed retention checkpoint history — 2026-11-10
+
+- [x C] Hardened `StorageNamespaceGcStore.AcceptRetentionCheckpoint`: after the first accepted checkpoint, every new checkpoint must be exactly the next sequence and its previous digest must match the currently accepted checkpoint. A correctly signed checkpoint that skips one or more sequence numbers is rejected instead of silently truncating an authority decision from the locally observed hash chain.
+- [x C] The first locally accepted checkpoint must be sequence 1; same-sequence exact replay remains idempotent, while same-sequence different-digest forks and lower sequences remain rejected. Sequence overflow is explicitly fail-closed.
+- [x C] Production change committed as `8de0cb2c` (`fix(gc): require contiguous retention checkpoint chain`) and pushed to `feature/fld-external-storage`.
+- [x C] Created paired recovery branches `backup/cpass-2026-11-10-retention-checkpoint-chain` in BIN-SYNC and FLD-DB before this C-pass slice.
+- [~ T] Add restart/reopen tests for first checkpoint sequence, exact next sequence, skipped sequence, wrong previous digest, exact replay, same-sequence fork and `UInt64.MaxValue` boundary. No tests/build were run in this C slice; physical GC remains disabled.
+- [~ C] Continue the v3/v3.1 source/API/byte audit, especially cross-store reference completeness and the final physical-retention proof boundary.
+
 ## 1.13. C-pass: generic Storage blob publication/cleanup source audit — 2026-11-10
 
 - [x C] Created recovery branch `backup/cpass-2026-11-10-issued-origin-monotonicity` from the current feature branch before continuing the remaining C-pass audit.
