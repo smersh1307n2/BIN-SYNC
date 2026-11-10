@@ -2566,7 +2566,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(provider.TryGetFullReplaceProgress(generation, out ProviderFullReplaceProgress? progress));
         Assert.NotNull(progress);
         Assert.False(progress.IsCommitted);
-        Assert.Empty(gcStore.ReadFullReplaceInstalledAcks(roster));
+        Assert.Empty(gcStore.ReadFullReplaceInstalledAcks(roster, generation));
     }
 
     private sealed class TestFullReplaceCommitLease : IFullReplaceCommitLease
