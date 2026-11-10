@@ -703,9 +703,21 @@ public sealed class StorageSyncCoordinatorTests
 
         RecordId staleRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000001").ToByteArray());
         RecordId providerRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000002").ToByteArray());
-        staleRemote.WriteField(1, staleRecord, 0x0822, "stale-node-checkpoint"u8.ToArray(), new Hlc(6900, 0));
-        Transport.MakeSession(staleRemote, originalNodeA);
-        Assert.NotNull(Transport.DeliverBatch(staleRemote, originalNodeA, 1));
+        // Seed a stale in-memory checkpoint row without creating a legacy Node
+        // ChangeId ledger entry. The provider cutover is then valid, and the test
+        // exercises authoritative snapshot rehydration rather than unsafe ledger loss.
+        originalNodeA.RestoreProviderSnapshot(1, new[]
+        {
+            new ProviderMutation
+            {
+                RecordId = staleRecord,
+                FieldId = 0x0822,
+                AuthorNodeId = staleRemote.NodeId,
+                HlcWall = 6900,
+                HlcLogical = 0,
+                Value = "stale-node-checkpoint"u8.ToArray()
+            }
+        }, Array.Empty<BatchId>());
 
         var initialCoordinatorA = new StorageSyncCoordinator(originalNodeA, providerA, 1, metadataA, scopeA);
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, scopeB);

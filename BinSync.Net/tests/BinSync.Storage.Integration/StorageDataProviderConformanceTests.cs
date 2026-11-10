@@ -230,9 +230,33 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
             Guid firstToken = Guid.Parse("00000000-0000-0000-0000-000000000501");
             Guid conflictingToken = Guid.Parse("00000000-0000-0000-0000-000000000502");
-            provider.ApplyRemoteBatch(firstToken, new[] { mutation });
-            Assert.Throws<InvalidDataException>(() => provider.ApplyRemoteBatch(conflictingToken, new[] { equivocation }));
-            Assert.False(provider.ApplyRemoteBatch(conflictingToken, new[] { mutation }).IsDuplicate);
+            var remoteMutation = new ProviderMutation
+            {
+                RecordId = RecordId.From(Guid.Parse("00000000-0000-0000-0000-000000000503").ToByteArray()),
+                FieldId = 0x0101,
+                AuthorNodeId = NodeId.From(new byte[] { 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+                ChangeId = BatchId.From(Guid.Parse("00000000-0000-0000-0000-000000000504").ToByteArray()),
+                OriginAuthorEpoch = 1,
+                OriginSequence = 1,
+                HlcWall = 501,
+                HlcLogical = 0,
+                Value = "remote-stable"u8.ToArray()
+            };
+            var remoteEquivocation = new ProviderMutation
+            {
+                RecordId = remoteMutation.RecordId,
+                FieldId = remoteMutation.FieldId,
+                AuthorNodeId = remoteMutation.AuthorNodeId,
+                ChangeId = remoteMutation.ChangeId,
+                OriginAuthorEpoch = remoteMutation.OriginAuthorEpoch,
+                OriginSequence = remoteMutation.OriginSequence,
+                HlcWall = remoteMutation.HlcWall,
+                HlcLogical = remoteMutation.HlcLogical,
+                Value = "remote-conflict"u8.ToArray()
+            };
+            provider.ApplyRemoteBatch(firstToken, new[] { remoteMutation });
+            Assert.Throws<InvalidDataException>(() => provider.ApplyRemoteBatch(conflictingToken, new[] { remoteEquivocation }));
+            Assert.False(provider.ApplyRemoteBatch(conflictingToken, new[] { remoteMutation }).IsDuplicate);
         }
         finally
         {

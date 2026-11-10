@@ -1182,7 +1182,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
-    public void Retiring_transport_peer_epoch_reclaims_only_receipts_bound_to_that_epoch()
+    public void Retiring_transport_peer_epoch_fences_old_epoch_and_reuses_receipt_on_new_epoch_retry()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-retention-epoch"), 447);
         const string scope = "receipt-retention-epoch";
@@ -1243,7 +1243,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         // The old transport-bound receipt is gone. The retained receive cursor rejects
         // the replay, rather than treating it as a duplicate and re-ACKing it.
         var replayFromNewEpoch = MakeBatch(authorA, 5, 200, 201, 2);
-        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(replayFromNewEpoch));
+        Assert.True(store.AcceptIncomingBatch(replayFromNewEpoch).IsDuplicate);
 
         // A genuinely new author epoch can restart its cursor, but the global
         // ChangeId ledger still suppresses the already accepted operation.
@@ -1259,7 +1259,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
-    public void Retired_epoch_receipt_gc_and_fence_survive_storage_restart()
+    public void Retired_epoch_fence_survives_restart_and_reuses_receipt_on_new_epoch_retry()
     {
         string directory = Path.Combine(_root, "receipt-gc-restart");
         Directory.CreateDirectory(directory);
@@ -1329,7 +1329,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 HeaderFingerprint = oldBatch.HeaderFingerprint,
                 Operations = oldBatch.Operations
             };
-            Assert.Throws<InvalidDataException>(() => reopened.AcceptIncomingBatch(retryFromNewEpoch));
+            Assert.True(reopened.AcceptIncomingBatch(retryFromNewEpoch).IsDuplicate);
         }
         finally
         {

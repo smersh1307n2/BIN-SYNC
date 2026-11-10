@@ -364,11 +364,11 @@ public abstract class MetadataStoreConformanceSuite
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             store.ReadRelay("scope-a", Node(1), 7, Node(20), 2, 0));
 
-        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(31, 51) });
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(21), new[] { FrozenOperation(31, 51) });
         ulong lease = store.AcquireOutboundLease(
-            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+            "scope-a", Node(1), 7, Node(21), Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 2, 0));
+            store.ReadOutbound("scope-a", Node(1), 7, Node(21), lease, 2, 0));
     }
 
     [Fact]
@@ -398,32 +398,32 @@ public abstract class MetadataStoreConformanceSuite
         using var store = CreateStore();
         store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
             Operation(20, 30, 40, 50)));
-        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(31, 51) });
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(21), new[] { FrozenOperation(31, 51) });
 
         using var snapshot = store.OpenSnapshot("scope-a", Node(1));
 
         store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 11, 2, 2, 10, 11,
             Operation(20, 32, 42, 52)));
-        store.FreezeOutbound("scope-a", Node(1), 7, Node(20), new[] { FrozenOperation(33, 53) });
+        store.FreezeOutbound("scope-a", Node(1), 7, Node(21), new[] { FrozenOperation(33, 53) });
 
         ulong lease = store.AcquireOutboundLease(
-            "scope-a", Node(1), 7, Node(20), Guid.Parse("00000000-0000-0000-0000-000000000001"));
-        store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(20), lease, 1);
-        store.CompactOutboundThrough("scope-a", Node(1), 7, Node(20), 1);
+            "scope-a", Node(1), 7, Node(21), Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        store.AcknowledgeOutbound("scope-a", Node(1), 7, Node(21), lease, 1);
+        store.CompactOutboundThrough("scope-a", Node(1), 7, Node(21), 1);
         store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 1);
         store.CompactRelayThrough("scope-a", Node(1), 7, Node(20), 1);
 
         Assert.Equal(1UL, snapshot.GetReceiveCursor(Node(2), 1, 7));
         Assert.Equal(1UL, snapshot.GetRelayHighWatermark(7, Node(20)));
-        Assert.Equal(1UL, snapshot.GetOutboundHighWatermark(7, Node(20)));
+        Assert.Equal(1UL, snapshot.GetOutboundHighWatermark(7, Node(21)));
         Assert.Single(snapshot.ReadRelay(7, Node(20), 0, 10).Items);
-        Assert.Single(snapshot.ReadOutbound(7, Node(20), 0, 10).Items);
+        Assert.Single(snapshot.ReadOutbound(7, Node(21), 0, 10).Items);
 
         Assert.Equal(2UL, store.GetReceiveCursor("scope-a", Node(1), Node(2), 1, 7));
         Assert.Equal(2UL, store.GetRelayHighWatermark("scope-a", Node(1), 7, Node(20)));
-        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(20)));
+        Assert.Equal(2UL, store.GetOutboundHighWatermark("scope-a", Node(1), 7, Node(21)));
         Assert.Single(store.ReadRelay("scope-a", Node(1), 7, Node(20), 1, 10).Items);
-        Assert.Single(store.ReadOutbound("scope-a", Node(1), 7, Node(20), lease, 1, 10).Items);
+        Assert.Single(store.ReadOutbound("scope-a", Node(1), 7, Node(21), lease, 1, 10).Items);
     }
 
     [Fact]
