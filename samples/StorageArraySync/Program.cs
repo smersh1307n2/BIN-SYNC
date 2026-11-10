@@ -41,6 +41,10 @@ try
         nodeBId = nodeB.NodeId;
         var coordinatorA = new StorageSyncCoordinator(nodeA, providerA, NamespaceId, metadataA, "array-demo");
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, NamespaceId, metadataB, "array-demo");
+        coordinatorA.EnableMetadataStoreOwnedPublication(n => StorageNodePersistence.Save(storageA, n));
+        coordinatorB.EnableMetadataStoreOwnedPublication(n => StorageNodePersistence.Save(storageB, n));
+        await InitializePeerBaselineAsync(
+            nodeA, coordinatorA, metadataA, nodeB, coordinatorB, metadataB, storageA, storageB);
 
         providerA.AppendLocalChange(Mutation(recordA, nameA, nodeA.NodeId, 1000, "pump-A"u8));
         providerA.AppendLocalChange(Mutation(recordA, quantityA, nodeA.NodeId, 1001, "4"u8));
@@ -50,8 +54,10 @@ try
         coordinatorA.PublishLocalChanges(n => StorageNodePersistence.Save(storageA, n));
         coordinatorB.PublishLocalChanges(n => StorageNodePersistence.Save(storageB, n));
         if (metadataA.GetOutboundHighWatermark("array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId) != 2 ||
-            metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 2)
-            throw new InvalidOperationException("Local Node Outbox was not frozen into durable Storage metadata.");
+            metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 2 ||
+            nodeA.GetOutboxHighWatermark(NamespaceId, nodeA.NodeId) != 0 ||
+            nodeB.GetOutboxHighWatermark(NamespaceId, nodeB.NodeId) != 0)
+            throw new InvalidOperationException("Provider changes were not frozen directly into Metadata Store.");
         ulong outboundLeaseA = metadataA.AcquireOutboundLease(
             "array-demo", nodeA.NodeId, NamespaceId, nodeA.NodeId, Guid.Parse("a1000000-0000-0000-0000-000000000001"));
         var outboundPageA = metadataA.ReadOutbound(
@@ -60,25 +66,8 @@ try
             RecordId.From(outboundPageA.Items[0].Payload.AsSpan(0, 16)) != recordA)
             throw new InvalidOperationException("Frozen outbound array payload is not readable from Storage metadata.");
 
-        Transport.MakeSession(nodeA, nodeB);
-        // Persist negotiated aliases before the first inbound batch can stage PendingApply.
-        StorageNodePersistence.Save(storageA, nodeA);
-        StorageNodePersistence.Save(storageB, nodeB);
-        int firstRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
-        {
-            // Persist the Node's accepted receipt/state first, then materialize the
-            // external provider. Transport sends ACK only after this callback returns.
-            if (ReferenceEquals(receiver, nodeA))
-            {
-                coordinatorA.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageA, n));
-            }
-            else
-            {
-                coordinatorB.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageB, n));
-            }
-        });
-        StorageNodePersistence.Save(storageA, nodeA);
-        StorageNodePersistence.Save(storageB, nodeB);
+        int firstRound = await ExchangeInProcessAsync(
+            nodeA, coordinatorA, storageA, metadataA, nodeB, coordinatorB, storageB, metadataB);
 
         Console.WriteLine($"initial sync rounds={firstRound}; each Storage provider now has both array items");
     }
@@ -108,22 +97,8 @@ try
         if (metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 3)
             throw new InvalidOperationException("Post-restart update was not frozen into the existing outbound stream.");
 
-        Transport.MakeSession(nodeA, nodeB);
-        StorageNodePersistence.Save(storageA, nodeA);
-        StorageNodePersistence.Save(storageB, nodeB);
-        int secondRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
-        {
-            if (ReferenceEquals(receiver, nodeA))
-            {
-                coordinatorA.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageA, n));
-            }
-            else
-            {
-                coordinatorB.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageB, n));
-            }
-        });
-        StorageNodePersistence.Save(storageA, nodeA);
-        StorageNodePersistence.Save(storageB, nodeB);
+        int secondRound = await ExchangeInProcessAsync(
+            nodeA, coordinatorA, storageA, metadataA, nodeB, coordinatorB, storageB, metadataB);
 
         string aName = Read(providerA, recordA, name);
         string aQuantity = Read(providerA, recordA, quantity);
@@ -157,17 +132,8 @@ try
         if (metadataB.GetOutboundHighWatermark("array-demo", nodeB.NodeId, NamespaceId, nodeB.NodeId) != 4)
             throw new InvalidOperationException("Record deletion was not frozen into the durable outbound stream.");
 
-        int deleteRound = Transport.SyncRound(nodeA, nodeB, NamespaceId, beforeAck: (receiver, batch, _) =>
-        {
-            if (ReferenceEquals(receiver, nodeA))
-            {
-                coordinatorA.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageA, n));
-            }
-            else
-            {
-                coordinatorB.ApplyRemoteBatchBeforeAck(batch, n => StorageNodePersistence.Save(storageB, n));
-            }
-        });
+        int deleteRound = await ExchangeInProcessAsync(
+            nodeA, coordinatorA, storageA, metadataA, nodeB, coordinatorB, storageB, metadataB);
         if (deleteRound == 0 ||
             providerA.TryReadCurrent(recordB, name, out _) ||
             providerA.TryReadCurrent(recordB, quantity, out _) ||
@@ -182,6 +148,86 @@ try
 finally
 {
     try { Directory.Delete(root, recursive: true); } catch { }
+}
+
+static async Task InitializePeerBaselineAsync(
+    Node nodeA, StorageSyncCoordinator coordinatorA, IMetadataPeerStateStore metadataA,
+    Node nodeB, StorageSyncCoordinator coordinatorB, IMetadataPeerStateStore metadataB,
+    StorageDatabase storageA, StorageDatabase storageB)
+{
+    var (aToB, bFromA) = PipeTransport.CreatePair();
+    var acceptTask = SyncSession.AcceptAsync(nodeA, bFromA);
+    await using var sessionB = await SyncSession.ConnectAsync(nodeB, aToB);
+    await using var sessionA = await acceptTask;
+    coordinatorA.RegisterInterestedPeer(sessionA, NamespaceId);
+    coordinatorB.RegisterInterestedPeer(sessionB, NamespaceId);
+    metadataA.CompletePeerInitialSync("array-demo", nodeA.NodeId, nodeB.NodeId,
+        checked((uint)nodeB.Epoch), NamespaceId,
+        new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, checked((uint)nodeA.Epoch)) });
+    metadataB.CompletePeerInitialSync("array-demo", nodeB.NodeId, nodeA.NodeId,
+        checked((uint)nodeA.Epoch), NamespaceId,
+        new[] { new MetadataPeerStreamBaseline(nodeB.NodeId, 0, checked((uint)nodeB.Epoch)) });
+    StorageNodePersistence.Save(storageA, nodeA);
+    StorageNodePersistence.Save(storageB, nodeB);
+}
+
+static async Task<int> ExchangeInProcessAsync(
+    Node nodeA, StorageSyncCoordinator coordinatorA, StorageDatabase storageA, IMetadataPeerStateStore metadataA,
+    Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB, IMetadataPeerStateStore metadataB)
+{
+    var (aToB, bFromA) = PipeTransport.CreatePair();
+    var acceptTask = SyncSession.AcceptAsync(nodeA, bFromA);
+    await using var sessionB = await SyncSession.ConnectAsync(nodeB, aToB);
+    await using var sessionA = await acceptTask;
+    StorageNodePersistence.Save(storageA, nodeA);
+    StorageNodePersistence.Save(storageB, nodeB);
+
+    int aToBCount = await PushUntilIdleAsync(sessionA, nodeA, metadataA, "array-demo",
+        sessionB, coordinatorB, n => StorageNodePersistence.Save(storageB, n));
+    int bToACount = await PushUntilIdleAsync(sessionB, nodeB, metadataB, "array-demo",
+        sessionA, coordinatorA, n => StorageNodePersistence.Save(storageA, n));
+    return aToBCount + bToACount;
+}
+
+static async Task<int> PushUntilIdleAsync(
+    SyncSession senderSession, Node sender, IMetadataPeerStateStore senderMetadata, string scope,
+    SyncSession receiverSession, StorageSyncCoordinator receiverCoordinator, Action<Node> persistReceiver)
+{
+    int sentCount = 0;
+    while (true)
+    {
+        using var receiveCts = new CancellationTokenSource();
+        Task<BatchResult> receiveTask = receiverCoordinator.ReceiveBatchBeforeAckAsync(
+            receiverSession, persistReceiver, receiveCts.Token);
+        Task<bool> pushTask = senderSession.PushBatchAsync(sender, NamespaceId, senderMetadata, scope);
+        Task first = await Task.WhenAny(pushTask, receiveTask);
+        if (ReferenceEquals(first, receiveTask) && receiveTask.IsFaulted)
+        {
+            receiveCts.Cancel();
+            try { await pushTask; } catch { }
+            await receiveTask;
+        }
+
+        bool sent;
+        try { sent = await pushTask; }
+        catch
+        {
+            receiveCts.Cancel();
+            try { await receiveTask; } catch { }
+            throw;
+        }
+
+        if (!sent)
+        {
+            receiveCts.Cancel();
+            try { await receiveTask; } catch (OperationCanceledException) { }
+            break;
+        }
+
+        await receiveTask;
+        sentCount++;
+    }
+    return sentCount;
 }
 
 static Node NewNode(byte seed)
