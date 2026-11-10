@@ -65,6 +65,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                     RecordId = recordId,
                     FieldId = fieldId,
                     AuthorNodeId = Node(1),
+                    OriginAuthorEpoch = 1,
                     HlcWall = 100,
                     HlcLogical = 0,
                     KeyEpoch = 0,
@@ -180,7 +181,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             {
                 RecordId = RecordId.From(new byte[] { 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
                 FieldId = 0x0101,
-                AuthorNodeId = NodeId.From(new byte[] { 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+                AuthorNodeId = NodeId.From(new byte[] { 4,
+                    OriginAuthorEpoch = 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
                 HlcWall = 500,
                 HlcLogical = 2,
                 Value = "stable"u8.ToArray()
@@ -196,6 +198,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 RecordId = mutation.RecordId,
                 FieldId = mutation.FieldId,
                 AuthorNodeId = mutation.AuthorNodeId,
+                    OriginAuthorEpoch = 1,
                 HlcWall = mutation.HlcWall,
                 HlcLogical = mutation.HlcLogical,
                 Value = "conflict"u8.ToArray()
@@ -230,11 +233,13 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             provider.AppendLocalChange(new ProviderMutation
             {
                 RecordId = record, FieldId = 0x0101, AuthorNodeId = author,
+                    OriginAuthorEpoch = 1,
                 HlcWall = 200, Value = "newer"u8.ToArray()
             });
             provider.AppendLocalChange(new ProviderMutation
             {
                 RecordId = record, FieldId = 0x0101, AuthorNodeId = author,
+                    OriginAuthorEpoch = 1,
                 HlcWall = 100, Value = "older"u8.ToArray()
             });
 
@@ -264,6 +269,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 RecordId = record,
                 FieldId = 0x0101,
                 AuthorNodeId = author,
+                    OriginAuthorEpoch = 1,
                 HlcWall = 1000,
                 Value = "before-delete"u8.ToArray()
             });
@@ -273,6 +279,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 FieldId = Model.LifecycleFieldId,
                 IsRecordTombstone = true,
                 AuthorNodeId = author,
+                    OriginAuthorEpoch = 1,
                 HlcWall = 2000,
                 Value = Array.Empty<byte>()
             });
@@ -284,6 +291,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 RecordId = record,
                 FieldId = 0x0101,
                 AuthorNodeId = author,
+                    OriginAuthorEpoch = 1,
                 HlcWall = 3000,
                 Value = "newer-ghost"u8.ToArray()
             });
@@ -384,6 +392,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                     RecordId = RecordId.From(identity),
                     FieldId = 0x0830,
                     AuthorNodeId = local,
+                    OriginAuthorEpoch = 1,
                     HlcWall = checked((ulong)(10_000 + i)),
                     Value = new[] { checked((byte)i) }
                 });
