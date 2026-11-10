@@ -2290,7 +2290,11 @@ public sealed class StorageSyncCoordinatorTests
 
         metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 7, 1);
         metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, 7, 1,
-            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, 3) });
+            new[]
+            {
+                new MetadataPeerStreamBaseline(local.NodeId, 0, 3),
+                new MetadataPeerStreamBaseline(peer.NodeId, 0, 3)
+            });
         var reservation = new MetadataOutboundBatchReservation
         {
             BatchId = BatchId.From(Guid.Parse("80000000-0000-0000-0000-000000000001").ToByteArray()),
@@ -2301,9 +2305,22 @@ public sealed class StorageSyncCoordinatorTests
             BatchDigest = Enumerable.Repeat((byte)0x81, 16).ToArray(),
             Payload = new byte[] { 0x81, 0x01 }
         };
+        var relayReservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = BatchId.From(Guid.Parse("80000000-0000-0000-0000-000000000002").ToByteArray()),
+            IssuerEpoch = 3,
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0x82, 16).ToArray(),
+            Payload = new byte[] { 0x82, 0x02 }
+        };
         metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1, local.NodeId, reservation);
         metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 7, 1,
             local.NodeId, reservation.BatchId);
+        metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1, peer.NodeId, relayReservation);
+        metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 7, 1,
+            peer.NodeId, relayReservation.BatchId);
 
         int hostAcquires = 0;
         int hostReleases = 0;
@@ -2316,14 +2333,25 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1, hostAcquires);
         Assert.Equal(1, hostReleases);
 
-        MetadataPeerStreamSnapshot stream = Assert.Single(
-            metadata.ReadPeerStreamStates(scope, local.NodeId, peer.NodeId, 7, 1));
-        Assert.Equal(0UL, stream.State.AckedCursor);
-        Assert.Equal(1UL, stream.State.PushedCursor);
-        Assert.NotNull(stream.State.PendingBatch);
+        IReadOnlyList<MetadataPeerStreamSnapshot> pendingStreams =
+            metadata.ReadPeerStreamStates(scope, local.NodeId, peer.NodeId, 7, 1);
+        Assert.Equal(2, pendingStreams.Count);
+        MetadataPeerStreamSnapshot pendingOutbound = Assert.Single(
+            pendingStreams, stream => stream.AuthorStream == local.NodeId);
+        MetadataPeerStreamSnapshot pendingRelay = Assert.Single(
+            pendingStreams, stream => stream.AuthorStream == peer.NodeId);
+        Assert.Equal(0UL, pendingOutbound.State.AckedCursor);
+        Assert.Equal(1UL, pendingOutbound.State.PushedCursor);
+        Assert.NotNull(pendingOutbound.State.PendingBatch);
+        Assert.Equal(0UL, pendingRelay.State.AckedCursor);
+        Assert.Equal(1UL, pendingRelay.State.PushedCursor);
+        Assert.NotNull(pendingRelay.State.PendingBatch);
 
         metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
             local.NodeId, reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest.ToArray());
+        metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
+            peer.NodeId, relayReservation.BatchId, relayReservation.CursorEnd,
+            relayReservation.BatchDigest.ToArray());
         using (coordinator.AcquireFullReplaceCommitGuard(() =>
         {
             Interlocked.Increment(ref hostAcquires);
@@ -2332,11 +2360,15 @@ public sealed class StorageSyncCoordinatorTests
         {
             Assert.Equal(2, hostAcquires);
             Assert.Equal(1, hostReleases);
-            MetadataPeerStreamSnapshot acknowledged = Assert.Single(
-                metadata.ReadPeerStreamStates(scope, local.NodeId, peer.NodeId, 7, 1));
-            Assert.Equal(1UL, acknowledged.State.AckedCursor);
-            Assert.Equal(1UL, acknowledged.State.PushedCursor);
-            Assert.Null(acknowledged.State.PendingBatch);
+            IReadOnlyList<MetadataPeerStreamSnapshot> acknowledgedStreams =
+                metadata.ReadPeerStreamStates(scope, local.NodeId, peer.NodeId, 7, 1);
+            Assert.Equal(2, acknowledgedStreams.Count);
+            foreach (MetadataPeerStreamSnapshot acknowledged in acknowledgedStreams)
+            {
+                Assert.Equal(1UL, acknowledged.State.AckedCursor);
+                Assert.Equal(1UL, acknowledged.State.PushedCursor);
+                Assert.Null(acknowledged.State.PendingBatch);
+            }
         }
         Assert.Equal(2, hostReleases);
     }
