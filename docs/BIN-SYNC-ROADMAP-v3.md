@@ -1,3 +1,9 @@
+## 1.19. Cross-repository C-pass: repair FLD blob restart-cleanup API call — 2026-11-10
+
+- [x C] Source audit found `FldDatabase.GcOrphanRuns` called nonexistent `StorageBlobStore.PruneOrphanPages`; FLD-DB now calls the actual bounded `PruneOrphanBlobs` API after catalog-backed unreferenced-blob pruning.
+- [x C] The blob publication/deletion ordering was source-audited: pending catalog → durable pages → completion marker; catalog removal precedes page-directory cleanup, with orphan-directory collection on restart.
+- [~ T] Exact-head build and crash/failure injection remain pending. Windows directory-entry durability is not claimed by the current storage directory-sync implementation and must be resolved/documented before claiming cross-platform power-loss durability.
+
 ## 1.18. C-pass: active StorageDataProvider snapshot handles block ChangeId GC — 2026-11-10
 
 - [x C] Found a second snapshot-pin gap: `CompactChangeLedger` scanned provider feed and external references but did not check already-open `StorageDataProvider.ProviderSnapshotState` handles. The composed provider commit gate prevented new opens but did not reject an existing immutable snapshot.
