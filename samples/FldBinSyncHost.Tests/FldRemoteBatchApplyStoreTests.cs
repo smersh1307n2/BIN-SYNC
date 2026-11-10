@@ -555,6 +555,10 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         });
         Assert.Equal(1, coordinatorA.PublishLocalChanges(
             node => StorageNodePersistence.Save(storageA, node)));
+        // The provider cutover is fenced until every local WAL commit is sealed,
+        // even when its Outbox prefix has already been published and acknowledged.
+        Assert.NotEqual(0UL, fldA.Checkpoint());
+        Assert.Equal(fldA.PendingFlushedCommitSeq, fldA.LastSealedCommitSeq);
         coordinatorA.EnableMetadataStoreOwnedPublication(
             node => StorageNodePersistence.Save(storageA, node));
 
