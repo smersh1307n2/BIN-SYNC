@@ -2334,18 +2334,21 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(hostCompleted.Wait(TimeSpan.FromMilliseconds(150)));
         Assert.False(gcChange.IsCompleted);
         Assert.False(gcReceipt.IsCompleted);
-        Assert.False(gcTombstone.IsCompleted);
+        // Tombstone GC is hard-disabled before lease acquisition; it must return
+        // without touching host references or waiting on the composed barrier.
+        Assert.True(gcTombstone.Wait(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, await gcTombstone);
 
         outerLease.Dispose();
-        await Task.WhenAll(providerCommit, hostCommit, gcChange, gcReceipt, gcTombstone)
+        await Task.WhenAll(providerCommit, hostCommit, gcChange, gcReceipt)
             .WaitAsync(TimeSpan.FromSeconds(15));
         Assert.NotNull(await receive.WaitAsync(TimeSpan.FromSeconds(5)));
 
         Assert.Equal(0, await gcChange);
         Assert.Equal(0, await gcReceipt);
         Assert.Equal(0, await gcTombstone);
-        Assert.Equal(4, hostLeaseAcquires);
-        Assert.Equal(4, hostLeaseReleases);
+        Assert.Equal(3, hostLeaseAcquires);
+        Assert.Equal(3, hostLeaseReleases);
         Assert.False(scanner.Opened); // All physical-GC proof switches remain disabled.
         Assert.True(node.TryGetField(1, receiveRecord, 0x0898, out var received));
         Assert.Equal("receive-after-release", Encoding.UTF8.GetString(received!.Value));
