@@ -2256,7 +2256,7 @@ public sealed class StorageSyncCoordinatorTests
                 });
             });
 
-        IDisposable outerLease = coordinator.AcquireApplicationCommitGuard(() =>
+        using IDisposable outerLease = coordinator.AcquireApplicationCommitGuard(() =>
         {
             Assert.True(hostGate.Wait(TimeSpan.FromSeconds(5)));
             Interlocked.Increment(ref hostLeaseAcquires);
