@@ -1,9 +1,18 @@
+## 1.39. T-pass: verify FULL_REPLACE capability binding and Metadata writer exclusion — 2026-11-10
+
+- [x T] `Full_replace_commit_guard_requires_exact_namespace_gc_binding_and_releases_host_lease` proves that an unattached namespace-GC capability is rejected before the host lease callback runs; a store attached to the wrong scope is rejected after host acquisition, and the host lease is released on failure.
+- [x T] `Full_replace_commit_guard_blocks_concurrent_metadata_writers_until_disposed` holds the typed FULL_REPLACE barrier while a concurrent `BeginPendingApply` writer attempts to enter Metadata. The writer remains blocked until lease disposal, then completes and persists its PendingApply.
+- [x T] Exact BIN-SYNC head `f319ce88acbacf70bbae7248fbbed757812d8da0`: Core 678/678 on Linux and Windows; Storage Integration 181/181 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
+- [~ T] The remaining typed-lease proof is receiver-side rejection of leases whose scope, local replica, namespace, namespace-GC store or trust-store instance differs from the receiver binding; also verify no provider switch or installed ACK occurs after rejection.
+- [~ T] The `FldBinSyncHost` cross-repository build remains unverified: `FLD_DB_READ_TOKEN` is absent, so the workflow skips private FLD-DB checkout and host-adapter build. The wrapper job's green conclusion is not a compile result.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; these barrier tests do not authorize physical deletion.
+
 ## 1.38. T-pass: verify FULL_REPLACE reservation and completed-receipt barriers — 2026-11-10
 
 - [x T] `Full_replace_commit_guard_blocks_pushed_unacknowledged_peer_reservations` proves that both a local outbound reservation and a foreign-author relay-stream reservation block FULL_REPLACE while pushed but unacknowledged, preserve their cursor/reservation state on rejection, and stop blocking only after their matching ACKs atomically advance the acknowledged cursors and clear both pending reservations. The host lease is released on rejection and normal disposal.
 - [x T] `Full_replace_commit_guard_does_not_treat_completed_receipts_as_pending_work` stages and finalizes a Metadata PendingApply, then proves the retained completed receipt is idempotency history rather than pending provider work and does not block FULL_REPLACE.
 - [x T] Exact BIN-SYNC head `7da5e680d63de7f13ef7b26b912ddb6463564a86`: Core 678/678 on Linux and Windows; Storage Integration 179/179 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
-- [~ T] Remaining §1.21 proof cases include missing/unattached capability and lease failures, typed receiver lease identity/scope/store/trust mismatches, and concurrent Metadata writers held off for the entire FULL_REPLACE switch.
+- [~ T] Remaining §1.21 proof case after §§1.37–1.39: receiver-side rejection of typed leases whose scope, local replica, namespace, namespace-GC store or trust-store instance differs from the receiver binding; prove no provider switch or installed ACK occurs.
 - [~ T] The `FldBinSyncHost` cross-repository build remains unverified: `FLD_DB_READ_TOKEN` is absent, so the workflow skips private FLD-DB checkout and host-adapter build. The wrapper job's green conclusion is not a compile result.
 - [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; these FULL_REPLACE barrier tests do not authorize physical deletion.
 
@@ -11,7 +20,7 @@
 
 - [x T] Added `Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace`: a durable PendingApply in another namespace does not block the target namespace's FULL_REPLACE lease; a PendingApply in the target namespace rejects the lease, and the acquired host lease is released on rejection. Both pending intents remain durable and isolated.
 - [x T] Exact BIN-SYNC head `ea1d0d1f51fa80c17aee0a3cfbb67b3453d2c8d2`: Core 678/678 on Linux and Windows; Storage Integration 177/177 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
-- [~ T] Remaining §1.21 cases after §§1.37–1.38: missing/unattached capability and lease failures, typed receiver lease identity/scope/store/trust mismatches, and concurrent Metadata writers held off for the entire FULL_REPLACE switch remain open.
+- [~ T] Remaining §1.21 case after §§1.37–1.39: receiver-side rejection of typed leases whose scope, local replica, namespace, namespace-GC store or trust-store instance differs from the receiver binding; prove no provider switch or installed ACK occurs.
 - [~ T] The `FldBinSyncHost` cross-repository build remains unverified: the workflow's private FLD-DB checkout/build steps are skipped when `FLD_DB_READ_TOKEN` is absent. A green wrapper job is not a successful host-adapter build.
 - [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; this test does not authorize physical deletion.
 
