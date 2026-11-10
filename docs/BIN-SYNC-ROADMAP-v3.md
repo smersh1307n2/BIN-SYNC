@@ -1,3 +1,9 @@
+## 1.61. T-pass: require all provider snapshot pins to drain before tombstone-GC guard — 2026-11-10
+
+- [x T] Added `Snapshot_gc_guard_waits_for_every_active_snapshot_pin_to_be_released`: one active snapshot blocks `TryAcquireSnapshotGcGuard`; releasing only one of two snapshots still blocks it; releasing both permits acquisition.
+- [~ T] Exact-head CI and local execution are not yet verified. Local Commander remains offline; GitHub Actions status/log access is still insufficient to claim a test result.
+- [x C] This validates the provider-side snapshot-pin admission guard only. It does not exercise cross-store GC, prove external application references, or enable physical tombstone deletion; the physical-GC switches remain hard false.
+
 ## 1.60. T-pass: recover immutable outbound reservations across restart — 2026-11-10
 
 - [x T] Extended the tombstone-GC metadata restart test to persist a peer's immutable outbound reservation after completing its baseline, close the Metadata store, and reopen the same durable partition.
