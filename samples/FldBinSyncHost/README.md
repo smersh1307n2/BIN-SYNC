@@ -50,7 +50,7 @@ FLD checkout as competing type identities.
    publication cutover and ApplyJournal receipts from landing in separate stores.
    After creating `StorageNamespaceGcStore` over that same BIN-SYNC
    `StorageDatabase`, call `coordinator.AttachNamespaceGcGuard(gcStore, trustStore)`;
-   this is required before the FULL_REPLACE-specific metadata barrier can be acquired.
+   this is required before the FULL_REPLACE-specific metadata barrier can be acquired. Pass these exact `gcStore` and `trustStore` instances to `StorageFullReplaceReceiver`; its typed lease rejects any different store/trust binding.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
    enabling any sender after process startup. It recovers durable PendingApply
    intents and freezes the local provider feed under the composed coordinator →

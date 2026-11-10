@@ -279,13 +279,42 @@ public sealed class StorageSyncCoordinator
     /// Acquire the cross-store FULL_REPLACE barrier. In addition to the normal
     /// coordinator/Node/host/provider gates, this holds the durable Metadata Store
     /// transaction gate and proves that no target-namespace PendingApply or immutable
-    /// outbound/relay reservation remains unresolved.
+    /// outbound/relay reservation remains unresolved. The returned typed lease is bound
+    /// to this coordinator's exact scope, local replica, namespace, namespace-GC store
+    /// and trust-store instance.
     /// </summary>
-    public IDisposable AcquireFullReplaceCommitGuard(Func<IDisposable?> acquireHostCommitLease)
+    public IFullReplaceCommitLease AcquireFullReplaceCommitGuard(Func<IDisposable?> acquireHostCommitLease)
     {
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
-        return AcquireApplicationCommitGuardCore(
-            acquireHostCommitLease, requireFullReplaceMetadataProof: true);
+        if (_namespaceId <= 0 || _namespaceId > ushort.MaxValue ||
+            _node.NodeId.IsZero || string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException(
+                "FULL_REPLACE requires a non-zero local replica, namespace and stable metadata scope.");
+        Monitor.Enter(_gate);
+        try
+        {
+            IMetadataNamespaceGcStore namespaceGcStore = _namespaceGcStore
+                ?? throw new NotSupportedException("FULL_REPLACE requires the coordinator to be attached to the exact namespace-GC store.");
+            TrustStore namespaceGcTrustStore = _namespaceGcTrustStore
+                ?? throw new NotSupportedException("FULL_REPLACE requires the coordinator to be attached to the exact namespace-GC trust store.");
+            IDisposable lease = AcquireApplicationCommitGuardCore(
+                acquireHostCommitLease, requireFullReplaceMetadataProof: true);
+            try
+            {
+                return new FullReplaceApplicationCommitLease(
+                    lease, _scopeId, _node.NodeId, _namespaceId,
+                    namespaceGcStore, namespaceGcTrustStore);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+        }
+        finally
+        {
+            Monitor.Exit(_gate);
+        }
     }
 
     /// <summary>
@@ -345,11 +374,20 @@ public sealed class StorageSyncCoordinator
         }
         catch
         {
-            providerLease?.Dispose();
-            metadataLease?.Dispose();
-            hostLease?.Dispose();
-            nodeLease?.Dispose();
-            Monitor.Exit(_gate);
+            try { providerLease?.Dispose(); }
+            finally
+            {
+                try { metadataLease?.Dispose(); }
+                finally
+                {
+                    try { hostLease?.Dispose(); }
+                    finally
+                    {
+                        try { nodeLease?.Dispose(); }
+                        finally { Monitor.Exit(_gate); }
+                    }
+                }
+            }
             throw;
         }
     }
@@ -577,6 +615,31 @@ public sealed class StorageSyncCoordinator
         map.CommitAfterFldRelayAck(
             _namespaceId, originalAuthor, safeOutbox, safeJournal);
         return safeJournal;
+    }
+
+    private sealed class FullReplaceApplicationCommitLease : IFullReplaceCommitLease
+    {
+        private IDisposable? _inner;
+        public string ScopeId { get; }
+        public NodeId LocalReplica { get; }
+        public int NamespaceId { get; }
+        public IMetadataNamespaceGcStore NamespaceGcStore { get; }
+        public TrustStore NamespaceGcTrustStore { get; }
+
+        public FullReplaceApplicationCommitLease(
+            IDisposable inner, string scopeId, NodeId localReplica, int namespaceId,
+            IMetadataNamespaceGcStore namespaceGcStore, TrustStore namespaceGcTrustStore)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            ScopeId = scopeId ?? throw new ArgumentNullException(nameof(scopeId));
+            LocalReplica = localReplica;
+            NamespaceId = namespaceId;
+            NamespaceGcStore = namespaceGcStore ?? throw new ArgumentNullException(nameof(namespaceGcStore));
+            NamespaceGcTrustStore = namespaceGcTrustStore ?? throw new ArgumentNullException(nameof(namespaceGcTrustStore));
+        }
+
+        public void Dispose()
+            => Interlocked.Exchange(ref _inner, null)?.Dispose();
     }
 
     private sealed class ApplicationCommitLease : IDisposable

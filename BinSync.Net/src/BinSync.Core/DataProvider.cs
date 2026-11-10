@@ -205,6 +205,22 @@ public interface IProviderSnapshotGcGuard
     IDisposable? TryAcquireSnapshotGcGuard();
 }
 
+/// <summary>
+/// Marker lease proving that the FULL_REPLACE-specific cross-store commit barrier
+/// was acquired for one exact scope, local replica, namespace, namespace-GC store and
+/// trust-store instance. The receiver checks these bindings and rejects ordinary
+/// IDisposable/application commit leases so a caller cannot accidentally omit Metadata
+/// pending-state fencing or supply another scope/store.
+/// </summary>
+public interface IFullReplaceCommitLease : IDisposable
+{
+    string ScopeId { get; }
+    NodeId LocalReplica { get; }
+    int NamespaceId { get; }
+    IMetadataNamespaceGcStore NamespaceGcStore { get; }
+    TrustStore NamespaceGcTrustStore { get; }
+}
+
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
 public sealed record ProviderApplyReceipt(Guid ApplyToken, byte[] BatchFingerprint, bool IsDuplicate);

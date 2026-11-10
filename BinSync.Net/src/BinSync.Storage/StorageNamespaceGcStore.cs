@@ -47,6 +47,27 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
     internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
 
+    internal bool IsBoundTo(StorageDatabase storage, string scopeId, NodeId localReplica)
+    {
+        if (!ReferenceEquals(_storage, storage) ||
+            string.IsNullOrWhiteSpace(scopeId) || localReplica.IsZero)
+            return false;
+
+        int scopeLength = Encoding.UTF8.GetByteCount(scopeId);
+        if (_identityValue.Length != checked(8 + scopeLength + 16) ||
+            !_identityValue.AsSpan(0, 4).SequenceEqual("NGC1"u8) ||
+            BinaryPrimitives.ReadInt32LittleEndian(_identityValue.AsSpan(4)) != scopeLength)
+            return false;
+
+        byte[] scope = Encoding.UTF8.GetBytes(scopeId);
+        if (!_identityValue.AsSpan(8, scopeLength).SequenceEqual(scope))
+            return false;
+
+        Span<byte> local = stackalloc byte[16];
+        localReplica.WriteTo(local);
+        return _identityValue.AsSpan(8 + scopeLength, 16).SequenceEqual(local);
+    }
+
     /// <summary>
     /// OFR2/NRS2/FRA2/RCP2 now carry the author-issued, retirement and HLC horizon
     /// proof. Physical tombstone GC remains disabled until provider/Node/WAL/FLD

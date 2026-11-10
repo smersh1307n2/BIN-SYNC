@@ -2,8 +2,9 @@ namespace BinSync.Storage;
 
 /// <summary>
 /// Durable receiver-side FULL_REPLACE orchestration. The provider owns staged bytes;
-/// the namespace-GC store owns signed installation evidence. Commit requires an
-/// application-supplied exclusive guard covering every cross-store live reference.
+/// the namespace-GC store owns signed installation evidence. Commit requires the
+/// typed IFullReplaceCommitLease produced by the FULL_REPLACE-specific coordinator
+/// barrier; an ordinary IDisposable/application commit lease is not accepted.
 /// </summary>
 public sealed class StorageFullReplaceReceiver
 {
@@ -21,7 +22,7 @@ public sealed class StorageFullReplaceReceiver
     private readonly NodeId _localMember;
     private readonly uint _localMemberEpoch;
     private readonly byte[] _localMemberSeed;
-    private readonly Func<IDisposable?> _acquireCommitGuard;
+    private readonly Func<IFullReplaceCommitLease?> _acquireCommitGuard;
     private readonly Action<ulong, uint> _advanceHlcAndRefresh;
     private NamespaceRosterCertificate? _roster;
     private FullReplaceTransferProtocol.Begin? _manifest;
@@ -38,7 +39,7 @@ public sealed class StorageFullReplaceReceiver
         byte[] localMemberSeed,
         string scopeId,
         IApplicationGcReferenceScanner externalState,
-        Func<IDisposable?> acquireCommitGuard,
+        Func<IFullReplaceCommitLease?> acquireCommitGuard,
         Action<ulong, uint> advanceHlcAndRefresh)
     {
         ArgumentNullException.ThrowIfNull(provider);
@@ -199,11 +200,19 @@ public sealed class StorageFullReplaceReceiver
             if (!progress.IsCommitted && progress.NextIndex != progress.ExpectedEntryCount)
                 throw new InvalidOperationException("FULL_REPLACE cannot commit before every manifest entry is staged.");
 
-            IDisposable? commitGuard = _acquireCommitGuard();
+            IFullReplaceCommitLease? commitGuard = _acquireCommitGuard();
             if (commitGuard is null)
                 throw new InvalidOperationException("Cross-store FULL_REPLACE commit proof is unavailable; provider state was not switched.");
             using (commitGuard)
             {
+                if (!StringComparer.Ordinal.Equals(commitGuard.ScopeId, _scopeId) ||
+                    commitGuard.LocalReplica != _localMember ||
+                    commitGuard.NamespaceId != _namespaceId ||
+                    !ReferenceEquals(commitGuard.NamespaceGcStore, _gcStore) ||
+                    !ReferenceEquals(commitGuard.NamespaceGcTrustStore, _trustStore))
+                    throw new InvalidOperationException(
+                        "FULL_REPLACE commit lease is bound to a different scope, local replica, namespace, namespace-GC store or trust store.");
+
                 if (_provider is not IProviderSnapshotGcGuard snapshotGuard)
                     throw new InvalidOperationException(
                         "FULL_REPLACE provider must expose a snapshot-pin guard; provider state was not switched.");

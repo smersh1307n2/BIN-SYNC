@@ -48,9 +48,9 @@ Wire remains b128 / canonical codec on the frame payload; typed ids are an API/l
 ## Storage and host orchestration
 
 - `StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)` composes coordinator, Node, host and provider gates for ordinary coordinated operations and physical-GC callbacks.
-- `StorageSyncCoordinator.AcquireFullReplaceCommitGuard(hostLeaseFactory)` is the required stronger barrier for `StorageFullReplaceReceiver`. It additionally holds `IMetadataFullReplaceCommitGuard` across the provider generation switch and fails closed when target-namespace `PendingApply` or immutable outbound/relay reservations remain.
+- `StorageSyncCoordinator.AcquireFullReplaceCommitGuard(hostLeaseFactory)` returns the marker type `IFullReplaceCommitLease`, bound to the coordinator's exact scope, local replica, namespace-GC store and trust-store instance, and is the required stronger barrier for `StorageFullReplaceReceiver`. The receiver checks that binding and accepts no arbitrary `IDisposable`, preventing accidental use of the ordinary application/GC guard. It holds `IMetadataFullReplaceCommitGuard` across the provider generation switch and fails closed when target-namespace `PendingApply` or immutable outbound/relay reservations remain.
 - Durable `StorageMetadataStore` implements `IMetadataFullReplaceCommitGuard`; call `StorageSyncCoordinator.AttachNamespaceGcGuard(gcStore, trustStore)` first so the Metadata Store and signed namespace-GC state are bound to the same `StorageDatabase`.
-- `FldBinSyncHostAdapter.AcquireFullReplaceCommitGuard()` is the sample host factory for the receiver. FLD's ApplyJournal stores completed idempotency receipts; the FLD commit lease excludes in-flight provider commits and the unsealed-WAL barrier remains part of the host draft horizon.
+- `IFullReplaceCommitLease` is the typed cross-store commit proof required by `StorageFullReplaceReceiver`; the receiver checks exact scope/local-replica/namespace and exact namespace-GC/trust-store references. The sample `FldBinSyncHostAdapter.AcquireFullReplaceCommitGuard()` returns it. FLD's ApplyJournal stores completed idempotency receipts; the FLD commit lease excludes in-flight provider commits and the unsealed-WAL barrier remains part of the host draft horizon.
 
 ## Supported (embedder contract)
 

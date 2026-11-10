@@ -1073,6 +1073,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
                 throw new InvalidOperationException(
                     "FULL_REPLACE requires the Metadata Store to be attached to its shared durable namespace-GC store.");
+            if (!_namespaceGcStore.IsBoundTo(_storage, scopeId, localReplica))
+                throw new InvalidOperationException(
+                    "FULL_REPLACE namespace-GC store is not bound to the exact Metadata Store scope and local replica.");
 
             if (TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             {

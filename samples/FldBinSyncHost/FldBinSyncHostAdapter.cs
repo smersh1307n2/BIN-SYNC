@@ -67,7 +67,7 @@ public sealed class FldBinSyncHostAdapter
     /// durable Metadata Store and provider. The Metadata Store lease rejects unresolved
     /// PendingApply and immutable peer reservations before the receiver may switch.
     /// </summary>
-    public IDisposable AcquireFullReplaceCommitGuard()
+    public IFullReplaceCommitLease AcquireFullReplaceCommitGuard()
         => _coordinator.AcquireFullReplaceCommitGuard(_database.AcquireCommitGuard);
 
     /// <summary>

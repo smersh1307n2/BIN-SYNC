@@ -2,6 +2,7 @@
 
 ## Unreleased — v3.1 C-pass
 
+- Added the typed, scope/local-replica/namespace/GC-store/trust-bound `IFullReplaceCommitLease` contract and made `StorageFullReplaceReceiver` reject ordinary `IDisposable` guards or a lease for another namespace. `StorageSyncCoordinator.AcquireFullReplaceCommitGuard` composes the Metadata Store PendingApply/reservation proof with the Node, host FLD/WAL and provider gates; the sample FLD host exposes the required factory.
 - Added the RPM3 durable relay provenance map in `BinSync.Storage`: atomic JournalSeq↔OutboxSeq mapping (ChangeId remains in the global ledger), per-author scan/ACK cursor, SHA-256/XOR mapping-set checksum, OutboxSeq-ordered recovery and O(log N) safe-ACK translation. Mapping pruning remains strictly after durable FLD relay ACK.
 - Added `StorageSyncCoordinator.AppendRelayProvenancePage` to resolve transient FLD ChangeIds through the global Node ledger before persisting only JournalSeq↔OutboxSeq pairs. Added a persisted-row golden sample and source-derived metadata byte inventory for Outbox, ApplyJournal, Micro-WAL, Manifest, Run and Fld1.Storage.
 - Added explicit broadcast of one accepted retention checkpoint to multiple members without minting a checkpoint sequence per destination; authority verification and durable checkpoint revalidation are serialized under the coordinator gate.
