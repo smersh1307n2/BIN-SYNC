@@ -101,7 +101,7 @@ public abstract class MetadataStoreConformanceSuite
 
         var alternateRoute = store.AcceptIncomingBatch(
             CreateBatch("scope-a", 1, 3, 1, 7, 11, 1, 1, 0, 11,
-                Operation(20, 30, 40, 50)));
+                Operation(20, 30, 40, 50, originSequence: 1)));
 
         Assert.False(alternateRoute.IsDuplicate);
         Assert.Equal(1UL, store.GetReceiveCursor("scope-a", Node(1), Node(3), 1, 7));
