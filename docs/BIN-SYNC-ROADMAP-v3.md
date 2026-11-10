@@ -1,3 +1,12 @@
+## 1.47. T-pass: prove applied-frontier scan holds one non-reentrant host lease — 2026-11-10
+
+- [x T] `Applied_origin_frontier_uses_one_non_reentrant_host_lease_and_releases_on_scan_failure` accepts a signed one-member roster, publishes an applied-origin frontier with a zero-draft host snapshot, and verifies the scanner opens while the non-reentrant host gate is already held. The scan is disposed before the single host lease is released.
+- [x T] A scanner exception propagates while releasing the host lease exactly once; a subsequent application-guard acquisition succeeds, proving coordinator, Node, provider and host gates were all released. This also proves no nested host-gate acquisition occurs inside the scanner.
+- [x T] Exact BIN-SYNC head `5eab643ac300e013f4067ee59582f5ddc3c7f429`: Core 678/678 on Linux and Windows; Storage Integration 193/193 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] This validates host lease/disposal ordering for frontier publication; it does not prove signed offline/rejoin retention horizons or authorize physical GC.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.46. T-pass: verify composed GC barrier under concurrent receive, provider and host commits — 2026-11-10
 
 - [x T] `Composed_gc_barrier_serializes_receive_provider_host_and_all_three_gc_callbacks` holds the composed coordinator → Node → host → provider lease while independent receive, provider append, host commit, ChangeId GC, receipt GC and tombstone GC operations are started.
@@ -176,7 +185,7 @@
 - [x C] FLD sample scanner opens `FldReferenceSnapshot` under the already-held guard and no longer reacquires `AcquireCommitGuard` through `AcquireReferenceSnapshotGuard`.
 - [x C] FLD provider snapshot-GC capability now returns its reference snapshot under the caller-held guard instead of nesting a second host lease; lease disposal remains owned by the outer application barrier.
 - [x C] Updated the host composition and public provider contracts to make the lease ownership explicit and avoid requiring reentrant host locks.
-- [~ T] Verify exception/disposal order, non-reentrant host gate behavior, and exactly one outer host-lease acquisition across ChangeId/frontier/tombstone GC. No build/tests run in this C slice.
+- [x T] Exception/disposal order and non-reentrant host-gate behavior for applied-frontier publication are covered in §1.47; ChangeId/receipt/tombstone GC serialization and fail-closed lease behavior are covered in §1.46. Tombstone GC remains hard-disabled before lease acquisition; no physical deletion is authorized.
 
 ## 1.23.1. C-pass: drive provider scans by explicit feed cursor — 2026-11-10
 
