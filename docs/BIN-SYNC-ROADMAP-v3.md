@@ -1,3 +1,9 @@
+## 1.16. Cross-repository C-pass: validate FLD snapshot Run semantics before watermark acceptance — 2026-11-10
+
+- [x C] Audited FLD-DB `FldDatabase.TryGetProviderSnapshotWatermark` and its persisted Run validation paths. Blob SHA-256/page integrity alone did not prove that the immutable bytes were a valid FLD Run in the expected namespace.
+- [x C] FLD-DB now performs `RunReader.TryValidate` plus namespace validation for blob-backed pinned Runs before accepting the persisted snapshot watermark; incomplete blobs still fail closed and are not hidden by legacy mirrors. FLD-DB roadmap §7.98 records the implementation and the outstanding T-pass.
+- [~ T] Add semantic-corruption and wrong-namespace regressions, then measure the materialization cost. No build/test was run in this C slice; no cross-repository validation is claimed.
+
 ## 1.15. C-pass audit: preserve offline NRS2 roster catch-up — 2026-11-10
 
 - [x C] Cross-checked roster acceptance against `docs/BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md` §4.1. The normative contract explicitly permits a higher signed full roster to be accepted after offline periods; requiring every intermediate local generation would break that recovery path.
