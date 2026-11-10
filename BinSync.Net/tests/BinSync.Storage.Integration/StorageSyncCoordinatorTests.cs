@@ -2336,7 +2336,8 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(gcReceipt.IsCompleted);
         // Tombstone GC is hard-disabled before lease acquisition; it must return
         // without touching host references or waiting on the composed barrier.
-        Assert.True(gcTombstone.Wait(TimeSpan.FromSeconds(5)));
+        Task tombstoneCompletion = await Task.WhenAny(gcTombstone, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(gcTombstone, tombstoneCompletion);
         Assert.Equal(0, await gcTombstone);
 
         outerLease.Dispose();
