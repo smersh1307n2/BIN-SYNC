@@ -1,3 +1,10 @@
+## 1.23.10. C-pass: close cross-store GC lock-order and liveness-snapshot audit — 2026-11-10
+
+- [x C] Verified all three physical-GC entry points acquire the composed application lease before their internal store gates: ChangeId GC then pins provider snapshots before Metadata lock; receipt GC then enters Metadata lock; tombstone GC enters the provider gate after the composed lease. No GC callback reacquires the host lease while a scan is active.
+- [x C] Verified the common order is coordinator → Node gates → host WAL/FLD lease → provider gate → Metadata/GC store gate; ordinary coordinator receive/publication paths take coordinator before Metadata, so the GC methods do not invert that order.
+- [x C] Verified ChangeId and tombstone scans open one host reference snapshot under the composed lease, and provider snapshot pins are excluded for ChangeId GC while tombstone GC rejects active provider readers. Receipt GC retains receive cursor/digest-chain, PendingApply and host receipt-reference fences.
+- [~ T] Add deterministic lock-contention/deadlock tests with concurrent receive, provider commit, host commit and all three GC callbacks; assert fail-closed behavior when any lease/reference scan cannot be acquired. No build/tests run in this C slice.
+
 ## 1.23.9. C-pass: reconcile Node-owned and Metadata-owned receive WAL boundaries — 2026-11-10
 
 - [x C] Audited `Node.ApplyBatchInternal`: legacy Node-owned receive persists accepted `RemoteBatch` payloads in Node WAL; Metadata-Store-authoritative receive uses the durable `PendingApply` intent as its sole protocol recovery journal and deliberately skips duplicate Node `RemoteBatch` WAL, Node `GlobalChangeLedger` and Node relay-Outbox mirroring.
@@ -146,7 +153,8 @@
 - [x C] Fixed a ChangeId-GC provider-feed scan hole: the previous loop stopped on an empty/short `Changes` collection, although FLD can advance `ScannedThroughSequence` over local-only lifecycle rows and later pages can still contain unpublished ChangeIds. GC now captures the provider high-watermark under the composed lease and scans until that cursor is reached, validating forward progress, the captured bound and page capacity. Commit: `5963d352fbae286db37d53b7f5097b58f72ddade`.
 - [~ T] Add a regression case with one or more empty/short provider pages followed by a live ChangeId page, plus a concurrent-writer exclusion case. Verify no ledger row is reclaimed while the later feed identity remains pending.
 - [~ T] Crash/fault proof remains open for every pending-row/page/temp-rename/directory-fsync/completion-marker boundary, catalog-delete/page-delete interruption, orphan cleanup and concurrent reader pins. Source review is not a durability test.
-- [~ C] Continue the remaining cross-store reference/liveness ordering and final public API/source/byte audit. Do not enable physical receipt, ChangeId or tombstone/Ghost GC.
+- [x C] Cross-store reference/liveness ordering is closed in §1.23.10: composed lease precedes store gates, host/provider reference snapshots are held consistently, and all physical-GC switches remain disabled.
+- [~ C] Complete the final public API/source/byte audit. Do not enable physical receipt, ChangeId or tombstone/Ghost GC.
 
 ## 1.12. C-pass: preserve issued-origin maxima across signed frontier reports — 2026-11-10
 
