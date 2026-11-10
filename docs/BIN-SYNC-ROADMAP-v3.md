@@ -1,16 +1,16 @@
-## 1.28. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
+## 1.23.5. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
 
 - [x C] ChangeId GC now validates every returned provider sequence is strictly increasing and lies within the page's explicit scanned prefix before using its ChangeId as a live-reference proof.
 - [~ T] Add malformed-provider cases for duplicate/regressing/out-of-range feed sequences and verify ChangeId reclamation fails closed. No build/tests run in this C slice.
 
-## 1.27. C-pass: separate transport retirement from receipt reclamation — 2026-11-10
+## 1.23.4. C-pass: separate transport retirement from receipt reclamation — 2026-11-10
 
 - [x C] `RetireInterestedPeer` now persists the retired transport-epoch fence and removes old peer stream/baseline state without eagerly deleting receipt rows.
 - [x C] `CompactReceipts` now requires the durable retired-epoch fence, confirms it against the accepted roster/current peer epoch, requires the signed origin retention checkpoint, and retains the existing PendingApply/host-reference checks. Receive cursors and digest chains remain the replay fence.
 - [x C] Old receipts remain eligible for later GC after a peer rejoins under a newer transport epoch; their external references are no longer bypassed by the peer-retirement path.
 - [~ T] Update retirement tests to assert receipts are retained immediately after fencing; test GC with/without external receipt references, after rejoin, with missing/regressed fences, PendingApply, cursor gaps, and origin-frontier coverage. No build/tests run in this C slice.
 
-## 1.26. C-pass: honor signed roster catch-up across generation gaps — 2026-11-10
+## 1.23.3. C-pass: honor signed roster catch-up across generation gaps — 2026-11-10
 
 - [x C] Membership transition validation now distinguishes consecutive roster generations from signed generation gaps. Consecutive transitions retain strict Joining/installed-ACK rules.
 - [x C] Across a gap, the pinned authority attests omitted Joining/FULL_REPLACE/retirement steps; the receiver still enforces member-key immutability, non-regressing transport/retired-epoch fences and all locally known retired-origin closures.
@@ -18,7 +18,7 @@
 - [x C] Updated v3.1 addendum §4.1 to make the authority-attestation boundary and consecutive-vs-gap transition rules normative.
 - [~ T] Test offline catch-up across new-member Joining→Active, Retired→Joining→Active, Active→Retired→Joining, new member already Retired, key/epoch regression, closure deletion, and ensure no GC frontier is enabled until current-generation reports/checkpoints are re-established. No build/tests run in this C slice.
 
-## 1.25. C-pass: keep host reference scans inside one composed lease — 2026-11-10
+## 1.23.2. C-pass: keep host reference scans inside one composed lease — 2026-11-10
 
 - [x C] `DelegateApplicationGcReferenceScan` now owns only the immutable host snapshot; the caller's composed application commit guard owns the host commit lease for the entire GC/frontier pass.
 - [x C] FLD sample scanner opens `FldReferenceSnapshot` under the already-held guard and no longer reacquires `AcquireCommitGuard` through `AcquireReferenceSnapshotGuard`.
@@ -26,7 +26,7 @@
 - [x C] Updated the host composition and public provider contracts to make the lease ownership explicit and avoid requiring reentrant host locks.
 - [~ T] Verify exception/disposal order, non-reentrant host gate behavior, and exactly one outer host-lease acquisition across ChangeId/frontier/tombstone GC. No build/tests run in this C slice.
 
-## 1.24. C-pass: drive provider scans by explicit feed cursor — 2026-11-10
+## 1.23.1. C-pass: drive provider scans by explicit feed cursor — 2026-11-10
 
 - [x C] Applied-origin frontier publication now scans through the captured provider high-watermark using `ScannedThroughSequence`, validates cursor progress/range and every returned sequence, and does not infer completion from a short page.
 - [x C] `PublishLocalChangesCore` now continues until the provider's current high-watermark is covered, including short/empty pages that advance only the scanned cursor; malformed/stalled pages fail closed instead of acknowledging an incomplete prefix.
@@ -129,7 +129,7 @@
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
 - [x C] Physical-format decision Option B is accepted: generic Storage owns opaque immutable blob pages plus its WAL-backed catalog; Database retains FLD1 Run v1/v2, manifest, field semantics and FLD WAL. The generic blob/page backend and FLD checkpoint/compaction/FULL_REPLACE paths are implemented on the paired branches.
 - [x C] Blob catalog/page failure-ordering and restart-cleanup source audit completed in §1.19, including correction of the stale orphan-cleanup API call. [~ C] Complete the final public API/source/byte audit. Durable sender recovery is implemented in §1.25 and FLD receiver staging/atomic switch in §1.26; both await T-pass proof. Transport creation/reconnect/disposal remain application-owned.
-- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.27 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23.5 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
 
@@ -1098,7 +1098,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 ### 2026-11-08 — C pass: receipt retirement reservation guard
 
-- [x] Historical audit finding: `RetireInterestedPeer` once deleted receipts/peer rows while fencing an old epoch. The PendingBatch reservation check was added, and §1.27 now supersedes eager receipt deletion: receipt rows remain until separate signed-frontier + host-reference GC.
+- [x] Historical audit finding: `RetireInterestedPeer` once deleted receipts/peer rows while fencing an old epoch. The PendingBatch reservation check was added, and §1.23.4 now supersedes eager receipt deletion: receipt rows remain until separate signed-frontier + host-reference GC.
 - [x] Added a fail-closed guard for any pending outbound reservation belonging to the peer and a retired-or-older epoch. A completed replacement baseline no longer silently discards the old incarnation's in-flight send/retry context.
 - [~] C implementation committed as `aab64ad`; targeted lost-ACK, reservation-retirement and crash-boundary tests are explicitly deferred to Phase T. Receipt GC remains conservative; ChangeId and tombstone/ghost GC remain disabled.
 
