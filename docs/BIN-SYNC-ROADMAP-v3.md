@@ -1,3 +1,11 @@
+## 1.42. T-pass: verify legacy Node digest alias codec and reopen — 2026-11-10
+
+- [x T] `Legacy_node_ledger_alias_round_trips_and_rejects_conflicts_after_reopen` creates a durable ChangeLedger identity, reopens the base row, attaches the legacy Node digest alias, reopens the alias-extended row, and proves identical reattachment is idempotent. Conflicting, all-zero and duplicate ChangeId aliases fail closed.
+- [x T] Exact BIN-SYNC head `0078c96e0edbf74cdd5944fe7b830df911f388be`: Core 678/678 on Linux and Windows; Storage Integration 187/187 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
+- [~ T] Remaining §1.23.8 alias proof: crash cuts before/after bounded alias batches and Node checkpoint, repeated cutover/recovery, prove Node ledger clears only after every alias is durable while `SeenChanges` remains intact, and recover markers written by the prior implementation.
+- [~ T] The `FldBinSyncHost` cross-repository build remains unverified because `FLD_DB_READ_TOKEN` is empty; private FLD-DB checkout/build is explicitly skipped. Configure a fine-grained read-only Contents token as the BIN-SYNC repository secret and rerun.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.41. T-pass: close receiver typed FULL_REPLACE lease identity matrix — 2026-11-10
 
 - [x T] Parameterized `Full_replace_receiver_rejects_mismatched_typed_lease_before_provider_switch_or_ack` across five independent mismatches: scope, local replica, namespace, namespace-GC store instance and trust-store instance. Every case rejects and disposes the lease before opening the host reference scanner, committing provider state or writing an installed ACK.
@@ -88,7 +96,7 @@
 - [x C] Only after all aliases are durable does the fenced Node clear its namespace `GlobalChangeLedger`; the caller checkpoints Node immediately. Crash before Node checkpoint leaves the old ledger and aliases for exact idempotent retry; crash after checkpoint leaves the legacy digest co-located in Metadata. `SeenChanges` remains untouched.
 - [x C] Alias and semantic identity are encoded in one ChangeLedger row and are deleted together by the existing ChangeId GC path. Compacted legacy aliases are preserved, not falsely claimed equivalent to the semantic fingerprint.
 - [x C] Fixed the partition loader's early legacy-row gate to accept both 45-byte base and 61-byte aliased ChangeLedger values; the later row decoder already validates the suffix shape and rejects zero aliases. Without this gate fix, a successfully committed alias would fail on Storage reopen.
-- [~ T] Add alias codec/reopen tests for 45/61-byte rows, zero/conflicting alias rejection, crash cuts before/after bounded alias batches and Node checkpoint, repeated cutover/recovery, and proof that Node ledger clears only after complete alias migration while `SeenChanges` remains. Include recovery from a marker written by the prior implementation: re-establish the Node fence and migrate/clear the full legacy ledger before `RestoreProviderSnapshot` removes pending remote IDs. No build/tests run in this C slice.
+- [x T] Basic base-row/alias-row reopen, identical alias idempotence, and zero/conflicting/duplicate alias rejection are covered in §1.42. [~ T] Crash cuts before/after bounded alias batches and Node checkpoint, repeated cutover/recovery, Node ledger clear ordering, `SeenChanges` preservation and prior-marker recovery remain open.
 
 ## 1.23.7. Cross-repository C-pass: narrow the FLD Storage public API — 2026-11-10
 
