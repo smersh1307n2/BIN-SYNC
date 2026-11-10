@@ -1,3 +1,13 @@
+## 1.55. T-pass: verify fail-closed ChangeId GC provider-feed scanning — 2026-11-10
+
+- [x T] `Change_id_gc_provider_scan_rejects_malformed_feed_sequences` verifies duplicate, regressing and out-of-range provider sequence values throw `InvalidDataException` before a live-reference set can be used for reclamation.
+- [x T] `Change_id_gc_provider_scan_keeps_later_live_ids_after_empty_advancing_page` proves an empty but advancing lifecycle page does not hide a later live ChangeId. `Change_id_gc_provider_scan_blocks_reclamation_for_legacy_unknown_change_id` confirms a zero/unknown ChangeId blocks the proof and clears the candidate live set.
+- [x T] Exact BIN-SYNC head `2c3d09273d85616db37103b2222cfa4079e4a1b5`: Core 678/678 on Linux and Windows; Storage Integration 213/213 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [x T] This tests the provider-feed validator independently because `IsChangeIdGcProofEnabled` remains hard false. No ChangeLedger rows were reclaimed and no physical-GC switch was enabled.
+- [x T] §1.23.5 malformed-provider scan T-pass is closed.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.54. T-pass: recover prior MCP1 Metadata publication markers — 2026-11-10
 
 - [x T] `Coordinator_migrates_legacy_metadata_publication_marker_into_provider_on_reopen` seeds the prior implementation's MCP1 marker in the Metadata keyspace with matching Node and outbound watermarks, then reopens the database. Coordinator construction migrates the marker to the provider-owned publication marker and reinstalls the Node write fence.
@@ -228,7 +238,7 @@
 ## 1.23.5. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
 
 - [x C] ChangeId GC now validates every returned provider sequence is strictly increasing and lies within the page's explicit scanned prefix before using its ChangeId as a live-reference proof.
-- [~ T] Add malformed-provider cases for duplicate/regressing/out-of-range feed sequences and verify ChangeId reclamation fails closed. No build/tests run in this C slice.
+- [x T] Malformed provider-feed sequence validation and empty-page/unknown-identity behavior are covered in §1.55; the scan validator is tested without enabling physical GC.
 
 ## 1.23.4. C-pass: separate transport retirement from receipt reclamation — 2026-11-10
 
