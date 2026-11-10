@@ -2864,6 +2864,41 @@ public sealed class StorageSyncCoordinator
                     continue;
                 if (field is null) continue;
 
+                // This compatibility bridge materializes Node state into the provider.
+                // It must carry the immutable identity from the exact local/relay Outbox
+                // operation that produced the visible FieldState; reconstructing a new
+                // ChangeId or Origin from the value would break route-independent dedupe.
+                OutboxEntry? sourceEntry = null;
+                foreach (OutboxEntry candidate in _node.ReadOutboxEntries(
+                    _namespaceId, field.AuthorNodeId, 0, int.MaxValue))
+                {
+                    if (candidate.RecordId != item.RecordId)
+                        continue;
+
+                    object sourceOperation = Ops.DecodeOp(candidate.Payload).Op;
+                    bool matches = sourceOperation switch
+                    {
+                        OpFieldWrite write =>
+                            !tombstone && write.FieldId == item.FieldId &&
+                            write.Wall == field.Timestamp.Wall &&
+                            write.Logical == field.Timestamp.Logical &&
+                            NodeId.From(write.AuthorNodeId) == field.AuthorNodeId,
+                        OpFieldTomb fieldTomb =>
+                            tombstone && fieldTomb.FieldId == item.FieldId &&
+                            fieldTomb.Wall == field.Timestamp.Wall &&
+                            fieldTomb.Logical == field.Timestamp.Logical &&
+                            NodeId.From(fieldTomb.AuthorNodeId) == field.AuthorNodeId,
+                        _ => false
+                    };
+                    if (matches)
+                        sourceEntry = candidate;
+                }
+
+                if (sourceEntry is null || sourceEntry.ChangeId.IsZero ||
+                    sourceEntry.OriginAuthorEpoch == 0 || sourceEntry.OriginSequence == 0)
+                    throw new InvalidDataException(
+                        "Node field materialization has no matching immutable Outbox ChangeId/Origin.");
+
                 mutations.Add(new ProviderMutation
                 {
                     RecordId = item.RecordId,
@@ -2872,8 +2907,11 @@ public sealed class StorageSyncCoordinator
                     HlcWall = field.Timestamp.Wall,
                     HlcLogical = field.Timestamp.Logical,
                     AuthorNodeId = field.AuthorNodeId,
-                    KeyEpoch = 0,
-                    Value = tombstone ? Array.Empty<byte>() : field.Value.ToArray()
+                    KeyEpoch = field.KeyEpoch,
+                    Value = tombstone ? Array.Empty<byte>() : field.Value.ToArray(),
+                    ChangeId = sourceEntry.ChangeId,
+                    OriginAuthorEpoch = sourceEntry.OriginAuthorEpoch,
+                    OriginSequence = sourceEntry.OriginSequence
                 });
             }
 
