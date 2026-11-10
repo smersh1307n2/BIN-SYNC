@@ -48,6 +48,9 @@ FLD checkout as competing type identities.
    apply store to `FldBinSyncHostAdapter`. The adapter rejects split
    provider/database/metadata/apply identities. This prevents field state, Outbox,
    publication cutover and ApplyJournal receipts from landing in separate stores.
+   After creating `StorageNamespaceGcStore` over that same BIN-SYNC
+   `StorageDatabase`, call `coordinator.AttachNamespaceGcGuard(gcStore, trustStore)`;
+   this is required before the FULL_REPLACE-specific metadata barrier can be acquired.
 3. Call the `RecoverAndPublishAllAsync(persistNode, ...)` overload before
    enabling any sender after process startup. It recovers durable PendingApply
    intents and freezes the local provider feed under the composed coordinator →
@@ -75,9 +78,10 @@ FLD checkout as competing type identities.
      OutboxSeq through RPM3, durably ACKs FLD JournalSeq, then prunes RPM3.
    Never combine the two authorities or duplicate a relay payload journal.
 6. Pass `CreateReferenceScanner()` to the BIN-SYNC physical-GC/frontier and
-   FULL_REPLACE proof paths, with the same
-   `StorageSyncCoordinator.AcquireApplicationCommitGuard(fld.AcquireCommitGuard)`
-   lease factory.
+   FULL_REPLACE proof paths. Physical GC uses
+   `StorageSyncCoordinator.AcquireApplicationCommitGuard(fld.AcquireCommitGuard)`;
+   FULL_REPLACE must use the stronger
+   `FldBinSyncHostAdapter.AcquireFullReplaceCommitGuard` factory.
 
 7. Use `FldBinSyncSessionScheduler` for one receive owner per `SyncSession`,
    serialized outbound sends, one shared ceiling set per namespace fanout round,
@@ -201,4 +205,4 @@ var coordinator = new StorageSyncCoordinator(
     remoteBatchCommitStore: fldApply);
 ```
 
-The host must ensure `fldDataProvider` and `fldApply` operate on the same durable FLD state and participate in the same `fld.AcquireCommitGuard()` outer lease. `FldDatabaseDataProvider` is implemented, including the snapshot-pin guard required by FULL_REPLACE commit. The caller-supplied commit guard must additionally prove that no Metadata PendingApply, relay reservation or provider intent depends on the old generation; the current sample lock alone is not that proof. Cross-repository build and adversarial T-pass remain pending.
+The host must ensure `fldDataProvider` and `fldApply` operate on the same durable FLD state and participate in the same `fld.AcquireCommitGuard()` outer lease. `FldDatabaseDataProvider` is implemented, including the snapshot-pin guard required by FULL_REPLACE commit. For FULL_REPLACE, pass `FldBinSyncHostAdapter.AcquireFullReplaceCommitGuard` as the receiver's commit-guard factory; it holds the Metadata Store transaction gate and fails closed while any target-namespace PendingApply or immutable outbound/relay reservation remains. FLD's ApplyJournal contains committed idempotency receipts rather than a separate pending-provider-intent queue; the FLD commit lease excludes in-flight applies, and the unsealed-WAL barrier is included in the host draft horizon. Cross-repository build and adversarial T-pass remain pending.

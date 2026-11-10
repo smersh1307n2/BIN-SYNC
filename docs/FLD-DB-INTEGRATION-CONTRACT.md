@@ -116,7 +116,8 @@ The source-level integration boundary now has concrete BIN-SYNC coordinator orch
 - `StorageSyncCoordinator.PublishAndSendAppliedOriginFrontierAsync(...)` — creates and persists a new frontier report before sending it.
 - `StorageSyncCoordinator.SendAcceptedAppliedOriginFrontierAsync(...)` — retries transport of the latest already-persisted local report without allocating a new ReportSequence; it verifies the stored signature against the accepted roster and supplied member key.
 
-- `StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)` — composes coordinator, Node, host FLD and shared Storage gates in the documented lock order.
+- `StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)` — composes coordinator, Node, host FLD and shared Storage gates for physical-GC/frontier work.
+- `StorageSyncCoordinator.AcquireFullReplaceCommitGuard(hostLeaseFactory)` — additionally holds the durable Metadata Store transaction gate and rejects target-namespace PendingApply and unresolved peer reservations across FULL_REPLACE.
 - `StorageSyncCoordinator.ReadAndAppendRelayProvenancePage(map, originalAuthor, hostLeaseFactory, readSourcePage)` — acquires the composed application guard, invokes the host's synchronous page-read/flatten callback while the FLD commit lease is held, then calls the resolver/atomic RPM3 append. The callback returns ordered `StorageRelaySourceChange[]` plus `ScannedThroughJournalSeq`; it must not perform network I/O.
 - `StorageSyncCoordinator.AppendRelayProvenancePage(map, originalAuthor, sourceChanges, scannedThroughJournalSeq)` — the lower-level variant for callers already holding the composed application guard. It resolves each transient `(JournalSeq, ChangeId)` through Node Outbox before cutover or Metadata Store relay rows after cutover, then atomically persists only `(JournalSeq, BIN-SYNC sequence)` plus the scan cursor. It returns false without cursor advancement if any ChangeId is no longer retained.
 - `StorageMetadataStore.TryResolveRelaySequences(...)` — resolves a page's ChangeIds to the Metadata Store's durable per-author relay sequences after publication cutover; it deliberately does not copy payload or duplicate ChangeId metadata.
@@ -344,9 +345,10 @@ All operations that publish an OFR2 frontier, commit FULL_REPLACE, or physically
 1. BIN-SYNC coordinator gate;
 2. Node's complete gate set;
 3. FLD/WAL transaction or writer gate;
-4. shared BIN-SYNC Storage transaction gate.
+4. shared BIN-SYNC Metadata/Storage transaction gate;
+5. provider gate (reentrant when it is the already-held FLD or shared Storage gate).
 
-Release in reverse order. The host passes its WAL/FLD lease factory to \`StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\`. For GC, pass \`() => coordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\` as the \`acquireGcLease\` callback. For FULL_REPLACE, use the same composed callback as the receiver's commit-guard factory. `StorageFullReplaceReceiver` also requires the host scanner and refuses to switch while the host draft horizon or provider feed is non-zero. Do not acquire the shared Storage gate and then wait for the FLD/WAL gate: that reverses the order and can deadlock with a normal FLD commit.
+Release in reverse order. The host passes its WAL/FLD lease factory to \`StorageSyncCoordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\`. For GC, pass \`() => coordinator.AcquireApplicationCommitGuard(hostLeaseFactory)\` as the \`acquireGcLease\` callback. For FULL_REPLACE, use `StorageSyncCoordinator.AcquireFullReplaceCommitGuard(hostLeaseFactory)` as the receiver's commit-guard factory. This stronger path also holds the Metadata Store transaction gate, requires its namespace-GC guard to be attached to the same StorageDatabase, and rejects any target-namespace PendingApply or unresolved immutable outbound/relay reservation. The host lease excludes in-flight FLD ApplyRemoteBatch/local commits; the unsealed-WAL barrier is reported as a non-zero host draft horizon. Completed ApplyJournal receipts remain retained as idempotency history and are not pending provider intents. `StorageFullReplaceReceiver` also requires the host scanner and refuses to switch while the host draft horizon or provider feed is non-zero. Do not acquire the shared Storage gate and then wait for the FLD/WAL gate: that reverses the order and can deadlock with a normal FLD commit.
 
 ### 9.2. Complete unpublished local draft horizon
 

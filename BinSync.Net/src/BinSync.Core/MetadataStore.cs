@@ -33,6 +33,16 @@ public interface IMetadataStore : IDisposable
 }
 
 /// <summary>
+/// Optional durable capability for FULL_REPLACE commit. The returned lease holds the
+/// Metadata Store transaction gate and proves that the target namespace has no
+/// unresolved receive apply or immutable outbound/relay batch reservation.
+/// </summary>
+public interface IMetadataFullReplaceCommitGuard
+{
+    IDisposable AcquireFullReplaceCommitGuard(string scopeId, NodeId localReplica, int namespaceId);
+}
+
+/// <summary>
 /// Optional Metadata Store capability used by durable provider-feed replay.
 /// It avoids requiring every third-party IMetadataStore implementation to expose
 /// BIN-SYNC's local outbound ChangeId ledger.

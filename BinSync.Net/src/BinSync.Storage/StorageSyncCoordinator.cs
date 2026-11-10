@@ -266,32 +266,51 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
-    /// Acquire the application commit barrier in lock order (coordinator, Node
-    /// Storage→Outbox→Meta gates, provider/shared-Storage transaction gate). This
-    /// excludes direct Node writes as well as coordinator/provider commits. Hosts
-    /// must additionally compose their WAL/FLD transaction gate when it is distinct.
+    /// Acquire the application commit barrier for coordinated work and physical-GC
+    /// callbacks in lock order (coordinator, Node gates, host gate when supplied,
+    /// provider/shared-Storage transaction gate). FULL_REPLACE must use the stronger
+    /// AcquireFullReplaceCommitGuard overload so Metadata pending state is also fenced.
     /// Dispose on the acquiring thread.
     /// </summary>
     public IDisposable AcquireApplicationCommitGuard()
-        => AcquireApplicationCommitGuardCore(null);
+        => AcquireApplicationCommitGuardCore(null, requireFullReplaceMetadataProof: false);
+
+    /// <summary>
+    /// Acquire the cross-store FULL_REPLACE barrier. In addition to the normal
+    /// coordinator/Node/host/provider gates, this holds the durable Metadata Store
+    /// transaction gate and proves that no target-namespace PendingApply or immutable
+    /// outbound/relay reservation remains unresolved.
+    /// </summary>
+    public IDisposable AcquireFullReplaceCommitGuard(Func<IDisposable?> acquireHostCommitLease)
+    {
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        return AcquireApplicationCommitGuardCore(
+            acquireHostCommitLease, requireFullReplaceMetadataProof: true);
+    }
 
     /// <summary>
     /// Acquire the application barrier in the required lock order:
     /// coordinator → Node gates → host WAL/FLD gate → shared BIN-SYNC Storage gate.
-    /// Use this overload for FULL_REPLACE and every physical GC operation when the
-    /// host has durable state outside the shared Storage database.
+    /// Use this overload for physical GC and other coordinated work when the host
+    /// has durable state outside the shared Storage database. FULL_REPLACE must use
+    /// AcquireFullReplaceCommitGuard so unresolved Metadata state is rejected.
     /// </summary>
     public IDisposable AcquireApplicationCommitGuard(Func<IDisposable?> acquireHostCommitLease)
     {
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
-        return AcquireApplicationCommitGuardCore(acquireHostCommitLease);
+        return AcquireApplicationCommitGuardCore(
+            acquireHostCommitLease, requireFullReplaceMetadataProof: false);
     }
 
-    private IDisposable AcquireApplicationCommitGuardCore(Func<IDisposable?>? acquireHostCommitLease)
+    private IDisposable AcquireApplicationCommitGuardCore(
+        Func<IDisposable?>? acquireHostCommitLease,
+        bool requireFullReplaceMetadataProof)
     {
         Monitor.Enter(_gate);
         IDisposable? nodeLease = null;
         IDisposable? hostLease = null;
+        IDisposable? metadataLease = null;
+        IDisposable? providerLease = null;
         try
         {
             nodeLease = _node.EnterAllGates();
@@ -304,11 +323,30 @@ public sealed class StorageSyncCoordinator
             if (acquireHostCommitLease is not null)
                 hostLease = acquireHostCommitLease()
                     ?? throw new InvalidOperationException("The host WAL/FLD commit lease is unavailable; the application barrier cannot be acquired.");
-            return new ApplicationCommitLease(
-                providerGuard.AcquireCommitGuard(), hostLease, nodeLease, _gate);
+
+            if (requireFullReplaceMetadataProof)
+            {
+                if (_metadataStore is not IMetadataFullReplaceCommitGuard metadataGuard ||
+                    string.IsNullOrWhiteSpace(_scopeId))
+                    throw new NotSupportedException(
+                        "FULL_REPLACE requires a Metadata Store full-replace guard for the exact scope and local replica.");
+                metadataLease = metadataGuard.AcquireFullReplaceCommitGuard(
+                    _scopeId, _node.NodeId, _namespaceId);
+            }
+
+            providerLease = providerGuard.AcquireCommitGuard();
+            var lease = new ApplicationCommitLease(
+                providerLease, metadataLease, hostLease, nodeLease, _gate);
+            providerLease = null;
+            metadataLease = null;
+            hostLease = null;
+            nodeLease = null;
+            return lease;
         }
         catch
         {
+            providerLease?.Dispose();
+            metadataLease?.Dispose();
             hostLease?.Dispose();
             nodeLease?.Dispose();
             Monitor.Exit(_gate);
@@ -544,14 +582,16 @@ public sealed class StorageSyncCoordinator
     private sealed class ApplicationCommitLease : IDisposable
     {
         private IDisposable? _providerLease;
+        private IDisposable? _metadataLease;
         private IDisposable? _hostLease;
         private IDisposable? _nodeLease;
         private object? _coordinatorGate;
         public ApplicationCommitLease(
-            IDisposable providerLease, IDisposable? hostLease,
-            IDisposable nodeLease, object coordinatorGate)
+            IDisposable providerLease, IDisposable? metadataLease,
+            IDisposable? hostLease, IDisposable nodeLease, object coordinatorGate)
         {
             _providerLease = providerLease;
+            _metadataLease = metadataLease;
             _hostLease = hostLease;
             _nodeLease = nodeLease;
             _coordinatorGate = coordinatorGate;
@@ -559,19 +599,24 @@ public sealed class StorageSyncCoordinator
         public void Dispose()
         {
             IDisposable? providerLease = Interlocked.Exchange(ref _providerLease, null);
+            IDisposable? metadataLease = Interlocked.Exchange(ref _metadataLease, null);
             IDisposable? hostLease = Interlocked.Exchange(ref _hostLease, null);
             IDisposable? nodeLease = Interlocked.Exchange(ref _nodeLease, null);
             object? coordinatorGate = Interlocked.Exchange(ref _coordinatorGate, null);
             try { providerLease?.Dispose(); }
             finally
             {
-                try { hostLease?.Dispose(); }
+                try { metadataLease?.Dispose(); }
                 finally
                 {
-                    try { nodeLease?.Dispose(); }
+                    try { hostLease?.Dispose(); }
                     finally
                     {
-                        if (coordinatorGate is not null) Monitor.Exit(coordinatorGate);
+                        try { nodeLease?.Dispose(); }
+                        finally
+                        {
+                            if (coordinatorGate is not null) Monitor.Exit(coordinatorGate);
+                        }
                     }
                 }
             }

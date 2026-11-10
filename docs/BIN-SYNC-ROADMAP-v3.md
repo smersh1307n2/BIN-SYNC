@@ -1,3 +1,11 @@
+## 1.21. C-pass: FULL_REPLACE proves Metadata Store queues are drained — 2026-11-10
+
+- [x C] Added the optional `IMetadataFullReplaceCommitGuard` capability. `StorageMetadataStore.AcquireFullReplaceCommitGuard` holds the durable Metadata/Storage transaction gate across the provider generation switch, requires the signed namespace-GC guard to be attached to the same StorageDatabase, and fails closed for target-namespace PendingApply intents or unresolved outbound/relay reservations (pending payload or pushed cursor beyond ACK).
+- [x C] Added `StorageSyncCoordinator.AcquireFullReplaceCommitGuard(hostLeaseFactory)`. It composes coordinator → Node → host FLD/WAL → Metadata Store → provider gates and releases in reverse order. Generic application/GC guards retain their existing behavior; FULL_REPLACE now requires the stronger capability and fails closed when it is unavailable.
+- [x C] The FLD host adapter exposes `AcquireFullReplaceCommitGuard` for `StorageFullReplaceReceiver`. Source audit confirmed FLD ApplyJournal contains committed idempotency receipts, not a separate pending-provider-intent queue; the FLD commit lease excludes in-flight provider applies, and the unsealed-WAL barrier is already reflected in the host draft horizon.
+- [x C] Updated the FLD integration contract, v3.1 host orchestration, roster/GC addendum and sample README with the exact API, lock order and retained-receipt distinction.
+- [~ T] Add tests for PendingApply blockers (target vs other namespace), unpushed and pushed outbound/relay reservations, ACK-cleared reservations, completed receipt non-blocking, missing/unattached metadata capability fail-closed, and concurrent metadata writers blocked for the full switch lease. No build or tests run in this C slice; physical GC flags remain disabled.
+
 ## 1.20. C-pass: FULL_REPLACE commit enforces provider snapshot pins — 2026-11-10
 
 - [x C] `StorageFullReplaceReceiver.Commit` now requires `IProviderSnapshotGcGuard` and holds its lease across host-reference scan, provider generation switch, HLC refresh and installed-ACK persistence. Missing capability or an active snapshot pin fails closed before the switch.

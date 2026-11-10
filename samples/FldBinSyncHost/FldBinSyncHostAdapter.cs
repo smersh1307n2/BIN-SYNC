@@ -63,6 +63,14 @@ public sealed class FldBinSyncHostAdapter
     }
 
     /// <summary>
+    /// Acquire the FULL_REPLACE barrier across the coordinator, Node, FLD database,
+    /// durable Metadata Store and provider. The Metadata Store lease rejects unresolved
+    /// PendingApply and immutable peer reservations before the receiver may switch.
+    /// </summary>
+    public IDisposable AcquireFullReplaceCommitGuard()
+        => _coordinator.AcquireFullReplaceCommitGuard(_database.AcquireCommitGuard);
+
+    /// <summary>
     /// Freeze the provider's currently pending local feed into the active outbound
     /// authority (Node Outbox before cutover, Metadata Store after cutover). Call
     /// before startup recovery/publication and before each later outbound gate run.

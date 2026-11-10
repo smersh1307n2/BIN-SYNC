@@ -10,7 +10,7 @@ namespace BinSync.Storage;
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
-public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore
+public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataFullReplaceCommitGuard
 {
     private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
@@ -1048,6 +1048,55 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             })
             .ToArray();
     
+        }
+    }
+
+    /// <summary>
+    /// Hold the durable metadata transaction gate across FULL_REPLACE and fail closed
+    /// while the namespace has an unresolved receive apply or outbound/relay reservation.
+    /// Completed receipts are deliberately retained: they are idempotency history, not
+    /// pending provider work and do not pin the replaced provider generation.
+    /// </summary>
+    public IDisposable AcquireFullReplaceCommitGuard(
+        string scopeId, NodeId localReplica, int namespaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if ((uint)namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+
+        Monitor.Enter(_gate);
+        try
+        {
+            ThrowIfDisposed();
+            if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
+                throw new InvalidOperationException(
+                    "FULL_REPLACE requires the Metadata Store to be attached to its shared durable namespace-GC store.");
+
+            if (TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+            {
+                int pendingApplies = state.PendingApplies.Values.Count(
+                    pending => pending.Batch.NamespaceId == namespaceId);
+                int pendingReservations = state.PeerStreams.Count(pair =>
+                    pair.Key.NamespaceId == namespaceId &&
+                    (pair.Value.PendingBatch is not null ||
+                     pair.Value.PushedCursor != pair.Value.AckedCursor));
+
+                if (pendingApplies != 0)
+                    throw new InvalidOperationException(
+                        $"FULL_REPLACE is blocked by {pendingApplies} unresolved Metadata PendingApply intent(s) in the target namespace.");
+                if (pendingReservations != 0)
+                    throw new InvalidOperationException(
+                        $"FULL_REPLACE is blocked by {pendingReservations} unresolved outbound/relay reservation(s) in the target namespace.");
+            }
+
+            return new FullReplaceCommitLease(_gate);
+        }
+        catch
+        {
+            Monitor.Exit(_gate);
+            throw;
         }
     }
 
@@ -4717,6 +4766,17 @@ private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound
     public OperationOrigin Provenance => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
         ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
 }
+
+    private sealed class FullReplaceCommitLease : IDisposable
+    {
+        private object? _gate;
+        public FullReplaceCommitLease(object gate) => _gate = gate;
+        public void Dispose()
+        {
+            object? gate = Interlocked.Exchange(ref _gate, null);
+            if (gate is not null) Monitor.Exit(gate);
+        }
+    }
 
     private sealed class PartitionState
     {
