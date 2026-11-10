@@ -16,6 +16,180 @@ public sealed class StorageFullReplaceSenderTests
         return bytes;
     }
 
+    private sealed class DurableSnapshotProvider : IDataProvider, IProviderDurableSnapshotStore
+    {
+        private const byte SnapshotPrefix = 0xF0;
+        private readonly StorageDataProvider _inner;
+        private readonly StorageDatabase _storage;
+
+        public DurableSnapshotProvider(StorageDatabase storage)
+        {
+            _storage = storage;
+            _inner = new StorageDataProvider(storage);
+        }
+
+        public RecordId ResolveRecordId(ReadOnlyMemory<byte> sourceItemKey) =>
+            _inner.ResolveRecordId(sourceItemKey);
+        public ushort ResolveFieldId(ReadOnlyMemory<byte> sourceFieldKey) =>
+            _inner.ResolveFieldId(sourceFieldKey);
+        public void AppendLocalChange(ProviderMutation mutation) => _inner.AppendLocalChange(mutation);
+        public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit) =>
+            _inner.ReadLocalChanges(afterSequence, limit);
+        public void AcknowledgeLocalChanges(ulong safeThroughSequence) =>
+            _inner.AcknowledgeLocalChanges(safeThroughSequence);
+        public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
+        public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations) =>
+            _inner.ApplyRemoteBatch(applyToken, mutations);
+        public bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation) =>
+            _inner.TryReadCurrent(recordId, fieldId, out mutation);
+
+        public ProviderSnapshotHandle OpenSnapshot()
+        {
+            ProviderSnapshotHandle source = _inner.OpenSnapshot();
+            try
+            {
+                var entries = new List<ProviderMutation>();
+                int afterIndex = 0;
+                while (true)
+                {
+                    ProviderSnapshotPage page = _inner.ReadSnapshot(source.Token, afterIndex, 512);
+                    if (page.Entries.Count > 512 || page.NextIndex < afterIndex ||
+                        page.NextIndex != afterIndex + page.Entries.Count)
+                        throw new InvalidDataException("Inner provider returned a non-contiguous snapshot page.");
+                    entries.AddRange(page.Entries);
+                    if (page.IsComplete) break;
+                    if (page.NextIndex <= afterIndex)
+                        throw new InvalidDataException("Inner provider snapshot cursor did not advance.");
+                    afterIndex = page.NextIndex;
+                }
+
+                byte[] value = EncodeSnapshot(source.ChangeFeedWatermark, entries);
+                using var batch = _storage.BeginWriteBatch();
+                batch.Put(SnapshotKey(source.Token), value);
+                batch.Commit();
+                return source;
+            }
+            finally
+            {
+                _inner.ReleaseSnapshot(source.Token);
+            }
+        }
+
+        public ProviderSnapshotPage ReadSnapshot(Guid snapshotToken, int afterIndex, int limit)
+        {
+            if (afterIndex < 0) throw new ArgumentOutOfRangeException(nameof(afterIndex));
+            if (limit <= 0) throw new ArgumentOutOfRangeException(nameof(limit));
+            ProviderMutation[] entries = ReadSnapshotData(snapshotToken, out _);
+            if (afterIndex > entries.Length)
+                throw new ArgumentOutOfRangeException(nameof(afterIndex));
+            ProviderMutation[] page = entries.Skip(afterIndex).Take(limit).ToArray();
+            int next = checked(afterIndex + page.Length);
+            return new ProviderSnapshotPage(page, next, next == entries.Length);
+        }
+
+        public void ReleaseSnapshot(Guid snapshotToken)
+        {
+            using var batch = _storage.BeginWriteBatch();
+            batch.Delete(SnapshotKey(snapshotToken));
+            batch.Commit();
+        }
+
+        public bool HasPersistedSnapshot(Guid snapshotToken)
+        {
+            using var snapshot = _storage.OpenSnapshot();
+            return snapshot.TryGet(SnapshotKey(snapshotToken), out _);
+        }
+
+        public bool TryGetPersistedSnapshotWatermark(Guid snapshotToken, out ulong changeFeedWatermark)
+        {
+            using var snapshot = _storage.OpenSnapshot();
+            if (!snapshot.TryGet(SnapshotKey(snapshotToken), out byte[]? value) || value is null)
+            {
+                changeFeedWatermark = 0;
+                return false;
+            }
+            changeFeedWatermark = DecodeSnapshot(value).Watermark;
+            return true;
+        }
+
+        public void PruneSnapshotsExcept(IReadOnlySet<Guid> activeSnapshotTokens)
+        {
+            ArgumentNullException.ThrowIfNull(activeSnapshotTokens);
+            using var snapshot = _storage.OpenSnapshot();
+            IReadOnlyList<StorageEntry> rows = snapshot.ScanPrefix(
+                new[] { SnapshotPrefix }, ReadOnlySpan<byte>.Empty, 4096);
+            byte[][] staleKeys = rows
+                .Where(row => row.Key.Length == 17 &&
+                    !activeSnapshotTokens.Contains(new Guid(row.Key.AsSpan(1, 16))))
+                .Select(row => row.Key)
+                .ToArray();
+            if (staleKeys.Length == 0) return;
+            using var batch = _storage.BeginWriteBatch();
+            foreach (byte[] key in staleKeys) batch.Delete(key);
+            batch.Commit();
+        }
+
+        public void Dispose() => _inner.Dispose();
+
+        private ProviderMutation[] ReadSnapshotData(Guid token, out ulong watermark)
+        {
+            using var snapshot = _storage.OpenSnapshot();
+            if (!snapshot.TryGet(SnapshotKey(token), out byte[]? value) || value is null)
+                throw new KeyNotFoundException("Durable provider snapshot token was not found.");
+            var decoded = DecodeSnapshot(value);
+            watermark = decoded.Watermark;
+            return decoded.Entries;
+        }
+
+        private static byte[] SnapshotKey(Guid token)
+        {
+            byte[] key = new byte[17];
+            key[0] = SnapshotPrefix;
+            token.ToByteArray().CopyTo(key, 1);
+            return key;
+        }
+
+        private static byte[] EncodeSnapshot(ulong watermark, IReadOnlyList<ProviderMutation> entries)
+        {
+            using var stream = new MemoryStream();
+            using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+            writer.Write(watermark);
+            writer.Write(entries.Count);
+            foreach (ProviderMutation entry in entries)
+            {
+                byte[] encoded = ProviderMutationCodec.Encode(entry);
+                writer.Write(encoded.Length);
+                writer.Write(encoded);
+            }
+            writer.Flush();
+            return stream.ToArray();
+        }
+
+        private static (ulong Watermark, ProviderMutation[] Entries) DecodeSnapshot(byte[] value)
+        {
+            using var stream = new MemoryStream(value, writable: false);
+            using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
+            ulong watermark = reader.ReadUInt64();
+            int count = reader.ReadInt32();
+            if (count < 0 || count > 1_000_000)
+                throw new InvalidDataException("Durable test snapshot entry count is invalid.");
+            var entries = new ProviderMutation[count];
+            for (int i = 0; i < count; i++)
+            {
+                int length = reader.ReadInt32();
+                if (length < ProviderMutationCodec.FixedEncodedLength || length > stream.Length - stream.Position)
+                    throw new InvalidDataException("Durable test snapshot mutation length is invalid.");
+                byte[] encoded = reader.ReadBytes(length);
+                if (encoded.Length != length)
+                    throw new InvalidDataException("Durable test snapshot mutation is truncated.");
+                entries[i] = ProviderMutationCodec.Decode(encoded);
+            }
+            if (stream.Position != stream.Length)
+                throw new InvalidDataException("Durable test snapshot contains trailing bytes.");
+            return (watermark, entries);
+        }
+    }
+
     private static (TrustStore Trust, NamespaceRosterCertificate Roster, byte[] Seed, NodeId Authority)
         CreateAuthority()
     {
@@ -168,7 +342,7 @@ public sealed class StorageFullReplaceSenderTests
         try
         {
             using var storage = StorageDatabase.Open(directory, partition);
-            using var provider = new StorageDataProvider(storage);
+            using var provider = new DurableSnapshotProvider(storage);
             using var metadata = new StorageMetadataStore(storage);
             provider.AppendLocalChange(new ProviderMutation
             {
