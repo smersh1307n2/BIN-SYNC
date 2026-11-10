@@ -728,7 +728,6 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 7000, Value = "provider-owned-before-cutover"u8.ToArray()
         });
         Assert.Equal(1, initialCoordinatorA.PublishLocalChanges(_ => { }));
-        byte[] staleCheckpoint = NodePersistence.SerializeToBytes(originalNodeA);
         Assert.Single(originalNodeA.ReadOutboxEntries(1, originalNodeA.NodeId, 0, 10));
 
         initialCoordinatorA.EnableMetadataStoreOwnedPublication(_ => { });
@@ -737,14 +736,16 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(originalNodeA.ReadOutboxEntries(1, staleRemote.NodeId, 0, 10));
         Assert.Equal(0, originalNodeA.GlobalChangeLedgerCount);
 
+        // Capture stale field state after the safe cutover has discarded the
+        // represented Node ledger shadow, but before provider rehydration.
+        byte[] staleCheckpoint = NodePersistence.SerializeToBytes(originalNodeA);
+
         // Simulate restart from a pre-rehydration Node checkpoint while the provider's
         // durable cutover marker and empty authoritative snapshot remain current.
         using var restartedNodeA = NodePersistence.LoadFromBytes(staleCheckpoint);
         Assert.True(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         var coordinatorA = new StorageSyncCoordinator(restartedNodeA, providerA, 1, metadataA, scopeA);
-        // The stale checkpoint retains one Node ledger shadow for providerRecord;
-        // its identity is already durable in Metadata Store and is removed during reconciliation.
-        Assert.Equal(1, restartedNodeA.GlobalChangeLedgerCount);
+        Assert.Equal(0, restartedNodeA.GlobalChangeLedgerCount);
 
         var (aToB, bFromA) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
