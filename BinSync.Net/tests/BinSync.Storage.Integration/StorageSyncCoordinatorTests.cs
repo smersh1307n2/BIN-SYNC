@@ -2276,8 +2276,11 @@ public sealed class StorageSyncCoordinatorTests
         string directory = Path.Combine(_root, "process-kill-" + crashCut);
         const ulong partitionId = 468;
         string scope = "process-kill-" + crashCut;
-        string readyPath = Path.Combine(_root, "coordinator-child-ready");
-        string ownerPidPath = Path.Combine(_root, "coordinator-child-pid");
+        // Each theory row runs independently and may execute in parallel. Keep its
+        // rendezvous files inside the crash-cut-specific directory to avoid cross-row
+        // PID/ready-file races that can kill the wrong child or strand a parent.
+        string readyPath = Path.Combine(directory, "coordinator-child-ready");
+        string ownerPidPath = Path.Combine(directory, "coordinator-child-pid");
         string? projectDirectory = AppContext.BaseDirectory;
         while (projectDirectory is not null &&
                !File.Exists(Path.Combine(projectDirectory, "BinSync.Storage.Integration.csproj")))
