@@ -236,7 +236,7 @@ public sealed class StorageFullReplaceSenderTests
         try
         {
             using (var storage = StorageDatabase.Open(directory, partition))
-            using (var provider = new StorageDataProvider(storage))
+            using (var provider = new DurableSnapshotProvider(storage))
             using (var metadata = new StorageMetadataStore(storage))
             {
                 provider.AppendLocalChange(new ProviderMutation
@@ -281,7 +281,7 @@ public sealed class StorageFullReplaceSenderTests
             }
 
             using (var reopened = StorageDatabase.Open(directory, partition))
-            using (var provider = new StorageDataProvider(reopened))
+            using (var provider = new DurableSnapshotProvider(reopened))
             using (var metadata = new StorageMetadataStore(reopened))
             {
                 var staleRosterUnsigned = new NamespaceRosterCertificate
