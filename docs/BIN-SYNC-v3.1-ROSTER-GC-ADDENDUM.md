@@ -102,6 +102,8 @@ Validation:
 - lower generations are rejected; same generation with a different digest is a fork and is rejected;
 - a higher signed full roster may be accepted after offline periods, but the local highest generation/digest is persisted before it affects any safe frontier.
 
+When one or more roster generations were missed, the receiver cannot verify the skipped `PreviousRosterDigest` links without fetching the missing certificates. Under the trusted, out-of-band pinned-authority model in §2, the signature on the higher full roster is therefore the authority's attestation of the complete current membership state and of the omitted transition preconditions (including FULL_REPLACE before reactivation). The receiver still enforces every monotonic fence and directly checkable transition rule against its last accepted roster. This is not a Byzantine-authority proof; deployments requiring that stronger property need a future explicit transition-proof/chain-fetch extension. Do not require local `generation + 1`, because that would strand offline members.
+
 Joining members contribute frontier zero. They cannot become Active until the current authoritative FULL_REPLACE generation is installed and acknowledged.
 
 ### 4.2 AppliedOriginFrontier (`OFR2`)
@@ -150,6 +152,8 @@ The Namespace Authority verifies member signatures and computes a signed namespa
 For each origin author/epoch, SafeAppliedOriginSequence is the minimum contiguous frontier across **every Active member in the roster generation**. Joining or missing reports contribute zero. The checkpoint is persisted atomically with the accepted roster generation and cannot regress.
 
 A node may use only an authority-signed checkpoint matching its highest accepted roster digest. A local untrusted minimum or gossip membership list is not sufficient.
+
+When a node missed one or more checkpoint sequences, it accepts a higher signed checkpoint only if its safe frontier is monotonic and the roster binding is current. `PreviousCheckpointDigest` is checked when the checkpoint is immediately consecutive to the locally accepted checkpoint; for a sequence gap, the pinned authority signature is the attestation of the complete current minimum. This preserves offline catch-up under the trusted-authority model in §2. Deployments requiring proof of every intermediate checkpoint need a future chain-fetch/transition-proof extension; they must not impose local `sequence + 1` as a catch-up prerequisite.
 
 ## 5. FULL_REPLACE installation proof
 

@@ -26,14 +26,14 @@
 
 - [x C] Cross-checked roster acceptance against `docs/BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md` §4.1. The normative contract explicitly permits a higher signed full roster to be accepted after offline periods; requiring every intermediate local generation would break that recovery path.
 - [x C] Reverted the experimental strict-contiguity change (`ee15822c`) in `e358b5a2`. The original higher-generation catch-up behavior and direct membership-transition checks are restored.
-- [~ C] Audit how offline roster catch-up can authenticate skipped membership transitions without weakening Joining/Retired fences or requiring an unavailable local predecessor. Do not impose a local generation+1 rule unless the normative contract is deliberately revised.
+- [x C] Resolved the offline roster-gap proof under the existing trust model: a higher full roster signed by the out-of-band pinned authority is its attestation of the complete current membership state and omitted transition preconditions. Receivers retain monotonic/directly-checkable fences; skipped predecessor links are not locally verifiable without chain fetch. The addendum now states this assumption explicitly and reserves Byzantine-authority proof for a future chain/transition extension. No generation+1 rule was introduced.
 - [~ T] Add offline catch-up cases spanning multiple roster generations, including retire/rejoin, transport epoch advancement, stale digest, wrong authority and current-generation replay. No tests/build were run in this C slice; physical GC remains disabled.
 
 ## 1.14. C-pass audit: preserve offline RCP2 checkpoint catch-up — 2026-11-10
 
 - [x C] Reverted the experimental strict-contiguity change (`8de0cb2c`) in `1a68150d`. RCP2 remains monotonic and same-sequence forks are rejected; a higher signed checkpoint can still be accepted after an offline gap, subject to the existing safe-frontier monotonicity and overclaim checks.
 - [x C] The paired recovery branch `backup/cpass-2026-11-10-retention-checkpoint-chain` remains available in both repositories as a snapshot of the experimental C slice; it is not the active implementation.
-- [~ C] Review whether the signed full checkpoint plus monotonic frontier is the intended offline recovery proof, and document any additional predecessor-fetch requirement before changing wire or persistence semantics.
+- [x C] Resolved offline RCP2 gaps under the pinned-authority trust model: a higher signed checkpoint with a current roster binding and monotonic safe frontier is the authority's attestation of the complete current minimum; PreviousCheckpointDigest is verified for immediately consecutive sequences, while gaps do not require fetching every intermediate checkpoint. The addendum now documents this and reserves stronger chain proof for a future extension. No sequence+1 rule was introduced.
 - [~ T] Add restart/offline-gap, stale checkpoint, wrong predecessor for an immediately consecutive checkpoint, exact replay, same-sequence fork and safe-frontier regression cases. No tests/build were run in this C slice; physical GC remains disabled.
 
 ## 1.13. C-pass: generic Storage blob publication/cleanup source audit — 2026-11-10
@@ -53,7 +53,7 @@
 - [x C] Hardened `StorageNamespaceGcStore.AcceptOriginFrontier`: every previously reported author epoch must remain present, and its issued sequence plus maximum HLC (wall/logical tuple) may not regress in a later signed report. The applied-origin vector was already monotonic; the issued-origin vector is independently consumed by tombstone/GC proof construction and must be monotonic as well.
 - [x C] Production fix committed as `47be8895046662a06481ac097229c59e2cb2ed47`.
 - [~ T] Add adversarial Storage restart/conformance cases for decreasing issued sequence, decreasing HLC wall, decreasing HLC logical at equal wall, dropped epoch, and unchanged/increased values. No tests were run in this C slice; physical GC remains disabled.
-- [~ C] Continue the final v3/v3.1 production-source/API/byte audit and close remaining implementation-only gaps before the T-pass.
+- [~ C] Complete the final v3/v3.1 public API/source/byte audit; blob catalog/page failure-ordering and restart-cleanup source audit is complete in §1.19.
 
 ## 1.11. Recovery point and C-pass continuation reset — 2026-11-09
 
@@ -61,7 +61,7 @@
 - [x C] Reconciled the live branch status against `docs/PRODUCTION-STATUS.md`: latest inspected production code head is `73571b8210bf67ad7e53ba6f29bf6aa4c1056043`; durable sender recovery is in §§1.25 and 1.27, and FLD receiver staging/switch is in §1.26.
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
 - [x C] Physical-format decision Option B is accepted: generic Storage owns opaque immutable blob pages plus its WAL-backed catalog; Database retains FLD1 Run v1/v2, manifest, field semantics and FLD WAL. The generic blob/page backend and FLD checkpoint/compaction/FULL_REPLACE paths are implemented on the paired branches.
-- [~ C] Remaining code gates: finish blob catalog/page failure-ordering and restart-cleanup source audit, then complete the public API/source/byte audit. Durable sender recovery is implemented in §1.25 and FLD receiver staging/atomic switch in §1.26; both await T-pass proof. Transport creation/reconnect/disposal remain application-owned.
+- [x C] Blob catalog/page failure-ordering and restart-cleanup source audit completed in §1.19, including correction of the stale orphan-cleanup API call. [~ C] Complete the final public API/source/byte audit. Durable sender recovery is implemented in §1.25 and FLD receiver staging/atomic switch in §1.26; both await T-pass proof. Transport creation/reconnect/disposal remain application-owned.
 - [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.27 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
