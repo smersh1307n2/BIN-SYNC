@@ -2412,6 +2412,55 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1, hostReleases);
     }
 
+    [Fact]
+    public async Task Full_replace_commit_guard_blocks_concurrent_metadata_writers_until_disposed()
+    {
+        const string scope = "full-replace-metadata-writer";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-metadata-writer"), 481);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(85);
+        using var sender = NewNode(86);
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+
+        MetadataIncomingBatch batch = CreatePendingProviderBatch(
+            scope, local, sender, 1,
+            RecordId.From(Guid.Parse("85000000-0000-0000-0000-000000000001").ToByteArray()),
+            0x0885, "blocked-metadata-writer", 0x85);
+        Guid applyToken = Guid.Parse("85000000-0000-0000-0000-000000000085");
+        using var writerStarted = new ManualResetEventSlim();
+        using var writerCompleted = new ManualResetEventSlim();
+
+        int hostReleases = 0;
+        IDisposable lease = coordinator.AcquireFullReplaceCommitGuard(() =>
+            new CallbackLease(() => Interlocked.Increment(ref hostReleases)));
+        Task writer = Task.Run(() =>
+        {
+            writerStarted.Set();
+            metadata.BeginPendingApply(batch, applyToken);
+            writerCompleted.Set();
+        });
+
+        try
+        {
+            Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(5)));
+            Assert.False(writerCompleted.Wait(TimeSpan.FromMilliseconds(150)));
+            Assert.Equal(0, hostReleases);
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+
+        Assert.True(writerCompleted.Wait(TimeSpan.FromSeconds(5)));
+        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, hostReleases);
+        Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId));
+    }
+
     private sealed class CallbackLease : IDisposable
     {
         private Action? _onDispose;
