@@ -181,8 +181,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             {
                 RecordId = RecordId.From(new byte[] { 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
                 FieldId = 0x0101,
-                AuthorNodeId = NodeId.From(new byte[] { 4,
-                    OriginAuthorEpoch = 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+                AuthorNodeId = NodeId.From(new byte[] { 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }),
+                OriginAuthorEpoch = 1,
                 HlcWall = 500,
                 HlcLogical = 2,
                 Value = "stable"u8.ToArray()
