@@ -1,3 +1,10 @@
+## 1.60. T-pass: recover immutable outbound reservations across restart — 2026-11-10
+
+- [x T] Extended the tombstone-GC metadata restart test to persist a peer's immutable outbound reservation after completing its baseline, close the Metadata store, and reopen the same durable partition.
+- [x T] The recovered namespace's live-reference scan must fail closed while that reservation is pending, preventing tombstone GC from proceeding across a payload copy retained by the reservation.
+- [~ T] Exact-head CI and local execution remain unverified; the BIN-SYNC commits have no status checks exposed by the current GitHub connector, and Local Commander remains offline.
+- [x C] This covers reservation recovery and fail-closed GC gating only; it does not enable physical GC or prove reservation retirement/rejoin horizons.
+
 ## 1.59. T-pass: verify tombstone-GC metadata references survive restart — 2026-11-10
 
 - [x T] Added `Tombstone_gc_live_reference_scan_recovers_pending_apply_and_outbound_payloads_after_restart`. The test writes a PendingApply payload and an immutable outbound payload, closes the metadata store, reopens the same durable partition, and verifies both RecordIds remain live in their respective namespaces.
