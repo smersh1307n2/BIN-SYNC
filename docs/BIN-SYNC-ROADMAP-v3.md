@@ -1,3 +1,12 @@
+## 1.58. T-pass: pin tombstone-GC field-selection ordering — 2026-11-10
+
+- [x T] Added `Tombstone_gc_field_selection_removes_only_fields_not_newer_than_record_tombstone` to the Storage provider conformance suite. It proves fields older than or equal to a record tombstone are eligible under the ordering predicate, while a strictly newer field survives; mismatched record identity, tombstone-as-field and non-tombstone comparison inputs fail closed.
+- [x T] Exact BIN-SYNC head `0db113028c55ebc0db3ee5f0d6b84828230d06ac`: BinSync.Net and FLD Storage Integration GitHub Actions completed successfully.
+- [x T] This closes the isolated field-selection predicate matrix only. It does not exercise physical tombstone compaction or authorize deletion; all physical ChangeId, receipt and tombstone/Ghost GC switches remain hard false.
+- [~ T] Remaining §1.23.6: end-to-end tombstone compaction preserving newer Ghost fields, restart/fault injection, external host/provider/Metadata references, PendingApply and immutable reservations, snapshot pins, receipt retirement/rejoin and cursor/digest replay fences, and multi-member offline/rejoin horizons.
+- [~ T] `FldBinSyncHost` exact-head build remains unverified while `FLD_DB_READ_TOKEN` is unavailable.
+- [x C] Physical GC capability switches remain hard false.
+
 ## 1.57. T-pass: require complete draft-free issued-origin evidence for tombstone horizons — 2026-11-10
 
 - [x T] `Full_replace_retention_checkpoint_rejects_missing_active_member_frontier_report` and `Full_replace_retention_checkpoint_rejects_active_member_with_unpublished_drafts` prove a FULL_REPLACE retention checkpoint cannot be formed without every Active member's report and a zero-draft report from each member.
