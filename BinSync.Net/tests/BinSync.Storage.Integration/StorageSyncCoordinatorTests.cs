@@ -2373,6 +2373,83 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Applied_origin_frontier_uses_one_non_reentrant_host_lease_and_releases_on_scan_failure()
+    {
+        const string scope = "frontier-non-reentrant-host-lease";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 488);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(100);
+        using var hostGate = new SemaphoreSlim(1, 1);
+        var trust = new TrustStore();
+        var (memberSeed, memberPublicKey) = BatchSignature.GenerateKeyPair();
+        trust.Allow(local.NodeId, memberPublicKey, TrustMode.PreShared);
+
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 1,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = local.NodeId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = local.NodeId,
+                    PublicKey = memberPublicKey,
+                    TransportPeerEpoch = 1,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        gcStore.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(unsignedRoster, memberSeed), trust);
+
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        Func<IDisposable?> acquireHostLease = () =>
+        {
+            if (!hostGate.Wait(0))
+                throw new InvalidOperationException("The host commit gate is non-reentrant and was already held.");
+            Interlocked.Increment(ref hostAcquires);
+            return new CallbackLease(() =>
+            {
+                Interlocked.Increment(ref hostReleases);
+                hostGate.Release();
+            });
+        };
+
+        var scanner = new NonReentrantGcReferenceScanner(hostGate);
+        AppliedOriginFrontierReport report = coordinator.PublishAppliedOriginFrontier(
+            memberSeed, scanner, acquireHostLease);
+        Assert.NotNull(report);
+        Assert.Equal(1, hostAcquires);
+        Assert.Equal(1, hostReleases);
+        Assert.Equal(1, scanner.OpenCount);
+        Assert.Equal(1, scanner.DisposeCount);
+        Assert.Equal(1, hostGate.CurrentCount);
+
+        var throwingScanner = new ThrowingGcReferenceScanner();
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.PublishAppliedOriginFrontier(memberSeed, throwingScanner, acquireHostLease));
+        Assert.True(throwingScanner.Opened);
+        Assert.Equal(2, hostAcquires);
+        Assert.Equal(2, hostReleases);
+        Assert.Equal(1, hostGate.CurrentCount);
+
+        // A subsequent acquisition proves scanner failure released the coordinator,
+        // Node, provider and host gates in the required reverse order.
+        using (coordinator.AcquireApplicationCommitGuard(acquireHostLease))
+            Assert.Equal(0, hostGate.CurrentCount);
+        Assert.Equal(3, hostAcquires);
+        Assert.Equal(3, hostReleases);
+        Assert.Equal(1, hostGate.CurrentCount);
+    }
+
+    [Fact]
     public void Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace()
     {
         const string scope = "full-replace-pending-namespace";
@@ -3119,6 +3196,36 @@ public sealed class StorageSyncCoordinatorTests
         {
             Opened = true;
             throw new InvalidOperationException("Host reference scan must not begin for a mismatched typed lease.");
+        }
+    }
+
+    private sealed class NonReentrantGcReferenceScanner : IApplicationGcReferenceScanner
+    {
+        private readonly SemaphoreSlim _hostGate;
+        private int _openCount;
+        private int _disposeCount;
+
+        public NonReentrantGcReferenceScanner(SemaphoreSlim hostGate) => _hostGate = hostGate;
+        public int OpenCount => Volatile.Read(ref _openCount);
+        public int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        public IApplicationGcReferenceScan OpenScan(string scopeId, NodeId localReplica, int namespaceId)
+        {
+            if (_hostGate.CurrentCount != 0)
+                throw new InvalidOperationException("Host reference scan must run under the already-held host commit lease.");
+            Interlocked.Increment(ref _openCount);
+            return new Scan(this);
+        }
+
+        private sealed class Scan : IApplicationGcReferenceScan
+        {
+            private readonly NonReentrantGcReferenceScanner _owner;
+            public Scan(NonReentrantGcReferenceScanner owner) => _owner = owner;
+            public ApplicationDraftHorizon UnpublishedLocalDraftHorizon => new(0, 0, 0);
+            public bool HasExternalReceiptReference(NodeId senderPeer, uint authorEpoch, uint transportPeerEpoch, BatchId batchId) => false;
+            public bool HasExternalChangeIdReference(BatchId changeId) => false;
+            public bool HasExternalRecordReference(RecordId recordId, BatchId tombstoneChangeId) => false;
+            public void Dispose() => Interlocked.Increment(ref _owner._disposeCount);
         }
     }
 
