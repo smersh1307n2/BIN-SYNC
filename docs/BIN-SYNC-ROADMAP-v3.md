@@ -1,3 +1,9 @@
+## 1.63. T-pass: assert recovered immutable reservation identity and payload — 2026-11-10
+
+- [x T] Strengthened the restart reference-scan test to read the recovered peer stream and assert the exact pending BatchId, cursor range and byte-identical immutable payload before confirming the reservation still blocks the tombstone-GC reference scan.
+- [~ T] Exact-head CI and local execution remain unverified; the current BIN-SYNC workflows are running for the preceding snapshot/adapter commits.
+- [x C] This closes the reservation-payload assertion gap only; reservation retirement/rejoin horizons and physical tombstone deletion remain separate, unproven work.
+
 ## 1.62. T-pass: verify external GC reference-scan snapshot ownership — 2026-11-10
 
 - [x T] Added `External_gc_reference_scan_owns_snapshot_and_exposes_reference_queries_until_disposed`: all three host-reference query delegates are exercised, the scan disposes its owned immutable snapshot, and queries after disposal fail with `ObjectDisposedException`.

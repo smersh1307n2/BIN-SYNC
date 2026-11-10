@@ -431,6 +431,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         {
             ProviderMutation pendingMutation = Mutation(0x51, 0x61, 1);
             ProviderMutation outboundMutation = Mutation(0x52, 0x62, 2);
+            ProviderMutation reservedMutation = Mutation(0x53, 0x69, 3);
             using (var store = new StorageMetadataStore(directory, 455, deleteOnDispose: false))
             {
                 byte[] pendingPayload = ProviderMutationCodec.Encode(pendingMutation);
@@ -483,7 +484,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                         CursorEnd = 1,
                         PreviousBatchDigest = new byte[16],
                         BatchDigest = Enumerable.Repeat((byte)0x68, 16).ToArray(),
-                        Payload = ProviderMutationCodec.Encode(Mutation(0x53, 0x69, 3))
+                        Payload = ProviderMutationCodec.Encode(reservedMutation)
                     });
             }
 
@@ -496,6 +497,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Contains(outboundMutation.RecordId, outboundReferences);
             Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
             Assert.DoesNotContain(pendingMutation.RecordId, outboundReferences);
+            var peerState = recovered.GetPeerStreamState(scope, local, sender, 1, 9, author);
+            var reservation = Assert.IsType<MetadataOutboundBatchReservation>(peerState.PendingBatch);
+            Assert.Equal(Batch(0x67), reservation.BatchId);
+            Assert.Equal(1UL, reservation.CursorStart);
+            Assert.Equal(1UL, reservation.CursorEnd);
+            Assert.Equal(ProviderMutationCodec.Encode(reservedMutation), reservation.Payload);
             Assert.False(recovered.TryBuildLiveRecordReferenceSet(
                 scope, local, 9, out _)); // Recovered immutable reservation blocks the entire GC proof.
         }
