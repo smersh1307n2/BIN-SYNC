@@ -2221,6 +2221,59 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("blocked-until-lease-release", Encoding.UTF8.GetString(current!.Value));
     }
 
+    [Fact]
+    public void Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace()
+    {
+        const string scope = "full-replace-pending-namespace";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-pending-namespace"), 478);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(78);
+        using var sender = NewNode(79);
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+
+        MetadataIncomingBatch otherNamespace = CreatePendingProviderBatch(
+            scope, local, sender, 2,
+            RecordId.From(Guid.Parse("78000000-0000-0000-0000-000000000002").ToByteArray()),
+            0x0878, "other-namespace-pending"u8.ToString(), 0x31);
+        metadata.BeginPendingApply(otherNamespace, Guid.Parse("78000000-0000-0000-0000-000000000201"));
+
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        using (coordinator.AcquireFullReplaceCommitGuard(() =>
+        {
+            Interlocked.Increment(ref hostAcquires);
+            return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+        }))
+        {
+            Assert.Equal(1, hostAcquires);
+            Assert.Equal(0, hostReleases);
+        }
+        Assert.Equal(1, hostReleases);
+
+        MetadataIncomingBatch targetNamespace = CreatePendingProviderBatch(
+            scope, local, sender, 1,
+            RecordId.From(Guid.Parse("78000000-0000-0000-0000-000000000001").ToByteArray()),
+            0x0878, "target-namespace-pending"u8.ToString(), 0x32);
+        metadata.BeginPendingApply(targetNamespace, Guid.Parse("78000000-0000-0000-0000-000000000101"));
+
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.AcquireFullReplaceCommitGuard(() =>
+            {
+                Interlocked.Increment(ref hostAcquires);
+                return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+            }));
+        Assert.Equal(2, hostAcquires);
+        Assert.Equal(2, hostReleases);
+        Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId)
+            .Where(intent => intent.NamespaceId == 1));
+        Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId)
+            .Where(intent => intent.NamespaceId == 2));
+    }
+
     private sealed class CallbackLease : IDisposable
     {
         private Action? _onDispose;
