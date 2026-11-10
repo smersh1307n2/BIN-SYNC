@@ -2507,7 +2507,7 @@ public sealed class StorageSyncCoordinatorTests
         {
             if (!hostGate.Wait(0))
                 throw new InvalidOperationException("Frontier publication attempted to reacquire the non-reentrant host lease.");
-            return new CallbackLease(hostGate.Release);
+            return new CallbackLease(() => hostGate.Release());
         };
 
         AppliedOriginFrontierReport report = coordinator.PublishAppliedOriginFrontier(
