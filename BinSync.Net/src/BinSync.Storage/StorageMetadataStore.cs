@@ -679,14 +679,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
             var liveChangeIds = new HashSet<BatchId>();
             ulong providerCursor = 0;
+            ulong providerHighWatermark = provider.LocalChangeHighWatermark;
             const int providerPageSize = 1024;
-            while (true)
+            while (providerCursor < providerHighWatermark)
             {
                 ProviderChangePage providerPage = provider.ReadLocalChanges(providerCursor, providerPageSize);
-                if (providerPage.Changes.Count == 0)
-                    break;
-                if (providerPage.ScannedThroughSequence <= providerCursor)
-                    throw new InvalidDataException("Provider local feed cursor did not advance during ChangeId GC.");
+                // ScannedThroughSequence, not Changes.Count, is the feed cursor:
+                // providers may legitimately scan pages containing only local-only
+                // lifecycle rows. Stopping on an empty/short Changes list can skip
+                // later unpublished ChangeIds and make them eligible for GC.
+                if (providerPage.ScannedThroughSequence <= providerCursor ||
+                    providerPage.ScannedThroughSequence > providerHighWatermark ||
+                    providerPage.Changes.Count > providerPageSize)
+                    throw new InvalidDataException("Provider local feed returned an invalid ChangeId GC scan page.");
                 foreach (ProviderChange change in providerPage.Changes)
                 {
                     if (change.ChangeId.IsZero)
@@ -694,8 +699,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     liveChangeIds.Add(change.ChangeId);
                 }
                 providerCursor = providerPage.ScannedThroughSequence;
-                if (providerPage.Changes.Count < providerPageSize)
-                    break;
             }
             foreach (var stream in current.Relay)
                 if (stream.Key.NamespaceId == namespaceId)
