@@ -35,6 +35,18 @@ public interface IDataProvider : IDisposable
 /// The stored watermark fences later direct Node writes after Metadata Store
 /// becomes the sole allocator for new local outbound sequences.
 /// </summary>
+/// <summary>
+/// Optional provider capability for applying an authenticated materialized state image
+/// received through SNAPSHOT_CHUNK. Snapshot rows are not immutable DELTA_BATCH
+/// operations and therefore may have no ChangeId or Origin sequence. Implementations
+/// must keep snapshot receipts separate from remote-operation receipts and must never
+/// erase stronger published provenance already stored at the same HLC/content.
+/// </summary>
+public interface IProviderSnapshotStateApply
+{
+    ProviderApplyReceipt ApplySnapshotBatch(Guid snapshotToken, IReadOnlyList<ProviderMutation> mutations);
+}
+
 public interface IProviderPublicationMode
 {
     bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark);
