@@ -148,6 +148,7 @@ try
             FieldId = Model.LifecycleFieldId,
             IsRecordTombstone = true,
             AuthorNodeId = nodeB.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 4000,
             HlcLogical = 0,
             Value = Array.Empty<byte>()
@@ -197,6 +198,7 @@ static ProviderMutation Mutation(RecordId recordId, ushort fieldId, NodeId autho
         RecordId = recordId,
         FieldId = fieldId,
         AuthorNodeId = author,
+        OriginAuthorEpoch = 1,
         HlcWall = wall,
         HlcLogical = 0,
         KeyEpoch = 0,
