@@ -2638,6 +2638,115 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(0, authoritative.OutboxCount);
     }
 
+    [Theory]
+    [InlineData("before-node-checkpoint")]
+    [InlineData("after-node-checkpoint")]
+    public void Provider_cutover_recovers_legacy_ledger_aliases_across_node_checkpoint_crash(string crashCut)
+    {
+        const string scope = "legacy-alias-cutover-crash";
+        const ulong partitionId = 485;
+        string directory = Path.Combine(_root, "legacy-alias-cutover-crash-" + crashCut);
+        NodeId localId;
+        MetadataLegacyNodeLedgerFingerprint alias;
+        int seenChangesBeforeCutover;
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var local = NewNode(95))
+        using (var sender = NewNode(96))
+        {
+            localId = local.NodeId;
+            RecordId record = RecordId.From(Guid.Parse("95000000-0000-0000-0000-000000000001").ToByteArray());
+            Assert.True(sender.WriteField(1, record, 0x0895, "legacy-alias-crash"u8.ToArray(), new Hlc(9500, 0)));
+            OutboxEntry sent = Assert.Single(sender.ReadOutboxEntries(1, sender.NodeId, 0, 10));
+            Transport.MakeSession(sender, local);
+            Assert.NotNull(Transport.DeliverBatch(sender, local, 1));
+            Assert.True(local.GlobalChangeLedger.ContainsKey((1, sent.ChangeId)));
+            Assert.True(local.SeenChanges.Contains((1, sent.ChangeId)));
+            seenChangesBeforeCutover = local.SeenChanges.Count;
+
+            object operation = Ops.DecodeOp(sent.Payload).Op;
+            Digest16 semanticFingerprint = ChangeIdentity.Fingerprint(
+                1, record, sent.OpKind, operation, sender.NodeId, sent.CausalDeps);
+            byte[] envelope = new byte[16 + sent.Payload.Length];
+            record.WriteTo(envelope);
+            sent.Payload.Span.CopyTo(envelope.AsSpan(16));
+            var incoming = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = local.NodeId,
+                SenderPeer = sender.NodeId,
+                SenderEpoch = checked((uint)sender.Epoch),
+                AuthorStreamNodeId = sender.NodeId,
+                NamespaceId = 1,
+                BatchId = BatchId.From(Guid.Parse("95000000-0000-0000-0000-000000000002").ToByteArray()),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x95, 16).ToArray(),
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender.NodeId,
+                        ChangeId = sent.ChangeId,
+                        Fingerprint = semanticFingerprint.ToArray(),
+                        Payload = envelope,
+                        RelayEligible = false,
+                        OriginAuthorEpoch = sent.OriginAuthorEpoch,
+                        OriginSequence = sent.OriginSequence
+                    }
+                }
+            };
+            Guid applyToken = Guid.Parse("95000000-0000-0000-0000-000000000003");
+            metadata.BeginPendingApply(incoming, applyToken);
+            metadata.FinalizePendingApply(scope, local.NodeId,
+                new MetadataProviderApplyReceipt(applyToken, incoming.BatchDigest.ToArray()));
+
+            alias = new MetadataLegacyNodeLedgerFingerprint(sent.ChangeId, local.GlobalChangeLedger[(1, sent.ChangeId)].Fingerprint.ToArray());
+            StorageNodePersistence.Save(storage, local);
+
+            var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+            Assert.Throws<IOException>(() => coordinator.EnableMetadataStoreOwnedPublication(node =>
+            {
+                if (crashCut == "after-node-checkpoint")
+                    StorageNodePersistence.Save(storage, node);
+                throw new IOException("Simulated process loss at the Node checkpoint boundary.");
+            }));
+            Assert.True(((IProviderPublicationMode)provider).TryGetMetadataStoreOwnedPublicationCutover(out _));
+        }
+
+        using (var reopenedStorage = StorageDatabase.Open(directory, partitionId))
+        using (var reopenedProvider = new StorageDataProvider(reopenedStorage))
+        using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+        using (var reopenedNode = StorageNodePersistence.Load(reopenedStorage, localId))
+        {
+            Assert.Equal(crashCut == "before-node-checkpoint" ? 1 : 0, reopenedNode.GlobalChangeLedger.Count);
+            Assert.Equal(seenChangesBeforeCutover, reopenedNode.SeenChanges.Count);
+            Assert.True(reopenedMetadata.TryGetChangeIdentity(
+                scope, localId, 1, alias.ChangeId,
+                out ReadOnlyMemory<byte> semanticFingerprint, out _, out _));
+            Assert.Equal(16, semanticFingerprint.Length);
+
+            var conflictingAlias = new MetadataLegacyNodeLedgerFingerprint(
+                alias.ChangeId, Enumerable.Repeat((byte)0x96, 16).ToArray());
+            Assert.Throws<InvalidDataException>(() =>
+                reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, localId, 1, new[] { conflictingAlias }));
+            reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, localId, 1, new[] { alias });
+
+            var recoveredCoordinator = new StorageSyncCoordinator(
+                reopenedNode, reopenedProvider, 1, reopenedMetadata, scope);
+            recoveredCoordinator.EnableMetadataStoreOwnedPublication(node =>
+                StorageNodePersistence.Save(reopenedStorage, node));
+
+            Assert.Empty(reopenedNode.GlobalChangeLedger.Where(pair => pair.Key.Ns == 1));
+            Assert.Equal(seenChangesBeforeCutover, reopenedNode.SeenChanges.Count);
+            Assert.Empty(reopenedNode.ReadOutboxAuthors(1).SelectMany(author => reopenedNode.ReadOutboxEntries(1, author, 0, 10)));
+            Assert.True(((IProviderPublicationMode)reopenedProvider).TryGetMetadataStoreOwnedPublicationCutover(out _));
+        }
+    }
+
     [Fact]
     public void Legacy_node_ledger_alias_round_trips_and_rejects_conflicts_after_reopen()
     {
