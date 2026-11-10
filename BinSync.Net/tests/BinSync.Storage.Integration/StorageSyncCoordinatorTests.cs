@@ -2622,6 +2622,7 @@ public sealed class StorageSyncCoordinatorTests
                 : coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
             Task<bool> send = initiator.PushBatchAsync(sender, 1);
             await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
+            wal.Dispose();
 
             return (CountWalRecords(walPath, WalRecordType.RemoteBatch),
                 receiver.GlobalChangeLedgerCount, receiver.GetOutboxCount(1));
