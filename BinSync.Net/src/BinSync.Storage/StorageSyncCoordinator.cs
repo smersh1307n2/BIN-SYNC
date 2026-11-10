@@ -1404,6 +1404,7 @@ public sealed class StorageSyncCoordinator
         var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
         var recoveredPublishedOrigins = new List<ProviderPublishedOrigin>();
         ulong afterSequence = 0;
+        ulong providerHighWatermark = _provider.LocalChangeHighWatermark;
         ulong scannedThroughSequence = 0;
         ulong lastFrozenFeedSequence = 0;
         ulong cutoverNodeOutboxHigh = 0;
@@ -1420,27 +1421,19 @@ public sealed class StorageSyncCoordinator
         if (metadataStoreOwnsOutbound && outboundIdentityStore is null)
             throw new NotSupportedException("Provider publication cutover requires the outbound ChangeId identity capability.");
 
-        // Drain the complete currently-pending provider feed, not just one page.
-        // The winner map is bounded by distinct record/field identities rather than
-        // the number of historical edits, so repeated pre-sync writes across page
-        // boundaries collapse without creating intermediate Outbox records.
-        while (true)
+        // Drain the complete provider-feed prefix visible at method entry, not just
+        // one page. Later concurrent appends remain pending for the next pass instead
+        // of extending this scan indefinitely. The winner map is bounded by distinct
+        // record/field identities rather than historical edits within that prefix.
+        while (afterSequence < providerHighWatermark)
         {
             var page = _provider.ReadLocalChanges(afterSequence, limit);
-            ulong providerHighWatermark = _provider.LocalChangeHighWatermark;
-            if (page.Changes.Count > limit ||
-                page.ScannedThroughSequence < afterSequence ||
-                page.ScannedThroughSequence > providerHighWatermark)
+            if (page.Changes.Count > limit || page.ScannedThroughSequence < afterSequence)
                 throw new InvalidDataException("Provider local feed returned an invalid scan page.");
             if (page.ScannedThroughSequence == afterSequence)
-            {
-                if (page.Changes.Count != 0)
-                    throw new InvalidDataException("Provider local feed returned rows without advancing its scanned cursor.");
-                if (afterSequence >= providerHighWatermark)
-                    break;
-                throw new InvalidDataException("Provider local feed cursor did not advance toward its high-watermark.");
-            }
+                throw new InvalidDataException("Provider local feed cursor did not advance toward its captured high-watermark.");
 
+            int pageChangeCount = 0;
             ulong previousChangeSequence = afterSequence;
             foreach (var change in page.Changes)
             {
@@ -1448,6 +1441,12 @@ public sealed class StorageSyncCoordinator
                     change.Sequence > page.ScannedThroughSequence)
                     throw new InvalidDataException("Provider local feed changes are not ordered within the scanned prefix.");
                 previousChangeSequence = change.Sequence;
+                // The provider may append while this scan is in progress. Its page can
+                // therefore extend beyond the high-watermark captured at entry; leave
+                // that suffix for the next publication pass rather than chasing writers.
+                if (change.Sequence > providerHighWatermark)
+                    continue;
+                pageChangeCount++;
                 _node.ValidateProviderMutation(change.Mutation);
                 if (change.Mutation.KeyEpoch != 0)
                     throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
@@ -1498,14 +1497,9 @@ public sealed class StorageSyncCoordinator
                 }
             }
 
-            totalChanges = checked(totalChanges + page.Changes.Count);
-            scannedThroughSequence = page.ScannedThroughSequence;
-            afterSequence = page.ScannedThroughSequence;
-            // Continue until the explicit scanned cursor covers the provider's
-            // current high-watermark. A short/empty page may still leave a later
-            // feed range to scan in a custom IDataProvider implementation.
-            if (afterSequence >= _provider.LocalChangeHighWatermark)
-                break;
+            totalChanges = checked(totalChanges + pageChangeCount);
+            scannedThroughSequence = Math.Min(page.ScannedThroughSequence, providerHighWatermark);
+            afterSequence = scannedThroughSequence;
         }
 
         if (metadataStoreOwnsOutbound)
