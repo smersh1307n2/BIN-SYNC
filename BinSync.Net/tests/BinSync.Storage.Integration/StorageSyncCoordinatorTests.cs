@@ -2498,14 +2498,20 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1, hostReleases);
     }
 
-    [Fact]
-    public void Full_replace_receiver_rejects_mismatched_typed_lease_before_provider_switch_or_ack()
+    [Theory]
+    [InlineData("scope")]
+    [InlineData("local")]
+    [InlineData("namespace")]
+    [InlineData("store")]
+    [InlineData("trust")]
+    public void Full_replace_receiver_rejects_mismatched_typed_lease_before_provider_switch_or_ack(string mismatch)
     {
         const string scope = "full-replace-receiver-lease-binding";
         using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-receiver-lease-binding"), 483);
         using var provider = new StorageDataProvider(storage);
         using var local = NewNode(90);
         using var authorityNode = NewNode(91);
+        using var wrongLocal = NewNode(92);
         var (authoritySeed, authorityPublicKey) = BatchSignature.GenerateKeyPair();
         var (localSeed, localPublicKey) = BatchSignature.GenerateKeyPair();
         var trust = new TrustStore();
@@ -2550,8 +2556,15 @@ public sealed class StorageSyncCoordinatorTests
 
         var scanner = new ThrowingGcReferenceScanner();
         int leaseDisposals = 0;
+        string leaseScope = mismatch == "scope" ? scope + "-wrong" : scope;
+        NodeId leaseLocal = mismatch == "local" ? wrongLocal.NodeId : local.NodeId;
+        int leaseNamespace = mismatch == "namespace" ? 2 : 1;
+        IMetadataNamespaceGcStore leaseGcStore = mismatch == "store"
+            ? new StorageNamespaceGcStore(storage, scope, local.NodeId)
+            : gcStore;
+        TrustStore leaseTrust = mismatch == "trust" ? new TrustStore() : trust;
         var mismatchedLease = new TestFullReplaceCommitLease(
-            scope + "-wrong", local.NodeId, 1, gcStore, trust,
+            leaseScope, leaseLocal, leaseNamespace, leaseGcStore, leaseTrust,
             () => Interlocked.Increment(ref leaseDisposals));
         var receiver = new StorageFullReplaceReceiver(
             provider, gcStore, trust, 1,
