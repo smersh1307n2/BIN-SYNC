@@ -1,3 +1,11 @@
+## 1.15. C-pass: enforce contiguous signed namespace roster history — 2026-11-10
+
+- [x C] Hardened `StorageNamespaceGcStore.AcceptNamespaceRoster`: the first locally accepted NRS2 roster must be generation 1; each later roster must be exactly the next generation and bind the digest of the currently accepted roster. A signed roster can no longer skip an unobserved membership transition or bypass the accepted hash-chain predecessor.
+- [x C] Existing same-generation exact replay/fork checks, authority identity pinning and direct membership-transition validation remain in force. Generation overflow fails closed.
+- [x C] Production change committed as `ee15822c` (`fix(gc): require contiguous namespace roster chain`) and pushed to `feature/fld-external-storage`.
+- [~ T] Add first-generation, exact-next-generation, skipped-generation, wrong-previous-digest, replay/fork, authority-change and `UInt64.MaxValue` adversarial/reopen cases. No tests/build were run in this C slice; physical GC remains disabled.
+- [~ C] Continue auditing v3.1 roster/frontier/checkpoint persistence, rollback behavior and cross-store reference proofs.
+
 ## 1.14. C-pass: enforce contiguous signed retention checkpoint history — 2026-11-10
 
 - [x C] Hardened `StorageNamespaceGcStore.AcceptRetentionCheckpoint`: after the first accepted checkpoint, every new checkpoint must be exactly the next sequence and its previous digest must match the currently accepted checkpoint. A correctly signed checkpoint that skips one or more sequence numbers is rejected instead of silently truncating an authority decision from the locally observed hash chain.

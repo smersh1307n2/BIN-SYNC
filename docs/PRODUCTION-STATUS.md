@@ -2,6 +2,10 @@
 
 ## C-pass continuation update — 2026-11-10
 
+- Latest production-code commit: `ee15822c` enforces a contiguous NRS2 namespace-roster hash chain. The first accepted roster must be generation 1; each subsequent roster must be exactly next generation and link the accepted predecessor digest. Pushed to `feature/fld-external-storage`.
+- Roadmap section 1.15 records this C-pass and its deferred adversarial T-pass cases. This follows `8de0cb2c`, which applied the same chain-continuity rule to RCP2 retention checkpoints.
+- This remains implementation-only: no build/tests were run for this slice and prior red CI evidence remains unchanged. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
 - Latest production-code commit: `8de0cb2c` enforces a contiguous RCP2 retention-checkpoint hash chain. New checkpoints cannot skip sequence numbers or bypass an unobserved predecessor; first acceptance is sequence 1, exact replay remains idempotent, and sequence overflow fails closed. Pushed to `feature/fld-external-storage`.
 - Roadmap section 1.14 records this C-pass and its deferred adversarial T-pass cases. Paired recovery branch `backup/cpass-2026-11-10-retention-checkpoint-chain` exists in both BIN-SYNC and FLD-DB.
 - This remains implementation-only: no build/tests were run for this slice and prior red CI evidence remains unchanged. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
