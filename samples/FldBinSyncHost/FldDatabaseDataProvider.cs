@@ -400,13 +400,13 @@ public sealed class FldDatabaseDataProvider :
         EnsureOpen();
         if (published.Count == 0) return;
         var stamps = new FldPublishedOrigin[published.Count];
+        Span<byte> recordId = stackalloc byte[16];
         for (int i = 0; i < published.Count; i++)
         {
             ProviderPublishedOrigin item = published[i]
                 ?? throw new ArgumentException("Published-origin list contains null.", nameof(published));
             ProviderChange change = item.Change
                 ?? throw new InvalidDataException("Published-origin entry has no provider change.");
-            Span<byte> recordId = stackalloc byte[16];
             change.Mutation.RecordId.WriteTo(recordId);
             stamps[i] = new FldPublishedOrigin
             {
