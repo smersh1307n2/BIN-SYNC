@@ -2350,6 +2350,19 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(3, hostLeaseAcquires);
         Assert.Equal(3, hostLeaseReleases);
         Assert.False(scanner.Opened); // All physical-GC proof switches remain disabled.
+
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.CompactChangeLedger(1, 16, () => null, scanner));
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.CompactReceipts(1, 16, () => null, scanner));
+        int tombstoneLeaseRequests = 0;
+        Assert.Equal(0, coordinator.CompactRecordTombstones(1, 16, () =>
+        {
+            Interlocked.Increment(ref tombstoneLeaseRequests);
+            return null;
+        }, scanner));
+        Assert.Equal(0, tombstoneLeaseRequests); // Hard-disabled before any lease or scan.
+
         Assert.True(node.TryGetField(1, receiveRecord, 0x0898, out var received));
         Assert.Equal("receive-after-release", Encoding.UTF8.GetString(received!.Value));
         Assert.True(provider.TryReadCurrent(
