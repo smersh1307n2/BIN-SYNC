@@ -1,3 +1,13 @@
+## 1.53. T-pass: recover legacy alias cutover from the 4096/1 commit boundary — 2026-11-10
+
+- [x T] `Provider_cutover_recovers_after_crash_between_4096_and_final_legacy_alias_batches` constructs 4097 Node ledger identities and reproduces the exact durable boundary after the first 4096-alias Metadata batch commits but before the final one-alias batch. It then closes and reopens Storage/Metadata/Node as if the process had terminated at that point.
+- [x T] Reopen confirms the first batch is durable and conflict-protected. Retrying the real coordinator cutover idempotently replays that batch, writes the final alias, then completes Node ledger cleanup; conflicting aliases for both boundary entries are rejected.
+- [x T] A second process-style reopen and repeated cutover remains idempotent; `SeenChanges` is preserved throughout.
+- [x T] Exact BIN-SYNC head `5b197e2b69201dfff151f465b68c96a5b8c564d4`: Core 678/678 on Linux and Windows; Storage Integration 206/206 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] Remaining §1.23.8: recovery of markers written by the prior implementation. Current crash-boundary coverage now includes before/after the Node checkpoint, after the first 4096-alias batch and after all alias batches; physical GC remains disabled.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.52. T-pass: close provider frontier pagination and captured-prefix publication matrix — 2026-11-10
 
 - [x T] `Applied_origin_frontier_scans_multiple_empty_advancing_pages_before_zero_or_later_drafts` verifies that two consecutive empty advancing pages do not terminate the captured-prefix scan; the final page is still inspected. Its zero-draft variant proves a zero report is emitted only after the full captured high-watermark has been scanned.
@@ -189,7 +199,7 @@
 - [x C] Only after all aliases are durable does the fenced Node clear its namespace `GlobalChangeLedger`; the caller checkpoints Node immediately. Crash before Node checkpoint leaves the old ledger and aliases for exact idempotent retry; crash after checkpoint leaves the legacy digest co-located in Metadata. `SeenChanges` remains untouched.
 - [x C] Alias and semantic identity are encoded in one ChangeLedger row and are deleted together by the existing ChangeId GC path. Compacted legacy aliases are preserved, not falsely claimed equivalent to the semantic fingerprint.
 - [x C] Fixed the partition loader's early legacy-row gate to accept both 45-byte base and 61-byte aliased ChangeLedger values; the later row decoder already validates the suffix shape and rejects zero aliases. Without this gate fix, a successfully committed alias would fail on Storage reopen.
-- [x T] Basic base-row/alias-row reopen and conflict rejection are covered in §1.42; Node-checkpoint crash/retry ordering and `SeenChanges` preservation are covered in §1.44; 4096+1 batch-boundary persistence and post-batch/pre-checkpoint recovery are covered in §1.45. [~ T] Crash specifically between the two alias batch commits, repeated multi-batch cutover after that crash, and prior-implementation marker recovery remain open.
+- [x T] Basic base-row/alias-row reopen and conflict rejection are covered in §1.42; Node-checkpoint crash/retry ordering and `SeenChanges` preservation are covered in §1.44; 4096+1 batch-boundary persistence is covered in §1.45; crash/reopen between the 4096 and final one-alias commits plus repeated cutover recovery are covered in §1.53. [~ T] Recovery of markers written by the prior implementation remains open.
 
 ## 1.23.7. Cross-repository C-pass: narrow the FLD Storage public API — 2026-11-10
 
