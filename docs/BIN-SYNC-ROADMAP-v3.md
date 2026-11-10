@@ -1,3 +1,14 @@
+## 1.56. T-pass: harden tombstone GC signed horizon proof cases — 2026-11-10
+
+- [x T] `Tombstone_gc_proof_rejects_hlc_and_full_replace_identity_overclaims` proves a signed tombstone horizon is rejected for HLC wall/logical overclaims and for a different FULL_REPLACE generation or digest.
+- [x T] `Tombstone_gc_proof_requires_every_active_member_installed_ack` proves a FULL_REPLACE retention checkpoint is rejected when any Active member's installed ACK is missing.
+- [x T] `Tombstone_gc_proof_requires_all_active_replicas_to_apply_the_final_issued_prefix` distinguishes a valid lower common applied prefix from the final issued sequence: the former can be retained as a checkpoint frontier but is insufficient to reclaim a tombstone.
+- [x T] Exact BIN-SYNC head `c4b870018a0f520b17d81e62d11727f222587165`: Core 678/678 on Linux and Windows; Storage Integration 216/216 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [x T] Tests exercise signed protocol proof construction only. All physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; no rows were deleted.
+- [~ T] Remaining §1.23.6: external host/provider/Metadata references, PendingApply and immutable reservations, snapshot pins, receipt retirement/rejoin and cursor/digest replay fences, tombstone newer-field preservation, restart/fault injection and multi-member offline/rejoin horizons.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical GC capability switches remain hard false.
+
 ## 1.55. T-pass: verify fail-closed ChangeId GC provider-feed scanning — 2026-11-10
 
 - [x T] `Change_id_gc_provider_scan_rejects_malformed_feed_sequences` verifies duplicate, regressing and out-of-range provider sequence values throw `InvalidDataException` before a live-reference set can be used for reclamation.
@@ -233,7 +244,7 @@
 - [x C] Receipt reclamation has one source deletion site (`CompactReceipts`). It requires the durable transport retirement fence, accepted-roster epoch fence, retained receive cursor/digest-chain replay fence, no PendingApply, no host receipt reference and a signed origin retention checkpoint. `RetireInterestedPeer` itself never deletes receipts.
 - [x C] Tombstone reclamation requires a common installed FULL_REPLACE generation/digest/HLC floor, signed issued-origin maxima, signed safe-applied frontiers, every active member's draft-free report and contiguous applied coverage, plus no provider/metadata/host record or tombstone ChangeId references. Older field rows are removed before the tombstone row; newer field mutations survive.
 - [x C] Confirmed all three physical-GC capability switches remain hard `false` (`IsChangeIdGcProofEnabled`, `IsReceiptGcProofEnabled`, `IsTombstoneGcProofEnabled`). This source audit does not authorize enabling any switch.
-- [~ T] Adversarial proof tests, restart/fault injection, multi-member offline/rejoin and external-reference fixtures remain mandatory before any physical deletion is enabled. No build/tests run in this source-audit slice.
+- [~ T] Initial signed tombstone horizon adversarial cases are covered in §1.56 (missing Active ACK, incomplete common applied prefix, HLC and FULL_REPLACE identity overclaims). External-reference/provider/Metadata/PendingApply/reservation/snapshot-pin fixtures, receipt and tombstone deletion-order proofs, restart/fault injection, and multi-member offline/rejoin horizons remain mandatory before any physical deletion is enabled.
 
 ## 1.23.5. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
 
