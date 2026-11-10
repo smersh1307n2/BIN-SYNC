@@ -15,6 +15,8 @@ internal static class TlsTestCert
         var req = new CertificateRequest($"CN={cn}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         req.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
         req.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+        var eku = new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }; // TLS Web Server Authentication
+        req.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(eku, critical: false));
         req.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(req.PublicKey, false));
         var san = new SubjectAlternativeNameBuilder();
         san.AddDnsName(cn);
