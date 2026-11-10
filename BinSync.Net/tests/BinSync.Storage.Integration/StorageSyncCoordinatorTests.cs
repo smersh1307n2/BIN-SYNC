@@ -471,6 +471,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0104, AuthorNodeId = local.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 4000, Value = "must-replay-for-new-incarnation"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
@@ -568,6 +569,7 @@ public sealed class StorageSyncCoordinatorTests
         providerA.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0103, AuthorNodeId = nodeA.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 3600, Value = "shared-relay-payload"u8.ToArray()
         });
         coordinatorA.PublishLocalChanges(_ => { });
@@ -651,6 +653,7 @@ public sealed class StorageSyncCoordinatorTests
         providerA.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0104, AuthorNodeId = nodeA.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 4400, Value = "snapshot-baseline"u8.ToArray()
         });
 
@@ -671,6 +674,7 @@ public sealed class StorageSyncCoordinatorTests
         providerA.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0105, AuthorNodeId = nodeA.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 4500, Value = "after-snapshot"u8.ToArray()
         });
         coordinatorA.PublishLocalChanges(_ => { });
@@ -708,6 +712,7 @@ public sealed class StorageSyncCoordinatorTests
         providerA.AppendLocalChange(new ProviderMutation
         {
             RecordId = providerRecord, FieldId = 0x0823, AuthorNodeId = originalNodeA.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 7000, Value = "provider-owned-before-cutover"u8.ToArray()
         });
         Assert.Equal(1, initialCoordinatorA.PublishLocalChanges(_ => { }));
@@ -774,6 +779,7 @@ public sealed class StorageSyncCoordinatorTests
         providerA.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0106, AuthorNodeId = nodeA.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 4600, Value = "provider-owned"u8.ToArray()
         });
         var seededFeed = providerA.ReadLocalChanges(0, 16);
@@ -811,6 +817,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0102, AuthorNodeId = sender.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 3400, Value = "metadata-source"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
@@ -859,6 +866,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0103, AuthorNodeId = originalSender.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 3600, Value = "replay-exactly"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
@@ -945,11 +953,13 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = first, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 3200, Value = "first"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = second, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 3300, Value = "second"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
@@ -987,6 +997,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = firstRecord, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 1000, HlcLogical = 0, Value = "first"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
@@ -1015,6 +1026,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = secondRecord, FieldId = 0x0101, AuthorNodeId = sender.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 2000, HlcLogical = 0, Value = "second"u8.ToArray()
         });
         coordinator.PublishLocalChanges(_ => { });
@@ -1164,6 +1176,7 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = recordId,
             FieldId = fieldId,
             AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 1000,
             HlcLogical = 2,
             KeyEpoch = 0,
@@ -1197,21 +1210,25 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = fieldA, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 1000, HlcLogical = 0, Value = "first"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = fieldB, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 1500, HlcLogical = 0, Value = "independent"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = fieldA, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 2000, HlcLogical = 0, Value = "second"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = fieldA, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 3000, HlcLogical = 0, Value = "final"u8.ToArray()
         });
 
@@ -1255,6 +1272,7 @@ public sealed class StorageSyncCoordinatorTests
         void Append(ushort field, ulong wall, string value) => provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = field, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = wall, HlcLogical = 0, Value = Encoding.UTF8.GetBytes(value)
         });
 
@@ -1299,11 +1317,13 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0711, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 1000, HlcLogical = 0, KeyEpoch = 1, Value = "unsupported"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0711, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 2000, HlcLogical = 0, KeyEpoch = 0, Value = "winner"u8.ToArray()
         });
 
@@ -1709,6 +1729,7 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = recordId,
             FieldId = fieldId,
             AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 8000,
             HlcLogical = 1,
             Value = value
@@ -1752,6 +1773,7 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = providerRecord,
             FieldId = 0x0818,
             AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 5900,
             Value = "provider-authoritative"u8.ToArray()
         });
@@ -1786,21 +1808,25 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = recordId, FieldId = 0x0831, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 7200, Value = "old"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = recordId, FieldId = 0x0831, IsTombstone = true,
-            AuthorNodeId = node.NodeId, HlcWall = 7300, Value = Array.Empty<byte>()
+            AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 7300, Value = Array.Empty<byte>()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = recordId, FieldId = Model.LifecycleFieldId, IsRecordTombstone = true,
-            AuthorNodeId = node.NodeId, HlcWall = 7400, Value = Array.Empty<byte>()
+            AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 7400, Value = Array.Empty<byte>()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = recordId, FieldId = 0x0832, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 7500, Value = "ghost"u8.ToArray()
         });
 
@@ -1831,11 +1857,13 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = recordId, FieldId = 0x0831, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 8200, Value = "maximum-HLC"u8.ToArray()
         });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = recordId, FieldId = 0x0831, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 8100, Value = "later-feed-but-older-HLC"u8.ToArray()
         });
 
@@ -1883,6 +1911,7 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = record,
             FieldId = 0x0830,
             AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 7100,
             Value = "must-not-freeze"u8.ToArray()
         });
@@ -1913,6 +1942,7 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = firstRecord,
             FieldId = 0x081B,
             AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6100,
             Value = "first"u8.ToArray()
         });
@@ -1931,6 +1961,7 @@ public sealed class StorageSyncCoordinatorTests
             RecordId = secondRecord,
             FieldId = 0x081C,
             AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6200,
             Value = "second"u8.ToArray()
         });
@@ -2047,6 +2078,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0821, AuthorNodeId = originalNode.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6800, Value = "durable-provider-value"u8.ToArray()
         });
         ProviderChange source = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
@@ -2092,6 +2124,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0820, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6600, Value = "first-frozen-edit"u8.ToArray()
         });
         ProviderChange first = Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
@@ -2104,6 +2137,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0820, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6700, Value = "second-edit"u8.ToArray()
         });
         var pending = innerProvider.ReadLocalChanges(0, 10).Changes;
@@ -2485,6 +2519,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = firstRecord, FieldId = 0x081D, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6300, Value = "legacy-pending"u8.ToArray()
         });
         Assert.Throws<InvalidOperationException>(() =>
@@ -2503,6 +2538,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = secondRecord, FieldId = 0x081E, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6400, Value = "metadata-owned"u8.ToArray()
         });
         Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
@@ -2541,6 +2577,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = nodeOnlyRecord, FieldId = 0x081F, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6500, Value = "node-only"u8.ToArray()
         });
         Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
@@ -2588,6 +2625,7 @@ public sealed class StorageSyncCoordinatorTests
             inner.AppendLocalChange(new ProviderMutation
             {
                 RecordId = record, FieldId = field, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
                 HlcWall = field, Value = new byte[] { (byte)field }
             });
         var seedPage = inner.ReadLocalChanges(0, 16);
@@ -2600,6 +2638,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0810, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 6000, Value = "first-frozen"u8.ToArray()
         });
         Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }, limit: 2));
@@ -2611,6 +2650,7 @@ public sealed class StorageSyncCoordinatorTests
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0810, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1,
             HlcWall = 7000, Value = "later-suffix"u8.ToArray()
         });
         var pendingFeed = provider.ReadLocalChanges(0, 16).Changes;
