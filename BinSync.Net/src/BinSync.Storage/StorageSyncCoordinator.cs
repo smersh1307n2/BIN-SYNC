@@ -2488,7 +2488,10 @@ public sealed class StorageSyncCoordinator
             digest[0] = 1;
             applyToken = new Guid(digest.AsSpan(0, 16));
         }
-        _provider.ApplySnapshotBatch(applyToken, mutations);
+        if (_provider is not IProviderSnapshotStateApply snapshotStateApply)
+            throw new NotSupportedException(
+                "Provider must implement IProviderSnapshotStateApply for SNAPSHOT_CHUNK reconciliation.");
+        snapshotStateApply.ApplySnapshotBatch(applyToken, mutations);
     }
 
     /// <summary>
