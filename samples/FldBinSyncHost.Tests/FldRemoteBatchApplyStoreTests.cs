@@ -179,7 +179,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             FieldId = 0x0301,
             HlcWall = 1001,
             AuthorNodeId = NodeId.From(authorA),
-            KeyEpoch = 1,
+            KeyEpoch = 0,
             Value = valueA,
             ChangeId = BatchId.From(Id(0xA3)),
             OriginAuthorEpoch = 1
@@ -190,7 +190,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             FieldId = 0x0301,
             HlcWall = 1002,
             AuthorNodeId = NodeId.From(authorB),
-            KeyEpoch = 1,
+            KeyEpoch = 0,
             Value = valueB,
             ChangeId = BatchId.From(Id(0xB3)),
             OriginAuthorEpoch = 1
