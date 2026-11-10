@@ -659,7 +659,8 @@ public sealed class StorageSyncCoordinatorTests
 
         await Task.WhenAll(
             coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
-            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false));
+            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false))
+            .WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(metadataA.IsPeerInitialSyncComplete(scopeA, nodeA.NodeId,
             nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
