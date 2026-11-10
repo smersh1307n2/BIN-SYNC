@@ -2654,57 +2654,32 @@ public sealed class StorageSyncCoordinatorTests
         using (var provider = new StorageDataProvider(storage))
         using (var metadata = new StorageMetadataStore(storage))
         using (var local = NewNode(95))
-        using (var sender = NewNode(96))
         {
             localId = local.NodeId;
             RecordId record = RecordId.From(Guid.Parse("95000000-0000-0000-0000-000000000001").ToByteArray());
-            Assert.True(sender.WriteField(1, record, 0x0895, "legacy-alias-crash"u8.ToArray(), new Hlc(9500, 0)));
-            OutboxEntry sent = Assert.Single(sender.ReadOutboxEntries(1, sender.NodeId, 0, 10));
-            Transport.MakeSession(sender, local);
-            Assert.NotNull(Transport.DeliverBatch(sender, local, 1));
+            Assert.True(local.WriteField(1, record, 0x0895, "legacy-alias-crash"u8.ToArray(), new Hlc(9500, 0)));
+            OutboxEntry sent = Assert.Single(local.ReadOutboxEntries(1, local.NodeId, 0, 10));
             Assert.Contains((1, sent.ChangeId), local.GlobalChangeLedger.Keys);
             Assert.Contains((1, sent.ChangeId), local.SeenChanges);
             seenChangesBeforeCutover = local.SeenChanges.Count;
 
-            object operation = Ops.DecodeOp(sent.Payload).Op;
-            Digest16 semanticFingerprint = ChangeIdentity.Fingerprint(
-                1, record, sent.OpKind, operation, sender.NodeId, sent.CausalDeps);
-            byte[] envelope = new byte[16 + sent.Payload.Length];
-            record.WriteTo(envelope);
-            sent.Payload.Span.CopyTo(envelope.AsSpan(16));
-            var incoming = new MetadataIncomingBatch
+            Digest16 semanticFingerprint = ChangeIdentity.Fingerprint(sent);
+            metadata.FreezeOutbound(scope, local.NodeId, 1, local.NodeId, new[]
             {
-                ScopeId = scope,
-                LocalReplica = local.NodeId,
-                SenderPeer = sender.NodeId,
-                SenderEpoch = checked((uint)sender.Epoch),
-                AuthorStreamNodeId = sender.NodeId,
-                NamespaceId = 1,
-                BatchId = BatchId.From(Guid.Parse("95000000-0000-0000-0000-000000000002").ToByteArray()),
-                CursorStart = 1,
-                CursorEnd = 1,
-                PreviousBatchDigest = new byte[16],
-                BatchDigest = Enumerable.Repeat((byte)0x95, 16).ToArray(),
-                Operations = new[]
+                new MetadataFrozenOperation
                 {
-                    new MetadataOperation
-                    {
-                        AuthorNodeId = sender.NodeId,
-                        ChangeId = sent.ChangeId,
-                        Fingerprint = semanticFingerprint.ToArray(),
-                        Payload = envelope,
-                        RelayEligible = false,
-                        OriginAuthorEpoch = sent.OriginAuthorEpoch,
-                        OriginSequence = sent.OriginSequence
-                    }
+                    ChangeId = sent.ChangeId,
+                    Fingerprint = semanticFingerprint.ToArray(),
+                    Payload = sent.Payload.ToArray(),
+                    OriginAuthorEpoch = sent.OriginAuthorEpoch,
+                    OriginSequence = sent.OriginSequence,
+                    HlcWall = 9500,
+                    HlcLogical = 0
                 }
-            };
-            Guid applyToken = Guid.Parse("95000000-0000-0000-0000-000000000003");
-            metadata.BeginPendingApply(incoming, applyToken);
-            metadata.FinalizePendingApply(scope, local.NodeId,
-                new MetadataProviderApplyReceipt(applyToken, incoming.BatchDigest.ToArray()));
+            });
 
-            alias = new MetadataLegacyNodeLedgerFingerprint(sent.ChangeId, local.GlobalChangeLedger[(1, sent.ChangeId)].Fingerprint.ToArray());
+            alias = new MetadataLegacyNodeLedgerFingerprint(
+                sent.ChangeId, local.GlobalChangeLedger[(1, sent.ChangeId)].Fingerprint.ToArray());
             StorageNodePersistence.Save(storage, local);
 
             var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
