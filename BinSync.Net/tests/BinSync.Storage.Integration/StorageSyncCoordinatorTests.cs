@@ -2498,6 +2498,120 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1, hostReleases);
     }
 
+    [Fact]
+    public void Full_replace_receiver_rejects_mismatched_typed_lease_before_provider_switch_or_ack()
+    {
+        const string scope = "full-replace-receiver-lease-binding";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-receiver-lease-binding"), 483);
+        using var provider = new StorageDataProvider(storage);
+        using var local = NewNode(90);
+        using var authorityNode = NewNode(91);
+        var (authoritySeed, authorityPublicKey) = BatchSignature.GenerateKeyPair();
+        var (localSeed, localPublicKey) = BatchSignature.GenerateKeyPair();
+        var trust = new TrustStore();
+        trust.Allow(authorityNode.NodeId, authorityPublicKey, TrustMode.PreShared);
+
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 1,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = authorityNode.NodeId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = authorityNode.NodeId,
+                    PublicKey = authorityPublicKey,
+                    TransportPeerEpoch = 7,
+                    Status = NamespaceMemberStatus.Active
+                },
+                new NamespaceRosterMember
+                {
+                    NodeId = local.NodeId,
+                    PublicKey = localPublicKey,
+                    TransportPeerEpoch = 9,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        NamespaceRosterCertificate roster = gcStore.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(unsignedRoster, authoritySeed), trust);
+
+        Guid generation = Guid.Parse("90000000-0000-0000-0000-000000000001");
+        byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(
+            generation, 0, Array.Empty<ProviderMutation>());
+        var unsignedManifest = new FullReplaceTransferProtocol.Begin(
+            1, generation, roster.RosterGeneration,
+            NamespaceRosterProtocol.ComputeDigest(roster), 0, 0, digest, Array.Empty<byte>());
+        FullReplaceTransferProtocol.Begin manifest =
+            FullReplaceTransferProtocol.SignBegin(unsignedManifest, authoritySeed);
+
+        var scanner = new ThrowingGcReferenceScanner();
+        int leaseDisposals = 0;
+        var mismatchedLease = new TestFullReplaceCommitLease(
+            scope + "-wrong", local.NodeId, 1, gcStore, trust,
+            () => Interlocked.Increment(ref leaseDisposals));
+        var receiver = new StorageFullReplaceReceiver(
+            provider, gcStore, trust, 1,
+            authorityNode.NodeId, 7, local.NodeId, 9, localSeed,
+            scope, scanner, () => mismatchedLease, (_, _) => { });
+
+        receiver.Begin(manifest);
+        var transfer = new FullReplaceTransferProtocol.TransferId(1, generation);
+        Assert.Throws<InvalidOperationException>(() => receiver.Commit(transfer));
+        Assert.Equal(1, leaseDisposals);
+        Assert.False(scanner.Opened);
+        Assert.True(provider.TryGetFullReplaceProgress(generation, out ProviderFullReplaceProgress? progress));
+        Assert.NotNull(progress);
+        Assert.False(progress.IsCommitted);
+        Assert.Empty(gcStore.ReadFullReplaceInstalledAcks(roster));
+    }
+
+    private sealed class TestFullReplaceCommitLease : IFullReplaceCommitLease
+    {
+        private readonly Action _onDispose;
+        private bool _disposed;
+
+        public TestFullReplaceCommitLease(
+            string scopeId, NodeId localReplica, int namespaceId,
+            IMetadataNamespaceGcStore namespaceGcStore, TrustStore trustStore,
+            Action onDispose)
+        {
+            ScopeId = scopeId;
+            LocalReplica = localReplica;
+            NamespaceId = namespaceId;
+            NamespaceGcStore = namespaceGcStore;
+            NamespaceGcTrustStore = trustStore;
+            _onDispose = onDispose;
+        }
+
+        public string ScopeId { get; }
+        public NodeId LocalReplica { get; }
+        public int NamespaceId { get; }
+        public IMetadataNamespaceGcStore NamespaceGcStore { get; }
+        public TrustStore NamespaceGcTrustStore { get; }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _onDispose();
+        }
+    }
+
+    private sealed class ThrowingGcReferenceScanner : IApplicationGcReferenceScanner
+    {
+        public bool Opened { get; private set; }
+
+        public IApplicationGcReferenceScan OpenScan(string scopeId, NodeId localReplica, int namespaceId)
+        {
+            Opened = true;
+            throw new InvalidOperationException("Host reference scan must not begin for a mismatched typed lease.");
+        }
+    }
+
     private sealed class CallbackLease : IDisposable
     {
         private Action? _onDispose;
