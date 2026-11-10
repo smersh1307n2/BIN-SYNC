@@ -2524,6 +2524,100 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1, hostGate.CurrentCount);
     }
 
+    [Theory]
+    [InlineData("stall")]
+    [InlineData("regression")]
+    [InlineData("overrun")]
+    [InlineData("unordered")]
+    [InlineData("out-of-range")]
+    [InlineData("oversized")]
+    public void Applied_origin_frontier_rejects_malformed_provider_scan_pages(string fault)
+    {
+        string scope = "frontier-malformed-provider-page-" + fault;
+        using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 490);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(102);
+        using var hostGate = new SemaphoreSlim(1, 1);
+        var trust = new TrustStore();
+        var (memberSeed, memberPublicKey) = BatchSignature.GenerateKeyPair();
+        trust.Allow(local.NodeId, memberPublicKey, TrustMode.PreShared);
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 1,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = local.NodeId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = local.NodeId,
+                    PublicKey = memberPublicKey,
+                    TransportPeerEpoch = 1,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        gcStore.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(unsignedRoster, memberSeed), trust);
+        for (int i = 1; i <= 2; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(100 + i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = 0x08A2,
+                AuthorNodeId = local.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 11000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        int pageSize = fault is "unordered" or "out-of-range" ? 2 : 1;
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (afterSequence, limit, page) => fault switch
+            {
+                "stall" => new ProviderChangePage(Array.Empty<ProviderChange>(), afterSequence),
+                "regression" when afterSequence > 0 =>
+                    new ProviderChangePage(Array.Empty<ProviderChange>(), afterSequence - 1),
+                "overrun" => new ProviderChangePage(page.Changes, innerProvider.LocalChangeHighWatermark + 1),
+                "unordered" => new ProviderChangePage(page.Changes.Reverse().ToArray(), page.ScannedThroughSequence),
+                "out-of-range" => new ProviderChangePage(
+                    new[] { page.Changes[0] with { Sequence = page.ScannedThroughSequence + 1 } },
+                    page.ScannedThroughSequence),
+                "oversized" => new ProviderChangePage(
+                    page.Changes.Concat(page.Changes).ToArray(), page.ScannedThroughSequence),
+                _ => page
+            });
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+        var scanner = new NonReentrantGcReferenceScanner(hostGate);
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        Func<IDisposable?> acquireHostLease = () =>
+        {
+            if (!hostGate.Wait(0))
+                throw new InvalidOperationException("Frontier publication attempted to reacquire the non-reentrant host lease.");
+            Interlocked.Increment(ref hostAcquires);
+            return new CallbackLease(() =>
+            {
+                Interlocked.Increment(ref hostReleases);
+                hostGate.Release();
+            });
+        };
+
+        Assert.Throws<InvalidDataException>(() => coordinator.PublishAppliedOriginFrontier(
+            memberSeed, scanner, acquireHostLease, pageSize));
+        Assert.Equal(1, scanner.OpenCount);
+        Assert.Equal(1, scanner.DisposeCount);
+        Assert.Equal(1, hostAcquires);
+        Assert.Equal(1, hostReleases);
+        Assert.Equal(1, hostGate.CurrentCount);
+    }
+
     [Fact]
     public void Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace()
     {
