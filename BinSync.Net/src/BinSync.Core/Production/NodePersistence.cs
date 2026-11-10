@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 // Production hardening (Шаг 3): atomic save/load of the FULL BinSync.Net node state.
 //
 // WAL-style durability contract:
@@ -31,6 +33,8 @@ public static class NodePersistence
     private const uint Magic = 0x42534E53; // 'B''S''N''S'
     private const ushort Version = 17;
     private const int DigestLen = 32;
+    private static readonly ConcurrentDictionary<string, object> SavePathGates = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 
     // ---------------------------------------------------------------- Save
 
@@ -40,24 +44,28 @@ public static class NodePersistence
         if (node is null) throw new ArgumentNullException(nameof(node));
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
 
-        var image = SerializeToBytes(node);
-
-        var dir = Path.GetDirectoryName(Path.GetFullPath(path))!;
-        Directory.CreateDirectory(dir);
-        var tmp = Path.Combine(dir, $".{Path.GetFileName(path)}.tmp-{Guid.NewGuid():N}");
-        try
+        string fullPath = Path.GetFullPath(path);
+        object saveGate = SavePathGates.GetOrAdd(fullPath, static _ => new object());
+        lock (saveGate)
         {
-            using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
-                                           4096, FileOptions.WriteThrough))
+            var image = SerializeToBytes(node);
+            var dir = Path.GetDirectoryName(fullPath)!;
+            Directory.CreateDirectory(dir);
+            var tmp = Path.Combine(dir, $".{Path.GetFileName(fullPath)}.tmp-{Guid.NewGuid():N}");
+            try
             {
-                fs.Write(image);
-                fs.Flush(flushToDisk: true);   // fsync before rename
+                using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                                               4096, FileOptions.WriteThrough))
+                {
+                    fs.Write(image);
+                    fs.Flush(flushToDisk: true);   // fsync before rename
+                }
+                File.Move(tmp, fullPath, overwrite: true); // atomic replacement after same-path saves are serialized
             }
-            File.Move(tmp, path, overwrite: true); // atomic on POSIX; rename semantics on Windows
-        }
-        finally
-        {
-            if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best effort */ } }
+            finally
+            {
+                if (File.Exists(tmp)) { try { File.Delete(tmp); } catch { /* best effort */ } }
+            }
         }
     }
 
