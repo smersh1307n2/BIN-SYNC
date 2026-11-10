@@ -487,9 +487,8 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
                 sessionB, node => StorageNodePersistence.Save(storageB, node));
             Task<bool> replayPush = sessionA.PushBatchAsync(nodeA, checked((int)namespaceId));
-            await Task.WhenAll(receiveTask, replayPush).WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.True(replayPush.Result);
-            BatchResult replay = receiveTask.Result;
+            BatchResult replay = await receiveTask.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.True(await replayPush.WaitAsync(TimeSpan.FromSeconds(20)));
             Assert.True(replay.Duplicate);
             Assert.True(fldB.TryGetBytes(recordId, 0x0601, out byte[]? afterReplay));
             Assert.Equal("hard-kill-after-fld-commit"u8.ToArray(), afterReplay);
