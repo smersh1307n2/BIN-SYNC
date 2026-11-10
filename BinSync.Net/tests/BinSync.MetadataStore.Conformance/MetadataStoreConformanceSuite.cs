@@ -17,7 +17,7 @@ public abstract class MetadataStoreConformanceSuite
     {
         using var store = CreateStore();
         var batch = CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
-            Operation(20, 30, 40, 50));
+            Operation(20, 30, 40, 50, originSequence: 1));
 
         var first = store.AcceptIncomingBatch(batch);
         var duplicate = store.AcceptIncomingBatch(batch);
