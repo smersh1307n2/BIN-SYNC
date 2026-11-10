@@ -205,6 +205,136 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
+    public void Offline_rejoin_accepts_signed_roster_gap_but_resets_every_gc_horizon()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-rejoin-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        NodeId authority = NodeId.From(Id(1));
+        NodeId rejoining = NodeId.From(Id(2));
+        trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
+        Guid generation = Guid.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
+        byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("pre-offline installed snapshot"));
+        var closure = new[]
+        {
+            new NamespaceRetiredOriginEpoch
+            {
+                OriginAuthorNodeId = rejoining,
+                OriginAuthorEpoch = 3,
+                FinalIssuedOriginSequence = 40,
+                MaxIssuedHlcWall = 100,
+                MaxIssuedHlcLogical = 2
+            }
+        };
+
+        NamespaceRosterCertificate MakeRoster(
+            ulong rosterGeneration, byte[] previousDigest,
+            NamespaceMemberStatus rejoiningStatus, uint rejoiningEpoch, uint retiredThrough)
+            => new()
+            {
+                NamespaceId = 19,
+                RosterGeneration = rosterGeneration,
+                PreviousRosterDigest = previousDigest,
+                AuthorityNodeId = authority,
+                Members = new[]
+                {
+                    new NamespaceRosterMember
+                    {
+                        NodeId = authority,
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = rejoining,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = rejoiningEpoch,
+                        Status = rejoiningStatus,
+                        RetiredThroughEpoch = retiredThrough
+                    }
+                },
+                RetiredOriginEpochs = closure
+            };
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 904))
+            {
+                var gc = new StorageNamespaceGcStore(storage, "fld-db/offline-rejoin", NodeId.From(Id(99)));
+                NamespaceRosterCertificate retiredRoster = MakeRoster(
+                    1, new byte[32], NamespaceMemberStatus.Retired, 11, 11);
+                retiredRoster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(retiredRoster, keys[0].Seed), trust);
+
+                AppliedOriginFrontierReport oldReport = gc.AcceptOriginFrontier(
+                    SignedReport(retiredRoster, 0, keys, 1, 100), retiredRoster);
+                var oldCheckpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    retiredRoster, 1, new byte[32], new[] { oldReport });
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(oldCheckpoint, keys[0].Seed), retiredRoster, trust);
+                gc.AcceptFullReplaceInstalledAck(
+                    SignedAck(retiredRoster, 0, keys, generation, replaceDigest), retiredRoster);
+
+                Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(
+                    retiredRoster, trust, rejoining, 3, 40));
+                Assert.True(gc.AreAllActiveMembersInstalled(retiredRoster, generation, replaceDigest));
+
+                // A consecutive Retired -> Active transition is forbidden even with
+                // a newer transport epoch; the authority must attest the skipped
+                // Joining/FULL_REPLACE/promotion history in a higher full roster.
+                NamespaceRosterCertificate consecutive = MakeRoster(
+                    2, NamespaceRosterProtocol.ComputeDigest(retiredRoster),
+                    NamespaceMemberStatus.Active, 12, 0);
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(consecutive, keys[0].Seed), trust));
+
+                // Across a generation gap the retired fence still applies: equality
+                // is not a new transport incarnation and cannot reactivate the member.
+                NamespaceRosterCertificate staleEpochGap = MakeRoster(
+                    4, SHA256.HashData("omitted roster chain"u8),
+                    NamespaceMemberStatus.Active, 11, 0);
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(staleEpochGap, keys[0].Seed), trust));
+
+                NamespaceRosterCertificate rejoined = MakeRoster(
+                    4, SHA256.HashData("omitted roster chain"u8),
+                    NamespaceMemberStatus.Active, 12, 0);
+                rejoined = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(rejoined, keys[0].Seed), trust);
+
+                // Old generation reports/checkpoints/ACKs are not inherited by the
+                // rejoined generation. The offline member and every newly active
+                // member must re-establish current evidence before any safe horizon
+                // or FULL_REPLACE installation proof can be used.
+                Assert.Empty(gc.ReadOriginFrontiers(rejoined));
+                Assert.False(gc.TryReadRetentionCheckpoint(rejoined, trust, out _));
+                Assert.Empty(gc.ReadFullReplaceInstalledAcks(rejoined, generation));
+                Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(rejoined, trust, rejoining, 3, 40));
+                Assert.False(gc.AreAllActiveMembersInstalled(rejoined, generation, replaceDigest));
+                Assert.False(gc.HasProtocolTombstoneGcProof(
+                    rejoined, trust, rejoining, 3, 40, 100, 2, generation, replaceDigest));
+            }
+
+            using (var reopened = StorageDatabase.Open(directory, 904))
+            {
+                var gc = new StorageNamespaceGcStore(reopened, "fld-db/offline-rejoin", NodeId.From(Id(99)));
+                Assert.True(gc.TryReadNamespaceRoster(19, trust, out var current));
+                Assert.NotNull(current);
+                Assert.Equal(4UL, current!.RosterGeneration);
+                Assert.Empty(gc.ReadOriginFrontiers(current));
+                Assert.False(gc.TryReadRetentionCheckpoint(current, trust, out _));
+                Assert.False(gc.AreAllActiveMembersInstalled(current, generation, replaceDigest));
+                Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(current, trust, rejoining, 3, 40));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Storage_rejects_frontier_regression_checkpoint_overclaim_and_roster_fork()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-fence-" + Guid.NewGuid().ToString("N"));
