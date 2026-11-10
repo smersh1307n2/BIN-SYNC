@@ -156,9 +156,9 @@ static async Task InitializePeerBaselineAsync(
     StorageDatabase storageA, StorageDatabase storageB)
 {
     var (aToB, bFromA) = PipeTransport.CreatePair();
-    var acceptTask = SyncSession.AcceptAsync(nodeA, bFromA);
-    await using var sessionB = await SyncSession.ConnectAsync(nodeB, aToB);
-    await using var sessionA = await acceptTask;
+    var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
+    await using var sessionA = await SyncSession.ConnectAsync(nodeA, aToB);
+    await using var sessionB = await acceptTask;
     coordinatorA.RegisterInterestedPeer(sessionA, NamespaceId);
     coordinatorB.RegisterInterestedPeer(sessionB, NamespaceId);
     metadataA.CompletePeerInitialSync("array-demo", nodeA.NodeId, nodeB.NodeId,
@@ -176,9 +176,9 @@ static async Task<int> ExchangeInProcessAsync(
     Node nodeB, StorageSyncCoordinator coordinatorB, StorageDatabase storageB, IMetadataPeerStateStore metadataB)
 {
     var (aToB, bFromA) = PipeTransport.CreatePair();
-    var acceptTask = SyncSession.AcceptAsync(nodeA, bFromA);
-    await using var sessionB = await SyncSession.ConnectAsync(nodeB, aToB);
-    await using var sessionA = await acceptTask;
+    var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);
+    await using var sessionA = await SyncSession.ConnectAsync(nodeA, aToB);
+    await using var sessionB = await acceptTask;
     StorageNodePersistence.Save(storageA, nodeA);
     StorageNodePersistence.Save(storageB, nodeB);
 
