@@ -25,8 +25,12 @@ internal static class TlsTestCert
         san.AddIpAddress(IPAddress.IPv6Loopback);
         req.CertificateExtensions.Add(san.Build());
         var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
-        return X509CertificateLoader.LoadPkcs12(cert.Export(X509ContentType.Pfx), password: null,
-            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+        X509KeyStorageFlags keyStorageFlags = X509KeyStorageFlags.Exportable |
+            (OperatingSystem.IsWindows()
+                ? X509KeyStorageFlags.UserKeySet
+                : X509KeyStorageFlags.EphemeralKeySet);
+        return X509CertificateLoader.LoadPkcs12(
+            cert.Export(X509ContentType.Pfx), password: null, keyStorageFlags);
     }
 
     internal static SslClientAuthenticationOptions ClientOptions(string targetHost = "localhost", string? expectedThumbprint = null) => new()
