@@ -2450,6 +2450,81 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Applied_origin_frontier_scans_empty_advancing_page_before_later_provider_drafts()
+    {
+        const string scope = "frontier-empty-advancing-provider-page";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 489);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(101);
+        using var hostGate = new SemaphoreSlim(1, 1);
+        var trust = new TrustStore();
+        var (memberSeed, memberPublicKey) = BatchSignature.GenerateKeyPair();
+        trust.Allow(local.NodeId, memberPublicKey, TrustMode.PreShared);
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 1,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = local.NodeId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = local.NodeId,
+                    PublicKey = memberPublicKey,
+                    TransportPeerEpoch = 1,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        gcStore.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(unsignedRoster, memberSeed), trust);
+
+        for (int i = 1; i <= 3; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = 0x08A1,
+                AuthorNodeId = local.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 10000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (afterSequence, _, page) => afterSequence == 0
+                ? new ProviderChangePage(Array.Empty<ProviderChange>(), page.ScannedThroughSequence)
+                : page);
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+        var scanner = new NonReentrantGcReferenceScanner(hostGate);
+        Func<IDisposable?> acquireHostLease = () =>
+        {
+            if (!hostGate.Wait(0))
+                throw new InvalidOperationException("Frontier publication attempted to reacquire the non-reentrant host lease.");
+            return new CallbackLease(hostGate.Release);
+        };
+
+        AppliedOriginFrontierReport report = coordinator.PublishAppliedOriginFrontier(
+            memberSeed, scanner, acquireHostLease, pageSize: 1);
+
+        // Sequence 1 is represented by an empty but advancing lifecycle page;
+        // the later pages still contain two unpublished drafts and must be scanned.
+        Assert.Equal(2UL, report.UnpublishedDraftCount);
+        Assert.Equal(10003UL, report.MaxUnpublishedDraftHlcWall);
+        Assert.Equal(3UL, provider.LocalChangeHighWatermark);
+        Assert.Equal(3, innerProvider.ReadLocalChanges(0, 10).Changes.Count);
+        Assert.Equal(1, scanner.OpenCount);
+        Assert.Equal(1, scanner.DisposeCount);
+        Assert.Equal(1, hostGate.CurrentCount);
+    }
+
+    [Fact]
     public void Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace()
     {
         const string scope = "full-replace-pending-namespace";
@@ -3240,6 +3315,7 @@ public sealed class StorageSyncCoordinatorTests
     {
         private readonly IDataProvider _inner;
         private readonly Func<ProviderChange, ProviderChange>? _changeTransform;
+        private readonly Func<ulong, int, ProviderChangePage, ProviderChangePage>? _pageTransform;
         private readonly Action? _afterRemoteApply;
         private readonly Action<string>? _commitGuardEvent;
         private bool _failNextAcknowledge = true;
@@ -3248,10 +3324,12 @@ public sealed class StorageSyncCoordinatorTests
             IDataProvider inner,
             Func<ProviderChange, ProviderChange>? changeTransform = null,
             Action? afterRemoteApply = null,
-            Action<string>? commitGuardEvent = null)
+            Action<string>? commitGuardEvent = null,
+            Func<ulong, int, ProviderChangePage, ProviderChangePage>? pageTransform = null)
         {
             _inner = inner;
             _changeTransform = changeTransform;
+            _pageTransform = pageTransform;
             _afterRemoteApply = afterRemoteApply;
             _commitGuardEvent = commitGuardEvent;
         }
@@ -3266,9 +3344,10 @@ public sealed class StorageSyncCoordinatorTests
         public ProviderChangePage ReadLocalChanges(ulong afterSequence, int limit)
         {
             ProviderChangePage page = _inner.ReadLocalChanges(afterSequence, limit);
-            return _changeTransform is null
-                ? page
-                : new ProviderChangePage(page.Changes.Select(_changeTransform).ToArray(), page.ScannedThroughSequence);
+            if (_changeTransform is not null)
+                page = new ProviderChangePage(
+                    page.Changes.Select(_changeTransform).ToArray(), page.ScannedThroughSequence);
+            return _pageTransform is null ? page : _pageTransform(afterSequence, limit, page);
         }
         public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
         public bool TryGetMetadataStoreOwnedPublicationCutover(out ulong nodeOutboxHighWatermark) =>
