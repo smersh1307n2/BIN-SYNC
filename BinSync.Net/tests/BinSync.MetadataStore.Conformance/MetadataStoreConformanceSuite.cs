@@ -71,7 +71,7 @@ public abstract class MetadataStoreConformanceSuite
     {
         using var store = CreateStore();
         store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
-            Operation(20, 30, 40, 50)));
+            Operation(20, 30, 40, 50, originSequence: 1)));
 
         var changedOrigin = new MetadataOperation
         {
@@ -589,7 +589,8 @@ public abstract class MetadataStoreConformanceSuite
             OriginSequence = 0
         };
 
-    protected static MetadataOperation Operation(byte author, byte change, byte fingerprint, byte payload)
+    protected static MetadataOperation Operation(
+        byte author, byte change, byte fingerprint, byte payload, ulong? originSequence = null)
         => new()
         {
             AuthorNodeId = Node(author),
@@ -598,7 +599,7 @@ public abstract class MetadataStoreConformanceSuite
             Payload = new[] { payload },
             RelayEligible = true,
             OriginAuthorEpoch = 1,
-            OriginSequence = change
+            OriginSequence = originSequence ?? change
         };
 
     protected static NodeId Node(byte seed) => NodeId.From(Bytes(seed));
