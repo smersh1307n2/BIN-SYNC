@@ -2222,6 +2222,140 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Composed_gc_barrier_serializes_receive_provider_host_and_all_three_gc_callbacks()
+    {
+        const string scope = "composed-gc-barrier-concurrency";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 487);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(98);
+        using var sender = NewNode(99);
+        using var hostGate = new SemaphoreSlim(1, 1);
+        var gcStore = new StorageNamespaceGcStore(storage, scope, node.NodeId);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+        var scanner = new ThrowingGcReferenceScanner();
+
+        RecordId receiveRecord = RecordId.From(Guid.Parse("98000000-0000-0000-0000-000000000001").ToByteArray());
+        Assert.True(sender.WriteField(1, receiveRecord, 0x0898, "receive-after-release"u8.ToArray(), new Hlc(9800, 0)));
+        Transport.MakeSession(sender, node);
+
+        int hostLeaseAcquires = 0;
+        int hostLeaseReleases = 0;
+        Func<IDisposable?> acquireComposedLease = () =>
+            coordinator.AcquireApplicationCommitGuard(() =>
+            {
+                if (!hostGate.Wait(TimeSpan.FromSeconds(10)))
+                    return null;
+                Interlocked.Increment(ref hostLeaseAcquires);
+                return new CallbackLease(() =>
+                {
+                    Interlocked.Increment(ref hostLeaseReleases);
+                    hostGate.Release();
+                });
+            });
+
+        IDisposable outerLease = coordinator.AcquireApplicationCommitGuard(() =>
+        {
+            Assert.True(hostGate.Wait(TimeSpan.FromSeconds(5)));
+            Interlocked.Increment(ref hostLeaseAcquires);
+            return new CallbackLease(() =>
+            {
+                Interlocked.Increment(ref hostLeaseReleases);
+                hostGate.Release();
+            });
+        });
+
+        using var providerStarted = new ManualResetEventSlim();
+        using var providerCompleted = new ManualResetEventSlim();
+        Task providerCommit = Task.Run(() =>
+        {
+            providerStarted.Set();
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(Guid.Parse("98000000-0000-0000-0000-000000000002").ToByteArray()),
+                FieldId = 0x0899,
+                AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 9801,
+                Value = "provider-commit"u8.ToArray()
+            });
+            providerCompleted.Set();
+        });
+
+        using var receiveStarted = new ManualResetEventSlim();
+        using var receiveCompleted = new ManualResetEventSlim();
+        Task<BatchResult?> receive = Task.Run(() =>
+        {
+            receiveStarted.Set();
+            BatchResult? result = Transport.DeliverBatch(sender, node, 1);
+            receiveCompleted.Set();
+            return result;
+        });
+
+        using var hostStarted = new ManualResetEventSlim();
+        using var hostCompleted = new ManualResetEventSlim();
+        Task hostCommit = Task.Run(() =>
+        {
+            hostStarted.Set();
+            hostGate.Wait();
+            try { hostCompleted.Set(); }
+            finally { hostGate.Release(); }
+        });
+
+        using var gcChangeStarted = new ManualResetEventSlim();
+        using var gcReceiptStarted = new ManualResetEventSlim();
+        using var gcTombstoneStarted = new ManualResetEventSlim();
+        Task<int> gcChange = Task.Run(() =>
+        {
+            gcChangeStarted.Set();
+            return coordinator.CompactChangeLedger(1, 16, acquireComposedLease, scanner);
+        });
+        Task<int> gcReceipt = Task.Run(() =>
+        {
+            gcReceiptStarted.Set();
+            return coordinator.CompactReceipts(1, 16, acquireComposedLease, scanner);
+        });
+        Task<int> gcTombstone = Task.Run(() =>
+        {
+            gcTombstoneStarted.Set();
+            return coordinator.CompactRecordTombstones(1, 16, acquireComposedLease, scanner);
+        });
+
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(receiveStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(hostStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(gcChangeStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(gcReceiptStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.True(gcTombstoneStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.False(providerCompleted.Wait(TimeSpan.FromMilliseconds(150)));
+        Assert.False(receiveCompleted.Wait(TimeSpan.FromMilliseconds(150)));
+        Assert.False(hostCompleted.Wait(TimeSpan.FromMilliseconds(150)));
+        Assert.False(gcChange.IsCompleted);
+        Assert.False(gcReceipt.IsCompleted);
+        Assert.False(gcTombstone.IsCompleted);
+
+        outerLease.Dispose();
+        await Task.WhenAll(providerCommit, hostCommit, gcChange, gcReceipt, gcTombstone)
+            .WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.NotNull(await receive.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(0, await gcChange);
+        Assert.Equal(0, await gcReceipt);
+        Assert.Equal(0, await gcTombstone);
+        Assert.Equal(4, hostLeaseAcquires);
+        Assert.Equal(4, hostLeaseReleases);
+        Assert.False(scanner.Opened); // All physical-GC proof switches remain disabled.
+        Assert.True(node.TryGetField(1, receiveRecord, 0x0898, out var received));
+        Assert.Equal("receive-after-release", Encoding.UTF8.GetString(received!.Value));
+        Assert.True(provider.TryReadCurrent(
+            RecordId.From(Guid.Parse("98000000-0000-0000-0000-000000000002").ToByteArray()),
+            0x0899, out var committed));
+        Assert.Equal("provider-commit", Encoding.UTF8.GetString(committed!.Value));
+    }
+
+    [Fact]
     public void Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace()
     {
         const string scope = "full-replace-pending-namespace";
