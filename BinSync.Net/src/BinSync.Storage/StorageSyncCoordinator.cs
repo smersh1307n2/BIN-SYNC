@@ -1287,8 +1287,9 @@ public sealed class StorageSyncCoordinator
     /// <summary>
     /// Performs the one-time, fail-closed transition from Node-Outbox mirroring to
     /// Metadata-Store-owned outbound sequencing. The provider feed must already be
-    /// drained through the legacy path; the cutover watermark is persisted by providers
-    /// that support <see cref="IProviderPublicationMode"/>.
+    /// drained through the legacy path; every retained Node Outbox payload is verified
+    /// against its durable Metadata outbound/relay identity before the cutover marker
+    /// or any duplicate-payload cleanup is allowed.
     /// </summary>
     public void EnableMetadataStoreOwnedPublication(Action<Node> persistNode)
     {
@@ -1331,6 +1332,11 @@ public sealed class StorageSyncCoordinator
             if (metadataHigh != (ulong)nodeHigh)
                 throw new InvalidOperationException(
                     "Node and Metadata Store outbound watermarks must already match. Drain the legacy provider feed and freeze every Node Outbox row before cutover; Node-only writes must first be migrated into the provider.");
+
+            // Prove every retained Node payload is already represented by the
+            // durable Metadata Store before the irreversible provider-authority marker.
+            // This includes local ChangeId fingerprints and all foreign-author relay rows.
+            ValidateRetainedNodeOutboxOwnership();
 
             // Fence direct Node local writes before replacing the cache. The durable
             // provider marker is the restart authority; a failed cutover remains
@@ -1596,8 +1602,88 @@ public sealed class StorageSyncCoordinator
         return totalChanges;
     }
 
+    /// <summary>
+    /// Prove that every retained Node Outbox payload already has a durable identity
+    /// in the Metadata Store before the duplicate Node projection can be discarded.
+    /// Local author rows are checked by immutable fingerprint; foreign-author relay
+    /// rows must still resolve to retained Metadata Relay payloads.
+    /// </summary>
+    private void ValidateRetainedNodeOutboxOwnership()
+    {
+        if (_metadataStore is not IMetadataOutboundChangeIdentityStore outboundIdentityStore)
+            throw new NotSupportedException(
+                "Provider-authoritative cutover requires the durable outbound ChangeId identity index.");
+
+        const int pageSize = 1024;
+        foreach (NodeId author in _node.ReadOutboxAuthors(_namespaceId))
+        {
+            long afterSequence = 0;
+            while (true)
+            {
+                IReadOnlyList<OutboxEntry> entries =
+                    _node.ReadOutboxEntries(_namespaceId, author, afterSequence, pageSize);
+                if (entries.Count == 0) break;
+
+                long previousSequence = afterSequence;
+                var relayChangeIds = author == _node.NodeId
+                    ? null
+                    : new BatchId[entries.Count];
+
+                for (int i = 0; i < entries.Count; i++)
+                {
+                    OutboxEntry entry = entries[i];
+                    if (entry.NamespaceId != _namespaceId || entry.AuthorNodeId != author ||
+                        entry.Seq <= previousSequence || entry.ChangeId.IsZero ||
+                        entry.Payload.IsEmpty || entry.OriginAuthorEpoch == 0)
+                        throw new InvalidDataException(
+                            "Retained Node Outbox row has an invalid namespace, author, sequence, ChangeId, origin epoch or payload during provider cutover.");
+                    previousSequence = entry.Seq;
+
+                    if (relayChangeIds is not null)
+                    {
+                        relayChangeIds[i] = entry.ChangeId;
+                        continue;
+                    }
+
+                    object operation = Ops.DecodeOp(entry.Payload).Op;
+                    Digest16 actualFingerprint = ChangeIdentity.Fingerprint(
+                        _namespaceId, entry.RecordId, entry.OpKind, operation,
+                        entry.AuthorNodeId, entry.CausalDeps);
+                    if (!outboundIdentityStore.TryGetOutboundChangeIdentity(
+                            _scopeId!, _node.NodeId, _namespaceId, entry.ChangeId,
+                            out ReadOnlyMemory<byte> storedFingerprint, out OperationOrigin storedOrigin) ||
+                        storedFingerprint.Length != 16 ||
+                        Digest16.From(storedFingerprint.Span) != actualFingerprint ||
+                        storedOrigin.AuthorNodeId != author ||
+                        storedOrigin.AuthorEpoch != entry.OriginAuthorEpoch ||
+                        (entry.OriginSequence != 0 && storedOrigin.Sequence != entry.OriginSequence))
+                        throw new InvalidOperationException(
+                            "A retained local Node Outbox payload is not represented by the same immutable Metadata Store ChangeId fingerprint and origin.");
+                }
+
+                if (relayChangeIds is not null)
+                {
+                    if (_metadataStore is not StorageMetadataStore metadataStore)
+                        throw new NotSupportedException(
+                            "Foreign-author Node relay payloads require StorageMetadataStore relay identity resolution before cutover.");
+                    var relaySequences = new ulong[relayChangeIds.Length];
+                    if (!metadataStore.TryResolveRelaySequences(
+                            _scopeId!, _node.NodeId, _namespaceId, author,
+                            relayChangeIds, relaySequences) ||
+                        relaySequences.Any(sequence => sequence == 0))
+                        throw new InvalidOperationException(
+                            "A retained foreign-author Node Outbox payload is not backed by a retained Metadata Store relay payload; drain or recover relay publication before cutover.");
+                }
+
+                afterSequence = previousSequence;
+                if (entries.Count < pageSize) break;
+            }
+        }
+    }
+
     private void DiscardNodeOutboxPayloadsAfterProviderCutover()
     {
+        ValidateRetainedNodeOutboxOwnership();
         foreach (NodeId author in _node.ReadOutboxAuthors(_namespaceId))
         {
             long highWatermark = _node.GetOutboxHighWatermark(_namespaceId, author);
