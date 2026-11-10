@@ -30,6 +30,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private const byte ActiveGeneration = 0x26;
     private const byte FullReplaceSession = 0x41;
     private const byte ApplyReceipt = 0x30;
+    private const byte SnapshotApplyReceipt = 0x31;
     private static ReadOnlySpan<byte> ProviderFormatV3 => [0x42, 0x53, 0x50, 0x33];
     private static readonly byte[] ProviderOwnedPrefixes =
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
@@ -730,7 +731,28 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         }
     }
 
+    /// <summary>
+    /// Apply immutable remote operations received through BIN-SYNC DELTA_BATCH.
+    /// Every operation must retain its original ChangeId and author-origin sequence.
+    /// </summary>
     public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations)
+        => ApplyBatch(applyToken, mutations, requirePublishedProvenance: true, receiptPrefix: ApplyReceipt);
+
+    /// <summary>
+    /// Apply a materialized state image received through SNAPSHOT_CHUNK.
+    /// A snapshot row is current state (HLC + original author + value), not an immutable
+    /// operation, so it may legitimately lack ChangeId/origin sequence. Its receipt is
+    /// kept in a separate keyspace from DELTA_BATCH receipts. Existing published
+    /// provenance is never erased when a snapshot replays the same HLC/content.
+    /// </summary>
+    public ProviderApplyReceipt ApplySnapshotBatch(Guid snapshotToken, IReadOnlyList<ProviderMutation> mutations)
+        => ApplyBatch(snapshotToken, mutations, requirePublishedProvenance: false, receiptPrefix: SnapshotApplyReceipt);
+
+    private ProviderApplyReceipt ApplyBatch(
+        Guid applyToken,
+        IReadOnlyList<ProviderMutation> mutations,
+        bool requirePublishedProvenance,
+        byte receiptPrefix)
     {
         lock (_gate)
         {
@@ -739,17 +761,20 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 throw new ArgumentException("Apply token must be non-empty.", nameof(applyToken));
             ArgumentNullException.ThrowIfNull(mutations);
             if (mutations.Count == 0)
-                throw new ArgumentException("Remote batch must not be empty.", nameof(mutations));
+                throw new ArgumentException("Apply batch must not be empty.", nameof(mutations));
 
-            // A single BIN-SYNC batch may contain several immutable operations
-            // for one field (for example, multiple commits before the next sync).
-            // Keep all operations in the receipt fingerprint; the LWW comparison below
-            // folds them into one current value without losing batch identity.
+            // DELTA_BATCH carries immutable operations; SNAPSHOT_CHUNK carries a
+            // materialized LWW image. Keep their validation and receipt domains distinct.
             foreach (var mutation in mutations)
-                ProviderMutationCodec.ValidatePublished(mutation);
+            {
+                if (requirePublishedProvenance)
+                    ProviderMutationCodec.ValidatePublished(mutation);
+                else
+                    ProviderMutationCodec.Validate(mutation);
+            }
 
             byte[] fingerprint = Fingerprint(mutations);
-            byte[] receiptKey = Prefixed(ApplyReceipt, applyToken.ToByteArray());
+            byte[] receiptKey = Prefixed(receiptPrefix, applyToken.ToByteArray());
             using var batch = _storage.BeginWriteBatch();
             if (batch.TryGet(receiptKey, out var prior))
             {
@@ -774,7 +799,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         if (SameMutation(mutation, existing))
                             continue;
                         if (!SameMutationContent(mutation, existing))
-                            throw new InvalidDataException("Remote provider apply equivocated at the same HLC and author.");
+                            throw new InvalidDataException("Provider apply equivocated at the same HLC and author.");
                         if (existing.ChangeId.IsZero && !mutation.ChangeId.IsZero)
                             batch.Put(key, EncodeMutation(mutation));
                         else if (existing.ChangeId == mutation.ChangeId &&
@@ -789,8 +814,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         }
                         else if (!existing.ChangeId.IsZero && mutation.ChangeId.IsZero)
                         {
-                            // A legacy materialization may refresh visible fields, but
-                            // it must never erase already-persisted origin identity.
+                            // A materialized state image may refresh visible fields, but
+                            // it must never erase already-persisted immutable identity.
                         }
                         else
                             throw new InvalidDataException("Provider mutation identity conflicts at the same HLC and author.");
