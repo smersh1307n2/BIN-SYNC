@@ -62,6 +62,32 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
+    public void Snapshot_gc_guard_waits_for_every_active_snapshot_pin_to_be_released()
+    {
+        string directory = Path.Combine(_root, "snapshot-gc-guard");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 96, deleteOnDispose: true);
+            ProviderSnapshotHandle first = provider.OpenSnapshot();
+            ProviderSnapshotHandle second = provider.OpenSnapshot();
+
+            Assert.Null(provider.TryAcquireSnapshotGcGuard());
+
+            provider.ReleaseSnapshot(first.Token);
+            Assert.Null(provider.TryAcquireSnapshotGcGuard());
+
+            provider.ReleaseSnapshot(second.Token);
+            using IDisposable? guard = provider.TryAcquireSnapshotGcGuard();
+            Assert.NotNull(guard);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Local_feed_mappings_remote_receipts_and_current_state_survive_restart()
     {
         string directory = Path.Combine(_root, "restart");
