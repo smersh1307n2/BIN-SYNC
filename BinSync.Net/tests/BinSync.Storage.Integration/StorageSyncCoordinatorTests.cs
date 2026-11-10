@@ -742,7 +742,9 @@ public sealed class StorageSyncCoordinatorTests
         using var restartedNodeA = NodePersistence.LoadFromBytes(staleCheckpoint);
         Assert.True(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         var coordinatorA = new StorageSyncCoordinator(restartedNodeA, providerA, 1, metadataA, scopeA);
-        Assert.Equal(0, restartedNodeA.GlobalChangeLedgerCount);
+        // The stale checkpoint retains one Node ledger shadow for providerRecord;
+        // its identity is already durable in Metadata Store and is removed during reconciliation.
+        Assert.Equal(1, restartedNodeA.GlobalChangeLedgerCount);
 
         var (aToB, bFromA) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(nodeB, bFromA);

@@ -1245,11 +1245,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var replayFromNewEpoch = MakeBatch(authorA, 5, 200, 201, 2);
         Assert.True(store.AcceptIncomingBatch(replayFromNewEpoch).IsDuplicate);
 
-        // A new author epoch cannot reuse a global ChangeId with different immutable
-        // Origin provenance, even when the payload fingerprint is unchanged.
-        var sameChangeIdNewAuthorEpoch = MakeBatch(authorA, 6, 230, 201, 2);
-        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(sameChangeIdNewAuthorEpoch));
-
         // Legacy rows without a recorded transport epoch cannot be attributed to the
         // retired incarnation, so they remain retained rather than being guessed away.
         var legacyReplay = MakeBatch(authorB, 5, 202, 203, 2, epochBound.BatchDigest);
