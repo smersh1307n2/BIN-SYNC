@@ -1,3 +1,10 @@
+## 1.23. C-pass: prove retained Node Outbox payload ownership before provider cutover — 2026-11-10
+
+- [x C] Found a destructive cutover gap: `DiscardNodeOutboxPayloadsAfterProviderCutover` removed every author stream, while the preflight compared only the local author's high-watermark. A retained Node relay payload could therefore be absent from Metadata Relay yet still be discarded.
+- [x C] Added a bounded, read-only preflight over every retained Node Outbox author stream. Local rows require the same durable Metadata ChangeId fingerprint and immutable origin; foreign-author rows require a retained Metadata Relay sequence. Invalid/legacy identities, missing or compacted relay payloads, and mismatched fingerprints fail closed.
+- [x C] Run the proof before the durable cutover marker and again before startup/recovery cleanup discards the Node payload projection. A marker from an earlier process cannot silently authorize cleanup of unproven stale rows. Implementation commit: `7835c56ef289c72fd7a1e4bb833badbd447e68b5`.
+- [~ T] Cover local fingerprint/origin match and mismatch, absent ChangeId ledger row, foreign relay present/missing/compacted, mixed author pages over 1,024 entries, interrupted cutover before/after marker, and restart cleanup with stale Node payloads. No build/tests run in this C slice; no payload is deleted when proof is absent.
+
 ## 1.22. Cross-repository C-pass: FLD Run allocation and abort crash consistency — 2026-11-10
 
 - [x C] FLD source audit found compaction bypassing the root-global Run allocator with `_nextRunId++`; it now uses `AllocateRunId()`, shared with checkpoint and FULL_REPLACE staging.
