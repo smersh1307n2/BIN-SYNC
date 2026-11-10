@@ -710,22 +710,6 @@ public sealed class StorageSyncCoordinatorTests
 
         RecordId staleRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000001").ToByteArray());
         RecordId providerRecord = RecordId.From(Guid.Parse("63000000-0000-0000-0000-000000000002").ToByteArray());
-        // Seed a stale in-memory checkpoint row without creating a legacy Node
-        // ChangeId ledger entry. The provider cutover is then valid, and the test
-        // exercises authoritative snapshot rehydration rather than unsafe ledger loss.
-        originalNodeA.RestoreProviderSnapshot(1, new[]
-        {
-            new ProviderMutation
-            {
-                RecordId = staleRecord,
-                FieldId = 0x0822,
-                AuthorNodeId = staleRemote.NodeId,
-                HlcWall = 6900,
-                HlcLogical = 0,
-                Value = "stale-node-checkpoint"u8.ToArray()
-            }
-        }, Array.Empty<BatchId>());
-
         var initialCoordinatorA = new StorageSyncCoordinator(originalNodeA, providerA, 1, metadataA, scopeA);
         var coordinatorB = new StorageSyncCoordinator(nodeB, providerB, 1, metadataB, scopeB);
         providerA.AppendLocalChange(new ProviderMutation
@@ -742,6 +726,21 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(originalNodeA.ReadOutboxEntries(1, originalNodeA.NodeId, 0, 10));
         Assert.Empty(originalNodeA.ReadOutboxEntries(1, staleRemote.NodeId, 0, 10));
         Assert.Equal(0, originalNodeA.GlobalChangeLedgerCount);
+
+        // Reintroduce a stale cache row after the cutover fence without creating a
+        // legacy ChangeId ledger entry. The provider snapshot must replace this row.
+        originalNodeA.RestoreProviderSnapshot(1, new[]
+        {
+            new ProviderMutation
+            {
+                RecordId = staleRecord,
+                FieldId = 0x0822,
+                AuthorNodeId = staleRemote.NodeId,
+                HlcWall = 6900,
+                HlcLogical = 0,
+                Value = "stale-node-checkpoint"u8.ToArray()
+            }
+        }, Array.Empty<BatchId>());
 
         // Capture stale field state after the safe cutover has discarded the
         // represented Node ledger shadow, but before provider rehydration.
