@@ -3367,6 +3367,127 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Coordinator_migrates_legacy_metadata_publication_marker_into_provider_on_reopen()
+    {
+        const string scope = "legacy-metadata-publication-marker-recovery";
+        const ulong partitionId = 496;
+        string directory = Path.Combine(_root, scope);
+        NodeId localId;
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var local = NewNode(108))
+        {
+            localId = local.NodeId;
+            RecordId record = RecordId.From(Guid.Parse("49600000-0000-0000-0000-000000000001").ToByteArray());
+            Assert.True(local.WriteField(1, record, 0x08A7,
+                "legacy-marker-state"u8.ToArray(), new Hlc(17000, 0)));
+            OutboxEntry entry = Assert.Single(local.ReadOutboxEntries(1, local.NodeId, 0, 1));
+            object operation = Ops.DecodeOp(entry.Payload).Op;
+            Digest16 fingerprint = ChangeIdentity.Fingerprint(
+                1, entry.RecordId, entry.OpKind, operation, entry.AuthorNodeId, entry.CausalDeps);
+            metadata.FreezeOutbound(scope, local.NodeId, 1, local.NodeId, new[]
+            {
+                new MetadataFrozenOperation
+                {
+                    ChangeId = entry.ChangeId,
+                    Fingerprint = fingerprint.ToArray(),
+                    Payload = entry.Payload.ToArray(),
+                    OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                    OriginSequence = entry.OriginSequence,
+                    HlcWall = 17000,
+                    HlcLogical = 0
+                }
+            });
+            StorageNodePersistence.Save(storage, local);
+
+            // Seed the MCP1 marker used by the prior Metadata-owned cutover
+            // implementation. The provider's newer marker is deliberately absent.
+            metadata.EnableProviderPublicationCutover(scope, local.NodeId, 1, 1);
+            Assert.True(metadata.TryGetProviderPublicationCutover(
+                scope, local.NodeId, 1, out ulong legacyHigh));
+            Assert.Equal(1UL, legacyHigh);
+            Assert.False(provider.TryGetMetadataStoreOwnedPublicationCutover(out _));
+        }
+
+        using (var reopenedStorage = StorageDatabase.Open(directory, partitionId))
+        using (var reopenedProvider = new StorageDataProvider(reopenedStorage))
+        using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+        using (var reopenedNode = StorageNodePersistence.Load(reopenedStorage, localId))
+        {
+            var coordinator = new StorageSyncCoordinator(
+                reopenedNode, reopenedProvider, 1, reopenedMetadata, scope);
+            Assert.True(coordinator.IsMetadataStoreOwnedPublication);
+            Assert.True(reopenedProvider.TryGetMetadataStoreOwnedPublicationCutover(out ulong providerHigh));
+            Assert.Equal(1UL, providerHigh);
+            Assert.True(reopenedMetadata.TryGetProviderPublicationCutover(
+                scope, localId, 1, out ulong retainedLegacyHigh));
+            Assert.Equal(providerHigh, retainedLegacyHigh);
+            Assert.Equal(1UL, reopenedMetadata.GetOutboundHighWatermark(
+                scope, localId, 1, localId));
+            Assert.Throws<InvalidOperationException>(() =>
+                reopenedNode.WriteField(1,
+                    RecordId.From(Guid.Parse("49600000-0000-0000-0000-000000000002").ToByteArray()),
+                    0x08A7, "must-remain-fenced"u8.ToArray(), new Hlc(17001, 0)));
+        }
+    }
+
+    [Fact]
+    public void Coordinator_rejects_conflicting_legacy_and_provider_publication_markers()
+    {
+        const string scope = "legacy-provider-marker-conflict";
+        const ulong partitionId = 497;
+        string directory = Path.Combine(_root, scope);
+        NodeId localId;
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var local = NewNode(109))
+        {
+            localId = local.NodeId;
+            RecordId record = RecordId.From(Guid.Parse("49700000-0000-0000-0000-000000000001").ToByteArray());
+            Assert.True(local.WriteField(1, record, 0x08A8,
+                "marker-conflict-state"u8.ToArray(), new Hlc(17100, 0)));
+            OutboxEntry entry = Assert.Single(local.ReadOutboxEntries(1, local.NodeId, 0, 1));
+            object operation = Ops.DecodeOp(entry.Payload).Op;
+            Digest16 fingerprint = ChangeIdentity.Fingerprint(
+                1, entry.RecordId, entry.OpKind, operation, entry.AuthorNodeId, entry.CausalDeps);
+            metadata.FreezeOutbound(scope, local.NodeId, 1, local.NodeId, new[]
+            {
+                new MetadataFrozenOperation
+                {
+                    ChangeId = entry.ChangeId,
+                    Fingerprint = fingerprint.ToArray(),
+                    Payload = entry.Payload.ToArray(),
+                    OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                    OriginSequence = entry.OriginSequence,
+                    HlcWall = 17100,
+                    HlcLogical = 0
+                }
+            });
+            StorageNodePersistence.Save(storage, local);
+            provider.EnableMetadataStoreOwnedPublication(1);
+            metadata.EnableProviderPublicationCutover(scope, local.NodeId, 1, 2);
+        }
+
+        using (var reopenedStorage = StorageDatabase.Open(directory, partitionId))
+        using (var reopenedProvider = new StorageDataProvider(reopenedStorage))
+        using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+        using (var reopenedNode = StorageNodePersistence.Load(reopenedStorage, localId))
+        {
+            Assert.Throws<InvalidDataException>(() =>
+                new StorageSyncCoordinator(reopenedNode, reopenedProvider, 1, reopenedMetadata, scope));
+            Assert.True(reopenedProvider.TryGetMetadataStoreOwnedPublicationCutover(out ulong providerHigh));
+            Assert.Equal(1UL, providerHigh);
+            Assert.True(reopenedMetadata.TryGetProviderPublicationCutover(
+                scope, localId, 1, out ulong legacyHigh));
+            Assert.Equal(2UL, legacyHigh);
+        }
+    }
+
+    [Fact]
     public void Provider_cutover_recovers_after_crash_between_4096_and_final_legacy_alias_batches()
     {
         const string scope = "legacy-alias-crash-between-batches";
