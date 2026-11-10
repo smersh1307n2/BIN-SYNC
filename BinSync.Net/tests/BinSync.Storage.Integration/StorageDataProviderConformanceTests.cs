@@ -15,6 +15,26 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             Path.Combine(_root, Guid.NewGuid().ToString("N")),
             partitionId: 77);
 
+    private static ProviderMutation MaterializedMutation(byte record, ushort field, byte value, byte author)
+    {
+        ProviderMutation source = Mutation(record, field, value, author);
+        return new ProviderMutation
+        {
+            RecordId = source.RecordId,
+            FieldId = source.FieldId,
+            IsTombstone = source.IsTombstone,
+            IsRecordTombstone = source.IsRecordTombstone,
+            HlcWall = source.HlcWall,
+            HlcLogical = source.HlcLogical,
+            AuthorNodeId = source.AuthorNodeId,
+            KeyEpoch = source.KeyEpoch,
+            Value = source.Value.ToArray(),
+            ChangeId = default,
+            OriginAuthorEpoch = 0,
+            OriginSequence = 0
+        };
+    }
+
     [Fact]
     public void Open_snapshot_authorizes_skipping_its_exact_feed_watermark_only_while_held()
     {
@@ -886,8 +906,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         try
         {
             using var provider = new StorageDataProvider(directory, partitionId: 97, deleteOnDispose: false);
-            ProviderMutation first = Mutation(105, 1, 100, 1);
-            ProviderMutation second = Mutation(106, 2, 200, 2);
+            ProviderMutation first = MaterializedMutation(105, 1, 100, 1);
+            ProviderMutation second = MaterializedMutation(106, 2, 200, 2);
             Guid staleGeneration = Guid.Parse("97000000-0000-0000-0000-000000000001");
             Guid currentGeneration = Guid.Parse("97000000-0000-0000-0000-000000000002");
 
@@ -963,8 +983,8 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         Directory.CreateDirectory(directory);
         try
         {
-            ProviderMutation first = Mutation(110, 1, 100, 1);
-            ProviderMutation second = Mutation(110, 2, 101, 1);
+            ProviderMutation first = MaterializedMutation(110, 1, 100, 1);
+            ProviderMutation second = MaterializedMutation(110, 2, 101, 1);
             Guid generation = Guid.Parse("99000000-0000-0000-0000-000000000001");
             byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 24, new[] { first, second });
 
@@ -994,9 +1014,9 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     [Fact]
     public void Full_replace_digest_builder_streams_canonical_pages_without_materializing()
     {
-        ProviderMutation first = Mutation(120, 1, 100, 1);
-        ProviderMutation second = Mutation(120, 2, 101, 1);
-        ProviderMutation third = Mutation(121, 1, 102, 1);
+        ProviderMutation first = MaterializedMutation(120, 1, 100, 1);
+        ProviderMutation second = MaterializedMutation(120, 2, 101, 1);
+        ProviderMutation third = MaterializedMutation(121, 1, 102, 1);
         Guid generation = Guid.Parse("9a000000-0000-0000-0000-000000000001");
         const ulong watermark = 25;
         byte[] expected = StorageDataProvider.ComputeFullReplaceDigest(
@@ -1024,7 +1044,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
         try
         {
             using var provider = new StorageDataProvider(directory, partitionId: 100, deleteOnDispose: false);
-            ProviderMutation hiddenField = Mutation(130, 1, 50, 1);
+            ProviderMutation hiddenField = MaterializedMutation(130, 1, 50, 1);
             ProviderMutation recordTombstone = new()
             {
                 RecordId = hiddenField.RecordId,
@@ -1038,7 +1058,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             };
             ProviderMutation fieldTombstone = new()
             {
-                RecordId = Mutation(131, 2, 160, 1).RecordId,
+                RecordId = MaterializedMutation(131, 2, 160, 1).RecordId,
                 FieldId = 2,
                 IsTombstone = true,
                 HlcWall = 250,
