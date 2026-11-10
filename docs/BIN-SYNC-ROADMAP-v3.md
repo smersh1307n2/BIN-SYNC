@@ -7,7 +7,7 @@
 
 - [x C] `RetireInterestedPeer` now persists the retired transport-epoch fence and removes old peer stream/baseline state without eagerly deleting receipt rows.
 - [x C] `CompactReceipts` now requires the durable retired-epoch fence, confirms it against the accepted roster/current peer epoch, requires the signed origin retention checkpoint, and retains the existing PendingApply/host-reference checks. Receive cursors and digest chains remain the replay fence.
-- [x C] Old receipts remain eligible for later GC after a peer rejoins under a newer transport epoch; their external references are no longer bypassed by the peer-retirement path.
+- [x C] Old receipts remain eligible for later GC after a peer rejoins under a newer transport epoch; their external references are no longer bypassed by the peer-retirement path. The byte audit now distinguishes receipt-key `SenderEpoch` (wire issuer/author epoch) from value `TransportPeerEpoch` (authenticated transport incarnation).
 - [~ T] Update retirement tests to assert receipts are retained immediately after fencing; test GC with/without external receipt references, after rejoin, with missing/regressed fences, PendingApply, cursor gaps, and origin-frontier coverage. No build/tests run in this C slice.
 
 ## 1.23.3. C-pass: honor signed roster catch-up across generation gaps — 2026-11-10
