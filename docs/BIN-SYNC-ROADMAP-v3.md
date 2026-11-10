@@ -2567,3 +2567,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] While the composed lease is held, a concurrent provider append remains blocked; after lease release it completes and the durable current-state row is visible. The test uses the real StorageDataProvider monitor, not a mock-only lock.
 - [x T] Exact head 63df3003ecb26054ddbcf1363d3e9efcda7c2da1: Core 678/678 on Linux and Windows; Storage Integration 174/174 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 golden vectors and Fuzz/Lab passed.
 - [x C/T] The base coordinator→Node→host→provider lease order and a concurrent local-writer exclusion case are covered. Full multi-party deadlock/fault injection across concurrent receive, FULL_REPLACE, host WAL commit and all three physical-GC callbacks remains open; physical GC stays disabled.
+
+
+### 1.70 — FLD cross-repository build unblocked; corrected RunBuilder namespace (2026-11-10)
+
+- The repository secret `FLD_DB_READ_TOKEN` is now present and valid: the integration workflow successfully checked out private `smersh1307n2/FLD-DB` branch `fix/crash-consistency-outbox`.
+- The first real host-adapter build exposed a compile error in `FldProviderSnapshotPersistence.cs`: it imported `Fld1.Run.Writer`, while `RunBuilder` is declared in `Fld1.Run.Builder`. The FLD-DB branch was corrected in commit `9471656f92cc68b9b5464e9c6fc3af85f7b7a00c`.
+- BIN-SYNC core, Windows, fuzz/lab and v3.1 vector jobs passed in the same run; the host-adapter build failed at the above compile error, so integration tests were not reached. A fresh cross-repository run is required against the corrected FLD-DB head before claiming the adapter builds or the end-to-end link works.
+- No physical tombstone/Run GC was enabled by this fix.
