@@ -17,13 +17,13 @@ public sealed partial class Node
             ThrowIfDisposed();
             _metadataStoreOwnedPublicationFences.Add(namespaceId);
 
-            // The durable Metadata Store is the sole ChangeId identity authority
-            // after this namespace's cutover. Retain no second Node-local identity
-            // ledger for the same namespace; local WAL replay markers (SeenChanges)
-            // are a separate recovery concern and intentionally remain untouched.
-            foreach (var key in GlobalChangeLedger.Keys
-                         .Where(key => key.Ns == namespaceId).ToArray())
-                GlobalChangeLedger.Remove(key);
+            // The Metadata Store becomes the active ChangeId authority after cutover.
+            // Keep the compact legacy Node ledger as a read-only safety shadow: older
+            // entries may no longer have payloads, so their origin-bound digest cannot
+            // be compared with the Metadata semantic fingerprint. Do not destroy that
+            // evidence until a versioned dual-fingerprint migration proves equivalence.
+            // New Node-owned writes/receives are fenced below; SeenChanges remains a
+            // separate WAL-replay concern and is intentionally untouched.
         }
     }
 

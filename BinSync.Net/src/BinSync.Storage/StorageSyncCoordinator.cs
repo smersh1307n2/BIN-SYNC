@@ -1288,7 +1288,7 @@ public sealed class StorageSyncCoordinator
     /// Performs the one-time, fail-closed transition from Node-Outbox mirroring to
     /// Metadata-Store-owned outbound sequencing. The provider feed must already be
     /// drained through the legacy path; every retained Node Outbox payload is verified
-    /// against its durable Metadata outbound/relay identity before the cutover marker
+    /// against its durable Metadata ChangeId identity before the cutover marker
     /// or any duplicate-payload cleanup is allowed.
     /// </summary>
     public void EnableMetadataStoreOwnedPublication(Action<Node> persistNode)
@@ -1297,8 +1297,9 @@ public sealed class StorageSyncCoordinator
         using IDisposable commitGuard = AcquireApplicationCommitGuard();
         if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException("Metadata-Store-owned publication requires a durable Metadata Store scope.");
-        if (_metadataStore is not IMetadataOutboundChangeIdentityStore)
-            throw new NotSupportedException("Metadata-Store-owned publication requires the outbound ChangeId identity capability.");
+        if (_metadataStore is not IMetadataOutboundChangeIdentityStore ||
+            _metadataStore is not IMetadataChangeIdentityStore)
+            throw new NotSupportedException("Metadata-Store-owned publication requires durable outbound and complete ChangeId identity capabilities.");
         if (_provider is not IProviderPublicationMode publicationMode)
             throw new NotSupportedException("The attached provider does not support a durable outbound authority cutover.");
         if (_provider is not IProviderPublishedOriginStore)
@@ -1308,6 +1309,10 @@ public sealed class StorageSyncCoordinator
         {
             if (publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong existingCutover))
             {
+                // Older/interrupted checkpoints may still contain Node-owned identity
+                // history. Prove its ChangeIds exist in Metadata Store before discarding
+                // any retained Node Outbox payload projection.
+                ValidateRetainedNodeOutboxOwnership();
                 _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
                 long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
                 if (currentNodeHigh < 0 || (ulong)currentNodeHigh != existingCutover)
@@ -1605,14 +1610,34 @@ public sealed class StorageSyncCoordinator
     /// <summary>
     /// Prove that every retained Node Outbox payload already has a durable identity
     /// in the Metadata Store before the duplicate Node projection can be discarded.
-    /// Local author rows are checked by immutable fingerprint; foreign-author relay
-    /// rows must still resolve to retained Metadata Relay payloads.
+    /// Every row is checked against its semantic fingerprint, immutable Origin,
+    /// ownership mode and legacy Node digest; foreign-author rows must also resolve
+    /// to retained Metadata Relay payloads.
     /// </summary>
     private void ValidateRetainedNodeOutboxOwnership()
     {
-        if (_metadataStore is not IMetadataOutboundChangeIdentityStore outboundIdentityStore)
+        if (_metadataStore is not IMetadataChangeIdentityStore changeIdentityStore)
             throw new NotSupportedException(
-                "Provider-authoritative cutover requires the durable outbound ChangeId identity index.");
+                "Provider-authoritative cutover requires the durable all-route ChangeId identity index.");
+
+        // Node's legacy ledger retains compact origin-bound identities even after
+        // Outbox payload ACK. Metadata Store must already know every such ChangeId
+        // before Node Outbox payloads can be discarded. The legacy digest and Metadata
+        // semantic fingerprint use different domains; retained payloads below are
+        // compared exactly, while compacted history is checked for durable identity presence.
+        foreach (var pair in _node.GlobalChangeLedger.Where(pair => pair.Key.Ns == _namespaceId))
+        {
+            if (!pair.Value.IsKnown ||
+                !changeIdentityStore.TryGetChangeIdentity(
+                    _scopeId!, _node.NodeId, _namespaceId, pair.Key.ChangeId,
+                    out ReadOnlyMemory<byte> fingerprint, out OperationOrigin origin,
+                    out bool isLocalOutbound) ||
+                fingerprint.Length != 16 || origin.AuthorNodeId.IsZero ||
+                origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
+                isLocalOutbound != (origin.AuthorNodeId == _node.NodeId))
+                throw new InvalidOperationException(
+                    "A retained Node GlobalChangeLedger identity is not durably represented by the Metadata Store; provider cutover cannot discard the Node Outbox payload projection.");
+        }
 
         const int pageSize = 1024;
         foreach (NodeId author in _node.ReadOutboxAuthors(_namespaceId))
@@ -1634,31 +1659,42 @@ public sealed class StorageSyncCoordinator
                     OutboxEntry entry = entries[i];
                     if (entry.NamespaceId != _namespaceId || entry.AuthorNodeId != author ||
                         entry.Seq <= previousSequence || entry.ChangeId.IsZero ||
-                        entry.Payload.IsEmpty || entry.OriginAuthorEpoch == 0)
+                        entry.Payload.IsEmpty || entry.OriginAuthorEpoch == 0 ||
+                        entry.OriginSequence == 0)
                         throw new InvalidDataException(
-                            "Retained Node Outbox row has an invalid namespace, author, sequence, ChangeId, origin epoch or payload during provider cutover.");
+                            "Retained Node Outbox row has an invalid namespace, author, sequence, ChangeId, origin or payload during provider cutover.");
                     previousSequence = entry.Seq;
-
-                    if (relayChangeIds is not null)
-                    {
-                        relayChangeIds[i] = entry.ChangeId;
-                        continue;
-                    }
 
                     object operation = Ops.DecodeOp(entry.Payload).Op;
                     Digest16 actualFingerprint = ChangeIdentity.Fingerprint(
                         _namespaceId, entry.RecordId, entry.OpKind, operation,
                         entry.AuthorNodeId, entry.CausalDeps);
-                    if (!outboundIdentityStore.TryGetOutboundChangeIdentity(
+                    Digest16 expectedLegacyLedgerFingerprint = ChangeIdentity.LedgerFingerprint(
+                        _namespaceId, entry.RecordId, entry.OpKind, operation,
+                        new OperationOrigin(author, entry.OriginAuthorEpoch, entry.OriginSequence),
+                        entry.CausalDepsOrNull);
+                    if (!_node.GlobalChangeLedger.TryGetValue(
+                            (_namespaceId, entry.ChangeId), out ChangeLedgerValue nodeLedger) ||
+                        !nodeLedger.IsKnown ||
+                        nodeLedger.Fingerprint != expectedLegacyLedgerFingerprint)
+                        throw new InvalidOperationException(
+                            "A retained Node Outbox payload does not match its compact origin-bound Node GlobalChangeLedger fingerprint.");
+
+                    if (!changeIdentityStore.TryGetChangeIdentity(
                             _scopeId!, _node.NodeId, _namespaceId, entry.ChangeId,
-                            out ReadOnlyMemory<byte> storedFingerprint, out OperationOrigin storedOrigin) ||
+                            out ReadOnlyMemory<byte> storedFingerprint, out OperationOrigin storedOrigin,
+                            out bool storedIsLocalOutbound) ||
                         storedFingerprint.Length != 16 ||
                         Digest16.From(storedFingerprint.Span) != actualFingerprint ||
                         storedOrigin.AuthorNodeId != author ||
                         storedOrigin.AuthorEpoch != entry.OriginAuthorEpoch ||
-                        (entry.OriginSequence != 0 && storedOrigin.Sequence != entry.OriginSequence))
+                        storedOrigin.Sequence != entry.OriginSequence ||
+                        storedIsLocalOutbound != (author == _node.NodeId))
                         throw new InvalidOperationException(
-                            "A retained local Node Outbox payload is not represented by the same immutable Metadata Store ChangeId fingerprint and origin.");
+                            "A retained Node Outbox payload is not represented by the same immutable Metadata Store ChangeId fingerprint, origin and ownership mode.");
+
+                    if (relayChangeIds is not null)
+                        relayChangeIds[i] = entry.ChangeId;
                 }
 
                 if (relayChangeIds is not null)

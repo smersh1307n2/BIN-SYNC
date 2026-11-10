@@ -56,6 +56,24 @@ public interface IMetadataOutboundChangeIdentityStore
     /// <summary>Returns the durable fingerprint and immutable origin in one partition lookup.</summary>
     bool TryGetOutboundChangeIdentity(string scopeId, NodeId localReplica, int namespaceId,
         BatchId changeId, out ReadOnlyMemory<byte> fingerprint, out OperationOrigin origin);
+
+}
+
+/// <summary>
+/// Optional durable capability for enumerating accepted ChangeId identities across
+/// both local outbound and incoming routes. Provider-authoritative cutover requires
+/// it to prove that Node's compact identity ledger is already represented.
+/// </summary>
+public interface IMetadataChangeIdentityStore
+{
+    /// <summary>
+    /// Returns the durable semantic fingerprint, immutable origin and ownership mode
+    /// for any accepted ChangeId. Implementations must return false when the identity
+    /// is absent; callers fail closed when migrating legacy Node identity state.
+    /// </summary>
+    bool TryGetChangeIdentity(string scopeId, NodeId localReplica, int namespaceId,
+        BatchId changeId, out ReadOnlyMemory<byte> fingerprint,
+        out OperationOrigin origin, out bool isLocalOutbound);
 }
 
 public interface IMetadataStoreSnapshot : IDisposable

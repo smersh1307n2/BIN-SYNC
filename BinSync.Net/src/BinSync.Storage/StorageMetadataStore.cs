@@ -10,7 +10,7 @@ namespace BinSync.Storage;
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
-public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataFullReplaceCommitGuard
+public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataChangeIdentityStore, IMetadataFullReplaceCommitGuard
 {
     private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
@@ -2058,6 +2058,36 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new InvalidDataException("Frozen local ChangeId is missing its immutable origin provenance.");
             fingerprint = ledger.Fingerprint;
             origin = new OperationOrigin(ledger.AuthorNodeId, ledger.OriginAuthorEpoch, ledger.OriginSequence);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Resolve any durable ChangeId identity, including incoming routes. This is used
+    /// only for a one-time authority cutover proof; ordinary receive hot paths retain
+    /// their existing partition transaction and do not call this per operation.
+    /// </summary>
+    public bool TryGetChangeIdentity(
+        string scopeId, NodeId localReplica, int namespaceId, BatchId changeId,
+        out ReadOnlyMemory<byte> fingerprint, out OperationOrigin origin,
+        out bool isLocalOutbound)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (changeId.IsZero)
+                throw new ArgumentException("ChangeId must be non-zero.", nameof(changeId));
+            fingerprint = ReadOnlyMemory<byte>.Empty;
+            origin = default;
+            isLocalOutbound = false;
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state) ||
+                !state.ChangeLedger.TryGetValue(new LedgerKey(namespaceId, changeId), out ChangeLedgerValue? ledger))
+                return false;
+
+            fingerprint = ledger.Fingerprint;
+            origin = ledger.Provenance;
+            isLocalOutbound = ledger.IsLocalOutbound;
             return true;
         }
     }
