@@ -1219,7 +1219,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                         ProviderMutation field = DecodeMutation(fieldRow.Value);
                         if (field.RecordId != tombstone.RecordId || field.IsRecordTombstone)
                             throw new InvalidDataException("Record field row contains an invalid mutation identity.");
-                        if (Compare(field, tombstone) <= 0)
+                        if (IsFieldObsoleteUnderRecordTombstone(field, tombstone))
                             obsoleteFieldKeys.Add(fieldRow.Key);
                         afterFieldKey = fieldRow.Key;
                         if (obsoleteFieldKeys.Count == 4096)
@@ -1378,6 +1378,17 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         => HlcOps.CompareHlc(
             new Hlc(left.HlcWall, left.HlcLogical), left.AuthorNodeId,
             new Hlc(right.HlcWall, right.HlcLogical), right.AuthorNodeId);
+
+    internal static bool IsFieldObsoleteUnderRecordTombstone(
+        ProviderMutation field, ProviderMutation tombstone)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(tombstone);
+        if (!tombstone.IsRecordTombstone || field.IsRecordTombstone ||
+            field.RecordId != tombstone.RecordId)
+            throw new InvalidDataException("Record tombstone comparison requires a field from the same record.");
+        return Compare(field, tombstone) <= 0;
+    }
 
     private static bool SameMutationContent(ProviderMutation left, ProviderMutation right)
         => left.RecordId == right.RecordId
