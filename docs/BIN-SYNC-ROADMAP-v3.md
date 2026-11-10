@@ -1,3 +1,12 @@
+## 1.54. T-pass: recover prior MCP1 Metadata publication markers — 2026-11-10
+
+- [x T] `Coordinator_migrates_legacy_metadata_publication_marker_into_provider_on_reopen` seeds the prior implementation's MCP1 marker in the Metadata keyspace with matching Node and outbound watermarks, then reopens the database. Coordinator construction migrates the marker to the provider-owned publication marker and reinstalls the Node write fence.
+- [x T] `Coordinator_rejects_conflicting_legacy_and_provider_publication_markers` proves conflicting MCP1 and provider marker watermarks fail closed; neither marker is silently overwritten.
+- [x T] Exact BIN-SYNC head `2a8d51d0a27a17a91c404ec1dc50ef4407dd70c8`: Core 678/678 on Linux and Windows; Storage Integration 208/208 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [x T] §1.23.8 legacy Node digest migration T-pass is closed: base/alias row reopen, crash recovery before/after Node checkpoint, 4096+1 batch recovery, repeated cutover, `SeenChanges` preservation and prior MCP1 marker migration/conflict handling are covered in §§1.42, 1.44, 1.45, 1.53 and 1.54.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.53. T-pass: recover legacy alias cutover from the 4096/1 commit boundary — 2026-11-10
 
 - [x T] `Provider_cutover_recovers_after_crash_between_4096_and_final_legacy_alias_batches` constructs 4097 Node ledger identities and reproduces the exact durable boundary after the first 4096-alias Metadata batch commits but before the final one-alias batch. It then closes and reopens Storage/Metadata/Node as if the process had terminated at that point.
@@ -199,7 +208,7 @@
 - [x C] Only after all aliases are durable does the fenced Node clear its namespace `GlobalChangeLedger`; the caller checkpoints Node immediately. Crash before Node checkpoint leaves the old ledger and aliases for exact idempotent retry; crash after checkpoint leaves the legacy digest co-located in Metadata. `SeenChanges` remains untouched.
 - [x C] Alias and semantic identity are encoded in one ChangeLedger row and are deleted together by the existing ChangeId GC path. Compacted legacy aliases are preserved, not falsely claimed equivalent to the semantic fingerprint.
 - [x C] Fixed the partition loader's early legacy-row gate to accept both 45-byte base and 61-byte aliased ChangeLedger values; the later row decoder already validates the suffix shape and rejects zero aliases. Without this gate fix, a successfully committed alias would fail on Storage reopen.
-- [x T] Basic base-row/alias-row reopen and conflict rejection are covered in §1.42; Node-checkpoint crash/retry ordering and `SeenChanges` preservation are covered in §1.44; 4096+1 batch-boundary persistence is covered in §1.45; crash/reopen between the 4096 and final one-alias commits plus repeated cutover recovery are covered in §1.53. [~ T] Recovery of markers written by the prior implementation remains open.
+- [x T] Legacy Node digest migration T-pass is closed by §§1.42, 1.44, 1.45, 1.53 and 1.54, including prior MCP1 marker migration and conflict rejection.
 
 ## 1.23.7. Cross-repository C-pass: narrow the FLD Storage public API — 2026-11-10
 
