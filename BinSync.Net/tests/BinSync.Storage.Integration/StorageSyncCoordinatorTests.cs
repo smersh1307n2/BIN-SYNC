@@ -2521,16 +2521,16 @@ public sealed class StorageSyncCoordinatorTests
             {
                 new NamespaceRosterMember
                 {
-                    NodeId = authorityNode.NodeId,
-                    PublicKey = authorityPublicKey,
-                    TransportPeerEpoch = 7,
+                    NodeId = local.NodeId,
+                    PublicKey = localPublicKey,
+                    TransportPeerEpoch = 9,
                     Status = NamespaceMemberStatus.Active
                 },
                 new NamespaceRosterMember
                 {
-                    NodeId = local.NodeId,
-                    PublicKey = localPublicKey,
-                    TransportPeerEpoch = 9,
+                    NodeId = authorityNode.NodeId,
+                    PublicKey = authorityPublicKey,
+                    TransportPeerEpoch = 7,
                     Status = NamespaceMemberStatus.Active
                 }
             }
