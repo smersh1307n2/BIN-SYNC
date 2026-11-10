@@ -1528,7 +1528,14 @@ public sealed class StorageSyncCoordinator
         }
 
         if (totalChanges == 0)
+        {
+            // A provider may advance the scanned cursor over local-only lifecycle
+            // rows without returning a syncable ProviderChange. Commit that empty
+            // prefix ACK so it is not rescanned forever on every publication pass.
+            if (scannedThroughSequence > 0)
+                _provider.AcknowledgeLocalChanges(scannedThroughSequence);
             return 0;
+        }
 
         if (metadataStoreOwnsOutbound)
         {

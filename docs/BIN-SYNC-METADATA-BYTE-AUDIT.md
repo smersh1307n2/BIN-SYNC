@@ -25,7 +25,7 @@ Partition identity row:
 | 0 | Partition identity | 50 | 8 + scope bytes | Exactly 1 per persisted partition |
 | 1 | Inbox receipt | 88 | 76 + optional header fingerprint[16] + optional transport epoch[4] = 76/80/92/96 | One per retained (sender peer, sender/author epoch, namespace, BatchId); authenticated transport peer epoch is stored in the value |
 | 2 | Receive cursor | 88 | 8 | One per (sender, sender epoch, namespace, author stream) |
-| 3 | Global ChangeId ledger | 68 | 45 | One per retained (namespace, ChangeId), shared across all peers |
+| 3 | Global ChangeId ledger | 68 | 45/61 | One per retained (namespace, ChangeId), shared across all peers; 61-byte form carries the optional cutover legacy digest alias |
 | 5 | Relay ACK + high watermark | 68 | 16 | One per (namespace, original author); canonical combined row only |
 | 8 | Outbound ACK + high watermark | 68 | 16 | One per (namespace, local author); canonical combined row only |
 | 10 | Outbound lease | 68 | 24 | At most one active lease per (namespace, local author) |
