@@ -1,3 +1,10 @@
+## 1.64. T-pass: exercise FLD contextual remote-apply adapter against durable database — 2026-11-10
+
+- [x T] Added a dedicated `FldBinSyncHost.Tests` project and an integration test that sends a complete BIN-SYNC `ProviderRemoteBatchCommit` through `FldRemoteBatchApplyStore` into a real FLD database.
+- [x T] The test checks field identity/value, stable ChangeId-derived apply receipt fingerprint, no local Outbox echo, no duplicate FLD relay payload journal, idempotent replay and duplicate recognition after closing/reopening the FLD database.
+- [x C] The cross-repository GitHub workflow now runs this test after building the host adapter whenever the read-only FLD checkout credential is available. This is a first executable cross-runtime test; it is not yet a two-peer network round-trip.
+- [~ T] Exact-head workflow result pending. Physical receipt/ChangeId/tombstone GC remains disabled.
+
 ## 1.63. T-pass: assert recovered immutable reservation identity and payload — 2026-11-10
 
 - [x T] Strengthened the restart reference-scan test to read the recovered peer stream and assert the exact pending BatchId, cursor range and byte-identical immutable payload before confirming the reservation still blocks the tombstone-GC reference scan.
