@@ -8,7 +8,7 @@ namespace BinSync.Storage;
 /// <summary>
 /// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
-public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore, IProviderCommitGuard, IProviderSnapshotGcGuard
+public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore, IProviderCommitGuard, IProviderSnapshotGcGuard, IProviderSnapshotStateApply
 {
     private const byte ItemMap = 0x01;
     private const byte ItemReverse = 0x02;
