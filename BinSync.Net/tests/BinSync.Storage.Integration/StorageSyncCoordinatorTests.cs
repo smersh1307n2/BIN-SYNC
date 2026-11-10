@@ -2221,6 +2221,107 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("blocked-until-lease-release", Encoding.UTF8.GetString(current!.Value));
     }
 
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("regressing")]
+    [InlineData("out-of-range")]
+    public void Change_id_gc_provider_scan_rejects_malformed_feed_sequences(string fault)
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "change-id-gc-malformed-" + fault), 498);
+        using var innerProvider = new StorageDataProvider(storage);
+        for (int i = 1; i <= 2; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(800 + i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = 0x08B2,
+                AuthorNodeId = NodeId.From(Enumerable.Repeat((byte)0xB2, 16).ToArray()),
+                OriginAuthorEpoch = 1,
+                HlcWall = 18000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (_, _, page) => fault switch
+            {
+                "duplicate" => new ProviderChangePage(
+                    new[] { page.Changes[0], page.Changes[0] }, page.ScannedThroughSequence),
+                "regressing" => new ProviderChangePage(
+                    page.Changes.Reverse().ToArray(), page.ScannedThroughSequence),
+                "out-of-range" => new ProviderChangePage(
+                    new[] { page.Changes[0] with { Sequence = page.ScannedThroughSequence + 1 } },
+                    page.ScannedThroughSequence),
+                _ => page
+            });
+
+        Assert.Throws<InvalidDataException>(() =>
+            StorageMetadataStore.TryCollectProviderChangeIdsForGc(
+                provider, provider.LocalChangeHighWatermark, out _));
+    }
+
+    [Fact]
+    public void Change_id_gc_provider_scan_keeps_later_live_ids_after_empty_advancing_page()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "change-id-gc-empty-advancing-page"), 499);
+        using var innerProvider = new StorageDataProvider(storage);
+        for (int i = 1; i <= 2; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(900 + i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = 0x08B3,
+                AuthorNodeId = NodeId.From(Enumerable.Repeat((byte)0xB3, 16).ToArray()),
+                OriginAuthorEpoch = 1,
+                HlcWall = 19000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        var scannedCursors = new List<ulong>();
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (afterSequence, _, page) =>
+            {
+                scannedCursors.Add(afterSequence);
+                return afterSequence == 0
+                    ? new ProviderChangePage(Array.Empty<ProviderChange>(), page.ScannedThroughSequence - 1)
+                    : page;
+            });
+
+        Assert.True(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
+            provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> liveChangeIds));
+        Assert.Equal(new ulong[] { 0, 1 }, scannedCursors);
+        Assert.Single(liveChangeIds);
+        Assert.Equal(innerProvider.ReadLocalChanges(1, 10).Changes[0].ChangeId,
+            Assert.Single(liveChangeIds));
+    }
+
+    [Fact]
+    public void Change_id_gc_provider_scan_blocks_reclamation_for_legacy_unknown_change_id()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "change-id-gc-legacy-unknown-id"), 500);
+        using var innerProvider = new StorageDataProvider(storage);
+        innerProvider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = RecordId.From(Guid.Parse("50000000-0000-0000-0000-000000000001").ToByteArray()),
+            FieldId = 0x08B4,
+            AuthorNodeId = NodeId.From(Enumerable.Repeat((byte)0xB4, 16).ToArray()),
+            OriginAuthorEpoch = 1,
+            HlcWall = 20000,
+            Value = "legacy-unknown-id"u8.ToArray()
+        });
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (_, _, page) => new ProviderChangePage(
+                new[] { page.Changes[0] with { ChangeId = default } }, page.ScannedThroughSequence));
+
+        Assert.False(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
+            provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> liveChangeIds));
+        Assert.Empty(liveChangeIds);
+    }
+
     [Fact]
     public async Task Composed_gc_barrier_serializes_receive_provider_host_and_all_three_gc_callbacks()
     {
