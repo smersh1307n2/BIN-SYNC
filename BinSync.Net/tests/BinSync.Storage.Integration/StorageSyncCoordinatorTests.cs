@@ -2583,6 +2583,58 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Metadata_authoritative_receive_uses_pending_apply_without_duplicate_node_remote_batch_wal()
+    {
+        async Task<(int RemoteBatchRecords, int GlobalLedgerCount, int OutboxCount)> Receive(
+            bool metadataOwned, string name, byte seed)
+        {
+            string directory = Path.Combine(_root, name);
+            Directory.CreateDirectory(directory);
+            using var storage = StorageDatabase.Open(directory, (ulong)(490 + seed));
+            using var provider = new StorageDataProvider(storage);
+            using var metadata = new StorageMetadataStore(storage);
+            using var sender = NewNode(seed);
+            using var receiver = NewNode((byte)(seed + 1));
+            string walPath = Path.Combine(directory, "receiver.wal");
+            using var wal = Wal.Open(walPath);
+            receiver.AttachWal(wal);
+
+            const string scopePrefix = "receive-wal-ownership-";
+            string scope = scopePrefix + name;
+            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
+            if (metadataOwned)
+                coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+
+            RecordId record = RecordId.From(Guid.Parse(
+                $"{seed:X2}000000-0000-0000-0000-000000000001").ToByteArray());
+            Assert.True(sender.WriteField(1, record, 0x0890,
+                "receive-wal-ownership"u8.ToArray(), new Hlc(8000UL + seed, 0)));
+
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            var connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+
+            Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+            Task<bool> send = initiator.PushBatchAsync(sender, 1);
+            await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
+
+            return (CountWalRecords(walPath, WalRecordType.RemoteBatch),
+                receiver.GlobalChangeLedgerCount, receiver.GetOutboxCount(1));
+        }
+
+        var legacy = await Receive(false, "node-owned-receive-wal", 95);
+        var authoritative = await Receive(true, "metadata-owned-receive-wal", 97);
+
+        Assert.Equal(1, legacy.RemoteBatchRecords);
+        Assert.True(legacy.GlobalLedgerCount > 0);
+        Assert.Equal(0, authoritative.RemoteBatchRecords);
+        Assert.Equal(0, authoritative.GlobalLedgerCount);
+        Assert.Equal(0, authoritative.OutboxCount);
+    }
+
+    [Fact]
     public void Legacy_node_ledger_alias_round_trips_and_rejects_conflicts_after_reopen()
     {
         const string scope = "legacy-node-ledger-alias";
@@ -2638,6 +2690,29 @@ public sealed class StorageSyncCoordinatorTests
             Assert.Throws<ArgumentException>(() =>
                 aliasMetadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { alias, alias }));
         }
+    }
+
+    private static int CountWalRecords(string path, WalRecordType type)
+    {
+        byte[] bytes = File.ReadAllBytes(path);
+        if (bytes.Length < 6)
+            throw new InvalidDataException("WAL header is truncated.");
+
+        int offset = 6;
+        int count = 0;
+        while (offset < bytes.Length)
+        {
+            if (bytes.Length - offset < 4)
+                throw new InvalidDataException("WAL record length prefix is truncated.");
+            int length = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(bytes.AsSpan(offset, 4));
+            offset += 4;
+            if (length < 1 || bytes.Length - offset < length + 16)
+                throw new InvalidDataException("WAL record payload or digest is truncated.");
+            if (bytes[offset] == (byte)type)
+                count++;
+            offset += length + 16;
+        }
+        return count;
     }
 
     private sealed class TestFullReplaceCommitLease : IFullReplaceCommitLease
