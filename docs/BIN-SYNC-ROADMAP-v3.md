@@ -53,7 +53,7 @@
 - [x C] Hardened `StorageNamespaceGcStore.AcceptOriginFrontier`: every previously reported author epoch must remain present, and its issued sequence plus maximum HLC (wall/logical tuple) may not regress in a later signed report. The applied-origin vector was already monotonic; the issued-origin vector is independently consumed by tombstone/GC proof construction and must be monotonic as well.
 - [x C] Production fix committed as `47be8895046662a06481ac097229c59e2cb2ed47`.
 - [~ T] Add adversarial Storage restart/conformance cases for decreasing issued sequence, decreasing HLC wall, decreasing HLC logical at equal wall, dropped epoch, and unchanged/increased values. No tests were run in this C slice; physical GC remains disabled.
-- [~ C] Complete the final v3/v3.1 public API/source/byte audit; blob catalog/page failure-ordering and restart-cleanup source audit is complete in §1.19.
+- [x C] Reconciled `PUBLIC-API.md`, the host-orchestration guide and the FLD integration contract with the implemented `FldDatabaseDataProvider`/`FldRemoteBatchApplyStore` sample; stale statements that the provider bridge remained open were removed. [~ C] Complete the final XML/public API/source/byte audit; blob catalog/page failure-ordering and restart-cleanup source audit is complete in §1.19.
 
 ## 1.11. Recovery point and C-pass continuation reset — 2026-11-09
 
