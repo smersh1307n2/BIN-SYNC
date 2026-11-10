@@ -24,6 +24,7 @@
   <!-- Do NOT add PackageReference Include="BouncyCastle.Cryptography". -->
   <ItemGroup>
     <InternalsVisibleTo Include="BinSync.Storage" />
+    <InternalsVisibleTo Include="BinSync.Storage.Integration" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Blake3.Managed" Version="1.10.0" />

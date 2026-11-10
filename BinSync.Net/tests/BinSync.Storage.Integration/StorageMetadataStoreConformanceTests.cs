@@ -1240,17 +1240,15 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Throws<InvalidDataException>(() =>
             store.BeginPendingApply(epochBound, Guid.Parse("00000000-0000-0000-0000-000000000447")));
 
-        // The old transport-bound receipt is gone. The retained receive cursor rejects
-        // the replay, rather than treating it as a duplicate and re-ACKing it.
+        // The old transport epoch is fenced, but its durable receipt remains
+        // available for an idempotent retry over the new transport incarnation.
         var replayFromNewEpoch = MakeBatch(authorA, 5, 200, 201, 2);
         Assert.True(store.AcceptIncomingBatch(replayFromNewEpoch).IsDuplicate);
 
-        // A genuinely new author epoch can restart its cursor, but the global
-        // ChangeId ledger still suppresses the already accepted operation.
+        // A new author epoch cannot reuse a global ChangeId with different immutable
+        // Origin provenance, even when the payload fingerprint is unchanged.
         var sameChangeIdNewAuthorEpoch = MakeBatch(authorA, 6, 230, 201, 2);
-        var deduplicated = store.AcceptIncomingBatch(sameChangeIdNewAuthorEpoch);
-        Assert.False(deduplicated.IsDuplicate);
-        Assert.Equal(0, deduplicated.NewRelayOperationCount);
+        Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(sameChangeIdNewAuthorEpoch));
 
         // Legacy rows without a recorded transport epoch cannot be attributed to the
         // retired incarnation, so they remain retained rather than being guessed away.
