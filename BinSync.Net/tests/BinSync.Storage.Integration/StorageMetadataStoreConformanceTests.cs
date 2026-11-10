@@ -406,6 +406,90 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+    [Fact]
+    public void Tombstone_gc_live_reference_scan_recovers_pending_apply_and_outbound_payloads_after_restart()
+    {
+        string directory = Path.Combine(_root, "tombstone-live-references-restart");
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        const string scope = "tombstone-live-references-restart";
+        const int pendingNamespace = 7;
+        const int outboundNamespace = 8;
+
+        ProviderMutation Mutation(byte record, byte change, ulong sequence) => new()
+        {
+            RecordId = RecordId.From(Enumerable.Repeat((byte)record, 16).ToArray()),
+            FieldId = 0x0101,
+            AuthorNodeId = author,
+            ChangeId = Batch(change),
+            OriginAuthorEpoch = 1,
+            OriginSequence = sequence,
+            HlcWall = sequence,
+            Value = new[] { record }
+        };
+
+        try
+        {
+            ProviderMutation pendingMutation = Mutation(0x51, 0x61, 1);
+            ProviderMutation outboundMutation = Mutation(0x52, 0x62, 2);
+            using (var store = new StorageMetadataStore(directory, 455, deleteOnDispose: false))
+            {
+                byte[] pendingPayload = ProviderMutationCodec.Encode(pendingMutation);
+                var incoming = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = local,
+                    SenderPeer = sender,
+                    SenderEpoch = 1,
+                    AuthorStreamNodeId = author,
+                    NamespaceId = pendingNamespace,
+                    BatchId = Batch(0x63),
+                    CursorStart = 1,
+                    CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)0x64, 16).ToArray(),
+                    Operations = new[]
+                    {
+                        new MetadataOperation
+                        {
+                            AuthorNodeId = author,
+                            ChangeId = pendingMutation.ChangeId,
+                            OriginAuthorEpoch = pendingMutation.OriginAuthorEpoch,
+                            OriginSequence = pendingMutation.OriginSequence,
+                            Fingerprint = Enumerable.Repeat((byte)0x65, 16).ToArray(),
+                            Payload = pendingPayload,
+                            RelayEligible = true
+                        }
+                    }
+                };
+                store.BeginPendingApply(incoming, Guid.Parse("a4550000-0000-0000-0000-000000000001"));
+                store.FreezeOutbound(scope, local, outboundNamespace, author, new[]
+                {
+                    new MetadataFrozenOperation
+                    {
+                        ChangeId = outboundMutation.ChangeId,
+                        Fingerprint = Enumerable.Repeat((byte)0x66, 16).ToArray(),
+                        Payload = ProviderMutationCodec.Encode(outboundMutation),
+                        OriginAuthorEpoch = 1
+                    }
+                });
+            }
+
+            using var recovered = new StorageMetadataStore(directory, 455, deleteOnDispose: true);
+            Assert.True(recovered.TryBuildLiveRecordReferenceSet(
+                scope, local, pendingNamespace, out HashSet<RecordId> pendingReferences));
+            Assert.Contains(pendingMutation.RecordId, pendingReferences);
+            Assert.True(recovered.TryBuildLiveRecordReferenceSet(
+                scope, local, outboundNamespace, out HashSet<RecordId> outboundReferences));
+            Assert.Contains(outboundMutation.RecordId, outboundReferences);
+            Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
+            Assert.DoesNotContain(pendingMutation.RecordId, outboundReferences);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] EncodeUInt64(ulong value)
     {
         byte[] bytes = new byte[8];
