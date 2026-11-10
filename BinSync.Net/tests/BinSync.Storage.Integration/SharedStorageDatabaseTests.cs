@@ -27,6 +27,7 @@ public sealed class SharedStorageDatabaseTests
                 RecordId = record,
                 FieldId = 0x0101,
                 AuthorNodeId = author,
+                OriginAuthorEpoch = 1,
                 HlcWall = 100,
                 Value = "one"u8.ToArray()
             });
@@ -48,6 +49,7 @@ public sealed class SharedStorageDatabaseTests
                 RecordId = record,
                 FieldId = 0x0102,
                 AuthorNodeId = author,
+                OriginAuthorEpoch = 1,
                 HlcWall = 101,
                 Value = "two"u8.ToArray()
             });
