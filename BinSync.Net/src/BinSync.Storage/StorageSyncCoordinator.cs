@@ -211,9 +211,43 @@ public sealed class StorageSyncCoordinator
         _namespaceId = namespaceId;
         _metadataStore = metadataStore;
         _scopeId = scopeId;
-        if (_metadataStore is not null && _provider is IProviderPublicationMode publicationMode &&
-            publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out _))
-            _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
+        if (_metadataStore is not null && _provider is IProviderPublicationMode publicationMode)
+        {
+            bool hasProviderCutover =
+                publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong providerCutover);
+            bool hasLegacyMetadataCutover = _metadataStore is StorageMetadataStore durableMetadata &&
+                durableMetadata.TryGetProviderPublicationCutover(
+                    _scopeId!, _node.NodeId, _namespaceId, out ulong legacyMetadataCutover);
+
+            if (hasLegacyMetadataCutover)
+            {
+                if (hasProviderCutover && providerCutover != legacyMetadataCutover)
+                    throw new InvalidDataException(
+                        "Legacy Metadata and provider publication cutover markers disagree.");
+
+                if (!hasProviderCutover)
+                {
+                    long nodeOutboxHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+                    ulong metadataOutboundHigh = _metadataStore.GetOutboundHighWatermark(
+                        _scopeId!, _node.NodeId, _namespaceId, _node.NodeId);
+                    if (nodeOutboxHigh < 0 ||
+                        (ulong)nodeOutboxHigh != legacyMetadataCutover ||
+                        metadataOutboundHigh != legacyMetadataCutover)
+                        throw new InvalidDataException(
+                            "Legacy Metadata publication marker does not match the durable Node and outbound watermarks.");
+
+                    // Older releases kept the cutover authority marker in the Metadata
+                    // keyspace. Migrate it into the provider-owned marker only after
+                    // both durable sequence authorities agree; the provider also
+                    // verifies that its local feed is fully acknowledged.
+                    publicationMode.EnableMetadataStoreOwnedPublication(legacyMetadataCutover);
+                    hasProviderCutover = true;
+                }
+            }
+
+            if (hasProviderCutover)
+                _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
+        }
     }
 
     /// <summary>Attach the same-partition signed namespace-GC replay fence to durable metadata.</summary>
