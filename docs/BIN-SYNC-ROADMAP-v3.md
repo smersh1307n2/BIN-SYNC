@@ -2575,3 +2575,10 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - The first real host-adapter build exposed a compile error in `FldProviderSnapshotPersistence.cs`: it imported `Fld1.Run.Writer`, while `RunBuilder` is declared in `Fld1.Run.Builder`. The FLD-DB branch was corrected in commit `9471656f92cc68b9b5464e9c6fc3af85f7b7a00c`.
 - BIN-SYNC core, Windows, fuzz/lab and v3.1 vector jobs passed in the same run; the host-adapter build failed at the above compile error, so integration tests were not reached. A fresh cross-repository run is required against the corrected FLD-DB head before claiming the adapter builds or the end-to-end link works.
 - No physical tombstone/Run GC was enabled by this fix.
+
+
+### 1.71 — First FLD host-adapter compile diagnostics and source corrections (2026-11-10)
+
+- With `FLD_DB_READ_TOKEN` configured, the cross-repository job checked out the private FLD-DB branch successfully. The first real compile exposed four independent source errors in FLD-DB: incorrect `RunBuilder` namespace (fixed in `9471656`), passing `HashSet<ushort>.Add` as a void callback, positional arguments after named `binaryVersion`, and references to a missing `TryFsyncDirectory` helper.
+- Corrected the remaining three compile errors in FLD-DB commits `bc605bd`, `bc56f80`, and `4aeb843`: adapt the callback with a void statement lambda, explicitly name optional RunHeader arguments, and use the existing durable `StorageDirectorySync.Flush` primitive for staging-directory durability.
+- FLD-DB CI was automatically re-queued for these source changes. The cross-repository BIN-SYNC host-adapter build has not yet been rerun against the corrected FLD-DB head; no integration pass is claimed.
