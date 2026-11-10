@@ -1,3 +1,12 @@
+## 1.49. T-pass: prove peer retirement retains receipts for rejoin replay — 2026-11-10
+
+- [x T] Renamed and corrected `Retiring_peer_epoch_preserves_receipts_and_fences_only_the_target_namespace`. It proves `RetireInterestedPeer` fences the old transport incarnation without eagerly deleting its durable receipt; replay under the new transport epoch is recognized as the same duplicate.
+- [x T] The target namespace's old-epoch replay is rejected, while its new-epoch replay reuses the receipt; a second namespace retains its independent receipt/fence state.
+- [x T] Exact BIN-SYNC head `aa88175202148bf140508683f218a821b175615d`: Core 678/678 on Linux and Windows; Storage Integration 193/193 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] Receipt-GC eligibility with and without external receipt references, current/rejoined roster proof, missing/regressed fences, PendingApply, cursor gaps and signed origin-frontier coverage remains open. `IsReceiptGcProofEnabled` stays hard false, so no receipt deletion is authorized.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.48. T-pass: verify offline roster catch-up transitions preserve GC safety fences — 2026-11-10
 
 - [x T] Extended `Offline_rejoin_accepts_signed_roster_gap_but_resets_every_gc_horizon` to exercise Retired → Joining → Active across signed generation gaps, including rejection when the rejoining epoch does not advance beyond the retired fence or a Joining → Active promotion regresses its epoch.
@@ -179,7 +188,7 @@
 - [x C] `CompactReceipts` now requires the durable retired-epoch fence, confirms it against the accepted roster/current peer epoch, requires the signed origin retention checkpoint, and retains the existing PendingApply/host-reference checks. Receive cursors and digest chains remain the replay fence.
 - [x C] Old receipts remain eligible for later GC after a peer rejoins under a newer transport epoch; their external references are no longer bypassed by the peer-retirement path. The byte audit now distinguishes receipt-key `SenderEpoch` (wire issuer/author epoch) from value `TransportPeerEpoch` (authenticated transport incarnation).
 - [x C] Re-audited all Storage source call sites: `CompactReceipts` is the only durable inbox-receipt deletion path. It requires non-zero stored author/epoch/sequence/transport identity, a durable retirement fence, an accepted roster epoch fence, receive cursor + digest-chain retention, no `PendingApply`, no host receipt reference, and a signed origin retention checkpoint. The receipt value's `OriginSequence` is the last strictly increasing operation sequence in its single-author/single-author-epoch batch; no SenderEpoch/OriginEpoch substitution exists. `IsReceiptGcProofEnabled` remains hard false, so physical deletion is still unreachable in production.
-- [~ T] Update retirement tests to assert receipts are retained immediately after fencing; test GC with/without external receipt references, after rejoin, with missing/regressed fences, PendingApply, cursor gaps, and origin-frontier coverage. No build/tests run in this C slice.
+- [x T] Retirement now proves old-epoch fencing without eager receipt deletion and successful duplicate replay under the new transport epoch; namespace isolation is covered in §1.49. [~ T] Receipt-GC eligibility with external references, current/rejoined roster proof, missing/regressed fences, PendingApply, cursor gaps and signed origin-frontier coverage remains open; the proof switch remains hard false.
 
 ## 1.23.3. C-pass: honor signed roster catch-up across generation gaps — 2026-11-10
 
