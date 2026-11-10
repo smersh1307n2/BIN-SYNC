@@ -18,12 +18,27 @@ public sealed partial class Node
             _metadataStoreOwnedPublicationFences.Add(namespaceId);
 
             // The Metadata Store becomes the active ChangeId authority after cutover.
-            // Keep the compact legacy Node ledger as a read-only safety shadow: older
-            // entries may no longer have payloads, so their origin-bound digest cannot
-            // be compared with the Metadata semantic fingerprint. Do not destroy that
-            // evidence until a versioned dual-fingerprint migration proves equivalence.
-            // New Node-owned writes/receives are fenced below; SeenChanges remains a
-            // separate WAL-replay concern and is intentionally untouched.
+            // The coordinator first migrates each legacy origin-bound digest into the
+            // same durable ChangeLedger row, then clears this duplicate Node projection.
+            // SeenChanges remains a separate WAL-replay concern and is intentionally untouched.
+        }
+    }
+
+    internal int DiscardMetadataStoreOwnedChangeLedgerShadow(int namespaceId)
+    {
+        ValidateNamespaceId(namespaceId);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (!_metadataStoreOwnedPublicationFences.Contains(namespaceId))
+                throw new InvalidOperationException("The Node ChangeId ledger can only be discarded after the Metadata Store publication fence is active.");
+
+            var keys = GlobalChangeLedger.Keys
+                .Where(key => key.Ns == namespaceId)
+                .ToArray();
+            foreach (var key in keys)
+                GlobalChangeLedger.Remove(key);
+            return keys.Length;
         }
     }
 

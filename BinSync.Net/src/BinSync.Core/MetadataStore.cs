@@ -76,6 +76,25 @@ public interface IMetadataChangeIdentityStore
         out OperationOrigin origin, out bool isLocalOutbound);
 }
 
+/// <summary>
+/// Optional migration capability that preserves the old origin-bound Node ledger digest
+/// inside the same durable ChangeId row. The legacy digest is not interchangeable with
+/// the semantic fingerprint; it is retained as a versioned alias until that ChangeId is GC'd.
+/// </summary>
+public readonly record struct MetadataLegacyNodeLedgerFingerprint(
+    BatchId ChangeId, ReadOnlyMemory<byte> Fingerprint);
+
+public interface IMetadataLegacyNodeLedgerStore
+{
+    /// <summary>
+    /// Idempotently attaches legacy Node digests to existing ChangeLedger rows. Implementations
+    /// should commit bounded batches atomically; a repeated identical alias is a no-op and a
+    /// conflicting alias must fail closed.
+    /// </summary>
+    void StoreLegacyNodeLedgerFingerprints(string scopeId, NodeId localReplica, int namespaceId,
+        IReadOnlyList<MetadataLegacyNodeLedgerFingerprint> fingerprints);
+}
+
 public interface IMetadataStoreSnapshot : IDisposable
 {
     ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId);

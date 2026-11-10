@@ -1377,7 +1377,10 @@ public sealed class StorageSyncCoordinator
             // Metadata Store is the only delivery source after cutover. Remove every
             // retained Node payload projection (local Outbox and legacy relay rows),
             // while preserving each author stream's sequence watermark and replay IDs.
-            DiscardNodeOutboxPayloadsAfterProviderCutover();
+            // Ownership and relay coverage were proved before the durable marker. The
+            // provider snapshot may remove pending remote IDs from Node's legacy ledger,
+            // so do not repeat that preflight after the snapshot has intentionally changed it.
+            DiscardNodeOutboxPayloadsAfterProviderCutover(ownershipAlreadyValidated: true);
             persistNode(_node);
         }
     }
@@ -1645,15 +1648,16 @@ public sealed class StorageSyncCoordinator
     /// </summary>
     private void ValidateRetainedNodeOutboxOwnership()
     {
-        if (_metadataStore is not IMetadataChangeIdentityStore changeIdentityStore)
+        if (_metadataStore is not IMetadataChangeIdentityStore changeIdentityStore ||
+            _metadataStore is not IMetadataLegacyNodeLedgerStore legacyLedgerStore)
             throw new NotSupportedException(
-                "Provider-authoritative cutover requires the durable all-route ChangeId identity index.");
+                "Provider-authoritative cutover requires the durable all-route ChangeId identity index and legacy Node digest migration capability.");
 
         // Node's legacy ledger retains compact origin-bound identities even after
-        // Outbox payload ACK. Metadata Store must already know every such ChangeId
-        // before Node Outbox payloads can be discarded. The legacy digest and Metadata
-        // semantic fingerprint use different domains; retained payloads below are
-        // compared exactly, while compacted history is checked for durable identity presence.
+        // Outbox payload ACK. Move each digest into the same Metadata ChangeLedger row
+        // before clearing the Node projection. Retained payloads are checked exactly
+        // below; compacted history cannot be re-hashed, so its original digest is
+        // preserved as a versioned alias rather than compared across hash domains.
         foreach (var pair in _node.GlobalChangeLedger.Where(pair => pair.Key.Ns == _namespaceId))
         {
             if (!pair.Value.IsKnown ||
@@ -1744,11 +1748,36 @@ public sealed class StorageSyncCoordinator
                 if (entries.Count < pageSize) break;
             }
         }
+
+        // Persist aliases only after every retained payload and relay route has passed
+        // exact validation. Bounded atomic batches avoid one Storage commit per ChangeId;
+        // a crash midway is idempotent because Node retains its complete ledger.
+        const int aliasBatchSize = 4096;
+        var aliasBatch = new List<MetadataLegacyNodeLedgerFingerprint>(aliasBatchSize);
+        foreach (var pair in _node.GlobalChangeLedger.Where(pair => pair.Key.Ns == _namespaceId))
+        {
+            aliasBatch.Add(new MetadataLegacyNodeLedgerFingerprint(
+                pair.Key.ChangeId, pair.Value.Fingerprint.ToArray()));
+            if (aliasBatch.Count == aliasBatchSize)
+            {
+                legacyLedgerStore.StoreLegacyNodeLedgerFingerprints(
+                    _scopeId!, _node.NodeId, _namespaceId, aliasBatch);
+                aliasBatch.Clear();
+            }
+        }
+        if (aliasBatch.Count != 0)
+            legacyLedgerStore.StoreLegacyNodeLedgerFingerprints(
+                _scopeId!, _node.NodeId, _namespaceId, aliasBatch);
     }
 
-    private void DiscardNodeOutboxPayloadsAfterProviderCutover()
+    private void DiscardNodeOutboxPayloadsAfterProviderCutover(bool ownershipAlreadyValidated = false)
     {
-        ValidateRetainedNodeOutboxOwnership();
+        if (!ownershipAlreadyValidated)
+            ValidateRetainedNodeOutboxOwnership();
+        // Every namespace ledger entry now has its legacy digest durably co-located
+        // with the semantic identity in Metadata Store. Only now may the duplicate
+        // Node projection be removed; the caller checkpoints this state immediately.
+        _node.DiscardMetadataStoreOwnedChangeLedgerShadow(_namespaceId);
         foreach (NodeId author in _node.ReadOutboxAuthors(_namespaceId))
         {
             long highWatermark = _node.GetOutboxHighWatermark(_namespaceId, author);
@@ -2173,18 +2202,26 @@ public sealed class StorageSyncCoordinator
                 afterIndex = page.NextIndex;
             }
 
-            _node.RestoreProviderSnapshot(_namespaceId, mutations, pendingRemoteChangeIds);
             if (_provider is IProviderPublicationMode publicationMode &&
                 publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong cutoverNodeHigh))
             {
                 long currentNodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
                 if (currentNodeHigh < 0 || (ulong)currentNodeHigh != cutoverNodeHigh)
                     throw new InvalidOperationException("Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+
+                // A prior-version cutover marker may be recovered with a Node snapshot
+                // that predates the in-memory fence. Re-establish it before migrating
+                // and clearing the complete legacy ledger; RestoreProviderSnapshot
+                // below removes pending remote IDs and must not erase their old digests
+                // before the Metadata aliases have been persisted.
+                _node.EnableMetadataStoreOwnedPublicationFence(_namespaceId);
                 // The provider snapshot is authoritative after cutover. No Node
                 // Outbox payload (local or legacy relay) may be revived from a stale
                 // checkpoint; Metadata Store owns every retained delivery stream.
                 DiscardNodeOutboxPayloadsAfterProviderCutover();
             }
+
+            _node.RestoreProviderSnapshot(_namespaceId, mutations, pendingRemoteChangeIds);
             // Persist the clean provider-derived base before replaying pending intents.
             // If recovery is interrupted, the same durable intents can safely replay.
             persistNode(_node);

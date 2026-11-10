@@ -10,7 +10,7 @@ namespace BinSync.Storage;
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
-public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataChangeIdentityStore, IMetadataFullReplaceCommitGuard
+public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard
 {
     private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
@@ -1320,13 +1320,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)item.Key.NamespaceId));
             item.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            byte[] value = new byte[45];
-            item.Value.Fingerprint.CopyTo(value, 0);
-            var provenance = item.Value.Provenance.EnsureValid();
-            provenance.AuthorNodeId.WriteTo(value.AsSpan(16));
-            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), provenance.AuthorEpoch);
-            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), provenance.Sequence);
-            value[44] = item.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            byte[] value = EncodeChangeLedgerValue(item.Value);
             writes.Add((StorageKey(root, 3, suffix), value));
         }
 
@@ -1699,13 +1693,7 @@ private static bool ValidateIncomingBatchForStaging(
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            byte[] value = new byte[45];
-            pair.Value.Fingerprint.CopyTo(value, 0);
-            var provenance = pair.Value.Provenance.EnsureValid();
-            provenance.AuthorNodeId.WriteTo(value.AsSpan(16));
-            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), provenance.AuthorEpoch);
-            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), provenance.Sequence);
-            value[44] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            byte[] value = EncodeChangeLedgerValue(pair.Value);
             writes.Add((StorageKey(root, 3, suffix), value));
         }
         foreach (var pair in newRelay)
@@ -2101,6 +2089,85 @@ private static bool ValidateIncomingBatchForStaging(
             origin = ledger.Provenance;
             isLocalOutbound = ledger.IsLocalOutbound;
             return true;
+        }
+    }
+
+    public void StoreLegacyNodeLedgerFingerprints(
+        string scopeId, NodeId localReplica, int namespaceId,
+        IReadOnlyList<MetadataLegacyNodeLedgerFingerprint> fingerprints)
+    {
+        ArgumentNullException.ThrowIfNull(fingerprints);
+        if (fingerprints.Count == 0)
+            return;
+        if (fingerprints.Count > 4096)
+            throw new ArgumentOutOfRangeException(nameof(fingerprints), "Legacy Node digest commits are bounded to 4096 ChangeIds.");
+
+        var seen = new HashSet<BatchId>(fingerprints.Count);
+        foreach (MetadataLegacyNodeLedgerFingerprint item in fingerprints)
+        {
+            if (item.ChangeId.IsZero || !seen.Add(item.ChangeId))
+                throw new ArgumentException("Legacy Node digest batch contains a zero or duplicate ChangeId.", nameof(fingerprints));
+            if (item.Fingerprint.Length != 16)
+                throw new ArgumentException("Legacy Node ledger fingerprint must be exactly 16 bytes.", nameof(fingerprints));
+            bool nonZero = false;
+            foreach (byte value in item.Fingerprint.Span) nonZero |= value != 0;
+            if (!nonZero)
+                throw new ArgumentException("Legacy Node ledger fingerprint cannot be zero.", nameof(fingerprints));
+        }
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out PartitionState? state))
+                throw new InvalidOperationException("Cannot attach legacy Node digests to a missing Metadata Store partition.");
+
+            var updates = new List<(LedgerKey LedgerKey, ChangeLedgerValue Value, byte[] StorageKey, byte[] Encoded)>(
+                fingerprints.Count);
+            byte[] root = PartitionRoot(partitionKey);
+            foreach (MetadataLegacyNodeLedgerFingerprint item in fingerprints)
+            {
+                var ledgerKey = new LedgerKey(namespaceId, item.ChangeId);
+                if (!state.ChangeLedger.TryGetValue(ledgerKey, out ChangeLedgerValue? ledger))
+                    throw new InvalidOperationException("Cannot attach a legacy Node digest to a missing durable ChangeId identity.");
+
+                if (ledger.LegacyNodeLedgerFingerprint is not null)
+                {
+                    if (!ledger.LegacyNodeLedgerFingerprint.AsSpan().SequenceEqual(item.Fingerprint.Span))
+                        throw new InvalidDataException("A ChangeId already has a different legacy Node ledger digest.");
+                    continue;
+                }
+
+                var updated = ledger with { LegacyNodeLedgerFingerprint = item.Fingerprint.ToArray() };
+                byte[] suffix = new byte[18];
+                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+                item.ChangeId.WriteTo(suffix.AsSpan(2));
+                byte[] storageKey = StorageKey(root, 3, suffix);
+                updates.Add((ledgerKey, updated, storageKey, EncodeChangeLedgerValue(updated)));
+            }
+
+            if (updates.Count == 0)
+                return;
+
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != state.StorageCommitSeq)
+                throw new StorageConflictException(state.StorageCommitSeq, actualBaseCommitSeq);
+            foreach (var update in updates)
+                batch.Put(update.StorageKey, update.Encoded);
+            batch.Commit();
+
+            if (ReferenceEquals(state.PersistedEntries, EmptyEntries))
+                state.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+            foreach (var update in updates)
+            {
+                state.ChangeLedger[update.LedgerKey] = update.Value;
+                state.PersistedEntries[Convert.ToHexString(update.StorageKey)] =
+                    (update.StorageKey, update.Encoded);
+            }
+            state.StorageCommitSeq = _storage.LastCommitSeq;
+            state.IsPersisted = true;
         }
     }
 
@@ -3440,12 +3507,9 @@ private static bool ValidateIncomingBatchForStaging(
             byte[] ledgerSuffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, checked((ushort)namespaceId));
             operation.ChangeId.WriteTo(ledgerSuffix.AsSpan(2));
-            byte[] ledgerValue = new byte[45];
-            operation.Fingerprint.CopyTo(ledgerValue, 0);
-            localAuthor.WriteTo(ledgerValue.AsSpan(16));
-            BinaryPrimitives.WriteUInt32LittleEndian(ledgerValue.AsSpan(32), item.OriginAuthorEpoch);
-            BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(36), item.OriginSequence);
-            ledgerValue[44] = 1;
+            byte[] ledgerValue = EncodeChangeLedgerValue(new ChangeLedgerValue(
+                operation.Fingerprint.ToArray(), true, localAuthor,
+                item.OriginAuthorEpoch, item.OriginSequence));
             writes.Add((StorageKey(root, 3, ledgerSuffix), ledgerValue));
         }
 
@@ -3889,12 +3953,7 @@ private static bool ValidateIncomingBatchForStaging(
             byte[] suffix = new byte[18];
             BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-            byte[] value = new byte[45];
-            pair.Value.Fingerprint.CopyTo(value, 0);
-            pair.Value.AuthorNodeId.WriteTo(value.AsSpan(16));
-            BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), pair.Value.OriginAuthorEpoch);
-            BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), pair.Value.OriginSequence);
-            value[44] = pair.Value.IsLocalOutbound ? (byte)1 : (byte)0;
+            byte[] value = EncodeChangeLedgerValue(pair.Value);
             Add(StorageKey(root, 3, suffix), value);
         }
 
@@ -4106,15 +4165,21 @@ private static bool ValidateIncomingBatchForStaging(
                 case 3:
                 {
                     RequireLength(key, 18);
-                    if (row.Value.Length != 45 || row.Value[44] > 1)
+                    if ((row.Value.Length != 45 && row.Value.Length != 61) || row.Value[44] > 1)
                         throw new InvalidDataException("Stored v3 ChangeId ledger value has an invalid length or origin flag.");
+                    byte[]? legacyNodeFingerprint = row.Value.Length == 61
+                        ? row.Value.AsSpan(45, 16).ToArray()
+                        : null;
+                    if (legacyNodeFingerprint is not null && legacyNodeFingerprint.All(value => value == 0))
+                        throw new InvalidDataException("Stored legacy Node ChangeId fingerprint cannot be zero.");
                     state.ChangeLedger.Add(new LedgerKey(
                         BinaryPrimitives.ReadUInt16LittleEndian(key),
                         BatchId.From(key.Slice(2, 16))),
                         new ChangeLedgerValue(row.Value.AsSpan(0, 16).ToArray(), row.Value[44] == 1,
                             NodeId.From(row.Value.AsSpan(16, 16)),
                             BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(32)),
-                            BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(36))));
+                            BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(36)),
+                            legacyNodeFingerprint));
                     break;
                 }
                 case 20:
@@ -4800,10 +4865,28 @@ private static bool ValidateIncomingBatchForStaging(
             && ledger.Provenance == operation.Provenance;
 
 private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound,
-    NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence)
+    NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence,
+    byte[]? LegacyNodeLedgerFingerprint = null)
 {
     public OperationOrigin Provenance => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
         ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
+}
+
+private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
+{
+    var provenance = ledger.Provenance.EnsureValid();
+    byte[]? legacy = ledger.LegacyNodeLedgerFingerprint;
+    if (legacy is not null && (legacy.Length != 16 || legacy.All(value => value == 0)))
+        throw new InvalidDataException("Legacy Node ChangeId fingerprint must be a non-zero 16-byte digest.");
+
+    byte[] value = new byte[legacy is null ? 45 : 61];
+    ledger.Fingerprint.CopyTo(value, 0);
+    provenance.AuthorNodeId.WriteTo(value.AsSpan(16));
+    BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), provenance.AuthorEpoch);
+    BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), provenance.Sequence);
+    value[44] = ledger.IsLocalOutbound ? (byte)1 : (byte)0;
+    legacy?.CopyTo(value, 45);
+    return value;
 }
 
     private sealed class FullReplaceCommitLease : IDisposable
