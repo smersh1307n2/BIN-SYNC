@@ -433,8 +433,8 @@ public sealed class FldDatabaseDataProvider :
         IDisposable lease = _database.AcquireReferenceSnapshotGuard(out FldReferenceSnapshot snapshot);
         if (snapshot.HasSnapshotPin)
         {
-            snapshot.Dispose();
-            lease.Dispose();
+            try { snapshot.Dispose(); }
+            finally { lease.Dispose(); }
             return null;
         }
         return new SnapshotGcLease(snapshot, lease);
@@ -720,10 +720,10 @@ public sealed class FldDatabaseDataProvider :
         {
             FldReferenceSnapshot? snapshot = _snapshot;
             _snapshot = null;
-            snapshot?.Dispose();
             IDisposable? commitLease = _commitLease;
             _commitLease = null;
-            commitLease?.Dispose();
+            try { snapshot?.Dispose(); }
+            finally { commitLease?.Dispose(); }
         }
     }
 
