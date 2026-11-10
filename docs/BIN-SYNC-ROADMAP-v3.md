@@ -1,3 +1,9 @@
+## 1.62. T-pass: verify external GC reference-scan snapshot ownership — 2026-11-10
+
+- [x T] Added `External_gc_reference_scan_owns_snapshot_and_exposes_reference_queries_until_disposed`: all three host-reference query delegates are exercised, the scan disposes its owned immutable snapshot, and queries after disposal fail with `ObjectDisposedException`.
+- [~ T] This is adapter/lifetime coverage, not an end-to-end tombstone-compaction proof. Exact-head CI and local execution remain unverified.
+- [x C] The external reference scanner remains a host-owned snapshot contract; no host database types enter BIN-SYNC and no physical tombstone deletion is enabled.
+
 ## 1.61. T-pass: require all provider snapshot pins to drain before tombstone-GC guard — 2026-11-10
 
 - [x T] Added `Snapshot_gc_guard_waits_for_every_active_snapshot_pin_to_be_released`: one active snapshot blocks `TryAcquireSnapshotGcGuard`; releasing only one of two snapshots still blocks it; releasing both permits acquisition.

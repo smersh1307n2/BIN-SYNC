@@ -88,6 +88,30 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
+    public void External_gc_reference_scan_owns_snapshot_and_exposes_reference_queries_until_disposed()
+    {
+        var snapshot = new MemoryStream();
+        int receiptQueries = 0, changeIdQueries = 0, recordQueries = 0;
+        using var scan = new DelegateApplicationGcReferenceScan(
+            snapshot,
+            default,
+            (_, _, _, _) => { receiptQueries++; return true; },
+            _ => { changeIdQueries++; return true; },
+            (_, _) => { recordQueries++; return true; });
+
+        Assert.True(scan.HasExternalReceiptReference(Node(1), 1, 2, default));
+        Assert.True(scan.HasExternalChangeIdReference(default));
+        Assert.True(scan.HasExternalRecordReference(default, default));
+        Assert.Equal(1, receiptQueries);
+        Assert.Equal(1, changeIdQueries);
+        Assert.Equal(1, recordQueries);
+
+        scan.Dispose();
+        Assert.False(snapshot.CanRead);
+        Assert.Throws<ObjectDisposedException>(() => scan.HasExternalChangeIdReference(default));
+    }
+
+    [Fact]
     public void Local_feed_mappings_remote_receipts_and_current_state_survive_restart()
     {
         string directory = Path.Combine(_root, "restart");
