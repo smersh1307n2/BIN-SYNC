@@ -1,5 +1,7 @@
 using BinSync;
 using BinSync.FldHost;
+using BinSync.Storage;
+using Fld1.Storage.Engine;
 using Fld1.Engine.Db;
 using Xunit;
 
@@ -139,6 +141,93 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             Assert.Equal(value, recovered.Mutation.Value);
             Assert.Equal(1UL, recovered.Sequence);
         }
+    }
+
+    [Fact]
+    public async Task Two_fld_databases_exchange_local_changes_through_binsync_sessions()
+    {
+        const int namespaceId = 7;
+        const string scope = "fld-host-two-node-roundtrip";
+        byte[] authorA = Id(0xA1);
+        byte[] authorB = Id(0xB1);
+        byte[] recordA = Id(0xA2);
+        byte[] recordB = Id(0xB2);
+        byte[] valueA = "from-fld-a"u8.ToArray();
+        byte[] valueB = "from-fld-b"u8.ToArray();
+
+        using var fldA = FldDatabase.Open(Path.Combine(_directory, "fld-a"), (uint)namespaceId, authorA);
+        using var fldB = FldDatabase.Open(Path.Combine(_directory, "fld-b"), (uint)namespaceId, authorB);
+        using var providerA = new FldDatabaseDataProvider(fldA, () => 1);
+        using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
+        using var storageA = StorageDatabase.Open(Path.Combine(_directory, "binsync-a"), 701);
+        using var storageB = StorageDatabase.Open(Path.Combine(_directory, "binsync-b"), 702);
+        using var metadataA = new StorageMetadataStore(storageA);
+        using var metadataB = new StorageMetadataStore(storageB);
+        using var nodeA = new NodeBuilder().WithNodeId(authorA).WithEpoch(1).Build();
+        using var nodeB = new NodeBuilder().WithNodeId(authorB).WithEpoch(1).Build();
+
+        var coordinatorA = new StorageSyncCoordinator(
+            nodeA, providerA, namespaceId, metadataA, scope,
+            remoteBatchCommitStore: new FldRemoteBatchApplyStore(fldA));
+        var coordinatorB = new StorageSyncCoordinator(
+            nodeB, providerB, namespaceId, metadataB, scope,
+            remoteBatchCommitStore: new FldRemoteBatchApplyStore(fldB));
+
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = RecordId.From(recordA),
+            FieldId = 0x0301,
+            HlcWall = 1001,
+            AuthorNodeId = NodeId.From(authorA),
+            KeyEpoch = 1,
+            Value = valueA,
+            ChangeId = BatchId.From(Id(0xA3)),
+            OriginAuthorEpoch = 1
+        });
+        providerB.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = RecordId.From(recordB),
+            FieldId = 0x0301,
+            HlcWall = 1002,
+            AuthorNodeId = NodeId.From(authorB),
+            KeyEpoch = 1,
+            Value = valueB,
+            ChangeId = BatchId.From(Id(0xB3)),
+            OriginAuthorEpoch = 1
+        });
+
+        Assert.Equal(1, coordinatorA.PublishLocalChanges(node => StorageNodePersistence.Save(storageA, node)));
+        Assert.Equal(1, coordinatorB.PublishLocalChanges(node => StorageNodePersistence.Save(storageB, node)));
+
+        var (toA, toB) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+        var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+        await using var sessionB = await acceptTask;
+        await using var sessionA = await connectTask;
+        // Persist negotiated peer aliases before the durable receive-before-ACK path.
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
+
+        Task<BatchResult> receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(
+            sessionB, node => StorageNodePersistence.Save(storageB, node));
+        Assert.True(await sessionA.PushBatchAsync(nodeA, namespaceId));
+        BatchResult resultAtB = await receiveAtB;
+        Assert.Equal(1, resultAtB.Applied);
+        Assert.True(fldB.TryGetBytes(recordA, 0x0301, out byte[]? receivedAtB));
+        Assert.Equal(valueA, receivedAtB);
+
+        Task<BatchResult> receiveAtA = coordinatorA.ReceiveBatchBeforeAckAsync(
+            sessionA, node => StorageNodePersistence.Save(storageA, node));
+        Assert.True(await sessionB.PushBatchAsync(nodeB, namespaceId));
+        BatchResult resultAtA = await receiveAtA;
+        Assert.Equal(1, resultAtA.Applied);
+        Assert.True(fldA.TryGetBytes(recordB, 0x0301, out byte[]? receivedAtA));
+        Assert.Equal(valueB, receivedAtA);
+
+        Assert.True(providerA.TryReadCurrent(RecordId.From(recordB), 0x0301, out ProviderMutation? currentA));
+        Assert.Equal(valueB, currentA!.Value);
+        Assert.True(providerB.TryReadCurrent(RecordId.From(recordA), 0x0301, out ProviderMutation? currentB));
+        Assert.Equal(valueA, currentB!.Value);
     }
 
     private static byte[] Id(byte first)

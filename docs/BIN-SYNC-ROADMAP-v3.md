@@ -1,3 +1,11 @@
+## 1.66. T-pass: add two-FLD-node BIN-SYNC session round-trip — 2026-11-10
+
+- [x T] Added an end-to-end integration scenario with two independent FLD databases, two BIN-SYNC Nodes, independent durable Storage/Metadata stores and a real paired `SyncSession`.
+- [x T] Each side appends one local FLD Outbox mutation, freezes it through `StorageSyncCoordinator.PublishLocalChanges`, transfers it over the session, and receives/applies the opposite peer's batch through `ReceiveBatchBeforeAckAsync` plus the exact `FldRemoteBatchApplyStore`.
+- [x T] Assertions cover both FLD database values and both provider current-state projections after bidirectional exchange.
+- [~ T] Exact-head execution is pending. The cross-repository test gate remains skipped until `FLD_DB_READ_TOKEN` is configured; local machines remain offline.
+- [x C] This is the first test that exercises the complete local-FLD-Outbox → BIN-SYNC session → remote-FLD-WAL path in both directions. Restart/reconnect and crash-boundary coverage remain separate.
+
 ## 1.65. T-pass: cover FLD local Outbox feed identity through the host adapter — 2026-11-10
 
 - [x T] Added `Local_fld_outbox_feed_preserves_stable_change_identity_across_reopen`: append a local FLD mutation through `FldDatabaseDataProvider`, read the bounded provider feed, and verify the stable ChangeId, local author, author epoch, deferred origin sequence and payload.
