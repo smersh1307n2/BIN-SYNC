@@ -1096,17 +1096,10 @@ The following is a test plan only; no tests are run in this C pass.
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Historical implementation checkpoint: `2f75b266c7c2d720d87b106573182393d5d15ea1` (exact-head CI green at that time). Current C-pass HEAD is `0dac1c3cf7a5fd8e740f101ffbbee93bbae16c7e`; exact-head CI has not been run for the current C-pass.
-- BinSync.Net: Core 662/662; Fuzz/Lab SUCCESS; Storage Integration 168/168 on Ubuntu, Windows and macOS.
-- FLD-DB `fix/crash-consistency-outbox` HEAD: `1f5c2528767e575bfb925a19792c69b6ffb1027e` (not modified during this BIN-SYNC pass).
-- Backup branches verified in both repositories: `backup/pre-autonomous-roadmap-v3-2026-11-08`, `backup/bin-sync-storage-gc-receipt-2026-11-08`, `backup/pre-final-bin-sync-storage-2026-11-08`, `backup/post-storage-fault-injection-2026-11-08`.
-
-### FLD-DB: fix/crash-consistency-outbox
-
-- HEAD: `1f5c2528767e575bfb925a19792c69b6ffb1027e`.
-- Generic Storage engine, WAL/recovery/checkpoint foundations, FLD field layer, Outbox and remote APPLY are present.
-- Two-DLL architecture is documented; extraction/contract completion and multi-application process model remain release gates.
-- Re-run cross-repository integration CI after v3 contracts are aligned.
+- Current branch HEAD: `d2a1440ca07ea40beb93dd1648a302ecadbe32f8`. Exact code/test checkpoint `1a7457895e3e05306fe695e043e371c9ae403d95` passed run `42927171426`: Linux/Windows Core 678/678, Fuzz/Lab 31/31, signed control-plane vectors, FLD Run/WAL/Engine 26/17/61 and FLD host integration 8/8. The documentation-only HEAD run is in progress.
+- FLD-DB `fix/crash-consistency-outbox` current HEAD: `fc205776c19887fa159e034cb1b78f2dbdb9a84c`; last source/test checkpoint `0f8f9740e51d58088d7b8590435cadd1c8b0e6b8` passed the cross-repository Run/WAL/Engine/host gate. The new direct-mode cross-process ownership test at `fc20577` awaits execution.
+- Runtime architecture is physically two DLLs: `Fld1.Storage.dll` + `Fld1.Database.dll`, with Database → Storage only. Direct embedded mode has one owning process and a cross-process writer fence. The Shared Engine Host/IPC/SHM multi-application mode is still a release gate, not an implemented feature.
+- Existing backup branches remain available; do not create extra working branches during this phase.
 
 ## 3. Execution checklist
 
@@ -1155,7 +1148,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x] Freeze ChangeId + immutable Origin + payload into Metadata Store atomically; provider source-feed ACK follows durable freeze and Node checkpoint persistence.
 - [x] Freeze replay is idempotent when metadata commit succeeds but provider ACK fails; frozen ChangeIds are recognized and only the later unfrozen suffix is coalesced/published.
 - [x C] The optional FLD host adapter resolves each source ChangeId to the active BIN-SYNC immutable identity and appends the JournalSeq↔OutboxSeq RPM3 mapping; JournalSeq is never used as OriginSequence. [~ T] Verify end-to-end before/after cutover and restart.
-- [ ] Complete Storage/DataProvider/MetadataStore conformance including reopen and crash boundaries.
+- [~ T] Single-process Storage/DataProvider/MetadataStore conformance now covers full FLD/Metadata/Node reopen, metadata-owned sender cursor continuation, PendingApply recovery, duplicate replay/ACK and process kill after FLD commit (BIN-SYNC §1.86). The FLD direct-mode second-process ownership probe is added at FLD-DB `fc20577` and awaits CI. Shared Engine client/host, multi-process concurrent client operations and the remaining WAL/Node/Metadata crash cuts remain open.
 - [x] Storage DLL remains protocol-agnostic; field/HLC/tombstone semantics stay in Database DLL.
 
 ### Phase 4 — Safe GC, independently proven
@@ -2709,3 +2702,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact FLD head `0f8f9740e51d58088d7b8590435cadd1c8b0e6b8` validated by BIN-SYNC commit `1a7457895e3e05306fe695e043e371c9ae403d95`: host adapter build **0 warnings / 0 errors**; FLD Run **26/26**, WAL **17/17**, Engine **61/61**, FLD host integration **8/8**. BIN-SYNC Linux **678/678**, Windows **678/678**, Fuzz/Lab **31/31**, signed control-plane vectors passed. Every job in run `42927171426` succeeded.
 - [x] The draft-origin contract is now consistent end-to-end: epoch-present/sequence-zero drafts survive WAL, RunBuilder, RunVerify and provider snapshot persistence; publication assigns the first sequence; identity-stamp WAL writes and recovery replay the stamp idempotently.
 - [~ T] The first durable metadata-owned sender restart path is now green. Remaining major work is multi-process FLD ownership/locking, process-kill coverage at the remaining WAL/Node/Metadata cut points, and the planned two-DLL separation (Storage DLL independent of FLD Database overlay). Do not enable physical ChangeId/receipt/tombstone/Ghost GC before those invariants are proven.
+
+
+### 1.87 — Direct-mode FLD cross-process ownership probe (2026-11-11)
+
+- [x C] The architecture explicitly distinguishes direct embedded mode (one owning process; all other direct openers fail before manifest/WAL recovery) from Shared-file mode (one Engine Host process plus multiple IPC/SHM clients). Do not weaken `WalWriterFence` to simulate multi-writer access.
+- [x T] Added `FldDatabaseProcessOwnershipTests` to FLD-DB commit `fc205776c19887fa159e034cb1b78f2dbdb9a84c`. A child process opens the real FLD database, commits a value and holds the owner fence; a second process must receive `IOException` when opening the same canonical path. The parent then kills the owner process, reopens the database and verifies the committed value survived abandoned-mutex recovery.
+- [~ T] This test proves the direct-mode exclusion/recovery boundary only. It does **not** implement or claim multiple applications sharing the file. Run it through the cross-repository Engine test gate before beginning Shared Engine implementation.
+- [ ] Shared Engine phase must implement a single host owner, bootstrap/discovery, versioned local IPC framing, bounded request queues, session-generation fencing, durable request identity/result recovery, read-only snapshot lifetime/EBR and two independent client processes. Storage-only clients must not load Database; FLD clients use the Database facade; no third runtime DLL.
