@@ -1,3 +1,11 @@
+## 1.37. T-pass: verify namespace-scoped FULL_REPLACE PendingApply barrier — 2026-11-10
+
+- [x T] Added `Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace`: a durable PendingApply in another namespace does not block the target namespace's FULL_REPLACE lease; a PendingApply in the target namespace rejects the lease, and the acquired host lease is released on rejection. Both pending intents remain durable and isolated.
+- [x T] Exact BIN-SYNC head `ea1d0d1f51fa80c17aee0a3cfbb67b3453d2c8d2`: Core 678/678 on Linux and Windows; Storage Integration 177/177 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
+- [~ T] Remaining §1.21 cases: target-vs-other namespace PendingApply matrix is only one part of the FULL_REPLACE barrier proof. Outbound/relay reservations, ACK-cleared reservations, completed-receipt non-blocking, missing capability/guard, typed lease identity mismatch and concurrent Metadata writers remain open.
+- [~ T] The `FldBinSyncHost` cross-repository build remains unverified: the workflow's private FLD-DB checkout/build steps are skipped when `FLD_DB_READ_TOKEN` is absent. A green wrapper job is not a successful host-adapter build.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; this test does not authorize physical deletion.
+
 ## 1.23.14. C-pass closeout: transition v3/v3.1 implementation to exact-head T-pass — 2026-11-10
 
 - [x C] The current v3/v3.1 implementation track is complete through the latest integration phases: provider publication/cutover, host scheduling, Metadata-authoritative receive, FULL_REPLACE sender recovery and receiver staging, generic Storage blobs, provider snapshot durability, and API/source/byte audits. Earlier `[~ C]` items in the chronological history are superseded by their later completion records; they are not active implementation blockers.
