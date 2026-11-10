@@ -2464,6 +2464,40 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId));
     }
 
+    [Fact]
+    public void Full_replace_commit_guard_requires_exact_namespace_gc_binding_and_releases_host_lease()
+    {
+        const string scope = "full-replace-gc-binding";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-gc-binding"), 482);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(87);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        Assert.Throws<NotSupportedException>(() =>
+            coordinator.AcquireFullReplaceCommitGuard(() =>
+            {
+                Interlocked.Increment(ref hostAcquires);
+                return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+            }));
+        Assert.Equal(0, hostAcquires);
+        Assert.Equal(0, hostReleases);
+
+        var wrongScopeStore = new StorageNamespaceGcStore(storage, scope + "-wrong", local.NodeId);
+        coordinator.AttachNamespaceGcGuard(wrongScopeStore, trust);
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.AcquireFullReplaceCommitGuard(() =>
+            {
+                Interlocked.Increment(ref hostAcquires);
+                return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+            }));
+        Assert.Equal(1, hostAcquires);
+        Assert.Equal(1, hostReleases);
+    }
+
     private sealed class CallbackLease : IDisposable
     {
         private Action? _onDispose;
