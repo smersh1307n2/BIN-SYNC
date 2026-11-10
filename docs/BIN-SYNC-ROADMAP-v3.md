@@ -2582,3 +2582,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - With `FLD_DB_READ_TOKEN` configured, the cross-repository job checked out the private FLD-DB branch successfully. The first real compile exposed four independent source errors in FLD-DB: incorrect `RunBuilder` namespace (fixed in `9471656`), passing `HashSet<ushort>.Add` as a void callback, positional arguments after named `binaryVersion`, and references to a missing `TryFsyncDirectory` helper.
 - Corrected the remaining three compile errors in FLD-DB commits `bc605bd`, `bc56f80`, and `4aeb843`: adapt the callback with a void statement lambda, explicitly name optional RunHeader arguments, and use the existing durable `StorageDirectorySync.Flush` primitive for staging-directory durability.
 - FLD-DB CI was automatically re-queued for these source changes. The cross-repository BIN-SYNC host-adapter build has not yet been rerun against the corrected FLD-DB head; no integration pass is claimed.
+
+
+### 1.72 — Host adapter compile passes; draft-origin WAL contract aligned (2026-11-10)
+
+- The cross-repository host adapter now compiles successfully against the current FLD-DB branch. The first adapter test run then exposed a real contract mismatch: FLD local drafts intentionally persist `OriginAuthorEpoch != 0` with `OriginSequence == 0` until BIN-SYNC freezes/publishes the operation, while the GROUP_COMMIT WAL codec incorrectly rejected that state.
+- Corrected the FLD GROUP_COMMIT encoder and decoder to permit the documented unpublished-draft state and continue rejecting the invalid sequence-without-epoch state. FLD-DB commit: `398802f`.
+- Added an FLD WAL recovery regression test for a local identity draft with an unassigned origin sequence: `881a8f8`.
+- Fixed BIN-SYNC host adapter analyzer CA2014 by moving the 16-byte stack buffer outside the loop: `a5f8419`.
+- At the same source revision, the host adapter build passed; its tests had 2 failures caused by the WAL draft-origin invariant above. Revalidation against FLD-DB commit `398802f` is pending. The separate durable provider integration workflow passed on Ubuntu; Windows and macOS are still running/pending at the time of this note. No end-to-end FLD/BIN-SYNC pass is claimed yet.
