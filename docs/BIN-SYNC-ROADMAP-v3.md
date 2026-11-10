@@ -1,3 +1,9 @@
+## 1.17. Cross-repository C-pass: persisted FLD snapshot pins block ChangeId/record GC — 2026-11-10
+
+- [x C] Audited the FLD host reference scanner against v3.1 §1 invariant 5. It previously indexed dirty state, unacknowledged Outbox and ApplyJournal but omitted active and persisted immutable ProviderSnapshot generations.
+- [x C] FLD-DB now makes every ChangeId/RecordId reference query fail closed while an in-memory or persisted snapshot generation remains. The host must recover sender token state and prune inactive generations before those horizons can advance; receipt references remain independent.
+- [~ T] Verify active/restarted snapshot pins, prune/release, crash-left directory behavior and receipt-horizon independence. No build/test was run in this C slice; all physical GC flags remain false.
+
 ## 1.16. Cross-repository C-pass: validate FLD snapshot Run semantics before watermark acceptance — 2026-11-10
 
 - [x C] Audited FLD-DB `FldDatabase.TryGetProviderSnapshotWatermark` and its persisted Run validation paths. Blob SHA-256/page integrity alone did not prove that the immutable bytes were a valid FLD Run in the expected namespace.
