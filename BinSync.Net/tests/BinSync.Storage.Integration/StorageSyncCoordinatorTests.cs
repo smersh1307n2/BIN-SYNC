@@ -3367,6 +3367,129 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public void Provider_cutover_recovers_after_crash_between_4096_and_final_legacy_alias_batches()
+    {
+        const string scope = "legacy-alias-crash-between-batches";
+        const ulong partitionId = 495;
+        const int operationCount = 4097;
+        string directory = Path.Combine(_root, scope);
+        NodeId localId;
+        int seenChangesBeforeCutover;
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var provider = new StorageDataProvider(storage))
+        using (var metadata = new StorageMetadataStore(storage))
+        using (var local = NewNode(107))
+        {
+            localId = local.NodeId;
+            for (int i = 1; i <= operationCount; i++)
+            {
+                RecordId record = RecordId.From(new Guid(i + 5000, 0, 0, new byte[8]).ToByteArray());
+                Assert.True(local.WriteField(1, record, 0x08A6,
+                    BitConverter.GetBytes(i), new Hlc(16000UL + (ulong)i, 0)));
+            }
+
+            var entries = new List<OutboxEntry>(operationCount);
+            long afterSequence = 0;
+            while (entries.Count < operationCount)
+            {
+                IReadOnlyList<OutboxEntry> page =
+                    local.ReadOutboxEntries(1, local.NodeId, afterSequence, 1024);
+                Assert.NotEmpty(page);
+                entries.AddRange(page);
+                afterSequence = page[^1].Seq;
+            }
+            Assert.Equal(operationCount, entries.Count);
+            seenChangesBeforeCutover = local.SeenChanges.Count;
+            Assert.Equal(operationCount, seenChangesBeforeCutover);
+
+            var frozen = new MetadataFrozenOperation[entries.Count];
+            for (int i = 0; i < entries.Count; i++)
+            {
+                OutboxEntry entry = entries[i];
+                object operation = Ops.DecodeOp(entry.Payload).Op;
+                Digest16 semanticFingerprint = ChangeIdentity.Fingerprint(
+                    1, entry.RecordId, entry.OpKind, operation, entry.AuthorNodeId, entry.CausalDeps);
+                frozen[i] = new MetadataFrozenOperation
+                {
+                    ChangeId = entry.ChangeId,
+                    Fingerprint = semanticFingerprint.ToArray(),
+                    Payload = entry.Payload.ToArray(),
+                    OriginAuthorEpoch = entry.OriginAuthorEpoch,
+                    OriginSequence = entry.OriginSequence,
+                    HlcWall = 16000UL + (ulong)i + 1,
+                    HlcLogical = 0
+                };
+            }
+            metadata.FreezeOutbound(scope, local.NodeId, 1, local.NodeId, frozen);
+            StorageNodePersistence.Save(storage, local);
+
+            // Reproduce the exact durable state at the boundary between the
+            // coordinator's first 4096-alias commit and its final one-alias commit.
+            // The process is terminated immediately after this first atomic batch.
+            var ledgerEntries = local.GlobalChangeLedger
+                .Where(pair => pair.Key.Ns == 1)
+                .ToArray();
+            Assert.Equal(operationCount, ledgerEntries.Length);
+            var firstBatch = ledgerEntries.Take(4096)
+                .Select(pair => new MetadataLegacyNodeLedgerFingerprint(
+                    pair.Key.ChangeId, pair.Value.Fingerprint.ToArray()))
+                .ToArray();
+            metadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, firstBatch);
+            var firstConflict = new MetadataLegacyNodeLedgerFingerprint(
+                firstBatch[0].ChangeId, Enumerable.Repeat((byte)0xA7, 16).ToArray());
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { firstConflict }));
+        }
+
+        // Reopen after the first batch is durable but before the 4097th alias exists.
+        using (var reopenedStorage = StorageDatabase.Open(directory, partitionId))
+        using (var reopenedProvider = new StorageDataProvider(reopenedStorage))
+        using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+        using (var reopenedNode = StorageNodePersistence.Load(reopenedStorage, localId))
+        {
+            Assert.Equal(operationCount, reopenedNode.GlobalChangeLedger.Count);
+            Assert.Equal(seenChangesBeforeCutover, reopenedNode.SeenChanges.Count);
+            var first = reopenedNode.GlobalChangeLedger
+                .Where(pair => pair.Key.Ns == 1).First();
+            var last = reopenedNode.GlobalChangeLedger
+                .Where(pair => pair.Key.Ns == 1).Last();
+            Assert.Throws<InvalidDataException>(() =>
+                reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, localId, 1,
+                    new[] { new MetadataLegacyNodeLedgerFingerprint(
+                        first.Key.ChangeId, Enumerable.Repeat((byte)0xA8, 16).ToArray()) }));
+
+            var coordinator = new StorageSyncCoordinator(
+                reopenedNode, reopenedProvider, 1, reopenedMetadata, scope);
+            coordinator.EnableMetadataStoreOwnedPublication(node =>
+                StorageNodePersistence.Save(reopenedStorage, node));
+
+            Assert.DoesNotContain(reopenedNode.GlobalChangeLedger.Keys, key => key.Ns == 1);
+            Assert.Equal(seenChangesBeforeCutover, reopenedNode.SeenChanges.Count);
+            Assert.Throws<InvalidDataException>(() =>
+                reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, localId, 1,
+                    new[] { new MetadataLegacyNodeLedgerFingerprint(
+                        last.Key.ChangeId, Enumerable.Repeat((byte)0xA9, 16).ToArray()) }));
+        }
+
+        // A second restart must treat the completed marker and every alias as
+        // authoritative and keep the cutover idempotent.
+        using (var finalStorage = StorageDatabase.Open(directory, partitionId))
+        using (var finalProvider = new StorageDataProvider(finalStorage))
+        using (var finalMetadata = new StorageMetadataStore(finalStorage))
+        using (var finalNode = StorageNodePersistence.Load(finalStorage, localId))
+        {
+            var coordinator = new StorageSyncCoordinator(finalNode, finalProvider, 1, finalMetadata, scope);
+            coordinator.EnableMetadataStoreOwnedPublication(node =>
+                StorageNodePersistence.Save(finalStorage, node));
+            Assert.DoesNotContain(finalNode.GlobalChangeLedger.Keys, key => key.Ns == 1);
+            Assert.Equal(seenChangesBeforeCutover, finalNode.SeenChanges.Count);
+            Assert.True(((IProviderPublicationMode)finalProvider)
+                .TryGetMetadataStoreOwnedPublicationCutover(out _));
+        }
+    }
+
+    [Fact]
     public void Provider_cutover_migrates_legacy_aliases_across_the_4096_entry_batch_boundary()
     {
         const string scope = "legacy-alias-bounded-batches";
