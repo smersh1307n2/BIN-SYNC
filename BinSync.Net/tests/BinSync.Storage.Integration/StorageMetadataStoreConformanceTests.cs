@@ -298,6 +298,114 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+    [Fact]
+    public void Tombstone_gc_live_reference_scan_covers_pending_apply_and_outbound_payloads_and_fails_closed()
+    {
+        string directory = Path.Combine(_root, "tombstone-live-references");
+        NodeId local = Node(1), sender = Node(2), author = Node(3), peer = Node(4);
+        const string scope = "tombstone-live-references";
+        const int namespaceId = 7;
+
+        ProviderMutation Mutation(byte record, byte change, ulong sequence) => new()
+        {
+            RecordId = RecordId.From(Enumerable.Repeat((byte)record, 16).ToArray()),
+            FieldId = 0x0101,
+            AuthorNodeId = author,
+            ChangeId = Batch(change),
+            OriginAuthorEpoch = 1,
+            OriginSequence = sequence,
+            HlcWall = sequence,
+            Value = new[] { record }
+        };
+
+        try
+        {
+            using var store = new StorageMetadataStore(directory, 454, deleteOnDispose: false);
+            ProviderMutation pendingMutation = Mutation(0x31, 0x41, 1);
+            byte[] pendingPayload = ProviderMutationCodec.Encode(pendingMutation);
+            var incoming = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = 1,
+                AuthorStreamNodeId = author,
+                NamespaceId = namespaceId,
+                BatchId = Batch(0x42),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x43, 16).ToArray(),
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = author,
+                        ChangeId = pendingMutation.ChangeId,
+                        OriginAuthorEpoch = pendingMutation.OriginAuthorEpoch,
+                        OriginSequence = pendingMutation.OriginSequence,
+                        Fingerprint = Enumerable.Repeat((byte)0x44, 16).ToArray(),
+                        Payload = pendingPayload,
+                        RelayEligible = true
+                    }
+                }
+            };
+            store.BeginPendingApply(incoming, Guid.Parse("a4540000-0000-0000-0000-000000000001"));
+
+            Assert.True(store.TryBuildLiveRecordReferenceSet(
+                scope, local, namespaceId, out HashSet<RecordId> pendingReferences));
+            Assert.Contains(pendingMutation.RecordId, pendingReferences);
+
+            ProviderMutation outboundMutation = Mutation(0x32, 0x45, 2);
+            store.FreezeOutbound(scope, local, 8, author, new[]
+            {
+                new MetadataFrozenOperation
+                {
+                    ChangeId = outboundMutation.ChangeId,
+                    Fingerprint = Enumerable.Repeat((byte)0x46, 16).ToArray(),
+                    Payload = ProviderMutationCodec.Encode(outboundMutation),
+                    OriginAuthorEpoch = 1
+                }
+            });
+            Assert.True(store.TryBuildLiveRecordReferenceSet(
+                scope, local, 8, out HashSet<RecordId> outboundReferences));
+            Assert.Contains(outboundMutation.RecordId, outboundReferences);
+            Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
+
+            CompleteBaseline(store, scope, local, peer, 1, namespaceId, author);
+            store.ReserveOutboundBatch(scope, local, peer, 1, namespaceId, author,
+                new MetadataOutboundBatchReservation
+                {
+                    BatchId = Batch(0x47),
+                    IssuerEpoch = 1,
+                    CursorStart = 1,
+                    CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)0x48, 16).ToArray(),
+                    Payload = pendingPayload
+                });
+            Assert.False(store.TryBuildLiveRecordReferenceSet(
+                scope, local, namespaceId, out _));
+
+            store.FreezeOutbound(scope, local, 9, author, new[]
+            {
+                new MetadataFrozenOperation
+                {
+                    ChangeId = Batch(0x49),
+                    Fingerprint = Enumerable.Repeat((byte)0x4A, 16).ToArray(),
+                    Payload = new byte[] { 0x01, 0x02 },
+                    OriginAuthorEpoch = 1
+                }
+            });
+            Assert.False(store.TryBuildLiveRecordReferenceSet(
+                scope, local, 9, out _));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] EncodeUInt64(ulong value)
     {
         byte[] bytes = new byte[8];
