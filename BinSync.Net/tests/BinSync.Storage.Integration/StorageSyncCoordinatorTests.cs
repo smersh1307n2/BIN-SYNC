@@ -806,7 +806,8 @@ public sealed class StorageSyncCoordinatorTests
 
         await Task.WhenAll(
             coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
-            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false));
+            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false))
+            .WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(nodeA.TryGetField(1, record, 0x0106, out var nodeValue));
         Assert.Equal("provider-owned", Encoding.UTF8.GetString(nodeValue!.Value));
@@ -2711,7 +2712,7 @@ public sealed class StorageSyncCoordinatorTests
 
         Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
         Task<bool> send = initiator.PushBatchAsync(sender, 1);
-        await Task.WhenAll(receive, send);
+        await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
 
         Assert.True(provider.TryReadCurrent(record, 0x0824, out var current));
         Assert.Equal("metadata-authoritative", Encoding.UTF8.GetString(current!.Value));
