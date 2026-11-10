@@ -110,6 +110,46 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
+    public void Snapshot_state_apply_accepts_materialized_rows_without_weakening_remote_operation_validation()
+    {
+        string directory = Path.Combine(_root, "snapshot-state-apply");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 92, deleteOnDispose: true);
+            Guid token = Guid.Parse("00000000-0000-0000-0000-000000000392");
+            ProviderMutation snapshotRow = MaterializedMutation(7, 3, 90, 2);
+
+            ProviderApplyReceipt snapshotReceipt = provider.ApplySnapshotBatch(token, new[] { snapshotRow });
+            Assert.False(snapshotReceipt.IsDuplicate);
+            Assert.True(provider.ApplySnapshotBatch(token, new[] { snapshotRow }).IsDuplicate);
+
+            // The same token is independently valid in the DELTA_BATCH receipt domain,
+            // but a state-image row is never accepted as an immutable remote operation.
+            Assert.Throws<ArgumentException>(() => provider.ApplyRemoteBatch(token, new[] { snapshotRow }));
+
+            ProviderMutation published = Mutation(7, 3, 90, 2);
+            ProviderApplyReceipt remoteReceipt = provider.ApplyRemoteBatch(token, new[] { published });
+            Assert.False(remoteReceipt.IsDuplicate);
+            Assert.True(provider.ApplyRemoteBatch(token, new[] { published }).IsDuplicate);
+
+            // A subsequent snapshot replay at the same HLC/content must not erase the
+            // immutable identity already learned from the published operation.
+            Guid replayToken = Guid.Parse("00000000-0000-0000-0000-000000000393");
+            Assert.False(provider.ApplySnapshotBatch(replayToken, new[] { snapshotRow }).IsDuplicate);
+            Assert.True(provider.TryReadCurrent(published.RecordId, published.FieldId, out var current));
+            Assert.Equal(published.Value, current!.Value);
+            Assert.Equal(published.ChangeId, current.ChangeId);
+            Assert.Equal(published.OriginAuthorEpoch, current.OriginAuthorEpoch);
+            Assert.Equal(published.OriginSequence, current.OriginSequence);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Local_feed_change_identity_survives_reopen_and_is_removed_on_ack()
     {
         string directory = Path.Combine(_root, "feed-change-identity");
