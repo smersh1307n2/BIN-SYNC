@@ -58,7 +58,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             protocolStateDelta: new byte[] { 0xA1, 0xB2 },
             mutations: new[] { mutation });
 
-        ulong firstCommit;
+        ulong firstRelayWatermark;
         using (var database = FldDatabase.Open(_directory, namespaceId, localAuthor))
         {
             var adapter = new FldRemoteBatchApplyStore(database);
@@ -70,12 +70,13 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             Assert.Equal(value, stored);
             Assert.Equal(0UL, database.GetOutboxHighWatermark());
             Assert.Empty(database.ReadRelayBatches(issuer, afterJournalSeq: 0, limit: 10));
-            firstCommit = database.LastCommitSeq;
+            firstRelayWatermark = database.GetRelayJournalHighWatermark();
+            Assert.Equal(1UL, firstRelayWatermark);
 
             var duplicate = adapter.ApplyRemoteBatch(batch);
             Assert.True(duplicate.IsDuplicate);
             Assert.Equal(first.BatchFingerprint, duplicate.BatchFingerprint);
-            Assert.Equal(firstCommit, database.LastCommitSeq);
+            Assert.Equal(firstRelayWatermark, database.GetRelayJournalHighWatermark());
         }
 
         using (var reopened = FldDatabase.Open(_directory, namespaceId, localAuthor))
@@ -88,7 +89,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
 
             var duplicateAfterRestart = adapter.ApplyRemoteBatch(batch);
             Assert.True(duplicateAfterRestart.IsDuplicate);
-            Assert.Equal(firstCommit, reopened.LastCommitSeq);
+            Assert.Equal(firstRelayWatermark, reopened.GetRelayJournalHighWatermark());
         }
     }
 
