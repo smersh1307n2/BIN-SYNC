@@ -2274,6 +2274,73 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Single(remaining, intent => intent.Batch.NamespaceId == 2);
     }
 
+    [Fact]
+    public void Full_replace_commit_guard_blocks_pushed_unacknowledged_peer_reservations()
+    {
+        const string scope = "full-replace-pending-reservation";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-pending-reservation"), 479);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(80);
+        using var peer = NewNode(81);
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+
+        metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 7, 1);
+        metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, 7, 1,
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, issuerEpoch: 3) });
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = BatchId.From(Guid.Parse("80000000-0000-0000-0000-000000000001").ToByteArray()),
+            IssuerEpoch = 3,
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0x81, 16).ToArray(),
+            Payload = new byte[] { 0x81, 0x01 }
+        };
+        metadata.ReserveOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1, local.NodeId, reservation);
+        metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 7, 1,
+            local.NodeId, reservation.BatchId);
+
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.AcquireFullReplaceCommitGuard(() =>
+            {
+                Interlocked.Increment(ref hostAcquires);
+                return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+            }));
+        Assert.Equal(1, hostAcquires);
+        Assert.Equal(1, hostReleases);
+
+        MetadataPeerStreamSnapshot stream = Assert.Single(
+            metadata.ReadPeerStreamStates(scope, local.NodeId, peer.NodeId, 7, 1));
+        Assert.Equal(0UL, stream.State.AckedCursor);
+        Assert.Equal(1UL, stream.State.PushedCursor);
+        Assert.NotNull(stream.State.PendingBatch);
+
+        metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
+            local.NodeId, reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest.ToArray());
+        using (coordinator.AcquireFullReplaceCommitGuard(() =>
+        {
+            Interlocked.Increment(ref hostAcquires);
+            return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+        }))
+        {
+            Assert.Equal(2, hostAcquires);
+            Assert.Equal(1, hostReleases);
+            MetadataPeerStreamSnapshot acknowledged = Assert.Single(
+                metadata.ReadPeerStreamStates(scope, local.NodeId, peer.NodeId, 7, 1));
+            Assert.Equal(1UL, acknowledged.State.AckedCursor);
+            Assert.Equal(1UL, acknowledged.State.PushedCursor);
+            Assert.Null(acknowledged.State.PendingBatch);
+        }
+        Assert.Equal(2, hostReleases);
+    }
+
     private sealed class CallbackLease : IDisposable
     {
         private Action? _onDispose;
