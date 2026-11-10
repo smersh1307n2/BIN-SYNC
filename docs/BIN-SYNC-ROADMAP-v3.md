@@ -1,3 +1,13 @@
+## 1.48. T-pass: verify offline roster catch-up transitions preserve GC safety fences — 2026-11-10
+
+- [x T] Extended `Offline_rejoin_accepts_signed_roster_gap_but_resets_every_gc_horizon` to exercise Retired → Joining → Active across signed generation gaps, including rejection when the rejoining epoch does not advance beyond the retired fence or a Joining → Active promotion regresses its epoch.
+- [x T] Covers Active → Joining across a gap only with an advanced transport epoch; a newly observed member may arrive already Retired across a signed gap and may become Active only after advancing beyond its own retired fence.
+- [x T] Verifies retired-origin closure deletion and member-key rotation are rejected; old reports, retention checkpoints, installed ACKs and origin coverage are not inherited across the new roster generation, including after reopen.
+- [x T] Exact BIN-SYNC head `6956dec5b8abad53f93df09450d1c5c887ad432c`: Core 678/678 on Linux and Windows; Storage Integration 193/193 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] This verifies roster catch-up and fail-closed horizon reset only. Fresh current-generation reports/checkpoints/ACKs must still be established before any retention proof; physical GC remains disabled.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.47. T-pass: prove applied-frontier scan holds one non-reentrant host lease — 2026-11-10
 
 - [x T] `Applied_origin_frontier_uses_one_non_reentrant_host_lease_and_releases_on_scan_failure` accepts a signed one-member roster, publishes an applied-origin frontier with a zero-draft host snapshot, and verifies the scanner opens while the non-reentrant host gate is already held. The scan is disposed before the single host lease is released.
@@ -177,7 +187,7 @@
 - [x C] Across a gap, the pinned authority attests omitted Joining/FULL_REPLACE/retirement steps; the receiver still enforces member-key immutability, non-regressing transport/retired-epoch fences and all locally known retired-origin closures.
 - [x C] A Retired member may become Active across a gap only after advancing beyond its retired transport fence; Joining→Active requires a non-regressing epoch; Active→Joining requires an advanced epoch; newly seen members may already be Active/Retired only when generations were skipped.
 - [x C] Updated v3.1 addendum §4.1 to make the authority-attestation boundary and consecutive-vs-gap transition rules normative.
-- [~ T] Test offline catch-up across new-member Joining→Active, Retired→Joining→Active, Active→Retired→Joining, new member already Retired, key/epoch regression, closure deletion, and ensure no GC frontier is enabled until current-generation reports/checkpoints are re-established. No build/tests run in this C slice.
+- [x T] Offline catch-up across Retired→Joining→Active, Active→Joining, a new member already Retired, key/epoch regression and immutable closure checks is covered in §1.48. Current-generation reports/checkpoints/ACKs are confirmed absent after catch-up and reopen; physical GC remains disabled.
 
 ## 1.23.2. C-pass: keep host reference scans inside one composed lease — 2026-11-10
 
