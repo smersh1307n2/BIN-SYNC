@@ -472,6 +472,19 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                         OriginAuthorEpoch = 1
                     }
                 });
+
+                CompleteBaseline(store, scope, local, sender, 1, 9, author);
+                store.ReserveOutboundBatch(scope, local, sender, 1, 9, author,
+                    new MetadataOutboundBatchReservation
+                    {
+                        BatchId = Batch(0x67),
+                        IssuerEpoch = 1,
+                        CursorStart = 1,
+                        CursorEnd = 1,
+                        PreviousBatchDigest = new byte[16],
+                        BatchDigest = Enumerable.Repeat((byte)0x68, 16).ToArray(),
+                        Payload = ProviderMutationCodec.Encode(Mutation(0x53, 0x69, 3))
+                    });
             }
 
             using var recovered = new StorageMetadataStore(directory, 455, deleteOnDispose: true);
@@ -483,6 +496,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Contains(outboundMutation.RecordId, outboundReferences);
             Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
             Assert.DoesNotContain(pendingMutation.RecordId, outboundReferences);
+            Assert.False(recovered.TryBuildLiveRecordReferenceSet(
+                scope, local, 9, out _)); // Recovered immutable reservation blocks the entire GC proof.
         }
         finally
         {
