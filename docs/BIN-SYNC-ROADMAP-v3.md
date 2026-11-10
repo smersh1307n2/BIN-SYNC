@@ -1,9 +1,18 @@
+## 1.51. T-pass: reject malformed provider pages during applied-frontier scans — 2026-11-10
+
+- [x T] `Applied_origin_frontier_rejects_malformed_provider_scan_pages` exercises six hostile provider-page shapes: a stalled cursor, a regressed cursor, a cursor beyond the captured provider high-watermark, unordered rows, a row beyond the page's scanned prefix, and an oversized page.
+- [x T] Every malformed page fails closed with `InvalidDataException`; the host reference scan is disposed and the non-reentrant host lease is released exactly once on every failure.
+- [x T] Exact BIN-SYNC head `63502d93f67de72c73268916f9b1da3fb0940c6a`: Core 678/678 on Linux and Windows; Storage Integration 200/200 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] Remaining §1.23.1: later empty/short advancing pages after the first page, empty scanned-prefix ACK behavior in `PublishLocalChanges`, appends beyond the captured high-watermark remaining for the next pass, and proof that a zero-draft report cannot precede complete captured-prefix coverage. Existing empty advancing-page coverage is in §1.50.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.50. T-pass: verify applied-frontier scans continue after empty advancing provider pages — 2026-11-10
 
 - [x T] `Applied_origin_frontier_scans_empty_advancing_page_before_later_provider_drafts` uses a provider wrapper that returns an empty page while advancing `ScannedThroughSequence` over the first feed row, then returns later draft rows on subsequent pages.
 - [x T] The signed frontier reports both later drafts and their maximum HLC rather than incorrectly publishing a zero-draft report or treating the empty page as end-of-feed. The host reference scan is disposed and the non-reentrant host lease released.
 - [x T] Exact BIN-SYNC head `acfe3be1b10b85135dc21e4092d2603146f9399b`: Core 678/678 on Linux and Windows; Storage Integration 194/194 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
-- [~ T] Remaining §1.23.1 provider-page cases: stalls/regression/overrun, unordered/out-of-range rows, later empty/short advancing pages, empty scanned-prefix ACK in `PublishLocalChanges`, appends beyond the captured high-watermark remaining for the next pass, and proof that a zero-draft report cannot precede full captured-prefix coverage.
+- [x T] §1.23.1 malformed frontier-page cases (stall/regression/overrun, unordered/out-of-range rows and oversized pages) are covered in §1.51; empty advancing-page continuation is covered in §1.50. [~ T] Later empty/short advancing pages, empty scanned-prefix ACK in `PublishLocalChanges`, appends beyond the captured high-watermark remaining for the next pass, and proof that a zero-draft report cannot precede full captured-prefix coverage remain open.
 - [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
 - [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
 
