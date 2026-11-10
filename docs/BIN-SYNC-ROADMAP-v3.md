@@ -1,9 +1,9 @@
 ## 1.38. T-pass: verify FULL_REPLACE reservation and completed-receipt barriers — 2026-11-10
 
-- [x T] `Full_replace_commit_guard_blocks_pushed_unacknowledged_peer_reservations` proves that a durable pushed-but-unacknowledged outbound reservation blocks FULL_REPLACE, preserves its cursor/reservation state on rejection, and stops blocking only after the matching ACK atomically advances the acknowledged cursor and clears the pending reservation. The host lease is released on rejection and normal disposal.
+- [x T] `Full_replace_commit_guard_blocks_pushed_unacknowledged_peer_reservations` proves that both a local outbound reservation and a foreign-author relay-stream reservation block FULL_REPLACE while pushed but unacknowledged, preserve their cursor/reservation state on rejection, and stop blocking only after their matching ACKs atomically advance the acknowledged cursors and clear both pending reservations. The host lease is released on rejection and normal disposal.
 - [x T] `Full_replace_commit_guard_does_not_treat_completed_receipts_as_pending_work` stages and finalizes a Metadata PendingApply, then proves the retained completed receipt is idempotency history rather than pending provider work and does not block FULL_REPLACE.
-- [x T] Exact BIN-SYNC head `dc8b3e7654246559a805acf168f3adac2a7bcee8`: Core 678/678 on Linux and Windows; Storage Integration 179/179 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
-- [~ T] Remaining §1.21 proof cases include relay-author reservations, missing/unattached capability and lease failures, typed receiver lease identity/scope/store/trust mismatches, and concurrent Metadata writers held off for the entire FULL_REPLACE switch.
+- [x T] Exact BIN-SYNC head `7da5e680d63de7f13ef7b26b912ddb6463564a86`: Core 678/678 on Linux and Windows; Storage Integration 179/179 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
+- [~ T] Remaining §1.21 proof cases include missing/unattached capability and lease failures, typed receiver lease identity/scope/store/trust mismatches, and concurrent Metadata writers held off for the entire FULL_REPLACE switch.
 - [~ T] The `FldBinSyncHost` cross-repository build remains unverified: `FLD_DB_READ_TOKEN` is absent, so the workflow skips private FLD-DB checkout and host-adapter build. The wrapper job's green conclusion is not a compile result.
 - [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; these FULL_REPLACE barrier tests do not authorize physical deletion.
 
@@ -11,7 +11,7 @@
 
 - [x T] Added `Full_replace_commit_guard_blocks_only_pending_apply_in_target_namespace`: a durable PendingApply in another namespace does not block the target namespace's FULL_REPLACE lease; a PendingApply in the target namespace rejects the lease, and the acquired host lease is released on rejection. Both pending intents remain durable and isolated.
 - [x T] Exact BIN-SYNC head `ea1d0d1f51fa80c17aee0a3cfbb67b3453d2c8d2`: Core 678/678 on Linux and Windows; Storage Integration 177/177 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
-- [~ T] Remaining §1.21 cases after §§1.37–1.38: relay-author reservations, missing/unattached capability and lease failures, typed receiver lease identity/scope/store/trust mismatches, and concurrent Metadata writers held off for the entire FULL_REPLACE switch remain open.
+- [~ T] Remaining §1.21 cases after §§1.37–1.38: missing/unattached capability and lease failures, typed receiver lease identity/scope/store/trust mismatches, and concurrent Metadata writers held off for the entire FULL_REPLACE switch remain open.
 - [~ T] The `FldBinSyncHost` cross-repository build remains unverified: the workflow's private FLD-DB checkout/build steps are skipped when `FLD_DB_READ_TOKEN` is absent. A green wrapper job is not a successful host-adapter build.
 - [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false; this test does not authorize physical deletion.
 
