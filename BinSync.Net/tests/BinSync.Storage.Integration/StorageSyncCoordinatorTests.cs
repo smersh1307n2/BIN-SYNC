@@ -2530,7 +2530,7 @@ public sealed class StorageSyncCoordinatorTests
     public void Applied_origin_frontier_scans_multiple_empty_advancing_pages_before_zero_or_later_drafts(
         bool includeFinalDraft, ulong expectedDraftCount)
     {
-        const string scope = "frontier-multiple-empty-pages-" + (includeFinalDraft ? "draft" : "zero");
+        string scope = "frontier-multiple-empty-pages-" + (includeFinalDraft ? "draft" : "zero");
         using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 491);
         using var innerProvider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
