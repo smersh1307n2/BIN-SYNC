@@ -2012,7 +2012,7 @@ public sealed class StorageSyncCoordinatorTests
         var coordinatorTwo = new StorageSyncCoordinator(node, provider, 2, metadata, scope);
         Assert.Equal(1, coordinatorTwo.RecoverPendingApplies());
         Assert.Empty(metadata.ReadPendingApplyIntents(scope, node.NodeId));
-        Assert.True(providerTwo.TryReadCurrent(recordTwo, 0x081A, out var valueTwo));
+        Assert.True(provider.TryReadCurrent(recordTwo, 0x081A, out var valueTwo));
         Assert.Equal("namespace-two", Encoding.UTF8.GetString(valueTwo!.Value));
     }
 
