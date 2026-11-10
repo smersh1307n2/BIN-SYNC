@@ -1524,14 +1524,14 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.RegisterInterestedPeer(scope, local, sender, 1, 7);
         store.RegisterInterestedPeer(scope, local, sender, 1, 8);
 
-        MetadataIncomingBatch Make(int namespaceId, NodeId author, uint authorEpoch, byte batchId)
+        MetadataIncomingBatch Make(int namespaceId, NodeId author, uint authorEpoch, byte batchId, uint transportPeerEpoch = 1)
             => new()
             {
                 ScopeId = scope,
                 LocalReplica = local,
                 SenderPeer = sender,
                 SenderEpoch = authorEpoch,
-                TransportPeerEpoch = 1,
+                TransportPeerEpoch = transportPeerEpoch,
                 AuthorStreamNodeId = author,
                 NamespaceId = namespaceId,
                 BatchId = Batch(batchId),
@@ -1569,8 +1569,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         // over the newly accepted transport epoch.
         var staleNamespace7 = Make(7, authorA, 5, 170);
         Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(staleNamespace7));
-        var replayNamespace7 = Make(7, authorA, 5, 170);
-        replayNamespace7.TransportPeerEpoch = 2;
+        var replayNamespace7 = Make(7, authorA, 5, 170, transportPeerEpoch: 2);
         Assert.True(store.AcceptIncomingBatch(replayNamespace7).IsDuplicate);
 
         // Namespace 8 has an independent fence and retains the same peer epoch's receipt.
