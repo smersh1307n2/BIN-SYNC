@@ -2488,7 +2488,7 @@ public sealed class StorageSyncCoordinator
             digest[0] = 1;
             applyToken = new Guid(digest.AsSpan(0, 16));
         }
-        _provider.ApplyRemoteBatch(applyToken, mutations);
+        _provider.ApplySnapshotBatch(applyToken, mutations);
     }
 
     /// <summary>
