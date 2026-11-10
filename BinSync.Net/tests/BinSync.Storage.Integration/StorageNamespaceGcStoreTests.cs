@@ -299,7 +299,7 @@ public sealed class StorageNamespaceGcStoreTests
 
                 NamespaceRosterCertificate staleJoiningGap = MakeRoster(
                     4, SHA256.HashData("omitted roster chain"u8),
-                    NamespaceMemberStatus.Joining, 11, 11);
+                    NamespaceMemberStatus.Joining, 11, 0);
                 Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(staleJoiningGap, keys[0].Seed), trust));
 
@@ -308,7 +308,7 @@ public sealed class StorageNamespaceGcStoreTests
                 // omitted FULL_REPLACE promotion and activate that same epoch.
                 NamespaceRosterCertificate rejoiningJoin = MakeRoster(
                     4, SHA256.HashData("omitted roster chain"u8),
-                    NamespaceMemberStatus.Joining, 12, 11);
+                    NamespaceMemberStatus.Joining, 12, 0);
                 rejoiningJoin = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(rejoiningJoin, keys[0].Seed), trust);
                 NamespaceRosterCertificate regressedPromotion = MakeRoster(
