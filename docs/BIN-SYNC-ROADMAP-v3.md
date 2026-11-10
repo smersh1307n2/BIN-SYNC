@@ -1,3 +1,10 @@
+## 1.23.11. C-pass: reconcile public API and sample entry points — 2026-11-10
+
+- [x C] Confirmed the removed `TcpSyncSession` has no source/sample references; the public transport surface is the generic `SyncSession` API. The only remaining name occurrence is the breaking-change note in `PUBLIC-API.md`.
+- [x C] Audited the three user-facing paths: `StorageArraySync` remains the intentional legacy Node-Outbox transition example; `StorageArrayTcpSync` demonstrates provider-authoritative Metadata-owned outbound plus Metadata-authoritative receive; `TwoNodeTcp` demonstrates the generic transport-only session API.
+- [x C] Updated `StorageArraySync/README.md` from the obsolete NodePersistence v15 label to the normative v17 checkpoint version. FLD host sample's provider cursor uses `ScannedThroughSequence` and treats lifecycle-only Outbox rows as scanned but non-publishable.
+- [~ T] Build and run all three examples plus `FldBinSyncHost`; verify the legacy transition and provider-authoritative paths against current v17/WAL v3 binaries. No sample build/run in this C slice.
+
 ## 1.23.10. C-pass: close cross-store GC lock-order and liveness-snapshot audit — 2026-11-10
 
 - [x C] Verified all three physical-GC entry points acquire the composed application lease before their internal store gates: ChangeId GC then pins provider snapshots before Metadata lock; receipt GC then enters Metadata lock; tombstone GC enters the provider gate after the composed lease. No GC callback reacquires the host lease while a scan is active.
