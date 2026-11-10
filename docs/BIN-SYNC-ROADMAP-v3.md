@@ -1,3 +1,12 @@
+## 1.50. T-pass: verify applied-frontier scans continue after empty advancing provider pages — 2026-11-10
+
+- [x T] `Applied_origin_frontier_scans_empty_advancing_page_before_later_provider_drafts` uses a provider wrapper that returns an empty page while advancing `ScannedThroughSequence` over the first feed row, then returns later draft rows on subsequent pages.
+- [x T] The signed frontier reports both later drafts and their maximum HLC rather than incorrectly publishing a zero-draft report or treating the empty page as end-of-feed. The host reference scan is disposed and the non-reentrant host lease released.
+- [x T] Exact BIN-SYNC head `acfe3be1b10b85135dc21e4092d2603146f9399b`: Core 678/678 on Linux and Windows; Storage Integration 194/194 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] Remaining §1.23.1 provider-page cases: stalls/regression/overrun, unordered/out-of-range rows, later empty/short advancing pages, empty scanned-prefix ACK in `PublishLocalChanges`, appends beyond the captured high-watermark remaining for the next pass, and proof that a zero-draft report cannot precede full captured-prefix coverage.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.49. T-pass: prove peer retirement retains receipts for rejoin replay — 2026-11-10
 
 - [x T] Renamed and corrected `Retiring_peer_epoch_preserves_receipts_and_fences_only_the_target_namespace`. It proves `RetireInterestedPeer` fences the old transport incarnation without eagerly deleting its durable receipt; replay under the new transport epoch is recognized as the same duplicate.
@@ -212,7 +221,7 @@
 - [x C] `PublishLocalChangesCore` captures the provider high-watermark at entry and scans exactly that finite prefix, including short/empty pages that advance only the scanned cursor. Concurrent later appends remain pending for the next pass instead of extending the current scan indefinitely; malformed/stalled pages fail closed instead of acknowledging an incomplete prefix.
 - [x C] If the entire captured prefix contains no syncable `ProviderChange` rows but the provider advanced `ScannedThroughSequence` over local-only lifecycle rows, the coordinator still acknowledges that empty scanned prefix. This prevents an empty prefix from being rescanned forever.
 - [x C] Documented `ProviderChangePage.ScannedThroughSequence` as an independent scan cursor in the public Data Provider contract.
-- [~ T] Add custom-provider regressions for short/empty advancing pages, later pages containing drafts, empty scanned prefixes that must still ACK their cursor, cursor stalls/regression/overrun, unordered/out-of-range entries, concurrent appends beyond the captured high-watermark remaining for the next pass, and ensuring zero-draft signed reports cannot be published before the captured feed high-watermark is scanned. No build/tests run in this C slice.
+- [x T] Empty advancing page followed by later draft pages, with no premature zero-draft frontier, is covered in §1.50. [~ T] Cursor stalls/regression/overrun, unordered/out-of-range entries, additional short/empty pages, empty-prefix ACK in `PublishLocalChanges`, concurrent appends beyond the captured high-watermark, and full-prefix-before-zero-report proof remain open.
 
 ## 1.23. C-pass: prove retained Node Outbox payload ownership before provider cutover — 2026-11-10
 
