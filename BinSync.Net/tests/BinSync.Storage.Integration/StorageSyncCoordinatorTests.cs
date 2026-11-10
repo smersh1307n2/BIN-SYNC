@@ -2685,12 +2685,17 @@ public sealed class StorageSyncCoordinatorTests
             StorageNodePersistence.Save(storage, local);
 
             var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
-            Assert.Throws<IOException>(() => coordinator.EnableMetadataStoreOwnedPublication(node =>
-            {
-                if (crashCut == "after-node-checkpoint")
-                    StorageNodePersistence.Save(storage, node);
-                throw new IOException("Simulated process loss at the Node checkpoint boundary.");
-            }));
+            bool checkpointCallbackEntered = false;
+            IOException crash = Assert.Throws<IOException>(() =>
+                coordinator.EnableMetadataStoreOwnedPublication(node =>
+                {
+                    checkpointCallbackEntered = true;
+                    if (crashCut == "after-node-checkpoint")
+                        StorageNodePersistence.Save(storage, node);
+                    throw new IOException("Simulated process loss at the Node checkpoint boundary.");
+                }));
+            Assert.Equal("Simulated process loss at the Node checkpoint boundary.", crash.Message);
+            Assert.True(checkpointCallbackEntered);
             Assert.True(((IProviderPublicationMode)provider).TryGetMetadataStoreOwnedPublicationCutover(out _));
         }
 
