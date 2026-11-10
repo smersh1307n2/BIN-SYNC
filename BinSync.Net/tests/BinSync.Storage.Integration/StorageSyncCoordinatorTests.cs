@@ -8,6 +8,13 @@ namespace BinSync.Storage.Integration;
 
 public sealed class StorageSyncCoordinatorTests
 {
+    private static async Task AwaitBothPeerOperationsAsync(Task left, Task right)
+    {
+        Task first = await Task.WhenAny(left, right).WaitAsync(TimeSpan.FromSeconds(30));
+        await first.ConfigureAwait(false);
+        await Task.WhenAll(left, right).WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-coordinator-" + Guid.NewGuid().ToString("N"));
 
     [Fact]
@@ -514,8 +521,7 @@ public sealed class StorageSyncCoordinatorTests
         var peerReconcile = acceptor.AutoReconcileAsync(peer, 1, initiate: false);
         var localReconcile = coordinator.AutoReconcileWithMetadataAsync(
             session, _ => { }, initiate: true);
-        await Task.WhenAll(peerReconcile, localReconcile)
-            .WaitAsync(TimeSpan.FromSeconds(30));
+        await AwaitBothPeerOperationsAsync(peerReconcile, localReconcile);
 
         var newEpochState = metadata.GetPeerStreamState(scope, local.NodeId,
             peer.NodeId, 2, 1, local.NodeId);
@@ -658,10 +664,9 @@ public sealed class StorageSyncCoordinatorTests
             HlcWall = 4400, Value = "snapshot-baseline"u8.ToArray()
         });
 
-        await Task.WhenAll(
-            coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
-            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false))
-            .WaitAsync(TimeSpan.FromSeconds(30));
+        Task reconcileA = coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true);
+        Task reconcileB = coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false);
+        await AwaitBothPeerOperationsAsync(reconcileA, reconcileB);
 
         Assert.True(metadataA.IsPeerInitialSyncComplete(scopeA, nodeA.NodeId,
             nodeB.NodeId, checked((uint)nodeB.Epoch), 1));
@@ -755,10 +760,9 @@ public sealed class StorageSyncCoordinatorTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
 
-        await Task.WhenAll(
-            coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
-            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false))
-            .WaitAsync(TimeSpan.FromSeconds(30));
+        Task reconcileA = coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true);
+        Task reconcileB = coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false);
+        await AwaitBothPeerOperationsAsync(reconcileA, reconcileB);
 
         Assert.False(restartedNodeA.TryGetField(1, staleRecord, 0x0822, out _));
         Assert.False(nodeB.TryGetField(1, staleRecord, 0x0822, out _));
@@ -804,10 +808,9 @@ public sealed class StorageSyncCoordinatorTests
         providerA.AcknowledgeLocalChanges(seededFeed.ScannedThroughSequence);
         Assert.True(nodeA.IsPristine);
 
-        await Task.WhenAll(
-            coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true),
-            coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false))
-            .WaitAsync(TimeSpan.FromSeconds(30));
+        Task reconcileA = coordinatorA.AutoReconcileWithMetadataAsync(initiator, _ => { }, initiate: true);
+        Task reconcileB = coordinatorB.AutoReconcileWithMetadataAsync(acceptor, _ => { }, initiate: false);
+        await AwaitBothPeerOperationsAsync(reconcileA, reconcileB);
 
         Assert.True(nodeA.TryGetField(1, record, 0x0106, out var nodeValue));
         Assert.Equal("provider-owned", Encoding.UTF8.GetString(nodeValue!.Value));
