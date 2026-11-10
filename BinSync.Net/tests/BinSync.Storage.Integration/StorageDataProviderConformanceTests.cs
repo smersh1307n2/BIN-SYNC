@@ -466,7 +466,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 }
             }));
 
-            await Task.WhenAll(providerWrites, metadataWrites);
+            await Task.WhenAll(providerWrites, metadataWrites).WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Equal(64UL, provider.LocalChangeHighWatermark);
             Assert.Equal(64UL, metadata.GetOutboundHighWatermark(scope, local, 1, local));
             // BSP3 marker + active-generation pointer are committed before concurrent writes.\n            Assert.Equal(129UL, storage.LastCommitSeq);
