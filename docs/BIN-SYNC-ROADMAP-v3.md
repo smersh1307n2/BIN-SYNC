@@ -1,3 +1,8 @@
+## 1.28. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
+
+- [x C] ChangeId GC now validates every returned provider sequence is strictly increasing and lies within the page's explicit scanned prefix before using its ChangeId as a live-reference proof.
+- [~ T] Add malformed-provider cases for duplicate/regressing/out-of-range feed sequences and verify ChangeId reclamation fails closed. No build/tests run in this C slice.
+
 ## 1.27. C-pass: separate transport retirement from receipt reclamation — 2026-11-10
 
 - [x C] `RetireInterestedPeer` now persists the retired transport-epoch fence and removes old peer stream/baseline state without eagerly deleting receipt rows.

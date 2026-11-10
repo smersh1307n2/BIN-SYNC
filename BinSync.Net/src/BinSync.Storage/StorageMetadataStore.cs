@@ -698,8 +698,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     providerPage.ScannedThroughSequence > providerHighWatermark ||
                     providerPage.Changes.Count > providerPageSize)
                     throw new InvalidDataException("Provider local feed returned an invalid ChangeId GC scan page.");
+                ulong previousProviderSequence = providerCursor;
                 foreach (ProviderChange change in providerPage.Changes)
                 {
+                    if (change.Sequence <= previousProviderSequence ||
+                        change.Sequence > providerPage.ScannedThroughSequence)
+                        throw new InvalidDataException("Provider local feed changes are not ordered within the ChangeId GC scan prefix.");
+                    previousProviderSequence = change.Sequence;
                     if (change.ChangeId.IsZero)
                         return 0; // Legacy/unknown feed identity blocks ChangeId reclamation.
                     liveChangeIds.Add(change.ChangeId);
