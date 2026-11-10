@@ -1,19 +1,16 @@
-## 1.15. C-pass: enforce contiguous signed namespace roster history — 2026-11-10
+## 1.15. C-pass audit: preserve offline NRS2 roster catch-up — 2026-11-10
 
-- [x C] Hardened `StorageNamespaceGcStore.AcceptNamespaceRoster`: the first locally accepted NRS2 roster must be generation 1; each later roster must be exactly the next generation and bind the digest of the currently accepted roster. A signed roster can no longer skip an unobserved membership transition or bypass the accepted hash-chain predecessor.
-- [x C] Existing same-generation exact replay/fork checks, authority identity pinning and direct membership-transition validation remain in force. Generation overflow fails closed.
-- [x C] Production change committed as `ee15822c` (`fix(gc): require contiguous namespace roster chain`) and pushed to `feature/fld-external-storage`.
-- [~ T] Add first-generation, exact-next-generation, skipped-generation, wrong-previous-digest, replay/fork, authority-change and `UInt64.MaxValue` adversarial/reopen cases. No tests/build were run in this C slice; physical GC remains disabled.
-- [~ C] Continue auditing v3.1 roster/frontier/checkpoint persistence, rollback behavior and cross-store reference proofs.
+- [x C] Cross-checked roster acceptance against `docs/BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md` §4.1. The normative contract explicitly permits a higher signed full roster to be accepted after offline periods; requiring every intermediate local generation would break that recovery path.
+- [x C] Reverted the experimental strict-contiguity change (`ee15822c`) in `e358b5a2`. The original higher-generation catch-up behavior and direct membership-transition checks are restored.
+- [~ C] Audit how offline roster catch-up can authenticate skipped membership transitions without weakening Joining/Retired fences or requiring an unavailable local predecessor. Do not impose a local generation+1 rule unless the normative contract is deliberately revised.
+- [~ T] Add offline catch-up cases spanning multiple roster generations, including retire/rejoin, transport epoch advancement, stale digest, wrong authority and current-generation replay. No tests/build were run in this C slice; physical GC remains disabled.
 
-## 1.14. C-pass: enforce contiguous signed retention checkpoint history — 2026-11-10
+## 1.14. C-pass audit: preserve offline RCP2 checkpoint catch-up — 2026-11-10
 
-- [x C] Hardened `StorageNamespaceGcStore.AcceptRetentionCheckpoint`: after the first accepted checkpoint, every new checkpoint must be exactly the next sequence and its previous digest must match the currently accepted checkpoint. A correctly signed checkpoint that skips one or more sequence numbers is rejected instead of silently truncating an authority decision from the locally observed hash chain.
-- [x C] The first locally accepted checkpoint must be sequence 1; same-sequence exact replay remains idempotent, while same-sequence different-digest forks and lower sequences remain rejected. Sequence overflow is explicitly fail-closed.
-- [x C] Production change committed as `8de0cb2c` (`fix(gc): require contiguous retention checkpoint chain`) and pushed to `feature/fld-external-storage`.
-- [x C] Created paired recovery branches `backup/cpass-2026-11-10-retention-checkpoint-chain` in BIN-SYNC and FLD-DB before this C-pass slice.
-- [~ T] Add restart/reopen tests for first checkpoint sequence, exact next sequence, skipped sequence, wrong previous digest, exact replay, same-sequence fork and `UInt64.MaxValue` boundary. No tests/build were run in this C slice; physical GC remains disabled.
-- [~ C] Continue the v3/v3.1 source/API/byte audit, especially cross-store reference completeness and the final physical-retention proof boundary.
+- [x C] Reverted the experimental strict-contiguity change (`8de0cb2c`) in `1a68150d`. RCP2 remains monotonic and same-sequence forks are rejected; a higher signed checkpoint can still be accepted after an offline gap, subject to the existing safe-frontier monotonicity and overclaim checks.
+- [x C] The paired recovery branch `backup/cpass-2026-11-10-retention-checkpoint-chain` remains available in both repositories as a snapshot of the experimental C slice; it is not the active implementation.
+- [~ C] Review whether the signed full checkpoint plus monotonic frontier is the intended offline recovery proof, and document any additional predecessor-fetch requirement before changing wire or persistence semantics.
+- [~ T] Add restart/offline-gap, stale checkpoint, wrong predecessor for an immediately consecutive checkpoint, exact replay, same-sequence fork and safe-frontier regression cases. No tests/build were run in this C slice; physical GC remains disabled.
 
 ## 1.13. C-pass: generic Storage blob publication/cleanup source audit — 2026-11-10
 

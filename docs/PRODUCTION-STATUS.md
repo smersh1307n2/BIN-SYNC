@@ -2,13 +2,11 @@
 
 ## C-pass continuation update — 2026-11-10
 
-- Latest production-code commit: `ee15822c` enforces a contiguous NRS2 namespace-roster hash chain. The first accepted roster must be generation 1; each subsequent roster must be exactly next generation and link the accepted predecessor digest. Pushed to `feature/fld-external-storage`.
-- Roadmap section 1.15 records this C-pass and its deferred adversarial T-pass cases. This follows `8de0cb2c`, which applied the same chain-continuity rule to RCP2 retention checkpoints.
+- Experimental strict-contiguity changes to NRS2/RCP2 acceptance were reverted in `e358b5a2` and `1a68150d` after checking the normative offline-catch-up contract. Active code retains higher signed roster/checkpoint catch-up behavior, existing monotonicity checks and same-sequence fork rejection.
+- Roadmap sections 1.14–1.15 record the correction and the remaining design audit: safe membership-transition validation when an offline node receives a newer full roster without all intermediate generations.
 - This remains implementation-only: no build/tests were run for this slice and prior red CI evidence remains unchanged. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
-- Latest production-code commit: `8de0cb2c` enforces a contiguous RCP2 retention-checkpoint hash chain. New checkpoints cannot skip sequence numbers or bypass an unobserved predecessor; first acceptance is sequence 1, exact replay remains idempotent, and sequence overflow fails closed. Pushed to `feature/fld-external-storage`.
-- Roadmap section 1.14 records this C-pass and its deferred adversarial T-pass cases. Paired recovery branch `backup/cpass-2026-11-10-retention-checkpoint-chain` exists in both BIN-SYNC and FLD-DB.
-- This remains implementation-only: no build/tests were run for this slice and prior red CI evidence remains unchanged. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+
 
 - Latest production-code slices: `47be8895046662a06481ac097229c59e2cb2ed47` hardens durable OFR2 issued-origin monotonicity; `5963d352fbae286db37d53b7f5097b58f72ddade` fixes ChangeId GC scanning so empty/short provider pages cannot hide later unpublished feed identities.
 - Roadmap progress (issued-origin monotonicity, Storage blob audit, and provider-feed GC cursor fix) recorded in `34950cbf512b1826f1c46ce343eea3ee275bd2c3`; v3.1 issued-origin monotonicity is explicit in addendum commit `476748632357a5f6031be435f1aa6e81b6545719`. Recovery branch: `backup/cpass-2026-11-10-provider-feed-gc-fix`.
