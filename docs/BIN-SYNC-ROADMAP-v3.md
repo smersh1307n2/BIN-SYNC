@@ -1,3 +1,10 @@
+## 1.27. C-pass: separate transport retirement from receipt reclamation — 2026-11-10
+
+- [x C] `RetireInterestedPeer` now persists the retired transport-epoch fence and removes old peer stream/baseline state without eagerly deleting receipt rows.
+- [x C] `CompactReceipts` now requires the durable retired-epoch fence, confirms it against the accepted roster/current peer epoch, requires the signed origin retention checkpoint, and retains the existing PendingApply/host-reference checks. Receive cursors and digest chains remain the replay fence.
+- [x C] Old receipts remain eligible for later GC after a peer rejoins under a newer transport epoch; their external references are no longer bypassed by the peer-retirement path.
+- [~ T] Update retirement tests to assert receipts are retained immediately after fencing; test GC with/without external receipt references, after rejoin, with missing/regressed fences, PendingApply, cursor gaps, and origin-frontier coverage. No build/tests run in this C slice.
+
 ## 1.26. C-pass: honor signed roster catch-up across generation gaps — 2026-11-10
 
 - [x C] Membership transition validation now distinguishes consecutive roster generations from signed generation gaps. Consecutive transitions retain strict Joining/installed-ACK rules.
@@ -1086,7 +1093,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 
 ### 2026-11-08 — C pass: receipt retirement reservation guard
 
-- [x] Audited `RetireInterestedPeer` against v3 §0.11 and found that the atomic retirement transaction fenced the old epoch and deleted receipts/peer rows without first rejecting an unresolved outbound `PendingBatch` reservation.
+- [x] Historical audit finding: `RetireInterestedPeer` once deleted receipts/peer rows while fencing an old epoch. The PendingBatch reservation check was added, and §1.27 now supersedes eager receipt deletion: receipt rows remain until separate signed-frontier + host-reference GC.
 - [x] Added a fail-closed guard for any pending outbound reservation belonging to the peer and a retired-or-older epoch. A completed replacement baseline no longer silently discards the old incarnation's in-flight send/retry context.
 - [~] C implementation committed as `aab64ad`; targeted lost-ACK, reservation-retirement and crash-boundary tests are explicitly deferred to Phase T. Receipt GC remains conservative; ChangeId and tombstone/ghost GC remain disabled.
 

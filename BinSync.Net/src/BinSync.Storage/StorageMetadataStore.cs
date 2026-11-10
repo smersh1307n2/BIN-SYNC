@@ -757,9 +757,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
-    /// Reclaim transport receipts only when the signed retention frontier covers the
-    /// entire author cursor range and no PendingApply still references the receipt.
-    /// Receive cursors and digest chains are retained as the replay fence.
+    /// Reclaim transport receipts only when the durable retired-epoch fence and
+    /// signed retention frontier cover the receipt, and neither PendingApply nor the
+    /// host reference snapshot retains it. Receive cursors/digest chains remain as
+    /// the replay fence; peer retirement itself never eagerly deletes receipt rows.
     /// </summary>
     public int CompactReceipts(
         string scopeId, NodeId localReplica, int namespaceId, int limit,
@@ -812,9 +813,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     key.Epoch == 0 || receipt.OriginSequence == 0)
                     continue;
                 if (!rosterMembers.TryGetValue(key.Sender, out NamespaceRosterMember? senderMember) ||
-                    senderMember.Status != NamespaceMemberStatus.Retired ||
                     receipt.TransportPeerEpoch == 0 ||
-                    receipt.TransportPeerEpoch > senderMember.RetiredThroughEpoch)
+                    !current.RetiredPeerEpochs.TryGetValue(
+                        (namespaceId, key.Sender), out uint retiredThrough) ||
+                    receipt.TransportPeerEpoch > retiredThrough)
+                    continue;
+                bool rosterFencesReceiptEpoch = senderMember.Status == NamespaceMemberStatus.Retired
+                    ? receipt.TransportPeerEpoch <= senderMember.RetiredThroughEpoch
+                    : receipt.TransportPeerEpoch < senderMember.TransportPeerEpoch;
+                if (!rosterFencesReceiptEpoch)
                     continue;
                 var receiveKey = new ReceiveKey(
                     key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
@@ -2609,13 +2616,10 @@ private static bool ValidateIncomingBatchForStaging(
                         "Cannot retire a transport peer epoch while its replacement snapshot baseline is behind an immutable outbound reservation.");
             }
 
-            ReceiptKey[] oldReceipts = current.Receipts
-                .Where(pair => pair.Key.Sender == peer && pair.Key.NamespaceId == namespaceId &&
-                    pair.Value.TransportPeerEpoch != 0 &&
-                    pair.Value.TransportPeerEpoch <= nextRetiredThrough)
-                .Select(pair => pair.Key)
-                .ToArray();
-            bool hasOldRows = oldReceipts.Length != 0 ||
+            // Keep receipts until the separate receipt-GC path proves that no
+            // host-side reference remains. The durable retired-epoch fence makes
+            // old transport replays impossible without eagerly deleting receipts.
+            bool hasOldRows =
                 current.InterestedPeers.Contains(oldRosterKey) ||
                 current.PeerStreams.Keys.Any(key => key.NamespaceId == namespaceId &&
                     key.Peer == peer && key.PeerEpoch == retiredPeerEpoch) ||
@@ -2631,14 +2635,13 @@ private static bool ValidateIncomingBatchForStaging(
             var oldRequired = current.RequiredPeerStreams
                 .Where(key => key.NamespaceId == namespaceId && key.Peer == peer &&
                     key.PeerEpoch == retiredPeerEpoch).ToArray();
-            var deletes = new List<byte[]>(oldStreams.Length + oldRequired.Length + oldReceipts.Length + 2)
+            var deletes = new List<byte[]>(oldStreams.Length + oldRequired.Length + 2)
             {
                 EncodeInterestedPeerKey(partitionKey, oldRosterKey),
                 EncodeCompletedPeerBaselineKey(partitionKey, oldRosterKey)
             };
             deletes.AddRange(oldStreams.Select(key => EncodePeerStreamKey(partitionKey, key)));
             deletes.AddRange(oldRequired.Select(key => EncodeRequiredPeerStreamKey(partitionKey, key)));
-            deletes.AddRange(oldReceipts.Select(key => EncodeReceiptKey(partitionKey, key)));
             byte[] retiredValue = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(retiredValue, nextRetiredThrough);
             var writes = new[]
@@ -2653,8 +2656,6 @@ private static bool ValidateIncomingBatchForStaging(
                     current.PeerStreams.Remove(key);
                 foreach (var key in oldRequired)
                     current.RequiredPeerStreams.Remove(key);
-                foreach (ReceiptKey receipt in oldReceipts)
-                    current.Receipts.Remove(receipt);
                 current.RetiredPeerEpochs[retiredKey] = nextRetiredThrough;
             });
         }

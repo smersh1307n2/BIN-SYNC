@@ -30,6 +30,11 @@ public interface IMetadataPeerStateStore
     /// Retires an older peer incarnation after a newer epoch has completed session
     /// establishment. The retired epoch is fenced against future reads and writes.
     /// </summary>
+    /// <summary>
+    /// Fence an old transport epoch and remove its peer-stream/baseline state. Receipt
+    /// rows remain durable until the separate signed-frontier + host-reference GC path
+    /// proves they can be reclaimed.
+    /// </summary>
     void RetireInterestedPeer(string scopeId, NodeId localReplica,
         NodeId peer, uint retiredPeerEpoch, uint replacementPeerEpoch, int namespaceId);
 
