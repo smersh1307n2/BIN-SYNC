@@ -646,6 +646,40 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// frontier and while the caller holds an exclusive cross-store live-reference
     /// lease. The retained checkpoint becomes the durable replay fence.
     /// </summary>
+    internal static bool TryCollectProviderChangeIdsForGc(
+        IDataProvider provider, ulong providerHighWatermark, out HashSet<BatchId> liveChangeIds)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        liveChangeIds = new HashSet<BatchId>();
+        ulong providerCursor = 0;
+        const int providerPageSize = 1024;
+        while (providerCursor < providerHighWatermark)
+        {
+            ProviderChangePage providerPage = provider.ReadLocalChanges(providerCursor, providerPageSize);
+            if (providerPage.ScannedThroughSequence <= providerCursor ||
+                providerPage.ScannedThroughSequence > providerHighWatermark ||
+                providerPage.Changes.Count > providerPageSize)
+                throw new InvalidDataException("Provider local feed returned an invalid ChangeId GC scan page.");
+
+            ulong previousProviderSequence = providerCursor;
+            foreach (ProviderChange change in providerPage.Changes)
+            {
+                if (change.Sequence <= previousProviderSequence ||
+                    change.Sequence > providerPage.ScannedThroughSequence)
+                    throw new InvalidDataException("Provider local feed changes are not ordered within the ChangeId GC scan prefix.");
+                previousProviderSequence = change.Sequence;
+                if (change.ChangeId.IsZero)
+                {
+                    liveChangeIds.Clear();
+                    return false; // Legacy/unknown feed identity blocks ChangeId reclamation.
+                }
+                liveChangeIds.Add(change.ChangeId);
+            }
+            providerCursor = providerPage.ScannedThroughSequence;
+        }
+        return true;
+    }
+
     public int CompactChangeLedger(
         string scopeId, NodeId localReplica, int namespaceId, IDataProvider provider, int limit,
         Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
@@ -691,34 +725,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
                 return 0;
-            var liveChangeIds = new HashSet<BatchId>();
-            ulong providerCursor = 0;
             ulong providerHighWatermark = provider.LocalChangeHighWatermark;
-            const int providerPageSize = 1024;
-            while (providerCursor < providerHighWatermark)
-            {
-                ProviderChangePage providerPage = provider.ReadLocalChanges(providerCursor, providerPageSize);
-                // ScannedThroughSequence, not Changes.Count, is the feed cursor:
-                // providers may legitimately scan pages containing only local-only
-                // lifecycle rows. Stopping on an empty/short Changes list can skip
-                // later unpublished ChangeIds and make them eligible for GC.
-                if (providerPage.ScannedThroughSequence <= providerCursor ||
-                    providerPage.ScannedThroughSequence > providerHighWatermark ||
-                    providerPage.Changes.Count > providerPageSize)
-                    throw new InvalidDataException("Provider local feed returned an invalid ChangeId GC scan page.");
-                ulong previousProviderSequence = providerCursor;
-                foreach (ProviderChange change in providerPage.Changes)
-                {
-                    if (change.Sequence <= previousProviderSequence ||
-                        change.Sequence > providerPage.ScannedThroughSequence)
-                        throw new InvalidDataException("Provider local feed changes are not ordered within the ChangeId GC scan prefix.");
-                    previousProviderSequence = change.Sequence;
-                    if (change.ChangeId.IsZero)
-                        return 0; // Legacy/unknown feed identity blocks ChangeId reclamation.
-                    liveChangeIds.Add(change.ChangeId);
-                }
-                providerCursor = providerPage.ScannedThroughSequence;
-            }
+            if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out HashSet<BatchId> liveChangeIds))
+                return 0; // Legacy/unknown feed identity blocks ChangeId reclamation.
             foreach (var stream in current.Relay)
                 if (stream.Key.NamespaceId == namespaceId)
                     foreach (var item in stream.Value)
