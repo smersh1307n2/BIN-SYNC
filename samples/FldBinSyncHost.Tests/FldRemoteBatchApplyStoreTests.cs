@@ -163,8 +163,8 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         using var storageB = StorageDatabase.Open(Path.Combine(_directory, "binsync-b"), 702);
         using var metadataA = new StorageMetadataStore(storageA);
         using var metadataB = new StorageMetadataStore(storageB);
-        using var nodeA = new NodeBuilder().WithNodeId(authorA).WithEpoch(1).Build();
-        using var nodeB = new NodeBuilder().WithNodeId(authorB).WithEpoch(1).Build();
+        using var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build();
+        using var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build();
 
         var coordinatorA = new StorageSyncCoordinator(
             nodeA, providerA, namespaceId, metadataA, scope,
