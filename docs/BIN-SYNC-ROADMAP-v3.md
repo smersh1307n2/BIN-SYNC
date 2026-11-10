@@ -2282,3 +2282,10 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] After the gap, prior-generation OFR2 reports, RCP2 checkpoint and FRA2 ACK are not inherited: current-generation frontiers/ACKs are empty, no current checkpoint exists, and origin/tombstone proof queries remain false. Reopen preserves the new roster and the fail-closed horizon.
 - [x T] Exact head 631136ebcc36512c62c176bbf4a1a36db3baafbf: Core 678/678 on Linux and Windows; Storage Integration 173/173 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 golden vectors and Fuzz/Lab passed.
 - [x C/T] Offline/rejoin generation-gap horizon reset is covered. This is not permission to enable physical GC: the three physical-GC switches remain hard false pending the broader adversarial multi-member/offline/rejoin and external-reference proof matrix.
+
+## 1.36. T-pass: verify composed application-commit lease ordering and writer exclusion — 2026-11-10
+
+- [x T] Added a deterministic coordinator test proving host lease acquisition precedes the provider transaction gate and disposal releases provider before host. A missing host lease fails closed before provider acquisition.
+- [x T] While the composed lease is held, a concurrent provider append remains blocked; after lease release it completes and the durable current-state row is visible. The test uses the real StorageDataProvider monitor, not a mock-only lock.
+- [x T] Exact head 63df3003ecb26054ddbcf1363d3e9efcda7c2da1: Core 678/678 on Linux and Windows; Storage Integration 174/174 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 golden vectors and Fuzz/Lab passed.
+- [x C/T] The base coordinator→Node→host→provider lease order and a concurrent local-writer exclusion case are covered. Full multi-party deadlock/fault injection across concurrent receive, FULL_REPLACE, host WAL commit and all three physical-GC callbacks remains open; physical GC stays disabled.
