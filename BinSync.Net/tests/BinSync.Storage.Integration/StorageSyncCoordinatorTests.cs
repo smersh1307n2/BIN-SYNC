@@ -2602,6 +2602,8 @@ public sealed class StorageSyncCoordinatorTests
                 RecordId.From(Guid.Parse("93000000-0000-0000-0000-000000000002").ToByteArray()),
                 0x0893, "legacy-ledger-alias", 0x93);
             metadata.BeginPendingApply(incoming, applyToken);
+            metadata.FinalizePendingApply(scope, local.NodeId,
+                new MetadataProviderApplyReceipt(applyToken, incoming.BatchDigest.ToArray()));
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local.NodeId, 1, incoming.Operations[0].ChangeId,
                 out ReadOnlyMemory<byte> semanticFingerprint, out _, out _));
