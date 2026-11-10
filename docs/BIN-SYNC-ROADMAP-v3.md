@@ -1,3 +1,13 @@
+## 1.46. T-pass: verify composed GC barrier under concurrent receive, provider and host commits — 2026-11-10
+
+- [x T] `Composed_gc_barrier_serializes_receive_provider_host_and_all_three_gc_callbacks` holds the composed coordinator → Node → host → provider lease while independent receive, provider append, host commit, ChangeId GC, receipt GC and tombstone GC operations are started.
+- [x T] Receive, provider and host writes remain blocked until the outer lease is released. ChangeId and receipt GC callbacks wait for and then acquire the same composed lease; both return without reclamation because their proof switches are disabled. Tombstone GC returns zero before lease acquisition while its proof switch is hard-disabled. No external reference scan is opened.
+- [x T] Explicit null host-lease acquisition fails closed for ChangeId and receipt GC; tombstone GC requests no lease while disabled. Acquired host leases are released exactly once; all concurrent tasks complete without deadlock.
+- [x T] Exact BIN-SYNC head `6b2215631511c919432794d3b0d5e126f8c187ef`: Core 678/678 on Linux and Windows; Storage Integration 192/192 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] This proves serialization and fail-closed lock acquisition only. Adversarial signed-frontier, external-reference, offline/rejoin and physical-deletion proofs remain open; no GC switch is enabled.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.45. T-pass: verify legacy Node alias migration across the 4096-entry batch boundary — 2026-11-10
 
 - [x T] `Provider_cutover_migrates_legacy_aliases_across_the_4096_entry_batch_boundary` creates 4097 local immutable operations, aligns their semantic ChangeId identities and author watermarks in Metadata, then exercises the coordinator's 4096 + 1 alias persistence batches.
@@ -106,7 +116,7 @@
 - [x C] Verified all three physical-GC entry points acquire the composed application lease before their internal store gates: ChangeId GC then pins provider snapshots before Metadata lock; receipt GC then enters Metadata lock; tombstone GC enters the provider gate after the composed lease. No GC callback reacquires the host lease while a scan is active.
 - [x C] Verified the common order is coordinator → Node gates → host WAL/FLD lease → provider gate → Metadata/GC store gate; ordinary coordinator receive/publication paths take coordinator before Metadata, so the GC methods do not invert that order.
 - [x C] Verified ChangeId and tombstone scans open one host reference snapshot under the composed lease, and provider snapshot pins are excluded for ChangeId GC while tombstone GC rejects active provider readers. Receipt GC retains receive cursor/digest-chain, PendingApply and host receipt-reference fences.
-- [~ T] Add deterministic lock-contention/deadlock tests with concurrent receive, provider commit, host commit and all three GC callbacks; assert fail-closed behavior when any lease/reference scan cannot be acquired. No build/tests run in this C slice.
+- [x T] Deterministic composed-barrier concurrency, host/provider lease ordering, receive/provider/host writer exclusion, all three GC entry points, null-lease fail-closed behavior and deadlock-free release are covered in §1.46. Physical GC remains disabled; signed-horizon and external-reference proofs are separate gates.
 
 ## 1.23.9. C-pass: reconcile Node-owned and Metadata-owned receive WAL boundaries — 2026-11-10
 
