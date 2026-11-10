@@ -1,3 +1,11 @@
+## 1.59. T-pass: verify tombstone-GC metadata references survive restart — 2026-11-10
+
+- [x T] Added `Tombstone_gc_live_reference_scan_recovers_pending_apply_and_outbound_payloads_after_restart`. The test writes a PendingApply payload and an immutable outbound payload, closes the metadata store, reopens the same durable partition, and verifies both RecordIds remain live in their respective namespaces.
+- [x T] The test also verifies namespace isolation after recovery: PendingApply references do not leak into the outbound namespace and outbound references do not leak into the PendingApply namespace.
+- [~ T] Exact-head CI and local execution are not yet verified. Local Commander remains offline; the FLD-DB workflow diagnostic run still has failed Ubuntu/Windows jobs with unavailable logs and a queued macOS job.
+- [x C] This is restart coverage for the Metadata live-reference scan only. It does not exercise physical tombstone compaction or enable any ChangeId, receipt, tombstone or Ghost GC switch; all physical-GC switches remain hard false.
+- [~ T] Remaining §1.23.6 work: end-to-end external host/provider references, immutable reservation recovery, snapshot pins, receipt retirement/rejoin and replay fences, newer-field preservation through compaction, fault-injection boundaries and multi-member offline/rejoin horizons.
+
 ## 1.58. T-pass: pin tombstone-GC field-selection ordering — 2026-11-10
 
 - [x T] Added `Tombstone_gc_field_selection_removes_only_fields_not_newer_than_record_tombstone` to the Storage provider conformance suite. It proves fields older than or equal to a record tombstone are eligible under the ordering predicate, while a strictly newer field survives; mismatched record identity, tombstone-as-field and non-tombstone comparison inputs fail closed.
