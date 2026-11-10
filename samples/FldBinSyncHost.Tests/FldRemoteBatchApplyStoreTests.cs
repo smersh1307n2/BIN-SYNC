@@ -251,7 +251,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     [Fact]
     public async Task Pending_apply_recovers_when_fld_commit_precedes_metadata_receipt_and_ack()
     {
-        const uint namespaceId = 10;
+        const int namespaceId = 10;
         const string scope = "fld-crash-boundary";
         byte[] authorA = Id(0xE1);
         byte[] authorB = Id(0xE2);
@@ -265,8 +265,8 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         // Simulate a process dying after FLD has durably committed the remote
         // mutation but before the Metadata PendingApply receipt can be finalized
         // and before the sender can receive its ACK.
-        using (var fldA = FldDatabase.Open(fldAPath, namespaceId, authorA))
-        using (var fldB = FldDatabase.Open(fldBPath, namespaceId, authorB))
+        using (var fldA = FldDatabase.Open(fldAPath, (uint)namespaceId, authorA))
+        using (var fldB = FldDatabase.Open(fldBPath, (uint)namespaceId, authorB))
         using (var providerA = new FldDatabaseDataProvider(fldA, () => 1))
         using (var providerB = new FldDatabaseDataProvider(fldB, () => 1))
         using (var storageA = StorageDatabase.Open(storageAPath, 711))
