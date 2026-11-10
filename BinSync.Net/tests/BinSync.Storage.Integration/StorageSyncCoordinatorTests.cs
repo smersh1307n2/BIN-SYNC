@@ -2307,6 +2307,8 @@ public sealed class StorageSyncCoordinatorTests
         start.ArgumentList.Add(configuration);
         start.ArgumentList.Add("--filter");
         start.ArgumentList.Add("FullyQualifiedName~Coordinator_process_kill_child_probe");
+        start.ArgumentList.Add("--results-directory");
+        start.ArgumentList.Add(Path.Combine(directory, "child-test-results"));
         start.Environment["BIN_SYNC_COORDINATOR_CRASH_DIR"] = directory;
         start.Environment["BIN_SYNC_COORDINATOR_CRASH_READY"] = readyPath;
         start.Environment["BIN_SYNC_COORDINATOR_CRASH_PID"] = ownerPidPath;
