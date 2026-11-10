@@ -565,6 +565,175 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Metadata_owned_sender_reservation_and_peer_cursor_survive_full_restart()
+    {
+        const uint namespaceId = 12;
+        const string scope = "fld-metadata-owned-restart";
+        byte[] authorA = Id(0x71);
+        byte[] authorB = Id(0x72);
+        byte[] recordA = Id(0x73);
+        byte[] recordB = Id(0x74);
+        byte[] valueA = "metadata-owned-first"u8.ToArray();
+        byte[] valueB = "metadata-owned-after-restart"u8.ToArray();
+        string fldAPath = Path.Combine(_directory, "metadata-fld-a");
+        string fldBPath = Path.Combine(_directory, "metadata-fld-b");
+        string storageAPath = Path.Combine(_directory, "metadata-storage-a");
+        string storageBPath = Path.Combine(_directory, "metadata-storage-b");
+
+        // First process: publish one local operation, seal its WAL prefix, then
+        // cross the durable Metadata-owned publication cutover and establish an
+        // explicit empty-peer baseline before the first delta stream.
+        using (var fldA = FldDatabase.Open(fldAPath, namespaceId, authorA))
+        using (var fldB = FldDatabase.Open(fldBPath, namespaceId, authorB))
+        using (var storageA = StorageDatabase.Open(storageAPath, 731))
+        using (var storageB = StorageDatabase.Open(storageBPath, 732))
+        using (var metadataA = new StorageMetadataStore(storageA))
+        using (var metadataB = new StorageMetadataStore(storageB))
+        using (var providerA = new FldDatabaseDataProvider(
+            fldA, () => 1,
+            publicationMode: new StorageMetadataPublicationMode(
+                metadataA, scope, NodeId.From(authorA), checked((int)namespaceId))))
+        using (var providerB = new FldDatabaseDataProvider(fldB, () => 1))
+        using (var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build())
+        using (var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build())
+        {
+            var remoteA = new FldRemoteBatchApplyStore(fldA);
+            var remoteB = new FldRemoteBatchApplyStore(fldB);
+            var coordinatorA = new StorageSyncCoordinator(
+                nodeA, providerA, checked((int)namespaceId), metadataA, scope,
+                remoteBatchCommitStore: remoteA);
+            var coordinatorB = new StorageSyncCoordinator(
+                nodeB, providerB, checked((int)namespaceId), metadataB, scope,
+                remoteBatchCommitStore: remoteB);
+            var mapA = new StorageRelayProvenanceMap(storageA, scope, nodeA.NodeId);
+            var adapterA = new FldBinSyncHostAdapter(
+                fldA, providerA, metadataA, coordinatorA, mapA, scope, remoteA);
+
+            providerA.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(recordA),
+                FieldId = 0x0701,
+                HlcWall = 7001,
+                AuthorNodeId = NodeId.From(authorA),
+                KeyEpoch = 0,
+                Value = valueA,
+                ChangeId = BatchId.From(Id(0x75)),
+                OriginAuthorEpoch = 1
+            });
+            Assert.Equal(1, coordinatorA.PublishLocalChanges(
+                node => StorageNodePersistence.Save(storageA, node)));
+            Assert.NotEqual(0UL, fldA.Checkpoint());
+            Assert.Equal(fldA.PendingFlushedCommitSeq, fldA.LastSealedCommitSeq);
+            coordinatorA.EnableMetadataStoreOwnedPublication(
+                node => StorageNodePersistence.Save(storageA, node));
+
+            var (toA, toB) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
+            await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
+
+            metadataA.RegisterInterestedPeer(
+                scope, nodeA.NodeId, nodeB.NodeId, checked((uint)nodeB.Epoch),
+                checked((int)namespaceId));
+            metadataA.CompletePeerInitialSync(
+                scope, nodeA.NodeId, nodeB.NodeId, checked((uint)nodeB.Epoch),
+                checked((int)namespaceId),
+                new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, checked((uint)nodeA.Epoch)) });
+            StorageNodePersistence.Save(storageA, nodeA);
+            StorageNodePersistence.Save(storageB, nodeB);
+
+            Task<BatchResult> receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(
+                sessionB, node => StorageNodePersistence.Save(storageB, node));
+            Assert.True(await adapterA.RecoverAndPublishAllAsync(
+                node => StorageNodePersistence.Save(storageA, node),
+                (watermarks, ct) => adapterA.PublishReadyOutboxAsync(
+                    sessionA, nodeA, metadataA, watermarks, cancellationToken: ct)));
+            BatchResult first = await receiveAtB.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(1, first.Applied);
+            Assert.True(fldB.TryGetBytes(recordA, 0x0701, out byte[]? firstValue));
+            Assert.Equal(valueA, firstValue);
+            MetadataPeerStreamState firstState = metadataA.GetPeerStreamState(
+                scope, nodeA.NodeId, nodeB.NodeId, checked((uint)nodeB.Epoch),
+                checked((int)namespaceId), nodeA.NodeId);
+            Assert.Equal(1UL, firstState.AckedCursor);
+            Assert.Null(firstState.PendingBatch);
+        }
+
+        // Second process: restore both FLD stores, Metadata stores, provenance map
+        // and Node images. Add another local draft after the cutover and publish it
+        // through the same host publication gate using the persisted peer cursor.
+        using (var fldA = FldDatabase.Open(fldAPath, namespaceId, authorA))
+        using (var fldB = FldDatabase.Open(fldBPath, namespaceId, authorB))
+        using (var storageA = StorageDatabase.Open(storageAPath, 731))
+        using (var storageB = StorageDatabase.Open(storageBPath, 732))
+        using (var metadataA = new StorageMetadataStore(storageA))
+        using (var metadataB = new StorageMetadataStore(storageB))
+        using (var providerA = new FldDatabaseDataProvider(
+            fldA, () => 1,
+            publicationMode: new StorageMetadataPublicationMode(
+                metadataA, scope, NodeId.From(authorA), checked((int)namespaceId))))
+        using (var providerB = new FldDatabaseDataProvider(fldB, () => 1))
+        using (var nodeA = StorageNodePersistence.Load(storageA, NodeId.From(authorA)))
+        using (var nodeB = StorageNodePersistence.Load(storageB, NodeId.From(authorB)))
+        {
+            var remoteA = new FldRemoteBatchApplyStore(fldA);
+            var remoteB = new FldRemoteBatchApplyStore(fldB);
+            var coordinatorA = new StorageSyncCoordinator(
+                nodeA, providerA, checked((int)namespaceId), metadataA, scope,
+                remoteBatchCommitStore: remoteA);
+            var coordinatorB = new StorageSyncCoordinator(
+                nodeB, providerB, checked((int)namespaceId), metadataB, scope,
+                remoteBatchCommitStore: remoteB);
+            var mapA = new StorageRelayProvenanceMap(storageA, scope, nodeA.NodeId);
+            var adapterA = new FldBinSyncHostAdapter(
+                fldA, providerA, metadataA, coordinatorA, mapA, scope, remoteA);
+
+            providerA.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(recordB),
+                FieldId = 0x0701,
+                HlcWall = 7002,
+                AuthorNodeId = NodeId.From(authorA),
+                KeyEpoch = 0,
+                Value = valueB,
+                ChangeId = BatchId.From(Id(0x76)),
+                OriginAuthorEpoch = 1
+            });
+            Assert.Equal(1, adapterA.PublishLocalChanges(
+                node => StorageNodePersistence.Save(storageA, node)));
+
+            var (toA, toB) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
+            await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
+            StorageNodePersistence.Save(storageA, nodeA);
+            StorageNodePersistence.Save(storageB, nodeB);
+
+            Task<BatchResult> receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(
+                sessionB, node => StorageNodePersistence.Save(storageB, node));
+            Assert.True(await adapterA.RecoverAndPublishAllAsync(
+                node => StorageNodePersistence.Save(storageA, node),
+                (watermarks, ct) => adapterA.PublishReadyOutboxAsync(
+                    sessionA, nodeA, metadataA, watermarks, cancellationToken: ct)));
+            BatchResult second = await receiveAtB.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(1, second.Applied);
+            Assert.True(fldB.TryGetBytes(recordA, 0x0701, out byte[]? persistedFirst));
+            Assert.Equal(valueA, persistedFirst);
+            Assert.True(fldB.TryGetBytes(recordB, 0x0701, out byte[]? persistedSecond));
+            Assert.Equal(valueB, persistedSecond);
+
+            MetadataPeerStreamState finalState = metadataA.GetPeerStreamState(
+                scope, nodeA.NodeId, nodeB.NodeId, checked((uint)nodeB.Epoch),
+                checked((int)namespaceId), nodeA.NodeId);
+            Assert.Equal(2UL, finalState.AckedCursor);
+            Assert.Null(finalState.PendingBatch);
+            Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
+        }
+    }
+
+    [Fact]
     public void Remote_record_and_field_tombstones_keep_distinct_fld_lifecycle_semantics()
     {
         const uint namespaceId = 9;
