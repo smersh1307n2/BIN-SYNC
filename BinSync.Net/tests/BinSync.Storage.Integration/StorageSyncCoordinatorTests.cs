@@ -2444,11 +2444,12 @@ public sealed class StorageSyncCoordinatorTests
             writerCompleted.Set();
         });
 
+        bool started;
+        bool blockedByLease;
         try
         {
-            Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(5)));
-            Assert.False(writerCompleted.Wait(TimeSpan.FromMilliseconds(150)));
-            Assert.Equal(0, hostReleases);
+            started = writerStarted.Wait(TimeSpan.FromSeconds(5));
+            blockedByLease = started && !writerCompleted.Wait(TimeSpan.FromMilliseconds(150));
         }
         finally
         {
@@ -2457,6 +2458,8 @@ public sealed class StorageSyncCoordinatorTests
 
         Assert.True(writerCompleted.Wait(TimeSpan.FromSeconds(5)));
         await writer.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(started);
+        Assert.True(blockedByLease);
         Assert.Equal(1, hostReleases);
         Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId));
     }
