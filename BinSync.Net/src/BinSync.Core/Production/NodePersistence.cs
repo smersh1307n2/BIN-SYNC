@@ -91,7 +91,27 @@ public static class NodePersistence
     public static Node Load(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path required.", nameof(path));
-        return LoadFromBytes(File.ReadAllBytes(path));
+
+        // Windows refuses an atomic replacement while any reader holds the target
+        // without FILE_SHARE_DELETE. Open the old generation with delete sharing so
+        // concurrent Save can replace the path while this handle keeps reading the
+        // complete prior image.
+        using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete,
+            64 * 1024, FileOptions.SequentialScan);
+        if (stream.Length > int.MaxValue)
+            throw new InvalidDataException("State file exceeds the supported in-memory size.");
+
+        byte[] image = new byte[checked((int)stream.Length)];
+        try
+        {
+            stream.ReadExactly(image);
+        }
+        catch (EndOfStreamException ex)
+        {
+            throw new InvalidDataException("State file was truncated while being read.", ex);
+        }
+        return LoadFromBytes(image);
     }
 
     /// <summary>In-memory variant of <see cref="Load"/> (same integrity rules).</summary>
