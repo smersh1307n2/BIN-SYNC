@@ -43,11 +43,12 @@ public interface IProviderPublicationMode
 
 /// <summary>
 /// Optional provider capability for an authenticated authoritative FULL_REPLACE.
-/// The caller validates the roster/snapshot certificate, serializes the switch against
-/// remote APPLY, and proves no unresolved PendingApply, relay reservation, provider
-/// intent or reader pin depends on the old generation before invoking this API.
-/// Staging is invisible until CommitFullReplace atomically switches the active
-/// generation. Old generations are retained; this API does not authorize GC.
+/// The caller validates the roster/snapshot certificate and serializes the switch
+/// against remote APPLY. The FULL_REPLACE receiver must hold IProviderSnapshotGcGuard
+/// across the switch; the caller's composed commit guard must additionally prove that
+/// no unresolved PendingApply, relay reservation or provider intent depends on the old
+/// generation. Staging is invisible until CommitFullReplace atomically switches the
+/// active generation. Old generations are retained; this API does not authorize GC.
 /// </summary>
 public interface IProviderFullReplace
 {
@@ -194,9 +195,10 @@ public interface IProviderCommitGuard
 }
 
 /// <summary>
-/// Optional provider capability used by ChangeId GC. A successful lease excludes
-/// new snapshot opens and proves that no provider snapshot handle is currently pinned;
-/// null means an active snapshot prevents reclamation. Dispose on the acquiring thread.
+/// Optional provider capability used by ChangeId GC and FULL_REPLACE commit. A
+/// successful lease excludes new snapshot opens and proves that no provider snapshot
+/// handle is currently pinned; null means an active snapshot prevents the operation.
+/// Dispose on the acquiring thread.
 /// </summary>
 public interface IProviderSnapshotGcGuard
 {

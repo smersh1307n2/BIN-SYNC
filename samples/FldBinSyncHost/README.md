@@ -201,4 +201,4 @@ var coordinator = new StorageSyncCoordinator(
     remoteBatchCommitStore: fldApply);
 ```
 
-The host must ensure `fldDataProvider` and `fldApply` operate on the same durable FLD state and participate in the same `fld.AcquireCommitGuard()` outer lease. The full `fldDataProvider` implementation is still open; do not substitute an unrelated in-memory or second durable database.
+The host must ensure `fldDataProvider` and `fldApply` operate on the same durable FLD state and participate in the same `fld.AcquireCommitGuard()` outer lease. `FldDatabaseDataProvider` is implemented, including the snapshot-pin guard required by FULL_REPLACE commit. The caller-supplied commit guard must additionally prove that no Metadata PendingApply, relay reservation or provider intent depends on the old generation; the current sample lock alone is not that proof. Cross-repository build and adversarial T-pass remain pending.

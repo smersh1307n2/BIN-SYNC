@@ -1,3 +1,10 @@
+## 1.20. C-pass: FULL_REPLACE commit enforces provider snapshot pins — 2026-11-10
+
+- [x C] `StorageFullReplaceReceiver.Commit` now requires `IProviderSnapshotGcGuard` and holds its lease across host-reference scan, provider generation switch, HLC refresh and installed-ACK persistence. Missing capability or an active snapshot pin fails closed before the switch.
+- [x C] `StorageDataProvider` already implements the guard; `FldDatabaseDataProvider` now implements it by acquiring an FLD reference-snapshot/commit lease and rejecting any in-memory or persisted ProviderSnapshot generation. `FldReferenceSnapshot.HasSnapshotPin` exposes the immutable proof to the adapter.
+- [~ C] The caller-supplied cross-store commit guard must still prove that Metadata PendingApply, relay reservations and provider intents do not target the old generation. The sample's current application lock serializes operations but does not itself prove those queues are empty; add an explicit coordinator/metadata blocker check before claiming FULL_REPLACE commit proof complete.
+- [~ T] Test active StorageDataProvider snapshot, active/persisted FLD snapshot, no-pin lease excluding new opens, missing guard failure, and PendingApply/relay-reservation blocker behavior. No build/test was run in this C slice.
+
 ## 1.19. Cross-repository C-pass: repair FLD blob restart-cleanup API call — 2026-11-10
 
 - [x C] Source audit found `FldDatabase.GcOrphanRuns` called nonexistent `StorageBlobStore.PruneOrphanPages`; FLD-DB now calls the actual bounded `PruneOrphanBlobs` API after catalog-backed unreferenced-blob pruning.

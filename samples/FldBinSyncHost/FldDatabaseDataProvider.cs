@@ -19,7 +19,8 @@ public sealed class FldDatabaseDataProvider :
     IProviderAuthorEpochClosureStore,
     IProviderPublicationMode,
     IProviderDurableSnapshotStore,
-    IProviderFullReplace
+    IProviderFullReplace,
+    IProviderSnapshotGcGuard
 {
     private readonly object _gate = new();
     private readonly FldDatabase _database;
@@ -426,6 +427,19 @@ public sealed class FldDatabaseDataProvider :
         return _database.AcquireCommitGuard();
     }
 
+    public IDisposable? TryAcquireSnapshotGcGuard()
+    {
+        EnsureOpen();
+        IDisposable lease = _database.AcquireReferenceSnapshotGuard(out FldReferenceSnapshot snapshot);
+        if (snapshot.HasSnapshotPin)
+        {
+            snapshot.Dispose();
+            lease.Dispose();
+            return null;
+        }
+        return new SnapshotGcLease(snapshot, lease);
+    }
+
     public bool TryGetFullReplaceProgress(Guid generation, out ProviderFullReplaceProgress? progress)
     {
         EnsureOpen();
@@ -689,6 +703,28 @@ public sealed class FldDatabaseDataProvider :
             OriginAuthorEpoch = originEpoch,
             OriginSequence = entry.OriginSequence
         };
+    }
+
+    private sealed class SnapshotGcLease : IDisposable
+    {
+        private FldReferenceSnapshot? _snapshot;
+        private IDisposable? _commitLease;
+
+        public SnapshotGcLease(FldReferenceSnapshot snapshot, IDisposable commitLease)
+        {
+            _snapshot = snapshot;
+            _commitLease = commitLease;
+        }
+
+        public void Dispose()
+        {
+            FldReferenceSnapshot? snapshot = _snapshot;
+            _snapshot = null;
+            snapshot?.Dispose();
+            IDisposable? commitLease = _commitLease;
+            _commitLease = null;
+            commitLease?.Dispose();
+        }
     }
 
     private void EnsureOpen()

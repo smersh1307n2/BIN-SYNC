@@ -204,6 +204,14 @@ public sealed class StorageFullReplaceReceiver
                 throw new InvalidOperationException("Cross-store FULL_REPLACE commit proof is unavailable; provider state was not switched.");
             using (commitGuard)
             {
+                if (_provider is not IProviderSnapshotGcGuard snapshotGuard)
+                    throw new InvalidOperationException(
+                        "FULL_REPLACE provider must expose a snapshot-pin guard; provider state was not switched.");
+                using IDisposable? snapshotLease = snapshotGuard.TryAcquireSnapshotGcGuard();
+                if (snapshotLease is null)
+                    throw new InvalidOperationException(
+                        "An active provider snapshot still pins the old generation; FULL_REPLACE was not committed.");
+
                 using IApplicationGcReferenceScan hostScan =
                     _externalState.OpenScan(_scopeId, _localMember, _namespaceId);
                 ApplicationDraftHorizon hostDrafts = hostScan.UnpublishedLocalDraftHorizon;
