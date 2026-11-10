@@ -257,7 +257,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ? DecodePreparedSnapshotIndex(index!)
                 : Array.Empty<Guid>();
             if (!generations.Contains(generation))
-                throw new InvalidDataException("Prepared FULL_REPLACE state is absent from its durable generation index.");
+            {
+                // A normal miss (including after the last generation was deleted)
+                // is represented by false. If an unindexed state row remains, that
+                // is an orphan/corruption and must still fail closed.
+                if (snapshot.TryGet(stateKey, out _))
+                    throw new InvalidDataException("Prepared FULL_REPLACE state row is absent from its durable generation index.");
+                state = null;
+                return false;
+            }
             if (!snapshot.TryGet(stateKey, out byte[]? encoded))
                 throw new InvalidDataException("Prepared FULL_REPLACE generation index references a missing state row.");
             state = DecodePreparedFullReplaceSnapshot(encoded!);
