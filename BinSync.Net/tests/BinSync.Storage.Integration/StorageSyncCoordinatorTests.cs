@@ -2162,21 +2162,90 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(second.ChangeId, outbound[1].ChangeId);
     }
 
+    [Fact]
+    public async Task Application_commit_guard_orders_host_and_provider_leases_and_blocks_concurrent_provider_writes()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "commit-guard-order"), 477);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(77);
+        var events = new List<string>();
+        var provider = new FailOnceAcknowledgeProvider(innerProvider, commitGuardEvent: events.Add);
+        var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, "commit-guard-order");
+
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.AcquireApplicationCommitGuard(() =>
+            {
+                events.Add("host.acquire.null");
+                return null;
+            }));
+        Assert.Equal(new[] { "host.acquire.null" }, events);
+
+        events.Clear();
+        IDisposable lease = coordinator.AcquireApplicationCommitGuard(() =>
+        {
+            events.Add("host.acquire");
+            return new CallbackLease(() => events.Add("host.release"));
+        });
+        Assert.Equal(new[] { "host.acquire", "provider.acquire" }, events);
+
+        using var writerStarted = new ManualResetEventSlim();
+        using var writerCompleted = new ManualResetEventSlim();
+        Task writer = Task.Run(() =>
+        {
+            writerStarted.Set();
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(Guid.Parse("77000000-0000-0000-0000-000000000001").ToByteArray()),
+                FieldId = 0x0877,
+                AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 7700,
+                Value = "blocked-until-lease-release"u8.ToArray()
+            });
+            writerCompleted.Set();
+        });
+
+        Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.False(writerCompleted.Wait(TimeSpan.FromMilliseconds(150)));
+        lease.Dispose();
+        Assert.True(writerCompleted.Wait(TimeSpan.FromSeconds(5)));
+        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            new[] { "host.acquire", "provider.acquire", "provider.release", "host.release" },
+            events);
+        Assert.True(innerProvider.TryReadCurrent(
+            RecordId.From(Guid.Parse("77000000-0000-0000-0000-000000000001").ToByteArray()),
+            0x0877, out var current));
+        Assert.Equal("blocked-until-lease-release", Encoding.UTF8.GetString(current!.Value));
+    }
+
+    private sealed class CallbackLease : IDisposable
+    {
+        private Action? _onDispose;
+        public CallbackLease(Action onDispose) => _onDispose = onDispose;
+        public void Dispose() => Interlocked.Exchange(ref _onDispose, null)?.Invoke();
+    }
+
     private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode, IProviderCommitGuard, IProviderPublishedOriginStore
     {
         private readonly IDataProvider _inner;
         private readonly Func<ProviderChange, ProviderChange>? _changeTransform;
         private readonly Action? _afterRemoteApply;
+        private readonly Action<string>? _commitGuardEvent;
         private bool _failNextAcknowledge = true;
 
         public FailOnceAcknowledgeProvider(
             IDataProvider inner,
             Func<ProviderChange, ProviderChange>? changeTransform = null,
-            Action? afterRemoteApply = null)
+            Action? afterRemoteApply = null,
+            Action<string>? commitGuardEvent = null)
         {
             _inner = inner;
             _changeTransform = changeTransform;
             _afterRemoteApply = afterRemoteApply;
+            _commitGuardEvent = commitGuardEvent;
         }
 
         public int SnapshotOpenCount { get; private set; }
@@ -2198,8 +2267,30 @@ public sealed class StorageSyncCoordinatorTests
             ((IProviderPublicationMode)_inner).TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
         public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark) =>
             ((IProviderPublicationMode)_inner).EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
-        public IDisposable AcquireCommitGuard() =>
-            ((IProviderCommitGuard)_inner).AcquireCommitGuard();
+        public IDisposable AcquireCommitGuard()
+        {
+            _commitGuardEvent?.Invoke("provider.acquire");
+            IDisposable lease = ((IProviderCommitGuard)_inner).AcquireCommitGuard();
+            return _commitGuardEvent is null
+                ? lease
+                : new CallbackLeaseWrapper(lease, () => _commitGuardEvent("provider.release"));
+        }
+
+        private sealed class CallbackLeaseWrapper : IDisposable
+        {
+            private IDisposable? _inner;
+            private Action? _onDispose;
+            public CallbackLeaseWrapper(IDisposable inner, Action onDispose)
+            {
+                _inner = inner;
+                _onDispose = onDispose;
+            }
+            public void Dispose()
+            {
+                Interlocked.Exchange(ref _inner, null)?.Dispose();
+                Interlocked.Exchange(ref _onDispose, null)?.Invoke();
+            }
+        }
         public void CommitPublishedOrigins(IReadOnlyList<ProviderPublishedOrigin> published) =>
             ((IProviderPublishedOriginStore)_inner).CommitPublishedOrigins(published);
 
