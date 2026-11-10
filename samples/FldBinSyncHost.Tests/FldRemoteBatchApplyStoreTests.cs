@@ -192,7 +192,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         {
             RecordId = RecordId.From(recordA),
             FieldId = 0x0301,
-            HlcWall = 1001 + recordASeed,
+            HlcWall = 1001UL + recordASeed,
             AuthorNodeId = NodeId.From(authorA),
             KeyEpoch = 0,
             Value = valueA,
@@ -203,7 +203,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         {
             RecordId = RecordId.From(recordB),
             FieldId = 0x0301,
-            HlcWall = 1002 + recordBSeed,
+            HlcWall = 1002UL + recordBSeed,
             AuthorNodeId = NodeId.From(authorB),
             KeyEpoch = 0,
             Value = valueB,
