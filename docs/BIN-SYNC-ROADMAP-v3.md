@@ -1,3 +1,14 @@
+## 1.57. T-pass: require complete draft-free issued-origin evidence for tombstone horizons — 2026-11-10
+
+- [x T] `Full_replace_retention_checkpoint_rejects_missing_active_member_frontier_report` and `Full_replace_retention_checkpoint_rejects_active_member_with_unpublished_drafts` prove a FULL_REPLACE retention checkpoint cannot be formed without every Active member's report and a zero-draft report from each member.
+- [x T] `Tombstone_gc_proof_requires_signed_issued_origin_maxima` proves applied frontiers alone do not establish an origin horizon: without a signed author-issued epoch maximum, no tombstone proof is produced.
+- [x T] Together with §1.56, the signed tombstone protocol proof now rejects missing Active ACK/report, nonzero drafts, absent issued-origin maxima, incomplete common applied prefix, HLC overclaims and FULL_REPLACE generation/digest mismatch.
+- [x T] Exact BIN-SYNC head `3b0481f78de836d560a23405df5acf834f04a105`: Core 678/678 on Linux and Windows; Storage Integration 219/219 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [x T] These are protocol proof tests only. Physical ChangeId, receipt and tombstone/Ghost GC switches remain hard false; no rows were deleted.
+- [~ T] Remaining §1.23.6: external host/provider/Metadata references, PendingApply and immutable reservations, snapshot pins, receipt retirement/rejoin and cursor/digest replay fences, tombstone newer-field preservation, restart/fault injection and multi-member offline/rejoin horizons.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured.
+- [x C] Physical GC capability switches remain hard false.
+
 ## 1.56. T-pass: harden tombstone GC signed horizon proof cases — 2026-11-10
 
 - [x T] `Tombstone_gc_proof_rejects_hlc_and_full_replace_identity_overclaims` proves a signed tombstone horizon is rejected for HLC wall/logical overclaims and for a different FULL_REPLACE generation or digest.
@@ -244,7 +255,7 @@
 - [x C] Receipt reclamation has one source deletion site (`CompactReceipts`). It requires the durable transport retirement fence, accepted-roster epoch fence, retained receive cursor/digest-chain replay fence, no PendingApply, no host receipt reference and a signed origin retention checkpoint. `RetireInterestedPeer` itself never deletes receipts.
 - [x C] Tombstone reclamation requires a common installed FULL_REPLACE generation/digest/HLC floor, signed issued-origin maxima, signed safe-applied frontiers, every active member's draft-free report and contiguous applied coverage, plus no provider/metadata/host record or tombstone ChangeId references. Older field rows are removed before the tombstone row; newer field mutations survive.
 - [x C] Confirmed all three physical-GC capability switches remain hard `false` (`IsChangeIdGcProofEnabled`, `IsReceiptGcProofEnabled`, `IsTombstoneGcProofEnabled`). This source audit does not authorize enabling any switch.
-- [~ T] Initial signed tombstone horizon adversarial cases are covered in §1.56 (missing Active ACK, incomplete common applied prefix, HLC and FULL_REPLACE identity overclaims). External-reference/provider/Metadata/PendingApply/reservation/snapshot-pin fixtures, receipt and tombstone deletion-order proofs, restart/fault injection, and multi-member offline/rejoin horizons remain mandatory before any physical deletion is enabled.
+- [x T] Signed tombstone horizon protocol prerequisites are covered in §§1.56–1.57: Active reports/ACKs, zero drafts, signed issued-origin maxima, common applied prefix, HLC floor and FULL_REPLACE identity. [~ T] External host/provider/Metadata references, PendingApply/reservations, snapshot pins, receipt retirement/rejoin and replay fences, tombstone field-deletion ordering, restart/fault injection and multi-member offline/rejoin horizons remain mandatory.
 
 ## 1.23.5. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
 
