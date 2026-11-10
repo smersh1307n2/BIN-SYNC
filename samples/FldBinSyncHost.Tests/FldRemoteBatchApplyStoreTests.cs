@@ -528,12 +528,15 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         byte[] recordId = Id(0xF3);
         using var fldA = FldDatabase.Open(Path.Combine(directory, "fld-a"), namespaceId, authorA);
         using var fldB = FldDatabase.Open(Path.Combine(directory, "fld-b"), namespaceId, authorB);
-        using var providerA = new FldDatabaseDataProvider(fldA, () => 1);
-        using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
         using var storageA = StorageDatabase.Open(Path.Combine(directory, "storage-a"), 721);
         using var storageB = StorageDatabase.Open(Path.Combine(directory, "storage-b"), 722);
         using var metadataA = new StorageMetadataStore(storageA);
         using var metadataB = new StorageMetadataStore(storageB);
+        using var providerA = new FldDatabaseDataProvider(
+            fldA, () => 1,
+            publicationMode: new StorageMetadataPublicationMode(
+                metadataA, scope, NodeId.From(authorA), checked((int)namespaceId)));
+        using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
         using var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build();
         using var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build();
 
