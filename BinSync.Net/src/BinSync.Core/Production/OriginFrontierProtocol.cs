@@ -417,24 +417,31 @@ public static class NamespaceRetentionCheckpointProtocol
         var safe = new List<RetentionFrontierEntry>(origins.Count);
         foreach (var pair in origins)
         {
-            bool allActiveApplied = true;
+            // The safe frontier is the minimum contiguous prefix applied by every
+            // Active member, not the author's issued high-watermark. Requiring every
+            // replica to have applied the full issued range would discard a valid
+            // lower common prefix and prevent incremental retention progress.
+            ulong minimumAppliedSequence = ulong.MaxValue;
+            bool allActiveReported = true;
             foreach (NamespaceRosterMember member in active)
             {
                 if (!appliedByMember.TryGetValue(member.NodeId, out Dictionary<OriginKey, ulong>? memberFrontier) ||
-                    !memberFrontier.TryGetValue(pair.Key, out ulong appliedSequence) ||
-                    appliedSequence < pair.Value.Sequence)
+                    !memberFrontier.TryGetValue(pair.Key, out ulong appliedSequence))
                 {
-                    allActiveApplied = false;
+                    allActiveReported = false;
                     break;
                 }
+                minimumAppliedSequence = Math.Min(minimumAppliedSequence, appliedSequence);
             }
-            if (allActiveApplied && pair.Value.Sequence != 0)
+
+            ulong safeSequence = Math.Min(minimumAppliedSequence, pair.Value.Sequence);
+            if (allActiveReported && safeSequence != 0 && safeSequence != ulong.MaxValue)
             {
                 safe.Add(new RetentionFrontierEntry
                 {
                     OriginAuthorNodeId = pair.Key.Author,
                     OriginAuthorEpoch = pair.Key.Epoch,
-                    SafeAppliedOriginSequence = pair.Value.Sequence
+                    SafeAppliedOriginSequence = safeSequence
                 });
             }
         }
