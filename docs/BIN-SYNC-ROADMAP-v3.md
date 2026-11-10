@@ -1,3 +1,9 @@
+## 1.23.14. C-pass closeout: transition v3/v3.1 implementation to exact-head T-pass — 2026-11-10
+
+- [x C] The current v3/v3.1 implementation track is complete through the latest integration phases: provider publication/cutover, host scheduling, Metadata-authoritative receive, FULL_REPLACE sender recovery and receiver staging, generic Storage blobs, provider snapshot durability, and API/source/byte audits. Earlier `[~ C]` items in the chronological history are superseded by their later completion records; they are not active implementation blockers.
+- [x C] Reconfirmed all three physical-GC proof switches remain hard `false`. Source-level eligibility and cross-store reference/lock-order audits are complete, but this does not prove safety under adversarial histories and does not authorize deletion.
+- [~ T] Next phase is the exact-head T-pass on the paired BIN-SYNC/FLD-DB commits: clean builds, core/storage integration, sample execution, codec reopen, restart/fault-injection matrix, concurrent lock/lease and offline/rejoin GC-horizon proofs, then benchmarks. Keep physical receipt/ChangeId/tombstone/Ghost GC disabled until those proofs pass.
+
 ## 1.23.13. C-pass: prevent Run ID reuse against catalog-less blob directories — 2026-11-10
 
 - [x C] `StorageBlobStore.ContainsBlob` now treats both catalog rows and catalog-less page directories as occupied IDs and serializes the check with Put/Delete through the shared per-prefix gate. `PutImmutableBlob` refuses to recreate a catalog row over an orphan page directory.
@@ -192,7 +198,7 @@
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
 - [x C] Physical-format decision Option B is accepted: generic Storage owns opaque immutable blob pages plus its WAL-backed catalog; Database retains FLD1 Run v1/v2, manifest, field semantics and FLD WAL. The generic blob/page backend and FLD checkpoint/compaction/FULL_REPLACE paths are implemented on the paired branches.
 - [x C] Blob catalog/page failure-ordering and restart-cleanup source audit completed in §1.19, including correction of the stale orphan-cleanup API call. [~ C] Complete the final public API/source/byte audit. Durable sender recovery is implemented in §1.25 and FLD receiver staging/atomic switch in §1.26; both await T-pass proof. Transport creation/reconnect/disposal remain application-owned.
-- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23.8 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the current implementation status is §§1.23.6–1.23.14 and 1.24–1.33, which supersede older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
 
@@ -2167,7 +2173,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] `FldDatabaseDataProvider` delegates publication-mode reads/writes to that wrapper and refuses cutover while FLD dirty/replayable drafts or unacknowledged Outbox entries remain.
 - [x C] `FldBinSyncHostAdapter` now requires exact provider/FLD database/Metadata Store/scope/local-replica/namespace/remote-apply identities; a provider cutover marker cannot silently point at a different namespace or Metadata Store.
 - [~ T] Add reopen/restart, concurrent metadata-write conflict, immutable marker mismatch, missing/corrupt identity row, namespace isolation, exact-composition and cutover crash-boundary tests. No build/test result is claimed.
-- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage physical-format decision and final API/source/byte audit remain open. Durable sender snapshot recovery is implemented in §1.25 and awaits T-pass proof.
+- [x C] FLD FULL_REPLACE receiver staging/atomic generation switch is implemented in §1.26; durable sender snapshot recovery is implemented in §1.25. Option B generic Storage format and the scoped BIN-SYNC API/source/byte audit are closed in §§1.28–1.32 and §1.23.12. Exact-head crash/restart proof remains T-pass.
 
 
 ## 1.25. C-pass: persist and restore FULL_REPLACE sender source generations across restart — 2026-11-09
@@ -2178,7 +2184,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Added `IProviderDurableSnapshotStore`; the FLD host provider delegates token-presence and pruning to FLD's persisted provider-snapshot generations. Prepared handles detach on ordinary Dispose while durable state remains; permanent release requires the exact original provider instance and removes sender progress after provider release.
 - [x C] Hardened failure ordering: active transfer leases block permanent release; sender progress is retained if provider release fails; interrupted release is reconciled by pruning; stale provider snapshot tokens are removed without loading full Run payloads; generation restore/validation failures retain the persisted source generation for explicit recovery or cleanup.
 - [~ T] Verify process restart/reopen, resumed multi-recipient transfer with byte-identical manifest/digest, missing/corrupt token, index/state mismatch, concurrent metadata write conflict, dispose during transfer, release failure at each durability boundary, stale-token pruning and wrong-provider release. No build/test result is claimed.
-- [~ C] FLD FULL_REPLACE receiver staging/atomic generation switch, generic Storage ordered page/run/WAL physical-format decision and final API/source/byte audit remain open. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] FLD FULL_REPLACE receiver staging is implemented in §1.26; Option B is the accepted generic Storage boundary in §1.28; scoped API/source/byte audit is closed in §1.23.12 and §§1.28–1.32. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 1.26. C-pass: implement FLD-backed v3.1 FULL_REPLACE receiver staging and atomic generation switch — 2026-11-09
 
@@ -2186,7 +2192,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The optional BIN-SYNC `FldDatabaseDataProvider` implements `IProviderFullReplace`. It maps mutations to FLD's neutral snapshot entry model, re-reads staged pages and verifies the canonical signed FULL_REPLACE digest with `ProviderFullReplaceDigestBuilder` before the FLD switch.
 - [x C] Preserved namespace isolation, WAL/Outbox/ApplyJournal state and old Run generations pinned by durable provider snapshots. Restart recovery detects a manifest switch that completed before the durable stage commit marker; orphan collection protects uncommitted staged Runs.
 - [~ T] Exact cross-repository build, receiver restart, page retry/order, lifecycle/field tombstones, v1/v2 provenance, digest tamper, manifest-switch crash boundary, old-snapshot pins, concurrent writer fencing and abort/reopen coverage remain deferred. No build/test result is claimed.
-- [~ C] Generic Storage ordered page/run/WAL physical-format decision and final public API/source/byte audit remain the remaining broad C-pass gates. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Option B is accepted in §1.28: generic Storage owns byte-KV, opaque immutable blobs and its own catalog WAL; FLD1 Run encoding, manifest, field semantics and FLD WAL remain Database-owned. The scoped API/source/byte audit is closed in §§1.23.12–1.23.13 and §§1.28–1.32. No third DLL; any future WAL/Run format migration requires a separate ADR. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 1.27. C-pass: bind durable FULL_REPLACE sender token to the provider's persisted source watermark — 2026-11-09
 
@@ -2206,8 +2212,8 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Orphan collection combines the full manifest Run set, durable provider-snapshot pins and incomplete FULL_REPLACE stage Run IDs before pruning catalog blobs and unreferenced page directories. Reader pins prevent deletion while a live reader is open.
 - [x C] `StorageBlobReader` serializes page reads, whole-blob streaming/materialization and disposal under one reader gate, so concurrent disposal cannot release the page-directory pin while a read is in flight.
 - [~ T] Exact-head FLD build, blob catalog/page crash cuts, pending-write resume, corrupt/missing page, same-ID conflict, reader/delete pin, cross-namespace Run ID, stage restart/collision, compaction pin and directory-fsync fault coverage remain deferred. No build/test result is claimed.
-- [~ C] Remaining physical-storage C-pass: audit blob catalog/page failure ordering and restart cleanup end-to-end; verify every Run publication path uses the shared allocator/blob/mirror contract; finish generic Storage API boundary and public API/source/byte audit. WAL itself remains Database-owned in this migration step; do not move it into generic Storage without a separate bounded migration decision.
-- [~ C] Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the independent v3.1 reference-horizon proofs and exact-head T-pass.
+- [x C] Source audit closed: pending→page temp write/flush/rename→directory flush→complete marker ordering is consistent; checkpoint, compaction and FULL_REPLACE all use the root-global allocator, immutable blob publication and durable legacy mirror before manifest/stage references. Catalog-less orphan-directory ID reuse is closed in §1.23.13 and FLD commit `fc11a16`. WAL remains Database-owned; no third DLL.
+- [x C] Source-level GC eligibility, external-reference coverage and lock-order audits are complete (§§1.23.6, 1.23.10); all three physical-GC switches remain hard false. Adversarial v3.1 reference-horizon proof tests remain T-pass.
 
 ## 1.29. C-pass: make FLD provider snapshot generations directory-durable — 2026-11-09
 
@@ -2217,7 +2223,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Exposed the domain-neutral `StorageDirectorySync` helper as a documented public API so the separate `Fld1.Database.dll` can share the exact same Unix durability primitive without duplicating native P/Invoke logic. FLD open-failure cleanup now releases the root writer lease even if disposing the generic Storage database itself throws.
 - [x C] `CreateDirectoryDurable` retains parent-entry paths whose fsync failed and retries them on the next call, even though the directory now exists in-process. This prevents a retry from mistaking an incompletely durable mkdir for a durable path.
 - [~ T] Verify process-kill/reopen at every boundary: generation mkdir, overlay file, temp manifest, final rename, release and prune; verify Windows remains explicitly outside the directory-entry durability claim. No exact-head build/test result is claimed.
-- [~ C] Continue the full Run/blob/snapshot pin audit, generic Storage API boundary and final v3/v3.1 source/byte audit. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Full Run/blob/snapshot-pin source audit and generic Storage public boundary are closed in §§1.23.13 and 1.28–1.32. Exact-head restart/pin/failure tests remain T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 1.30. C-pass: make persisted provider snapshots consume the generic Run backend — 2026-11-09
 
@@ -2225,7 +2231,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Durable snapshot-token checks now require each pinned Run to have a readable completed blob or a legacy mirror only when no blob catalog row exists. A pending/corrupt blob is never hidden by a compatibility mirror. The watermark-binding path streams each blob to `Stream.Null` to verify every page and the whole-blob SHA-256 without materializing the Run; legacy fallback Runs are fully decoded/validated at this boundary. The cheap presence-only check does not perform a redundant full read.
 - [x C] Normal Run loading now attempts one catalog snapshot first and opens a second only on the legacy/pending fallback path, avoiding duplicate Storage snapshot creation on the common blob-backed read path.
 - [~ T] Verify snapshot reopen with blob-only, mirror-only and mixed Run v1/v2 generations; missing page, wrong digest, pending catalog row, corrupt mirror fallback and concurrent release while checking the token. No exact-head build/test result is claimed.
-- [~ C] Continue the final source/API/byte audit and exact T-pass for blob-backed provider snapshot recovery. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Blob-backed provider snapshot source/API/byte audit is closed; the exact-head recovery, corruption and concurrent-release matrix remains T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 1.31. C-pass: harden blob metadata arithmetic and reader lifetime — 2026-11-09
 
@@ -2235,7 +2241,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] The public directory-sync helper validates its path argument and documents the platform boundary.
 - [x C] `StorageDatabase.Open` now normalizes the partition directory to an absolute path before opening WAL/catalog files; `DirectoryPath` is stable even if the process working directory later changes.
 - [~ T] Add malformed metadata vectors around `UInt64.MaxValue`, page-count boundary, zero-length blob, simultaneous `CopyTo`/`Dispose`, concurrent independent readers and deletion while pinned. No exact-head build/test result is claimed.
-- [~ C] Continue final public API/source/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Final Storage public API/source/byte audit is closed in §§1.23.12–1.23.14 and 1.28–1.33. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled pending T-pass proof.
 
 ## 1.32. C-pass: reclaim provider snapshot generations that never published a manifest — 2026-11-09
 
@@ -2244,7 +2250,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Valid manifests are parsed, their generation is checked against the containing directory name, and their Run IDs are retained; malformed names, generation mismatches and corrupt/missing manifests never become implicit permission to delete Runs. Windows directory-entry durability remains unclaimed.
 - [x C] Created current recovery points before further C-pass work: BIN-SYNC `backup/cpass-2026-11-09-storage-blob-roadmap` at `998a41d51e3b64dbf40735b5bdc3efa4f1c1c1c1` and FLD-DB `backup/cpass-2026-11-09-storage-blob` at `f4f850a6ca35a998a5625482ec83f70946b8a6f2`.
 - [~ T] Add crash cuts before/after final manifest rename, restart cleanup of temp-only generations, preservation of valid token generations, corrupt-manifest fail-closed and interaction with sender progress pruning. No exact-head build/test result is claimed.
-- [~ C] Continue final source/API/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Source/API/byte audit is closed; exact-head orphan-generation crash/restart and fail-closed pin tests remain T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 1.33. C-pass: preserve immutable blob geometry across Storage configuration changes — 2026-11-09
 
@@ -2255,5 +2261,5 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Immutable identity is the blob length plus SHA-256 content digest; reusing the ID with identical bytes is idempotent even if the caller's current default page size differs. Existing page files are verified using their original durable geometry.
 - [x C] `ContainsBlob` and `TryOpenRead` no longer reject valid generations merely because the current writer's preferred page size changed.
 - [x C] Blob page file contents are flushed individually, but directory entries are now fsynced once per completed blob generation rather than once per page. The pending catalog row remains authoritative until that single directory flush succeeds, so interrupted writes remain resumable while avoiding thousands of redundant directory fsyncs.
-- [~ T] Verify reopen/read/resume with page sizes 4 KiB, 1 MiB and 4 MiB across process versions, same-ID same-content different geometry, same-ID different-content rejection and partial pending-write recovery. No exact-head build/test result is claimed.
-- [~ C] Continue final public API/source/byte audit and exact-head T-pass. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [x C] Final Storage public API/source/byte audit is closed in §§1.23.12–1.23.13 and 1.28–1.33; catalog-less orphan-directory ID occupancy is also covered by §1.23.13.
+- [~ T] Verify reopen/read/resume with page sizes 4 KiB, 1 MiB and 4 MiB across process versions, same-ID same-content different geometry, same-ID different-content rejection, partial pending-write recovery, and exact-head crash/failure matrices. No exact-head build/test result is claimed. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
