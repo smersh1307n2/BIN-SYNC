@@ -2268,10 +2268,10 @@ public sealed class StorageSyncCoordinatorTests
             }));
         Assert.Equal(2, hostAcquires);
         Assert.Equal(2, hostReleases);
-        Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId)
-            .Where(intent => intent.Batch.NamespaceId == 1));
-        Assert.Single(metadata.ReadPendingApplyIntents(scope, local.NodeId)
-            .Where(intent => intent.Batch.NamespaceId == 2));
+        IReadOnlyList<MetadataPendingApplyIntent> remaining =
+            metadata.ReadPendingApplyIntents(scope, local.NodeId);
+        Assert.Single(remaining, intent => intent.Batch.NamespaceId == 1);
+        Assert.Single(remaining, intent => intent.Batch.NamespaceId == 2);
     }
 
     private sealed class CallbackLease : IDisposable
