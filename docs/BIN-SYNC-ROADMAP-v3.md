@@ -2686,3 +2686,10 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] FLD-DB commit `bea7dbb5a1b166d808476fd2a67ce95d5de9daab` now treats only a nonzero OriginSequence as immutable. An epoch-stamped draft can receive its first sequence if the epoch matches; a different epoch still fails closed, and conflicting nonzero sequences remain rejected.
 - [x T] FLD-DB commit `c13786161a37389c5d1a1db1265aacfa5ce8cc3c` adds a regression covering first sequence assignment, exact idempotent restamping, conflicting sequence rejection and snapshot persistence after reopen.
 - [~ T] Re-run the metadata-owned sender restart test against these commits. It must complete two exchanges across a full process/store reopen and advance the same peer stream from ACK cursor 1 to 2 without losing or restamping the first ChangeId.
+
+
+### 1.84 — Identity-stamp WAL record was not enabled in the writer allowlist (2026-11-11)
+
+- [!] The latest FLD Engine regression reached the intended publication-stamp path but failed at `WalWriter.Append`: `KindIdentityStamp (0x05)` was already declared, encoded, recognized by WAL recovery and replayed by FLD, yet the writer's accepted-kind allowlist still omitted it. Run **26/26** and WAL **17/17** passed; Engine **60/61** failed only on this new regression.
+- [x C] FLD-DB commit `e50157fe687bf9573b47d972e88748fe9c1263f5` adds `KindIdentityStamp` to the WAL writer allowlist. The existing recovery path already decodes and replays this record idempotently; no format/version change is required.
+- [~ T] Re-run the FLD Run/WAL/Engine gate and metadata-owned restart integration. The target is Engine **61/61**, host adapter **8/8**, and durable local author cursor **2** after the second post-restart publication.
