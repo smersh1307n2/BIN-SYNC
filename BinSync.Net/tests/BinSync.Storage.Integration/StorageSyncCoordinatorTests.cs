@@ -2663,7 +2663,9 @@ public sealed class StorageSyncCoordinatorTests
             Assert.Contains((1, sent.ChangeId), local.SeenChanges);
             seenChangesBeforeCutover = local.SeenChanges.Count;
 
-            Digest16 semanticFingerprint = ChangeIdentity.Fingerprint(sent);
+            object operation = Ops.DecodeOp(sent.Payload).Op;
+            Digest16 semanticFingerprint = ChangeIdentity.Fingerprint(
+                1, sent.RecordId, sent.OpKind, operation, sent.AuthorNodeId, sent.CausalDeps);
             metadata.FreezeOutbound(scope, local.NodeId, 1, local.NodeId, new[]
             {
                 new MetadataFrozenOperation
