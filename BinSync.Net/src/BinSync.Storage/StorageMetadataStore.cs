@@ -4104,7 +4104,7 @@ private static bool ValidateIncomingBatchForStaging(
             if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
             byte kind = suffix[0];
             if (kind is 4 or 6 or 7 or 9 or 11 ||
-                (kind == 3 && row.Value.Length != 45) ||
+                (kind == 3 && row.Value.Length is not (45 or 61)) ||
                 ((kind is 5 or 8) && row.Value.Length != 16))
                 throw new InvalidDataException("Legacy metadata row encoding is not supported by BIN-SYNC v3.");
             ReadOnlySpan<byte> key = suffix.Slice(1);
