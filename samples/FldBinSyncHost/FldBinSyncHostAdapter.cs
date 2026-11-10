@@ -362,8 +362,8 @@ public sealed class FldBinSyncHostAdapter
 
     /// <summary>
     /// Create the host reference scanner used by BIN-SYNC's ChangeId, receipt,
-    /// record-tombstone and FULL_REPLACE proof paths. Each scan owns one immutable
-    /// FLD index and its commit lease; disposal releases snapshot before lease.
+    /// record-tombstone and FULL_REPLACE proof paths. The caller holds the composed
+    /// application commit lease; each scan owns only its immutable FLD reference index.
     /// </summary>
     public IApplicationGcReferenceScanner CreateReferenceScanner()
         => new DelegateApplicationGcReferenceScanner((scope, replica, namespaceId) =>
@@ -374,13 +374,11 @@ public sealed class FldBinSyncHostAdapter
                 throw new InvalidOperationException(
                     "The FLD reference scanner is bound to a different scope, replica or namespace.");
 
-            IDisposable lease = _database.AcquireReferenceSnapshotGuard(
-                out FldReferenceSnapshot snapshot);
+            FldReferenceSnapshot snapshot = _database.OpenReferenceSnapshot();
             try
             {
                 FldDraftHorizon drafts = snapshot.UnpublishedLocalDraftHorizon;
                 return new DelegateApplicationGcReferenceScan(
-                    lease,
                     snapshot,
                     new ApplicationDraftHorizon(
                         drafts.Count, drafts.MaxHlcWall, drafts.MaxHlcLogical),
@@ -399,7 +397,6 @@ public sealed class FldBinSyncHostAdapter
             catch
             {
                 snapshot.Dispose();
-                lease.Dispose();
                 throw;
             }
         });

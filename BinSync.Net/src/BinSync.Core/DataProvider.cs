@@ -202,10 +202,11 @@ public interface IProviderCommitGuard
 }
 
 /// <summary>
-/// Optional provider capability used by ChangeId GC and FULL_REPLACE commit. A
-/// successful lease excludes new snapshot opens and proves that no provider snapshot
-/// handle is currently pinned; null means an active snapshot prevents the operation.
-/// Dispose on the acquiring thread.
+/// Optional provider capability used by ChangeId and tombstone GC. The caller must
+/// already hold the composed application commit lease, including the host/provider
+/// commit gates. A successful lease pins the provider's reference view and proves
+/// that no conflicting snapshot handle is active; null means an active snapshot
+/// prevents the operation. It must not reacquire a host gate already held by the caller.
 /// </summary>
 public interface IProviderSnapshotGcGuard
 {

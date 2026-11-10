@@ -1255,7 +1255,7 @@ public sealed class StorageSyncCoordinator
         return (wall, logical) => RefreshAfterFullReplace(persistNode, wall, logical);
     }
 
-    /// <summary>Compact ChangeId fingerprints below the signed origin frontier under an external live-reference lease.</summary>
+    /// <summary>Compact ChangeId fingerprints below the signed origin frontier. The supplied lease must be the composed application barrier (coordinator, Node, host and provider gates); the reference scanner opens snapshots under that already-held lease and must not reacquire the host gate.</summary>
     public int CompactChangeLedger(
         int namespaceId, int limit, Func<IDisposable?> acquireGcLease,
         IApplicationGcReferenceScanner externalReferences)
@@ -1267,7 +1267,7 @@ public sealed class StorageSyncCoordinator
             _node.NodeId, namespaceId, _provider, limit, acquireGcLease, externalReferences);
     }
 
-    /// <summary>Attempt fail-closed record-tombstone compaction with internal and host live-reference scans.</summary>
+    /// <summary>Attempt fail-closed record-tombstone compaction. The supplied lease must be the composed application barrier (coordinator, Node, host and provider gates); the reference scanner opens snapshots under that already-held lease and must not reacquire the host gate.</summary>
     public int CompactRecordTombstones(
         int namespaceId, int limit, Func<IDisposable?> acquireGcLease,
         IApplicationGcReferenceScanner externalReferences)
@@ -1286,7 +1286,7 @@ public sealed class StorageSyncCoordinator
             limit, acquireGcLease, externalReferences);
     }
 
-    /// <summary>Compact incoming batch receipts below the signed origin frontier under an external live-reference lease.</summary>
+    /// <summary>Compact incoming batch receipts below the signed origin frontier under the composed application barrier, including host/provider gates; the reference scanner must not reacquire the host gate.</summary>
     public int CompactReceipts(
         int namespaceId, int limit, Func<IDisposable?> acquireGcLease,
         IApplicationGcReferenceScanner externalReferences)

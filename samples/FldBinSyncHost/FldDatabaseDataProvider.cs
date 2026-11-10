@@ -430,14 +430,15 @@ public sealed class FldDatabaseDataProvider :
     public IDisposable? TryAcquireSnapshotGcGuard()
     {
         EnsureOpen();
-        IDisposable lease = _database.AcquireReferenceSnapshotGuard(out FldReferenceSnapshot snapshot);
+        // The caller already holds the composed application commit lease, including
+        // the FLD gate. Capture the reference view without recursively acquiring it.
+        FldReferenceSnapshot snapshot = _database.OpenReferenceSnapshot();
         if (snapshot.HasSnapshotPin)
         {
-            try { snapshot.Dispose(); }
-            finally { lease.Dispose(); }
+            snapshot.Dispose();
             return null;
         }
-        return new SnapshotGcLease(snapshot, lease);
+        return snapshot;
     }
 
     public bool TryGetFullReplaceProgress(Guid generation, out ProviderFullReplaceProgress? progress)
@@ -703,28 +704,6 @@ public sealed class FldDatabaseDataProvider :
             OriginAuthorEpoch = originEpoch,
             OriginSequence = entry.OriginSequence
         };
-    }
-
-    private sealed class SnapshotGcLease : IDisposable
-    {
-        private FldReferenceSnapshot? _snapshot;
-        private IDisposable? _commitLease;
-
-        public SnapshotGcLease(FldReferenceSnapshot snapshot, IDisposable commitLease)
-        {
-            _snapshot = snapshot;
-            _commitLease = commitLease;
-        }
-
-        public void Dispose()
-        {
-            FldReferenceSnapshot? snapshot = _snapshot;
-            _snapshot = null;
-            IDisposable? commitLease = _commitLease;
-            _commitLease = null;
-            try { snapshot?.Dispose(); }
-            finally { commitLease?.Dispose(); }
-        }
     }
 
     private void EnsureOpen()

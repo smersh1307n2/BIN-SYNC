@@ -1,3 +1,11 @@
+## 1.25. C-pass: keep host reference scans inside one composed lease — 2026-11-10
+
+- [x C] `DelegateApplicationGcReferenceScan` now owns only the immutable host snapshot; the caller's composed application commit guard owns the host commit lease for the entire GC/frontier pass.
+- [x C] FLD sample scanner opens `FldReferenceSnapshot` under the already-held guard and no longer reacquires `AcquireCommitGuard` through `AcquireReferenceSnapshotGuard`.
+- [x C] FLD provider snapshot-GC capability now returns its reference snapshot under the caller-held guard instead of nesting a second host lease; lease disposal remains owned by the outer application barrier.
+- [x C] Updated the host composition and public provider contracts to make the lease ownership explicit and avoid requiring reentrant host locks.
+- [~ T] Verify exception/disposal order, non-reentrant host gate behavior, and exactly one outer host-lease acquisition across ChangeId/frontier/tombstone GC. No build/tests run in this C slice.
+
 ## 1.24. C-pass: drive provider scans by explicit feed cursor — 2026-11-10
 
 - [x C] Applied-origin frontier publication now scans through the captured provider high-watermark using `ScannedThroughSequence`, validates cursor progress/range and every returned sequence, and does not infer completion from a short page.
@@ -678,7 +686,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x C] Confirmed `AcquireApplicationCommitGuard(hostLeaseFactory)`, host scan snapshot contracts, FULL_REPLACE host draft barrier, and all three mandatory GC scanner entry points are already wired in the coordinator. Physical GC remains disabled.
 - [x C] Confirmed the provider snapshot path uses sorted-key lower-bound seeking and bounded 1,024-entry pages. It shares immutable value arrays but still copies an O(key-count) sorted index; therefore only payload duplication is closed, not total snapshot memory bounded to O(page).
 - [x C] The synchronized-FLD adapter remains a separate integration boundary from the Storage-only Metadata Store adapter. The host sample now binds the FLD page read, RPM3 map append, publication/send gate, safe-ACK translation, durable FLD ACK and post-ACK map pruning. Do not put FLD semantic types into `Fld1.Storage` or add a third database runtime DLL. [~ T] End-to-end execution and restart proof remain.
-- [x C] `FldBinSyncHostAdapter.CreateReferenceScanner` opens one `FldReferenceSnapshot` through `AcquireReferenceSnapshotGuard`, maps the draft horizon and receipt/ChangeId/RecordId indexes, and returns a scan lease that disposes the snapshot before releasing the FLD guard. [~ T] Verify disposal and composed lock ordering.
+- [x C] Historical implementation used `AcquireReferenceSnapshotGuard` inside the scanner; superseded by §1.25. The scanner now owns only the immutable reference snapshot while the outer composed application guard owns the FLD commit lease. [~ T] Verify disposal and composed lock ordering.
 - [x C] Public coordinator APIs are explicit one-message operations and the host orchestration recipe covers member lifecycle (Joining→FULL_REPLACE→installed ACK→Active; Retired→fenced rejoin), one-checkpoint-per-round broadcast, cancellation, transport ownership and persistence. Periodic scheduling remains deliberately application-owned; no background timer/worker belongs inside protocol core.
 - [x C] Public sample and canonical signed-payload vectors are now aligned to the audited 0x01–0x1C frame registry. [~ T] Execute the vector sample and verify encode/decode/trust-store/negative cases; no test pass is claimed yet.
 - [x C] Fixed framing and row formulas are documented across NodePersistence v17, StorageMetadataStore, FLD Outbox/ApplyJournal/Micro-WAL, Fld1.Storage, Manifest and Run. [~ O/T] Actual workload cardinalities, adaptive receipt grouping savings, per-author progress compaction, PGM/dictionary amplification, in-memory indexes and write/snapshot amplification still require measurement.
@@ -1536,7 +1544,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] `CompactChangeLedger` now checks both BIN-SYNC-owned live references and the host scanner before deleting a ChangeId ledger row.
 - [x C] `StorageMetadataStore.HasLiveRecordReference` checks pending apply payloads, relay payloads, outbound payloads and conservatively blocks on any pending immutable peer reservation in the namespace. Malformed retained payloads count as live.
 - [x C] `CompactRecordTombstones` now requires the durable Metadata Store and external scanner, verifies all three durable adapters share one StorageDatabase, and checks both internal and host record/ChangeId references under the supplied composed lease.
-- [x C] The FLD reference scanner and host lease composition are implemented by the optional sample and `AcquireReferenceSnapshotGuard`. All physical GC feature flags remain false until T-pass proof exists.
+- [x C] The FLD reference scanner and host lease composition are implemented by the optional sample; current ownership is documented in §1.25. All physical GC feature flags remain false until T-pass proof exists.
 
 - [x C] Threaded the required host scanner through the public `StorageSyncCoordinator` GC entry points; there is no coordinator wrapper that can silently invoke ChangeId or record-tombstone compaction without the scanner.
 
@@ -1563,7 +1571,7 @@ A C marker is explicitly provisional, not a claim of correctness or test complet
 - [x C] FLD's receipt scanner matches durable ApplyJournal identities across sender peer, transport epoch, issuer author epoch, namespace and batch id. ChangeId/RecordId scanners inspect dirty state, pending Outbox and retained ApplyJournal field/relay payloads.
 - [x C] Any unsealed WAL prefix blocks external ChangeId/RecordId/receipt reclamation conservatively until checkpoint/seal; a faulted database throws and cannot authorize GC.
 - [x C] Added \`OutboxLog.VisitUnackedBatch\` borrowed-span iteration. FLD horizon/reference scans now inspect IDs and HLC without copying potentially large field-value payloads, using bounded 512-entry pages; ApplyJournal scans use 256-record pages.
-- [x C] The optional `samples/FldBinSyncHost` adapter implements `IApplicationGcReferenceScanner`, opens one `FldReferenceSnapshot` under `AcquireReferenceSnapshotGuard` and returns a scan lease that releases snapshot before the FLD guard. The host composes this with `AcquireApplicationCommitGuard(hostLeaseFactory)`; FLD remains protocol-neutral.
+- [x C] The optional `samples/FldBinSyncHost` adapter implements `IApplicationGcReferenceScanner` and returns an immutable `FldReferenceSnapshot`; the host composes `AcquireApplicationCommitGuard(hostLeaseFactory)` and owns the single FLD commit lease. Current scanner ownership supersedes the earlier nested-guard implementation; FLD remains protocol-neutral.
 - [~ T] FLD exact-head CI is running for code head \`488150e\`; BIN-SYNC Core remains red on the previous exact code head due OFR1/RCP1 fixtures and one obsolete record-tombstone fixture. Fuzz/Lab passed. Do not weaken the production OFR2/ProviderMutation invariants to make legacy fixtures pass.
 - [~ O] Zero-copy Outbox scans are expected to reduce temporary allocations, but benchmark acceptance is pending.
 

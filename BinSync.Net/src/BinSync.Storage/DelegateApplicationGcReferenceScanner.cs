@@ -3,8 +3,9 @@ namespace BinSync.Storage;
 /// <summary>
 /// Adapts an application-owned immutable reference snapshot to BIN-SYNC's GC contract
 /// without introducing a dependency on the application's database or domain types.
-/// The factory must acquire the host commit lease before opening its snapshot and return
-/// a scan that owns both resources until Dispose.
+/// The caller must hold the composed application commit lease before opening a scan.
+/// The factory opens one immutable host snapshot under that lease; the returned scan
+/// owns only the snapshot and must not reacquire the host commit gate.
 /// </summary>
 public sealed class DelegateApplicationGcReferenceScanner : IApplicationGcReferenceScanner
 {
@@ -31,27 +32,24 @@ public sealed class DelegateApplicationGcReferenceScanner : IApplicationGcRefere
 }
 
 /// <summary>
-/// Owns one host commit lease and one immutable host snapshot while adapting its
-/// pre-indexed reference queries to BIN-SYNC. Dispose always releases the snapshot
-/// before releasing the commit lease, including when snapshot disposal throws.
+/// Owns one immutable host snapshot while adapting its pre-indexed reference
+/// queries to BIN-SYNC. The caller owns the composed application commit lease and
+/// must keep it held until this scan has been disposed.
 /// </summary>
 public sealed class DelegateApplicationGcReferenceScan : IApplicationGcReferenceScan
 {
-    private IDisposable? _hostCommitLease;
     private IDisposable? _snapshot;
     private readonly Func<NodeId, uint, uint, BatchId, bool> _hasReceipt;
     private readonly Func<BatchId, bool> _hasChangeId;
     private readonly Func<RecordId, BatchId, bool> _hasRecord;
 
     public DelegateApplicationGcReferenceScan(
-        IDisposable hostCommitLease,
         IDisposable snapshot,
         ApplicationDraftHorizon unpublishedLocalDraftHorizon,
         Func<NodeId, uint, uint, BatchId, bool> hasReceipt,
         Func<BatchId, bool> hasChangeId,
         Func<RecordId, BatchId, bool> hasRecord)
     {
-        ArgumentNullException.ThrowIfNull(hostCommitLease);
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(hasReceipt);
         ArgumentNullException.ThrowIfNull(hasChangeId);
@@ -62,7 +60,6 @@ public sealed class DelegateApplicationGcReferenceScan : IApplicationGcReference
             throw new ArgumentException("An empty draft horizon cannot have a non-zero HLC maximum.",
                 nameof(unpublishedLocalDraftHorizon));
 
-        _hostCommitLease = hostCommitLease;
         _snapshot = snapshot;
         UnpublishedLocalDraftHorizon = unpublishedLocalDraftHorizon;
         _hasReceipt = hasReceipt;
@@ -93,20 +90,11 @@ public sealed class DelegateApplicationGcReferenceScan : IApplicationGcReference
 
     public void Dispose()
     {
-        IDisposable? snapshot = Interlocked.Exchange(ref _snapshot, null);
-        IDisposable? hostLease = Interlocked.Exchange(ref _hostCommitLease, null);
-        try
-        {
-            snapshot?.Dispose();
-        }
-        finally
-        {
-            hostLease?.Dispose();
-        }
+        Interlocked.Exchange(ref _snapshot, null)?.Dispose();
     }
 
     private void ThrowIfDisposed()
     {
-        ObjectDisposedException.ThrowIf(_snapshot is null || _hostCommitLease is null, this);
+        ObjectDisposedException.ThrowIf(_snapshot is null, this);
     }
 }

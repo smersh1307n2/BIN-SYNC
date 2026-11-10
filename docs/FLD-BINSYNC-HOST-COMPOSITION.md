@@ -108,18 +108,18 @@ Do not run both paths or mirror relay payload/ACK state in FLD. A crash before M
 
 ## GC reference snapshot binding
 
-The host scanner acquires the FLD commit lease before building one immutable `FldReferenceSnapshot`. The BIN-SYNC wrapper owns both and releases the snapshot before the lease. Every callback is partition-scoped; the namespace is checked/cast to FLD's 16-bit receipt key domain.
+The composed BIN-SYNC application commit guard acquires the FLD commit lease before the shared Storage gate. The host scanner then builds one immutable `FldReferenceSnapshot` under that already-held lease; it must not reacquire the FLD commit gate. The BIN-SYNC wrapper owns the snapshot, while the outer composed guard owns the lease. Every callback is partition-scoped; the namespace is checked/cast to FLD's 16-bit receipt key domain.
 
 ```csharp
 var scanner = new DelegateApplicationGcReferenceScanner((scope, replica, ns) =>
 {
-    IDisposable lease = fld.AcquireCommitGuard();
+    // The caller already holds the composed application commit guard, including
+    // fld.AcquireCommitGuard(), in coordinator → Node → host → shared-Storage order.
+    FldReferenceSnapshot snapshot = fld.OpenReferenceSnapshot();
     try
     {
-        FldReferenceSnapshot snapshot = fld.OpenReferenceSnapshot();
         FldDraftHorizon drafts = snapshot.UnpublishedLocalDraftHorizon;
         return new DelegateApplicationGcReferenceScan(
-            lease,
             snapshot,
             new ApplicationDraftHorizon(
                 drafts.Count, drafts.MaxHlcWall, drafts.MaxHlcLogical),
@@ -134,13 +134,13 @@ var scanner = new DelegateApplicationGcReferenceScanner((scope, replica, ns) =>
     }
     catch
     {
-        lease.Dispose();
+        snapshot.Dispose();
         throw;
     }
 });
 ```
 
-Pass this scanner and `AcquireFldLease` into every BIN-SYNC physical-GC/frontier/FULL_REPLACE path that requires host state. Do not enable physical GC yet: first prove composed lock ordering and safe horizons for receipts, ChangeId and record tombstones/ghosts with crash/reopen and adversarial tests.
+Pass this scanner to every BIN-SYNC physical-GC/frontier path that requires host state, and pass the composed application commit lease (including the FLD commit gate) as the corresponding `acquireHostCommitLease`/`acquireGcLease`. The scanner itself must only open the immutable snapshot; it must not reacquire the host gate. Do not enable physical GC yet: first prove composed lock ordering and safe horizons for receipts, ChangeId and record tombstones/ghosts with crash/reopen and adversarial tests.
 
 ## Operational invariants
 
