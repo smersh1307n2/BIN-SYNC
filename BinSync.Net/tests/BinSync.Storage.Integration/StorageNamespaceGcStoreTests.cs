@@ -161,6 +161,145 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
+    public void Tombstone_gc_proof_rejects_hlc_and_full_replace_identity_overclaims()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-tombstone-proof-overclaim-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        var roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("12345678-1234-5678-9abc-def012345679");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("tombstone proof snapshot"));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 903);
+            var gc = new StorageNamespaceGcStore(storage, "fld-db/tombstone-overclaim", NodeId.From(Id(99)));
+            roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, digest), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, digest), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 }, generation, digest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            NodeId origin = NodeId.From(Id(2));
+            Assert.True(gc.HasProtocolTombstoneGcProof(
+                roster, trust, origin, 3, 90, 100, 2, generation, digest));
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, origin, 3, 90, 101, 0, generation, digest));
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, origin, 3, 90, 100, 3, generation, digest));
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, origin, 3, 90, 100, 2,
+                Guid.Parse("12345678-1234-5678-9abc-def012345680"), digest));
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, origin, 3, 90, 100, 2, generation,
+                SHA256.HashData(Encoding.UTF8.GetBytes("different snapshot"))));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Tombstone_gc_proof_requires_every_active_member_installed_ack()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-tombstone-proof-missing-ack-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        var roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("one member missing ack"));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 904);
+            var gc = new StorageNamespaceGcStore(storage, "fld-db/tombstone-missing-ack", NodeId.From(Id(99)));
+            roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, digest), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 }, generation, digest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, NodeId.From(Id(2)), 3, 90, 100, 2, generation, digest));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Tombstone_gc_proof_requires_all_active_replicas_to_apply_the_final_issued_prefix()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-tombstone-proof-incomplete-applied-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        var roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("incomplete applied prefix"));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 905);
+            var gc = new StorageNamespaceGcStore(storage, "fld-db/tombstone-incomplete-applied", NodeId.From(Id(99)));
+            roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            AppliedOriginFrontierReport partialBase = Report(roster, 1, keys, 1, 80);
+            var partialIssuedReport = new AppliedOriginFrontierReport
+            {
+                NamespaceId = partialBase.NamespaceId,
+                RosterGeneration = partialBase.RosterGeneration,
+                RosterDigest = partialBase.RosterDigest,
+                MemberNodeId = partialBase.MemberNodeId,
+                MemberTransportEpoch = partialBase.MemberTransportEpoch,
+                ReportSequence = partialBase.ReportSequence,
+                Entries = partialBase.Entries,
+                IssuedOrigins = new[]
+                {
+                    new IssuedOriginFrontierEntry
+                    {
+                        OriginAuthorEpoch = 3,
+                        IssuedOriginSequence = 90,
+                        MaxIssuedHlcWall = 100,
+                        MaxIssuedHlcLogical = 2
+                    }
+                }
+            };
+            var report1 = gc.AcceptOriginFrontier(
+                OriginFrontierProtocol.Sign(partialIssuedReport, keys[1].Seed), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, digest), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, digest), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 }, generation, digest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(2)), 3, 80));
+            Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(2)), 3, 90));
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, NodeId.From(Id(2)), 3, 80, 100, 2, generation, digest));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Joining_member_cannot_become_active_until_current_full_replace_ack_is_durable()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-join-" + Guid.NewGuid().ToString("N"));
