@@ -377,6 +377,203 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Process_kill_after_fld_commit_before_metadata_finalize_recovers_and_duplicate_acks()
+    {
+        const uint namespaceId = 11;
+        const string scope = "fld-process-kill-after-commit";
+        byte[] authorA = Id(0xF1);
+        byte[] authorB = Id(0xF2);
+        byte[] recordId = Id(0xF3);
+        string directory = Path.Combine(_directory, "fld-process-kill");
+        string readyPath = Path.Combine(directory, "child-ready");
+        string ownerPidPath = Path.Combine(directory, "child-owner-pid");
+        string? projectDirectory = AppContext.BaseDirectory;
+        while (projectDirectory is not null &&
+               !File.Exists(Path.Combine(projectDirectory, "FldBinSyncHost.Tests.csproj")))
+            projectDirectory = Directory.GetParent(projectDirectory)?.FullName;
+        Assert.NotNull(projectDirectory);
+
+        string configuration = Directory.GetParent(AppContext.BaseDirectory.TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))?.Name ?? "Release";
+        var start = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            WorkingDirectory = projectDirectory!,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add("test");
+        start.ArgumentList.Add(Path.Combine(projectDirectory!, "FldBinSyncHost.Tests.csproj"));
+        start.ArgumentList.Add("--no-build");
+        start.ArgumentList.Add("--no-restore");
+        start.ArgumentList.Add("--configuration");
+        start.ArgumentList.Add(configuration);
+        start.ArgumentList.Add("--filter");
+        start.ArgumentList.Add("FullyQualifiedName~Fld_process_kill_child_probe");
+        start.ArgumentList.Add("--results-directory");
+        start.ArgumentList.Add(Path.Combine(directory, "child-test-results"));
+        start.Environment["BIN_SYNC_FLD_CRASH_DIR"] = directory;
+        start.Environment["BIN_SYNC_FLD_CRASH_READY"] = readyPath;
+        start.Environment["BIN_SYNC_FLD_CRASH_PID"] = ownerPidPath;
+
+        System.Diagnostics.Process? child = null;
+        try
+        {
+            child = System.Diagnostics.Process.Start(start);
+            Assert.NotNull(child);
+            Task<string> stdout = child!.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = child.StandardError.ReadToEndAsync();
+
+            DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            while (!File.Exists(readyPath) && !child.HasExited && DateTime.UtcNow < deadline)
+                await Task.Delay(25);
+            if (!File.Exists(readyPath))
+            {
+                if (!child.HasExited)
+                    child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(File.Exists(readyPath),
+                    $"Child did not reach the post-FLD-commit crash cut. stdout={await stdout} stderr={await stderr}");
+            }
+
+            int ownerPid = int.Parse(File.ReadAllText(ownerPidPath));
+            using (var owner = System.Diagnostics.Process.GetProcessById(ownerPid))
+            {
+                owner.Kill(entireProcessTree: true);
+                await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            if (!child.HasExited)
+                child.Kill(entireProcessTree: true);
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            // Reopen every durable store after the owner process has been killed.
+            using var fldA = FldDatabase.Open(Path.Combine(directory, "fld-a"), namespaceId, authorA);
+            using var fldB = FldDatabase.Open(Path.Combine(directory, "fld-b"), namespaceId, authorB);
+            using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
+            using var storageA = StorageDatabase.Open(Path.Combine(directory, "storage-a"), 721);
+            using var storageB = StorageDatabase.Open(Path.Combine(directory, "storage-b"), 722);
+            using var metadataB = new StorageMetadataStore(storageB);
+            using var nodeA = StorageNodePersistence.Load(storageA, NodeId.From(authorA));
+            using var nodeB = StorageNodePersistence.Load(storageB, NodeId.From(authorB));
+            var coordinatorB = new StorageSyncCoordinator(
+                nodeB, providerB, checked((int)namespaceId), metadataB, scope,
+                remoteBatchCommitStore: new FldRemoteBatchApplyStore(fldB));
+
+            Assert.Single(metadataB.ReadPendingApplyIntents(scope, nodeB.NodeId));
+            Assert.True(fldB.TryGetBytes(recordId, 0x0601, out byte[]? committed));
+            Assert.Equal("hard-kill-after-fld-commit"u8.ToArray(), committed);
+            Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
+
+            Assert.Equal(1, coordinatorB.RecoverPendingApplies(
+                node => StorageNodePersistence.Save(storageB, node)));
+            Assert.Empty(metadataB.ReadPendingApplyIntents(scope, nodeB.NodeId));
+            Assert.Equal(0, coordinatorB.RecoverPendingApplies(
+                node => StorageNodePersistence.Save(storageB, node)));
+
+            // The sender had no ACK at the kill point. Its durable Node image still
+            // owns the outbound operation; after recovery, a fresh session retries
+            // that same immutable operation and receives a duplicate ACK.
+            var (toA, toB) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
+            await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
+            StorageNodePersistence.Save(storageA, nodeA);
+            StorageNodePersistence.Save(storageB, nodeB);
+
+            Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
+                sessionB, node => StorageNodePersistence.Save(storageB, node));
+            Assert.True(await sessionA.PushBatchAsync(
+                nodeA, checked((int)namespaceId)).WaitAsync(TimeSpan.FromSeconds(20)));
+            BatchResult replay = await receiveTask.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.True(replay.Duplicate);
+            Assert.True(fldB.TryGetBytes(recordId, 0x0601, out byte[]? afterReplay));
+            Assert.Equal("hard-kill-after-fld-commit"u8.ToArray(), afterReplay);
+            Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
+        }
+        finally
+        {
+            if (child is not null)
+            {
+                try { if (!child.HasExited) child.Kill(entireProcessTree: true); } catch { }
+                try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+                child.Dispose();
+            }
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Fld_process_kill_child_probe()
+    {
+        string? directory = Environment.GetEnvironmentVariable("BIN_SYNC_FLD_CRASH_DIR");
+        string? readyPath = Environment.GetEnvironmentVariable("BIN_SYNC_FLD_CRASH_READY");
+        string? ownerPidPath = Environment.GetEnvironmentVariable("BIN_SYNC_FLD_CRASH_PID");
+        if (string.IsNullOrWhiteSpace(directory) || string.IsNullOrWhiteSpace(readyPath) ||
+            string.IsNullOrWhiteSpace(ownerPidPath))
+            return;
+
+        const uint namespaceId = 11;
+        const string scope = "fld-process-kill-after-commit";
+        byte[] authorA = Id(0xF1);
+        byte[] authorB = Id(0xF2);
+        byte[] recordId = Id(0xF3);
+        using var fldA = FldDatabase.Open(Path.Combine(directory, "fld-a"), namespaceId, authorA);
+        using var fldB = FldDatabase.Open(Path.Combine(directory, "fld-b"), namespaceId, authorB);
+        using var providerA = new FldDatabaseDataProvider(fldA, () => 1);
+        using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
+        using var storageA = StorageDatabase.Open(Path.Combine(directory, "storage-a"), 721);
+        using var storageB = StorageDatabase.Open(Path.Combine(directory, "storage-b"), 722);
+        using var metadataA = new StorageMetadataStore(storageA);
+        using var metadataB = new StorageMetadataStore(storageB);
+        using var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build();
+        using var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build();
+
+        var coordinatorA = new StorageSyncCoordinator(
+            nodeA, providerA, checked((int)namespaceId), metadataA, scope);
+        providerA.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = RecordId.From(recordId),
+            FieldId = 0x0601,
+            HlcWall = 6001,
+            AuthorNodeId = NodeId.From(authorA),
+            KeyEpoch = 0,
+            Value = "hard-kill-after-fld-commit"u8.ToArray(),
+            ChangeId = BatchId.From(Id(0xF4)),
+            OriginAuthorEpoch = 1
+        });
+        Assert.Equal(1, coordinatorA.PublishLocalChanges(
+            node => StorageNodePersistence.Save(storageA, node)));
+
+        var (toA, toB) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+        var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+        await using var sessionB = await acceptTask;
+        await using var sessionA = await connectTask;
+        StorageNodePersistence.Save(storageA, nodeA);
+        StorageNodePersistence.Save(storageB, nodeB);
+
+        Action signalAndBlock = () =>
+        {
+            File.WriteAllText(ownerPidPath, Environment.ProcessId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+            File.WriteAllText(readyPath, "after-fld-commit");
+            Thread.Sleep(Timeout.Infinite);
+        };
+        var blockingStore = new ApplyAndBlockStore(new FldRemoteBatchApplyStore(fldB), signalAndBlock);
+        var coordinatorB = new StorageSyncCoordinator(
+            nodeB, providerB, checked((int)namespaceId), metadataB, scope,
+            remoteBatchCommitStore: blockingStore);
+
+        Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
+            sessionB, node => StorageNodePersistence.Save(storageB, node));
+        Task<bool> sendTask = sessionA.PushBatchAsync(nodeA, checked((int)namespaceId));
+        await Task.WhenAll(receiveTask, sendTask);
+    }
+
+    [Fact]
     public void Remote_record_and_field_tombstones_keep_distinct_fld_lifecycle_semantics()
     {
         const uint namespaceId = 9;
@@ -437,6 +634,25 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         Assert.True(database.TryResolve(fieldTombstoneId, 0x0401, out var field));
         Assert.True(field.Found);
         Assert.True(field.IsTombstone);
+    }
+
+    private sealed class ApplyAndBlockStore : IProviderRemoteBatchCommitStore
+    {
+        private readonly IProviderRemoteBatchCommitStore _inner;
+        private readonly Action _block;
+
+        public ApplyAndBlockStore(IProviderRemoteBatchCommitStore inner, Action block)
+        {
+            _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+            _block = block ?? throw new ArgumentNullException(nameof(block));
+        }
+
+        public ProviderApplyReceipt ApplyRemoteBatch(ProviderRemoteBatchCommit batch)
+        {
+            ProviderApplyReceipt receipt = _inner.ApplyRemoteBatch(batch);
+            _block();
+            return receipt;
+        }
     }
 
     private sealed class ApplyThenThrowOnceStore : IProviderRemoteBatchCommitStore
