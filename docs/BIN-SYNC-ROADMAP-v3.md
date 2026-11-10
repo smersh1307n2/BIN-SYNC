@@ -2274,3 +2274,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Tested code head 2dc16a8621bd74eda9256e94d79d04e553a3bdb8: core suite 678/678 on Linux and Windows; durable provider integration 172/172 on Linux, macOS and Windows; both in-process and real-TCP Storage array samples passed on all three platforms; v3.1 signed control-plane vectors and fuzz/lab jobs passed.
 - [~ T] The FLD cross-repository workflow job was green, but its private FLD-DB checkout and host-adapter build steps were skipped; the exact cross-repository build remains unverified.
 - [x C/T] Snapshot-state/remote-operation contract and this exact-head cross-platform integration gate are closed. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled pending the separate complete reference-horizon proof.
+
+## 1.35. T-pass: prove signed offline rejoin cannot inherit stale GC horizons — 2026-11-10
+
+- [x T] Added an end-to-end durable-store test that seeds a retired member's prior-generation applied frontier, retention checkpoint and FULL_REPLACE-installed ACK, then exercises a signed roster-generation gap and rejoin.
+- [x T] The test rejects Retired→Active on a consecutive generation, rejects reactivation at or below the retired transport-epoch fence across a gap, and accepts the higher signed full roster only after the rejoining member advances beyond that fence while preserving its immutable retired-origin closure.
+- [x T] After the gap, prior-generation OFR2 reports, RCP2 checkpoint and FRA2 ACK are not inherited: current-generation frontiers/ACKs are empty, no current checkpoint exists, and origin/tombstone proof queries remain false. Reopen preserves the new roster and the fail-closed horizon.
+- [x T] Exact head 631136ebcc36512c62c176bbf4a1a36db3baafbf: Core 678/678 on Linux and Windows; Storage Integration 173/173 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 golden vectors and Fuzz/Lab passed.
+- [x C/T] Offline/rejoin generation-gap horizon reset is covered. This is not permission to enable physical GC: the three physical-GC switches remain hard false pending the broader adversarial multi-member/offline/rejoin and external-reference proof matrix.
