@@ -2341,6 +2341,44 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(2, hostReleases);
     }
 
+    [Fact]
+    public void Full_replace_commit_guard_does_not_treat_completed_receipts_as_pending_work()
+    {
+        const string scope = "full-replace-completed-receipt";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-completed-receipt"), 480);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(82);
+        using var sender = NewNode(83);
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+
+        MetadataIncomingBatch batch = CreatePendingProviderBatch(
+            scope, local, sender, 1,
+            RecordId.From(Guid.Parse("82000000-0000-0000-0000-000000000001").ToByteArray()),
+            0x0882, "completed-receipt", 0x82);
+        Guid applyToken = Guid.Parse("82000000-0000-0000-0000-000000000082");
+        metadata.BeginPendingApply(batch, applyToken);
+        metadata.FinalizePendingApply(scope, local.NodeId,
+            new MetadataProviderApplyReceipt(applyToken, batch.BatchDigest.ToArray()));
+        Assert.Empty(metadata.ReadPendingApplyIntents(scope, local.NodeId));
+
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        using (coordinator.AcquireFullReplaceCommitGuard(() =>
+        {
+            Interlocked.Increment(ref hostAcquires);
+            return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+        }))
+        {
+            Assert.Equal(1, hostAcquires);
+            Assert.Equal(0, hostReleases);
+        }
+        Assert.Equal(1, hostReleases);
+    }
+
     private sealed class CallbackLease : IDisposable
     {
         private Action? _onDispose;
