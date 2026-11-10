@@ -2182,7 +2182,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(new[] { "host.acquire.null" }, events);
 
         events.Clear();
-        IDisposable lease = coordinator.AcquireApplicationCommitGuard(() =>
+        using IDisposable lease = coordinator.AcquireApplicationCommitGuard(() =>
         {
             events.Add("host.acquire");
             return new CallbackLease(() => events.Add("host.release"));
