@@ -585,7 +585,8 @@ public abstract class MetadataStoreConformanceSuite
             Fingerprint = Bytes(fingerprint ?? payload),
             Payload = new[] { payload },
             OriginAuthorEpoch = 1,
-            OriginSequence = change
+            // New outbound drafts defer immutable OriginSequence allocation to the Metadata Store.
+            OriginSequence = 0
         };
 
     protected static MetadataOperation Operation(byte author, byte change, byte fingerprint, byte payload)
