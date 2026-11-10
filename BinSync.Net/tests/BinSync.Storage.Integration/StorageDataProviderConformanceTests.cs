@@ -339,6 +339,54 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
 
     [Fact]
+    public void Tombstone_gc_field_selection_removes_only_fields_not_newer_than_record_tombstone()
+    {
+        RecordId record = RecordId.From(Guid.Parse("f3000000-0000-0000-0000-000000000003").ToByteArray());
+        RecordId otherRecord = RecordId.From(Guid.Parse("f3000000-0000-0000-0000-000000000004").ToByteArray());
+        NodeId author = Node(1);
+
+        ProviderMutation Field(ulong wall, RecordId? recordId = null) => new()
+        {
+            RecordId = recordId ?? record,
+            FieldId = 0x0101,
+            HlcWall = wall,
+            HlcLogical = 0,
+            AuthorNodeId = author,
+            Value = BitConverter.GetBytes(wall)
+        };
+
+        ProviderMutation tombstone = new()
+        {
+            RecordId = record,
+            FieldId = Model.LifecycleFieldId,
+            IsRecordTombstone = true,
+            HlcWall = 200,
+            HlcLogical = 0,
+            AuthorNodeId = author,
+            Value = Array.Empty<byte>()
+        };
+
+        Assert.True(StorageDataProvider.IsFieldObsoleteUnderRecordTombstone(Field(100), tombstone));
+        Assert.True(StorageDataProvider.IsFieldObsoleteUnderRecordTombstone(Field(200), tombstone));
+        Assert.False(StorageDataProvider.IsFieldObsoleteUnderRecordTombstone(Field(201), tombstone));
+        Assert.Throws<InvalidDataException>(() =>
+            StorageDataProvider.IsFieldObsoleteUnderRecordTombstone(Field(201, otherRecord), tombstone));
+        Assert.Throws<InvalidDataException>(() =>
+            StorageDataProvider.IsFieldObsoleteUnderRecordTombstone(
+                new ProviderMutation
+                {
+                    RecordId = record,
+                    FieldId = Model.LifecycleFieldId,
+                    IsRecordTombstone = true,
+                    HlcWall = 150,
+                    AuthorNodeId = author,
+                    Value = Array.Empty<byte>()
+                }, tombstone));
+        Assert.Throws<InvalidDataException>(() =>
+            StorageDataProvider.IsFieldObsoleteUnderRecordTombstone(Field(100), Field(200)));
+    }
+
+    [Fact]
     public void Record_tombstone_hides_older_fields_but_newer_ghost_field_survives_restart_and_snapshot()
     {
         string directory = Path.Combine(_root, "record-tombstone");
