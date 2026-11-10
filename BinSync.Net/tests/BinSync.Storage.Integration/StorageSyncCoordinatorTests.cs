@@ -2238,7 +2238,7 @@ public sealed class StorageSyncCoordinatorTests
         MetadataIncomingBatch otherNamespace = CreatePendingProviderBatch(
             scope, local, sender, 2,
             RecordId.From(Guid.Parse("78000000-0000-0000-0000-000000000002").ToByteArray()),
-            0x0878, "other-namespace-pending"u8.ToString(), 0x31);
+            0x0878, "other-namespace-pending", 0x31);
         metadata.BeginPendingApply(otherNamespace, Guid.Parse("78000000-0000-0000-0000-000000000201"));
 
         int hostAcquires = 0;
@@ -2257,7 +2257,7 @@ public sealed class StorageSyncCoordinatorTests
         MetadataIncomingBatch targetNamespace = CreatePendingProviderBatch(
             scope, local, sender, 1,
             RecordId.From(Guid.Parse("78000000-0000-0000-0000-000000000001").ToByteArray()),
-            0x0878, "target-namespace-pending"u8.ToString(), 0x32);
+            0x0878, "target-namespace-pending", 0x32);
         metadata.BeginPendingApply(targetNamespace, Guid.Parse("78000000-0000-0000-0000-000000000101"));
 
         Assert.Throws<InvalidOperationException>(() =>
