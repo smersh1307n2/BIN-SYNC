@@ -56,6 +56,12 @@ public sealed class OriginFrontierProtocolTests
                     OriginAuthorNodeId = NodeId.From(Id(e.Author)),
                     OriginAuthorEpoch = e.Epoch,
                     ContiguousAppliedOriginSequence = e.Sequence
+                }).ToArray(),
+            IssuedOrigins = entries.Where(e => e.Author == (byte)(memberIndex + 1))
+                .OrderBy(e => e.Epoch).Select(e => new IssuedOriginFrontierEntry
+                {
+                    OriginAuthorEpoch = e.Epoch,
+                    IssuedOriginSequence = e.Sequence
                 }).ToArray()
         };
         return OriginFrontierProtocol.DecodeAndVerify(
@@ -110,7 +116,8 @@ public sealed class OriginFrontierProtocolTests
             MemberNodeId = activeReport.MemberNodeId,
             MemberTransportEpoch = activeReport.MemberTransportEpoch + 1,
             ReportSequence = activeReport.ReportSequence,
-            Entries = activeReport.Entries
+            Entries = activeReport.Entries,
+            IssuedOrigins = activeReport.IssuedOrigins
         };
         byte[] wrongEpochBytes = OriginFrontierProtocol.Sign(wrongEpoch, keys[0].Seed);
         Assert.Throws<InvalidDataException>(() => OriginFrontierProtocol.DecodeAndVerify(wrongEpochBytes, roster));
