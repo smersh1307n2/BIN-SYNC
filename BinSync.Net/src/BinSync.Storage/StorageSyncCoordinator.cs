@@ -215,9 +215,11 @@ public sealed class StorageSyncCoordinator
         {
             bool hasProviderCutover =
                 publicationMode.TryGetMetadataStoreOwnedPublicationCutover(out ulong providerCutover);
-            bool hasLegacyMetadataCutover = _metadataStore is StorageMetadataStore durableMetadata &&
-                durableMetadata.TryGetProviderPublicationCutover(
-                    _scopeId!, _node.NodeId, _namespaceId, out ulong legacyMetadataCutover);
+            ulong legacyMetadataCutover = 0;
+            bool hasLegacyMetadataCutover = false;
+            if (_metadataStore is StorageMetadataStore durableMetadata)
+                hasLegacyMetadataCutover = durableMetadata.TryGetProviderPublicationCutover(
+                    _scopeId!, _node.NodeId, _namespaceId, out legacyMetadataCutover);
 
             if (hasLegacyMetadataCutover)
             {
