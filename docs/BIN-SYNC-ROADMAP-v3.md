@@ -1,3 +1,17 @@
+## 1.23.13. C-pass: prevent Run ID reuse against catalog-less blob directories — 2026-11-10
+
+- [x C] `StorageBlobStore.ContainsBlob` now treats both catalog rows and catalog-less page directories as occupied IDs and serializes the check with Put/Delete through the shared per-prefix gate. `PutImmutableBlob` refuses to recreate a catalog row over an orphan page directory.
+- [x C] This closes the restart case where an interrupted catalog-first delete removed the metadata row but failed to remove the page directory; a root-global FLD Run allocator can no longer reuse that ID and collide with stale immutable pages.
+- [~ T] Add failure-injection coverage for catalog deletion followed by page-directory delete/fsync failure, reopen, allocator skip, orphan cleanup retry, and successful allocation only after the directory is gone. No build/tests run in this C slice.
+
+## 1.23.12. C-pass: complete the BIN-SYNC metadata/provider/transport API-source-byte audit — 2026-11-10
+
+- [x C] Public cutover contract now names both optional requirements (`IMetadataChangeIdentityStore` all-route lookup and `IMetadataLegacyNodeLedgerStore` alias persistence); `StorageMetadataStore` implements both and custom stores must fail closed.
+- [x C] Source audit confirms `TcpSyncSession` is absent from source and samples; legacy Node-owned receive alone writes `RemoteBatch` WAL, while Metadata-authoritative receive uses PendingApply without a duplicate Node WAL/ledger/relay mirror.
+- [x C] Byte audit reconciles ChangeLedger's 45-byte base and 61-byte cutover-alias value in the normative spec, source loader, architecture docs and byte inventory; sample checkpoint documentation now says NodePersistence v17.
+- [x C] Reviewed current public sample entry points and the FLD host provider's scanned-cursor behavior. No sample build/run was performed in this C-pass.
+- [~ T] Exact-head build/test, sample execution, byte-codec reopen tests, crash matrix, concurrency/lock-contention tests and performance measurements remain mandatory. Physical receipt/ChangeId/tombstone/Ghost GC remains disabled.
+
 ## 1.23.11. C-pass: reconcile public API and sample entry points — 2026-11-10
 
 - [x C] Confirmed the removed `TcpSyncSession` has no source/sample references; the public transport surface is the generic `SyncSession` API. The only remaining name occurrence is the breaking-change note in `PUBLIC-API.md`.
@@ -162,7 +176,7 @@
 - [~ T] Add a regression case with one or more empty/short provider pages followed by a live ChangeId page, plus a concurrent-writer exclusion case. Verify no ledger row is reclaimed while the later feed identity remains pending.
 - [~ T] Crash/fault proof remains open for every pending-row/page/temp-rename/directory-fsync/completion-marker boundary, catalog-delete/page-delete interruption, orphan cleanup and concurrent reader pins. Source review is not a durability test.
 - [x C] Cross-store reference/liveness ordering is closed in §1.23.10: composed lease precedes store gates, host/provider reference snapshots are held consistently, and all physical-GC switches remain disabled.
-- [~ C] Complete the final public API/source/byte audit. Do not enable physical receipt, ChangeId or tombstone/Ghost GC.
+- [x C] Scoped BIN-SYNC Metadata/provider/transport API-source-byte audit is closed in §1.23.12. Broader FLD Storage/Run/WAL format and FULL_REPLACE C-pass gates remain in §§1.24–1.32. Do not enable physical receipt, ChangeId or tombstone/Ghost GC.
 
 ## 1.12. C-pass: preserve issued-origin maxima across signed frontier reports — 2026-11-10
 
