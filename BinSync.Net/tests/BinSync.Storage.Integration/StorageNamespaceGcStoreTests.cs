@@ -371,6 +371,133 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
+    public void Full_replace_retention_checkpoint_rejects_missing_active_member_frontier_report()
+    {
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var roster = Roster(1, new byte[32], keys);
+        var report0 = OriginFrontierProtocol.Sign(Report(roster, 0, keys, 1, 100), keys[0].Seed);
+        Guid generation = Guid.Parse("cccccccc-dddd-eeee-ffff-000000000001");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("missing active report"));
+
+        Assert.Throws<InvalidDataException>(() =>
+            NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[]
+                {
+                    OriginFrontierProtocol.DecodeAndVerify(report0, roster)
+                },
+                generation, digest, fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2));
+    }
+
+    [Fact]
+    public void Full_replace_retention_checkpoint_rejects_active_member_with_unpublished_drafts()
+    {
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var roster = Roster(1, new byte[32], keys);
+        AppliedOriginFrontierReport clean = Report(roster, 0, keys, 1, 100);
+        AppliedOriginFrontierReport draftBase = Report(roster, 1, keys, 1, 90);
+        var draftful = new AppliedOriginFrontierReport
+        {
+            NamespaceId = draftBase.NamespaceId,
+            RosterGeneration = draftBase.RosterGeneration,
+            RosterDigest = draftBase.RosterDigest,
+            MemberNodeId = draftBase.MemberNodeId,
+            MemberTransportEpoch = draftBase.MemberTransportEpoch,
+            ReportSequence = draftBase.ReportSequence,
+            UnpublishedDraftCount = 1,
+            MaxUnpublishedDraftHlcWall = 200,
+            Entries = draftBase.Entries,
+            IssuedOrigins = draftBase.IssuedOrigins
+        };
+        var verified = new[]
+        {
+            OriginFrontierProtocol.DecodeAndVerify(
+                OriginFrontierProtocol.Sign(clean, keys[0].Seed), roster),
+            OriginFrontierProtocol.DecodeAndVerify(
+                OriginFrontierProtocol.Sign(draftful, keys[1].Seed), roster)
+        };
+        Guid generation = Guid.Parse("cccccccc-dddd-eeee-ffff-000000000002");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("draftful active member"));
+
+        Assert.Throws<InvalidDataException>(() =>
+            NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], verified, generation, digest,
+                fullReplaceHlcWallFloor: 200, fullReplaceHlcLogicalFloor: 2));
+    }
+
+    [Fact]
+    public void Tombstone_gc_proof_requires_signed_issued_origin_maxima()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-tombstone-proof-missing-issued-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        var roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("cccccccc-dddd-eeee-ffff-000000000003");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("missing issued origin"));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 906);
+            var gc = new StorageNamespaceGcStore(storage, "fld-db/tombstone-missing-issued", NodeId.From(Id(99)));
+            roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+            var report0 = new AppliedOriginFrontierReport
+            {
+                NamespaceId = roster.NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                MemberNodeId = roster.Members[0].NodeId,
+                MemberTransportEpoch = roster.Members[0].TransportPeerEpoch,
+                ReportSequence = 1,
+                Entries = new[]
+                {
+                    new AppliedOriginFrontierEntry
+                    {
+                        OriginAuthorNodeId = NodeId.From(Id(2)),
+                        OriginAuthorEpoch = 3,
+                        ContiguousAppliedOriginSequence = 90
+                    }
+                }
+            };
+            var report1 = new AppliedOriginFrontierReport
+            {
+                NamespaceId = roster.NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                MemberNodeId = roster.Members[1].NodeId,
+                MemberTransportEpoch = roster.Members[1].TransportPeerEpoch,
+                ReportSequence = 1,
+                Entries = new[]
+                {
+                    new AppliedOriginFrontierEntry
+                    {
+                        OriginAuthorNodeId = NodeId.From(Id(1)),
+                        OriginAuthorEpoch = 3,
+                        ContiguousAppliedOriginSequence = 90
+                    }
+                }
+            };
+            var accepted0 = gc.AcceptOriginFrontier(
+                OriginFrontierProtocol.Sign(report0, keys[0].Seed), roster);
+            var accepted1 = gc.AcceptOriginFrontier(
+                OriginFrontierProtocol.Sign(report1, keys[1].Seed), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, digest), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, digest), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { accepted0, accepted1 }, generation, digest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            Assert.False(gc.HasProtocolTombstoneGcProof(
+                roster, trust, NodeId.From(Id(2)), 3, 90, 100, 2, generation, digest));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Offline_rejoin_accepts_signed_roster_gap_but_resets_every_gc_horizon()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-rejoin-" + Guid.NewGuid().ToString("N"));
