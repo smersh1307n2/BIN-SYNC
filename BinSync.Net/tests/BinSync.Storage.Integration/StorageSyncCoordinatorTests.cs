@@ -2290,7 +2290,7 @@ public sealed class StorageSyncCoordinatorTests
 
         metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, 7, 1);
         metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, 7, 1,
-            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, issuerEpoch: 3) });
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, 3) });
         var reservation = new MetadataOutboundBatchReservation
         {
             BatchId = BatchId.From(Guid.Parse("80000000-0000-0000-0000-000000000001").ToByteArray()),
