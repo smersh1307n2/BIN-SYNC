@@ -2591,3 +2591,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - Added an FLD WAL recovery regression test for a local identity draft with an unassigned origin sequence: `881a8f8`.
 - Fixed BIN-SYNC host adapter analyzer CA2014 by moving the 16-byte stack buffer outside the loop: `a5f8419`.
 - At the same source revision, the host adapter build passed; its tests had 2 failures caused by the WAL draft-origin invariant above. Revalidation against FLD-DB commit `398802f` is pending. The separate durable provider integration workflow passed on Ubuntu; Windows and macOS are still running/pending at the time of this note. No end-to-end FLD/BIN-SYNC pass is claimed yet.
+
+
+### 1.73 — First green FLD/BIN-SYNC host-adapter roundtrip (2026-11-10)
+
+- Cross-repository workflow run `42859662182` completed successfully against BIN-SYNC commit `a9b9b6a`; the FLD private checkout and host-adapter build both succeeded. The host-adapter test step reports **4 passed, 0 failed**. This includes the two-FLD-database exchange through BIN-SYNC `SyncSession`.
+- BIN-SYNC core workflow run `42859677867` passed on Linux and Windows, including signed control-plane vectors and fuzz/lab. Durable provider integration passed on Ubuntu and Windows in run `42859677865`; macOS remained queued when this note was written.
+- FLD-DB standalone CI for commit `881a8f8` currently reports failures on Ubuntu and Windows; GitHub's job-log download returned BlobNotFound and no test artifact was published, so the cause is not yet established. This does not negate the passing host-adapter run, which used the FLD branch head available at its checkout time; standalone FLD CI still needs diagnosis and a green run.
+- The WAL change permits durable local draft identity (`OriginAuthorEpoch != 0`, `OriginSequence == 0`) and the added recovery regression test is in commit `881a8f8`. Do not declare the complete FLD-DB branch green until its own CI passes. Physical metadata/tombstone GC remains disabled.
