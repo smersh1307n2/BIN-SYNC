@@ -1,3 +1,9 @@
+## 1.18. C-pass: active StorageDataProvider snapshot handles block ChangeId GC — 2026-11-10
+
+- [x C] Found a second snapshot-pin gap: `CompactChangeLedger` scanned provider feed and external references but did not check already-open `StorageDataProvider.ProviderSnapshotState` handles. The composed provider commit gate prevented new opens but did not reject an existing immutable snapshot.
+- [x C] Added optional `IProviderSnapshotGcGuard`; `StorageDataProvider` acquires its gate, returns no lease while any snapshot handle is active, and holds the gate for the full ChangeId GC pass otherwise. `CompactChangeLedger` fails closed on an active pin. Host-side FLD snapshot checks remain independent.
+- [~ T] Verify active snapshot prevents ledger deletion, no-snapshot guard excludes concurrent opens for the complete pass, release permits a later pass, and provider implementations without the optional capability remain protected by their host scanner. No build/test was run; physical GC flags remain false.
+
 ## 1.17. Cross-repository C-pass: persisted FLD snapshot pins block ChangeId/record GC — 2026-11-10
 
 - [x C] Audited the FLD host reference scanner against v3.1 §1 invariant 5. It previously indexed dirty state, unacknowledged Outbox and ApplyJournal but omitted active and persisted immutable ProviderSnapshot generations.

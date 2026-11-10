@@ -654,8 +654,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (lease is null)
             throw new InvalidOperationException("Cross-store ChangeId GC proof is unavailable; no ledger rows were reclaimed.");
         using (lease)
+        using (IDisposable? providerSnapshotLease =
+            provider is IProviderSnapshotGcGuard snapshotGuard
+                ? snapshotGuard.TryAcquireSnapshotGcGuard()
+                : null)
         lock (_gate)
         {
+            if (provider is IProviderSnapshotGcGuard && providerSnapshotLease is null)
+                return 0; // An active immutable provider snapshot still references its captured ChangeIds.
             ThrowIfDisposed();
             StorageNamespaceGcStore gcStore = _namespaceGcStore
                 ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before ChangeId GC.");

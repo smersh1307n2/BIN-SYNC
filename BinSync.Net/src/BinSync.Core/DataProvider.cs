@@ -193,6 +193,16 @@ public interface IProviderCommitGuard
     IDisposable AcquireCommitGuard();
 }
 
+/// <summary>
+/// Optional provider capability used by ChangeId GC. A successful lease excludes
+/// new snapshot opens and proves that no provider snapshot handle is currently pinned;
+/// null means an active snapshot prevents reclamation. Dispose on the acquiring thread.
+/// </summary>
+public interface IProviderSnapshotGcGuard
+{
+    IDisposable? TryAcquireSnapshotGcGuard();
+}
+
 public sealed record ProviderSnapshotHandle(Guid Token, ulong ChangeFeedWatermark);
 public sealed record ProviderSnapshotPage(IReadOnlyList<ProviderMutation> Entries, int NextIndex, bool IsComplete);
 public sealed record ProviderApplyReceipt(Guid ApplyToken, byte[] BatchFingerprint, bool IsDuplicate);

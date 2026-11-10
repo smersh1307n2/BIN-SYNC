@@ -8,7 +8,7 @@ namespace BinSync.Storage;
 /// <summary>
 /// Durable BIN-SYNC Data Provider backed by the neutral Fld1.Storage byte API.
 /// </summary>
-public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore, IProviderCommitGuard
+public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IProviderFullReplace, IProviderPublishedOriginStore, IProviderAuthorEpochClosureStore, IProviderCommitGuard, IProviderSnapshotGcGuard
 {
     private const byte ItemMap = 0x01;
     private const byte ItemReverse = 0x02;
@@ -286,6 +286,30 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     {
         Monitor.Enter(_gate);
         return new ProviderCommitLease(_gate);
+    }
+
+    /// <summary>
+    /// Exclude snapshot creation while checking for active provider snapshot pins.
+    /// ChangeId GC must not run while a snapshot can still expose old ChangeId provenance.
+    /// </summary>
+    public IDisposable? TryAcquireSnapshotGcGuard()
+    {
+        Monitor.Enter(_gate);
+        try
+        {
+            ThrowIfDisposed();
+            if (_snapshots.Count != 0)
+            {
+                Monitor.Exit(_gate);
+                return null;
+            }
+            return new ProviderCommitLease(_gate);
+        }
+        catch
+        {
+            Monitor.Exit(_gate);
+            throw;
+        }
     }
 
     private sealed class ProviderCommitLease : IDisposable
