@@ -1,3 +1,12 @@
+## 1.44. T-pass: recover legacy Node ledger alias cutover across Node checkpoint crashes — 2026-11-10
+
+- [x T] `Provider_cutover_recovers_legacy_ledger_aliases_across_node_checkpoint_crash` exercises both crash boundaries after the provider-authority marker: process loss before the post-cutover Node checkpoint, and process loss immediately after that checkpoint is durable.
+- [x T] Reopen proves the expected pre-/post-checkpoint Node ledger state, preserves `SeenChanges`, and retries cutover idempotently. A conflicting alias is rejected after reopen while reattaching the exact alias is idempotent, proving the legacy digest was durably attached before Node ledger cleanup.
+- [x T] Exact BIN-SYNC head `cd2ba7b481b98843c8c4e51b6f5f9dcd307d50e5`: Core 678/678 on Linux and Windows; Storage Integration 190/190 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; v3.1 signed control-plane golden vectors and fuzz/lab passed.
+- [~ T] Remaining §1.23.8 alias proof: interruption/reopen around the 4096-entry alias-batch boundary, repeated multi-batch cutover, and recovery of markers written by the prior implementation. The current crash test uses one alias and closes only the Node-checkpoint boundaries.
+- [~ T] `FldBinSyncHost` exact-head build remains skipped because `FLD_DB_READ_TOKEN` is not configured; green wrapper status is not a host-adapter compile result.
+- [x C] Physical ChangeId, receipt and tombstone/Ghost GC proof switches remain hard false.
+
 ## 1.43. T-pass: verify single-journal ownership for both receive modes — 2026-11-10
 
 - [x T] `Metadata_authoritative_receive_uses_pending_apply_without_duplicate_node_remote_batch_wal` compares the actual legacy `SyncSession.ReceiveBatchAsync` path with Metadata-authoritative coordinator receive. Legacy mode writes exactly one `RemoteBatch` WAL record and populates the Node `GlobalChangeLedger`; Metadata-authoritative mode writes zero Node `RemoteBatch` records, leaves Node `GlobalChangeLedger` empty and creates no Node relay-Outbox mirror.
@@ -104,7 +113,7 @@
 - [x C] Only after all aliases are durable does the fenced Node clear its namespace `GlobalChangeLedger`; the caller checkpoints Node immediately. Crash before Node checkpoint leaves the old ledger and aliases for exact idempotent retry; crash after checkpoint leaves the legacy digest co-located in Metadata. `SeenChanges` remains untouched.
 - [x C] Alias and semantic identity are encoded in one ChangeLedger row and are deleted together by the existing ChangeId GC path. Compacted legacy aliases are preserved, not falsely claimed equivalent to the semantic fingerprint.
 - [x C] Fixed the partition loader's early legacy-row gate to accept both 45-byte base and 61-byte aliased ChangeLedger values; the later row decoder already validates the suffix shape and rejects zero aliases. Without this gate fix, a successfully committed alias would fail on Storage reopen.
-- [x T] Basic base-row/alias-row reopen, identical alias idempotence, and zero/conflicting/duplicate alias rejection are covered in §1.42. [~ T] Crash cuts before/after bounded alias batches and Node checkpoint, repeated cutover/recovery, Node ledger clear ordering, `SeenChanges` preservation and prior-marker recovery remain open.
+- [x T] Basic base-row/alias-row reopen and conflict rejection are covered in §1.42; Node-checkpoint crash/retry ordering and `SeenChanges` preservation are covered in §1.44. [~ T] Interruption/reopen around the 4096-entry alias-batch boundary, repeated multi-batch cutover, and prior-implementation marker recovery remain open.
 
 ## 1.23.7. Cross-repository C-pass: narrow the FLD Storage public API — 2026-11-10
 
