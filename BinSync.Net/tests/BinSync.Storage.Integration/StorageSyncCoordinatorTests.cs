@@ -1395,7 +1395,10 @@ public sealed class StorageSyncCoordinatorTests
                     HlcWall = 4000,
                     HlcLogical = 0,
                     AuthorNodeId = sender.NodeId,
-                    Value = Encoding.UTF8.GetBytes("newer")
+                    Value = Encoding.UTF8.GetBytes("newer"),
+                    ChangeId = BatchId.From(Guid.Parse("60000000-0000-0000-0000-000000000403").ToByteArray()),
+                    OriginAuthorEpoch = checked((uint)sender.Epoch),
+                    OriginSequence = 2
                 }
             });
 
