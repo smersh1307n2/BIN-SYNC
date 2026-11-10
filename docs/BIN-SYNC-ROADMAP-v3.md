@@ -1,3 +1,10 @@
+## 1.24. C-pass: drive provider scans by explicit feed cursor — 2026-11-10
+
+- [x C] Applied-origin frontier publication now scans through the captured provider high-watermark using `ScannedThroughSequence`, validates cursor progress/range and every returned sequence, and does not infer completion from a short page.
+- [x C] `PublishLocalChangesCore` now continues until the provider's current high-watermark is covered, including short/empty pages that advance only the scanned cursor; malformed/stalled pages fail closed instead of acknowledging an incomplete prefix.
+- [x C] Documented `ProviderChangePage.ScannedThroughSequence` as an independent scan cursor in the public Data Provider contract.
+- [~ T] Add custom-provider regressions for short/empty advancing pages, later pages containing drafts, cursor stalls/regression/overrun, unordered/out-of-range entries, and ensuring zero-draft signed reports cannot be published before the captured feed high-watermark is scanned. No build/tests run in this C slice.
+
 ## 1.23. C-pass: prove retained Node Outbox payload ownership before provider cutover — 2026-11-10
 
 - [x C] Found a destructive cutover gap: `DiscardNodeOutboxPayloadsAfterProviderCutover` removed every author stream, while the preflight compared only the local author's high-watermark. A retained Node relay payload could therefore be absent from Metadata Relay yet still be discarded.

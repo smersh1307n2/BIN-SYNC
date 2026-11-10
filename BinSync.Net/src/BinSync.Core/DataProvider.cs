@@ -109,6 +109,13 @@ public sealed record ProviderChange(ulong Sequence, ProviderMutation Mutation)
     /// </summary>
     public BatchId ChangeId { get; init; }
 }
+/// <summary>
+/// Bounded provider-feed scan result. ScannedThroughSequence is the highest source
+/// sequence examined, not a function of Changes.Count: a short or empty page may
+/// still advance the scan cursor without reaching the current feed high-watermark.
+/// Consumers must continue by cursor until their captured/current high-watermark is
+/// covered; they must not infer end-of-feed from a short page.
+/// </summary>
 public sealed record ProviderChangePage(IReadOnlyList<ProviderChange> Changes, ulong ScannedThroughSequence);
 
 /// <summary>One local feed entry paired with its immutable Metadata Store OperationOrigin.</summary>

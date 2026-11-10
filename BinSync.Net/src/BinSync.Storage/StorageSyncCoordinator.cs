@@ -754,12 +754,24 @@ public sealed class StorageSyncCoordinator
             ulong unpublishedDraftCount = hostDrafts.Count;
             ulong maxDraftHlcWall = hostDrafts.MaxHlcWall;
             uint maxDraftHlcLogical = hostDrafts.MaxHlcLogical;
+            ulong providerHighWatermark = _provider.LocalChangeHighWatermark;
             ulong afterSequence = 0;
-            while (true)
+            while (afterSequence < providerHighWatermark)
             {
                 ProviderChangePage page = _provider.ReadLocalChanges(afterSequence, pageSize);
+                if (page.ScannedThroughSequence <= afterSequence ||
+                    page.ScannedThroughSequence > providerHighWatermark ||
+                    page.Changes.Count > pageSize)
+                    throw new InvalidDataException("Provider feed returned an invalid frontier scan page.");
+
+                ulong previousChangeSequence = afterSequence;
                 foreach (ProviderChange change in page.Changes)
                 {
+                    if (change.Sequence <= previousChangeSequence ||
+                        change.Sequence > page.ScannedThroughSequence)
+                        throw new InvalidDataException("Provider feed draft sequences are not ordered within the scanned prefix.");
+                    previousChangeSequence = change.Sequence;
+
                     ProviderMutation mutation = change.Mutation
                         ?? throw new InvalidDataException("Provider feed contains a null draft mutation.");
                     unpublishedDraftCount = checked(unpublishedDraftCount + 1);
@@ -770,9 +782,11 @@ public sealed class StorageSyncCoordinator
                         maxDraftHlcLogical = mutation.HlcLogical;
                     }
                 }
-                if (page.ScannedThroughSequence <= afterSequence ||
-                    page.Changes.Count < pageSize)
-                    break;
+
+                // A short page is not an end-of-feed signal for arbitrary providers.
+                // Advance by the provider's explicit scanned cursor until the captured
+                // high-watermark is covered; otherwise a false zero-draft report could
+                // authorize an unsafe FULL_REPLACE retention checkpoint.
                 afterSequence = page.ScannedThroughSequence;
             }
 
@@ -1410,15 +1424,27 @@ public sealed class StorageSyncCoordinator
         while (true)
         {
             var page = _provider.ReadLocalChanges(afterSequence, limit);
-            if (page.Changes.Count == 0)
+            ulong providerHighWatermark = _provider.LocalChangeHighWatermark;
+            if (page.Changes.Count > limit ||
+                page.ScannedThroughSequence < afterSequence ||
+                page.ScannedThroughSequence > providerHighWatermark)
+                throw new InvalidDataException("Provider local feed returned an invalid scan page.");
+            if (page.ScannedThroughSequence == afterSequence)
             {
-                scannedThroughSequence = Math.Max(scannedThroughSequence, page.ScannedThroughSequence);
-                break;
+                if (page.Changes.Count != 0)
+                    throw new InvalidDataException("Provider local feed returned rows without advancing its scanned cursor.");
+                if (afterSequence >= providerHighWatermark)
+                    break;
+                throw new InvalidDataException("Provider local feed cursor did not advance toward its high-watermark.");
             }
-            if (page.ScannedThroughSequence <= afterSequence)
-                throw new InvalidDataException("Provider local feed cursor did not advance.");
+
+            ulong previousChangeSequence = afterSequence;
             foreach (var change in page.Changes)
             {
+                if (change.Sequence <= previousChangeSequence ||
+                    change.Sequence > page.ScannedThroughSequence)
+                    throw new InvalidDataException("Provider local feed changes are not ordered within the scanned prefix.");
+                previousChangeSequence = change.Sequence;
                 _node.ValidateProviderMutation(change.Mutation);
                 if (change.Mutation.KeyEpoch != 0)
                     throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
@@ -1472,7 +1498,10 @@ public sealed class StorageSyncCoordinator
             totalChanges = checked(totalChanges + page.Changes.Count);
             scannedThroughSequence = page.ScannedThroughSequence;
             afterSequence = page.ScannedThroughSequence;
-            if (page.Changes.Count < limit)
+            // Continue until the explicit scanned cursor covers the provider's
+            // current high-watermark. A short/empty page may still leave a later
+            // feed range to scan in a custom IDataProvider implementation.
+            if (afterSequence >= _provider.LocalChangeHighWatermark)
                 break;
         }
 
