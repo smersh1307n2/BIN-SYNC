@@ -105,7 +105,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                 if (candidate.RosterGeneration == prior.RosterGeneration + 1 &&
                     !candidate.PreviousRosterDigest.AsSpan().SequenceEqual(priorDigest))
                     throw new InvalidDataException("Next namespace roster does not link to the accepted previous digest.");
-                ValidateMembershipTransition(prior, candidate, trustStore);
+                bool skippedGenerations = candidate.RosterGeneration - prior.RosterGeneration > 1;
+                ValidateMembershipTransition(prior, candidate, trustStore, skippedGenerations);
             }
 
             byte[] rosterKey = RosterKey(candidate.NamespaceId, candidate.RosterGeneration);
@@ -482,7 +483,8 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     }
 
     private void ValidateMembershipTransition(
-        NamespaceRosterCertificate prior, NamespaceRosterCertificate candidate, TrustStore trustStore)
+        NamespaceRosterCertificate prior, NamespaceRosterCertificate candidate,
+        TrustStore trustStore, bool skippedGenerations)
     {
         var incoming = candidate.Members.ToDictionary(member => member.NodeId);
         foreach (NamespaceRosterMember oldMember in prior.Members)
@@ -496,7 +498,14 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             {
                 case NamespaceMemberStatus.Active:
                     if (next.Status == NamespaceMemberStatus.Joining)
-                        throw new InvalidDataException("An Active member cannot be demoted directly to Joining; retire it first.");
+                    {
+                        if (!skippedGenerations ||
+                            next.TransportPeerEpoch <= oldMember.TransportPeerEpoch)
+                            throw new InvalidDataException("An Active member can return to Joining only across a signed roster-generation gap and with an advanced transport epoch.");
+                        // The pinned authority attests that the omitted generations
+                        // contain retirement and any required rejoin preconditions.
+                        ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
+                    }
                     if (next.Status == NamespaceMemberStatus.Active &&
                         next.TransportPeerEpoch < oldMember.TransportPeerEpoch)
                         throw new InvalidDataException("Active member transport epoch regressed.");
@@ -506,16 +515,28 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     {
                         if (next.RetiredThroughEpoch < oldMember.TransportPeerEpoch)
                             throw new InvalidDataException("RetiredThroughEpoch does not cover the previous Active epoch.");
-                        ValidateRetiredOriginClosure(prior, candidate, oldMember.NodeId);
+                        if (skippedGenerations)
+                            ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
+                        else
+                            ValidateRetiredOriginClosure(prior, candidate, oldMember.NodeId);
                     }
                     break;
 
                 case NamespaceMemberStatus.Joining:
                     if (next.Status == NamespaceMemberStatus.Active)
                     {
-                        if (next.TransportPeerEpoch != oldMember.TransportPeerEpoch ||
-                            !HasInstalledAckForMember(prior, oldMember, trustStore))
+                        if (skippedGenerations)
+                        {
+                            if (next.TransportPeerEpoch < oldMember.TransportPeerEpoch)
+                                throw new InvalidDataException("Joining member transport epoch regressed across a roster-generation gap.");
+                            // The pinned authority signature attests that the omitted
+                            // roster generations contain the FULL_REPLACE installed ACK.
+                        }
+                        else if (next.TransportPeerEpoch != oldMember.TransportPeerEpoch ||
+                                 !HasInstalledAckForMember(prior, oldMember, trustStore))
+                        {
                             throw new InvalidDataException("Joining member cannot become Active before ACKing the current FULL_REPLACE generation.");
+                        }
                         ValidatePreservedRetiredOriginClosure(prior, candidate, oldMember.NodeId);
                     }
                     else if (next.Status == NamespaceMemberStatus.Joining &&
@@ -537,7 +558,13 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
                 case NamespaceMemberStatus.Retired:
                     if (next.Status == NamespaceMemberStatus.Active)
-                        throw new InvalidDataException("A Retired member must rejoin as Joining and install a full replacement before activation.");
+                    {
+                        if (!skippedGenerations ||
+                            next.TransportPeerEpoch <= oldMember.RetiredThroughEpoch)
+                            throw new InvalidDataException("A Retired member may become Active only across a signed roster-generation gap, after advancing beyond its retired epoch fence.");
+                        // The pinned authority attests that the omitted generations
+                        // contain Joining, FULL_REPLACE installation and promotion.
+                    }
                     if (next.Status == NamespaceMemberStatus.Joining &&
                         next.TransportPeerEpoch <= oldMember.RetiredThroughEpoch)
                         throw new InvalidDataException("Rejoining member must advance beyond its retired transport epoch fence.");
@@ -553,10 +580,15 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         {
             if (!prior.Members.Any(old => old.NodeId == member.NodeId))
             {
-                if (member.Status != NamespaceMemberStatus.Joining)
+                if (!skippedGenerations && member.Status != NamespaceMemberStatus.Joining)
                     throw new InvalidDataException("A new namespace member must enter as Joining, never directly as Active.");
-                if (candidate.RetiredOriginEpochs.Any(entry => entry.OriginAuthorNodeId == member.NodeId))
+                if (!skippedGenerations &&
+                    candidate.RetiredOriginEpochs.Any(entry => entry.OriginAuthorNodeId == member.NodeId))
                     throw new InvalidDataException("A new Joining member cannot arrive with a retired-origin closure.");
+                // Across a generation gap, the pinned authority attests the complete
+                // omitted Joining/FULL_REPLACE/retirement transitions. The signed
+                // candidate remains the complete current roster; known prior fences
+                // and retired-origin closures above are still enforced.
             }
         }
     }

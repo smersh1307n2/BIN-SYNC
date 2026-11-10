@@ -1,3 +1,11 @@
+## 1.26. C-pass: honor signed roster catch-up across generation gaps — 2026-11-10
+
+- [x C] Membership transition validation now distinguishes consecutive roster generations from signed generation gaps. Consecutive transitions retain strict Joining/installed-ACK rules.
+- [x C] Across a gap, the pinned authority attests omitted Joining/FULL_REPLACE/retirement steps; the receiver still enforces member-key immutability, non-regressing transport/retired-epoch fences and all locally known retired-origin closures.
+- [x C] A Retired member may become Active across a gap only after advancing beyond its retired transport fence; Joining→Active requires a non-regressing epoch; Active→Joining requires an advanced epoch; newly seen members may already be Active/Retired only when generations were skipped.
+- [x C] Updated v3.1 addendum §4.1 to make the authority-attestation boundary and consecutive-vs-gap transition rules normative.
+- [~ T] Test offline catch-up across new-member Joining→Active, Retired→Joining→Active, Active→Retired→Joining, new member already Retired, key/epoch regression, closure deletion, and ensure no GC frontier is enabled until current-generation reports/checkpoints are re-established. No build/tests run in this C slice.
+
 ## 1.25. C-pass: keep host reference scans inside one composed lease — 2026-11-10
 
 - [x C] `DelegateApplicationGcReferenceScan` now owns only the immutable host snapshot; the caller's composed application commit guard owns the host commit lease for the entire GC/frontier pass.
