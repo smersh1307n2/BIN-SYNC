@@ -96,6 +96,8 @@ public sealed class StorageNamespaceGcStoreTests
             Digest = digest,
             MemberNodeId = roster.Members[memberIndex].NodeId,
             MemberTransportEpoch = roster.Members[memberIndex].TransportPeerEpoch,
+            HlcWallFloor = 100,
+            HlcLogicalFloor = 2,
             Installed = true
         }, keys[memberIndex].Seed);
 
