@@ -2525,6 +2525,238 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Theory]
+    [InlineData(false, 0UL)]
+    [InlineData(true, 1UL)]
+    public void Applied_origin_frontier_scans_multiple_empty_advancing_pages_before_zero_or_later_drafts(
+        bool includeFinalDraft, ulong expectedDraftCount)
+    {
+        const string scope = "frontier-multiple-empty-pages-" + (includeFinalDraft ? "draft" : "zero");
+        using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 491);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(103);
+        using var hostGate = new SemaphoreSlim(1, 1);
+        var trust = new TrustStore();
+        var (memberSeed, memberPublicKey) = BatchSignature.GenerateKeyPair();
+        trust.Allow(local.NodeId, memberPublicKey, TrustMode.PreShared);
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 1,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = local.NodeId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = local.NodeId,
+                    PublicKey = memberPublicKey,
+                    TransportPeerEpoch = 1,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        gcStore.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(unsignedRoster, memberSeed), trust);
+        for (int i = 1; i <= 3; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(200 + i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = 0x08A3,
+                AuthorNodeId = local.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 12000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        var scannedCursors = new List<ulong>();
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (afterSequence, _, page) =>
+            {
+                scannedCursors.Add(afterSequence);
+                if (afterSequence < 2)
+                    return new ProviderChangePage(Array.Empty<ProviderChange>(), afterSequence + 1);
+                return includeFinalDraft
+                    ? page
+                    : new ProviderChangePage(Array.Empty<ProviderChange>(), page.ScannedThroughSequence);
+            });
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+        var scanner = new NonReentrantGcReferenceScanner(hostGate);
+        Func<IDisposable?> acquireHostLease = () =>
+        {
+            if (!hostGate.Wait(0))
+                throw new InvalidOperationException("Frontier publication attempted to reacquire the non-reentrant host lease.");
+            return new CallbackLease(() => hostGate.Release());
+        };
+
+        AppliedOriginFrontierReport report = coordinator.PublishAppliedOriginFrontier(
+            memberSeed, scanner, acquireHostLease, pageSize: 1);
+
+        Assert.Equal(new ulong[] { 0, 1, 2 }, scannedCursors);
+        Assert.Equal(expectedDraftCount, report.UnpublishedDraftCount);
+        Assert.Equal(includeFinalDraft ? 12003UL : 0UL, report.MaxUnpublishedDraftHlcWall);
+        Assert.Equal(1, scanner.OpenCount);
+        Assert.Equal(1, scanner.DisposeCount);
+        Assert.Equal(1, hostGate.CurrentCount);
+    }
+
+    [Fact]
+    public void Applied_origin_frontier_continues_after_short_advancing_page()
+    {
+        const string scope = "frontier-short-advancing-provider-page";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, scope), 492);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(104);
+        using var hostGate = new SemaphoreSlim(1, 1);
+        var trust = new TrustStore();
+        var (memberSeed, memberPublicKey) = BatchSignature.GenerateKeyPair();
+        trust.Allow(local.NodeId, memberPublicKey, TrustMode.PreShared);
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 1,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = local.NodeId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = local.NodeId,
+                    PublicKey = memberPublicKey,
+                    TransportPeerEpoch = 1,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        gcStore.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(unsignedRoster, memberSeed), trust);
+        for (int i = 1; i <= 3; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(300 + i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = 0x08A4,
+                AuthorNodeId = local.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 13000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (afterSequence, _, page) => afterSequence == 0
+                ? new ProviderChangePage(page.Changes.Take(1).ToArray(), 2)
+                : page);
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+        var scanner = new NonReentrantGcReferenceScanner(hostGate);
+        Func<IDisposable?> acquireHostLease = () =>
+        {
+            if (!hostGate.Wait(0))
+                throw new InvalidOperationException("Frontier publication attempted to reacquire the non-reentrant host lease.");
+            return new CallbackLease(() => hostGate.Release());
+        };
+
+        AppliedOriginFrontierReport report = coordinator.PublishAppliedOriginFrontier(
+            memberSeed, scanner, acquireHostLease, pageSize: 2);
+
+        Assert.Equal(2UL, report.UnpublishedDraftCount);
+        Assert.Equal(13003UL, report.MaxUnpublishedDraftHlcWall);
+        Assert.Equal(1, scanner.OpenCount);
+        Assert.Equal(1, scanner.DisposeCount);
+        Assert.Equal(1, hostGate.CurrentCount);
+    }
+
+    [Fact]
+    public void Publish_local_changes_acknowledges_empty_advancing_provider_prefix_after_retry()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "publish-empty-prefix-ack"), 493);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(105);
+        const string scope = "publish-empty-prefix-ack";
+        for (int i = 1; i <= 3; i++)
+        {
+            innerProvider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(new Guid(400 + i, 0, 0, new byte[8]).ToByteArray()),
+                FieldId = (ushort)(0x08A5 + i),
+                AuthorNodeId = local.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = 14000UL + (ulong)i,
+                Value = BitConverter.GetBytes(i)
+            });
+        }
+
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (_, _, page) =>
+                new ProviderChangePage(Array.Empty<ProviderChange>(), page.ScannedThroughSequence));
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+
+        Assert.Throws<IOException>(() => coordinator.PublishLocalChanges(_ => { }, limit: 1));
+        Assert.Equal(3, innerProvider.ReadLocalChanges(0, 10).Changes.Count);
+        Assert.Equal(0, coordinator.PublishLocalChanges(_ => { }, limit: 1));
+        Assert.Empty(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(0, local.GetOutboxCount(1));
+    }
+
+    [Fact]
+    public void Publish_local_changes_leaves_appends_beyond_captured_high_watermark_for_next_pass()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "publish-captured-high-watermark"), 494);
+        using var innerProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(106);
+        const string scope = "publish-captured-high-watermark";
+        RecordId record = RecordId.From(Guid.Parse("49400000-0000-0000-0000-000000000001").ToByteArray());
+        innerProvider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x08B0, AuthorNodeId = local.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 15001, Value = "captured-prefix"u8.ToArray()
+        });
+
+        bool appendedSuffix = false;
+        var provider = new FailOnceAcknowledgeProvider(
+            innerProvider,
+            pageTransform: (afterSequence, _, page) =>
+            {
+                if (!appendedSuffix && afterSequence == 0)
+                {
+                    appendedSuffix = true;
+                    innerProvider.AppendLocalChange(new ProviderMutation
+                    {
+                        RecordId = record, FieldId = 0x08B1, AuthorNodeId = local.NodeId,
+                        OriginAuthorEpoch = 1, HlcWall = 15002, Value = "later-suffix"u8.ToArray()
+                    });
+                }
+                return page;
+            },
+            failFirstAcknowledge: false);
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }, limit: 1));
+        var pendingSuffix = Assert.Single(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(2UL, pendingSuffix.Sequence);
+        Assert.Equal("later-suffix", Encoding.UTF8.GetString(pendingSuffix.Mutation.Value));
+
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }, limit: 1));
+        Assert.Empty(innerProvider.ReadLocalChanges(0, 10).Changes);
+        Assert.True(local.TryGetField(1, record, 0x08B0, out var first));
+        Assert.Equal("captured-prefix", Encoding.UTF8.GetString(first!.Value));
+        Assert.True(local.TryGetField(1, record, 0x08B1, out var suffix));
+        Assert.Equal("later-suffix", Encoding.UTF8.GetString(suffix!.Value));
+    }
+
+    [Theory]
     [InlineData("stall")]
     [InlineData("regression")]
     [InlineData("overrun")]
@@ -3412,18 +3644,20 @@ public sealed class StorageSyncCoordinatorTests
         private readonly Func<ulong, int, ProviderChangePage, ProviderChangePage>? _pageTransform;
         private readonly Action? _afterRemoteApply;
         private readonly Action<string>? _commitGuardEvent;
-        private bool _failNextAcknowledge = true;
+        private bool _failNextAcknowledge;
 
         public FailOnceAcknowledgeProvider(
             IDataProvider inner,
             Func<ProviderChange, ProviderChange>? changeTransform = null,
             Action? afterRemoteApply = null,
             Action<string>? commitGuardEvent = null,
-            Func<ulong, int, ProviderChangePage, ProviderChangePage>? pageTransform = null)
+            Func<ulong, int, ProviderChangePage, ProviderChangePage>? pageTransform = null,
+            bool failFirstAcknowledge = true)
         {
             _inner = inner;
             _changeTransform = changeTransform;
             _pageTransform = pageTransform;
+            _failNextAcknowledge = failFirstAcknowledge;
             _afterRemoteApply = afterRemoteApply;
             _commitGuardEvent = commitGuardEvent;
         }
