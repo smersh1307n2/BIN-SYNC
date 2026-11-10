@@ -1,3 +1,11 @@
+## 1.43. T-pass: verify single-journal ownership for both receive modes — 2026-11-10
+
+- [x T] `Metadata_authoritative_receive_uses_pending_apply_without_duplicate_node_remote_batch_wal` compares the actual legacy `SyncSession.ReceiveBatchAsync` path with Metadata-authoritative coordinator receive. Legacy mode writes exactly one `RemoteBatch` WAL record and populates the Node `GlobalChangeLedger`; Metadata-authoritative mode writes zero Node `RemoteBatch` records, leaves Node `GlobalChangeLedger` empty and creates no Node relay-Outbox mirror.
+- [x T] Existing `Process_kill_at_receive_durability_cut_recovers_pending_apply_and_provider_state` passes all four process-kill boundaries: after PendingApply, after Node checkpoint, after provider commit and after Metadata finalize. Reopen checks which side had committed, then recovers the exact payload into both provider and Node without a duplicate apply.
+- [x T] Exact BIN-SYNC head `8e2f901c860056d37aceba8b1b8799af0956922b`: Core 678/678 on Linux and Windows; Storage Integration 188/188 on Linux, macOS and Windows; both Storage array samples passed on all three platforms; fuzz/lab and v3.1 signed control-plane vectors passed.
+- [~ T] The remaining cross-repository `FldBinSyncHost` build is still skipped until `FLD_DB_READ_TOKEN` is configured as a fine-grained read-only Contents token for `smersh1307n2/FLD-DB` in BIN-SYNC repository secrets.
+- [x C] Metadata-authoritative receive remains single-journal: PendingApply is the protocol recovery journal; no duplicate Node RemoteBatch WAL, GlobalChangeLedger or relay-Outbox mirror is written.
+
 ## 1.42. T-pass: verify legacy Node digest alias codec and reopen — 2026-11-10
 
 - [x T] `Legacy_node_ledger_alias_round_trips_and_rejects_conflicts_after_reopen` creates a durable ChangeLedger identity, reopens the base row, attaches the legacy Node digest alias, reopens the alias-extended row, and proves identical reattachment is idempotent. Conflicting, all-zero and duplicate ChangeId aliases fail closed.
@@ -87,7 +95,7 @@
 - [x C] Audited `Node.ApplyBatchInternal`: legacy Node-owned receive persists accepted `RemoteBatch` payloads in Node WAL; Metadata-Store-authoritative receive uses the durable `PendingApply` intent as its sole protocol recovery journal and deliberately skips duplicate Node `RemoteBatch` WAL, Node `GlobalChangeLedger` and Node relay-Outbox mirroring.
 - [x C] Confirmed the metadata-authoritative path applies the durable per-operation ChangeId decision mask, checkpoints Node cache before provider apply, finalizes the Metadata receipt only after provider success, and replays the exact stored wire payload through Node/provider during PendingApply recovery.
 - [x C] Reconciled `PUBLIC-API.md` so the two receive modes and their single-journal ownership are explicit; removed the ambiguous statement that Metadata-authoritative replay also writes a Node RemoteBatch WAL entry.
-- [~ T] Verify both receive modes separately: one Node WAL RemoteBatch for legacy mode, zero duplicate Node RemoteBatch frames in Metadata-authoritative mode, PendingApply crash recovery at each boundary, and no Node ledger/relay mirror mutation in the authoritative mode. No tests/build run in this C slice.
+- [x T] Both receive modes are verified in §1.43: legacy Node-owned receive writes exactly one RemoteBatch WAL record; Metadata-authoritative receive writes none, does not mutate Node GlobalChangeLedger/relay-Outbox, and uses PendingApply as its only protocol recovery journal. All four process-kill boundaries recover the exact payload.
 
 ## 1.23.8. C-pass: migrate the legacy Node digest into the Metadata ChangeLedger row — 2026-11-10
 
