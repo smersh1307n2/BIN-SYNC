@@ -2872,7 +2872,8 @@ public sealed class StorageSyncCoordinator
                 foreach (OutboxEntry candidate in _node.ReadOutboxEntries(
                     _namespaceId, field.AuthorNodeId, 0, int.MaxValue))
                 {
-                    if (candidate.RecordId != item.RecordId)
+                    if (candidate.RecordId != item.RecordId ||
+                        candidate.AuthorNodeId != field.AuthorNodeId)
                         continue;
 
                     object sourceOperation = Ops.DecodeOp(candidate.Payload).Op;
@@ -2881,13 +2882,11 @@ public sealed class StorageSyncCoordinator
                         OpFieldWrite write =>
                             !tombstone && write.FieldId == item.FieldId &&
                             write.Wall == field.Timestamp.Wall &&
-                            write.Logical == field.Timestamp.Logical &&
-                            write.AuthorNodeId == field.AuthorNodeId,
+                            write.Logical == field.Timestamp.Logical,
                         OpFieldTomb fieldTomb =>
                             tombstone && fieldTomb.FieldId == item.FieldId &&
                             fieldTomb.Wall == field.Timestamp.Wall &&
-                            fieldTomb.Logical == field.Timestamp.Logical &&
-                            fieldTomb.AuthorNodeId == field.AuthorNodeId,
+                            fieldTomb.Logical == field.Timestamp.Logical,
                         _ => false
                     };
                     if (matches)
