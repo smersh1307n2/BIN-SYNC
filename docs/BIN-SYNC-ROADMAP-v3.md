@@ -1,3 +1,11 @@
+## 1.68. CI follow-up: isolate Windows scheduling flake and close the typed-node test setup — 2026-11-10
+
+- [x CI] Exact-head run for §1.67 passed the Linux .NET test job, signed control-plane vectors and fuzz/lab; the Windows .NET test job had one failure only: `FlowControl_WaitForCredit_reserves_atomically_and_wakes_all_waiters` timed out at its 1-second test deadline. Build succeeded and 677/678 tests passed.
+- [x T] Raised that test's scheduling deadline to 5 seconds (no protocol/runtime behavior changed) and corrected the two-node host test to pass typed `NodeId` values into `NodeBuilder`.
+- [~ CI] New exact-head run is pending. The durable Storage Integration workflow for §1.67 completed successfully on Ubuntu, Windows and macOS; this validates the BIN-SYNC Storage provider integration suite, not the FLD host adapter project.
+- [!] CI credential blocker confirmed from runner logs: `FLD_DB_READ_TOKEN` is empty. Consequently the cross-repository FLD checkout, host-adapter build and `FldBinSyncHost.Tests` execution are explicitly skipped. Configure a fine-grained read-only token with Contents: read access to `smersh1307n2/FLD-DB` as the BIN-SYNC repository Actions secret `FLD_DB_READ_TOKEN` to activate them.
+- [ ] Do not mark the two-FLD-node round-trip complete until `FldBinSyncHost.Tests` has actually compiled and passed against the current FLD-DB branch. Local Commander workstations are still offline; no local test result is claimed.
+
 ## 1.67. T-pass: preserve FLD record-vs-field tombstone semantics through remote APPLY — 2026-11-10
 
 - [x T] Added a contextual remote batch containing both a record tombstone and an ordinary field tombstone. The host adapter must map the former to FLD lifecycle field `0x0000 = Dead`, while preserving the latter as a tombstoned user field.
