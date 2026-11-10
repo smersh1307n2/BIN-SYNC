@@ -454,6 +454,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
             using var storageA = StorageDatabase.Open(Path.Combine(directory, "storage-a"), 721);
             using var storageB = StorageDatabase.Open(Path.Combine(directory, "storage-b"), 722);
+            using var metadataA = new StorageMetadataStore(storageA);
             using var metadataB = new StorageMetadataStore(storageB);
             using var nodeA = StorageNodePersistence.Load(storageA, NodeId.From(authorA));
             using var nodeB = StorageNodePersistence.Load(storageB, NodeId.From(authorB));
@@ -483,10 +484,14 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             StorageNodePersistence.Save(storageA, nodeA);
             StorageNodePersistence.Save(storageB, nodeB);
 
-            Assert.Single(nodeA.ReadOutboxEntries(checked((int)namespaceId), nodeA.NodeId, 0, 10));
+            MetadataPeerStreamState persistedStream = metadataA.GetPeerStreamState(
+                scope, nodeA.NodeId, nodeB.NodeId, checked((uint)nodeB.Epoch),
+                checked((int)namespaceId), nodeA.NodeId);
+            Assert.NotNull(persistedStream.PendingBatch);
             Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
                 sessionB, node => StorageNodePersistence.Save(storageB, node));
-            Task<bool> replayPush = sessionA.PushBatchAsync(nodeA, checked((int)namespaceId));
+            Task<bool> replayPush = sessionA.PushBatchAsync(
+                nodeA, checked((int)namespaceId), metadataA, scope);
             BatchResult replay = await receiveTask.WaitAsync(TimeSpan.FromSeconds(20));
             Assert.True(await replayPush.WaitAsync(TimeSpan.FromSeconds(20)));
             Assert.True(replay.Duplicate);
@@ -547,6 +552,8 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         });
         Assert.Equal(1, coordinatorA.PublishLocalChanges(
             node => StorageNodePersistence.Save(storageA, node)));
+        coordinatorA.EnableMetadataStoreOwnedPublication(
+            node => StorageNodePersistence.Save(storageA, node));
 
         var (toA, toB) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
@@ -570,7 +577,8 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
 
         Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
             sessionB, node => StorageNodePersistence.Save(storageB, node));
-        Task<bool> sendTask = sessionA.PushBatchAsync(nodeA, checked((int)namespaceId));
+        Task<bool> sendTask = sessionA.PushBatchAsync(
+            nodeA, checked((int)namespaceId), metadataA, scope);
         await Task.WhenAll(receiveTask, sendTask);
     }
 
