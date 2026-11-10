@@ -1516,7 +1516,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
-    public void Retiring_peer_epoch_reclaims_receipts_only_in_the_target_namespace()
+    public void Retiring_peer_epoch_preserves_receipts_and_fences_only_the_target_namespace()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "receipt-gc-namespace-scope"), 453);
         const string scope = "receipt-gc-namespace-scope";
@@ -1564,11 +1564,16 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             new[] { new MetadataPeerStreamBaseline(authorA, 0, 5) });
         store.RetireInterestedPeer(scope, local, sender, 1, 2, 7);
 
-        // Namespace 7 is fenced and its old receipt is gone.
+        // Namespace 7's old transport incarnation is fenced, but retirement does
+        // not eagerly delete its durable receipt. The same immutable batch is reusable
+        // over the newly accepted transport epoch.
         var staleNamespace7 = Make(7, authorA, 5, 170);
         Assert.Throws<InvalidDataException>(() => store.AcceptIncomingBatch(staleNamespace7));
+        var replayNamespace7 = Make(7, authorA, 5, 170);
+        replayNamespace7.TransportPeerEpoch = 2;
+        Assert.True(store.AcceptIncomingBatch(replayNamespace7).IsDuplicate);
 
-        // Namespace 8 has an independent roster and must retain the same peer epoch's receipt.
+        // Namespace 8 has an independent fence and retains the same peer epoch's receipt.
         Assert.True(store.AcceptIncomingBatch(namespace8).IsDuplicate);
     }
 
