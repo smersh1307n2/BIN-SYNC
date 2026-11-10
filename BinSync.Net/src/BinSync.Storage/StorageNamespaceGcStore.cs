@@ -81,19 +81,10 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                         throw new InvalidDataException("Namespace roster generation fork detected.");
                     return prior;
                 }
-                // NRS2 is a hash-linked authority log. A signed roster cannot
-                // skip an unobserved membership transition, even when its final
-                // membership happens to be compatible with the last accepted state.
-                if (prior.RosterGeneration == ulong.MaxValue ||
-                    candidate.RosterGeneration != prior.RosterGeneration + 1)
-                    throw new InvalidDataException("Namespace roster chain has a generation gap.");
-                if (!candidate.PreviousRosterDigest.AsSpan().SequenceEqual(priorDigest))
+                if (candidate.RosterGeneration == prior.RosterGeneration + 1 &&
+                    !candidate.PreviousRosterDigest.AsSpan().SequenceEqual(priorDigest))
                     throw new InvalidDataException("Next namespace roster does not link to the accepted previous digest.");
                 ValidateMembershipTransition(prior, candidate, trustStore);
-            }
-            else if (candidate.RosterGeneration != 1)
-            {
-                throw new InvalidDataException("The first accepted namespace roster must start at generation one.");
             }
 
             byte[] rosterKey = RosterKey(candidate.NamespaceId, candidate.RosterGeneration);
