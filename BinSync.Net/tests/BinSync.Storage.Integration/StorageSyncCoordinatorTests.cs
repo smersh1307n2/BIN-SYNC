@@ -1745,52 +1745,34 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
-    public void Provider_authoritative_rehydration_replaces_node_cache_and_freezes_local_feed()
+    public void Provider_cutover_refuses_to_discard_unrepresented_legacy_Node_change_ledger()
     {
-        using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-authoritative-rehydration"), 453);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "provider-cutover-legacy-ledger"), 453);
         using var provider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
         using var node = NewNode(54);
         using var remote = NewNode(55);
-        const string scope = "provider-authoritative-rehydration";
+        const string scope = "provider-cutover-legacy-ledger";
         var coordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
 
-        RecordId staleRecord = RecordId.From(Guid.Parse("54000000-0000-0000-0000-000000000054").ToByteArray());
-        RecordId providerRecord = RecordId.From(Guid.Parse("55000000-0000-0000-0000-000000000055").ToByteArray());
-        remote.WriteField(1, staleRecord, 0x0817, "node-cache-only"u8.ToArray(), new Hlc(5800, 0));
+        RecordId legacyRecord = RecordId.From(Guid.Parse("54000000-0000-0000-0000-000000000054").ToByteArray());
+        remote.WriteField(1, legacyRecord, 0x0817, "legacy-node-only"u8.ToArray(), new Hlc(5800, 0));
         Transport.MakeSession(remote, node);
         Assert.NotNull(Transport.DeliverBatch(remote, node, 1));
-        Assert.True(node.TryGetField(1, staleRecord, 0x0817, out _));
+        Assert.True(node.TryGetField(1, legacyRecord, 0x0817, out _));
+        int retainedLedgerCount = node.GlobalChangeLedgerCount;
 
-        // The legacy Node-only receive happened before cutover. Provider snapshot
-        // replacement now drops that stale cache state and its duplicate relay row.
-        coordinator.EnableMetadataStoreOwnedPublication(_ => { });
-        Assert.False(node.TryGetField(1, staleRecord, 0x0817, out _));
-        Assert.Empty(node.ReadOutboxEntries(1, remote.NodeId, 0, 10));
+        // Cutover must not silently discard a retained Node ChangeId identity that
+        // has never been committed to the durable Metadata Store.
+        Assert.Throws<InvalidOperationException>(() =>
+            coordinator.EnableMetadataStoreOwnedPublication(_ => { }));
 
-        provider.AppendLocalChange(new ProviderMutation
-        {
-            RecordId = providerRecord,
-            FieldId = 0x0818,
-            AuthorNodeId = node.NodeId,
-            OriginAuthorEpoch = 1,
-            HlcWall = 5900,
-            Value = "provider-authoritative"u8.ToArray()
-        });
-        BatchId expectedChangeId = Assert.Single(provider.ReadLocalChanges(0, 10).Changes).ChangeId;
-
-        Assert.Equal(0, coordinator.RehydrateNodeFromProviderSnapshot(_ => { }));
-
-        Assert.False(node.TryGetField(1, staleRecord, 0x0817, out _));
-        Assert.True(node.TryGetField(1, providerRecord, 0x0818, out var restored));
-        Assert.Equal("provider-authoritative", Encoding.UTF8.GetString(restored!.Value));
-        Assert.Empty(node.ReadOutboxEntries(1, node.NodeId, 0, 10));
-        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
-        BatchId publishedChangeId = metadata.ReadOutbound(scope, node.NodeId, 1, node.NodeId,
-            metadata.AcquireOutboundLease(scope, node.NodeId, 1, node.NodeId,
-                Guid.Parse("54000000-0000-0000-0000-000000000001")), 0, 10).Items.Single().ChangeId;
-        Assert.Equal(expectedChangeId, publishedChangeId);
+        Assert.True(node.TryGetField(1, legacyRecord, 0x0817, out _));
+        Assert.Equal(retainedLedgerCount, node.GlobalChangeLedgerCount);
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(0UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.False(((IProviderPublicationMode)provider)
+            .TryGetMetadataStoreOwnedPublicationCutover(out _));
     }
 
     [Fact]
@@ -1991,12 +1973,9 @@ public sealed class StorageSyncCoordinatorTests
     [Fact]
     public void Provider_authoritative_recovery_processes_only_its_namespace_pending_intents()
     {
-        using var metadataStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-metadata"), 454);
-        using var namespaceOneStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-provider-one"), 455);
-        using var namespaceTwoStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-provider-two"), 456);
-        using var metadata = new StorageMetadataStore(metadataStorage);
-        using var providerOne = new StorageDataProvider(namespaceOneStorage);
-        using var providerTwo = new StorageDataProvider(namespaceTwoStorage);
+        using var sharedStorage = StorageDatabase.Open(Path.Combine(_root, "multi-namespace-shared"), 454);
+        using var metadata = new StorageMetadataStore(sharedStorage);
+        using var provider = new StorageDataProvider(sharedStorage);
         using var node = NewNode(56);
         using var sender = NewNode(57);
         const string scope = "multi-namespace-provider-recovery";
@@ -2009,7 +1988,7 @@ public sealed class StorageSyncCoordinatorTests
             scope, node, sender, 2, recordTwo, 0x081A, "namespace-two", 0xA2);
         metadata.BeginPendingApply(batchTwo, Guid.NewGuid());
 
-        var coordinatorOne = new StorageSyncCoordinator(node, providerOne, 1, metadata, scope);
+        var coordinatorOne = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
         Assert.Equal(0, coordinatorOne.RehydrateNodeFromProviderSnapshot(_ => { }));
         MetadataPendingApplyIntent foreign = Assert.Single(
             metadata.ReadPendingApplyIntents(scope, node.NodeId));
@@ -2023,11 +2002,11 @@ public sealed class StorageSyncCoordinatorTests
         MetadataPendingApplyIntent remaining = Assert.Single(
             metadata.ReadPendingApplyIntents(scope, node.NodeId));
         Assert.Equal(2, remaining.Batch.NamespaceId);
-        Assert.True(providerOne.TryReadCurrent(recordOne, 0x0819, out var valueOne));
+        Assert.True(provider.TryReadCurrent(recordOne, 0x0819, out var valueOne));
         Assert.Equal("namespace-one", Encoding.UTF8.GetString(valueOne!.Value));
-        Assert.False(providerTwo.TryReadCurrent(recordTwo, 0x081A, out _));
+        Assert.False(provider.TryReadCurrent(recordTwo, 0x081A, out _));
 
-        var coordinatorTwo = new StorageSyncCoordinator(node, providerTwo, 2, metadata, scope);
+        var coordinatorTwo = new StorageSyncCoordinator(node, provider, 2, metadata, scope);
         Assert.Equal(1, coordinatorTwo.RecoverPendingApplies());
         Assert.Empty(metadata.ReadPendingApplyIntents(scope, node.NodeId));
         Assert.True(providerTwo.TryReadCurrent(recordTwo, 0x081A, out var valueTwo));
@@ -2159,7 +2138,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(second.ChangeId, outbound[1].ChangeId);
     }
 
-    private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode
+    private sealed class FailOnceAcknowledgeProvider : IDataProvider, IProviderPublicationMode, IProviderCommitGuard
     {
         private readonly IDataProvider _inner;
         private readonly Func<ProviderChange, ProviderChange>? _changeTransform;
@@ -2195,6 +2174,8 @@ public sealed class StorageSyncCoordinatorTests
             ((IProviderPublicationMode)_inner).TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
         public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark) =>
             ((IProviderPublicationMode)_inner).EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
+        public IDisposable AcquireCommitGuard() =>
+            ((IProviderCommitGuard)_inner).AcquireCommitGuard();
 
         public void AcknowledgeLocalChanges(ulong safeThroughSequence)
         {
