@@ -217,24 +217,27 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         var (toA, toB) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
         var connectTask = SyncSession.ConnectAsync(nodeA, toA);
-        await using var sessionB = await acceptTask;
-        await using var sessionA = await connectTask;
+        await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
+        await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
         // Persist negotiated peer aliases before the durable receive-before-ACK path.
         StorageNodePersistence.Save(storageA, nodeA);
         StorageNodePersistence.Save(storageB, nodeB);
 
         Task<BatchResult> receiveAtB = coordinatorB.ReceiveBatchBeforeAckAsync(
             sessionB, node => StorageNodePersistence.Save(storageB, node));
-        Assert.True(await sessionA.PushBatchAsync(nodeA, namespaceId));
-        BatchResult resultAtB = await receiveAtB;
+        Assert.True(await sessionA.PushBatchAsync(nodeA, namespaceId).WaitAsync(TimeSpan.FromSeconds(20)));
+        BatchResult resultAtB = await receiveAtB.WaitAsync(TimeSpan.FromSeconds(20));
+        // The sender's ACK/progress is part of its durable Node checkpoint too.
+        StorageNodePersistence.Save(storageA, nodeA);
         Assert.Equal(1, resultAtB.Applied);
         Assert.True(fldB.TryGetBytes(recordA, 0x0301, out byte[]? receivedAtB));
         Assert.Equal(valueA, receivedAtB);
 
         Task<BatchResult> receiveAtA = coordinatorA.ReceiveBatchBeforeAckAsync(
             sessionA, node => StorageNodePersistence.Save(storageA, node));
-        Assert.True(await sessionB.PushBatchAsync(nodeB, namespaceId));
-        BatchResult resultAtA = await receiveAtA;
+        Assert.True(await sessionB.PushBatchAsync(nodeB, namespaceId).WaitAsync(TimeSpan.FromSeconds(20)));
+        BatchResult resultAtA = await receiveAtA.WaitAsync(TimeSpan.FromSeconds(20));
+        StorageNodePersistence.Save(storageB, nodeB);
         Assert.Equal(1, resultAtA.Applied);
         Assert.True(fldA.TryGetBytes(recordB, 0x0301, out byte[]? receivedAtA));
         Assert.Equal(valueB, receivedAtA);
