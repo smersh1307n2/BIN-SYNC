@@ -1,3 +1,11 @@
+## 1.23.6. C-pass: source-audit all three physical GC horizons — 2026-11-10
+
+- [x C] ChangeId ledger reclamation is gated by the signed origin retention checkpoint and the union of provider-feed, relay, outbound, PendingApply and external host ChangeId references. It blocks on immutable peer reservations and active provider snapshot pins; provider scans run to the captured high-watermark and validate cursor progress, page bounds and strictly increasing row sequences.
+- [x C] Receipt reclamation has one source deletion site (`CompactReceipts`). It requires the durable transport retirement fence, accepted-roster epoch fence, retained receive cursor/digest-chain replay fence, no PendingApply, no host receipt reference and a signed origin retention checkpoint. `RetireInterestedPeer` itself never deletes receipts.
+- [x C] Tombstone reclamation requires a common installed FULL_REPLACE generation/digest/HLC floor, signed issued-origin maxima, signed safe-applied frontiers, every active member's draft-free report and contiguous applied coverage, plus no provider/metadata/host record or tombstone ChangeId references. Older field rows are removed before the tombstone row; newer field mutations survive.
+- [x C] Confirmed all three physical-GC capability switches remain hard `false` (`IsChangeIdGcProofEnabled`, `IsReceiptGcProofEnabled`, `IsTombstoneGcProofEnabled`). This source audit does not authorize enabling any switch.
+- [~ T] Adversarial proof tests, restart/fault injection, multi-member offline/rejoin and external-reference fixtures remain mandatory before any physical deletion is enabled. No build/tests run in this source-audit slice.
+
 ## 1.23.5. C-pass: validate provider scan rows during ChangeId GC — 2026-11-10
 
 - [x C] ChangeId GC now validates every returned provider sequence is strictly increasing and lies within the page's explicit scanned prefix before using its ChangeId as a live-reference proof.
@@ -130,7 +138,7 @@
 - [x C] Base FLD `IDataProvider` bridge, provider author-epoch closure, exact host composition and multi-session send/receive scheduler are now implemented in the optional host sample.
 - [x C] Physical-format decision Option B is accepted: generic Storage owns opaque immutable blob pages plus its WAL-backed catalog; Database retains FLD1 Run v1/v2, manifest, field semantics and FLD WAL. The generic blob/page backend and FLD checkpoint/compaction/FULL_REPLACE paths are implemented on the paired branches.
 - [x C] Blob catalog/page failure-ordering and restart-cleanup source audit completed in §1.19, including correction of the stale orphan-cleanup API call. [~ C] Complete the final public API/source/byte audit. Durable sender recovery is implemented in §1.25 and FLD receiver staging/atomic switch in §1.26; both await T-pass proof. Transport creation/reconnect/disposal remain application-owned.
-- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23.5 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
+- [~ T] Current validation remains red/unverified: latest completed evidence is older than the current source head; stale Core and Storage Integration fixtures/adapters remain a separate T-pass. Historical [~ C] entries below are chronological progress records; the latest status is §§1.17–1.23.6 and supersedes older open-item summaries. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 ## 0.74. Recovery branches created before the next integration slice — 2026-11-09
 
