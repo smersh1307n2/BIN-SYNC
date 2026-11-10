@@ -8,6 +8,7 @@ on:
       - "samples/**"
       - ".github/workflows/dotnet.yml"
       - "docs/PRODUCTION-STATUS.md"
+      - "docs/BIN-SYNC-ROADMAP-v3.md"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
       - "third_party/ed25519-zlib/**"
   pull_request:
