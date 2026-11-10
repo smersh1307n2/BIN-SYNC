@@ -3,7 +3,7 @@
 ## C-pass continuation update — 2026-11-10
 
 - Experimental strict-contiguity changes to NRS2/RCP2 acceptance were reverted in `e358b5a2` and `1a68150d` after checking the normative offline-catch-up contract. Active code retains higher signed roster/checkpoint catch-up behavior, existing monotonicity checks and same-sequence fork rejection.
-- Roadmap sections 1.14–1.15 record the correction and the remaining design audit: safe membership-transition validation when an offline node receives a newer full roster without all intermediate generations.
+- Roadmap §1.15 and addendum §§4.1/4.3 now resolve offline generation gaps under the pinned, trusted-authority model: a higher signed full roster/checkpoint attests the omitted transition history, while directly checkable monotonic fences remain enforced. Immediate predecessor digests are checked for consecutive generations; no local generation+1/sequence+1 rule is imposed. Stronger Byzantine-authority proof remains a future chain-fetch/transition-proof extension.
 - This remains implementation-only: no build/tests were run for this slice and prior red CI evidence remains unchanged. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 
@@ -12,7 +12,14 @@
 - Roadmap progress (issued-origin monotonicity, Storage blob audit, and provider-feed GC cursor fix) recorded in `34950cbf512b1826f1c46ce343eea3ee275bd2c3`; v3.1 issued-origin monotonicity is explicit in addendum commit `476748632357a5f6031be435f1aa6e81b6545719`. Recovery branch: `backup/cpass-2026-11-10-provider-feed-gc-fix`.
 - This is implementation-only C-pass work. No tests/build were run for this slice; historical CI evidence below does not validate it. Receipt, ChangeId and tombstone/Ghost physical GC remain disabled.
 
-## Current continuation checkpoint — 2026-11-09
+- Latest verified branch heads before this status-only documentation update: BIN-SYNC `feature/fld-external-storage` `38b34f23b6e4ca256a8b0194f4351206da3911bd`; FLD-DB `fix/crash-consistency-outbox` `86d746613bf9115494139da127741762ecbc9348`. Both local branches matched their fetched origin heads and were clean at the last verification.
+- FLD-DB C-pass commits: `75d548b` validates blob-backed ProviderSnapshot Runs semantically and by NamespaceId before accepting a persisted watermark; `6953875` makes in-memory/persisted ProviderSnapshot pins block ChangeId/RecordId reclamation; `86d7466` fixes the stale orphan-blob cleanup API call in startup recovery.
+- BIN-SYNC C-pass commit `4f5e92f6` adds a provider snapshot GC guard so active StorageDataProvider snapshot handles block ChangeId reclamation; the external FLD scanner separately covers durable FLD snapshot directories. All physical receipt, ChangeId and tombstone/Ghost GC flags remain disabled.
+- Blob source audit confirms pending catalog → durable page files → completion marker ordering and catalog-first deletion with orphan-directory cleanup. The stale `PruneOrphanPages` call is corrected to `PruneOrphanBlobs`. Windows directory-entry durability is not claimed by `StorageDirectorySync`; this platform limitation remains explicit.
+- Public API, host orchestration and FLD integration docs now describe the implemented `FldDatabaseDataProvider`/`FldRemoteBatchApplyStore` sample and both Node-owned and Metadata Store-owned publication-sequence resolution. The final public API/source/byte audit remains open.
+- No build or tests were run in this continuation, by the requested C-pass-before-T-pass sequencing. Historical red CI evidence below is not an exact-head result and does not validate these commits. No release/build/test success is claimed.
+
+## Historical checkpoint — 2026-11-09 (superseded by 2026-11-10)
 
 - BIN-SYNC `feature/fld-external-storage` latest production-code C-pass commit: `47be8895046662a06481ac097229c59e2cb2ed47`; subsequent roadmap/status documentation commits record this continuation. The optional FLD host provider implements the full `IProviderFullReplace` receiver capability: durable staged pages, canonical digest re-read/verification and atomic FLD namespace generation switch. Durable sender-side FULL_REPLACE snapshot persistence/restart recovery is also implemented. This is C-pass source, not a validated release.
 - FLD-DB `fix/crash-consistency-outbox` latest FLD C-pass branch head: `f1839bc7baa755aed3dea41ed5efba2e48e73607`; current storage implementation includes the generic immutable blob/page backend and FLD Run/FULL_REPLACE integration. FLD provides namespace-scoped checksummed FULL_REPLACE stage state, write-through/fsync publication, immutable Run pages, bounded resumable abort, pre-switch Run revalidation and an atomic per-namespace manifest switch; restart recovery protects incomplete stages and old provider snapshot pins.
@@ -39,7 +46,7 @@
 | Merge policies | §8 | **partial** — Node apply path supports LWW_FIELD only; other merge helpers are standalone |
 | Digests | §9 | record digest v2 distinguishes live field values from tombstones |
 | Outbox / inbox | §10 | implemented |
-| Membership / GC | §11 | membership and GC_NOTICE frames implemented; destructive tombstone/ghost GC is disabled by E-25 until a safe namespace frontier and stale-peer recovery protocol exist |
+| Membership / GC | §11 | membership and GC_NOTICE frames implemented; namespace roster/retention checkpoint proofs and offline catch-up are specified, but destructive receipt, ChangeId and tombstone/Ghost GC remain disabled until exact cross-store reference completeness and physical-retention T-pass prove all safe horizons |
 | Wire frames | §12 | implemented, including fragments |
 | Reconciliation ladder | §13 | implemented; CI lab/fuzz coverage |
 | E2EE | §14 | opt-in |
