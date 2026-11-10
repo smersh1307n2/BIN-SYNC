@@ -2662,8 +2662,8 @@ public sealed class StorageSyncCoordinatorTests
             OutboxEntry sent = Assert.Single(sender.ReadOutboxEntries(1, sender.NodeId, 0, 10));
             Transport.MakeSession(sender, local);
             Assert.NotNull(Transport.DeliverBatch(sender, local, 1));
-            Assert.True(local.GlobalChangeLedger.ContainsKey((1, sent.ChangeId)));
-            Assert.True(local.SeenChanges.Contains((1, sent.ChangeId)));
+            Assert.Contains((1, sent.ChangeId), local.GlobalChangeLedger.Keys);
+            Assert.Contains((1, sent.ChangeId), local.SeenChanges);
             seenChangesBeforeCutover = local.SeenChanges.Count;
 
             object operation = Ops.DecodeOp(sent.Payload).Op;
@@ -2740,7 +2740,7 @@ public sealed class StorageSyncCoordinatorTests
             recoveredCoordinator.EnableMetadataStoreOwnedPublication(node =>
                 StorageNodePersistence.Save(reopenedStorage, node));
 
-            Assert.Empty(reopenedNode.GlobalChangeLedger.Where(pair => pair.Key.Ns == 1));
+            Assert.DoesNotContain(reopenedNode.GlobalChangeLedger.Keys, key => key.Ns == 1);
             Assert.Equal(seenChangesBeforeCutover, reopenedNode.SeenChanges.Count);
             Assert.Empty(reopenedNode.ReadOutboxAuthors(1).SelectMany(author => reopenedNode.ReadOutboxEntries(1, author, 0, 10)));
             Assert.True(((IProviderPublicationMode)reopenedProvider).TryGetMetadataStoreOwnedPublicationCutover(out _));
