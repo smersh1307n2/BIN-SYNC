@@ -1,3 +1,10 @@
+## 1.23.9. C-pass: reconcile Node-owned and Metadata-owned receive WAL boundaries — 2026-11-10
+
+- [x C] Audited `Node.ApplyBatchInternal`: legacy Node-owned receive persists accepted `RemoteBatch` payloads in Node WAL; Metadata-Store-authoritative receive uses the durable `PendingApply` intent as its sole protocol recovery journal and deliberately skips duplicate Node `RemoteBatch` WAL, Node `GlobalChangeLedger` and Node relay-Outbox mirroring.
+- [x C] Confirmed the metadata-authoritative path applies the durable per-operation ChangeId decision mask, checkpoints Node cache before provider apply, finalizes the Metadata receipt only after provider success, and replays the exact stored wire payload through Node/provider during PendingApply recovery.
+- [x C] Reconciled `PUBLIC-API.md` so the two receive modes and their single-journal ownership are explicit; removed the ambiguous statement that Metadata-authoritative replay also writes a Node RemoteBatch WAL entry.
+- [~ T] Verify both receive modes separately: one Node WAL RemoteBatch for legacy mode, zero duplicate Node RemoteBatch frames in Metadata-authoritative mode, PendingApply crash recovery at each boundary, and no Node ledger/relay mirror mutation in the authoritative mode. No tests/build run in this C slice.
+
 ## 1.23.8. C-pass: migrate the legacy Node digest into the Metadata ChangeLedger row — 2026-11-10
 
 - [x C] Added optional `IMetadataLegacyNodeLedgerStore`; `StorageMetadataStore` stores the old 16-byte origin-bound Node digest as an optional suffix on the existing ChangeLedger value (45-byte base / 61-byte alias encoding), not in a second key/table.

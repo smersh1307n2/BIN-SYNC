@@ -209,16 +209,20 @@ each local mutation is one integrity-protected frame containing both the operati
 and its exact Outbox identity (`ChangeId`, `Seq`, author, payload, creation time and
 causal dependencies). There is no field-only WAL record or v1 writer/reader.
 
-Accepted incoming DELTA_BATCH frames are also recorded as `RemoteBatch` entries
-before the receiver publishes new record effects or sends the ACK. Each entry preserves
-the exact batch payload together with the sending peer identity, session epoch and
-alias map needed to resolve operation authors during replay. A replay whose ChangeIds
-are already present in the atomically checkpointed Node `GlobalChangeLedger` does not
-create another WAL entry. If a Metadata Store receipt is replayed into a newly created
-Node whose local ledger is empty, the batch is still written to WAL so that the Node
-record cache can be rebuilt; Metadata Store and Data Provider remain the protocol
-and durable-value authorities. This closes the crash window in which a sender could
-receive an ACK for data that the receiver had not yet made recoverable.
+In legacy Node-owned receive mode, accepted incoming DELTA_BATCH frames are recorded
+as `RemoteBatch` WAL entries before the receiver publishes new record effects or sends
+the ACK. Each entry preserves the exact batch payload together with the sending peer
+identity, session epoch and alias map needed to resolve operation authors during replay.
+A replay whose ChangeIds are already present in the atomically checkpointed Node
+`GlobalChangeLedger` does not create another WAL entry. Metadata-Store-authoritative
+receive (`receiveStateOwnedByMetadataStore`) instead treats the durable `PendingApply`
+intent as the protocol WAL/recovery source and deliberately skips a duplicate Node
+`RemoteBatch` WAL entry. It applies the per-operation decision mask from the global
+Metadata ChangeId ledger, checkpoints the Node cache before provider apply, then
+finalizes the Metadata receipt. On restart, PendingApply recovery replays the exact
+stored wire payload into Node and provider before finalization; completed provider
+state can also rebuild the Node cache from a provider snapshot. This keeps one durable
+receive journal per mode and prevents an ACK before recoverable state is committed.
 
 Snapshot transfers remain atomic in memory but are not WAL records: they have no
 acceptance ACK, do not advance the sender's Outbox acknowledgement cursor, and can
