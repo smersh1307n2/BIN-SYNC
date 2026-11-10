@@ -2582,6 +2582,62 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(gcStore.ReadFullReplaceInstalledAcks(roster, generation));
     }
 
+    [Fact]
+    public void Legacy_node_ledger_alias_round_trips_and_rejects_conflicts_after_reopen()
+    {
+        const string scope = "legacy-node-ledger-alias";
+        const ulong partitionId = 484;
+        string directory = Path.Combine(_root, "legacy-node-ledger-alias");
+        using var local = NewNode(93);
+        using var sender = NewNode(94);
+        MetadataIncomingBatch incoming;
+        Guid applyToken = Guid.Parse("93000000-0000-0000-0000-000000000001");
+        byte[] legacyDigest = Enumerable.Repeat((byte)0x93, 16).ToArray();
+
+        using (var storage = StorageDatabase.Open(directory, partitionId))
+        using (var metadata = new StorageMetadataStore(storage))
+        {
+            incoming = CreatePendingProviderBatch(
+                scope, local, sender, 1,
+                RecordId.From(Guid.Parse("93000000-0000-0000-0000-000000000002").ToByteArray()),
+                0x0893, "legacy-ledger-alias", 0x93);
+            metadata.BeginPendingApply(incoming, applyToken);
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local.NodeId, 1, incoming.Operations[0].ChangeId,
+                out ReadOnlyMemory<byte> semanticFingerprint, out _, out _));
+            Assert.Equal(incoming.Operations[0].Fingerprint.ToArray(), semanticFingerprint.ToArray());
+        }
+
+        var alias = new MetadataLegacyNodeLedgerFingerprint(
+            incoming.Operations[0].ChangeId, legacyDigest);
+        using (var reopenedStorage = StorageDatabase.Open(directory, partitionId))
+        using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+        {
+            Assert.True(reopenedMetadata.TryGetChangeIdentity(
+                scope, local.NodeId, 1, incoming.Operations[0].ChangeId,
+                out ReadOnlyMemory<byte> semanticFingerprint, out _, out _));
+            Assert.Equal(incoming.Operations[0].Fingerprint.ToArray(), semanticFingerprint.ToArray());
+            reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { alias });
+        }
+
+        using (var aliasStorage = StorageDatabase.Open(directory, partitionId))
+        using (var aliasMetadata = new StorageMetadataStore(aliasStorage))
+        {
+            aliasMetadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { alias });
+            var conflictingAlias = new MetadataLegacyNodeLedgerFingerprint(
+                incoming.Operations[0].ChangeId, Enumerable.Repeat((byte)0x94, 16).ToArray());
+            Assert.Throws<InvalidDataException>(() =>
+                aliasMetadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { conflictingAlias }));
+
+            var zeroAlias = new MetadataLegacyNodeLedgerFingerprint(
+                incoming.Operations[0].ChangeId, new byte[16]);
+            Assert.Throws<ArgumentException>(() =>
+                aliasMetadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { zeroAlias }));
+            Assert.Throws<ArgumentException>(() =>
+                aliasMetadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, new[] { alias, alias }));
+        }
+    }
+
     private sealed class TestFullReplaceCommitLease : IFullReplaceCommitLease
     {
         private readonly Action _onDispose;
