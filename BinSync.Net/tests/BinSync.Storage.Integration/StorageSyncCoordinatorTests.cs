@@ -2685,17 +2685,25 @@ public sealed class StorageSyncCoordinatorTests
             StorageNodePersistence.Save(storage, local);
 
             var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
-            bool checkpointCallbackEntered = false;
+            int persistCalls = 0;
             IOException crash = Assert.Throws<IOException>(() =>
                 coordinator.EnableMetadataStoreOwnedPublication(node =>
                 {
-                    checkpointCallbackEntered = true;
+                    int call = Interlocked.Increment(ref persistCalls);
+                    if (call == 1)
+                    {
+                        // InstallProviderSnapshot persists the provider-derived Node
+                        // state before the durable publication marker is written.
+                        StorageNodePersistence.Save(storage, node);
+                        return;
+                    }
+
                     if (crashCut == "after-node-checkpoint")
                         StorageNodePersistence.Save(storage, node);
-                    throw new IOException("Simulated process loss at the Node checkpoint boundary.");
+                    throw new IOException("Simulated process loss at the post-cutover Node checkpoint boundary.");
                 }));
-            Assert.Equal("Simulated process loss at the Node checkpoint boundary.", crash.Message);
-            Assert.True(checkpointCallbackEntered);
+            Assert.Equal("Simulated process loss at the post-cutover Node checkpoint boundary.", crash.Message);
+            Assert.Equal(2, persistCalls);
             Assert.True(((IProviderPublicationMode)provider).TryGetMetadataStoreOwnedPublicationCutover(out _));
         }
 
