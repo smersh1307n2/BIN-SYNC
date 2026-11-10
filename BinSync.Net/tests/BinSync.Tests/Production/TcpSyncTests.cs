@@ -46,7 +46,19 @@ public class TcpSyncTests
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b, serverCertificate: cert);
         var ssl = TlsTestCert.ClientOptions("localhost", cert.GetCertHashString());
-        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port, sslOptions: ssl);
+        var connect = TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port, sslOptions: ssl);
+        try
+        {
+            await Task.WhenAll(accept, connect);
+        }
+        catch
+        {
+            var errors = new List<Exception>();
+            if (accept.Exception is { } acceptError) errors.AddRange(acceptError.InnerExceptions);
+            if (connect.Exception is { } connectError) errors.AddRange(connectError.InnerExceptions);
+            throw new AggregateException("TLS loopback failed on one or both authentication sides.", errors);
+        }
+        await using var client = await connect;
         await using var server = await accept;
 
         Assert.True(Fix.Eq(b.NodeId, client.PeerNodeId));
