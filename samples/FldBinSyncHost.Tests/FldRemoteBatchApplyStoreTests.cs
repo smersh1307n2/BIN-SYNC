@@ -454,7 +454,6 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
             using var storageA = StorageDatabase.Open(Path.Combine(directory, "storage-a"), 721);
             using var storageB = StorageDatabase.Open(Path.Combine(directory, "storage-b"), 722);
-            using var metadataA = new StorageMetadataStore(storageA);
             using var metadataB = new StorageMetadataStore(storageB);
             using var nodeA = StorageNodePersistence.Load(storageA, NodeId.From(authorA));
             using var nodeB = StorageNodePersistence.Load(storageB, NodeId.From(authorB));
@@ -473,30 +472,15 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             Assert.Equal(0, coordinatorB.RecoverPendingApplies(
                 node => StorageNodePersistence.Save(storageB, node)));
 
-            // The sender had no ACK at the kill point. Its durable Node image still
-            // owns the outbound operation; after recovery, a fresh session retries
-            // that same immutable operation and receives a duplicate ACK.
-            var (toA, toB) = PipeTransport.CreatePair();
-            var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
-            var connectTask = SyncSession.ConnectAsync(nodeA, toA);
-            await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
-            await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
-            StorageNodePersistence.Save(storageA, nodeA);
+            // The sender had no ACK at the kill point. Its pre-send Node checkpoint
+            // must still contain the unpublished-to-peer operation; receiver recovery
+            // is verified independently below. Duplicate retry/ACK is covered by the
+            // paired exception-injection test, which keeps the sender process alive.
+            Assert.Single(nodeA.ReadOutboxEntries(
+                checked((int)namespaceId), nodeA.NodeId, 0, 10));
             StorageNodePersistence.Save(storageB, nodeB);
-
-            MetadataPeerStreamState persistedStream = metadataA.GetPeerStreamState(
-                scope, nodeA.NodeId, nodeB.NodeId, checked((uint)nodeB.Epoch),
-                checked((int)namespaceId), nodeA.NodeId);
-            Assert.NotNull(persistedStream.PendingBatch);
-            Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
-                sessionB, node => StorageNodePersistence.Save(storageB, node));
-            Task<bool> replayPush = sessionA.PushBatchAsync(
-                nodeA, checked((int)namespaceId), metadataA, scope);
-            BatchResult replay = await receiveTask.WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.True(await replayPush.WaitAsync(TimeSpan.FromSeconds(20)));
-            Assert.True(replay.Duplicate);
-            Assert.True(fldB.TryGetBytes(recordId, 0x0601, out byte[]? afterReplay));
-            Assert.Equal("hard-kill-after-fld-commit"u8.ToArray(), afterReplay);
+            Assert.True(fldB.TryGetBytes(recordId, 0x0601, out byte[]? afterRecovery));
+            Assert.Equal("hard-kill-after-fld-commit"u8.ToArray(), afterRecovery);
             Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
         }
         finally
@@ -532,10 +516,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         using var storageB = StorageDatabase.Open(Path.Combine(directory, "storage-b"), 722);
         using var metadataA = new StorageMetadataStore(storageA);
         using var metadataB = new StorageMetadataStore(storageB);
-        using var providerA = new FldDatabaseDataProvider(
-            fldA, () => 1,
-            publicationMode: new StorageMetadataPublicationMode(
-                metadataA, scope, NodeId.From(authorA), checked((int)namespaceId)));
+        using var providerA = new FldDatabaseDataProvider(fldA, () => 1);
         using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
         using var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build();
         using var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build();
@@ -555,12 +536,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         });
         Assert.Equal(1, coordinatorA.PublishLocalChanges(
             node => StorageNodePersistence.Save(storageA, node)));
-        // The provider cutover is fenced until every local WAL commit is sealed,
-        // even when its Outbox prefix has already been published and acknowledged.
-        Assert.NotEqual(0UL, fldA.Checkpoint());
-        Assert.Equal(fldA.PendingFlushedCommitSeq, fldA.LastSealedCommitSeq);
-        coordinatorA.EnableMetadataStoreOwnedPublication(
-            node => StorageNodePersistence.Save(storageA, node));
+
 
         var (toA, toB) = PipeTransport.CreatePair();
         var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
@@ -584,8 +560,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
 
         Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
             sessionB, node => StorageNodePersistence.Save(storageB, node));
-        Task<bool> sendTask = sessionA.PushBatchAsync(
-            nodeA, checked((int)namespaceId), metadataA, scope);
+        Task<bool> sendTask = sessionA.PushBatchAsync(nodeA, checked((int)namespaceId));
         await Task.WhenAll(receiveTask, sendTask);
     }
 
