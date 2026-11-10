@@ -249,6 +249,134 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Pending_apply_recovers_when_fld_commit_precedes_metadata_receipt_and_ack()
+    {
+        const uint namespaceId = 10;
+        const string scope = "fld-crash-boundary";
+        byte[] authorA = Id(0xE1);
+        byte[] authorB = Id(0xE2);
+        byte[] recordId = Id(0xE3);
+        byte[] value = "durable-before-ack"u8.ToArray();
+        string fldAPath = Path.Combine(_directory, "crash-fld-a");
+        string fldBPath = Path.Combine(_directory, "crash-fld-b");
+        string storageAPath = Path.Combine(_directory, "crash-storage-a");
+        string storageBPath = Path.Combine(_directory, "crash-storage-b");
+
+        // Simulate a process dying after FLD has durably committed the remote
+        // mutation but before the Metadata PendingApply receipt can be finalized
+        // and before the sender can receive its ACK.
+        using (var fldA = FldDatabase.Open(fldAPath, namespaceId, authorA))
+        using (var fldB = FldDatabase.Open(fldBPath, namespaceId, authorB))
+        using (var providerA = new FldDatabaseDataProvider(fldA, () => 1))
+        using (var providerB = new FldDatabaseDataProvider(fldB, () => 1))
+        using (var storageA = StorageDatabase.Open(storageAPath, 711))
+        using (var storageB = StorageDatabase.Open(storageBPath, 712))
+        using (var metadataA = new StorageMetadataStore(storageA))
+        using (var metadataB = new StorageMetadataStore(storageB))
+        using (var nodeA = new NodeBuilder().WithNodeId(NodeId.From(authorA)).WithEpoch(1).Build())
+        using (var nodeB = new NodeBuilder().WithNodeId(NodeId.From(authorB)).WithEpoch(1).Build())
+        {
+            var coordinatorA = new StorageSyncCoordinator(
+                nodeA, providerA, namespaceId, metadataA, scope);
+            var crashAfterCommit = new ApplyThenThrowOnceStore(new FldRemoteBatchApplyStore(fldB));
+            var coordinatorB = new StorageSyncCoordinator(
+                nodeB, providerB, namespaceId, metadataB, scope,
+                remoteBatchCommitStore: crashAfterCommit);
+
+            providerA.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(recordId),
+                FieldId = 0x0501,
+                HlcWall = 5001,
+                AuthorNodeId = NodeId.From(authorA),
+                KeyEpoch = 0,
+                Value = value,
+                ChangeId = BatchId.From(Id(0xE4)),
+                OriginAuthorEpoch = 1
+            });
+            Assert.Equal(1, coordinatorA.PublishLocalChanges(
+                node => StorageNodePersistence.Save(storageA, node)));
+
+            var (toA, toB) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
+            await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
+            StorageNodePersistence.Save(storageA, nodeA);
+            StorageNodePersistence.Save(storageB, nodeB);
+
+            using var sendCancellation = new CancellationTokenSource();
+            Task<BatchResult> receiveTask = coordinatorB.ReceiveBatchBeforeAckAsync(
+                sessionB, node => StorageNodePersistence.Save(storageB, node));
+            Task<bool> sendTask = sessionA.PushBatchAsync(
+                nodeA, namespaceId, ct: sendCancellation.Token);
+
+            await Assert.ThrowsAsync<SimulatedProcessCrashException>(
+                async () => await receiveTask.WaitAsync(TimeSpan.FromSeconds(20)));
+            sendCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                async () => await sendTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+            // FLD has committed, Node is checkpointed, but the durable Metadata
+            // intent is deliberately still pending and the sender has no ACK.
+            Assert.True(fldB.TryGetBytes(recordId, 0x0501, out byte[]? committedBeforeRestart));
+            Assert.Equal(value, committedBeforeRestart);
+            Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
+            Assert.Single(metadataB.ReadPendingApplyIntents(scope, nodeB.NodeId));
+            StorageNodePersistence.Save(storageA, nodeA);
+        }
+
+        // Full process restart: reopen both FLD stores, both BIN-SYNC Storage
+        // databases and the exact persisted Node images. Recovery replays the
+        // PendingApply intent; FLD recognizes the already-committed ChangeId as
+        // a duplicate, after which Metadata can safely finalize the receipt.
+        using (var fldA = FldDatabase.Open(fldAPath, namespaceId, authorA))
+        using (var fldB = FldDatabase.Open(fldBPath, namespaceId, authorB))
+        using (var providerB = new FldDatabaseDataProvider(fldB, () => 1))
+        using (var storageA = StorageDatabase.Open(storageAPath, 711))
+        using (var storageB = StorageDatabase.Open(storageBPath, 712))
+        using (var metadataB = new StorageMetadataStore(storageB))
+        using (var nodeA = StorageNodePersistence.Load(storageA, NodeId.From(authorA)))
+        using (var nodeB = StorageNodePersistence.Load(storageB, NodeId.From(authorB)))
+        {
+            var coordinatorB = new StorageSyncCoordinator(
+                nodeB, providerB, namespaceId, metadataB, scope,
+                remoteBatchCommitStore: new FldRemoteBatchApplyStore(fldB));
+
+            Assert.Equal(1, coordinatorB.RecoverPendingApplies(
+                node => StorageNodePersistence.Save(storageB, node)));
+            Assert.Empty(metadataB.ReadPendingApplyIntents(scope, nodeB.NodeId));
+            Assert.Equal(0, coordinatorB.RecoverPendingApplies(
+                node => StorageNodePersistence.Save(storageB, node)));
+            Assert.True(fldB.TryGetBytes(recordId, 0x0501, out byte[]? recovered));
+            Assert.Equal(value, recovered);
+            Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
+
+            // The sender still owns the unacknowledged immutable batch. Reconnect
+            // and deliver it again: the receiver recognizes the finalized receipt,
+            // returns a duplicate ACK, and does not echo or reapply the mutation.
+            var (toA, toB) = PipeTransport.CreatePair();
+            var acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            var connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            await using var sessionB = await acceptTask.WaitAsync(TimeSpan.FromSeconds(20));
+            await using var sessionA = await connectTask.WaitAsync(TimeSpan.FromSeconds(20));
+            StorageNodePersistence.Save(storageA, nodeA);
+            StorageNodePersistence.Save(storageB, nodeB);
+
+            Task<BatchResult> replayReceive = coordinatorB.ReceiveBatchBeforeAckAsync(
+                sessionB, node => StorageNodePersistence.Save(storageB, node));
+            Assert.True(await sessionA.PushBatchAsync(
+                nodeA, namespaceId).WaitAsync(TimeSpan.FromSeconds(20)));
+            BatchResult replayResult = await replayReceive.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.True(replayResult.Duplicate);
+            StorageNodePersistence.Save(storageA, nodeA);
+            Assert.True(fldB.TryGetBytes(recordId, 0x0501, out byte[]? afterReplay));
+            Assert.Equal(value, afterReplay);
+            Assert.Equal(0UL, fldB.GetOutboxHighWatermark());
+        }
+    }
+
+    [Fact]
     public void Remote_record_and_field_tombstones_keep_distinct_fld_lifecycle_semantics()
     {
         const uint namespaceId = 9;
@@ -310,6 +438,26 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         Assert.True(field.Found);
         Assert.True(field.IsTombstone);
     }
+
+    private sealed class ApplyThenThrowOnceStore : IProviderRemoteBatchCommitStore
+    {
+        private readonly IProviderRemoteBatchCommitStore _inner;
+        private int _hasThrown;
+
+        public ApplyThenThrowOnceStore(IProviderRemoteBatchCommitStore inner)
+            => _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+
+        public ProviderApplyReceipt ApplyRemoteBatch(ProviderRemoteBatchCommit batch)
+        {
+            ProviderApplyReceipt receipt = _inner.ApplyRemoteBatch(batch);
+            if (Interlocked.Exchange(ref _hasThrown, 1) == 0)
+                throw new SimulatedProcessCrashException();
+            return receipt;
+        }
+    }
+
+    private sealed class SimulatedProcessCrashException()
+        : Exception("Injected crash after durable FLD APPLY and before metadata receipt finalization.");
 
     private static byte[] Id(byte first)
     {
