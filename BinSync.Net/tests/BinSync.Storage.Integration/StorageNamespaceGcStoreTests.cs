@@ -124,7 +124,8 @@ public sealed class StorageNamespaceGcStoreTests
                 gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, replaceDigest), roster);
 
                 var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
-                    roster, 1, new byte[32], new[] { report1, report2 }, generation, replaceDigest);
+                    roster, 1, new byte[32], new[] { report1, report2 }, generation, replaceDigest,
+                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
                 byte[] checkpointBytes = NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed);
                 gc.AcceptRetentionCheckpoint(checkpointBytes, roster, trust);
 
@@ -177,7 +178,8 @@ public sealed class StorageNamespaceGcStoreTests
             var report = gc.AcceptOriginFrontier(SignedReport(roster1, 0, keys, 1, 50), roster1);
             gc.AcceptFullReplaceInstalledAck(SignedAck(roster1, 0, keys, generation, replaceDigest), roster1);
             var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
-                roster1, 1, new byte[32], new[] { report }, generation, replaceDigest);
+                roster1, 1, new byte[32], new[] { report }, generation, replaceDigest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
             gc.AcceptRetentionCheckpoint(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster1, trust);
 
