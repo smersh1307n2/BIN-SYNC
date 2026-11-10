@@ -228,8 +228,8 @@ public sealed class StorageNamespaceGcStoreTests
             var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
                 roster, 1, new byte[32], new[] { report0, report1 }, generation, digest,
                 fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
-            gc.AcceptRetentionCheckpoint(
-                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+            Assert.Throws<InvalidDataException>(() => gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust));
 
             Assert.False(gc.HasProtocolTombstoneGcProof(
                 roster, trust, NodeId.From(Id(2)), 3, 90, 100, 2, generation, digest));
@@ -256,17 +256,24 @@ public sealed class StorageNamespaceGcStoreTests
             using var storage = StorageDatabase.Open(directory, 905);
             var gc = new StorageNamespaceGcStore(storage, "fld-db/tombstone-incomplete-applied", NodeId.From(Id(99)));
             roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
-            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
-            AppliedOriginFrontierReport partialBase = Report(roster, 1, keys, 1, 80);
-            var partialIssuedReport = new AppliedOriginFrontierReport
+            NodeId origin = NodeId.From(Id(1));
+            var member0Report = new AppliedOriginFrontierReport
             {
-                NamespaceId = partialBase.NamespaceId,
-                RosterGeneration = partialBase.RosterGeneration,
-                RosterDigest = partialBase.RosterDigest,
-                MemberNodeId = partialBase.MemberNodeId,
-                MemberTransportEpoch = partialBase.MemberTransportEpoch,
-                ReportSequence = partialBase.ReportSequence,
-                Entries = partialBase.Entries,
+                NamespaceId = roster.NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                MemberNodeId = roster.Members[0].NodeId,
+                MemberTransportEpoch = roster.Members[0].TransportPeerEpoch,
+                ReportSequence = 1,
+                Entries = new[]
+                {
+                    new AppliedOriginFrontierEntry
+                    {
+                        OriginAuthorNodeId = origin,
+                        OriginAuthorEpoch = 3,
+                        ContiguousAppliedOriginSequence = 100
+                    }
+                },
                 IssuedOrigins = new[]
                 {
                     new IssuedOriginFrontierEntry
@@ -278,8 +285,28 @@ public sealed class StorageNamespaceGcStoreTests
                     }
                 }
             };
+            var member1Report = new AppliedOriginFrontierReport
+            {
+                NamespaceId = roster.NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                MemberNodeId = roster.Members[1].NodeId,
+                MemberTransportEpoch = roster.Members[1].TransportPeerEpoch,
+                ReportSequence = 1,
+                Entries = new[]
+                {
+                    new AppliedOriginFrontierEntry
+                    {
+                        OriginAuthorNodeId = origin,
+                        OriginAuthorEpoch = 3,
+                        ContiguousAppliedOriginSequence = 80
+                    }
+                }
+            };
+            var report0 = gc.AcceptOriginFrontier(
+                OriginFrontierProtocol.Sign(member0Report, keys[0].Seed), roster);
             var report1 = gc.AcceptOriginFrontier(
-                OriginFrontierProtocol.Sign(partialIssuedReport, keys[1].Seed), roster);
+                OriginFrontierProtocol.Sign(member1Report, keys[1].Seed), roster);
             gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, digest), roster);
             gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, digest), roster);
             var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
@@ -288,10 +315,10 @@ public sealed class StorageNamespaceGcStoreTests
             gc.AcceptRetentionCheckpoint(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
-            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(2)), 3, 80));
-            Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, NodeId.From(Id(2)), 3, 90));
+            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, origin, 3, 80));
+            Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, origin, 3, 90));
             Assert.False(gc.HasProtocolTombstoneGcProof(
-                roster, trust, NodeId.From(Id(2)), 3, 80, 100, 2, generation, digest));
+                roster, trust, origin, 3, 80, 100, 2, generation, digest));
         }
         finally
         {
