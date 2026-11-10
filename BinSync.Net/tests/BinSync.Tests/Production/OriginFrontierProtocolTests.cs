@@ -130,7 +130,8 @@ public sealed class OriginFrontierProtocolTests
             MemberNodeId = activeReport.MemberNodeId,
             MemberTransportEpoch = activeReport.MemberTransportEpoch,
             ReportSequence = activeReport.ReportSequence,
-            Entries = activeReport.Entries
+            Entries = activeReport.Entries,
+            IssuedOrigins = activeReport.IssuedOrigins
         };
         byte[] wrongDigestBytes = OriginFrontierProtocol.Sign(wrongDigest, keys[0].Seed);
         Assert.Throws<InvalidDataException>(() => OriginFrontierProtocol.DecodeAndVerify(wrongDigestBytes, roster));
