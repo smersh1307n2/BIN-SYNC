@@ -2882,12 +2882,12 @@ public sealed class StorageSyncCoordinator
                             !tombstone && write.FieldId == item.FieldId &&
                             write.Wall == field.Timestamp.Wall &&
                             write.Logical == field.Timestamp.Logical &&
-                            NodeId.From(write.AuthorNodeId) == field.AuthorNodeId,
+                            write.AuthorNodeId == field.AuthorNodeId,
                         OpFieldTomb fieldTomb =>
                             tombstone && fieldTomb.FieldId == item.FieldId &&
                             fieldTomb.Wall == field.Timestamp.Wall &&
                             fieldTomb.Logical == field.Timestamp.Logical &&
-                            NodeId.From(fieldTomb.AuthorNodeId) == field.AuthorNodeId,
+                            fieldTomb.AuthorNodeId == field.AuthorNodeId,
                         _ => false
                     };
                     if (matches)
