@@ -2693,3 +2693,10 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [!] The latest FLD Engine regression reached the intended publication-stamp path but failed at `WalWriter.Append`: `KindIdentityStamp (0x05)` was already declared, encoded, recognized by WAL recovery and replayed by FLD, yet the writer's accepted-kind allowlist still omitted it. Run **26/26** and WAL **17/17** passed; Engine **60/61** failed only on this new regression.
 - [x C] FLD-DB commit `e50157fe687bf9573b47d972e88748fe9c1263f5` adds `KindIdentityStamp` to the WAL writer allowlist. The existing recovery path already decodes and replays this record idempotently; no format/version change is required.
 - [~ T] Re-run the FLD Run/WAL/Engine gate and metadata-owned restart integration. The target is Engine **61/61**, host adapter **8/8**, and durable local author cursor **2** after the second post-restart publication.
+
+
+### 1.85 — Identity-stamp replay must also recognize epoch-only drafts (2026-11-11)
+
+- [!] The metadata-owned restart gate passed Run **26/26** and WAL **17/17**, then Engine **60/61** failed in the new stamping regression. The write-side `CommitPublishedOrigins` now accepted an epoch-only draft, but `ApplyIdentityStampsUnlocked` (also used during WAL replay) still treated any nonzero epoch as immutable and rejected its own identity-stamp WAL record.
+- [x C] FLD-DB commit `0f8f9740e51d58088d7b8590435cadd1c8b0e6b8` applies the same rule to WAL replay: a nonzero sequence is immutable; an epoch-only draft may be stamped if its epoch matches; a mismatched epoch or conflicting nonzero sequence is rejected.
+- [~ T] Re-run FLD Engine and the metadata-owned two-round restart test. The test now exercises both live stamp application and reopen/replay of the identity-stamp WAL record.
