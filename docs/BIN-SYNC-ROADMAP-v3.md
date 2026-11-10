@@ -69,6 +69,7 @@
 
 - [x C] Applied-origin frontier publication now scans through the captured provider high-watermark using `ScannedThroughSequence`, validates cursor progress/range and every returned sequence, and does not infer completion from a short page.
 - [x C] `PublishLocalChangesCore` captures the provider high-watermark at entry and scans exactly that finite prefix, including short/empty pages that advance only the scanned cursor. Concurrent later appends remain pending for the next pass instead of extending the current scan indefinitely; malformed/stalled pages fail closed instead of acknowledging an incomplete prefix.
+- [x C] If the entire captured prefix contains no syncable `ProviderChange` rows but the provider advanced `ScannedThroughSequence` over local-only lifecycle rows, the coordinator still acknowledges that empty scanned prefix. This prevents an empty prefix from being rescanned forever.
 - [x C] Documented `ProviderChangePage.ScannedThroughSequence` as an independent scan cursor in the public Data Provider contract.
 - [~ T] Add custom-provider regressions for short/empty advancing pages, later pages containing drafts, empty scanned prefixes that must still ACK their cursor, cursor stalls/regression/overrun, unordered/out-of-range entries, concurrent appends beyond the captured high-watermark remaining for the next pass, and ensuring zero-draft signed reports cannot be published before the captured feed high-watermark is scanned. No build/tests run in this C slice.
 
