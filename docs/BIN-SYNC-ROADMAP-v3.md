@@ -1,3 +1,10 @@
+## 1.69. CI green after Windows waiter deadline correction — 2026-11-10
+
+- [x CI] The full BIN-SYNC workflow for source commit `47e9f3df0b8c9a8ac0ed77cc6d31e1f068ed6711` completed successfully: Linux .NET tests 678/678, Windows .NET test job success, signed v3.1 control-plane vectors success, fuzz/lab success, and the workflow's host-adapter job completed.
+- [!] The host-adapter job's detailed steps confirm that the private FLD checkout/build/test were skipped, not executed, because `FLD_DB_READ_TOKEN` is unset. Its green job status is therefore only a successful skip/notice path.
+- [x CI] The separate durable BIN-SYNC Storage Integration matrix for source commit `e6f78a1c2b3c20c79b3c615ed168addd12404838` passed on Ubuntu, Windows and macOS.
+- [ ] Still unverified: compilation and execution of `samples/FldBinSyncHost.Tests` against the private FLD-DB branch, including the new two-FLD-node session round-trip. No claim of end-to-end success until that job actually runs.
+
 ## 1.68. CI follow-up: isolate Windows scheduling flake and close the typed-node test setup — 2026-11-10
 
 - [x CI] Exact-head run for §1.67 passed the Linux .NET test job, signed control-plane vectors and fuzz/lab; the Windows .NET test job had one failure only: `FlowControl_WaitForCredit_reserves_atomically_and_wakes_all_waiters` timed out at its 1-second test deadline. Build succeeded and 677/678 tests passed.
