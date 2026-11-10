@@ -35,7 +35,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     private static readonly byte[] ProviderOwnedPrefixes =
         [ItemMap, ItemReverse, FieldMap, FieldReverse, CurrentField, CurrentRecordTombstone,
          LocalChange, LocalHighWatermark, LocalAckWatermark, LocalReadWatermark,
-         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt, ClosedAuthorEpoch,
+         ProviderPublicationMode, ActiveGeneration, FullReplaceSession, ApplyReceipt, SnapshotApplyReceipt, ClosedAuthorEpoch,
          ClosedAuthorIdentity, ActiveAuthorEpoch, RetiredFinalAuthorEpoch];
 
     private readonly object _gate;
