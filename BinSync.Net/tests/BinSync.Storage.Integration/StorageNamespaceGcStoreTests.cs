@@ -297,16 +297,33 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(staleEpochGap, keys[0].Seed), trust));
 
-                NamespaceRosterCertificate rejoined = MakeRoster(
+                NamespaceRosterCertificate staleJoiningGap = MakeRoster(
                     4, SHA256.HashData("omitted roster chain"u8),
+                    NamespaceMemberStatus.Joining, 11, 11);
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(staleJoiningGap, keys[0].Seed), trust));
+
+                // Retired -> Joining requires an epoch strictly beyond the retired
+                // transport fence. The next signed generation gap may attest the
+                // omitted FULL_REPLACE promotion and activate that same epoch.
+                NamespaceRosterCertificate rejoiningJoin = MakeRoster(
+                    4, SHA256.HashData("omitted roster chain"u8),
+                    NamespaceMemberStatus.Joining, 12, 11);
+                rejoiningJoin = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(rejoiningJoin, keys[0].Seed), trust);
+                NamespaceRosterCertificate regressedPromotion = MakeRoster(
+                    6, NamespaceRosterProtocol.ComputeDigest(rejoiningJoin),
+                    NamespaceMemberStatus.Active, 11, 0);
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(regressedPromotion, keys[0].Seed), trust));
+                NamespaceRosterCertificate rejoined = MakeRoster(
+                    6, NamespaceRosterProtocol.ComputeDigest(rejoiningJoin),
                     NamespaceMemberStatus.Active, 12, 0);
                 rejoined = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(rejoined, keys[0].Seed), trust);
 
                 // Old generation reports/checkpoints/ACKs are not inherited by the
-                // rejoined generation. The offline member and every newly active
-                // member must re-establish current evidence before any safe horizon
-                // or FULL_REPLACE installation proof can be used.
+                // rejoined generation. Current evidence must be re-established.
                 Assert.Empty(gc.ReadOriginFrontiers(rejoined));
                 Assert.False(gc.TryReadRetentionCheckpoint(rejoined, trust, out _));
                 Assert.Empty(gc.ReadFullReplaceInstalledAcks(rejoined, generation));
@@ -314,6 +331,136 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.False(gc.AreAllActiveMembersInstalled(rejoined, generation, replaceDigest));
                 Assert.False(gc.HasProtocolTombstoneGcProof(
                     rejoined, trust, rejoining, 3, 40, 100, 2, generation, replaceDigest));
+
+                // Active -> Joining is accepted only across a signed generation gap
+                // with a strictly advanced transport epoch. In the same skipped
+                // roster, a newly seen member may already be Retired.
+                NamespaceRosterCertificate staleActiveJoin = MakeRoster(
+                    8, NamespaceRosterProtocol.ComputeDigest(rejoined),
+                    NamespaceMemberStatus.Joining, 12, 0);
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(staleActiveJoin, keys[0].Seed), trust));
+
+                NodeId newRetiredMember = NodeId.From(Id(3));
+                var newRetiredKey = BatchSignature.GenerateKeyPair();
+                NamespaceRosterCertificate activeToJoiningWithRetiredJoiner = new()
+                {
+                    NamespaceId = 19,
+                    RosterGeneration = 8,
+                    PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(rejoined),
+                    AuthorityNodeId = authority,
+                    Members = new[]
+                    {
+                        new NamespaceRosterMember
+                        {
+                            NodeId = authority,
+                            PublicKey = keys[0].PublicKey,
+                            TransportPeerEpoch = 10,
+                            Status = NamespaceMemberStatus.Active
+                        },
+                        new NamespaceRosterMember
+                        {
+                            NodeId = rejoining,
+                            PublicKey = keys[1].PublicKey,
+                            TransportPeerEpoch = 13,
+                            Status = NamespaceMemberStatus.Joining
+                        },
+                        new NamespaceRosterMember
+                        {
+                            NodeId = newRetiredMember,
+                            PublicKey = newRetiredKey.PublicKey,
+                            TransportPeerEpoch = 5,
+                            Status = NamespaceMemberStatus.Retired,
+                            RetiredThroughEpoch = 5
+                        }
+                    },
+                    RetiredOriginEpochs = closure
+                };
+                activeToJoiningWithRetiredJoiner = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(activeToJoiningWithRetiredJoiner, keys[0].Seed), trust);
+
+                // A later signed gap may attest Joining -> Active and Retired ->
+                // Active, but neither transition may regress its transport epoch.
+                NamespaceRosterCertificate allActive = new()
+                {
+                    NamespaceId = 19,
+                    RosterGeneration = 10,
+                    PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(activeToJoiningWithRetiredJoiner),
+                    AuthorityNodeId = authority,
+                    Members = new[]
+                    {
+                        new NamespaceRosterMember
+                        {
+                            NodeId = authority,
+                            PublicKey = keys[0].PublicKey,
+                            TransportPeerEpoch = 10,
+                            Status = NamespaceMemberStatus.Active
+                        },
+                        new NamespaceRosterMember
+                        {
+                            NodeId = rejoining,
+                            PublicKey = keys[1].PublicKey,
+                            TransportPeerEpoch = 13,
+                            Status = NamespaceMemberStatus.Active
+                        },
+                        new NamespaceRosterMember
+                        {
+                            NodeId = newRetiredMember,
+                            PublicKey = newRetiredKey.PublicKey,
+                            TransportPeerEpoch = 6,
+                            Status = NamespaceMemberStatus.Active
+                        }
+                    },
+                    RetiredOriginEpochs = closure
+                };
+                allActive = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(allActive, keys[0].Seed), trust);
+
+                // Retired-origin closures are immutable even across signed gaps;
+                // member key identity is likewise immutable without a dedicated
+                // authenticated key-rotation transition.
+                NamespaceRosterCertificate deletedClosure = new()
+                {
+                    NamespaceId = 19,
+                    RosterGeneration = 12,
+                    PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(allActive),
+                    AuthorityNodeId = authority,
+                    Members = allActive.Members,
+                    RetiredOriginEpochs = Array.Empty<NamespaceRetiredOriginEpoch>()
+                };
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(deletedClosure, keys[0].Seed), trust));
+
+                NamespaceRosterCertificate rotatedKey = new()
+                {
+                    NamespaceId = 19,
+                    RosterGeneration = 12,
+                    PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(allActive),
+                    AuthorityNodeId = authority,
+                    Members = new[]
+                    {
+                        allActive.Members[0],
+                        new NamespaceRosterMember
+                        {
+                            NodeId = rejoining,
+                            PublicKey = BatchSignature.GenerateKeyPair().PublicKey,
+                            TransportPeerEpoch = 13,
+                            Status = NamespaceMemberStatus.Active
+                        },
+                        allActive.Members[2]
+                    },
+                    RetiredOriginEpochs = closure
+                };
+                Assert.Throws<InvalidDataException>(() => gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(rotatedKey, keys[0].Seed), trust));
+
+                Assert.Empty(gc.ReadOriginFrontiers(allActive));
+                Assert.False(gc.TryReadRetentionCheckpoint(allActive, trust, out _));
+                Assert.Empty(gc.ReadFullReplaceInstalledAcks(allActive, generation));
+                Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(allActive, trust, rejoining, 3, 40));
+                Assert.False(gc.AreAllActiveMembersInstalled(allActive, generation, replaceDigest));
+                Assert.False(gc.HasProtocolTombstoneGcProof(
+                    allActive, trust, rejoining, 3, 40, 100, 2, generation, replaceDigest));
             }
 
             using (var reopened = StorageDatabase.Open(directory, 904))
@@ -321,7 +468,7 @@ public sealed class StorageNamespaceGcStoreTests
                 var gc = new StorageNamespaceGcStore(reopened, "fld-db/offline-rejoin", NodeId.From(Id(99)));
                 Assert.True(gc.TryReadNamespaceRoster(19, trust, out var current));
                 Assert.NotNull(current);
-                Assert.Equal(4UL, current!.RosterGeneration);
+                Assert.Equal(10UL, current!.RosterGeneration);
                 Assert.Empty(gc.ReadOriginFrontiers(current));
                 Assert.False(gc.TryReadRetentionCheckpoint(current, trust, out _));
                 Assert.False(gc.AreAllActiveMembersInstalled(current, generation, replaceDigest));
