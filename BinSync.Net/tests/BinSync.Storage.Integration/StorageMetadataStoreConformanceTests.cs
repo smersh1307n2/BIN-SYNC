@@ -909,7 +909,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(87),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 3,
                     OriginSequence = 87,
                     Fingerprint = Fingerprint(88),
                     Payload = new byte[] { 89 },
