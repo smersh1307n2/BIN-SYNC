@@ -1,3 +1,10 @@
+## 1.65. T-pass: cover FLD local Outbox feed identity through the host adapter — 2026-11-10
+
+- [x T] Added `Local_fld_outbox_feed_preserves_stable_change_identity_across_reopen`: append a local FLD mutation through `FldDatabaseDataProvider`, read the bounded provider feed, and verify the stable ChangeId, local author, author epoch, deferred origin sequence and payload.
+- [x T] The same feed entry is read after closing/reopening FLD, proving the provider projection retains the durable Outbox identity and sequence.
+- [~ T] Exact-head test execution is not yet available: the cross-repository CI job is currently skipped because `FLD_DB_READ_TOKEN` is not configured; local workstations are offline. The test project and workflow gate are committed and will execute when the read-only repository credential is supplied.
+- [x C] Together with §1.64 this covers the two adapter boundaries separately (local FLD Outbox→provider feed and BIN-SYNC contextual APPLY→FLD WAL/ApplyJournal). The full two-node round-trip remains the next integration milestone.
+
 ## 1.64. T-pass: exercise FLD contextual remote-apply adapter against durable database — 2026-11-10
 
 - [x T] Added a dedicated `FldBinSyncHost.Tests` project and an integration test that sends a complete BIN-SYNC `ProviderRemoteBatchCommit` through `FldRemoteBatchApplyStore` into a real FLD database.

@@ -93,6 +93,54 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Local_fld_outbox_feed_preserves_stable_change_identity_across_reopen()
+    {
+        const uint namespaceId = 8;
+        byte[] localAuthor = Id(0x19);
+        byte[] recordBytes = Id(0x29);
+        byte[] changeBytes = Id(0x39);
+        byte[] value = "local-outbox-feed"u8.ToArray();
+        var mutation = new ProviderMutation
+        {
+            RecordId = RecordId.From(recordBytes),
+            FieldId = 0x0203,
+            HlcWall = 987654,
+            HlcLogical = 2,
+            AuthorNodeId = NodeId.From(localAuthor),
+            KeyEpoch = 1,
+            Value = value,
+            ChangeId = BatchId.From(changeBytes),
+            OriginAuthorEpoch = 6,
+            OriginSequence = 0
+        };
+
+        using (var database = FldDatabase.Open(_directory, namespaceId, localAuthor))
+        using (var provider = new FldDatabaseDataProvider(database, () => 6))
+        {
+            provider.AppendLocalChange(mutation);
+            var page = provider.ReadLocalChanges(afterSequence: 0, limit: 16);
+            var change = Assert.Single(page.Changes);
+            Assert.Equal(1UL, page.ScannedThroughSequence);
+            Assert.Equal(BatchId.From(changeBytes), change.ChangeId);
+            Assert.Equal(BatchId.From(changeBytes), change.Mutation.ChangeId);
+            Assert.Equal(NodeId.From(localAuthor), change.Mutation.AuthorNodeId);
+            Assert.Equal(6U, change.Mutation.OriginAuthorEpoch);
+            Assert.Equal(0UL, change.Mutation.OriginSequence);
+            Assert.Equal(value, change.Mutation.Value);
+        }
+
+        using (var reopened = FldDatabase.Open(_directory, namespaceId, localAuthor))
+        using (var provider = new FldDatabaseDataProvider(reopened, () => 6))
+        {
+            var recovered = Assert.Single(provider.ReadLocalChanges(afterSequence: 0, limit: 16).Changes);
+            Assert.Equal(BatchId.From(changeBytes), recovered.ChangeId);
+            Assert.Equal(BatchId.From(changeBytes), recovered.Mutation.ChangeId);
+            Assert.Equal(value, recovered.Mutation.Value);
+            Assert.Equal(1UL, recovered.Sequence);
+        }
+    }
+
     private static byte[] Id(byte first)
     {
         byte[] bytes = new byte[16];
