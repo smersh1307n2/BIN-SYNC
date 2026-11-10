@@ -2601,9 +2601,10 @@ public sealed class StorageSyncCoordinatorTests
 
             const string scopePrefix = "receive-wal-ownership-";
             string scope = scopePrefix + name;
-            var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, scope);
-            if (metadataOwned)
-                coordinator.EnableMetadataStoreOwnedPublication(_ => { });
+            StorageSyncCoordinator? coordinator = metadataOwned
+                ? new StorageSyncCoordinator(receiver, provider, 1, metadata, scope)
+                : null;
+            coordinator?.EnableMetadataStoreOwnedPublication(_ => { });
 
             RecordId record = RecordId.From(Guid.Parse(
                 $"{seed:X2}000000-0000-0000-0000-000000000001").ToByteArray());
@@ -2616,7 +2617,9 @@ public sealed class StorageSyncCoordinatorTests
             await using var acceptor = await acceptTask;
             await using var initiator = await connectTask;
 
-            Task<BatchResult> receive = coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
+            Task<BatchResult> receive = coordinator is null
+                ? acceptor.ReceiveBatchAsync(receiver)
+                : coordinator.ReceiveBatchBeforeAckAsync(acceptor, _ => { });
             Task<bool> send = initiator.PushBatchAsync(sender, 1);
             await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
 
