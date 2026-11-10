@@ -471,7 +471,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = authorA,
                     ChangeId = Batch(142),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 5,
                     OriginSequence = 142,
                     Fingerprint = Enumerable.Repeat((byte)143, 16).ToArray(),
                     Payload = new byte[] { 1, 4, 2 }, RelayEligible = true
@@ -491,7 +491,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = authorA,
                     ChangeId = Batch(142),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 5,
                     OriginSequence = 142,
                     Fingerprint = Enumerable.Repeat((byte)143, 16).ToArray(),
                     Payload = new byte[] { 1, 4, 2 }, RelayEligible = true
@@ -660,7 +660,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(112),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 2,
                     OriginSequence = 112,
                     Fingerprint = Enumerable.Repeat((byte)113, 16).ToArray(),
                     Payload = new byte[17], RelayEligible = true
@@ -1213,7 +1213,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     {
                         AuthorNodeId = author,
                         ChangeId = Batch(changeId),
-                        OriginAuthorEpoch = 1,
+                        OriginAuthorEpoch = authorEpoch,
                         OriginSequence = changeId,
                         Fingerprint = Enumerable.Repeat((byte)(changeId + 1), 16).ToArray(),
                         Payload = new byte[] { changeId }
@@ -1286,7 +1286,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(243),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 5,
                     OriginSequence = 243,
                     Fingerprint = Enumerable.Repeat((byte)244, 16).ToArray(),
                     Payload = new byte[] { 245 }
@@ -1365,7 +1365,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(223),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 5,
                     OriginSequence = 223,
                     Fingerprint = Enumerable.Repeat((byte)224, 16).ToArray(),
                     Payload = new byte[] { 225 }
@@ -1455,7 +1455,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(213),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 4,
                     OriginSequence = 213,
                     Fingerprint = Enumerable.Repeat((byte)214, 16).ToArray(),
                     Payload = new byte[] { 215 }
@@ -1503,7 +1503,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 {
                     AuthorNodeId = author,
                     ChangeId = Batch(163),
-                    OriginAuthorEpoch = 1,
+                    OriginAuthorEpoch = 4,
                     OriginSequence = 163,
                     Fingerprint = Enumerable.Repeat((byte)164, 16).ToArray(),
                     Payload = new byte[] { 165 }
@@ -1553,7 +1553,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     {
                         AuthorNodeId = author,
                         ChangeId = Batch((byte)(batchId + 10)),
-                        OriginAuthorEpoch = 1,
+                        OriginAuthorEpoch = authorEpoch,
                         OriginSequence = (ulong)(batchId + 10),
                         Fingerprint = Enumerable.Repeat((byte)(batchId + 11), 16).ToArray(),
                         Payload = new byte[] { batchId }
