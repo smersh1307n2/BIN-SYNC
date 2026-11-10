@@ -3,7 +3,7 @@
 ## C-pass continuation update — 2026-11-10
 
 - Latest production-code slices: `47be8895046662a06481ac097229c59e2cb2ed47` hardens durable OFR2 issued-origin monotonicity; `5963d352fbae286db37d53b7f5097b58f72ddade` fixes ChangeId GC scanning so empty/short provider pages cannot hide later unpublished feed identities.
-- Roadmap progress (issued-origin monotonicity and Storage blob publication/cleanup source audit) recorded in `5379faaddd9167ce81867925272edec66fe3d041`; the v3.1 addendum now states the issued-origin monotonicity rule explicitly (`476748632357a5f6031be435f1aa6e81b6545719`).
+- Roadmap progress (issued-origin monotonicity, Storage blob audit, and provider-feed GC cursor fix) recorded in `34950cbf512b1826f1c46ce343eea3ee275bd2c3`; v3.1 issued-origin monotonicity is explicit in addendum commit `476748632357a5f6031be435f1aa6e81b6545719`. Recovery branch: `backup/cpass-2026-11-10-provider-feed-gc-fix`.
 - This is implementation-only C-pass work. No tests/build were run for this slice; historical CI evidence below does not validate it. Receipt, ChangeId and tombstone/Ghost physical GC remain disabled.
 
 ## Current continuation checkpoint — 2026-11-09
