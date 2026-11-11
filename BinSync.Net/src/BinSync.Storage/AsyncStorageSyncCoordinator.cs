@@ -1,4 +1,5 @@
 using System.IO;
+using System.Collections.Concurrent;
 
 namespace BinSync.Storage;
 
@@ -18,9 +19,22 @@ public sealed class AsyncStorageSyncCoordinator
     private readonly IMetadataStore _metadataStore;
     private readonly string _scopeId;
     private readonly int _namespaceId;
-    private readonly SemaphoreSlim _asyncAdmissionGate = new(1, 1);
+    // Coordinator instances are cheap host facades, not independent admission
+    // domains. Every instance for the same durable local replica/namespace must share
+    // one process-wide receive/publication gate and one per-peer outbound reservation
+    // gate; otherwise two facades can race PendingApply and peer ACK reservations.
+    private sealed class NamespaceAdmissionGates
+    {
+        public readonly SemaphoreSlim Admission = new(1, 1);
+        public readonly ConcurrentDictionary<NodeId, SemaphoreSlim> OutboundPeers = new();
+    }
+
+    private static readonly ConcurrentDictionary<(NodeId Replica, int Namespace), NamespaceAdmissionGates>
+        SharedAdmissionGates = new();
+
+    private readonly NamespaceAdmissionGates _admissionGates;
+    private readonly SemaphoreSlim _asyncAdmissionGate;
     private readonly object _metadataGate = new();
-    private readonly Dictionary<NodeId, SemaphoreSlim> _outboundPeerGates = new();
 
     public AsyncStorageSyncCoordinator(
         Node node, IMetadataStore metadataStore, string scopeId, int namespaceId)
@@ -35,6 +49,9 @@ public sealed class AsyncStorageSyncCoordinator
         _metadataStore = metadataStore;
         _scopeId = scopeId;
         _namespaceId = namespaceId;
+        _admissionGates = SharedAdmissionGates.GetOrAdd(
+            (node.NodeId, namespaceId), static _ => new NamespaceAdmissionGates());
+        _asyncAdmissionGate = _admissionGates.Admission;
     }
 
     /// <summary>
@@ -405,15 +422,8 @@ public sealed class AsyncStorageSyncCoordinator
         if (_metadataStore is not IMetadataPeerStateStore peerStore)
             throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
 
-        SemaphoreSlim peerGate;
-        lock (_metadataGate)
-        {
-            if (!_outboundPeerGates.TryGetValue(session.PeerNodeId, out peerGate!))
-            {
-                peerGate = new SemaphoreSlim(1, 1);
-                _outboundPeerGates.Add(session.PeerNodeId, peerGate);
-            }
-        }
+        SemaphoreSlim peerGate = _admissionGates.OutboundPeers.GetOrAdd(
+            session.PeerNodeId, static _ => new SemaphoreSlim(1, 1));
 
         // Multiple transport sessions can represent the same peer. Serialize that
         // peer's reservation/ACK lifecycle, while allowing other peers and inbound
