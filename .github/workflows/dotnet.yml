@@ -41,6 +41,7 @@ jobs:
           dotnet-version: "10.0.x"
 
       - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
       - name: Restore
@@ -214,9 +215,13 @@ jobs:
         run: dotnet run --project samples/V31ControlPlaneVectors -c Release
 
   fld-host-integration-build:
-    name: FLD cross-repository host adapter build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: FLD cross-repository host adapter build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     steps:
       - name: Checkout BIN-SYNC
         uses: actions/checkout@v4
@@ -233,6 +238,7 @@ jobs:
         id: fld_access
         env:
           FLD_DB_READ_TOKEN: ${{ secrets.FLD_DB_READ_TOKEN }}
+        shell: bash
         run: |
           if [ -n "$FLD_DB_READ_TOKEN" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
@@ -252,6 +258,7 @@ jobs:
 
       - name: Build cross-repository FLD host adapter
         if: steps.fld_access.outputs.available == 'true'
+        shell: bash
         run: |
           dotnet build samples/FldBinSyncHost/FldBinSyncHost.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
@@ -260,6 +267,7 @@ jobs:
 
       - name: Test FLD Storage, Manifest, Run, WAL and Engine durability contracts
         if: steps.fld_access.outputs.available == 'true'
+        shell: bash
         run: |
           dotnet test FLD-DB/tests/Fld1.Storage.Tests/Fld1.Storage.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Manifest.Tests/Fld1.Manifest.Tests.csproj --configuration Release
@@ -269,6 +277,7 @@ jobs:
 
       - name: Test FLD host adapter against durable FLD database
         if: steps.fld_access.outputs.available == 'true'
+        shell: bash
         run: |
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
@@ -277,6 +286,7 @@ jobs:
 
       - name: Explain skipped private cross-repository build
         if: steps.fld_access.outputs.available != 'true'
+        shell: bash
         run: |
           echo "No cross-repository compile result was produced."
           echo "Add a fine-grained read-only token with Contents: read access to smersh1307n2/FLD-DB as repository secret FLD_DB_READ_TOKEN."
