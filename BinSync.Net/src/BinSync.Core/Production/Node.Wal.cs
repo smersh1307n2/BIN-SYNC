@@ -295,9 +295,10 @@ public sealed partial class Node
             ulong alreadyAcked = ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out var acked)
                 ? acked : 0;
             if (throughSequence <= alreadyAcked) return 0;
+            ulong baseline = GetProviderOperationReceiptBaselineUnsafe(namespaceId);
             ulong prefix = GetPublishedProviderOperationReceiptPrefixUnsafe(namespaceId);
-            if (throughSequence > prefix)
-                throw new InvalidDataException("Provider receipt ACK exceeds the contiguous Published ClientSequence prefix.");
+            if (throughSequence < baseline || throughSequence > prefix)
+                throw new InvalidDataException("Provider receipt ACK is outside the retained contiguous Published ClientSequence prefix.");
             if (_wal is null)
                 throw new InvalidOperationException("A durable Node WAL must be attached before acknowledging provider operation receipts.");
 
@@ -367,8 +368,10 @@ public sealed partial class Node
             ulong alreadyAcked = ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out var acked)
                 ? acked : 0;
             if (throughSequence <= alreadyAcked) return 0;
-            if (throughSequence > GetPublishedProviderOperationReceiptPrefixUnsafe(namespaceId))
-                throw new InvalidDataException("WAL provider receipt ACK exceeds the contiguous Published prefix.");
+            ulong baseline = GetProviderOperationReceiptBaselineUnsafe(namespaceId);
+            if (throughSequence < baseline ||
+                throughSequence > GetPublishedProviderOperationReceiptPrefixUnsafe(namespaceId))
+                throw new InvalidDataException("WAL provider receipt ACK is outside the retained contiguous Published prefix.");
 
             int removed = 0;
             foreach (var pair in ProviderOperationReceiptSequences
@@ -384,6 +387,20 @@ public sealed partial class Node
                 ProviderOperationReceiptHighWatermarks.Remove(namespaceId);
             return removed;
         }
+    }
+
+    private ulong GetProviderOperationReceiptBaselineUnsafe(int namespaceId)
+    {
+        if (ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out ulong acked))
+            return acked;
+        if (!ProviderOperationReceiptHighWatermarks.ContainsKey(namespaceId))
+            return 0;
+        ulong first = ProviderOperationReceiptSequences.Keys
+            .Where(key => key.Ns == namespaceId)
+            .Select(key => key.ClientSequence)
+            .DefaultIfEmpty(0UL)
+            .Min();
+        return first == 0 ? 0 : first - 1;
     }
 
     private ulong GetPublishedProviderOperationReceiptPrefixUnsafe(int namespaceId)

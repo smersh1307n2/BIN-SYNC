@@ -812,6 +812,11 @@ public class WalTests
                 fs.Flush(flushToDisk: true);
             }
 
+            var legacyReplay = Fix.MakeNode(941);
+            Assert.Equal(1, Wal.ReplayFile(path, legacyReplay));
+            Assert.True(legacyReplay.TryGetField(1, rid, 0x100, out var legacyField));
+            Assert.Equal(new byte[] { 0x41 }, legacyField!.Value);
+
             var receiver = Fix.MakeNode(941);
             BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
             using (var wal = Wal.Open(path))
@@ -897,11 +902,17 @@ public class WalTests
             node.MarkProviderOperationReceiptPublished(1, first, 20);
             Assert.Equal(20UL, node.GetPublishedProviderOperationReceiptPrefix(1));
             Assert.Throws<InvalidDataException>(() => node.AcknowledgeProviderOperationReceipts(1, 21));
+            Assert.Throws<InvalidDataException>(() => node.AcknowledgeProviderOperationReceipts(1, 18));
 
             node.MarkProviderOperationReceiptPublished(1, second, 21);
             Assert.Equal(21UL, node.GetPublishedProviderOperationReceiptPrefix(1));
             Assert.Equal(2, node.AcknowledgeProviderOperationReceipts(1, 21));
             Assert.Empty(node.ReadProviderOperationReceipts(1));
+
+            var recovered = Fix.MakeNode(943);
+            Assert.Equal(6, wal.Replay(recovered));
+            Assert.Empty(recovered.ReadProviderOperationReceipts(1));
+            Assert.Equal(21UL, recovered.GetPublishedProviderOperationReceiptPrefix(1));
         }
         finally
         {
