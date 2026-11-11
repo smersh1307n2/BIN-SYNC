@@ -20,6 +20,19 @@ public interface IAsyncProviderPublicationMode
         ulong nodeOutboxHighWatermark, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Optional IPC receipt lifecycle for providers with durable local-operation receipts.
+/// The caller must persist the returned sequence in its own durable commit before
+/// acknowledging that receipt prefix. This ACK is independent of source-feed/Outbox ACK.
+/// </summary>
+public interface IAsyncProviderOperationReceiptStore
+{
+    ValueTask<ulong> AppendLocalChangeWithReceiptAsync(
+        ProviderMutation mutation, CancellationToken cancellationToken = default);
+    ValueTask AcknowledgeOperationReceiptsAsync(
+        ulong throughSequence, CancellationToken cancellationToken = default);
+}
+
 /// <summary>Asynchronous immutable-origin stamping capability.</summary>
 public interface IAsyncProviderPublishedOriginStore
 {
