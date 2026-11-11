@@ -2924,3 +2924,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] BIN-SYNC commit `c35898dbf48960b34f544b27ece02269a6d6e733` adds an actual StorageIpcServer → StorageIpcOperationDispatcher → StorageDatabase test, including reconnect replay of PUT, GET readback and DELETE.
 - [~ CI] Re-run the cross-repository gate against FLD head `9f7e4263c3158ca951c3aa6c1548581c5a359424` and BIN-SYNC head containing `c35898dbf48960b34f544b27ece02269a6d6e733`.
 - [~ T] The dispatcher is a library component, not yet the standalone single-owner Host executable. Next: create the Host executable with canonical endpoint naming, exclusive StorageDatabase ownership, orderly Ctrl+C/shutdown and a discovery/owner record; then exercise two independent client processes.
+
+
+
+### 1.112 — Standalone Storage Host executable and endpoint discovery
+
+- [x C] FLD-DB commits `c57c7bcf16cdb8cc6819ff841aff213ae6148346`, `1b31805990e17c065b2c4f6a76b21569d52a9c1b` and `387a7922e399450acc096d18c502cf496c8bcc02` add `Fld1.Storage.Host` as a separate executable project and include it in `Fld.Db.slnx`. It references only `Fld1.Storage.dll`, owns one StorageDatabase partition lease, runs the operation dispatcher and handles Ctrl+C shutdown. It does not load `Fld1.Database.dll`.
+- [x C] FLD-DB commits `d480e2caee28fe56a1bbcb9696764aa408032b57`, `1253785560b42abf53e939cd43716649d51ba96a` and `0bf96c28141359555a88613c4f28e78df06b0b04` add deterministic pipe naming (normalized root + partition + OS user), an atomic owner-published endpoint record, owner-safe endpoint deletion, a server Ready signal, and client `ConnectToDatabaseAsync`.
+- [x T] FLD-DB commits `b5a81ac764d088ecb5238ac8f4d6026fee3e733e`, `a4fd57022e30e6cdf55c3dfbcd857db9a4082984`, `60c2e5325214e75713f29189feb70d202316ed16`, `5bfbbde9edf7c1d7fdbf339f3ac6b88fde1d7f2d` and `47227e780c2160255a0acafc3976bc0afc0228c1` add endpoint validation and a real process test: start Host, connect via endpoint, reject a competing Host for the same partition, kill/restart the owner, replay the same operation, then reopen StorageDatabase and verify one durable commit.
+- [x T] BIN-SYNC commit `887340a043fdb44420ace263345a42b6540a0903` updates the cross-repository dispatcher integration probe to discover and connect through the published endpoint rather than a hard-coded pipe name.
+- [~ CI] Re-run the exact cross-repository gate against the latest FLD branch and BIN-SYNC PR head. Required: Host executable builds with warnings-as-errors, endpoint tests pass, and the multi-process owner/restart test succeeds on Linux, Windows and macOS.
+- [~ T] The Storage-only Host is now implemented as an executable, but the multi-process test must pass before considering ownership/discovery complete. The FLD Database facade remains a separate later phase and must not be loaded by Storage-only clients.
