@@ -4,8 +4,8 @@
 
 - Run 42962678340: BIN-SYNC Linux/Windows build+tests, benchmark build, fuzz/lab, and v3.1 vector conformance passed. Public FLD checkout and FldBinSyncHost builds passed on both Ubuntu and Windows.
 - FLD Storage/Manifest/Run/WAL suites passed 66/66, 11/11, 26/26, and 21/21. Engine had 70/71: the failing assertion requested a 1 MiB chunk explicitly but expected the 4,194,210-byte maximum. FLD commit d6a6857e removes the explicit chunkSize so the test verifies the default maximum; no IPC source change was required.
-- The BIN-SYNC public integration workflow now includes Fld1.Core.Tests (commit 75746428). A fresh exact-head run is pending before marking FLD cross-repository integration green.
-- FldBinSyncHost.Tests was skipped in run 42962678340 because the Engine test step failed first; it must pass in the next run.
+- The BIN-SYNC public integration workflow now includes Fld1.Core.Tests (commit 75746428). Exact-head run 42963323793 passed on both Ubuntu and Windows: FLD Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21, Engine 71/71, and FldBinSyncHost.Tests 14/14 per platform (232/232 each). Both host adapter builds had 0 warnings and 0 errors.
+- FldBinSyncHost.Tests was skipped in the earlier run 42962678340 after the incorrect Engine assertion; it passed 14/14 on both platforms in run 42963323793. Two existing xUnit1031 blocking-task analyzer warnings remain in FLD Engine test code; they do not affect test results.
 
 ## T-pass continuation update — 2026-11-11
 
