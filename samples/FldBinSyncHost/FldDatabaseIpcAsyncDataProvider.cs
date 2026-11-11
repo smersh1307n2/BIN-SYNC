@@ -371,9 +371,10 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                     : await ReadCompleteCurrentValueAsync(
                         recordBytes, fieldId, metadata, cancellationToken).ConfigureAwait(false);
             }
-            catch (CurrentValueChangedException) when (attempt < 2)
+            catch (CurrentValueChangedException)
             {
-                continue;
+                if (attempt < 2) continue;
+                break;
             }
 
             bool recordTombstone = false;
@@ -455,7 +456,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         }
         finally
         {
-            await _client.ReleaseSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
+            await _client.ReleaseSnapshotAsync(snapshot, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
