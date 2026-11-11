@@ -16,6 +16,8 @@ on:
       - "BinSync.Net/**"
       - "samples/**"
       - ".github/workflows/dotnet.yml"
+      - "docs/PRODUCTION-STATUS.md"
+      - "docs/BIN-SYNC-ROADMAP-v3.md"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
   workflow_dispatch:
   schedule:
