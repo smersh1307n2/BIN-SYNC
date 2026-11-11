@@ -271,7 +271,8 @@ public partial class SyncSession : IAsyncDisposable
         CancellationToken ct = default,
         bool receiveStateOwnedByMetadataStore = false,
         Func<Batch, ReadOnlyMemory<byte>, NodeId, IReadOnlyList<bool>>? beforeApplyWithOperationDecisions = null,
-        Func<Batch, BatchResult, Task>? beforeAckAsync = null)
+        Func<Batch, BatchResult, Task>? beforeAckAsync = null,
+        Func<CancellationToken, ValueTask<IDisposable>>? acquireProcessingLeaseAsync = null)
     {
         ArgumentNullException.ThrowIfNull(receiver);
         ValidateLocalNode(receiver);
@@ -279,6 +280,13 @@ public partial class SyncSession : IAsyncDisposable
         try
         {
             var raw = await ReceivePacketAsync(0x09, ct).ConfigureAwait(false);
+            // Do not hold a host's namespace admission gate while waiting for the
+            // network. Acquire it only after a DELTA_BATCH has arrived, immediately
+            // before any Node/Metadata mutation, so outbound publication can proceed
+            // concurrently with a long-lived receive loop.
+            using IDisposable? processingLease = acquireProcessingLeaseAsync is null
+                ? null
+                : await acquireProcessingLeaseAsync(ct).ConfigureAwait(false);
             var frame = ParseExpectedSessionFrame(raw, 0x09);
             if (frame.Payload.Length < sizeof(ushort))
                 throw new FrameException("FRAME_REJECTED");
