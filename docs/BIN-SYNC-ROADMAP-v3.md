@@ -3194,9 +3194,18 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 - [x A] Chose durable PendingApply/intent plus short-lock snapshot/revalidation for ordinary remote APPLY and local feed publication. Do not hold Node, coordinator or MetadataStore Monitor locks across IPC awaits.
 - [x A] Reuse the existing `StorageRelayPublicationGate` SemaphoreSlim to serialize remote APPLY, relay reconciliation and publication. The FLD APPLY_COMMIT plus MetadataStore PendingApply/finalize sequence is the crash-recovery boundary.
-- [ ] C Implement the async remote-apply path: stage PendingApply and persist Node under short synchronous gates; release gates; await `IAsyncProviderRemoteBatchCommitStore`; reacquire the MetadataStore gate and finalize. Recover by replaying the exact apply token and batch.
+- [x C] Implemented the async remote-apply path: stage PendingApply, apply Node and checkpoint under short synchronous gates; release gates; await `IAsyncProviderRemoteBatchCommitStore`; reacquire the MetadataStore gate and finalize before transport ACK. Commit `f9dda30dbc4df26d508c46bf03ece79237cc8652` adds the awaited before-ACK path; commit `534cdcb1761bb0460ee5a4d4400989740fa889b0` adds async recovery using the exact retained wire payload and stable ApplyToken. The implementation fails closed for incomplete/non-metadata-authoritative intents and never falls back to the lossy synchronous provider API.
 - [ ] C Implement async local-feed publication using a captured FLD source-feed ceiling. Read only through that ceiling; writes after capture remain for the next pass. Persist cutover/publication intent under short locks and do not hold them while sending.
 - [ ] C/T Persist the returned IPC ClientSequence in the existing Node WAL/commit record, then call the separate receipt ACK. Advance source Outbox ACK only after durable publication; prove that neither ACK can retire the other's state.
 - [ ] T Inject crashes before/after Node checkpoint, FLD APPLY_COMMIT, MetadataStore finalization, origin stamping, peer ACK, Node receipt-sequence persistence, IPC receipt ACK and Outbox ACK. Add concurrent local-write tests across each await boundary.
 - [ ] A/C Keep FULL_REPLACE, snapshot-state replacement and physical GC disabled until they have dedicated async-safe guards and complete crash-recovery proofs.
 
+
+
+### 1.84 — Recover asynchronous remote APPLY intents after process interruption
+
+- [x C] BIN-SYNC commit `534cdcb1761bb0460ee5a4d4400989740fa889b0` adds `StorageSyncCoordinator.RecoverPendingAppliesAsync`. It reads durable intents, requires the exact retained metadata-authoritative wire payload and full-header fingerprint, replays the payload with the stored per-operation decision mask, checkpoints Node, then awaits contextual provider APPLY with the original ApplyToken and immutable batch identity before finalizing Metadata.
+- [x C] The async recovery path deliberately rejects incomplete/legacy intents instead of falling back to synchronous `IDataProvider.ApplyRemoteBatch`; a response lost after provider commit is retried with the same ApplyToken.
+- [x T] Added `Async_pending_apply_recovery_replays_exact_wire_payload_before_finalizing_metadata`: interruption after durable intent but before Node mutation, then async recovery verifies Node/provider state and clears PendingApply.
+- [~ CI] Exact-head validation is running for the recovery implementation and interruption test. An initial compile exposed a `Digest16` comparison API mismatch; commit `7fa172eab1a718b83977a12c735c7079a69d9289` corrects it. Do not mark this slice complete until the newest Linux/Windows/macOS jobs pass.
+- [ ] T Extend the fault-injection matrix to cover provider commit followed by lost IPC response, Metadata finalization failure after provider receipt, and restart after Node checkpoint. Then begin async local-feed publication and durable ClientSequence integration; keep receipt ACK separate from Outbox ACK.
