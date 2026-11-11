@@ -542,6 +542,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         bool expectedComplete = (ulong)expectedOffset + (uint)current.ValueChunk.Length == first.ValueLength;
         if (current.OutboxSeq != first.OutboxSeq || current.CommitSeq != first.CommitSeq ||
             current.FieldId != first.FieldId || current.OpKind != first.OpKind ||
+            current.Wall != first.Wall || current.Logical != first.Logical ||
             current.KeyEpoch != first.KeyEpoch || current.ValueLength != first.ValueLength ||
             current.ValueOffset != expectedOffset || current.ValueChunk.Length > remaining ||
             current.IsComplete != expectedComplete ||
