@@ -26,77 +26,88 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         Guid firstOwner = Guid.Empty;
         Process? host = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
-        using var nodeStorage = StorageDatabase.Open(nodeRoot, 701);
-        using var metadata = new StorageMetadataStore(nodeStorage);
-        using var nodeWal = Wal.Open(Path.Combine(nodeRoot, "node.wal"));
-        Node node = new NodeBuilder().WithNodeId(author).WithEpoch(17).Build();
-        node.AttachWal(nodeWal);
-
-        RecordId record = RecordId.From(Id(0x56));
-        BatchId changeId = BatchId.From(Id(0x57));
-        byte[] value = "real-host-async-publication"u8.ToArray();
-        const string scope = "real-host-async-publication";
         try
         {
-            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
-            StorageIpcEndpointInfo firstEndpoint = await WaitForHostEndpointAsync(
-                hostRoot, host, TimeSpan.FromSeconds(45));
-            firstOwner = firstEndpoint.OwnerId;
-
-            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
-            await provider.EnableMetadataStoreOwnedPublicationAsync(0);
-            ulong clientSequence = await provider.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            using (var nodeStorage = StorageDatabase.Open(nodeRoot, 701))
+            using (var metadata = new StorageMetadataStore(nodeStorage))
+            using (var nodeWal = Wal.Open(Path.Combine(nodeRoot, "node.wal")))
             {
-                RecordId = record,
-                FieldId = 0x0551,
-                AuthorNodeId = author,
-                OriginAuthorEpoch = 17,
-                OriginSequence = 0,
-                HlcWall = 55_700,
-                HlcLogical = 3,
-                Value = value,
-                ChangeId = changeId
-            });
-            Assert.Equal(1UL, clientSequence);
+                Node node = new NodeBuilder().WithNodeId(author).WithEpoch(17).Build();
+                node.AttachWal(nodeWal);
+                try
+                {
+                    RecordId record = RecordId.From(Id(0x56));
+                    BatchId changeId = BatchId.From(Id(0x57));
+                    byte[] value = "real-host-async-publication"u8.ToArray();
+                    const string scope = "real-host-async-publication";
 
-            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
-            int published = await coordinator.PublishLocalChangesAsync(
-                provider, current => StorageNodePersistence.Save(nodeStorage, current));
+                    host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
+                    StorageIpcEndpointInfo firstEndpoint = await WaitForHostEndpointAsync(
+                        hostRoot, host, TimeSpan.FromSeconds(45));
+                    firstOwner = firstEndpoint.OwnerId;
 
-            Assert.Equal(1, published);
-            Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, checked((int)namespaceId), node.NodeId));
-            Assert.True(node.TryGetField(checked((int)namespaceId), record, 0x0551, out var cached));
-            Assert.Equal(value, cached!.Value);
+                    provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                        hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
+                    await provider.EnableMetadataStoreOwnedPublicationAsync(0);
+                    ulong clientSequence = await provider.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+                    {
+                        RecordId = record,
+                        FieldId = 0x0551,
+                        AuthorNodeId = author,
+                        OriginAuthorEpoch = 17,
+                        OriginSequence = 0,
+                        HlcWall = 55_700,
+                        HlcLogical = 3,
+                        Value = value,
+                        ChangeId = changeId
+                    });
+                    Assert.Equal(1UL, clientSequence);
 
-            ProviderMutation? current = await provider.ReadCurrentAsync(record, 0x0551);
-            Assert.NotNull(current);
-            Assert.Equal(changeId, current!.ChangeId);
-            Assert.Equal(1UL, current.OriginSequence);
-            Assert.Empty((await provider.ReadLocalChangesAsync(0, 16)).Changes);
-            Assert.Equal(1UL, await provider.GetLocalChangeHighWatermarkAsync());
+                    var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
+                    int published = await coordinator.PublishLocalChangesAsync(
+                        provider, current => StorageNodePersistence.Save(nodeStorage, current));
 
-            await provider.DisposeAsync();
-            provider = null;
-            await StopDatabaseHostAsync(host);
-            host = null;
-            await WaitForDatabaseWriterReleaseAsync(hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
+                    Assert.Equal(1, published);
+                    Assert.Equal(1UL, metadata.GetOutboundHighWatermark(
+                        scope, node.NodeId, checked((int)namespaceId), node.NodeId));
+                    Assert.True(node.TryGetField(checked((int)namespaceId), record, 0x0551, out var cached));
+                    Assert.Equal(value, cached!.Value);
 
-            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
-            StorageIpcEndpointInfo secondEndpoint = await WaitForHostEndpointAsync(
-                hostRoot, host, TimeSpan.FromSeconds(45), firstOwner);
-            Assert.NotEqual(firstOwner, secondEndpoint.OwnerId);
+                    ProviderMutation? current = await provider.ReadCurrentAsync(record, 0x0551);
+                    Assert.NotNull(current);
+                    Assert.Equal(changeId, current!.ChangeId);
+                    Assert.Equal(1UL, current.OriginSequence);
+                    Assert.Empty((await provider.ReadLocalChangesAsync(0, 16)).Changes);
+                    Assert.Equal(1UL, await provider.GetLocalChangeHighWatermarkAsync());
 
-            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
-            current = await provider.ReadCurrentAsync(record, 0x0551);
-            Assert.NotNull(current);
-            Assert.Equal(value, current!.Value);
-            Assert.Equal(changeId, current.ChangeId);
-            Assert.Equal(1UL, current.OriginSequence);
-            Assert.Empty((await provider.ReadLocalChangesAsync(0, 16)).Changes);
-            Assert.Equal(1UL, await provider.GetLocalChangeHighWatermarkAsync());
-            await provider.AcknowledgeOperationReceiptsAsync(clientSequence);
+                    await provider.DisposeAsync();
+                    provider = null;
+                    await StopDatabaseHostAsync(host);
+                    host = null;
+                    await WaitForDatabaseWriterReleaseAsync(
+                        hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
+
+                    host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
+                    StorageIpcEndpointInfo secondEndpoint = await WaitForHostEndpointAsync(
+                        hostRoot, host, TimeSpan.FromSeconds(45), firstOwner);
+                    Assert.NotEqual(firstOwner, secondEndpoint.OwnerId);
+
+                    provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                        hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
+                    current = await provider.ReadCurrentAsync(record, 0x0551);
+                    Assert.NotNull(current);
+                    Assert.Equal(value, current!.Value);
+                    Assert.Equal(changeId, current.ChangeId);
+                    Assert.Equal(1UL, current.OriginSequence);
+                    Assert.Empty((await provider.ReadLocalChangesAsync(0, 16)).Changes);
+                    Assert.Equal(1UL, await provider.GetLocalChangeHighWatermarkAsync());
+                    await provider.AcknowledgeOperationReceiptsAsync(clientSequence);
+                }
+                finally
+                {
+                    node.Dispose();
+                }
+            }
         }
         finally
         {
@@ -104,7 +115,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 await provider.DisposeAsync();
             if (host is not null)
                 await StopDatabaseHostAsync(host);
-            node.Dispose();
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
             try { Directory.Delete(nodeRoot, recursive: true); } catch { }
         }
