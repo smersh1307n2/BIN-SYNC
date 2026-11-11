@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.IO.Pipes;
 using Fld1.Engine.Db;
 using Fld1.Storage.Ipc;
@@ -20,6 +21,7 @@ public sealed class StorageIpcHostCompositionTests
         const ushort fieldId = 0x0317;
         const ushort keyEpoch = 4;
         byte[] value = "ipc-to-fld-durable-write"u8.ToArray();
+        var requestIds = new ConcurrentQueue<ulong>();
 
         try
         {
@@ -30,8 +32,10 @@ public sealed class StorageIpcHostCompositionTests
                 (context, request, cancellationToken) =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (context.ClientId == Guid.Empty || context.SessionGeneration == 0)
+                    if (context.ClientId == Guid.Empty || context.SessionGeneration == 0 ||
+                        context.RequestId == 0)
                         throw new InvalidDataException("IPC request context is not authenticated.");
+                    requestIds.Enqueue(context.RequestId);
 
                     if (request.Length < 20)
                         throw new InvalidDataException("FLD write request is truncated.");
@@ -87,6 +91,7 @@ public sealed class StorageIpcHostCompositionTests
             Assert.Equal(value, stored);
             Assert.True(database.TryGetBytes(recordId, checked((ushort)(fieldId + 1)), out byte[]? storedAfterOverload));
             Assert.Equal("same-session-after-overload"u8.ToArray(), storedAfterOverload);
+            Assert.Equal(new ulong[] { 1, 2 }, requestIds.ToArray());
         }
         finally
         {
