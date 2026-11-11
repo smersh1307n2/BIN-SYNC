@@ -63,6 +63,23 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     });
                     Assert.Equal(1UL, clientSequence);
 
+                    // Simulate Host restart after the FLD WAL commit but before
+                    // BIN-SYNC has recorded ClientSequence in its Node WAL. Reconnect
+                    // with the same ClientId; coordinator retry must recover the
+                    // original receipt instead of appending a second Outbox operation.
+                    await provider.DisposeAsync();
+                    provider = null;
+                    await StopDatabaseHostAsync(host);
+                    host = null;
+                    await WaitForDatabaseWriterReleaseAsync(
+                        hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
+                    host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
+                    StorageIpcEndpointInfo receiptRecoveryEndpoint = await WaitForHostEndpointAsync(
+                        hostRoot, host, TimeSpan.FromSeconds(45), firstOwner);
+                    Assert.NotEqual(firstOwner, receiptRecoveryEndpoint.OwnerId);
+                    provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                        hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
+
                     var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
                     int published = await coordinator.PublishLocalChangesAsync(
                         provider, current => StorageNodePersistence.Save(nodeStorage, current));
