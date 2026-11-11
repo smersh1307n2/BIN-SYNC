@@ -19,6 +19,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 {
     private readonly FldDatabaseIpcClient _client;
     private readonly FldDatabaseIpcOutboxLease _outboxLease;
+    private readonly Guid _clientId;
     private readonly NodeId _localAuthor;
     private readonly Func<uint> _activeAuthorEpoch;
     private readonly Func<ReadOnlyMemory<byte>, RecordId> _recordIdResolver;
@@ -33,6 +34,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     private FldDatabaseIpcAsyncDataProvider(
         FldDatabaseIpcClient client,
         FldDatabaseIpcOutboxLease outboxLease,
+        Guid clientId,
         NodeId localAuthor,
         Func<uint> activeAuthorEpoch,
         Func<ReadOnlyMemory<byte>, RecordId>? recordIdResolver,
@@ -40,6 +42,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     {
         _client = client;
         _outboxLease = outboxLease;
+        _clientId = clientId;
         _localAuthor = localAuthor;
         _activeAuthorEpoch = activeAuthorEpoch;
         _recordIdResolver = recordIdResolver ?? ResolveDirectRecordId;
@@ -56,6 +59,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver = null,
         CancellationToken cancellationToken = default)
     {
+        if (clientId == Guid.Empty) throw new ArgumentException("Stable FLD ClientId is required.", nameof(clientId));
         if (localAuthor.IsZero) throw new ArgumentException("FLD local author must be nonzero.", nameof(localAuthor));
         ArgumentNullException.ThrowIfNull(activeAuthorEpoch);
         FldDatabaseIpcClient client = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
@@ -69,7 +73,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             FldDatabaseIpcOutboxLease lease = await client.AcquireOutboxLeaseAsync(cancellationToken)
                 .ConfigureAwait(false);
             return new FldDatabaseIpcAsyncDataProvider(
-                client, lease, localAuthor, activeAuthorEpoch, recordIdResolver, fieldIdResolver);
+                client, lease, clientId, localAuthor, activeAuthorEpoch, recordIdResolver, fieldIdResolver);
         }
         catch
         {
@@ -77,6 +81,8 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             throw;
         }
     }
+
+    public Guid ReceiptStreamId => _clientId;
 
     public ValueTask<RecordId> ResolveRecordIdAsync(
         ReadOnlyMemory<byte> sourceItemKey, CancellationToken cancellationToken = default)

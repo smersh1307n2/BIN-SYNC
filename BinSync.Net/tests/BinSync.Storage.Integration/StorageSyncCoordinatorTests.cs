@@ -59,11 +59,13 @@ public sealed class StorageSyncCoordinatorTests
         public bool LoseNextReceiptAckResponseAfterCommit { get; set; }
         public bool LoseNextAppendResponseAfterCommit { get; set; }
         public Action? AfterNextRead { get; set; }
+        public Guid ReceiptStreamId { get; }
 
-        public RecordingAsyncLocalProvider(StorageDataProvider provider)
+        public RecordingAsyncLocalProvider(StorageDataProvider provider, Guid? receiptStreamId = null)
         {
             _provider = provider;
             _adapter = new InProcessAsyncDataProviderAdapter(provider);
+            ReceiptStreamId = receiptStreamId ?? Guid.NewGuid();
         }
 
         public ValueTask<RecordId> ResolveRecordIdAsync(ReadOnlyMemory<byte> key, CancellationToken ct = default)
@@ -309,6 +311,49 @@ public sealed class StorageSyncCoordinatorTests
             wal.Dispose();
             node.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task Async_local_publication_rejects_receipt_client_id_rotation()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-receipt-stream-binding"), 496);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(95);
+        const string scope = "async-receipt-stream-binding";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+        using var wal = Wal.Open(Path.Combine(_root, "async-receipt-stream-binding.wal"));
+        node.AttachWal(wal);
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        Guid firstClientId = Guid.Parse("95000000-0000-0000-0000-000000000095");
+        var firstProvider = new RecordingAsyncLocalProvider(provider, firstClientId);
+        int firstPass = await coordinator.PublishLocalChangesAsync(
+            firstProvider, current => StorageNodePersistence.Save(storage, current));
+        Assert.Equal(0, firstPass);
+
+        var rotatedProvider = new RecordingAsyncLocalProvider(
+            provider, Guid.Parse("95000000-0000-0000-0000-000000000096"));
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await coordinator.PublishLocalChangesAsync(
+                rotatedProvider, current => StorageNodePersistence.Save(storage, current)));
+        Assert.Equal(0UL, rotatedProvider.LastOutboxAck);
+        Assert.Equal(0UL, rotatedProvider.LastReceiptAck);
+    }
+
+    [Fact]
+    public void Metadata_store_rejects_reusing_one_receipt_client_id_across_namespaces()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-receipt-client-namespace"), 497);
+        using var metadata = new StorageMetadataStore(storage);
+        NodeId local = NodeId.From(IdBytes(97));
+        Guid clientId = Guid.Parse("97000000-0000-0000-0000-000000000097");
+
+        Assert.Equal(clientId, metadata.BindProviderReceiptStream("receipt-client-namespace", local, 1, clientId));
+        Assert.Throws<InvalidOperationException>(() =>
+            metadata.BindProviderReceiptStream("receipt-client-namespace", local, 2, clientId));
     }
 
     [Fact]

@@ -10,7 +10,7 @@ namespace BinSync.Storage;
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
-public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard
+public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataProviderReceiptStreamStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard
 {
     private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
@@ -143,6 +143,68 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 batch.Put(identityKey, EncodePartitionIdentity(partition));
             batch.Put(markerKey, EncodeProviderPublicationCutover(nodeOutboxHighWatermark));
             batch.Commit();
+        }
+    }
+
+    /// <summary>
+    /// Durably binds one namespace to one stable FLD ClientId and prevents that ClientId's
+    /// ClientSequence stream from being reused by another namespace of the same replica.
+    /// The two indexes are committed atomically in the publication-mode keyspace.
+    /// </summary>
+    public Guid BindProviderReceiptStream(
+        string scopeId, NodeId localReplica, int namespaceId, Guid receiptStreamId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        if (receiptStreamId == Guid.Empty)
+            throw new ArgumentException("Provider receipt stream identity must be non-empty.", nameof(receiptStreamId));
+        ushort ns = checked((ushort)namespaceId);
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partition = new PartitionKey(scopeId, localReplica);
+            byte[] root = PublicationModeRoot(partition);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            byte[] namespaceSuffix = new byte[2];
+            BinaryPrimitives.WriteUInt16LittleEndian(namespaceSuffix, ns);
+            byte[] namespaceKey = StorageKey(root, 2, namespaceSuffix);
+            byte[] clientKey = StorageKey(root, 3, receiptStreamId.ToByteArray());
+
+            using var snapshot = _storage.OpenSnapshot();
+            bool hasIdentity = snapshot.TryGet(identityKey, out byte[]? identity);
+            bool hasNamespaceBinding = snapshot.TryGet(namespaceKey, out byte[]? namespaceValue);
+            bool hasClientBinding = snapshot.TryGet(clientKey, out byte[]? clientValue);
+            if (!hasIdentity && (hasNamespaceBinding || hasClientBinding))
+                throw new InvalidDataException("Provider receipt stream binding has no partition identity row.");
+            if (hasIdentity)
+                ValidatePartitionIdentity(partition, identity!);
+            if (hasNamespaceBinding != hasClientBinding)
+                throw new InvalidDataException("Provider receipt stream indexes are incomplete.");
+
+            if (hasNamespaceBinding)
+            {
+                if (namespaceValue!.Length != 16 || new Guid(namespaceValue) != receiptStreamId)
+                    throw new InvalidOperationException(
+                        "BIN-SYNC namespace is already bound to a different FLD ClientId/receipt stream.");
+                if (clientValue!.Length != 2 ||
+                    BinaryPrimitives.ReadUInt16LittleEndian(clientValue) != ns)
+                    throw new InvalidOperationException(
+                        "FLD ClientId is already bound to a different BIN-SYNC namespace.");
+                return receiptStreamId;
+            }
+
+            using var batch = _storage.BeginWriteBatch();
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            if (!hasIdentity)
+                batch.Put(identityKey, EncodePartitionIdentity(partition));
+            batch.Put(namespaceKey, receiptStreamId.ToByteArray());
+            batch.Put(clientKey, namespaceSuffix);
+            batch.Commit();
+            return receiptStreamId;
         }
     }
 

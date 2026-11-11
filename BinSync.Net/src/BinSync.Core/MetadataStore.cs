@@ -64,6 +64,17 @@ public interface IMetadataOutboundChangeIdentityStore
 /// both local outbound and incoming routes. Provider-authoritative cutover requires
 /// it to prove that Node's compact identity ledger is already represented.
 /// </summary>
+/// <summary>
+/// Optional durable binding between one namespace and its FLD operation-receipt stream.
+/// ClientSequence is allocated per stable FLD ClientId; a ClientId cannot be shared by
+/// multiple namespaces managed by the same local replica.
+/// </summary>
+public interface IMetadataProviderReceiptStreamStore
+{
+    Guid BindProviderReceiptStream(
+        string scopeId, NodeId localReplica, int namespaceId, Guid receiptStreamId);
+}
+
 public interface IMetadataChangeIdentityStore
 {
     /// <summary>

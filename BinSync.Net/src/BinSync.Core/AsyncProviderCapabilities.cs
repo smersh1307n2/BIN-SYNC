@@ -32,6 +32,9 @@ public interface IAsyncProviderPublicationMode
 /// </summary>
 public interface IAsyncProviderOperationReceiptStore
 {
+    /// <summary>Stable FLD ClientId whose ClientSequence namespace this provider exposes.</summary>
+    Guid ReceiptStreamId { get; }
+
     ValueTask<ulong> AppendLocalChangeWithReceiptAsync(
         ProviderMutation mutation, CancellationToken cancellationToken = default);
     ValueTask AcknowledgeOperationReceiptsAsync(

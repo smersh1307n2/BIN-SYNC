@@ -171,13 +171,23 @@ public sealed class AsyncStorageSyncCoordinator
             asyncProvider is not IAsyncProviderPublicationMode publicationMode)
             throw new NotSupportedException(
                 "Async local publication requires durable operation receipts, immutable-origin stamping and publication-mode capabilities.");
+        if (receiptStore.ReceiptStreamId == Guid.Empty)
+            throw new InvalidDataException("Async provider receipt stream identity must be non-empty.");
         if (_metadataStore is not IMetadataOutboundChangeIdentityStore identityStore)
             throw new NotSupportedException(
                 "Async local publication requires the durable Metadata Store outbound ChangeId identity index.");
+        if (_metadataStore is not IMetadataProviderReceiptStreamStore receiptStreamStore)
+            throw new NotSupportedException(
+                "Async local publication requires durable FLD ClientId-to-namespace receipt-stream binding.");
 
         await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            Guid boundReceiptStream = receiptStreamStore.BindProviderReceiptStream(
+                _scopeId, _node.NodeId, _namespaceId, receiptStore.ReceiptStreamId);
+            if (boundReceiptStream != receiptStore.ReceiptStreamId)
+                throw new InvalidDataException("Metadata Store returned a different provider receipt stream binding.");
+
             (bool Exists, ulong NodeOutboxHighWatermark) cutover =
                 await publicationMode.TryGetMetadataStoreOwnedPublicationCutoverAsync(ct)
                     .ConfigureAwait(false);
