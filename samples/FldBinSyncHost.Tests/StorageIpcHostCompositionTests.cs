@@ -104,60 +104,67 @@ public sealed class StorageIpcHostCompositionTests
         byte[] localAuthor = Id(0x31);
         byte[] recordId = Id(0x32);
         const ushort fieldId = 0x0321;
-        using var database = FldDatabase.Open(directory, namespaceId, localAuthor);
-        using var serverCancellation = new CancellationTokenSource();
-        int handlerCalls = 0;
-        var server = new StorageIpcServer(
-            pipeName,
-            (context, request, cancellationToken) =>
-            {
-                Interlocked.Increment(ref handlerCalls);
-                database.Put(recordId, fieldId, request.ToArray(), 1);
-                _ = database.Commit();
-                return ValueTask.FromResult<ReadOnlyMemory<byte>>(recordId);
-            });
-        Task serverTask = server.RunAsync(serverCancellation.Token);
 
         try
         {
-            await using var pipe = new NamedPipeClientStream(
-                ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-            await pipe.ConnectAsync(10_000);
-            await StorageIpcProtocol.WriteAsync(pipe,
-                new StorageIpcFrame(
-                    StorageIpcFrameType.Hello, 0, 0, Guid.NewGuid().ToByteArray()));
+            using var database = FldDatabase.Open(directory, namespaceId, localAuthor);
+            using var serverCancellation = new CancellationTokenSource();
+            int handlerCalls = 0;
+            var server = new StorageIpcServer(
+                pipeName,
+                (context, request, cancellationToken) =>
+                {
+                    Interlocked.Increment(ref handlerCalls);
+                    database.Put(recordId, fieldId, request.ToArray(), 1);
+                    _ = database.Commit();
+                    return ValueTask.FromResult<ReadOnlyMemory<byte>>(recordId);
+                });
+            Task serverTask = server.RunAsync(serverCancellation.Token);
 
-            StorageIpcFrame? helloAck = await StorageIpcProtocol.ReadAsync(pipe);
-            Assert.NotNull(helloAck);
-            Assert.Equal(StorageIpcFrameType.HelloAck, helloAck.Value.Type);
-            ulong liveGeneration = helloAck.Value.SessionGeneration;
-            ulong staleGeneration = liveGeneration == 1 ? 2UL : liveGeneration - 1;
-
-            await StorageIpcProtocol.WriteAsync(pipe,
-                new StorageIpcFrame(
-                    StorageIpcFrameType.Request, 1, staleGeneration, "must-not-apply"u8.ToArray()));
-
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            StorageIpcFrame? response = null;
-            Exception? transportFailure = null;
             try
             {
-                response = await StorageIpcProtocol.ReadAsync(pipe, timeout.Token);
-            }
-            catch (Exception exception) when (exception is IOException or ObjectDisposedException)
-            {
-                transportFailure = exception;
-            }
+                await using var pipe = new NamedPipeClientStream(
+                    ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                await pipe.ConnectAsync(10_000);
+                await StorageIpcProtocol.WriteAsync(pipe,
+                    new StorageIpcFrame(
+                        StorageIpcFrameType.Hello, 0, 0, Guid.NewGuid().ToByteArray()));
 
-            Assert.True(response is null || transportFailure is not null,
-                "The server must close a stale-generation session without responding.");
-            Assert.Equal(0, Volatile.Read(ref handlerCalls));
-            Assert.False(database.TryGetBytes(recordId, fieldId, out _));
+                StorageIpcFrame? helloAck = await StorageIpcProtocol.ReadAsync(pipe);
+                Assert.NotNull(helloAck);
+                Assert.Equal(StorageIpcFrameType.HelloAck, helloAck.Value.Type);
+                ulong liveGeneration = helloAck.Value.SessionGeneration;
+                ulong staleGeneration = liveGeneration == 1 ? 2UL : liveGeneration - 1;
+
+                await StorageIpcProtocol.WriteAsync(pipe,
+                    new StorageIpcFrame(
+                        StorageIpcFrameType.Request, 1, staleGeneration, "must-not-apply"u8.ToArray()));
+
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                StorageIpcFrame? response = null;
+                Exception? transportFailure = null;
+                try
+                {
+                    response = await StorageIpcProtocol.ReadAsync(pipe, timeout.Token);
+                }
+                catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+                {
+                    transportFailure = exception;
+                }
+
+                Assert.True(response is null || transportFailure is not null,
+                    "The server must close a stale-generation session without responding.");
+                Assert.Equal(0, Volatile.Read(ref handlerCalls));
+                Assert.False(database.TryGetBytes(recordId, fieldId, out _));
+            }
+            finally
+            {
+                serverCancellation.Cancel();
+                await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
         }
         finally
         {
-            serverCancellation.Cancel();
-            await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
