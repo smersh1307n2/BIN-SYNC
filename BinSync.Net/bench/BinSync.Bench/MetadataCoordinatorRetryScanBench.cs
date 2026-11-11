@@ -105,7 +105,7 @@ public class MetadataCoordinatorRetryScanBench
         return bytes;
     }
 
-    private sealed class FailOnceAckProvider : IDataProvider, IProviderPublicationMode
+    private sealed class FailOnceAckProvider : IDataProvider, IProviderPublicationMode, IProviderCommitGuard
     {
         public const string InjectedFailureMessage = "Injected provider ACK interruption.";
         private readonly StorageDataProvider _inner;
@@ -139,6 +139,7 @@ public class MetadataCoordinatorRetryScanBench
             _inner.TryGetMetadataStoreOwnedPublicationCutover(out nodeOutboxHighWatermark);
         public void EnableMetadataStoreOwnedPublication(ulong nodeOutboxHighWatermark) =>
             _inner.EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
+        public IDisposable AcquireCommitGuard() => _inner.AcquireCommitGuard();
         public void Dispose() => _inner.Dispose();
     }
 }
