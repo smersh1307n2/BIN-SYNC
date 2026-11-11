@@ -47,9 +47,10 @@ public sealed class StorageIpcHostCompositionTests
                 maxConcurrentClients: 2);
             Task serverTask = server.RunAsync(serverCancellation.Token);
 
-            await using (var client = await StorageIpcClientConnection.ConnectAsync(
-                pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10)))
+            try
             {
+                await using var client = await StorageIpcClientConnection.ConnectAsync(
+                    pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10));
                 byte[] request = new byte[20 + value.Length];
                 recordId.CopyTo(request, 0);
                 BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(16), fieldId);
@@ -59,12 +60,14 @@ public sealed class StorageIpcHostCompositionTests
                 ReadOnlyMemory<byte> response = await client.RequestAsync(request);
                 Assert.Equal(recordId, response.ToArray());
             }
+            finally
+            {
+                serverCancellation.Cancel();
+                await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
 
             Assert.True(database.TryGetBytes(recordId, fieldId, out byte[]? stored));
             Assert.Equal(value, stored);
-
-            serverCancellation.Cancel();
-            await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
         }
         finally
         {
