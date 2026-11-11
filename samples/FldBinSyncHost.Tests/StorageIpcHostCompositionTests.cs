@@ -66,6 +66,16 @@ public sealed class StorageIpcHostCompositionTests
 
                 ReadOnlyMemory<byte> response = await client.RequestAsync(request);
                 Assert.Equal(recordId, response.ToArray());
+
+                byte[] secondValue = "same-session-after-overload"u8.ToArray();
+                byte[] secondRequest = new byte[20 + secondValue.Length];
+                recordId.CopyTo(secondRequest, 0);
+                BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(16), checked((ushort)(fieldId + 1)));
+                BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(18), keyEpoch);
+                secondValue.CopyTo(secondRequest, 20);
+
+                ReadOnlyMemory<byte> secondResponse = await client.RequestAsync(secondRequest);
+                Assert.Equal(recordId, secondResponse.ToArray());
             }
             finally
             {
@@ -75,6 +85,8 @@ public sealed class StorageIpcHostCompositionTests
 
             Assert.True(database.TryGetBytes(recordId, fieldId, out byte[]? stored));
             Assert.Equal(value, stored);
+            Assert.True(database.TryGetBytes(recordId, checked((ushort)(fieldId + 1)), out byte[]? storedAfterOverload));
+            Assert.Equal("same-session-after-overload"u8.ToArray(), storedAfterOverload);
         }
         finally
         {
