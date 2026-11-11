@@ -1,3 +1,11 @@
+## 1.78. Explicit async optional provider capability contracts — 2026-11-11
+
+- [x A] Added `BinSync.Core/AsyncProviderCapabilities.cs` with async counterparts for snapshot-state apply, publication cutover, published-origin stamping, author-epoch lifecycle, FULL_REPLACE, durable snapshot retention, async commit/snapshot-GC leases and host-owned pinned GC reference scans.
+- [x A] Async commit leases use `IAsyncDisposable`; this avoids requiring a thread-affine Monitor to be disposed after an await. It does not by itself make current Node/Storage Monitor gates await-safe.
+- [~ T] Exact-head CI is required for this API addition. No runtime implementation or process-isolation milestone is claimed.
+- [!] Do not implement a catch-all optional-capability adapter that advertises unsupported methods and throws at runtime. Implement capability-specific adapters only when their durable FLD IPC operations exist.
+- [ ] Next: compile/test the contract addition; audit every conflicting Node, Metadata Store and provider writer before selecting the async gate protocol. Then implement durable FLD IPC methods and parity tests capability by capability.
+
 ## 1.77. Async provider adapter spike and FLD process-host CI correction — 2026-11-11
 
 - [x T] FLD-DB commit `f961f995f2d69749be12940095d744258ebf19e5` corrects the process-host recovery assertion: the durable Outbox high watermark is 2 while the independent acknowledged Outbox watermark remains 0. This preserves the intended no-ACK recovery scenario.
