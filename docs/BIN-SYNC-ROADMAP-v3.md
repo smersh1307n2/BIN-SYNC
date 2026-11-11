@@ -1,3 +1,10 @@
+## 1.91. Async Metadata outbound delivery coverage — 2026-11-11
+
+- [x C] Added `Async_metadata_outbound_delivery_uses_frozen_store_and_waits_for_remote_apply_ack`: the test freezes a local provider change into Metadata, sends it through `PushNextBatchAsync`, and verifies the receiver's async provider APPLY completes before the sender observes the transport ACK.
+- [x C] Added a per-peer outbound gate to the coordinator. Multiple transport sessions for the same peer cannot race the durable reservation/ACK lifecycle; different peers remain independent. The namespace admission gate is still released before transport waits, preserving full-duplex progress.
+- [!] The new integration test and per-peer gate are not yet validated by exact-head CI. This is a one-process integration test, not the required two-independent-Database-Host proof.
+- [ ] Next: add multi-session same-peer contention and lost-ACK replay tests, then compose the coordinator in the actual host orchestration and run two independent Database Host processes bidirectionally.
+
 ## 1.90. Async Metadata outbound delivery entry point — 2026-11-11
 
 - [x C] Added `AsyncStorageSyncCoordinator.PushNextBatchAsync`. It sends the already-frozen Metadata outbound/relay stream through the durable per-peer reservation and ACK path in `SyncSession.PushBatchAsync`; it does not read the FLD Outbox or create a second payload queue.
