@@ -1,3 +1,12 @@
+## 1.75. FLD identity-preserving IPC and cross-repository host gate green — 2026-11-11
+
+- [x CI] BIN-SYNC exact head e0cc43cb51d7e9df0a652c008e33ed5e4d7b30b9 passed workflow run 42970243666. Linux and Windows each passed all 678 BIN-SYNC tests; fuzz/lab passed 31 tests; v3.1 signed control-plane golden vectors passed; benchmark build, public samples and coverage threshold passed.
+- [x CI] The public FLD-DB branch fix/crash-consistency-outbox was checked out without FLD_DB_READ_TOKEN on both Ubuntu and Windows. Cross-repository FldBinSyncHost build passed on both OSes.
+- [x CI] Both cross-repository OS jobs passed FLD Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21 and Engine 80/80; FldBinSyncHost.Tests passed 15/15 on Ubuntu and Windows.
+- [x C] FLD IPC now has immutable provider snapshots (0x2108–0x210B), contextual remote APPLY (0x210C) and identity-preserving local provider batch append (0x210D). The latter preserves ChangeId/HLC/OriginAuthorEpoch, keeps Host LocalAuthor authoritative, assigns OriginSequence only at publication freeze, rejects duplicate identities/fields and unrelated dirty overlay state, and commits multi-field batches plus receipt in one GROUP_COMMIT.
+- [x T] FLD exact head 2a8048516e7bec8142e860a0c7e5316f81b12421 passed run 42969990001 on Windows, Ubuntu and macOS: Engine 80/80 and every other FLD suite green on all three OSes.
+- [ ] Process-isolated IDataProvider composition is still not complete. Do not wire IPC into the current synchronous provider interfaces with sync-over-async. The next architectural task is an async provider/apply contract and a complete IPC-backed provider surface, followed by two-process restart, duplicate, Outbox, snapshot and FULL_REPLACE parity tests. Keep the current in-process adapter as the reference until then.
+
 ## 1.74. FLD contextual Remote APPLY IPC boundary added; process-isolated provider audit — 2026-11-11
 
 - [x C] FLD-DB branch fix/crash-consistency-outbox adds Database IPC operation 0x210C, a bounded versioned codec for the complete RemoteBatchCommit context, relay-subset indices, client API and dispatcher route to the existing atomic FldDatabase.ApplyRemoteBatch transaction.
