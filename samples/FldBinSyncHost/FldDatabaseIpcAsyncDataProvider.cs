@@ -750,7 +750,19 @@ public sealed class FldDatabaseIpcRemoteBatchApplyStore : IAsyncProviderRemoteBa
             batch.RecordsRoot, writes, Array.Empty<RemoteFieldWrite>(), batch.ProtocolStateDelta);
         RemoteBatchReceipt receipt = await _client.ApplyRemoteBatchAsync(
             batch.ApplyToken, commit, cancellationToken).ConfigureAwait(false);
+        ValidateReceipt(batch, receipt, writes.Length);
         return new ProviderApplyReceipt(batch.ApplyToken, batch.BatchDigest.ToArray(), receipt.IsDuplicate);
+    }
+
+    private static void ValidateReceipt(
+        ProviderRemoteBatchCommit batch, RemoteBatchReceipt receipt, int writeCount)
+    {
+        if (receipt.CommitSeq == 0 || receipt.CursorStart != batch.CursorStart ||
+            receipt.CursorEnd != batch.CursorEnd ||
+            !receipt.BatchId.AsSpan().SequenceEqual(batch.BatchId.ToArray()) ||
+            !receipt.ProtocolStateDelta.AsSpan().SequenceEqual(batch.ProtocolStateDelta) ||
+            receipt.AppliedCount < 0 || receipt.AppliedCount > writeCount)
+            throw new InvalidDataException("FLD remote APPLY receipt does not match the committed provider batch.");
     }
 
     private static RemoteFieldWrite ToRemoteFieldWrite(ProviderMutation mutation)
