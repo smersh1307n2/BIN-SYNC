@@ -60,7 +60,19 @@ public static class NodePersistence
                     fs.Write(image);
                     fs.Flush(flushToDisk: true);   // fsync before rename
                 }
-                File.Move(tmp, fullPath, overwrite: true); // atomic replacement after same-path saves are serialized
+                for (int attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        File.Move(tmp, fullPath, overwrite: true); // atomic replacement after same-path saves are serialized
+                        break;
+                    }
+                    catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows() && attempt < 7)
+                    {
+                        // Windows security/filter drivers may briefly deny replacement while readers close.
+                        Thread.Sleep(5 << attempt);
+                    }
+                }
             }
             finally
             {
