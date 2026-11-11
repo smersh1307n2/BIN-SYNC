@@ -9,6 +9,13 @@
 - The earlier 42962678340 Engine failure was only a test fixture passing an explicit 1 MiB chunk size while expecting the protocol maximum. FLD test commit d6a6857e corrected the call to use the documented default; no IPC implementation rollback was needed.
 - Cross-repository integration is verified at this head. Physical receipt, ChangeId and tombstone/ghost GC remain disabled pending their independent safe-horizon and crash/recovery proofs.
 
+## FLD IPC snapshot handles — implementation under verification — 2026-11-11
+
+- FLD-DB now exposes metadata-only snapshot pages and bounded value chunks through Database IPC. Handles are bound to ClientId and dispatcher HostGeneration, survive reconnects within one host generation, and are rejected after host restart.
+- IPC snapshot ownership is durably marked before provider manifest publication. Restart cleanup prunes stale IPC-owned pins only and preserves non-IPC provider snapshots, including BIN-SYNC FULL_REPLACE generations.
+- Added tests for snapshot page retry semantics, chunk reads, writes/checkpoint/compaction stability, idempotent open/release, client isolation, reconnect, host restart, and non-IPC snapshot preservation.
+- Exact-head cross-repository CI is pending; do not mark this milestone green until FLD Engine tests and FldBinSyncHost integration pass on Ubuntu and Windows.
+
 ## T-pass integration follow-up — 2026-11-11
 
 - Run 42962678340: BIN-SYNC Linux/Windows build+tests, benchmark build, fuzz/lab, and v3.1 vector conformance passed. Public FLD checkout and FldBinSyncHost builds passed on both Ubuntu and Windows.
