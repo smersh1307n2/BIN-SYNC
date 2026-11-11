@@ -58,6 +58,10 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
             rootDirectory, clientId, timeout, cancellationToken).ConfigureAwait(false);
         try
         {
+            NodeId hostAuthor = NodeId.From(await client.GetLocalAuthorAsync(cancellationToken).ConfigureAwait(false));
+            if (hostAuthor != localAuthor)
+                throw new InvalidOperationException("Configured BIN-SYNC local author does not match the FLD Database Host LocalAuthor.");
+
             FldDatabaseIpcOutboxLease lease = await client.AcquireOutboxLeaseAsync(cancellationToken)
                 .ConfigureAwait(false);
             return new FldDatabaseIpcAsyncDataProvider(
