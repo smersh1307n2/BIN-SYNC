@@ -24,6 +24,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         NodeId author = NodeId.From(authorBytes);
         Guid clientId = Guid.NewGuid();
         Guid firstOwner = Guid.Empty;
+        Guid secondOwner = Guid.Empty;
         Process? host = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
         try
@@ -77,6 +78,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     StorageIpcEndpointInfo receiptRecoveryEndpoint = await WaitForHostEndpointAsync(
                         hostRoot, host, TimeSpan.FromSeconds(45), firstOwner);
                     Assert.NotEqual(firstOwner, receiptRecoveryEndpoint.OwnerId);
+                    secondOwner = receiptRecoveryEndpoint.OwnerId;
                     provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                         hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
 
@@ -105,9 +107,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
 
                     host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
-                    StorageIpcEndpointInfo secondEndpoint = await WaitForHostEndpointAsync(
-                        hostRoot, host, TimeSpan.FromSeconds(45), firstOwner);
-                    Assert.NotEqual(firstOwner, secondEndpoint.OwnerId);
+                    StorageIpcEndpointInfo thirdEndpoint = await WaitForHostEndpointAsync(
+                        hostRoot, host, TimeSpan.FromSeconds(45), secondOwner);
+                    Assert.NotEqual(secondOwner, thirdEndpoint.OwnerId);
 
                     provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                         hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 17);
