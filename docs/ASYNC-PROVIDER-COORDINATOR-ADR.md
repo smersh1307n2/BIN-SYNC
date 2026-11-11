@@ -61,6 +61,28 @@ Before implementing the process-isolated coordinator, choose and prove one of th
 
 Do not mix these approaches opportunistically. Do not hold a Monitor across an await. The selected design must demonstrate deadlock-free ordering and bounded cancellation/recovery behavior.
 
+## Chosen async consistency strategy — 2026-11-11
+
+Choose the **durable PendingApply/intent plus short-lock snapshot/revalidation** path for the first process-isolated coordinator. Do not replace every existing Node/Metadata Monitor with a shared async gate as a prerequisite for ordinary local feed and remote APPLY.
+
+### Remote APPLY
+
+1. Under the existing short synchronous coordinator/Node gates, stage `MetadataStore.BeginPendingApply` and apply the decoded batch to Node; persist the Node checkpoint before provider APPLY.
+2. Release every Monitor/Node lease before any IPC await. The immutable PendingApply contains the exact batch identity, operations, header fingerprint and apply token.
+3. Await the FLD contextual `ApplyRemoteBatchAsync` operation. FLD's WAL APPLY_COMMIT and apply receipt make an uncertain retry idempotent.
+4. Re-enter only the short MetadataStore gate and call `FinalizePendingApply`. A crash before this step is recovered by replaying the same apply token/batch; a crash after it is handled by the completed receipt.
+5. Keep the existing `StorageRelayPublicationGate` SemaphoreSlim around remote APPLY plus relay publication. It serializes the async operation without carrying thread-affine locks across awaits.
+
+### Local feed and publication
+
+1. Capture an immutable FLD source-feed ceiling with the async provider. Enumerate only through that ceiling; writes committed later have higher Outbox sequence and remain for the next pass.
+2. Persist the publication/cutover decision under short Node/Metadata locks. Do not hold those locks while sending a batch or awaiting peer ACK.
+3. Stamp each published local origin by stable ChangeId through `IAsyncProviderPublishedOriginStore`; FLD ignores a superseded ChangeId and rejects a conflicting stamp for the current one.
+4. Persist the returned IPC receipt ClientSequence in the existing Node WAL/commit record before calling `IAsyncProviderOperationReceiptStore.AcknowledgeOperationReceiptsAsync`. This is independent from source-feed `AcknowledgeLocalChangesAsync`; Outbox ACK must never retire caller receipts.
+5. Revalidate the durable publication intent and feed watermark before final ACK. If the process crashes, recover from Node WAL, MetadataStore intent and FLD receipts; never invent a new ChangeId/OperationId.
+
+This strategy is suitable only for ordinary local feed and contextual remote APPLY. FULL_REPLACE, snapshot-state replacement and physical GC still require dedicated async-safe guards and complete recovery proofs; keep them disabled in the IPC adapter until those contracts are implemented.
+
 ## Coordinator implementation boundary
 
 Add an asynchronous coordinator path that depends on `IAsyncDataProvider` and the async optional capabilities. Do not make the current synchronous `StorageSyncCoordinator` call async methods synchronously.
