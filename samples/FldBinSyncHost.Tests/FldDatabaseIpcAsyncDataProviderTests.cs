@@ -113,6 +113,83 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
+    [Fact]
+    public async Task Async_ipc_provider_roundtrips_record_tombstone_as_empty_provider_value()
+    {
+        string root = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-async-provider-tombstone-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x534;
+        byte[] authorBytes = Id(0x43);
+        NodeId author = NodeId.From(authorBytes);
+        Guid ownerId = Guid.NewGuid();
+        Guid clientId = Guid.NewGuid();
+        byte[] recordBytes = FldDatabase.NewRecordId();
+        byte[] changeBytes = Id(0x74);
+
+        using var database = FldDatabase.Open(root, namespaceId, authorBytes);
+        using var dispatcher = new FldDatabaseIpcDispatcher(database);
+        using var shutdown = new CancellationTokenSource();
+        var server = new StorageIpcServer(
+            StorageIpcEndpoint.ComputePipeName(root, 0), dispatcher.HandleAsync);
+        Task serverTask = server.RunAsync(shutdown.Token);
+
+        try
+        {
+            await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+            StorageIpcEndpoint.Publish(root, StorageIpcEndpoint.Create(
+                root, 0, ownerId, Environment.ProcessId));
+
+            await using var provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                root, clientId, TimeSpan.FromSeconds(10), author, () => 17);
+            var tombstone = new ProviderMutation
+            {
+                RecordId = RecordId.From(recordBytes),
+                FieldId = FldLifecycle.FieldId,
+                IsRecordTombstone = true,
+                HlcWall = 123457,
+                HlcLogical = 1,
+                AuthorNodeId = author,
+                KeyEpoch = 0,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(changeBytes),
+                OriginAuthorEpoch = 17,
+                OriginSequence = 0
+            };
+
+            await provider.AppendLocalChangeAsync(tombstone);
+
+            ProviderChangePage changes = await provider.ReadLocalChangesAsync(0, 8);
+            ProviderMutation local = Assert.Single(changes.Changes).Mutation;
+            Assert.True(local.IsRecordTombstone);
+            Assert.Empty(local.Value);
+
+            ProviderMutation? current = await provider.ReadCurrentAsync(
+                RecordId.From(recordBytes), FldLifecycle.FieldId);
+            Assert.NotNull(current);
+            Assert.True(current.IsRecordTombstone);
+            Assert.Empty(current.Value);
+
+            ProviderSnapshotHandle snapshot = await provider.OpenSnapshotAsync();
+            ProviderSnapshotPage page = await provider.ReadSnapshotAsync(snapshot.Token, 0, 8);
+            ProviderMutation snapshotEntry = Assert.Single(page.Entries);
+            Assert.True(snapshotEntry.IsRecordTombstone);
+            Assert.Empty(snapshotEntry.Value);
+
+            await provider.AcknowledgeLocalChangesAsync(1);
+            await provider.ReleaseSnapshotAsync(snapshot.Token);
+            Assert.Equal(1ul, database.GetOutboxWatermark());
+        }
+        finally
+        {
+            shutdown.Cancel();
+            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+            StorageIpcEndpoint.DeleteIfOwned(root, 0, ownerId);
+            dispatcher.Dispose();
+            database.Dispose();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] id = new byte[16];
