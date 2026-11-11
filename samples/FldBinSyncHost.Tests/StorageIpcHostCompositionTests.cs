@@ -241,7 +241,8 @@ public sealed class StorageIpcHostCompositionTests
             finally
             {
                 serverCancellation.Cancel();
-                await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                try { await serverTask.WaitAsync(TimeSpan.FromSeconds(10)); }
+                catch (OperationCanceledException) { }
                 StorageIpcEndpoint.DeleteIfOwned(directory, 0, ownerId);
             }
         }
