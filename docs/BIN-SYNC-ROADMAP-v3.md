@@ -2855,3 +2855,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] BIN-SYNC commit `45db17c771f78d79d430c4d24ecd92caf5613ec2` adds a cross-repository host test for the ledger's public contract: data and result commit together, the exact result is replayed after Storage reopen, and conflicting OperationId reuse is rejected.
 - [~ CI] Re-run the full cross-repository gate against FLD head `1bad945a59247f7f7703b411eb925ee74021e265` and the latest BIN-SYNC PR head. Required: the atomic WAL crash-recovery test and the BIN-SYNC ledger reopen/replay test pass.
 - [~ T] This ledger currently provides atomic exactly-once effects for mutations performed through the same StorageWriteBatch. It does not yet make FLD Database WAL mutations atomic with the Storage ledger. For Database operations, the host must use a durable FLD ApplyJournal/receipt keyed by the same OperationId, then finalize the Storage-side result record; crash between the two stores must replay the FLD operation idempotently and recover its original receipt. Implement and test that cross-WAL recovery adapter before advertising generic FLD Database IPC idempotency.
+
+
+
+### 1.104 — Enforce same-database atomicity for the operation ledger
+
+- [x C] FLD-DB commits `18296f5e78c4e37470d82e3c6909b37ab5f5dace` and `dfa0741fb105aa2fc5b4bb14fc9d1d7bba49612d` add an internal StorageWriteBatch ownership check and make `StorageIpcOperationLedger.TryStageResult` reject any batch not created by the exact StorageDatabase instance that owns the ledger. This prevents a host from accidentally persisting the result row in one database while committing the data mutation in another.
+- [x T] FLD-DB commit `2e378a21ed3ccb61fe77e0f9a5c15beb849bac8c` tests foreign-database batch rejection. BIN-SYNC commit `feb660bebd68dc14f4434abcddc88ed3e08d747a` adds the same ownership assertion to the cross-repository host integration test.
+- [~ CI] Re-run the full cross-repository gate against FLD head `2e378a21ed3ccb61fe77e0f9a5c15beb849bac8c` and BIN-SYNC head containing `feb660bebd68dc14f4434abcddc88ed3e08d747a`. Required: atomic ledger/recovery, wrong-store rejection, and real host tests all pass.
