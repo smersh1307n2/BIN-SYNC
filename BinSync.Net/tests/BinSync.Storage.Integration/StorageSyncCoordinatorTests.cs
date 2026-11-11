@@ -60,6 +60,7 @@ public sealed class StorageSyncCoordinatorTests
         public bool LoseNextAppendResponseAfterCommit { get; set; }
         public bool LoseNextOutboxAckResponseAfterCommit { get; set; }
         public bool LoseNextPublishedOriginResponseAfterCommit { get; set; }
+        public List<int> PublishedOriginBatchSizes { get; } = new();
         public Action? AfterNextRead { get; set; }
         public Guid ReceiptStreamId { get; }
 
@@ -142,6 +143,7 @@ public sealed class StorageSyncCoordinatorTests
             IReadOnlyList<ProviderPublishedOrigin> published, CancellationToken ct = default)
         {
             ct.ThrowIfCancellationRequested();
+            PublishedOriginBatchSizes.Add(published.Count);
             _provider.CommitPublishedOrigins(published);
             if (LoseNextPublishedOriginResponseAfterCommit)
             {
@@ -332,6 +334,45 @@ public sealed class StorageSyncCoordinatorTests
         }
     }
 
+    [Fact]
+    public async Task Async_local_publication_chunks_published_origin_stamps_to_ipc_frame_limit()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-origin-chunking"), 501);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(101);
+        const string scope = "async-origin-chunking";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+        using var wal = Wal.Open(Path.Combine(_root, "async-origin-chunking.wal"));
+        node.AttachWal(wal);
+        var asyncProvider = new RecordingAsyncLocalProvider(provider);
+        const int count = 4097;
+        for (int i = 0; i < count; i++)
+        {
+            RecordId record = RecordId.From(Guid.NewGuid().ToByteArray());
+            BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record, FieldId = 0x0B01, AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1, HlcWall = checked((ulong)(20_000 + i)),
+                Value = new byte[] { (byte)i }, ChangeId = changeId
+            });
+        }
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        int published = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current), limit: 1024);
+
+        Assert.Equal(count, published);
+        Assert.Equal(new[] { 4096, 1 }, asyncProvider.PublishedOriginBatchSizes);
+        Assert.Equal((ulong)count, asyncProvider.LastOutboxAck);
+        Assert.Equal((ulong)count, asyncProvider.LastReceiptAck);
+        Assert.Equal((ulong)count, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
+        Assert.False(node.HasPendingProviderOperationReceipts);
+    }
     [Fact]
     public async Task Async_local_publication_recovers_after_published_origin_commit_response_loss()
     {
