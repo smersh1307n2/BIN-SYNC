@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO.Pipes;
 using Fld1.Engine.Db;
+using Fld1.Storage.Engine;
 using Fld1.Storage.Ipc;
 using Xunit;
 
@@ -196,6 +197,59 @@ public sealed class StorageIpcHostCompositionTests
             {
                 serverCancellation.Cancel();
                 await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Storage_ipc_operation_ledger_replays_durable_result_and_rejects_conflicting_identity()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-ipc-ledger-" + Guid.NewGuid().ToString("N"));
+        const ulong partition = 0x3103;
+        Guid clientId = Guid.Parse("31030000-0000-0000-0000-000000000001");
+        Guid operationId = Guid.Parse("31030000-0000-0000-0000-000000000002");
+        byte[] dataKey = "fld-host-storage-key"u8.ToArray();
+        byte[] dataValue = "durable-storage-value"u8.ToArray();
+        byte[] requestPayload = "put-storage-value"u8.ToArray();
+        byte[] fingerprint = StorageIpcOperationLedger.ComputeFingerprint(3, requestPayload);
+        byte[] result = "stored"u8.ToArray();
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, partition))
+            {
+                var ledger = new StorageIpcOperationLedger(storage);
+                using var batch = storage.BeginWriteBatch();
+                batch.Put(dataKey, dataValue);
+                Assert.True(ledger.TryStageResult(
+                    batch, clientId, operationId, fingerprint, result, out byte[]? prior));
+                Assert.Null(prior);
+                batch.Commit();
+            }
+
+            using (var reopened = StorageDatabase.Open(directory, partition))
+            {
+                var ledger = new StorageIpcOperationLedger(reopened);
+                Assert.True(reopened.TryGet(dataKey, out byte[]? stored));
+                Assert.Equal(dataValue, stored);
+                Assert.True(ledger.TryGetResult(clientId, operationId, fingerprint, out byte[]? replayed));
+                Assert.Equal(result, replayed);
+
+                using var duplicate = reopened.BeginWriteBatch();
+                Assert.False(ledger.TryStageResult(
+                    duplicate, clientId, operationId, fingerprint,
+                    "different-local-result"u8, out byte[]? prior));
+                Assert.Equal(result, prior);
+
+                byte[] conflictingFingerprint =
+                    StorageIpcOperationLedger.ComputeFingerprint(3, "different-request"u8);
+                Assert.Throws<InvalidOperationException>(() =>
+                    ledger.TryGetResult(clientId, operationId, conflictingFingerprint, out _));
             }
         }
         finally
