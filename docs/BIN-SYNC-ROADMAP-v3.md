@@ -3373,7 +3373,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C/T] Added `Lost_transport_ack_replays_same_batch_after_reconnect_without_reapplying` to the real `SyncSession` transport tests. The receiver applies the DELTA_BATCH, then an opt-in test transport drops the first ACK and closes the channel before delivery. The sender therefore has no durable ACK cursor and must replay the same pending batch after a fresh handshake.
 - [x T] The retry assertions require the receiver to recognize the duplicate without applying the operation again, retain the exact value, and return the ACK that advances the sender's per-author cursor. This complements §1.95's real FLD Host process crash after durable APPLY but before IPC response; it is a transport/session test, not yet a two-Host FLD ACK-loss process test.
 - [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository builds/tests must pass before this transport-loss proof is considered verified.
-- [ ] T Extend ACK-loss coverage through two independent FLD Database Host processes and the async Metadata/FLD adapter, then add crash/restart interruption tests across receive intent, Node checkpoint, provider APPLY receipt and Metadata finalization.
+- [x C/T] Extended ACK-loss coverage through the existing two-independent-FLD-Host process composition and async Metadata/FLD adapter; see §1.98. Exact-head CI remains pending.
 
 
 ## 1.97. Process-wide async admission and peer-send gates — 2026-11-11
@@ -3384,3 +3384,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x A] The Node metadata-store-owned publication fence already rejects legacy direct Node-owned local writes, receive validation and Node Outbox transport after cutover. This protects the main Node bypass path. The shared registry does not serialize arbitrary direct calls into public Metadata Store mutation APIs; production host composition must keep that writer capability private and route namespace mutations through the coordinator. Do not claim a universal application-writer barrier yet.
 - [ ] CI Exact-head BIN-SYNC and FLD Storage Integration workflows must pass for the shared-gate implementation and test before marking this change verified.
 - [ ] A remaining limitation is process scope: the registry coordinates coordinator instances in one process, not multiple processes. Cross-process coordination remains the responsibility of the single-owner Host/partition lease and durable Metadata transactions.
+
+
+## 1.98. Two-Host FLD transport ACK loss and retry — 2026-11-11
+
+- [x C/T] Extended `Async_host_composition_exchanges_changes_bidirectionally_between_two_database_host_processes` after both Hosts and their Node/WAL/Metadata state have been restarted and recovered. A new local change is published from Host A; Host B durably applies it through the real IPC provider and finalizes its Metadata receive cursor, while the transport wrapper deliberately drops the ACK and closes the session channel.
+- [x T] The sender's durable peer ACK cursor must remain at the previous value while the receiver's durable receive cursor advances. The test reconnects both BIN-SYNC sessions without restarting either Host, replays the reserved batch, requires a duplicate/no-op result and a successful ACK, then verifies the sender ACK cursor advances exactly once and the receiver's FLD value/ChangeId remain unchanged.
+- [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository build/test workflows must pass before this two-Host ACK-loss proof is verified.
+- [ ] Extend the same matrix with process termination/restart after durable receive intent, after Node checkpoint but before provider APPLY, after provider APPLY receipt but before Metadata finalization, and after Metadata finalization but before transport ACK. Existing §1.95 separately proves process death after durable APPLY and before IPC response.
