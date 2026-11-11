@@ -57,6 +57,8 @@ public sealed class StorageSyncCoordinatorTests
         public ulong LastOutboxAck { get; private set; }
         public ulong LastReceiptAck { get; private set; }
         public bool LoseNextReceiptAckResponseAfterCommit { get; set; }
+        public bool LoseNextAppendResponseAfterCommit { get; set; }
+        public Action? AfterNextRead { get; set; }
 
         public RecordingAsyncLocalProvider(StorageDataProvider provider)
         {
@@ -71,7 +73,13 @@ public sealed class StorageSyncCoordinatorTests
         public ValueTask AppendLocalChangeAsync(ProviderMutation mutation, CancellationToken ct = default)
             => _adapter.AppendLocalChangeAsync(mutation, ct);
         public ValueTask<ProviderChangePage> ReadLocalChangesAsync(ulong after, int limit, CancellationToken ct = default)
-            => _adapter.ReadLocalChangesAsync(after, limit, ct);
+        {
+            ValueTask<ProviderChangePage> pending = _adapter.ReadLocalChangesAsync(after, limit, ct);
+            Action? afterRead = AfterNextRead;
+            AfterNextRead = null;
+            afterRead?.Invoke();
+            return pending;
+        }
         public ValueTask AcknowledgeLocalChangesAsync(ulong through, CancellationToken ct = default)
         {
             LastOutboxAck = Math.Max(LastOutboxAck, through);
@@ -98,6 +106,11 @@ public sealed class StorageSyncCoordinatorTests
                 return ValueTask.FromResult(existing);
             ulong sequence = _nextClientSequence++;
             _receipts.Add(mutation.ChangeId, sequence);
+            if (LoseNextAppendResponseAfterCommit)
+            {
+                LoseNextAppendResponseAfterCommit = false;
+                throw new IOException("simulated response loss after durable auto-sequence append");
+            }
             return ValueTask.FromResult(sequence);
         }
 
@@ -276,6 +289,103 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1UL, asyncProvider.LastReceiptAck);
         Assert.False(node.HasPendingProviderOperationReceipts);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+    }
+
+    [Fact]
+    public async Task Async_local_publication_retries_host_auto_sequence_after_lost_append_response()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-local-append-response-loss"), 493);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(92);
+        const string scope = "async-local-append-response-loss";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+
+        using var wal = Wal.Open(Path.Combine(_root, "async-local-append-response-loss.wal"));
+        node.AttachWal(wal);
+        var asyncProvider = new RecordingAsyncLocalProvider(provider)
+        {
+            LoseNextAppendResponseAfterCommit = true
+        };
+        RecordId record = RecordId.From(Guid.Parse("92000000-0000-0000-0000-000000000092").ToByteArray());
+        BatchId changeId = BatchId.From(Guid.Parse("92000000-0000-0000-0000-000000000093").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0903, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9200, Value = "append-response-loss"u8.ToArray(), ChangeId = changeId
+        });
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        await Assert.ThrowsAsync<IOException>(async () =>
+            await coordinator.PublishLocalChangesAsync(
+                asyncProvider, current => StorageNodePersistence.Save(storage, current)));
+
+        Assert.False(node.HasPendingProviderOperationReceipts);
+        Assert.Equal(0UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+
+        int published = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+        Assert.Equal(1, published);
+        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.False(node.HasPendingProviderOperationReceipts);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+    }
+
+    [Fact]
+    public async Task Async_local_publication_leaves_appends_after_captured_ceiling_for_next_pass()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-local-feed-ceiling"), 494);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(93);
+        const string scope = "async-local-feed-ceiling";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+
+        using var wal = Wal.Open(Path.Combine(_root, "async-local-feed-ceiling.wal"));
+        node.AttachWal(wal);
+        var asyncProvider = new RecordingAsyncLocalProvider(provider);
+        RecordId firstRecord = RecordId.From(Guid.Parse("93000000-0000-0000-0000-000000000093").ToByteArray());
+        RecordId secondRecord = RecordId.From(Guid.Parse("93000000-0000-0000-0000-000000000094").ToByteArray());
+        BatchId firstChange = BatchId.From(Guid.Parse("93000000-0000-0000-0000-000000000095").ToByteArray());
+        BatchId secondChange = BatchId.From(Guid.Parse("93000000-0000-0000-0000-000000000096").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = firstRecord, FieldId = 0x0904, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9300, Value = "captured-prefix"u8.ToArray(), ChangeId = firstChange
+        });
+        asyncProvider.AfterNextRead = () => provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = secondRecord, FieldId = 0x0904, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9301, Value = "next-prefix"u8.ToArray(), ChangeId = secondChange
+        });
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        int firstPass = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+        Assert.Equal(1, firstPass);
+        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+        ProviderChange pending = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(secondChange, pending.ChangeId);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+
+        int secondPass = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+        Assert.Equal(1, secondPass);
+        Assert.Equal(2UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(2UL, asyncProvider.LastReceiptAck);
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(2UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.False(node.HasPendingProviderOperationReceipts);
     }
 
     [Fact]
