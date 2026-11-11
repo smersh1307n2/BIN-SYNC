@@ -116,6 +116,89 @@ public sealed class SessionStreamBindingTests
     }
 
     [Fact]
+    public async Task Lost_transport_ack_replays_same_batch_after_reconnect_without_reapplying()
+    {
+        using var sender = Fix.MakeNode(331);
+        using var receiver = Fix.MakeNode(332);
+        var record = Fix.Rid(333);
+        byte[] value = [0x31, 0x32, 0x33];
+        Assert.True(sender.WriteField(1, record, 0x100, value));
+
+        // First connection: the receiver applies the batch, but its first ACK is
+        // deliberately lost by closing the transport before the packet is delivered.
+        var (firstSenderPipe, firstReceiverPipe) = PipeTransport.CreatePair();
+        var droppingReceiver = new DropFirstAckTransport(firstReceiverPipe);
+        var firstAccept = SyncSession.AcceptAsync(receiver, droppingReceiver);
+        await using (var firstClient = await SyncSession.ConnectAsync(sender, firstSenderPipe))
+        await using (var firstServer = await firstAccept)
+        {
+            Task<bool> push = firstClient.PushBatchAsync(sender, 1);
+            Task<BatchResult> receive = firstServer.ReceiveBatchAsync(receiver);
+            await Assert.ThrowsAnyAsync<IOException>(async () => await receive);
+            await Assert.ThrowsAnyAsync<Exception>(async () => await push);
+        }
+
+        Assert.True(receiver.TryGetField(1, record, 0x100, out var afterFirstApply));
+        Assert.Equal(value, afterFirstApply!.Value);
+        Assert.Equal(0UL, sender.PeerStates[(receiver.NodeId, 1)].AckedFor(sender.NodeId));
+
+        // Reconnect with the same durable Nodes. Sender has no ACK watermark, so it
+        // must replay the immutable batch. Receiver recognizes the already-applied
+        // operation, returns an ACK, and does not apply it a second time.
+        var (retrySenderPipe, retryReceiverPipe) = PipeTransport.CreatePair();
+        var retryAccept = SyncSession.AcceptAsync(receiver, retryReceiverPipe);
+        await using var retryClient = await SyncSession.ConnectAsync(sender, retrySenderPipe);
+        await using var retryServer = await retryAccept;
+        Task<bool> retryPush = retryClient.PushBatchAsync(sender, 1);
+        Task<BatchResult> retryReceive = retryServer.ReceiveBatchAsync(receiver);
+        Assert.True(await retryPush.WaitAsync(TimeSpan.FromSeconds(5)));
+        BatchResult duplicate = await retryReceive.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, duplicate.Applied);
+        Assert.True(receiver.TryGetField(1, record, 0x100, out var afterRetry));
+        Assert.Equal(value, afterRetry!.Value);
+        Assert.Equal(1UL, sender.PeerStates[(receiver.NodeId, 1)].AckedFor(sender.NodeId));
+    }
+
+    private sealed class DropFirstAckTransport : IPeerAwareSyncTransport
+    {
+        private readonly ISyncTransport _inner;
+        private int _drop = 1;
+        private NodeId _peerNodeId;
+
+        public DropFirstAckTransport(ISyncTransport inner) => _inner = inner;
+
+        public NodeId PeerNodeId
+        {
+            get => _peerNodeId;
+            set
+            {
+                _peerNodeId = value;
+                if (_inner is IPeerAwareSyncTransport aware)
+                    aware.PeerNodeId = value;
+            }
+        }
+
+        public SyncTransportCapabilities Capabilities => _inner.Capabilities;
+        public int? MaxPacketSize => _inner.MaxPacketSize;
+
+        public async ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
+        {
+            var (frame, _) = FrameCodec.ParseFrame(packet.ToArray());
+            if (frame.FrameType == 0x0B && Interlocked.Exchange(ref _drop, 0) == 1)
+            {
+                await _inner.DisposeAsync().ConfigureAwait(false);
+                throw new IOException("Injected transport ACK loss.");
+            }
+            await _inner.SendAsync(packet, ct).ConfigureAwait(false);
+        }
+
+        public ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default) =>
+            _inner.ReceiveAsync(ct);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Need_keys_rejects_frame_on_wrong_namespace_stream()
     {
         using var a = Fix.MakeNode(317);
