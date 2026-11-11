@@ -156,7 +156,7 @@ Pass this scanner to every BIN-SYNC physical-GC/frontier path that requires host
 
 ## Optional source implementation
 
-The optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost) implements both the legacy FLD/RPM3 relay adapter and the direct Metadata Store-owned relay publication/compaction path, plus the contextual FLD ApplyJournal receipt adapter and reference scanner. The full `FldDatabase`→`IDataProvider` snapshot/local-feed/key-resolver bridge remains open. The sample stays outside the default BIN-SYNC solution because FLD-DB is a separate checkout; its cross-repository build is still a T-pass requirement. Physical GC remains disabled.
+The optional cross-repository sample in BIN-SYNC at [`samples/FldBinSyncHost`](https://github.com/smersh1307n2/BIN-SYNC/tree/feature/fld-external-storage/samples/FldBinSyncHost) implements the FLD/RPM3 legacy relay adapter, direct Metadata Store-owned relay publication/compaction, contextual FLD ApplyJournal receipt adapter, reference scanner, and the `FldDatabase`→`IDataProvider` bridge. `FldDatabaseDataProvider` supplies generation-pinned paged snapshots, the Outbox-backed local feed, stable identifier resolution, current-state reads, published-origin stamping, author-epoch closure, durable publication cutover and snapshot-GC pinning. The sample stays outside the default BIN-SYNC solution because FLD-DB is a separate checkout. Exact cross-repository build and test validation passed on FLD-DB `b7f3c3f0b2951bbadba8325f3e6e592f3be07b81` (host adapter tests 8/8). Physical GC remains disabled.
 
 
 ### Local feed freeze and ceiling-aware sender API
@@ -168,16 +168,16 @@ The adapter provides `RecoverAndPublishAllAsync(persistNode, ...)`, `ApplyAndPub
 The optional host adapter's `PublishReadyOutboxAsync` converts the captured watermark set into a per-author ceiling map and drains the peer session using the matching ceiling-aware Core overload. Before cutover it uses Node-owned `SyncSession.PushBatchAsync`; after cutover it uses the Metadata Store overload. Both paths filter local-outbound and relay pages before batch construction. The Metadata Store path also rejects any immutable pending reservation whose absolute sequence (`CursorEnd + StreamOffset`) exceeds the captured ceiling. Authors absent from the set and zero-ceiling authors are not eligible. The captured authority-mode bit prevents a cutover race. Do not use a legacy ceiling-free overload inside this FLD publication gate.
 
 
-### Remaining provider bridge (still C-pass)
+### Provider bridge implementation and remaining validation
 
-The optional adapter is intentionally only the relay/ACK/GC integration layer. It accepts a preconstructed `StorageSyncCoordinator` and a host-supplied remote-apply callback. It does not yet implement `IDataProvider` over `FldDatabase`: FLD needs a generation-pinned, paged full-data snapshot API, and the neutral provider apply contract must carry the complete remote batch context (sender peer/epoch, issuer, cursor, batch identity/digests and relay writes) so FLD can persist the correct `RemoteBatchCommit` without synthetic identities. This is a separate remaining C-pass item, not a test-only task.
+`FldDatabaseDataProvider` now implements `IDataProvider` over the durable FLD database, including generation-pinned paged snapshots, Outbox-backed local changes, stable RecordId/FieldId resolution (host-supplied resolvers or direct canonical key encoding), current-state reads, published-origin stamping, shared commit guard, author-epoch closure, durable publication cutover, FULL_REPLACE staging and snapshot-GC pinning. Contextual remote APPLY remains a separate `FldRemoteBatchApplyStore` capability so authenticated sender/epoch and the complete batch header are not lost. Exact cross-repository CI against FLD-DB `b7f3c3f0b2951bbadba8325f3e6e592f3be07b81` passed, including `FldBinSyncHost.Tests` 8/8. Remaining work is adversarial restart/crash/concurrency coverage and the Storage IPC/Host multi-process access phase; this bridge must not be described as the IPC host.
 
 
 ### Full remote APPLY context
 
 The Core optional capability `IProviderRemoteBatchCommitStore` and sample `FldRemoteBatchApplyStore` preserve the entire v3 batch header across PendingApply and recovery. The FLD adapter constructs `RemoteBatchCommit` with authenticated SenderPeer/transport epoch kept separate from wire IssuerNodeId/issuer epoch; it carries BatchId, cursor, previous/current digest and RecordsRoot unchanged. The v3 provider-state delta is empty because the current `Batch` wire DTO has no such member. The FLD `RelayWrites` list remains empty by design: BIN-SYNC Metadata Store owns relay copies. Record tombstones map to FLD lifecycle field 0 DeadValue, preserving original HLC/author/ChangeId.
 
-Do not mistake this capability for a full `IDataProvider` implementation. The generation-pinned full-data snapshot API, Outbox-backed local feed with an epoch/ChangeId contract, identifier resolver and crash/reopen conformance are still open C/T work.
+Together with `FldDatabaseDataProvider`, this capability completes the provider/feed and contextual APPLY adapter surface for the current integration. The remaining gate is adversarial restart/crash/concurrency validation across the composed FLD→BIN-SYNC durability boundary; the Storage IPC Host/client is a separate unfinished phase. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 
 
 ### Separate remote-apply capability injection
