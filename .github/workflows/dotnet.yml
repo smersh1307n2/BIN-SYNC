@@ -250,9 +250,10 @@ jobs:
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
-      - name: Test FLD Storage, Manifest, Run, WAL and Engine durability contracts
+      - name: Test FLD Core, Storage, Manifest, Run, WAL and Engine durability contracts
         shell: bash
         run: |
+          dotnet test FLD-DB/tests/Fld1.Core.Tests/Fld1.Core.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Storage.Tests/Fld1.Storage.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Manifest.Tests/Fld1.Manifest.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Run.Tests/Fld1.Run.Tests.csproj --configuration Release
