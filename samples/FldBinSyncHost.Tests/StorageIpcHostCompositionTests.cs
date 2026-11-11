@@ -713,7 +713,7 @@ public sealed class StorageIpcHostCompositionTests
     }
 
     [Fact]
-    public async Task Local_provider_append_replays_same_receipt_after_response_loss_and_database_restart()
+    public async Task Auto_sequence_provider_append_replays_same_receipt_after_response_loss_and_database_restart()
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-fld-provider-replay-" + Guid.NewGuid().ToString("N"));
@@ -725,7 +725,7 @@ public sealed class StorageIpcHostCompositionTests
         byte[] value = "durable-provider-retry"u8.ToArray();
         Guid ownerId = Guid.NewGuid();
         Guid clientId = Guid.NewGuid();
-        Guid operationId = Guid.NewGuid();
+        Guid operationId = new(changeId, bigEndian: true);
         const ushort fieldId = 0x0421;
         var mutation = new FldLocalProviderMutation(
             recordId, fieldId, value, changeId,
@@ -757,8 +757,8 @@ public sealed class StorageIpcHostCompositionTests
                     await using var client = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
                         directory, clientId, TimeSpan.FromSeconds(10));
                     Exception lostResponse = await Assert.ThrowsAnyAsync<Exception>(async () =>
-                        await client.AppendLocalProviderBatchAsync(
-                            operationId, 1, new[] { mutation }));
+                        await client.AppendLocalProviderBatchAutoSequenceAsync(
+                            operationId, new[] { mutation }));
                     Assert.True(
                         lostResponse is IOException or InvalidDataException or ObjectDisposedException,
                         $"Expected response loss after durable FLD commit, received {lostResponse.GetType().Name}.");
@@ -784,8 +784,8 @@ public sealed class StorageIpcHostCompositionTests
                     await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
                     await using var reconnected = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
                         directory, clientId, TimeSpan.FromSeconds(10));
-                    FldDatabaseIpcWriteResult replay = await reconnected.AppendLocalProviderBatchAsync(
-                        operationId, 1, new[] { mutation });
+                    FldDatabaseIpcWriteResult replay = await reconnected.AppendLocalProviderBatchAutoSequenceAsync(
+                        operationId, new[] { mutation });
                     Assert.True(replay.IsDuplicate);
                     Assert.Equal(1, replay.MutationCount);
                     Assert.Equal(1UL, await reconnected.GetOutboxHighWatermarkAsync());
