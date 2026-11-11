@@ -3075,7 +3075,7 @@ public sealed class StorageSyncCoordinator
         };
     }
 
-    private static List<ProviderMutation> CreateProviderMutations(
+    internal static List<ProviderMutation> CreateProviderMutations(
         IReadOnlyList<MetadataOperation> operations)
     {
         var mutations = new List<ProviderMutation>(operations.Count);
@@ -3226,7 +3226,7 @@ public sealed class StorageSyncCoordinator
         }
     }
 
-    private static Guid CreateBatchApplyToken(Batch batch)
+    internal static Guid CreateBatchApplyToken(Batch batch)
     {
         Span<byte> identity = stackalloc byte[34];
         BinaryPrimitives.WriteUInt16LittleEndian(identity, checked((ushort)batch.NamespaceId));

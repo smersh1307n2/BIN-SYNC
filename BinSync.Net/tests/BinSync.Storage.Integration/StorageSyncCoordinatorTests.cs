@@ -56,7 +56,7 @@ public sealed class StorageSyncCoordinatorTests
         var connectTask = SyncSession.ConnectAsync(sender, toSender);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
-        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "async-remote-apply");
+        var coordinator = new AsyncStorageSyncCoordinator(receiver, metadata, "async-remote-apply", 1);
         var asyncProvider = new RecordingAsyncRemoteBatchStore(provider);
         RecordId record = RecordId.From(Guid.Parse("88000000-0000-0000-0000-000000000088").ToByteArray());
         Assert.True(sender.WriteField(1, record, 0x0891, "async-ipc-apply"u8.ToArray(), new Hlc(8900, 0)));
@@ -94,7 +94,7 @@ public sealed class StorageSyncCoordinatorTests
         var connectTask = SyncSession.ConnectAsync(sender, toSender);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
-        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "async-pending-recovery");
+        var coordinator = new AsyncStorageSyncCoordinator(receiver, metadata, "async-pending-recovery", 1);
         var asyncProvider = new RecordingAsyncRemoteBatchStore(provider);
 
         RecordId record = RecordId.From(Guid.Parse("38000000-0000-0000-0000-000000000038").ToByteArray());
