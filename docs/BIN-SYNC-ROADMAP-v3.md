@@ -2786,3 +2786,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 - [x T] BIN-SYNC commit `182e28ec847397817bdcb9bb91078ba418c592ac` extends `StorageIpcHostCompositionTests`: after a second client is rejected at the one-client admission limit, the admitted client sends a second request on the same session and commits a second field to the real FLD database. The test verifies both durable values after server shutdown. This proves overload rejection does not poison the admitted session's request/response stream.
 - [~ CI] The new BIN-SYNC test and latest FLD source/test commits require a fresh exact-head cross-repository run; do not infer success from the earlier run that stopped at Storage 46/47.
+
+
+
+### 1.97 — Fix host integration test namespace collision; Storage IPC gate passes 47/47 — 2026-11-11
+
+- [x CI] Cross-repository run `42933192110` checked out FLD-DB head `7307a9f4c27c0d21d44886aa98c41e14bdfd3efd`. Host adapter build succeeded with **0 warnings / 0 errors**. FLD Storage passed **47/47** (including portable overload rejection and bounded slot reuse), Run **26/26**, WAL **17/17**, Engine **63/63**. The earlier four xUnit1031 warnings in `StorageIpcConnectionTests` are gone.
+- [!] The same run then stopped compiling the new BIN-SYNC host-composition test: in namespace `BinSync.FldHost.Tests`, `Record` resolves to the BIN-SYNC `Record` model, so `Record.ExceptionAsync` is not the xUnit helper. The FLD storage suite and all preceding projects had already passed; `FldBinSyncHost.Tests` did not execute.
+- [x C] BIN-SYNC commit `a4456989b5888c6739584c16a9cb3ddde0491212` replaces the ambiguous helper call with `Assert.ThrowsAnyAsync<Exception>` plus an explicit transport-exception type assertion (`IOException` or `InvalidDataException`). The overload rejection remains required; arbitrary exceptions do not satisfy the assertion.
+- [~ CI] Re-run the exact cross-repository gate against FLD head `7307a9f4c27c0d21d44886aa98c41e14bdfd3efd` and BIN-SYNC head containing `a4456989b5888c6739584c16a9cb3ddde0491212`. Required: the new `FldBinSyncHost.Tests` real-database IPC write/overload/session-continuation test passes.
