@@ -1,21 +1,20 @@
-## 1.72. Exact-head cross-repository FLD integration gate fully green — 2026-11-11
+## 1.72. FLD IPC snapshot handles and exact-head cross-repository gate green — 2026-11-11
 
-- [x CI] BIN-SYNC exact head 2d65688aeee32eb8d2732bf718b6dca182df6949 passed workflow run 42963323793. Every job completed successfully.
-- [x CI] The public FLD checkout and FldBinSyncHost build passed on both Ubuntu and Windows; FldBinSyncHost.Tests passed 14/14 on each OS.
-- [x CI] FLD suites passed on both OSes: Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21 and Engine 71/71. FLD branch fix/crash-consistency-outbox was at d6a6857eaaa28230f46feaca181faf340ad4e8ac; the default-chunk fixture correction is included.
-- [x CI] BIN-SYNC Core passed 678/678 on Linux and Windows; benchmark build, public samples, coverage threshold, fuzz/lab and v3.1 signed control-plane vectors all passed.
-- [x CI] Separate Storage Integration run 42963323775 passed on Ubuntu, Windows and macOS.
-- [x C] The former private-repository gate is closed: no FLD_DB_READ_TOKEN is required, and the cross-repository host tests are now actually executed rather than skipped.
-- [ ] Next: continue the remaining Phase 3–5 proof work. Keep physical receipt, ChangeId and tombstone/ghost GC disabled until each independent safe-horizon, composed-lease, crash/reopen and adversarial proof is complete.
-
-## 1.72. FLD IPC snapshot handles implemented; exact-head CI pending — 2026-11-11
-
-- [x A] Snapshot consistency boundary is the pinned immutable Run generation plus the durable frozen overlay Run and its SourceFeedWatermark. Snapshot pages do not copy the namespace's value payloads per client.
-- [x C] FLD provider snapshots now expose metadata-only pages and bounded value chunks. The page retry cache includes absolute start index, page limit and value/metadata mode.
-- [x C] Database IPC adds OpenSnapshot, ReadSnapshotPage, ReadSnapshotValueChunk and ReleaseSnapshot. Handles bind to ClientId and dispatcher HostGeneration; open is idempotent by (ClientId, OperationId), release is idempotent, limits are four handles/client and 64/host.
-- [x C] IPC-owned generations persist an atomic ipc.handle descriptor before manifest publication. Host restart invalidates IPC handles and prunes only stale IPC-owned generations; non-IPC provider snapshots used by FULL_REPLACE remain pinned.
-- [x T] Added tests for metadata-only paging, chunk boundaries, different-limit retries, snapshot stability across writes/checkpoint/compaction, open retry, client isolation, reconnect, release idempotency, host-restart invalidation and preservation of non-IPC snapshots.
-- [ ] CI Exact-head cross-repository build/test run is pending for FLD branch fix/crash-consistency-outbox and BIN-SYNC branch feature/fld-external-storage.
+- [x A] Snapshot consistency boundary is the pinned immutable Run generation plus the durable frozen overlay Run and its SourceFeedWatermark. Snapshot pages do not copy namespace value payloads per client.
+- [x C] FLD provider snapshots expose metadata-only pages and bounded value chunks. The retry cache is keyed by absolute start index, page limit and metadata/value mode; chunk reads do not materialize whole values.
+- [x C] Database IPC adds OpenSnapshot, ReadSnapshotPage, ReadSnapshotValueChunk and ReleaseSnapshot. Handles bind to ClientId and dispatcher HostGeneration; open retries are idempotent while a handle is active, release is idempotent, and limits are four active handles/client and 64/host.
+- [x C] IPC generations write an atomic ipc.handle descriptor before manifest publication. Host restart invalidates old IPC handles and prunes only stale IPC-owned generations; non-IPC provider snapshots used by BIN-SYNC FULL_REPLACE are preserved.
+- [x T] Added tests for metadata-only pages, chunk boundaries, different-limit retries, snapshot stability across writes/checkpoint/compaction, open retry, cross-client rejection, reconnect, idempotent release, host restart invalidation/pruning, and preservation of non-IPC snapshots.
+- [x CI] BIN-SYNC exact head 9af43e1d1d6cd06c5859d456db682cecd4b197ad passed workflow run 42965583024 on Ubuntu and Windows. BIN-SYNC tests passed 678/678 on each OS; benchmark build, public samples, coverage threshold, fuzz/lab and v3.1 signed vectors passed.
+- [x CI] FLD-DB branch fix/crash-consistency-outbox at e7c23082edfd0d65699e708d272f291e894ebcd9 passed on Ubuntu and Windows: Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21, Engine 73/73, and FldBinSyncHost.Tests 15/15 per OS. Both host adapter builds completed with 0 warnings and 0 errors.
+- [x CI] Separate Storage Integration run 42965583027 passed on Ubuntu, Windows and macOS.
+- [x C] Backup refs created at exact branch heads:
+  - BIN-SYNC backup/2026-11-11/main -> f0a18b8caa45efb0df5faa4a3e6e9653d160aa84
+  - BIN-SYNC backup/2026-11-11/feature-fld-external-storage -> 9af43e1d1d6cd06c5859d456db682cecd4b197ad
+  - FLD-DB backup/2026-11-11/main -> 4a3b589175630cb42fde8e12d217e04de896b6d2
+  - FLD-DB backup/2026-11-11/fix-crash-consistency-outbox -> e7c23082edfd0d65699e708d272f291e894ebcd9
+- [!] Two non-fatal xUnit1031 warnings remain in FLD tests/SyncApplyTests.cs lines 467 and 475. The abandoned-thread named-Mutex scenario is exercised on Windows; a true child-process-death harness for Unix remains follow-up work.
+- [ ] Next: continue the remaining Phase 3–5 proof work. Keep physical receipt, ChangeId and tombstone/ghost GC disabled until safe-horizon, composed-lease, crash/reopen and adversarial proofs are independently complete.
 
 ## 1.71. FLD public host build passes; default-chunk test corrected — 2026-11-11
 
