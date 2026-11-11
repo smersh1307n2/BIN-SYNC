@@ -196,6 +196,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 protocolStateDelta: Array.Empty<byte>(),
                 new[] { mutation });
 
+            // Release the independent read provider while the Host is still alive;
+            // its Dispose path releases an Outbox lease and must not race the deliberate
+            // process death below. A fresh reader is connected after Host recovery.
+            await reader.DisposeAsync();
+            reader = null;
+
             // The real Host process exits immediately after ApplyRemoteBatch has
             // committed its WAL/receipt, but before StorageIpcServer writes the IPC
             // response frame. The caller must observe response loss, not a receipt.
@@ -209,8 +215,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             await applyStore.DisposeAsync();
             applyStore = null;
-            await reader.DisposeAsync();
-            reader = null;
             await StopDatabaseHostAsync(host);
             host = null;
             await WaitForDatabaseWriterReleaseAsync(
