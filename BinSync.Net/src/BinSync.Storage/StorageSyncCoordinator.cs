@@ -2679,8 +2679,9 @@ public sealed class StorageSyncCoordinator
 
             ProviderApplyReceipt receipt = await asyncProvider.ApplyRemoteBatchAsync(
                 context, ct).ConfigureAwait(false);
-            if (receipt.ApplyToken != plan.ApplyToken)
-                throw new InvalidDataException("Async provider returned a receipt for a different ApplyToken.");
+            if (receipt.ApplyToken != plan.ApplyToken ||
+                !receipt.BatchFingerprint.AsSpan().SequenceEqual(plan.Batch.BatchDigest))
+                throw new InvalidDataException("Async provider receipt does not match the pending ApplyToken and batch digest.");
 
             if (plan.FinalizeMetadata)
             {
@@ -2938,8 +2939,10 @@ public sealed class StorageSyncCoordinator
                 // durable and the same ApplyToken/context is retried on the next startup.
                 ProviderApplyReceipt providerReceipt = await asyncProvider.ApplyRemoteBatchAsync(
                     context, ct).ConfigureAwait(false);
-                if (providerReceipt.ApplyToken != intent.ApplyToken)
-                    throw new InvalidDataException("Async provider returned a receipt for a different recovered ApplyToken.");
+                if (providerReceipt.ApplyToken != intent.ApplyToken ||
+                    !providerReceipt.BatchFingerprint.AsSpan().SequenceEqual(pending.BatchDigest))
+                    throw new InvalidDataException(
+                        "Async provider recovery receipt does not match the pending ApplyToken and batch digest.");
 
                 lock (_gate)
                 {
