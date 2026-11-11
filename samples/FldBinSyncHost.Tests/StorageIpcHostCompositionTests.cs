@@ -424,9 +424,10 @@ public sealed class StorageIpcHostCompositionTests
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-fld-ipc-dispatch-" + Guid.NewGuid().ToString("N"));
-        string pipeName = "fld1-ipc-" + Guid.NewGuid().ToString("N");
+        string pipeName = StorageIpcEndpoint.ComputePipeName(directory, partition);
         const ulong partition = 0x3107;
         Guid clientId = Guid.NewGuid();
+        Guid ownerId = Guid.NewGuid();
         Guid putOperationId = Guid.NewGuid();
         Guid deleteOperationId = Guid.NewGuid();
         byte[] key = "host-dispatch-key"u8.ToArray();
@@ -454,15 +455,19 @@ public sealed class StorageIpcHostCompositionTests
 
             try
             {
-                await using (var client = await StorageIpcClientConnection.ConnectAsync(
-                    pipeName, clientId, TimeSpan.FromSeconds(10)))
+                await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                StorageIpcEndpoint.Publish(directory, StorageIpcEndpoint.Create(
+                    directory, partition, ownerId, Environment.ProcessId));
+
+                await using (var client = await StorageIpcClientConnection.ConnectToDatabaseAsync(
+                    directory, partition, clientId, TimeSpan.FromSeconds(10)))
                 {
                     ReadOnlyMemory<byte> putResult = await client.RequestAsync(putEnvelope);
                     Assert.Equal(new byte[] { 1 }, putResult.ToArray());
                 }
 
-                await using (var reconnected = await StorageIpcClientConnection.ConnectAsync(
-                    pipeName, clientId, TimeSpan.FromSeconds(10)))
+                await using (var reconnected = await StorageIpcClientConnection.ConnectToDatabaseAsync(
+                    directory, partition, clientId, TimeSpan.FromSeconds(10)))
                 {
                     ReadOnlyMemory<byte> replayedPut = await reconnected.RequestAsync(putEnvelope);
                     Assert.Equal(new byte[] { 1 }, replayedPut.ToArray());
@@ -480,6 +485,7 @@ public sealed class StorageIpcHostCompositionTests
             {
                 serverCancellation.Cancel();
                 await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                StorageIpcEndpoint.DeleteIfOwned(directory, ownerId);
             }
 
             Assert.Equal(2UL, storage.LastCommitSeq);
