@@ -2710,3 +2710,10 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added `FldDatabaseProcessOwnershipTests` to FLD-DB commit `fc205776c19887fa159e034cb1b78f2dbdb9a84c`. A child process opens the real FLD database, commits a value and holds the owner fence; a second process must receive `IOException` when opening the same canonical path. The parent then kills the owner process, reopens the database and verifies the committed value survived abandoned-mutex recovery.
 - [~ T] This test proves the direct-mode exclusion/recovery boundary only. It does **not** implement or claim multiple applications sharing the file. Run it through the cross-repository Engine test gate before beginning Shared Engine implementation.
 - [ ] Shared Engine phase must implement a single host owner, bootstrap/discovery, versioned local IPC framing, bounded request queues, session-generation fencing, durable request identity/result recovery, read-only snapshot lifetime/EBR and two independent client processes. Storage-only clients must not load Database; FLD clients use the Database facade; no third runtime DLL.
+
+
+### 1.88 — FLD process-ownership probe aligned to the public Put API (2026-11-11)
+
+- [!] The new cross-process ownership probe was discovered by the expanded gate, but the first compile stopped at its child fixture: it used timestamp parameters from `PutWithIdentity` on the simpler `Put` overload. The Run suite remained **26/26** and WAL **17/17**; Engine tests did not execute.
+- [x C] FLD-DB commit `f95eee5270530f6dcbd1ff0a7b968bdac0667903` changes the fixture to the current public `Put(recordId, fieldId, value, keyEpoch)` API. The child still commits a stable value before signalling that it owns the database.
+- [~ T] Re-run the direct-mode cross-process ownership test through the Engine gate. Expected behavior: the second opener fails with `IOException`; after the owner process is killed, a new opener recovers and reads the committed value.
