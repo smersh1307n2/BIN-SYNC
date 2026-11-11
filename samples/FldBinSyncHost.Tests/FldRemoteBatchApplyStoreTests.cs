@@ -70,6 +70,10 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             Assert.Equal(batch.BatchDigest, first.BatchFingerprint);
             Assert.True(database.TryGetBytes(recordBytes, 0x0102, out byte[]? stored));
             Assert.Equal(value, stored);
+            Assert.True(database.TryResolve(recordBytes, 0x0102, out FieldResolver.Resolved resolved));
+            Assert.Equal(changeBytes, resolved.ChangeId);
+            Assert.Equal(4U, resolved.OriginAuthorEpoch);
+            Assert.Equal(9UL, resolved.OriginSequence);
             Assert.Equal(0UL, database.GetOutboxHighWatermark());
             Assert.Empty(database.ReadRelayBatches(issuer, afterJournalSeq: 0, limit: 10));
             firstRelayWatermark = database.GetRelayJournalHighWatermark();
@@ -86,6 +90,10 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             var adapter = new FldRemoteBatchApplyStore(reopened);
             Assert.True(reopened.TryGetBytes(recordBytes, 0x0102, out byte[]? recovered));
             Assert.Equal(value, recovered);
+            Assert.True(reopened.TryResolve(recordBytes, 0x0102, out FieldResolver.Resolved recoveredMetadata));
+            Assert.Equal(changeBytes, recoveredMetadata.ChangeId);
+            Assert.Equal(4U, recoveredMetadata.OriginAuthorEpoch);
+            Assert.Equal(9UL, recoveredMetadata.OriginSequence);
             Assert.Equal(0UL, reopened.GetOutboxHighWatermark());
             Assert.Empty(reopened.ReadRelayBatches(issuer, afterJournalSeq: 0, limit: 10));
 
