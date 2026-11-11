@@ -95,7 +95,7 @@ public sealed class StorageIpcHostCompositionTests
     }
 
     [Fact]
-    public async Task Stale_ipc_generation_is_rejected_before_any_fld_write()
+    public async Task Previous_ipc_connection_generation_is_rejected_before_any_fld_write()
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-fld-ipc-fence-" + Guid.NewGuid().ToString("N"));
@@ -104,6 +104,7 @@ public sealed class StorageIpcHostCompositionTests
         byte[] localAuthor = Id(0x31);
         byte[] recordId = Id(0x32);
         const ushort fieldId = 0x0321;
+        Guid stableClientId = Guid.NewGuid();
 
         try
         {
@@ -120,32 +121,44 @@ public sealed class StorageIpcHostCompositionTests
                     return ValueTask.FromResult<ReadOnlyMemory<byte>>(recordId);
                 });
             Task serverTask = server.RunAsync(serverCancellation.Token);
+            ulong previousGeneration;
 
             try
             {
-                await using var pipe = new NamedPipeClientStream(
+                await using (var previousPipe = new NamedPipeClientStream(
+                    ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+                {
+                    await previousPipe.ConnectAsync(10_000);
+                    await StorageIpcProtocol.WriteAsync(previousPipe,
+                        new StorageIpcFrame(
+                            StorageIpcFrameType.Hello, 0, 0, stableClientId.ToByteArray()));
+                    StorageIpcFrame? previousAck = await StorageIpcProtocol.ReadAsync(previousPipe);
+                    Assert.NotNull(previousAck);
+                    Assert.Equal(StorageIpcFrameType.HelloAck, previousAck.Value.Type);
+                    previousGeneration = previousAck.Value.SessionGeneration;
+                }
+
+                await using var currentPipe = new NamedPipeClientStream(
                     ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-                await pipe.ConnectAsync(10_000);
-                await StorageIpcProtocol.WriteAsync(pipe,
+                await currentPipe.ConnectAsync(10_000);
+                await StorageIpcProtocol.WriteAsync(currentPipe,
                     new StorageIpcFrame(
-                        StorageIpcFrameType.Hello, 0, 0, Guid.NewGuid().ToByteArray()));
+                        StorageIpcFrameType.Hello, 0, 0, stableClientId.ToByteArray()));
+                StorageIpcFrame? currentAck = await StorageIpcProtocol.ReadAsync(currentPipe);
+                Assert.NotNull(currentAck);
+                Assert.Equal(StorageIpcFrameType.HelloAck, currentAck.Value.Type);
+                Assert.NotEqual(previousGeneration, currentAck.Value.SessionGeneration);
 
-                StorageIpcFrame? helloAck = await StorageIpcProtocol.ReadAsync(pipe);
-                Assert.NotNull(helloAck);
-                Assert.Equal(StorageIpcFrameType.HelloAck, helloAck.Value.Type);
-                ulong liveGeneration = helloAck.Value.SessionGeneration;
-                ulong staleGeneration = liveGeneration == 1 ? 2UL : liveGeneration - 1;
-
-                await StorageIpcProtocol.WriteAsync(pipe,
+                await StorageIpcProtocol.WriteAsync(currentPipe,
                     new StorageIpcFrame(
-                        StorageIpcFrameType.Request, 1, staleGeneration, "must-not-apply"u8.ToArray()));
+                        StorageIpcFrameType.Request, 1, previousGeneration, "must-not-apply"u8.ToArray()));
 
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 StorageIpcFrame? response = null;
                 Exception? transportFailure = null;
                 try
                 {
-                    response = await StorageIpcProtocol.ReadAsync(pipe, timeout.Token);
+                    response = await StorageIpcProtocol.ReadAsync(currentPipe, timeout.Token);
                 }
                 catch (Exception exception) when (exception is IOException or ObjectDisposedException)
                 {
@@ -153,7 +166,7 @@ public sealed class StorageIpcHostCompositionTests
                 }
 
                 Assert.True(response is null || transportFailure is not null,
-                    "The server must close a stale-generation session without responding.");
+                    "A previous connection generation must be rejected after reconnect.");
                 Assert.Equal(0, Volatile.Read(ref handlerCalls));
                 Assert.False(database.TryGetBytes(recordId, fieldId, out _));
             }
