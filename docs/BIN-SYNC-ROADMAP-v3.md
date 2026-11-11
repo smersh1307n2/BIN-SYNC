@@ -1,3 +1,13 @@
+## 1.73. Phase 4.1 retirement crash proof and Phase 4.2 ChangeId restart proof green — 2026-11-11
+
+- [x T] Peer retirement now has an injected crash test at StorageFaultPoint.AfterWalFlushBeforePublish. Reopen replays the complete one-batch retirement: replacement epoch remains active, old epoch rows are removed, the retired-through fence is durable, and repeated retirement creates no second commit.
+- [x T] Global ChangeId equivocation now has a durable cross-peer/restart test. A finalized operation is reopened from ChangeLedger; a different peer reuses the same ChangeId with a different fingerprint, payload and next origin sequence; BeginPendingApply rejects it without adding a pending intent or changing relay state.
+- [x CI] Exact BIN-SYNC head 7dae12a1b60fe481f52febfe4c5692400ca029d1 passed dotnet workflow run 42966709635 on Ubuntu and Windows. BIN-SYNC tests passed 678/678 per OS; benchmark build, public samples, coverage threshold, fuzz/lab and v3.1 signed vectors passed.
+- [x CI] Exact Storage Integration run 42966709649 passed 226/226 on Ubuntu, Windows and macOS, including both new crash/reopen proofs.
+- [x CI] Cross-repository FLD host adapter build and tests passed on Ubuntu and Windows: Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21, Engine 73/73, FldBinSyncHost.Tests 15/15 per OS.
+- [!] Two non-fatal xUnit1031 warnings remain in FLD tests/SyncApplyTests.cs lines 467 and 475. The abandoned-thread named-Mutex scenario is exercised on Windows; a true child-process-death harness for Unix remains follow-up work.
+- [ ] Next T-pass: independently test field tombstone, record tombstone and ghost retention across offline peers, alternate routes and crash cuts. Keep physical receipt, ChangeId and tombstone/ghost GC disabled until all safe-horizon and reference-scan proofs pass.
+
 ## 1.72. FLD IPC snapshot handles and exact-head cross-repository gate green — 2026-11-11
 
 - [x A] Snapshot consistency boundary is the pinned immutable Run generation plus the durable frozen overlay Run and its SourceFeedWatermark. Snapshot pages do not copy namespace value payloads per client.
@@ -1130,10 +1140,13 @@ The following is a test plan only; no tests are run in this C pass.
 
 ### BIN-SYNC: feature/fld-external-storage
 
-- Current branch HEAD: `d2a1440ca07ea40beb93dd1648a302ecadbe32f8`. Exact code/test checkpoint `1a7457895e3e05306fe695e043e371c9ae403d95` passed run `42927171426`: Linux/Windows Core 678/678, Fuzz/Lab 31/31, signed control-plane vectors, FLD Run/WAL/Engine 26/17/61 and FLD host integration 8/8. The documentation-only HEAD run is in progress.
-- FLD-DB `fix/crash-consistency-outbox` current HEAD: `fc205776c19887fa159e034cb1b78f2dbdb9a84c`; last source/test checkpoint `0f8f9740e51d58088d7b8590435cadd1c8b0e6b8` passed the cross-repository Run/WAL/Engine/host gate. The new direct-mode cross-process ownership test at `fc20577` awaits execution.
-- Runtime architecture is physically two DLLs: `Fld1.Storage.dll` + `Fld1.Database.dll`, with Database → Storage only. Direct embedded mode has one owning process and a cross-process writer fence. The Shared Engine Host/IPC/SHM multi-application mode is still a release gate, not an implemented feature.
-- Existing backup branches remain available; do not create extra working branches during this phase.
+- Current HEAD: `7dae12a1b60fe481f52febfe4c5692400ca029d1`; exact-head dotnet workflow `42966709635` passed on Ubuntu and Windows. BIN-SYNC tests: 678/678 per OS; benchmark build, public samples, coverage threshold, fuzz/lab and v3.1 signed vectors passed.
+- FLD-DB integration branch `fix/crash-consistency-outbox`: current HEAD `1b8312a4f95a128f9af2e66526c60e27fe01192e`; code checkpoint `e7c23082edfd0d65699e708d272f291e894ebcd9` passed. The later FLD commit contains ADR wording only.
+- Storage Integration run `42966709649`: 226/226 passed on Ubuntu, Windows and macOS. Cross-repository FLD host adapter build and tests passed on Ubuntu and Windows.
+- Database IPC snapshot streaming is implemented and tested; this is not the full Shared Engine Host/IPC/SHM multi-application mode, which remains a release gate. Multi-process concurrent client-operation and remaining WAL/Node/Metadata crash-cut proofs remain open.
+- Physical receipt, ChangeId, tombstone and ghost GC remain disabled. No GC authority is inferred from the applied-origin frontier alone.
+- Backup refs created: BIN-SYNC `backup/2026-11-11/main`, `backup/2026-11-11/feature-fld-external-storage`; FLD-DB `backup/2026-11-11/main`, `backup/2026-11-11/fix-crash-consistency-outbox`. Do not create additional working branches.
+- Next implementation focus: Phase 4.3 tombstone/ghost retention proofs, then the remaining Phase 3 multi-process and Phase 5 public API/sample conformance gates.
 
 ## 3. Execution checklist
 
@@ -1192,7 +1205,7 @@ The following is a test plan only; no tests are run in this C pass.
 - [x] Conservative retired-transport-epoch receipt GC and PendingApply retirement guard exist in earlier Storage-backed implementation.
 - [x C] Retirement now blocks old PendingBatch reclamation unless the exact reservation is ACKed or the replacement baseline for the same author epoch covers `old StreamOffset + PendingBatch.CursorEnd`. Before the retired-through fence, a stale epoch may only resume/mark-pushed/ACK that exact reservation; it cannot reserve new data. Epoch-zero and cross-author-epoch baselines never discharge the reservation.
 - [x] Revalidated canonical v3 receipt identity. Old receipt key/value formats are rejected; v3 rows with unknown transport epoch are retained and never assigned guessed provenance.
-- [x T] Added tests for short-baseline blocking, exact stale-epoch retry/ACK, replacement-baseline supersession and author-epoch mismatch. Exact-head CI at `2f75b26` passed 168/168 on three OS. Atomic retirement transaction remains one commit; dedicated injected-crash-at-commit-boundary coverage remains a Phase T follow-up.
+- [x T] Tests cover short-baseline blocking, exact stale-epoch retry/ACK, replacement-baseline supersession and author-epoch mismatch. Added an injected crash after WAL flush and before in-memory publish; reopen proves the complete one-commit retirement transaction. Exact-head Storage Integration run 42966709649 passed 226/226 on Ubuntu, Windows and macOS.
 
 #### 4.2 ChangeId ledger
 
@@ -1204,7 +1217,7 @@ Mandatory extension: [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-
 - [x D] Specified durable member retirement fence and mandatory FULL_REPLACE before stale-peer rejoin.
 - [x D] Specified reference scan across PendingApply, operation payload, relay/outbound reservation, provider intent, snapshot pin, feed lease and apply token.
 - [x D] Specified crash-consistent deletion plus monotonic forgotten checkpoint and replay rejection below the frontier.
-- [~] v3.1 codecs, capability negotiation, signed roster/frontier/checkpoint persistence and all-member install ACK are implemented; exact-head adversarial tests remain in Phase T. ChangeId GC remains physically disabled.
+- [~ T] v3.1 codecs, capability negotiation, signed roster/frontier/checkpoint persistence and all-member install ACK are implemented. A global ChangeId equivocation test now proves cross-peer rejection after durable finalize/reopen (run 42966709649, 226/226 on three OS); remaining roster/frontier/checkpoint adversarial tests are still open. ChangeId GC remains physically disabled.
 
 #### 4.3 Tombstone / ghost
 
