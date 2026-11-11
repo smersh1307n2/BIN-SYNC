@@ -22,6 +22,7 @@ public sealed class StorageIpcHostCompositionTests
         const ushort keyEpoch = 4;
         byte[] value = "ipc-to-fld-durable-write"u8.ToArray();
         var requestIds = new ConcurrentQueue<ulong>();
+        var operationIds = new ConcurrentQueue<Guid>();
 
         try
         {
@@ -36,14 +37,19 @@ public sealed class StorageIpcHostCompositionTests
                         context.RequestId == 0)
                         throw new InvalidDataException("IPC request context is not authenticated.");
                     requestIds.Enqueue(context.RequestId);
+                    StorageIpcOperationEnvelope operation = StorageIpcOperationProtocol.Decode(request);
+                    if (operation.OperationCode != 1)
+                        throw new InvalidDataException("Unknown FLD host operation code.");
+                    operationIds.Enqueue(operation.OperationId);
+                    ReadOnlyMemory<byte> operationPayload = operation.Payload;
 
-                    if (request.Length < 20)
+                    if (operationPayload.Length < 20)
                         throw new InvalidDataException("FLD write request is truncated.");
 
-                    byte[] requestedRecord = request.Slice(0, 16).ToArray();
-                    ushort requestedField = BinaryPrimitives.ReadUInt16LittleEndian(request.Span[16..]);
-                    ushort requestedKeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(request.Span[18..]);
-                    byte[] requestedValue = request[20..].ToArray();
+                    byte[] requestedRecord = operationPayload.Slice(0, 16).ToArray();
+                    ushort requestedField = BinaryPrimitives.ReadUInt16LittleEndian(operationPayload.Span[16..]);
+                    ushort requestedKeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(operationPayload.Span[18..]);
+                    byte[] requestedValue = operationPayload[20..].ToArray();
 
                     database.Put(requestedRecord, requestedField, requestedValue, requestedKeyEpoch);
                     _ = database.Commit();
@@ -68,7 +74,10 @@ public sealed class StorageIpcHostCompositionTests
                 BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(18), keyEpoch);
                 value.CopyTo(request, 20);
 
-                ReadOnlyMemory<byte> response = await client.RequestAsync(request);
+                byte[] firstOperation = StorageIpcOperationProtocol.Encode(
+                    new StorageIpcOperationEnvelope(
+                        Guid.Parse("31000000-0000-0000-0000-000000000001"), 1, request));
+                ReadOnlyMemory<byte> response = await client.RequestAsync(firstOperation);
                 Assert.Equal(recordId, response.ToArray());
 
                 byte[] secondValue = "same-session-after-overload"u8.ToArray();
@@ -77,8 +86,11 @@ public sealed class StorageIpcHostCompositionTests
                 BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(16), checked((ushort)(fieldId + 1)));
                 BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(18), keyEpoch);
                 secondValue.CopyTo(secondRequest, 20);
+                byte[] secondOperation = StorageIpcOperationProtocol.Encode(
+                    new StorageIpcOperationEnvelope(
+                        Guid.Parse("31000000-0000-0000-0000-000000000002"), 1, secondRequest));
 
-                ReadOnlyMemory<byte> secondResponse = await client.RequestAsync(secondRequest);
+                ReadOnlyMemory<byte> secondResponse = await client.RequestAsync(secondOperation);
                 Assert.Equal(recordId, secondResponse.ToArray());
             }
             finally
@@ -92,6 +104,11 @@ public sealed class StorageIpcHostCompositionTests
             Assert.True(database.TryGetBytes(recordId, checked((ushort)(fieldId + 1)), out byte[]? storedAfterOverload));
             Assert.Equal("same-session-after-overload"u8.ToArray(), storedAfterOverload);
             Assert.Equal(new ulong[] { 1, 2 }, requestIds.ToArray());
+            Assert.Equal(new[]
+            {
+                Guid.Parse("31000000-0000-0000-0000-000000000001"),
+                Guid.Parse("31000000-0000-0000-0000-000000000002")
+            }, operationIds.ToArray());
         }
         finally
         {
