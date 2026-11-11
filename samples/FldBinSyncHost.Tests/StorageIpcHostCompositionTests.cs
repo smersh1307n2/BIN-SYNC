@@ -458,6 +458,9 @@ public sealed class StorageIpcHostCompositionTests
                 await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
                 StorageIpcEndpoint.Publish(directory, StorageIpcEndpoint.Create(
                     directory, partition, ownerId, Environment.ProcessId));
+                StorageIpcEndpointInfo publishedEndpoint = StorageIpcEndpoint.Read(directory, partition);
+                Assert.Equal(ownerId, publishedEndpoint.OwnerId);
+                Assert.Equal(pipeName, publishedEndpoint.PipeName);
 
                 await using (var client = await StorageIpcClientConnection.ConnectToDatabaseAsync(
                     directory, partition, clientId, TimeSpan.FromSeconds(10)))
