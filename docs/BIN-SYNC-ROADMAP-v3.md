@@ -2717,3 +2717,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [!] The new cross-process ownership probe was discovered by the expanded gate, but the first compile stopped at its child fixture: it used timestamp parameters from `PutWithIdentity` on the simpler `Put` overload. The Run suite remained **26/26** and WAL **17/17**; Engine tests did not execute.
 - [x C] FLD-DB commit `f95eee5270530f6dcbd1ff0a7b968bdac0667903` changes the fixture to the current public `Put(recordId, fieldId, value, keyEpoch)` API. The child still commits a stable value before signalling that it owns the database.
 - [~ T] Re-run the direct-mode cross-process ownership test through the Engine gate. Expected behavior: the second opener fails with `IOException`; after the owner process is killed, a new opener recovers and reads the committed value.
+
+
+### 1.89 — Direct-mode cross-process ownership and abandoned-owner recovery green (2026-11-11)
+
+- [x T] FLD-DB `FldDatabaseProcessOwnershipTests.Second_process_cannot_open_database_owned_by_another_process` passed through the private cross-repository Engine gate. A child process opened the real database, committed a value and held the writer fence; a second process was rejected with `IOException`; after killing the owner process, the parent reopened the database and recovered the committed value.
+- [x CI] The job checked out FLD-DB exact head `8d170c1b15bee4de8d8db1439e80d5a6f1982f07` and passed: FLD Run **26/26**, WAL **17/17**, Engine **63/63** (including the cross-process owner probe), host integration **8/8**, build **0 warnings / 0 errors**. BIN-SYNC Linux/Windows **678/678**, Fuzz/Lab **31/31**, signed control-plane vectors passed. Every job in run `42927917206` succeeded.
+- [x] Direct embedded mode is now explicitly tested as single-owner across processes. The writer fence remains fail-closed; abandoned owner recovery does not compromise WAL/manifest state.
+- [~ T] Shared Engine multi-client access is still unimplemented. The next phase must introduce a single Engine Host process and IPC/SHM clients rather than weakening the direct-mode lock. Keep exactly two runtime DLLs; the host is an executable, not a third library.
