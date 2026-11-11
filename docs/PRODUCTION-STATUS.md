@@ -1,5 +1,12 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+## T-pass integration follow-up — 2026-11-11
+
+- Run 42962678340: BIN-SYNC Linux/Windows build+tests, benchmark build, fuzz/lab, and v3.1 vector conformance passed. Public FLD checkout and FldBinSyncHost builds passed on both Ubuntu and Windows.
+- FLD Storage/Manifest/Run/WAL suites passed 66/66, 11/11, 26/26, and 21/21. Engine had 70/71: the failing assertion requested a 1 MiB chunk explicitly but expected the 4,194,210-byte maximum. FLD commit d6a6857e removes the explicit chunkSize so the test verifies the default maximum; no IPC source change was required.
+- The BIN-SYNC public integration workflow now includes Fld1.Core.Tests (commit 75746428). A fresh exact-head run is pending before marking FLD cross-repository integration green.
+- FldBinSyncHost.Tests was skipped in run 42962678340 because the Engine test step failed first; it must pass in the next run.
+
 ## T-pass continuation update — 2026-11-11
 
 - BIN-SYNC branch head: 827d366bb23bd80c53dfdb434b0f77c2cf60e4e6. Local Windows Release BinSync.Tests passed 678/678 on this head.
