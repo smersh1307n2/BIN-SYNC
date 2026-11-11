@@ -274,6 +274,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         FldDatabaseIpcAsyncDataProvider? providerB = null;
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteA = null;
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteB = null;
+        SyncSession? acceptor = null;
+        SyncSession? initiator = null;
         try
         {
             hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes);
@@ -349,8 +351,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var (toA, toB) = PipeTransport.CreatePair();
             Task<SyncSession> acceptTask = SyncSession.AcceptAsync(nodeB, toB);
             Task<SyncSession> connectTask = SyncSession.ConnectAsync(nodeA, toA);
-            await using SyncSession acceptor = await acceptTask;
-            await using SyncSession initiator = await connectTask;
+            acceptor = await acceptTask;
+            initiator = await connectTask;
 
             // The test begins after each host has completed its initial snapshot.
             // Persist the empty per-author baseline so incremental DELTA_BATCH
@@ -398,9 +400,117 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId))).State.AckedCursor);
             Assert.Empty((await providerA.ReadLocalChangesAsync(0, 16)).Changes);
             Assert.Empty((await providerB.ReadLocalChangesAsync(0, 16)).Changes);
+
+            // Tear down both complete host compositions, not only the FLD Database
+            // Host processes. The next phase must reconstruct Node, WAL and Metadata
+            // exclusively from their durable checkpoints before accepting sessions.
+            await initiator.DisposeAsync();
+            initiator = null;
+            await acceptor.DisposeAsync();
+            acceptor = null;
+            await providerA.DisposeAsync();
+            providerA = null;
+            await providerB.DisposeAsync();
+            providerB = null;
+            await remoteA.DisposeAsync();
+            remoteA = null;
+            await remoteB.DisposeAsync();
+            remoteB = null;
+            nodeA.Dispose();
+            nodeA = null;
+            nodeB.Dispose();
+            nodeB = null;
+            walA.Dispose();
+            walA = null;
+            walB.Dispose();
+            walB = null;
+            metadataA.Dispose();
+            metadataA = null;
+            metadataB.Dispose();
+            metadataB = null;
+            nodeStorageA.Dispose();
+            nodeStorageA = null;
+            nodeStorageB.Dispose();
+            nodeStorageB = null;
+            await StopDatabaseHostAsync(hostA);
+            hostA = null;
+            await StopDatabaseHostAsync(hostB);
+            hostB = null;
+            await WaitForDatabaseWriterReleaseAsync(
+                hostRootA, namespaceId, authorABytes, TimeSpan.FromSeconds(15));
+            await WaitForDatabaseWriterReleaseAsync(
+                hostRootB, namespaceId, authorBBytes, TimeSpan.FromSeconds(15));
+
+            hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes);
+            hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes);
+            _ = await WaitForHostEndpointAsync(hostRootA, hostA, TimeSpan.FromSeconds(45));
+            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+
+            nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
+            nodeStorageB = StorageDatabase.Open(nodeRootB, nodeStorageNamespace);
+            metadataA = new StorageMetadataStore(nodeStorageA);
+            metadataB = new StorageMetadataStore(nodeStorageB);
+            walA = Wal.Open(Path.Combine(nodeRootA, "node.wal"));
+            walB = Wal.Open(Path.Combine(nodeRootB, "node.wal"));
+            nodeA = StorageNodePersistence.Load(nodeStorageA, authorA);
+            nodeB = StorageNodePersistence.Load(nodeStorageB, authorB);
+            nodeA.AttachWal(walA);
+            nodeB.AttachWal(walB);
+
+            providerA = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootA, clientA, TimeSpan.FromSeconds(15), authorA, () => 17);
+            providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
+            remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+
+            var recoveredCoordinatorA = new AsyncStorageSyncCoordinator(
+                nodeA, metadataA, "two-host-a", checked((int)namespaceId));
+            var recoveredCoordinatorB = new AsyncStorageSyncCoordinator(
+                nodeB, metadataB, "two-host-b", checked((int)namespaceId));
+            var recoveredAdapterA = new FldBinSyncAsyncHostAdapter(
+                recoveredCoordinatorA, providerA, remoteA,
+                current => StorageNodePersistence.Save(nodeStorageA, current));
+            var recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
+                recoveredCoordinatorB, providerB, remoteB,
+                current => StorageNodePersistence.Save(nodeStorageB, current));
+
+            AsyncStorageStartupRecoveryResult recoveredA =
+                await recoveredAdapterA.RecoverBeforeAcceptingSessionsAsync();
+            AsyncStorageStartupRecoveryResult recoveredB =
+                await recoveredAdapterB.RecoverBeforeAcceptingSessionsAsync();
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0), recoveredA);
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0), recoveredB);
+
+            ProviderMutation? recoveredAtA = await providerA.ReadCurrentAsync(recordB, 0x0752);
+            ProviderMutation? recoveredAtB = await providerB.ReadCurrentAsync(recordA, 0x0751);
+            Assert.NotNull(recoveredAtA);
+            Assert.NotNull(recoveredAtB);
+            Assert.Equal(valueB, recoveredAtA!.Value);
+            Assert.Equal(valueA, recoveredAtB!.Value);
+            Assert.Equal(BatchId.From(Id(0x76)), recoveredAtA.ChangeId);
+            Assert.Equal(BatchId.From(Id(0x75)), recoveredAtB.ChangeId);
+            Assert.True(nodeA.TryGetField(checked((int)namespaceId), recordB, 0x0752, out var recoveredNodeValueAtA));
+            Assert.True(nodeB.TryGetField(checked((int)namespaceId), recordA, 0x0751, out var recoveredNodeValueAtB));
+            Assert.Equal(valueB, recoveredNodeValueAtA!.Value);
+            Assert.Equal(valueA, recoveredNodeValueAtB!.Value);
+            Assert.Equal(1UL, metadataA.GetReceiveCursor(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, 17, checked((int)namespaceId))).State.AckedCursor);
+            Assert.Equal(1UL, Assert.Single(metadataB.ReadPeerStreamStates(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId))).State.AckedCursor);
+            Assert.Empty((await providerA.ReadLocalChangesAsync(0, 16)).Changes);
+            Assert.Empty((await providerB.ReadLocalChangesAsync(0, 16)).Changes);
         }
         finally
         {
+            if (initiator is not null) await initiator.DisposeAsync();
+            if (acceptor is not null) await acceptor.DisposeAsync();
             if (providerA is not null) await providerA.DisposeAsync();
             if (providerB is not null) await providerB.DisposeAsync();
             if (remoteA is not null) await remoteA.DisposeAsync();
