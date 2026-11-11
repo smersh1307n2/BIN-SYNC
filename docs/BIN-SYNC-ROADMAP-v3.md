@@ -2863,3 +2863,19 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] FLD-DB commits `18296f5e78c4e37470d82e3c6909b37ab5f5dace` and `dfa0741fb105aa2fc5b4bb14fc9d1d7bba49612d` add an internal StorageWriteBatch ownership check and make `StorageIpcOperationLedger.TryStageResult` reject any batch not created by the exact StorageDatabase instance that owns the ledger. This prevents a host from accidentally persisting the result row in one database while committing the data mutation in another.
 - [x T] FLD-DB commit `2e378a21ed3ccb61fe77e0f9a5c15beb849bac8c` tests foreign-database batch rejection. BIN-SYNC commit `feb660bebd68dc14f4434abcddc88ed3e08d747a` adds the same ownership assertion to the cross-repository host integration test.
 - [~ CI] Re-run the full cross-repository gate against FLD head `2e378a21ed3ccb61fe77e0f9a5c15beb849bac8c` and BIN-SYNC head containing `feb660bebd68dc14f4434abcddc88ed3e08d747a`. Required: atomic ledger/recovery, wrong-store rejection, and real host tests all pass.
+
+
+
+### 1.105 — Durable Storage IPC operation ledger and same-database guard pass CI
+
+- [x CI] BIN-SYNC run `42936501802` checked the operation-ledger implementation and cross-repository host adapter: FLD Storage **57/57**, Run **26/26**, WAL **17/17**, Engine **63/63**, `FldBinSyncHost.Tests` **11/11**; host build **0 warnings / 0 errors**. BIN-SYNC Linux/Windows tests, Fuzz/Lab and signed vectors passed. Storage Integration run `42936501809` passed on Ubuntu, macOS and Windows.
+- [x T] The gate covers stable envelope encoding, durable result replay after reopen, conflicting OperationId rejection, WAL-flush-before-publish recovery, and rejection of a ledger batch from a different StorageDatabase. The cross-repository sample exercises the same public ledger API.
+- [!] Two existing xUnit1031 blocking-task warnings remain in `Fld1.Engine.Tests/SyncApplyTests.cs`; no IPC or ledger test warnings remain.
+- [~ T] The Storage-only exactly-once transaction contract is now validated. The next test targets concurrent duplicate operations that both begin before either commits; Storage CommitSeq must allow one atomic winner and force the other to re-read the durable result after conflict.
+
+
+### 1.106 — Concurrent duplicate operation commit fence
+
+- [x T] FLD-DB commit `9f15c05bfb8690a53e321cfab9de485efe97387e` adds a race test with two write batches created at the same base CommitSeq. Both stage the same ClientId + OperationId + fingerprint and different data mutations; the first commits, the second must fail with `StorageConflictException`, and only the first mutation plus one durable result may remain.
+- [x T] BIN-SYNC commit `cbe6c6c22926447b3914eef04bb8ab6a4341e874` mirrors the concurrent duplicate-operation contract in the cross-repository host test project.
+- [~ CI] Re-run the exact cross-repository gate against FLD head `9f15c05bfb8690a53e321cfab9de485efe97387e` and BIN-SYNC head containing `cbe6c6c22926447b3914eef04bb8ab6a4341e874`.
