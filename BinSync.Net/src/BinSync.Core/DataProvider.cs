@@ -31,6 +31,53 @@ public interface IDataProvider : IDisposable
 }
 
 /// <summary>
+/// Asynchronous provider boundary for process-isolated or remote-backed application
+/// storage. Implementations must preserve the same durability, feed and idempotency
+/// contracts as IDataProvider. No caller may bridge this interface through sync-over-async.
+/// </summary>
+public interface IAsyncDataProvider : IAsyncDisposable
+{
+    ValueTask<RecordId> ResolveRecordIdAsync(
+        ReadOnlyMemory<byte> sourceItemKey, CancellationToken cancellationToken = default);
+    ValueTask<ushort> ResolveFieldIdAsync(
+        ReadOnlyMemory<byte> sourceFieldKey, CancellationToken cancellationToken = default);
+
+    ValueTask AppendLocalChangeAsync(
+        ProviderMutation mutation, CancellationToken cancellationToken = default);
+    ValueTask<ProviderChangePage> ReadLocalChangesAsync(
+        ulong afterSequence, int limit, CancellationToken cancellationToken = default);
+    ValueTask AcknowledgeLocalChangesAsync(
+        ulong safeThroughSequence, CancellationToken cancellationToken = default);
+    ValueTask<ulong> GetLocalChangeHighWatermarkAsync(
+        CancellationToken cancellationToken = default);
+
+    ValueTask<ProviderSnapshotHandle> OpenSnapshotAsync(
+        CancellationToken cancellationToken = default);
+    ValueTask<ProviderSnapshotPage> ReadSnapshotAsync(
+        Guid snapshotToken, int afterIndex, int limit,
+        CancellationToken cancellationToken = default);
+    ValueTask ReleaseSnapshotAsync(
+        Guid snapshotToken, CancellationToken cancellationToken = default);
+
+    ValueTask<ProviderApplyReceipt> ApplyRemoteBatchAsync(
+        Guid applyToken, IReadOnlyList<ProviderMutation> mutations,
+        CancellationToken cancellationToken = default);
+    ValueTask<ProviderMutation?> ReadCurrentAsync(
+        RecordId recordId, ushort fieldId, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Optional asynchronous counterpart to IProviderRemoteBatchCommitStore. It carries
+/// the complete immutable batch context across an IPC/remote boundary without
+/// projecting it down to the lossy (ApplyToken, mutations) shape.
+/// </summary>
+public interface IAsyncProviderRemoteBatchCommitStore
+{
+    ValueTask<ProviderApplyReceipt> ApplyRemoteBatchAsync(
+        ProviderRemoteBatchCommit batch, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
 /// Optional provider capability for applying an authenticated materialized state image
 /// received through SNAPSHOT_CHUNK. Snapshot rows are not immutable DELTA_BATCH
 /// operations and therefore may have no ChangeId or Origin sequence. Implementations
