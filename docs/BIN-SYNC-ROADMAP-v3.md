@@ -3331,18 +3331,18 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] T Complete the two-host restart/crash matrix before marking async provider integration complete.
 - [ ] V3.1 roster/frontier/checkpoint/rejoin/FULL_REPLACE and safe-GC proofs remain separate required work. Physical GC and FULL_REPLACE remain disabled until their adversarial and crash-recovery proofs are complete.
 
-### 1.99 — Real Database Host remote-APPLY restart durability
+### 1.121 — Real Database Host remote-APPLY restart durability
 
 - [x T] Extended the real FLD Database Host IPC test to commit a contextual remote APPLY, stop the complete Host process, wait for the FLD writer fence to be released, restart the Host against the same database root, reconnect with fresh IPC clients, and retry the identical immutable batch.
 - [x T] The restarted Host returns the original ApplyToken and BatchFingerprint with `IsDuplicate=true`; the persisted field value, ChangeId, OriginAuthorEpoch and OriginSequence remain unchanged, and the remote write does not enter the local Outbox.
 - [x CI] Exact branch head `e950cd6e72d525c63ca56bb5551e4cf53dcd8b9c` passed `BinSync.Net` run `43046189626` (6/6 jobs: Linux/Windows .NET tests, Fuzz + Lab, V3.1 signed vectors, FLD host adapter builds on Ubuntu/Windows) and `FLD Storage Integration` run `43046189665` (3/3: Ubuntu, Windows, macOS).
 - [x D] This process-restart proof complements, but does not replace, the coordinator-level fault-injection test for a lost provider APPLY response and exact ApplyToken retry (§1.84). The real-host test currently receives the first receipt before restarting; it does not yet simulate termination after durable commit but before the IPC response reaches the caller.
 - [ ] T Extend the two-host bidirectional exchange test with orderly shutdown/restart of both Database Host processes and reopen of both Node/Metadata/WAL stores. Preserve each provider receipt ClientId, recover PendingApply before accepting sessions, re-handshake, and assert provider data, Node cache, receive cursors and peer ACK cursors remain consistent.
-- [x T] Implemented the real-process lost-APPLY-response test in §1.101: the Host terminates after durable APPLY and before response framing; restart/retry assertions are committed. Exact-head CI remains pending.
+- [x T] Implemented the real-process lost-APPLY-response test in §1.123: the Host terminates after durable APPLY and before response framing; restart/retry assertions are committed. Exact-head CI remains pending.
 - [ ] A/T Audit the async commit-guard boundary across remote APPLY, relay reconciliation, local publication and application writes. The current namespace admission gate is coordinator-instance scoped; host composition must enforce one coordinator/admission domain per namespace and prevent bypass writers until a process-wide writer protocol is proven.
 - [ ] V3.1 roster/frontier/checkpoint/rejoin/FULL_REPLACE and safe-GC proofs remain separate required work. Physical GC and FULL_REPLACE remain disabled until their adversarial and crash-recovery proofs are complete.
 
-### 1.100 — Two-host full restart and resumed-session proof
+### 1.122 — Two-host full restart and resumed-session proof
 
 - [x T] Extended the two-host bidirectional integration scenario to shut down both complete FLD Database Host processes and all client-side composition state after a successful exchange. The test closes sessions, IPC providers and remote APPLY stores, then disposes both Nodes, WALs, Metadata Stores and StorageDatabase handles before stopping the two Host processes.
 - [x T] Restarts both independent Hosts against their original database roots, waits for fresh IPC endpoints and writer-fence release, reopens both StorageDatabase/Metadata/WAL roots, reloads each Node through `StorageNodePersistence.Load`, and reattaches the recovered WAL.
@@ -3360,7 +3360,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact BIN-SYNC head `9eb17845eb213440d4a6fc1b7e24712f591e08e0` passed run `43055002147`: Windows and Ubuntu cross-repository FLD host adapter builds/tests both passed against FLD-DB branch `fix/crash-consistency-outbox` (including the endpoint-restart scenario); the main Linux/Windows .NET suites, Fuzz/Lab, and v3.1 signed vectors also passed. FLD Storage Integration passed on Windows, Ubuntu and macOS in run `43055002297`. FLD-DB commit `b852329` independently passed its Windows and Ubuntu jobs in runs `43054964897` and `43054978281`; the macOS job on the latter remains queued.
 
 
-### 1.101 — Real-process remote APPLY response-loss boundary
+### 1.123 — Real-process remote APPLY response-loss boundary
 
 - [x C/T] Added an explicit opt-in test failpoint to the FLD Database Host. It terminates the Host with exit code 86 only after the remote APPLY dispatcher has completed and returned its durable receipt, before the IPC server can write the response frame; normal Host invocations do not enable it.
 - [x T] Reworked the real Host process integration to use that failpoint: the caller must observe IPC response loss, the Host process must exit, and after restart against the same database root a fresh IPC client retries the exact immutable batch. The ApplyJournal must return the original ApplyToken/fingerprint as a duplicate; persisted value, ChangeId, origin epoch/sequence and zero local Outbox watermark are asserted.
@@ -3368,15 +3368,15 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] T Extend the same process-level approach to lost transport ACK and the complete receive-intent → Node checkpoint → FLD APPLY receipt → Metadata finalization interruption matrix on both peers.
 
 
-## 1.102. Transport ACK loss and immutable replay — 2026-11-11
+## 1.124. Transport ACK loss and immutable replay — 2026-11-11
 
 - [x C/T] Added `Lost_transport_ack_replays_same_batch_after_reconnect_without_reapplying` to the real `SyncSession` transport tests. The receiver applies the DELTA_BATCH, then an opt-in test transport drops the first ACK and closes the channel before delivery. The sender therefore has no durable ACK cursor and must replay the same pending batch after a fresh handshake.
-- [x T] The retry assertions require the receiver to recognize the duplicate without applying the operation again, retain the exact value, and return the ACK that advances the sender's per-author cursor. This complements §1.101's real FLD Host process crash after durable APPLY but before IPC response; it is a transport/session test, not yet a two-Host FLD ACK-loss process test.
+- [x T] The retry assertions require the receiver to recognize the duplicate without applying the operation again, retain the exact value, and return the ACK that advances the sender's per-author cursor. This complements §1.123's real FLD Host process crash after durable APPLY but before IPC response; it is a transport/session test, not yet a two-Host FLD ACK-loss process test.
 - [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository builds/tests must pass before this transport-loss proof is considered verified.
-- [x C/T] Extended ACK-loss coverage through the existing two-independent-FLD-Host process composition and async Metadata/FLD adapter; see §1.104. Exact-head CI remains pending.
+- [x C/T] Extended ACK-loss coverage through the existing two-independent-FLD-Host process composition and async Metadata/FLD adapter; see §1.126. Exact-head CI remains pending.
 
 
-## 1.103. Process-wide async admission and peer-send gates — 2026-11-11
+## 1.125. Process-wide async admission and peer-send gates — 2026-11-11
 
 - [x C] Replaced coordinator-instance-owned async admission with a process-wide registry keyed by durable `(NodeId, namespaceId)`. Separate `AsyncStorageSyncCoordinator` facades for the same local replica/namespace now share the same receive/publication/recovery `SemaphoreSlim`.
 - [x C] The short Metadata coordination lock and per-peer outbound reservation/ACK gates are shared by the same registry as well, so multiple coordinator facades cannot interleave multi-call metadata registration or concurrently reserve/send the same peer stream; different peers remain independent.
@@ -3386,9 +3386,9 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] A remaining limitation is process scope: the registry coordinates coordinator instances in one process, not multiple processes. Cross-process coordination remains the responsibility of the single-owner Host/partition lease and durable Metadata transactions.
 
 
-## 1.104. Two-Host FLD transport ACK loss and retry — 2026-11-11
+## 1.126. Two-Host FLD transport ACK loss and retry — 2026-11-11
 
 - [x C/T] Extended `Async_host_composition_exchanges_changes_bidirectionally_between_two_database_host_processes` after both Hosts and their Node/WAL/Metadata state have been restarted and recovered. A new local change is published from Host A; Host B durably applies it through the real IPC provider and finalizes its Metadata receive cursor, while the transport wrapper deliberately drops the ACK and closes the session channel.
 - [x T] The sender's durable peer ACK cursor must remain at the previous value while the receiver's durable receive cursor advances. The test reconnects both BIN-SYNC sessions without restarting either Host, replays the reserved batch, requires a duplicate/no-op result and a successful ACK, then verifies the sender ACK cursor advances exactly once and the receiver's FLD value/ChangeId remain unchanged.
 - [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository build/test workflows must pass before this two-Host ACK-loss proof is verified.
-- [ ] Extend the same matrix with process termination/restart after durable receive intent, after Node checkpoint but before provider APPLY, after provider APPLY receipt but before Metadata finalization, and after Metadata finalization but before transport ACK. Existing §1.101 separately proves process death after durable APPLY and before IPC response.
+- [ ] Extend the same matrix with process termination/restart after durable receive intent, after Node checkpoint but before provider APPLY, after provider APPLY receipt but before Metadata finalization, and after Metadata finalization but before transport ACK. Existing §1.123 separately proves process death after durable APPLY and before IPC response.
