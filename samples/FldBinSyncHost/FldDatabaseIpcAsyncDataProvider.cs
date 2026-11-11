@@ -210,7 +210,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
                     throw new InvalidDataException(
                         "Provider ACK exceeds the scanned feed prefix and is not covered by a source snapshot.");
             }
-            await _client.AcknowledgeOutboxThroughAsync(
+            await _client.AcknowledgeProviderOutboxThroughAsync(
                 _outboxLease, safeThroughSequence, cancellationToken).ConfigureAwait(false);
         }
         finally
