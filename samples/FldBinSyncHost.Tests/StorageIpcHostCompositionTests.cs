@@ -419,6 +419,78 @@ public sealed class StorageIpcHostCompositionTests
         }
     }
 
+    [Fact]
+    public async Task Storage_ipc_server_dispatches_put_get_delete_and_replays_after_reconnect()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-ipc-dispatch-" + Guid.NewGuid().ToString("N"));
+        string pipeName = "fld1-ipc-" + Guid.NewGuid().ToString("N");
+        const ulong partition = 0x3107;
+        Guid clientId = Guid.NewGuid();
+        Guid putOperationId = Guid.NewGuid();
+        Guid deleteOperationId = Guid.NewGuid();
+        byte[] key = "host-dispatch-key"u8.ToArray();
+        byte[] value = "host-dispatch-value"u8.ToArray();
+
+        byte[] putPayload = new byte[8 + key.Length + value.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(putPayload, (uint)key.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(putPayload.AsSpan(4), (uint)value.Length);
+        key.CopyTo(putPayload, 8);
+        value.CopyTo(putPayload, 8 + key.Length);
+        byte[] putEnvelope = StorageIpcOperationProtocol.Encode(
+            new StorageIpcOperationEnvelope(putOperationId, StorageIpcOperationCodes.Put, putPayload));
+        byte[] getEnvelope = StorageIpcOperationProtocol.Encode(
+            new StorageIpcOperationEnvelope(Guid.NewGuid(), StorageIpcOperationCodes.Get, key));
+        byte[] deleteEnvelope = StorageIpcOperationProtocol.Encode(
+            new StorageIpcOperationEnvelope(deleteOperationId, StorageIpcOperationCodes.Delete, key));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, partition);
+            var dispatcher = new StorageIpcOperationDispatcher(storage);
+            using var serverCancellation = new CancellationTokenSource();
+            var server = new StorageIpcServer(pipeName, dispatcher.HandleAsync);
+            Task serverTask = server.RunAsync(serverCancellation.Token);
+
+            try
+            {
+                await using (var client = await StorageIpcClientConnection.ConnectAsync(
+                    pipeName, clientId, TimeSpan.FromSeconds(10)))
+                {
+                    ReadOnlyMemory<byte> putResult = await client.RequestAsync(putEnvelope);
+                    Assert.Equal(new byte[] { 1 }, putResult.ToArray());
+                }
+
+                await using (var reconnected = await StorageIpcClientConnection.ConnectAsync(
+                    pipeName, clientId, TimeSpan.FromSeconds(10)))
+                {
+                    ReadOnlyMemory<byte> replayedPut = await reconnected.RequestAsync(putEnvelope);
+                    Assert.Equal(new byte[] { 1 }, replayedPut.ToArray());
+
+                    ReadOnlyMemory<byte> getResult = await reconnected.RequestAsync(getEnvelope);
+                    Assert.Equal(1, getResult.Span[0]);
+                    Assert.Equal((uint)value.Length, BinaryPrimitives.ReadUInt32LittleEndian(getResult.Span[1..]));
+                    Assert.Equal(value, getResult.Span[5..].ToArray());
+
+                    ReadOnlyMemory<byte> deleteResult = await reconnected.RequestAsync(deleteEnvelope);
+                    Assert.Equal(new byte[] { 1 }, deleteResult.ToArray());
+                }
+            }
+            finally
+            {
+                serverCancellation.Cancel();
+                await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            Assert.Equal(2UL, storage.LastCommitSeq);
+            Assert.False(storage.TryGet(key, out _));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] bytes = new byte[16];
