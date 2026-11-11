@@ -2907,7 +2907,13 @@ public sealed class StorageSyncCoordinator
                 }
 
                 if (recoveredBatch.NamespaceId != _namespaceId ||
+                    recoveredBatch.NamespaceId != pending.NamespaceId ||
                     recoveredBatch.BatchId != pending.BatchId ||
+                    checked((uint)recoveredBatch.IssuerEpoch) != pending.SenderEpoch ||
+                    checked((ulong)recoveredBatch.CursorStart) != pending.CursorStart ||
+                    checked((ulong)recoveredBatch.CursorEnd) != pending.CursorEnd ||
+                    (!pending.AuthorStreamNodeId.IsZero &&
+                     recoveredBatch.DurableAuthor != pending.AuthorStreamNodeId) ||
                     !recoveredBatch.BatchDigest.ToArray().AsSpan().SequenceEqual(pending.BatchDigest) ||
                     !recoveredBatch.PrevBatchDigest.ToArray().AsSpan().SequenceEqual(pending.PreviousBatchDigest) ||
                     !InboxReceiptIdentity.Compute(recoveredBatch).ToArray().AsSpan().SequenceEqual(pending.HeaderFingerprint) ||
