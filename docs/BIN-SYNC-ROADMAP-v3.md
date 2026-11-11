@@ -2977,3 +2977,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] FLD-DB Engine tests cover sequence gaps, exact retry, contiguous ACK, ACK idempotence, rejection of late retries, receipt-window integrity and recovery after Dispose/checkpoint/WAL replay. WAL tests cover the new acknowledgement codec; Manifest tests cover versioned `FLOR/LOR2` receipts and `FLOC/LOC1` client watermarks.
 - [x T] BIN-SYNC commit `e25d499a4de111498b699c891ea2b78f6d719afd` updates the real IPC→FLD host probe to send ClientSequence 1/2, replay sequence 1 after sequence 2, reopen FLD, acknowledge through sequence 2, and verify the acknowledged watermark survives another reopen while Outbox entries remain unchanged.
 - [~ CI] Run the full cross-repository gate against the latest FLD branch head and BIN-SYNC PR head; require WAL, Manifest, Engine, host IPC tests and Windows/Linux runs to pass with warnings-as-errors.
+
+
+
+### 1.117 — Complete WAL writer support for local receipt ACK records
+
+- [x C] FLD-DB commit `5ee2c1c430e4a0ec3ddf322338ebc2c51f53a0cd` adds `KindLocalOperationAck` to the WAL writer's known-kind allowlist. Recovery already recognizes the kind; the first ACK integration run exposed that append was still rejected before record encoding.
+- [x T] The ACK test reaches the real `WalManager.Append` path and exercises WAL flush, restart replay and checkpoint watermark persistence; this was a runtime integration defect rather than a codec or recovery-decoder defect.
+- [~ CI] Re-run against this exact FLD head and the current PR head; the next cross-repository gate must show the acknowledgement path passing end-to-end.
