@@ -235,7 +235,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-b-" + Guid.NewGuid().ToString("N"));
         string nodeRootA = Path.Combine(Path.GetTempPath(), "binsync-two-host-node-a-" + Guid.NewGuid().ToString("N"));
         string nodeRootB = Path.Combine(Path.GetTempPath(), "binsync-two-host-node-b-" + Guid.NewGuid().ToString("N"));
-        const uint namespaceId = 0x537;
+        const ushort namespaceId = 0x537;
         const uint nodeStorageNamespace = 702;
         byte[] authorABytes = Id(0x71);
         byte[] authorBBytes = Id(0x72);
