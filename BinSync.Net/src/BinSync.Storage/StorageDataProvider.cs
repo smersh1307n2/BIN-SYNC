@@ -1145,6 +1145,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                 return 0; // Unknown payloads or pending reservations block the whole pass.
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
+            ApplicationDraftHorizon draftHorizon = externalScan.UnpublishedLocalDraftHorizon;
+            if (draftHorizon.Count != 0 || draftHorizon.MaxHlcWall != 0 ||
+                draftHorizon.MaxHlcLogical != 0)
+                return 0; // An unpublished host draft may still resurrect a field as a newer ghost.
 
             ulong examined = 0;
             int reclaimed = 0;
