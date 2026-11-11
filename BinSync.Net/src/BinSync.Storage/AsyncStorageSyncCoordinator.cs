@@ -121,6 +121,220 @@ public sealed class AsyncStorageSyncCoordinator
     }
 
     /// <summary>
+    /// Publish the finite local provider-feed prefix through the async provider boundary.
+    /// The FLD operation receipt is mapped in the Node WAL before metadata freeze; source
+    /// Outbox ACK and operation-receipt ACK remain separate, ordered durable transitions.
+    /// </summary>
+    public async Task<int> PublishLocalChangesAsync(
+        IAsyncDataProvider asyncProvider,
+        Action<Node> persistNode,
+        int limit = 1024,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(asyncProvider);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (limit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        if (asyncProvider is not IAsyncProviderOperationReceiptStore receiptStore ||
+            asyncProvider is not IAsyncProviderPublishedOriginStore originStore ||
+            asyncProvider is not IAsyncProviderPublicationMode publicationMode)
+            throw new NotSupportedException(
+                "Async local publication requires durable operation receipts, immutable-origin stamping and publication-mode capabilities.");
+        if (_metadataStore is not IMetadataOutboundChangeIdentityStore identityStore)
+            throw new NotSupportedException(
+                "Async local publication requires the durable Metadata Store outbound ChangeId identity index.");
+
+        await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            (bool Exists, ulong NodeOutboxHighWatermark) cutover =
+                await publicationMode.TryGetMetadataStoreOwnedPublicationCutoverAsync(ct)
+                    .ConfigureAwait(false);
+            if (!cutover.Exists)
+                throw new InvalidOperationException(
+                    "Async local publication requires the provider-authoritative Metadata Store cutover.");
+            long nodeHigh = _node.GetOutboxHighWatermark(_namespaceId, _node.NodeId);
+            if (nodeHigh < 0 || checked((ulong)nodeHigh) != cutover.NodeOutboxHighWatermark)
+                throw new InvalidOperationException(
+                    "Node Outbox advanced after Metadata-Store-owned publication was enabled.");
+
+            ulong providerHighWatermark =
+                await asyncProvider.GetLocalChangeHighWatermarkAsync(ct).ConfigureAwait(false);
+            var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+            Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>? nodeWinners = null;
+            var recoveredPublishedOrigins = new List<ProviderPublishedOrigin>();
+            var receiptMappings = new List<(BatchId ChangeId, ulong ClientSequence)>();
+            var seenChangeIds = new HashSet<BatchId>();
+            ulong afterSequence = 0;
+            ulong scannedThroughSequence = 0;
+            ulong lastFrozenFeedSequence = 0;
+            int totalChanges = 0;
+
+            // Scan exactly the source-feed ceiling captured above. Appends made while
+            // IPC is in flight are deliberately deferred to the next publication pass.
+            while (afterSequence < providerHighWatermark)
+            {
+                ProviderChangePage page = await asyncProvider.ReadLocalChangesAsync(
+                    afterSequence, limit, ct).ConfigureAwait(false);
+                if (page.Changes.Count > limit ||
+                    page.ScannedThroughSequence < afterSequence ||
+                    page.ScannedThroughSequence > providerHighWatermark ||
+                    page.ScannedThroughSequence == afterSequence)
+                    throw new InvalidDataException("Async provider returned an invalid or non-advancing local-feed page.");
+
+                ulong previousChangeSequence = afterSequence;
+                foreach (ProviderChange change in page.Changes)
+                {
+                    if (change.Sequence <= previousChangeSequence ||
+                        change.Sequence > page.ScannedThroughSequence)
+                        throw new InvalidDataException("Async provider local-feed changes are not ordered within the scanned prefix.");
+                    previousChangeSequence = change.Sequence;
+                    if (change.Sequence > providerHighWatermark)
+                        continue;
+                    if (change.ChangeId.IsZero || change.Mutation.ChangeId != change.ChangeId ||
+                        change.Mutation.AuthorNodeId != _node.NodeId ||
+                        change.Mutation.OriginAuthorEpoch == 0 || change.Mutation.OriginSequence != 0)
+                        throw new InvalidDataException(
+                            "Async local feed requires stable ChangeId, local author epoch and deferred OriginSequence.");
+                    if (!seenChangeIds.Add(change.ChangeId))
+                        throw new InvalidDataException("Async provider local feed repeated a ChangeId within one captured prefix.");
+                    _node.ValidateProviderMutation(change.Mutation);
+                    if (change.Mutation.KeyEpoch != 0)
+                        throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
+
+                    // Append is idempotent by ChangeId-derived OperationId. If the Host
+                    // committed but its response was lost, this exact retry recovers the
+                    // original ClientSequence before the Node WAL records the mapping.
+                    if (!_node.TryGetProviderOperationReceipt(
+                            _namespaceId, change.ChangeId, out ulong clientSequence, out _))
+                    {
+                        clientSequence = await receiptStore.AppendLocalChangeWithReceiptAsync(
+                            change.Mutation, ct).ConfigureAwait(false);
+                        _node.RecordProviderOperationReceipt(
+                            _namespaceId, change.ChangeId, clientSequence);
+                    }
+                    receiptMappings.Add((change.ChangeId, clientSequence));
+
+                    bool sharedNodeAndOutboundWinners = false;
+                    nodeWinners ??= winners;
+                    sharedNodeAndOutboundWinners = ReferenceEquals(nodeWinners, winners);
+                    if (sharedNodeAndOutboundWinners)
+                        AddAsyncCoalescedPendingLocalChange(winners, change);
+                    else
+                        AddAsyncCoalescedPendingLocalChange(nodeWinners, change);
+
+                    if (identityStore.TryGetOutboundChangeIdentity(
+                            _scopeId, _node.NodeId, _namespaceId, change.ChangeId,
+                            out ReadOnlyMemory<byte> frozenFingerprint, out OperationOrigin frozenOrigin))
+                    {
+                        Digest16 actualFingerprint = ChangeIdentity.Fingerprint(
+                            _namespaceId, change.Mutation, _node.NodeId);
+                        if (frozenFingerprint.Length != 16 ||
+                            Digest16.From(frozenFingerprint.Span) != actualFingerprint)
+                            throw new InvalidDataException(
+                                "Async provider ChangeId conflicts with its previously frozen outbound operation.");
+                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, frozenOrigin));
+                        lastFrozenFeedSequence = change.Sequence;
+                        if (sharedNodeAndOutboundWinners)
+                            nodeWinners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>(winners);
+                        winners.Clear();
+                        continue;
+                    }
+                    if (change.Sequence <= lastFrozenFeedSequence)
+                        throw new InvalidDataException(
+                            "Async provider local feed is not in strictly increasing source-sequence order.");
+                    if (!sharedNodeAndOutboundWinners)
+                        AddAsyncCoalescedPendingLocalChange(winners, change);
+                }
+
+                totalChanges = checked(totalChanges + page.Changes.Count);
+                scannedThroughSequence = page.ScannedThroughSequence;
+                afterSequence = scannedThroughSequence;
+            }
+
+            ulong currentMetadataHigh = _metadataStore.GetOutboundHighWatermark(
+                _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
+            if (currentMetadataHigh < cutover.NodeOutboxHighWatermark)
+                throw new InvalidDataException(
+                    "Metadata Store outbound watermark regressed below the provider cutover fence.");
+
+            ProviderChange[] nodeChanges = (nodeWinners ?? winners).Values
+                .OrderBy(change => change.Sequence).ToArray();
+            if (nodeChanges.Length > totalChanges ||
+                (nodeChanges.Length != 0 && nodeChanges[^1].Sequence > scannedThroughSequence))
+                throw new InvalidDataException(
+                    "Async provider cache winners exceed the captured local-feed prefix.");
+
+            ProviderChange[] orderedWinners = winners.Values.OrderBy(change => change.Sequence).ToArray();
+            var frozenOperations = new List<MetadataFrozenOperation>(orderedWinners.Length);
+            foreach (ProviderChange change in orderedWinners)
+                frozenOperations.Add(CreateAsyncMetadataFrozenOperation(change));
+
+            IReadOnlyList<MetadataOutboundItem> published;
+            lock (_metadataGate)
+            {
+                // Revalidate the immutable cutover fence immediately before freezing.
+                ulong metadataHigh = _metadataStore.GetOutboundHighWatermark(
+                    _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
+                if (metadataHigh < cutover.NodeOutboxHighWatermark)
+                    throw new InvalidDataException("Metadata Store outbound watermark regressed during async publication.");
+                published = frozenOperations.Count == 0
+                    ? Array.Empty<MetadataOutboundItem>()
+                    : _metadataStore.FreezeOutbound(
+                        _scopeId, _node.NodeId, _namespaceId, _node.NodeId, frozenOperations);
+            }
+            if (published.Count != frozenOperations.Count)
+                throw new InvalidDataException("Metadata Store freeze returned an unexpected operation count.");
+            for (int i = 0; i < published.Count; i++)
+            {
+                if (published[i].ChangeId != frozenOperations[i].ChangeId ||
+                    (i > 0 && published[i].Sequence <= published[i - 1].Sequence))
+                    throw new InvalidDataException(
+                        "Metadata Store returned an unexpected or unordered async outbound identity.");
+            }
+
+            var publishedOrigins = new List<ProviderPublishedOrigin>(
+                checked(recoveredPublishedOrigins.Count + published.Count));
+            publishedOrigins.AddRange(recoveredPublishedOrigins);
+            for (int i = 0; i < published.Count; i++)
+                publishedOrigins.Add(new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance));
+            if (publishedOrigins.Count != 0)
+                await originStore.CommitPublishedOriginsAsync(publishedOrigins, ct).ConfigureAwait(false);
+
+            // Node remains an application-data cache. Persist it before marking the
+            // receipt mappings terminal or acknowledging either provider retention domain.
+            lock (_metadataGate)
+            {
+                _node.ApplyProviderChanges(_namespaceId, nodeChanges);
+                persistNode(_node);
+            }
+            foreach ((BatchId changeId, ulong clientSequence) in receiptMappings)
+                _node.MarkProviderOperationReceiptPublished(_namespaceId, changeId, clientSequence);
+
+            // Source Outbox ACK must precede receipt ACK. If this call fails, the
+            // Published WAL mappings remain and the same feed prefix is replayed.
+            if (scannedThroughSequence > 0)
+                await asyncProvider.AcknowledgeLocalChangesAsync(scannedThroughSequence, ct)
+                    .ConfigureAwait(false);
+
+            // This also recovers the crash window after source Outbox ACK but before
+            // receipt ACK: the WAL still holds the exact contiguous ClientSequence prefix.
+            ulong receiptPrefix = _node.GetPublishedProviderOperationReceiptPrefix(_namespaceId);
+            if (receiptPrefix > 0)
+            {
+                await receiptStore.AcknowledgeOperationReceiptsAsync(receiptPrefix, ct)
+                    .ConfigureAwait(false);
+                _node.AcknowledgeProviderOperationReceipts(_namespaceId, receiptPrefix);
+            }
+            return totalChanges;
+        }
+        finally
+        {
+            _asyncAdmissionGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Receive one batch and emit its transport ACK only after Node checkpoint,
     /// contextual async provider APPLY and Metadata finalization all succeed.
     /// </summary>
@@ -325,6 +539,110 @@ public sealed class AsyncStorageSyncCoordinator
             _asyncAdmissionGate.Release();
         }
     }
+
+    private MetadataFrozenOperation CreateAsyncMetadataFrozenOperation(ProviderChange change)
+    {
+        ProviderMutation mutation = change.Mutation;
+        if (change.ChangeId.IsZero || mutation.ChangeId != change.ChangeId ||
+            mutation.OriginAuthorEpoch == 0 || mutation.OriginSequence != 0 ||
+            mutation.AuthorNodeId != _node.NodeId)
+            throw new InvalidDataException(
+                "Async provider feed entry must retain a stable ChangeId/local author epoch and defer OriginSequence until freeze.");
+        object operation;
+        byte operationKind;
+        if (mutation.IsRecordTombstone)
+        {
+            operation = new OpRecordTombstone
+            {
+                RecordId = mutation.RecordId,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1
+            };
+            operationKind = OpsConst.TagRecordTomb;
+        }
+        else if (mutation.IsTombstone)
+        {
+            operation = new OpFieldTomb
+            {
+                FieldId = mutation.FieldId,
+                KeyEpoch = mutation.KeyEpoch,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1
+            };
+            operationKind = OpsConst.TagFieldTomb;
+        }
+        else
+        {
+            operation = new OpFieldWrite
+            {
+                FieldId = mutation.FieldId,
+                KeyEpoch = mutation.KeyEpoch,
+                Wall = mutation.HlcWall,
+                Logical = mutation.HlcLogical,
+                Origin = 1,
+                Value = mutation.Value.ToArray()
+            };
+            operationKind = OpsConst.TagFieldWrite;
+        }
+
+        byte[] encoded = Ops.EncodeOp(operation, fullAuthor: false);
+        byte[] envelope = new byte[16 + encoded.Length];
+        mutation.RecordId.WriteTo(envelope);
+        encoded.CopyTo(envelope, 16);
+        Digest16 fingerprint = ChangeIdentity.Fingerprint(
+            _namespaceId, mutation.RecordId, operationKind, operation,
+            _node.NodeId, Array.Empty<BatchId>());
+        return new MetadataFrozenOperation
+        {
+            ChangeId = change.ChangeId,
+            Fingerprint = fingerprint.ToArray(),
+            Payload = envelope,
+            OriginAuthorEpoch = mutation.OriginAuthorEpoch,
+            OriginSequence = 0,
+            HlcWall = mutation.HlcWall,
+            HlcLogical = mutation.HlcLogical
+        };
+    }
+
+    private static void AddAsyncCoalescedPendingLocalChange(
+        Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> winners,
+        ProviderChange change)
+    {
+        ProviderMutation mutation = change.Mutation;
+        var key = (mutation.RecordId, mutation.FieldId, mutation.IsRecordTombstone);
+        if (!winners.TryGetValue(key, out ProviderChange? prior))
+        {
+            winners.Add(key, change);
+            return;
+        }
+
+        ProviderMutation previous = prior.Mutation;
+        int comparison = HlcOps.CompareHlc(
+            new Hlc(mutation.HlcWall, mutation.HlcLogical), mutation.AuthorNodeId,
+            new Hlc(previous.HlcWall, previous.HlcLogical), previous.AuthorNodeId);
+        if (comparison == 0)
+        {
+            if (!SameAsyncMutation(mutation, previous))
+                throw new InvalidDataException(
+                    "Async pending local feed contains conflicting mutations at the same HLC and author.");
+            return;
+        }
+        if (comparison > 0)
+            winners[key] = change;
+    }
+
+    private static bool SameAsyncMutation(ProviderMutation left, ProviderMutation right)
+        => left.RecordId == right.RecordId
+            && left.FieldId == right.FieldId
+            && left.IsTombstone == right.IsTombstone
+            && left.IsRecordTombstone == right.IsRecordTombstone
+            && left.HlcWall == right.HlcWall
+            && left.HlcLogical == right.HlcLogical
+            && left.AuthorNodeId == right.AuthorNodeId
+            && left.KeyEpoch == right.KeyEpoch
+            && left.Value.AsSpan().SequenceEqual(right.Value);
 
     private ProviderRemoteBatchCommit CreateRemoteBatchCommit(
         Batch batch, StorageRemoteApplyPlan plan, IReadOnlyList<ProviderMutation> mutations) =>
