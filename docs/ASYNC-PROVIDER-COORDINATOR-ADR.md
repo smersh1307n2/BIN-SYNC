@@ -73,7 +73,15 @@ The async coordinator must cover, at minimum:
 - FULL_REPLACE staging, commit and recovery;
 - capability-checked composed commit barriers.
 
-The in-process implementation should use adapters only as a test/reference bridge. The production FLD implementation must call `FldDatabaseIpcClient` asynchronously and persist its IPC ClientId, operation ids and contiguous ClientSequence across reconnects.
+The in-process implementation should use adapters only as a test/reference bridge. The production FLD implementation calls `FldDatabaseIpcClient` asynchronously. ClientId is stable host/Node identity; OperationId is derived from the durable ChangeId; FLD assigns ClientSequence atomically and returns it with CommitSeq. The coordinator must persist that returned sequence in the existing Node WAL/commit record before calling the separate receipt ACK. No client-side sequence allocator or second payload journal is required.
+
+
+
+## IPC receipt lifecycle update — 2026-11-11
+
+The FLD IPC receipt and synchronization Outbox have distinct consumers and distinct acknowledgement watermarks. `AcknowledgeThroughAsync` (0x2103) retires caller operation receipts; `AcknowledgeOutboxThroughAsync` (0x2106) advances the BIN-SYNC source feed. One must never imply the other.
+
+The async FLD provider now implements `IAsyncProviderOperationReceiptStore`. `AppendLocalChangeWithReceiptAsync` returns the Host-assigned ClientSequence, and `AcknowledgeOperationReceiptsAsync` performs the independent receipt ACK. The async coordinator must persist the returned sequence in its existing Node WAL/commit record before ACK. On uncertain append response, retry with the same ChangeId-derived OperationId and exact payload; FLD returns the original sequence. Do not add a second pending payload journal or infer receipt completion from Outbox publication progress.
 
 ## Required verification before marking complete
 
