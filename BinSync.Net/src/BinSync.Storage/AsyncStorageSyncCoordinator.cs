@@ -422,8 +422,14 @@ public sealed class AsyncStorageSyncCoordinator
         try
         {
             Dictionary<NodeId, ulong> ceilings;
-            await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
-            try
+            // Capture the immutable Metadata high-watermarks without taking the
+            // namespace admission semaphore. ReceiveBatchWithAsyncProviderBeforeAckAsync
+            // intentionally owns that semaphore while it waits for an inbound frame;
+            // requiring it here would deadlock two peers that both receive and send
+            // concurrently. Metadata reads/peer registration remain serialized by
+            // the short in-process metadata lock, and the captured ceilings bound
+            // this transport operation even if a later publication advances them.
+            lock (_metadataGate)
             {
                 RegisterInterestedPeer(session, _namespaceId);
                 ceilings = new Dictionary<NodeId, ulong>();
@@ -443,10 +449,6 @@ public sealed class AsyncStorageSyncCoordinator
                         _scopeId, _node.NodeId, _namespaceId, author);
                     if (high != 0) ceilings[author] = high;
                 }
-            }
-            finally
-            {
-                _asyncAdmissionGate.Release();
             }
 
             // Do not hold namespace admission while waiting for ACK: the peer may be
