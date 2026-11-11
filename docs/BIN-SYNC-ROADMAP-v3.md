@@ -1,3 +1,12 @@
+## 1.80. Async provider implementation and writer-lock audit — 2026-11-11
+
+- [x C/T] Added the first process-isolated `IAsyncDataProvider` implementation in `samples/FldBinSyncHost/FldDatabaseIpcAsyncDataProvider.cs`, plus a separate `IAsyncProviderRemoteBatchCommitStore` adapter. It uses asynchronous IPC only; no sync-over-async.
+- [x C/T] FLD IPC now provides point metadata/value reads (0x210F/0x2110), Host-assigned receipt sequence for local provider append (0x2111), provider-aware Outbox ACK/receipt retirement (0x2112), and authoritative LocalAuthor discovery (0x2113). The auto-sequence path reuses the existing durable operation receipt; it adds no second journal.
+- [x A] Updated the async coordinator ADR with the actual writer-lock audit. `StorageSyncCoordinator` holds a Monitor, then Node Storage→Outbox→Meta Monitors, then host/provider gates; FULL_REPLACE additionally holds the Metadata Store Monitor. A semaphore at the IPC boundary alone cannot serialize direct Node/Metadata writers.
+- [!] The new provider is not yet usable by the production coordinator. It does not implement optional async capabilities or `IAsyncProviderCommitGuard`; the synchronous coordinator remains Monitor-based. No async coordinator, FULL_REPLACE, or physical-GC support is claimed.
+- [~ CI] Exact-head CI for the current BIN-SYNC branch is running after the async-provider tests and documentation updates. FLD-DB exact head `9943d57d67d71f47d22132667ccfcc1dc9042c80` passed build and tests on Ubuntu, Windows and macOS (runs `42988005885` and `42987998071`).
+- [ ] Next: choose and prove one complete strategy: a shared sync+async gate participating in every conflicting writer, or durable PendingApply/intent with short-lock snapshot/revalidation across awaits. Do not add a dispatcher-only SemaphoreSlim. Then implement async coordinator phases and two-process crash/restart parity tests.
+- [!] Physical receipt, ChangeId and tombstone/ghost GC remain disabled. Preserve exactly two runtime DLLs and the separate Database Host executable.
 ## 1.79. First process-isolated async FLD provider slice — 2026-11-11
 
 - [x C] FLD Database IPC adds addressed current metadata reads (0x210F) and ChangeId-fenced bounded current-value chunks (0x2110). Point reads use the existing indexed LWW resolver across overlay + Runs; they do not scan the full provider snapshot or create WAL receipts for reads.

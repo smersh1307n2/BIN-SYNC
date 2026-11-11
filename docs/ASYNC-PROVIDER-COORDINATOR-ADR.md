@@ -120,3 +120,28 @@ A closer read of the current FLD IPC implementation establishes that two items p
 - `ReadSnapshotPageAsync` exposes all current-field metadata required by `ProviderMutation`; `ReadSnapshotValueChunkAsync` reads the value from that same pinned generation. This supports a correct snapshot-backed `ReadCurrentAsync` fallback by bounded traversal, although it is not an efficient point lookup.
 
 The next provider implementation should use these existing operations and explicitly document the performance cost. Do not expand the IPC protocol with a duplicate watermark operation. The genuinely missing capabilities remain published-origin stamping, durable publication/author-epoch transitions, snapshot-state/FULL_REPLACE operations, and the async-safe composed commit barrier. A dedicated versioned point-read may be added later only if profiling justifies it and it preserves generation consistency.
+
+## IPC-backed async provider implementation update — 2026-11-11
+
+The first separate-process provider slice is now implemented in the optional cross-repository sample:
+
+- `FldDatabaseIpcAsyncDataProvider` implements the core `IAsyncDataProvider` contract using asynchronous Database IPC for key resolution, identity-preserving local append, Outbox scan/ACK, snapshots and point reads.
+- `FldDatabaseIpcRemoteBatchApplyStore` implements `IAsyncProviderRemoteBatchCommitStore`; it preserves the complete remote batch context. Context-free APPLY remains rejected.
+- FLD IPC 0x210F/0x2110 provides indexed current metadata plus bounded value chunks fenced by ChangeId. This removes the need to scan the whole snapshot for ordinary point reads.
+- FLD IPC 0x2111 assigns the local-provider receipt sequence inside the Host commit lock. The caller reuses stable ClientId and OperationId derived from ChangeId; the existing durable receipt and fingerprint provide response-loss/restart idempotency. No second client-side sequence journal is required.
+- FLD IPC 0x2112 performs provider-aware Outbox ACK and retires only the contiguous auto-sequenced receipt prefix covered by the acknowledged feed. 0x2113 returns the Host-authoritative LocalAuthor, which the async provider verifies before acquiring its feed lease.
+
+This implementation closes the core provider/apply transport boundary, but it is not the async coordinator. It does not implement optional async publication cutover, published-origin stamping, author-epoch lifecycle, snapshot-state apply, FULL_REPLACE, durable snapshot retention, async commit guards or GC reference scans. Do not advertise any of those capabilities from this adapter.
+
+## Lock audit result — 2026-11-11
+
+The current synchronous lock chain is confirmed in code:
+
+1. `StorageSyncCoordinator` uses a thread-affine Monitor for its coordinator gate. `AcquireApplicationCommitGuardCore` enters that gate first.
+2. It then calls `Node.EnterAllGates`, which acquires Node domain gates in Storage → Outbox → Meta order. Node write/apply paths also enter those Monitor locks directly.
+3. The optional host lease is acquired after Node gates. The in-process FLD provider/host lease is Monitor-based.
+4. FULL_REPLACE then acquires the Metadata Store transaction gate; the provider commit guard is acquired last. `StorageMetadataStore` methods and its FULL_REPLACE lease use a Monitor on the store gate.
+
+Therefore a SemaphoreSlim added only to the IPC dispatcher is insufficient: direct Node and Metadata Store writers would bypass it, and holding any existing Monitor across an IPC await is invalid. A future async commit barrier must either (a) replace/augment every conflicting writer path with one shared sync+async gate protocol, or (b) use the durable PendingApply/intent plus short-lock snapshot/revalidation protocol and prove each crash cut. Do not implement a partial lease that serializes only IPC requests.
+
+Until that design is selected and tested, `FldDatabaseIpcAsyncDataProvider` deliberately does not implement `IAsyncProviderCommitGuard`, and the synchronous `StorageSyncCoordinator` must not consume it. Physical GC and FULL_REPLACE remain unavailable through this async adapter.
