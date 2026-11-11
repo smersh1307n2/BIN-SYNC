@@ -1,3 +1,11 @@
+## 1.90. Async Metadata outbound delivery entry point — 2026-11-11
+
+- [x C] Added `AsyncStorageSyncCoordinator.PushNextBatchAsync`. It sends the already-frozen Metadata outbound/relay stream through the durable per-peer reservation and ACK path in `SyncSession.PushBatchAsync`; it does not read the FLD Outbox or create a second payload queue.
+- [x C] Outbound delivery now uses the same coordinator admission semaphore as async local publication, remote receive/APPLY, and PendingApply recovery. It captures per-author Metadata high-watermarks and passes them as publication ceilings, so an immutable reservation cannot advance beyond the captured publication boundary.
+- [!] This is a per-coordinator, per-namespace serialization boundary. It is not yet a process-wide/shared gate across multiple coordinator instances, direct Node/Metadata writers, or the synchronous scheduler. Production host composition must own one coordinator admission domain per namespace and must prevent bypass writers until the broader async/sync writer protocol is proven.
+- [~ CI] Commit `ba9b22be58611c0763844b2334912a4381716c49` adds the entry point. Exact-head build/test results are pending; do not treat the method as verified until BIN-SYNC and FLD Storage Integration workflows finish.
+- [ ] Next: add integration coverage for two concurrent sessions contending for one namespace, outbound reservation retry after lost ACK response, and send interleaved with local publication/remote APPLY. Then compose this entry point into an explicit async host adapter and proceed to two independent FLD Host processes exchanging changes bidirectionally.
+
 ## 1.89. Real FLD Host process coverage for async local publication — 2026-11-11
 
 - [x T] Added `Async_storage_coordinator_publishes_through_real_database_host_and_survives_host_restart` in `samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs`. It starts the actual FLD Database Host as a separate process, commits a local provider append, stops/restarts the Host before BIN-SYNC records the returned ClientSequence in its Node WAL, reconnects with the same stable ClientId, and runs `AsyncStorageSyncCoordinator.PublishLocalChangesAsync` through the IPC-backed provider.
