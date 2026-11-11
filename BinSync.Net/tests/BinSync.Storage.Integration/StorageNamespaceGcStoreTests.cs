@@ -207,6 +207,139 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
+    public void Tombstone_horizon_waits_for_offline_active_member_and_requires_member_bound_reports()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-tombstone-offline-member-" + Guid.NewGuid().ToString("N"));
+        var keys = new[]
+        {
+            BatchSignature.GenerateKeyPair(),
+            BatchSignature.GenerateKeyPair(),
+            BatchSignature.GenerateKeyPair()
+        };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        NamespaceRosterCertificate roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("cccccccc-dddd-eeee-ffff-000000000042");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("same full replace for every route"));
+        NodeId origin = NodeId.From(Id(4));
+        const uint originEpoch = 7;
+        const ulong finalIssued = 42;
+
+        AppliedOriginFrontierReport MemberReport(int memberIndex, ulong reportSequence, ulong applied)
+            => new()
+            {
+                NamespaceId = roster.NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                MemberNodeId = roster.Members[memberIndex].NodeId,
+                MemberTransportEpoch = roster.Members[memberIndex].TransportPeerEpoch,
+                ReportSequence = reportSequence,
+                Entries = new[]
+                {
+                    new AppliedOriginFrontierEntry
+                    {
+                        OriginAuthorNodeId = origin,
+                        OriginAuthorEpoch = originEpoch,
+                        ContiguousAppliedOriginSequence = applied
+                    }
+                },
+                IssuedOrigins = new[]
+                {
+                    new IssuedOriginFrontierEntry
+                    {
+                        OriginAuthorEpoch = originEpoch,
+                        IssuedOriginSequence = finalIssued,
+                        MaxIssuedHlcWall = 500,
+                        MaxIssuedHlcLogical = 2
+                    }
+                }
+            };
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 906))
+            {
+                var gc = new StorageNamespaceGcStore(
+                    storage, "fld-db/tombstone-offline-member", NodeId.From(Id(99)));
+                roster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+
+                var reports = new[]
+                {
+                    gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                        MemberReport(0, 1, finalIssued), keys[0].Seed), roster),
+                    gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                        MemberReport(1, 1, finalIssued), keys[1].Seed), roster),
+                    gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                        MemberReport(2, 1, finalIssued - 1), keys[2].Seed), roster)
+                };
+
+                for (int i = 0; i < keys.Length; i++)
+                    gc.AcceptFullReplaceInstalledAck(SignedAck(roster, i, keys, generation, digest), roster);
+
+                var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    roster, 1, new byte[32], reports, generation, digest,
+                    fullReplaceHlcWallFloor: 500, fullReplaceHlcLogicalFloor: 2);
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+                Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, origin, originEpoch, finalIssued - 1));
+                Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, origin, originEpoch, finalIssued));
+                Assert.False(gc.HasProtocolTombstoneGcProof(
+                    roster, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
+
+                // A report forwarded over another route cannot impersonate the offline member:
+                // the signed member identity and transport epoch remain bound to its roster key.
+                AppliedOriginFrontierReport forged = MemberReport(2, 2, finalIssued);
+                byte[] forgedBytes = OriginFrontierProtocol.Sign(forged, keys[0].Seed);
+                Assert.Throws<InvalidDataException>(() => gc.AcceptOriginFrontier(forgedBytes, roster));
+            }
+
+            // Reopen must preserve the lagging member's durable frontier and keep the
+            // tombstone horizon closed while that active member is offline.
+            using (var reopened = StorageDatabase.Open(directory, 906))
+            {
+                var gc = new StorageNamespaceGcStore(
+                    reopened, "fld-db/tombstone-offline-member", NodeId.From(Id(99)));
+                Assert.True(gc.TryReadNamespaceRoster(19, trust, out NamespaceRosterCertificate? restored));
+                Assert.NotNull(restored);
+                Assert.False(gc.HasProtocolTombstoneGcProof(
+                    restored!, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
+
+                var recoveredReports = gc.ReadOriginFrontiers(restored!);
+                AppliedOriginFrontierReport recoveredLagging = recoveredReports.Single(
+                    report => report.MemberNodeId == restored!.Members[2].NodeId);
+                AppliedOriginFrontierReport caughtUp = MemberReport(2, 2, finalIssued);
+                gc.AcceptOriginFrontier(
+                    OriginFrontierProtocol.Sign(caughtUp, keys[2].Seed), restored!);
+
+                var nextReports = gc.ReadOriginFrontiers(restored!);
+                var nextCheckpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    restored!, 2, NamespaceRetentionCheckpointProtocol.ComputeDigest(
+                        NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                            restored!, 1, new byte[32], recoveredReports, generation, digest,
+                            fullReplaceHlcWallFloor: 500, fullReplaceHlcLogicalFloor: 2)),
+                    nextReports, generation, digest,
+                    fullReplaceHlcWallFloor: 500, fullReplaceHlcLogicalFloor: 2);
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(nextCheckpoint, keys[0].Seed),
+                    restored!, trust);
+
+                Assert.True(gc.HasProtocolTombstoneGcProof(
+                    restored!, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
+                Assert.Equal(finalIssued, nextReports.Single(
+                    report => report.MemberNodeId == restored!.Members[2].NodeId)
+                    .Entries.Single().ContiguousAppliedOriginSequence);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Tombstone_gc_proof_requires_every_active_member_installed_ack()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-tombstone-proof-missing-ack-" + Guid.NewGuid().ToString("N"));
