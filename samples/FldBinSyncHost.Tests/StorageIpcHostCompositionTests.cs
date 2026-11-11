@@ -424,8 +424,8 @@ public sealed class StorageIpcHostCompositionTests
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-fld-ipc-dispatch-" + Guid.NewGuid().ToString("N"));
-        string pipeName = StorageIpcEndpoint.ComputePipeName(directory, partition);
         const ulong partition = 0x3107;
+        string pipeName = StorageIpcEndpoint.ComputePipeName(directory, partition);
         Guid clientId = Guid.NewGuid();
         Guid ownerId = Guid.NewGuid();
         Guid putOperationId = Guid.NewGuid();
