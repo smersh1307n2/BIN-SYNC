@@ -1,5 +1,14 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+## Exact-head FLD integration gate — 2026-11-11
+
+- BIN-SYNC commit 2d65688a passed workflow run 42963323793: Linux and Windows .NET jobs each passed 678/678; benchmark build, samples, fuzz/lab, coverage threshold and v3.1 vectors passed.
+- Public FLD branch fix/crash-consistency-outbox at d6a6857e was checked out without a secret. FldBinSyncHost build passed on Ubuntu and Windows; FldBinSyncHost.Tests passed 14/14 on each OS.
+- FLD Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21 and Engine 71/71 passed on both OSes.
+- Storage Integration run 42963323775 passed on Ubuntu, Windows and macOS.
+- The earlier 42962678340 Engine failure was only a test fixture passing an explicit 1 MiB chunk size while expecting the protocol maximum. FLD test commit d6a6857e corrected the call to use the documented default; no IPC implementation rollback was needed.
+- Cross-repository integration is verified at this head. Physical receipt, ChangeId and tombstone/ghost GC remain disabled pending their independent safe-horizon and crash/recovery proofs.
+
 ## T-pass integration follow-up — 2026-11-11
 
 - Run 42962678340: BIN-SYNC Linux/Windows build+tests, benchmark build, fuzz/lab, and v3.1 vector conformance passed. Public FLD checkout and FldBinSyncHost builds passed on both Ubuntu and Windows.
