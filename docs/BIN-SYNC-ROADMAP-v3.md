@@ -2805,3 +2805,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] BIN-SYNC core passed **678/678** on Linux and **678/678** on Windows; v3.1 signed control-plane vectors and Fuzz/Lab passed in the same run. The Storage Integration matrix passed on Ubuntu and macOS; Windows was still running at the time this entry was written.
 - [!] Two existing xUnit1031 blocking-task analyzer warnings remain in `Fld1.Engine.Tests/SyncApplyTests.cs` (lines 467 and 475). They are outside the new Storage IPC tests; no test failed. Keep them tracked for cleanup, but do not confuse them with the four IPC-test warnings already removed.
 - [~ T] The local transport plus one real host-owned FLD write path is now cross-repository verified. Still not complete: production operation dispatcher/DTO, single-owner Host executable and discovery, durable idempotency/result ledger, restart-safe request replay, explicit Unix-domain transport tests, high-concurrency cancellation/shutdown stress, pinned snapshot/EBR IPC and FLD Database client facade. No SHM or full multi-process Shared Engine claim yet.
+
+
+
+### 1.99 — Test real reconnect generation fencing and orderly multi-client shutdown — 2026-11-11
+
+- [x T] FLD-DB commit `034578136d7def36d2ae964236604999c9013d19` adds Storage tests for orderly server cancellation with eight admitted client sessions and for rejecting a request that presents a previous connection's session generation after reconnecting with the same stable ClientId. The stale-generation request must be closed before the request handler is invoked.
+- [x T] BIN-SYNC commit `cbf6a449a009bc81865e3e62a34e2619749077e0` extends the host integration test to perform the same reconnect scenario against a real FLD database and assert that no handler call or database mutation occurs when the old generation is replayed.
+- [x C] FLD-DB commit `e6802c4e2f666a13869dbba58030f7669b6c24f4` ensures the database is disposed before temporary-directory cleanup in the new host test, including Windows file-handle semantics.
+- [~ CI] Re-run the exact cross-repository gate against FLD head `4a254a93500b777be6c673a062b3f297dd2fe1df` and BIN-SYNC head containing `cbf6a449a009bc81865e3e62a34e2619749077e0`. Required: Storage shutdown/fencing tests and the real-FLD stale-generation integration test pass on the CI platform; the existing three-platform Storage Integration matrix must remain green.
+- [~ T] These tests cover session-generation fencing and bounded shutdown, not durable request idempotency. The next architectural item remains the durable request identity/result ledger and host restart replay contract, followed by the single-owner Host/discovery and FLD Database facade.
