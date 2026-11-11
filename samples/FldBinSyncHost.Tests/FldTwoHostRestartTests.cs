@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Reflection;
 using BinSync;
 using BinSync.FldHost;
+using Fld1.Engine.Db;
+using Fld1.Storage;
 using Fld1.Storage.Ipc;
 using Xunit;
 
@@ -137,11 +139,11 @@ public sealed class FldTwoHostRestartTests
             HlcLogical = 1
         };
         return new ProviderRemoteBatchCommit(
-            Guid.NewGuid(), NodeId.From(sender), senderTransportEpoch: 1,
-            namespaceId: namespaceId, NodeId.From(issuer), issuerEpoch: epoch,
-            BatchId.From(batchId), cursorStart: 1, cursorEnd: 1,
+            Guid.NewGuid(), NodeId.From(sender), 1,
+            namespaceId, NodeId.From(issuer), epoch,
+            BatchId.From(batchId), 1, 1,
             new byte[16], Id((byte)(0x90 + epoch - 11)), Id((byte)(0xA0 + epoch - 11)),
-            protocolStateDelta: Array.Empty<byte>(), mutations: [mutation]);
+            Array.Empty<byte>(), [mutation]);
     }
 
     private static Process StartHost(string root, ushort namespaceId, byte[] author)
@@ -200,7 +202,7 @@ public sealed class FldTwoHostRestartTests
         DateTime deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            try { using var probe = Fld1.Engine.Db.FldDatabase.Open(root, namespaceId, author); return; }
+            try { using var probe = FldDatabase.Open(root, namespaceId, author); return; }
             catch (IOException) { await Task.Delay(50); }
         }
         throw new TimeoutException("FLD Database Host writer fence was not released.");
