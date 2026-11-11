@@ -62,6 +62,8 @@ public sealed class StorageSyncCoordinatorTests
         public bool LoseNextPublishedOriginResponseAfterCommit { get; set; }
         public List<int> PublishedOriginBatchSizes { get; } = new();
         public Action? AfterNextRead { get; set; }
+        public TaskCompletionSource<bool>? HighWatermarkEntered { get; set; }
+        public TaskCompletionSource<bool>? HighWatermarkRelease { get; set; }
         public Guid ReceiptStreamId { get; }
 
         public RecordingAsyncLocalProvider(StorageDataProvider provider, Guid? receiptStreamId = null)
@@ -96,8 +98,15 @@ public sealed class StorageSyncCoordinatorTests
             }
             return ack;
         }
-        public ValueTask<ulong> GetLocalChangeHighWatermarkAsync(CancellationToken ct = default)
-            => _adapter.GetLocalChangeHighWatermarkAsync(ct);
+        public async ValueTask<ulong> GetLocalChangeHighWatermarkAsync(CancellationToken ct = default)
+        {
+            if (HighWatermarkRelease is { } release)
+            {
+                HighWatermarkEntered?.TrySetResult(true);
+                await release.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+            return await _adapter.GetLocalChangeHighWatermarkAsync(ct).ConfigureAwait(false);
+        }
         public ValueTask<ProviderSnapshotHandle> OpenSnapshotAsync(CancellationToken ct = default)
             => _adapter.OpenSnapshotAsync(ct);
         public ValueTask<ProviderSnapshotPage> ReadSnapshotAsync(Guid token, int after, int limit, CancellationToken ct = default)
@@ -334,6 +343,46 @@ public sealed class StorageSyncCoordinatorTests
         Assert.True(node.TryGetField(1, record, 0x0901, out var value));
         Assert.Equal("coalesced-winner", Encoding.UTF8.GetString(value!.Value));
         Assert.False(node.HasPendingProviderOperationReceipts);
+    }
+
+    [Fact]
+    public async Task Async_coordinator_instances_share_one_namespace_admission_gate()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-shared-admission"), 527);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(0xC1);
+        using var wal = Wal.Open(Path.Combine(_root, "async-shared-admission.wal"));
+        const string scope = "async-shared-admission";
+
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+        node.AttachWal(wal);
+
+        var entered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var asyncProvider = new RecordingAsyncLocalProvider(provider)
+        {
+            HighWatermarkEntered = entered,
+            HighWatermarkRelease = release
+        };
+
+        var firstCoordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        var secondCoordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        Task<int> publication = firstCoordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Task<int> recovery = secondCoordinator.RecoverPendingAppliesAsync(
+            new RecordingAsyncRemoteBatchStore(provider),
+            current => StorageNodePersistence.Save(storage, current));
+        await Task.Delay(100);
+        Assert.False(recovery.IsCompleted);
+
+        release.TrySetResult(true);
+        Assert.Equal(0, await publication.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(0, await recovery.WaitAsync(TimeSpan.FromSeconds(10)));
     }
 
     [Fact]
