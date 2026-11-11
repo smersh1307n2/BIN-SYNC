@@ -277,10 +277,17 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         lock (_gate)
         {
             ThrowIfDisposed();
-            _snapshots.Remove(snapshotToken, out handle);
+            _snapshots.TryGetValue(snapshotToken, out handle);
         }
-        if (handle is not null)
-            await _client.ReleaseSnapshotAsync(handle, cancellationToken).ConfigureAwait(false);
+        if (handle is null) return;
+        await _client.ReleaseSnapshotAsync(handle, cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+        {
+            if (_snapshots.TryGetValue(snapshotToken, out FldDatabaseIpcSnapshotHandle? current) &&
+                current.SnapshotToken == handle.SnapshotToken &&
+                current.HostGeneration == handle.HostGeneration)
+                _snapshots.Remove(snapshotToken);
+        }
     }
 
     /// <summary>
@@ -357,17 +364,19 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
             snapshots = _snapshots.Values.ToArray();
             _snapshots.Clear();
         }
-        try
+        List<Exception>? failures = null;
+        foreach (FldDatabaseIpcSnapshotHandle snapshot in snapshots)
         {
-            foreach (FldDatabaseIpcSnapshotHandle snapshot in snapshots)
-                await _client.ReleaseSnapshotAsync(snapshot).ConfigureAwait(false);
-            await _client.ReleaseOutboxLeaseAsync(_outboxLease).ConfigureAwait(false);
+            try { await _client.ReleaseSnapshotAsync(snapshot).ConfigureAwait(false); }
+            catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
         }
-        finally
-        {
-            await _client.DisposeAsync().ConfigureAwait(false);
-            _feedGate.Dispose();
-        }
+        try { await _client.ReleaseOutboxLeaseAsync(_outboxLease).ConfigureAwait(false); }
+        catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
+        try { await _client.DisposeAsync().ConfigureAwait(false); }
+        catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
+        finally { _feedGate.Dispose(); }
+        if (failures is not null)
+            throw new AggregateException("One or more FLD IPC provider resources could not be released cleanly.", failures);
     }
 
     private async Task<byte[]> ReadCompleteOutboxValueAsync(
