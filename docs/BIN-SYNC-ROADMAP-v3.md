@@ -1,3 +1,13 @@
+## 1.74. FLD contextual Remote APPLY IPC boundary added; process-isolated provider audit — 2026-11-11
+
+- [x C] FLD-DB branch fix/crash-consistency-outbox adds Database IPC operation 0x210C, a bounded versioned codec for the complete RemoteBatchCommit context, relay-subset indices, client API and dispatcher route to the existing atomic FldDatabase.ApplyRemoteBatch transaction.
+- [x C] Remote APPLY IPC preserves sender peer/transport epoch, namespace, issuer/author epoch, batch id, cursor range, 16-byte digest identities, records root and opaque ProtocolStateDelta. ApplyJournal remains the durable deduplication authority; the IPC OperationId is correlation only.
+- [x T] FLD adds codec round-trip, malformed/trailing payload and IPC duplicate-apply tests; exact branch CI is running for commit 2931222a. Do not mark this gate green until the latest run completes on Windows, Ubuntu and macOS.
+- [x A] Existing FLD snapshot IPC 0x2108–0x210B is already implemented and tested: immutable generation, metadata pages, bounded value chunks, ClientId/HostGeneration fencing and release. FLD IPC docs were corrected to match implementation.
+- [!] A complete process-isolated IDataProvider is not yet ready. Existing local IPC WriteBatch generates local HLC/ChangeId inside FLD and cannot accept the provider-supplied stable ChangeId, OriginAuthorEpoch and HLC required by FldDatabaseDataProvider.AppendLocalChange. Add a dedicated atomic identity-preserving local-provider batch operation before moving local writes behind IPC.
+- [!] IDataProvider and IProviderRemoteBatchCommitStore are synchronous today, while FldDatabaseIpcClient is async. Do not hide IPC waits inside sync methods or use sync-over-async on the receive hot path. Introduce an async provider/apply boundary (or an explicit host worker queue with durable admission semantics) before wiring the production process-isolated adapter.
+- [ ] Next: complete FLD CI, then add identity-preserving local provider IPC and async coordinator capability; only then compose the separate-process host and run two-process restart/duplicate/Outbox/snapshot tests. Keep the current in-process adapter as the reference implementation until parity is proven.
+
 ## 1.73. Phase 4.1 retirement crash proof and Phase 4.2 ChangeId restart proof green — 2026-11-11
 
 - [x T] Peer retirement now has an injected crash test at StorageFaultPoint.AfterWalFlushBeforePublish. Reopen replays the complete one-batch retirement: replacement epoch remains active, old epoch rows are removed, the retired-through fence is durable, and repeated retirement creates no second commit.
