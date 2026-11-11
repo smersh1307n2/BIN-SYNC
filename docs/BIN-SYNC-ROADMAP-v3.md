@@ -5,7 +5,7 @@
 - [x T] FLD Storage 66/66, Manifest 11/11, Run 26/26, and WAL 21/21 passed in the same run.
 - [x FLD] The sole Engine test failure was a test-call mismatch, not an IPC implementation defect: the second client explicitly requested the 1 MiB chunkSize while asserting the 4,194,210-byte protocol maximum. FLD commit d6a6857e removes that argument so the test exercises the documented default maximum chunk.
 - [x C] BIN-SYNC integration workflow now also runs Fld1.Core.Tests; commit 75746428.
-- [ ] New exact-head workflow run is required to confirm the corrected Engine test, Core suite, and FldBinSyncHost.Tests on both operating systems.
+- [x CI] Exact-head run 42963323793 completed successfully on Ubuntu and Windows: all six FLD projects plus FldBinSyncHost.Tests passed 232/232 per platform; both FldBinSyncHost builds completed with 0 warnings and 0 errors.
 
 ## 1.70. Public FLD-DB checkout gate enabled — 2026-11-11
 
