@@ -23,6 +23,11 @@ public sealed class StorageIpcHostCompositionTests
         const ushort fieldId = 0x0317;
         const ushort keyEpoch = 4;
         byte[] value = "ipc-to-fld-durable-write"u8.ToArray();
+        byte[] request = new byte[20 + value.Length];
+        recordId.CopyTo(request, 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(16), fieldId);
+        BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(18), keyEpoch);
+        value.CopyTo(request, 20);
         var requestIds = new ConcurrentQueue<ulong>();
         var operationIds = new ConcurrentQueue<Guid>();
         Guid ipcClientId = Guid.NewGuid();
@@ -86,12 +91,6 @@ public sealed class StorageIpcHostCompositionTests
                         pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10)));
                 Assert.True(overload is IOException or InvalidDataException,
                     $"Expected a transport-level overload rejection, received {overload.GetType().Name}.");
-
-                byte[] request = new byte[20 + value.Length];
-                recordId.CopyTo(request, 0);
-                BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(16), fieldId);
-                BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(18), keyEpoch);
-                value.CopyTo(request, 20);
 
                 byte[] firstOperation = StorageIpcOperationProtocol.Encode(
                     new StorageIpcOperationEnvelope(
