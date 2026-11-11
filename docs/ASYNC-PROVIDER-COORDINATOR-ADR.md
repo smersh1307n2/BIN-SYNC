@@ -110,3 +110,13 @@ The first explicit optional async capability contracts are now present in `BinSy
 These are API contracts only. They are not yet implemented by the FLD IPC client or an async coordinator, and they do not authorize GC. Optional capability presence must remain truthful; do not add a catch-all adapter that implements unsupported capabilities and throws at runtime.
 
 The async commit lease contract explicitly returns `IAsyncDisposable` so a future coordinator can release it after awaited IPC work. This does not make existing `Monitor`-based Node/Storage gates await-safe. The coordinator implementation remains blocked until every conflicting writer participates in a proven async-compatible gate protocol or a durable intent/revalidation protocol.
+
+
+## Snapshot capability audit correction — 2026-11-11
+
+A closer read of the current FLD IPC implementation establishes that two items previously described as missing are already available through the immutable snapshot contract:
+
+- `OpenSnapshotAsync` returns `SourceFeedWatermark` captured with the snapshot generation. No separate live high-watermark RPC is required for snapshot-consistent traversal.
+- `ReadSnapshotPageAsync` exposes all current-field metadata required by `ProviderMutation`; `ReadSnapshotValueChunkAsync` reads the value from that same pinned generation. This supports a correct snapshot-backed `ReadCurrentAsync` fallback by bounded traversal, although it is not an efficient point lookup.
+
+The next provider implementation should use these existing operations and explicitly document the performance cost. Do not expand the IPC protocol with a duplicate watermark operation. The genuinely missing capabilities remain published-origin stamping, durable publication/author-epoch transitions, snapshot-state/FULL_REPLACE operations, and the async-safe composed commit barrier. A dedicated versioned point-read may be added later only if profiling justifies it and it preserves generation consistency.
