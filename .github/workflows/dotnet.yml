@@ -258,10 +258,11 @@ jobs:
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
-      - name: Test FLD Storage, Run, WAL and Engine durability contracts
+      - name: Test FLD Storage, Manifest, Run, WAL and Engine durability contracts
         if: steps.fld_access.outputs.available == 'true'
         run: |
           dotnet test FLD-DB/tests/Fld1.Storage.Tests/Fld1.Storage.Tests.csproj --configuration Release
+          dotnet test FLD-DB/tests/Fld1.Manifest.Tests/Fld1.Manifest.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Run.Tests/Fld1.Run.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Wal.Tests/Fld1.Wal.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release
