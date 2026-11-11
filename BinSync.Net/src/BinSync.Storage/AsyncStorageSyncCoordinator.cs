@@ -26,6 +26,7 @@ public sealed class AsyncStorageSyncCoordinator
     private sealed class NamespaceAdmissionGates
     {
         public readonly SemaphoreSlim Admission = new(1, 1);
+        public readonly object MetadataGate = new();
         public readonly ConcurrentDictionary<NodeId, SemaphoreSlim> OutboundPeers = new();
     }
 
@@ -34,7 +35,7 @@ public sealed class AsyncStorageSyncCoordinator
 
     private readonly NamespaceAdmissionGates _admissionGates;
     private readonly SemaphoreSlim _asyncAdmissionGate;
-    private readonly object _metadataGate = new();
+    private readonly object _metadataGate;
 
     public AsyncStorageSyncCoordinator(
         Node node, IMetadataStore metadataStore, string scopeId, int namespaceId)
@@ -52,6 +53,7 @@ public sealed class AsyncStorageSyncCoordinator
         _admissionGates = SharedAdmissionGates.GetOrAdd(
             (node.NodeId, namespaceId), static _ => new NamespaceAdmissionGates());
         _asyncAdmissionGate = _admissionGates.Admission;
+        _metadataGate = _admissionGates.MetadataGate;
     }
 
     /// <summary>
