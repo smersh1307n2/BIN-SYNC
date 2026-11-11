@@ -712,6 +712,103 @@ public sealed class StorageIpcHostCompositionTests
         }
     }
 
+    [Fact]
+    public async Task Local_provider_append_replays_same_receipt_after_response_loss_and_database_restart()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-provider-replay-" + Guid.NewGuid().ToString("N"));
+        string pipeName = StorageIpcEndpoint.ComputePipeName(directory, 0);
+        const uint namespaceId = 43;
+        byte[] localAuthor = Id(0x61);
+        byte[] recordId = Id(0x62);
+        byte[] changeId = Id(0x63);
+        byte[] value = "durable-provider-retry"u8.ToArray();
+        Guid ownerId = Guid.NewGuid();
+        Guid clientId = Guid.NewGuid();
+        Guid operationId = Guid.NewGuid();
+        const ushort fieldId = 0x0421;
+        var mutation = new FldLocalProviderMutation(
+            recordId, fieldId, value, changeId,
+            OriginAuthorEpoch: 7, Wall: 123456, Logical: 2, KeyEpoch: 3);
+
+        try
+        {
+            using (var database = FldDatabase.Open(directory, namespaceId, localAuthor))
+            {
+                StorageIpcEndpoint.Publish(directory, StorageIpcEndpoint.Create(
+                    directory, 0, ownerId, Environment.ProcessId));
+                var dispatcher = new FldDatabaseIpcDispatcher(database);
+                using var serverCancellation = new CancellationTokenSource();
+                var server = new StorageIpcServer(
+                    pipeName,
+                    (context, request, cancellationToken) =>
+                    {
+                        ValueTask<ReadOnlyMemory<byte>> response =
+                            dispatcher.HandleAsync(context, request, cancellationToken);
+                        // The FLD WAL commit and durable receipt complete before the
+                        // server is stopped, simulating loss of the response frame.
+                        serverCancellation.Cancel();
+                        return response;
+                    });
+                Task serverTask = server.RunAsync(serverCancellation.Token);
+                try
+                {
+                    await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                    await using var client = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                        directory, clientId, TimeSpan.FromSeconds(10));
+                    Exception lostResponse = await Assert.ThrowsAnyAsync<Exception>(async () =>
+                        await client.AppendLocalProviderBatchAsync(
+                            operationId, 1, new[] { mutation }));
+                    Assert.True(
+                        lostResponse is IOException or InvalidDataException or ObjectDisposedException,
+                        $"Expected response loss after durable FLD commit, received {lostResponse.GetType().Name}.");
+                }
+                finally
+                {
+                    serverCancellation.Cancel();
+                    await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                    dispatcher.Dispose();
+                }
+
+                Assert.Equal(1UL, database.GetOutboxHighWatermark());
+            }
+
+            using (var reopened = FldDatabase.Open(directory, namespaceId, localAuthor))
+            {
+                var dispatcher = new FldDatabaseIpcDispatcher(reopened);
+                using var serverCancellation = new CancellationTokenSource();
+                var server = new StorageIpcServer(pipeName, dispatcher.HandleAsync);
+                Task serverTask = server.RunAsync(serverCancellation.Token);
+                try
+                {
+                    await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                    await using var reconnected = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                        directory, clientId, TimeSpan.FromSeconds(10));
+                    FldDatabaseIpcWriteResult replay = await reconnected.AppendLocalProviderBatchAsync(
+                        operationId, 1, new[] { mutation });
+                    Assert.True(replay.IsDuplicate);
+                    Assert.Equal(1, replay.MutationCount);
+                    Assert.Equal(1UL, await reconnected.GetOutboxHighWatermarkAsync());
+                }
+                finally
+                {
+                    serverCancellation.Cancel();
+                    await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                    dispatcher.Dispose();
+                    StorageIpcEndpoint.DeleteIfOwned(directory, 0, ownerId);
+                }
+
+                Assert.True(reopened.TryGetBytes(recordId, fieldId, out byte[]? stored));
+                Assert.Equal(value, stored);
+                Assert.Equal(1, reopened.ReadOutboxBatch(0, 10).Count);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] bytes = new byte[16];
