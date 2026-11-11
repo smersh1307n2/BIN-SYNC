@@ -157,7 +157,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         try
         {
             host = StartDatabaseHost(hostRoot, namespaceId, localAuthor);
-            _ = await WaitForHostEndpointAsync(hostRoot, host, TimeSpan.FromSeconds(45));
+            StorageIpcEndpointInfo firstEndpoint =
+                await WaitForHostEndpointAsync(hostRoot, host, TimeSpan.FromSeconds(45));
 
             reader = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15),
@@ -198,7 +199,25 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(batch.ApplyToken, first.ApplyToken);
             Assert.False(first.IsDuplicate);
 
+            // Simulate a full FLD Database Host process restart after durable APPLY.
+            // The sender retries the same immutable batch after reconnecting; the
+            // recovered ApplyJournal must return the original durable receipt.
             await applyStore.DisposeAsync();
+            applyStore = null;
+            await reader.DisposeAsync();
+            reader = null;
+            await StopDatabaseHostAsync(host);
+            host = null;
+            await WaitForDatabaseWriterReleaseAsync(
+                hostRoot, namespaceId, localAuthor, TimeSpan.FromSeconds(15));
+
+            host = StartDatabaseHost(hostRoot, namespaceId, localAuthor);
+            _ = await WaitForHostEndpointAsync(
+                hostRoot, host, TimeSpan.FromSeconds(45), firstEndpoint.OwnerId);
+
+            reader = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15),
+                NodeId.From(localAuthor), () => 1);
             applyStore = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRoot, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
 
