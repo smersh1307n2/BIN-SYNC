@@ -398,7 +398,7 @@ public sealed partial class Node
             ulong first = ProviderOperationReceiptSequences.Keys
                 .Where(key => key.Ns == namespaceId)
                 .Select(key => key.ClientSequence)
-                .DefaultIfEmpty(0)
+                .DefaultIfEmpty(0UL)
                 .Min();
             if (first == 0) return 0;
             acked = first - 1;
