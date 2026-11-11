@@ -21,6 +21,8 @@ public sealed class StorageSyncCoordinatorTests
     {
         private readonly IDataProvider _provider;
         public ProviderRemoteBatchCommit? LastCommit { get; private set; }
+        public List<Guid> ApplyTokens { get; } = new();
+        public bool LoseNextResponseAfterCommit { get; set; }
 
         public RecordingAsyncRemoteBatchStore(IDataProvider provider) => _provider = provider;
 
@@ -29,7 +31,13 @@ public sealed class StorageSyncCoordinatorTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastCommit = batch;
+            ApplyTokens.Add(batch.ApplyToken);
             ProviderApplyReceipt applied = _provider.ApplyRemoteBatch(batch.ApplyToken, batch.Mutations);
+            if (LoseNextResponseAfterCommit)
+            {
+                LoseNextResponseAfterCommit = false;
+                throw new IOException("simulated response loss after durable provider APPLY");
+            }
             return ValueTask.FromResult(new ProviderApplyReceipt(
                 batch.ApplyToken, batch.BatchDigest.ToArray(), applied.IsDuplicate));
         }
@@ -118,10 +126,22 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(receiver.TryGetField(1, record, 0x0838, out _));
         Assert.False(provider.TryReadCurrent(record, 0x0838, out _));
 
+        asyncProvider.LoseNextResponseAfterCommit = true;
+        await Assert.ThrowsAsync<IOException>(async () =>
+            await coordinator.RecoverPendingAppliesAsync(
+                asyncProvider, node => StorageNodePersistence.Save(storage, node)));
+        Assert.Single(metadata.ReadPendingApplyIntents("async-pending-recovery", receiver.NodeId));
+        Assert.True(provider.TryReadCurrent(record, 0x0838, out _));
+        using (Node checkpoint = StorageNodePersistence.Load(storage, receiver.NodeId))
+            Assert.True(checkpoint.TryGetField(1, record, 0x0838, out _));
+
         int recovered = await coordinator.RecoverPendingAppliesAsync(
             asyncProvider, node => StorageNodePersistence.Save(storage, node));
 
         Assert.Equal(1, recovered);
+        Assert.Equal(2, asyncProvider.ApplyTokens.Count);
+        Assert.Equal(pending.ApplyToken, asyncProvider.ApplyTokens[0]);
+        Assert.Equal(asyncProvider.ApplyTokens[0], asyncProvider.ApplyTokens[1]);
         Assert.NotNull(asyncProvider.LastCommit);
         Assert.Equal(pending.ApplyToken, asyncProvider.LastCommit!.ApplyToken);
         Assert.Equal(sender.NodeId, asyncProvider.LastCommit.SenderPeer);
