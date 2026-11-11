@@ -294,7 +294,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         RecordId recordId, ushort fieldId, CancellationToken cancellationToken = default)
     {
         ThrowIfUnavailable(cancellationToken);
-        Span<byte> recordBytes = stackalloc byte[16];
+        byte[] recordBytes = new byte[16];
         recordId.WriteTo(recordBytes);
         FldDatabaseIpcCurrentMetadata? metadata = await _client.ReadCurrentMetadataAsync(
             recordBytes.ToArray(), fieldId, cancellationToken).ConfigureAwait(false);
