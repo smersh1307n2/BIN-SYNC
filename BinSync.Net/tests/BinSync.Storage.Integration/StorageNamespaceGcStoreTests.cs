@@ -222,7 +222,7 @@ public sealed class StorageNamespaceGcStoreTests
         NamespaceRosterCertificate roster = Roster(1, new byte[32], keys);
         Guid generation = Guid.Parse("cccccccc-dddd-eeee-ffff-000000000042");
         byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("same full replace for every route"));
-        NodeId origin = NodeId.From(Id(4));
+        NodeId origin = NodeId.From(Id(2));
         const uint originEpoch = 7;
         const ulong finalIssued = 42;
 
@@ -244,16 +244,18 @@ public sealed class StorageNamespaceGcStoreTests
                         ContiguousAppliedOriginSequence = applied
                     }
                 },
-                IssuedOrigins = new[]
-                {
-                    new IssuedOriginFrontierEntry
+                IssuedOrigins = memberIndex == 1
+                    ? new[]
                     {
-                        OriginAuthorEpoch = originEpoch,
-                        IssuedOriginSequence = finalIssued,
-                        MaxIssuedHlcWall = 500,
-                        MaxIssuedHlcLogical = 2
+                        new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = originEpoch,
+                            IssuedOriginSequence = finalIssued,
+                            MaxIssuedHlcWall = 500,
+                            MaxIssuedHlcLogical = 2
+                        }
                     }
-                }
+                    : Array.Empty<IssuedOriginFrontierEntry>()
             };
 
         try
@@ -308,8 +310,6 @@ public sealed class StorageNamespaceGcStoreTests
                     restored!, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
 
                 var recoveredReports = gc.ReadOriginFrontiers(restored!);
-                AppliedOriginFrontierReport recoveredLagging = recoveredReports.Single(
-                    report => report.MemberNodeId == restored!.Members[2].NodeId);
                 AppliedOriginFrontierReport caughtUp = MemberReport(2, 2, finalIssued);
                 gc.AcceptOriginFrontier(
                     OriginFrontierProtocol.Sign(caughtUp, keys[2].Seed), restored!);
