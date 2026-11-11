@@ -29,7 +29,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         using var nodeStorage = StorageDatabase.Open(nodeRoot, 701);
         using var metadata = new StorageMetadataStore(nodeStorage);
         using var nodeWal = Wal.Open(Path.Combine(nodeRoot, "node.wal"));
-        Node node = new NodeBuilder().WithNodeId(authorBytes).WithEpoch(17).Build();
+        Node node = new NodeBuilder().WithNodeId(author).WithEpoch(17).Build();
         node.AttachWal(nodeWal);
 
         RecordId record = RecordId.From(Id(0x56));
