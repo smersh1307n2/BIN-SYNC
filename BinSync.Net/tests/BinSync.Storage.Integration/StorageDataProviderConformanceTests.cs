@@ -92,13 +92,15 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     {
         var snapshot = new MemoryStream();
         int receiptQueries = 0, changeIdQueries = 0, recordQueries = 0;
+        var draftHorizon = new ApplicationDraftHorizon(2, 300, 4);
         using var scan = new DelegateApplicationGcReferenceScan(
             snapshot,
-            default,
+            draftHorizon,
             (_, _, _, _) => { receiptQueries++; return true; },
             _ => { changeIdQueries++; return true; },
             (_, _) => { recordQueries++; return true; });
 
+        Assert.Equal(draftHorizon, scan.UnpublishedLocalDraftHorizon);
         Assert.True(scan.HasExternalReceiptReference(Node(1), 1, 2, default));
         Assert.True(scan.HasExternalChangeIdReference(default));
         Assert.True(scan.HasExternalRecordReference(default, default));
