@@ -77,7 +77,9 @@ public sealed class FldRemoteBatchApplyStore : IProviderRemoteBatchCommitStore
                 mutation.AuthorNodeId.ToArray(),
                 mutation.ChangeId.ToArray(),
                 keyEpoch: 0,
-                isTombstone: false);
+                isTombstone: false,
+                originAuthorEpoch: mutation.OriginAuthorEpoch,
+                originSequence: mutation.OriginSequence);
         }
 
         return new RemoteFieldWrite(
@@ -89,6 +91,8 @@ public sealed class FldRemoteBatchApplyStore : IProviderRemoteBatchCommitStore
             mutation.AuthorNodeId.ToArray(),
             mutation.ChangeId.ToArray(),
             mutation.KeyEpoch,
-            mutation.IsTombstone);
+            mutation.IsTombstone,
+            mutation.OriginAuthorEpoch,
+            mutation.OriginSequence);
     }
 }
