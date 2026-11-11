@@ -94,3 +94,19 @@ The runtime remains exactly two DLLs:
 - `Fld1.Database.dll`: FLD database, WAL/manifest integration, IPC protocol and dispatcher.
 
 Database Host remains a separate executable, not a third runtime DLL. BIN-SYNC owns transport, delivery, ACK and causal metadata; FLD owns durable application field state, WAL recovery and its apply receipt. Do not add a duplicate pending journal or relay journal in FLD.
+
+## Contract implementation progress — 2026-11-11
+
+The first explicit optional async capability contracts are now present in `BinSync.Core/AsyncProviderCapabilities.cs`:
+- snapshot-state apply;
+- provider publication cutover;
+- immutable published-origin stamping;
+- author-epoch closure/activation;
+- FULL_REPLACE lifecycle and progress;
+- durable snapshot lookup/watermark/pruning;
+- async commit and snapshot-GC leases;
+- host-owned async GC reference scan with a pinned disposable view.
+
+These are API contracts only. They are not yet implemented by the FLD IPC client or an async coordinator, and they do not authorize GC. Optional capability presence must remain truthful; do not add a catch-all adapter that implements unsupported capabilities and throws at runtime.
+
+The async commit lease contract explicitly returns `IAsyncDisposable` so a future coordinator can release it after awaited IPC work. This does not make existing `Monitor`-based Node/Storage gates await-safe. The coordinator implementation remains blocked until every conflicting writer participates in a proven async-compatible gate protocol or a durable intent/revalidation protocol.
