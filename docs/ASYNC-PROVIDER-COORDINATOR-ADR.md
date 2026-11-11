@@ -182,3 +182,21 @@ Until that design is selected and tested, `FldDatabaseIpcAsyncDataProvider` deli
 FLD Database IPC operation 0x2114 now exposes the existing identity-only `CommitPublishedOrigins` WAL path. The process-isolated sample implements `IAsyncProviderPublishedOriginStore` and maps BIN-SYNC's immutable `(ChangeId, OperationOrigin)` stamps without creating another Outbox row or pending journal. The FLD operation is idempotent for an exact stamp, ignores a superseded ChangeId, and rejects conflicting origins for a still-current ChangeId.
 
 This is a real async optional capability, but it is not sufficient for safe end-to-end publication by itself: without the composed async commit barrier, a caller cannot claim atomicity across Metadata Store publication and the FLD current-state projection. The remaining optional capabilities and coordinator lock gate remain open.
+
+
+## First asynchronous remote-APPLY receive slice — 2026-11-11
+
+`SyncSession.ReceiveBatchAsync` now accepts an asynchronous before-ACK callback. The callback is awaited after Node applies the decoded batch and before the ACK frame is constructed/sent. The synchronous callback remains supported; supplying both is rejected.
+
+`StorageSyncCoordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync` composes the existing durable PendingApply staging with `IAsyncProviderRemoteBatchCommitStore`:
+
+1. Stage the complete immutable batch and per-operation decisions in Metadata Store.
+2. Let SyncSession apply the decoded batch to Node.
+3. Persist the Node checkpoint before crossing the IPC boundary.
+4. Await contextual provider APPLY with the original sender, transport epoch, issuer/author epoch, BatchId, cursor range, digest chain and RecordsRoot.
+5. Validate the returned ApplyToken, finalize the Metadata receipt, and return to SyncSession.
+6. SyncSession emits the transport ACK only after the awaited callback succeeds.
+
+No thread-affine Monitor is held across the provider await. A per-coordinator `SemaphoreSlim` serializes the async provider/finalization phase. The stable ApplyToken and provider-side durable receipt are the retry identity after an uncertain response.
+
+This is deliberately a narrow first slice, not a complete async coordinator. The current orchestration assumes one receive stream per namespace/coordinator. Multiple independent sessions sharing one coordinator still require namespace-wide admission before production use. Local feed publication, Node-WAL persistence of the IPC receipt ClientSequence, independent receipt ACK, async snapshot rehydration, FULL_REPLACE and all physical GC remain out of scope and disabled. Exact-head CI plus response-loss/restart tests are required before this path is considered production-ready.
