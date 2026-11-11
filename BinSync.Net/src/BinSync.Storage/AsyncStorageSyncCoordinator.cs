@@ -479,11 +479,8 @@ public sealed class AsyncStorageSyncCoordinator
         if (session.PeerEpoch <= 0)
             throw new InvalidDataException("A nonzero transport peer epoch is required for async receive.");
         RegisterInterestedPeer(session, _namespaceId);
-        await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            StorageRemoteApplyPlan? plan = null;
-            BatchResult result = await session.ReceiveBatchAsync(
+        StorageRemoteApplyPlan? plan = null;
+        BatchResult result = await session.ReceiveBatchAsync(
                 _node,
                 beforeApply: null,
                 beforeAck: null,
@@ -501,15 +498,15 @@ public sealed class AsyncStorageSyncCoordinator
                         ?? throw new InvalidOperationException("Receive intent was not durably staged.");
                     await ApplyRemoteBatchAfterNodeApplyCoreAsync(
                         batch, accepted, asyncProvider, persistNode, ct).ConfigureAwait(false);
+                },
+                acquireProcessingLeaseAsync: async token =>
+                {
+                    await _asyncAdmissionGate.WaitAsync(token).ConfigureAwait(false);
+                    return new SemaphoreRelease(_asyncAdmissionGate);
                 }).ConfigureAwait(false);
-            if (plan?.IsDuplicate == true)
-                result.Duplicate = true;
-            return result;
-        }
-        finally
-        {
-            _asyncAdmissionGate.Release();
-        }
+        if (plan?.IsDuplicate == true)
+            result.Duplicate = true;
+        return result;
     }
 
     /// <summary>Complete a separately staged receive through the async provider.</summary>
@@ -772,6 +769,13 @@ public sealed class AsyncStorageSyncCoordinator
             && left.AuthorNodeId == right.AuthorNodeId
             && left.KeyEpoch == right.KeyEpoch
             && left.Value.AsSpan().SequenceEqual(right.Value);
+
+    private sealed class SemaphoreRelease : IDisposable
+    {
+        private SemaphoreSlim? _semaphore;
+        public SemaphoreRelease(SemaphoreSlim semaphore) => _semaphore = semaphore;
+        public void Dispose() => Interlocked.Exchange(ref _semaphore, null)?.Release();
+    }
 
     private ProviderRemoteBatchCommit CreateRemoteBatchCommit(
         Batch batch, StorageRemoteApplyPlan plan, IReadOnlyList<ProviderMutation> mutations) =>
