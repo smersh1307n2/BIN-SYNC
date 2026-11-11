@@ -227,10 +227,24 @@ public sealed class StorageSyncCoordinatorTests
         const string scope = "async-metadata-outbound";
         RecordId record = RecordId.From(Guid.Parse("90000000-0000-0000-0000-000000000090").ToByteArray());
 
-        Assert.True(sender.WriteField(1, record, 0x0892,
-            "metadata-outbound"u8.ToArray(), new Hlc(9000, 0)));
         var legacyPublisher = new StorageSyncCoordinator(sender, provider, 1, metadata, scope);
-        Assert.Equal(1, legacyPublisher.PublishLocalChanges(_ => { }));
+        legacyPublisher.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, sender));
+        using var wal = Wal.Open(Path.Combine(_root, "async-metadata-outbound.wal"));
+        sender.AttachWal(wal);
+        await using var asyncLocalProvider = new RecordingAsyncLocalProvider(provider);
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record,
+            FieldId = 0x0892,
+            AuthorNodeId = sender.NodeId,
+            OriginAuthorEpoch = 1,
+            HlcWall = 9000,
+            Value = "metadata-outbound"u8.ToArray(),
+            ChangeId = BatchId.From(Guid.Parse("90000000-0000-0000-0000-000000000091").ToByteArray())
+        });
+        var publisher = new AsyncStorageSyncCoordinator(sender, metadata, scope, 1);
+        Assert.Equal(1, await publisher.PublishLocalChangesAsync(
+            asyncLocalProvider, current => StorageNodePersistence.Save(storage, current)));
         Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, sender.NodeId, 1, sender.NodeId));
 
