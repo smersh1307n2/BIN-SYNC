@@ -8,6 +8,15 @@
 - [x C] The former private-repository gate is closed: no FLD_DB_READ_TOKEN is required, and the cross-repository host tests are now actually executed rather than skipped.
 - [ ] Next: continue the remaining Phase 3–5 proof work. Keep physical receipt, ChangeId and tombstone/ghost GC disabled until each independent safe-horizon, composed-lease, crash/reopen and adversarial proof is complete.
 
+## 1.72. FLD IPC snapshot handles implemented; exact-head CI pending — 2026-11-11
+
+- [x A] Snapshot consistency boundary is the pinned immutable Run generation plus the durable frozen overlay Run and its SourceFeedWatermark. Snapshot pages do not copy the namespace's value payloads per client.
+- [x C] FLD provider snapshots now expose metadata-only pages and bounded value chunks. The page retry cache includes absolute start index, page limit and value/metadata mode.
+- [x C] Database IPC adds OpenSnapshot, ReadSnapshotPage, ReadSnapshotValueChunk and ReleaseSnapshot. Handles bind to ClientId and dispatcher HostGeneration; open is idempotent by (ClientId, OperationId), release is idempotent, limits are four handles/client and 64/host.
+- [x C] IPC-owned generations persist an atomic ipc.handle descriptor before manifest publication. Host restart invalidates IPC handles and prunes only stale IPC-owned generations; non-IPC provider snapshots used by FULL_REPLACE remain pinned.
+- [x T] Added tests for metadata-only paging, chunk boundaries, different-limit retries, snapshot stability across writes/checkpoint/compaction, open retry, client isolation, reconnect, release idempotency, host-restart invalidation and preservation of non-IPC snapshots.
+- [ ] CI Exact-head cross-repository build/test run is pending for FLD branch fix/crash-consistency-outbox and BIN-SYNC branch feature/fld-external-storage.
+
 ## 1.71. FLD public host build passes; default-chunk test corrected — 2026-11-11
 
 - [x CI] Public FLD checkout and FldBinSyncHost build succeeded on both Ubuntu and Windows without FLD_DB_READ_TOKEN; both host adapter builds completed with zero warnings/errors.
