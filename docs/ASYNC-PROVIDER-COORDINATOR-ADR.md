@@ -219,3 +219,16 @@ Recovery follows the same durable ordering as live receive:
 The async admission semaphore serializes this recovery pass against the coordinator's async receive path. The implementation does not hold a thread-affine Monitor across provider IPC. A provider commit whose response is lost is retried with the same ApplyToken and immutable context; provider idempotency remains mandatory.
 
 The recovery API is a startup barrier, not a claim that every synchronous writer has joined the async admission protocol. Hosts must run it before accepting sync sessions or application writes. The new interruption test stages PendingApply and interrupts before Node mutation, then verifies replay into Node/provider and metadata finalization. Response-loss-after-provider-commit and multi-process restart fault injection remain required before production readiness.
+
+
+### Recovery verification hardening — 2026-11-11
+
+The asynchronous provider receipt is accepted only when both its ApplyToken and BatchFingerprint match the durable PendingApply intent (BatchDigest). Recovery also compares the decoded payload's namespace, BatchId, issuer epoch, durable author, cursor range, previous digest, BatchDigest, full-header fingerprint and deterministic ApplyToken before provider IPC. A matching token alone is not sufficient.
+
+The integration test now covers a provider commit whose IPC response is lost: the first recovery call commits the provider batch and throws before Metadata finalization; PendingApply remains. The second recovery call replays the same wire payload and ApplyToken, obtains the provider's idempotent receipt, and finalizes Metadata. It also reloads the persisted Node checkpoint between the two calls.
+
+Exact-head verification passed:
+- BIN-SYNC run `43012649107`: .NET Linux and Windows, Fuzz/Lab, signed vectors, and FLD host adapter builds on Ubuntu and Windows — 6/6 jobs.
+- Storage Integration run `43012649100`: Ubuntu, Windows and macOS — 3/3 jobs.
+
+This establishes the tested recovery primitive, not a completed process-isolated async coordinator. The existing `StorageSyncCoordinator` still has a synchronous `IDataProvider` dependency for its other operations; the production async-only provider path still needs a first-class async coordinator and async local-feed publication.
