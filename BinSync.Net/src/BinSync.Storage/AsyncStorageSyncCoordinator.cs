@@ -387,6 +387,56 @@ public sealed class AsyncStorageSyncCoordinator
     }
 
     /// <summary>
+    /// Deliver one immutable Metadata-owned outbound batch to a registered peer.
+    /// Local publication, remote APPLY and outbound reservation/ACK share the same
+    /// namespace admission gate, so this coordinator never interleaves those phases.
+    /// The captured per-author ceilings prevent this send from observing a later,
+    /// not-yet-published provider feed suffix.
+    /// </summary>
+    public async Task<bool> PushNextBatchAsync(
+        SyncSession session,
+        int schemaVersion = 1,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (session.PeerEpoch <= 0)
+            throw new InvalidDataException("A nonzero transport peer epoch is required for async send.");
+        if (_metadataStore is not IMetadataPeerStateStore peerStore)
+            throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
+
+        await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            RegisterInterestedPeer(session, _namespaceId);
+            var ceilings = new Dictionary<NodeId, ulong>();
+            foreach (NodeId author in peerStore.ReadOutboundAuthors(
+                _scopeId, _node.NodeId, _namespaceId))
+            {
+                if (author == session.PeerNodeId) continue;
+                ulong high = _metadataStore.GetOutboundHighWatermark(
+                    _scopeId, _node.NodeId, _namespaceId, author);
+                if (high != 0) ceilings[author] = high;
+            }
+            foreach (NodeId author in peerStore.ReadRelayAuthors(
+                _scopeId, _node.NodeId, _namespaceId))
+            {
+                if (author == session.PeerNodeId || author == _node.NodeId) continue;
+                ulong high = _metadataStore.GetRelayHighWatermark(
+                    _scopeId, _node.NodeId, _namespaceId, author);
+                if (high != 0) ceilings[author] = high;
+            }
+
+            return await session.PushBatchAsync(
+                _node, _namespaceId, peerStore, _scopeId,
+                ceilings, schemaVersion, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _asyncAdmissionGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Receive one batch and emit its transport ACK only after Node checkpoint,
     /// contextual async provider APPLY and Metadata finalization all succeed.
     /// </summary>
