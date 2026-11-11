@@ -2909,7 +2909,7 @@ public sealed class StorageSyncCoordinator
                     recoveredBatch.BatchId != pending.BatchId ||
                     !recoveredBatch.BatchDigest.ToArray().AsSpan().SequenceEqual(pending.BatchDigest) ||
                     !recoveredBatch.PrevBatchDigest.ToArray().AsSpan().SequenceEqual(pending.PreviousBatchDigest) ||
-                    !InboxReceiptIdentity.Compute(recoveredBatch).AsSpan().SequenceEqual(pending.HeaderFingerprint) ||
+                    !InboxReceiptIdentity.Compute(recoveredBatch).ToArray().AsSpan().SequenceEqual(pending.HeaderFingerprint) ||
                     CreateBatchApplyToken(recoveredBatch) != intent.ApplyToken)
                     throw new InvalidDataException(
                         "Recovered wire payload does not match its durable PendingApply identity.");
