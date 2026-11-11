@@ -333,6 +333,20 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await using SyncSession acceptor = await acceptTask;
             await using SyncSession initiator = await connectTask;
 
+            // The test begins after each host has completed its initial snapshot.
+            // Persist the empty per-author baseline so incremental DELTA_BATCH
+            // delivery is legal for both newly registered peer incarnations.
+            metadataA!.RegisterInterestedPeer("two-host-a", nodeA!.NodeId, nodeB!.NodeId,
+                checked((uint)initiator.PeerEpoch), checked((int)namespaceId));
+            metadataA.CompletePeerInitialSync("two-host-a", nodeA.NodeId, nodeB.NodeId,
+                checked((uint)initiator.PeerEpoch), checked((int)namespaceId),
+                new[] { new MetadataPeerStreamBaseline(nodeA.NodeId, 0, 17) });
+            metadataB!.RegisterInterestedPeer("two-host-b", nodeB.NodeId, nodeA.NodeId,
+                checked((uint)acceptor.PeerEpoch), checked((int)namespaceId));
+            metadataB.CompletePeerInitialSync("two-host-b", nodeB.NodeId, nodeA.NodeId,
+                checked((uint)acceptor.PeerEpoch), checked((int)namespaceId),
+                new[] { new MetadataPeerStreamBaseline(nodeB.NodeId, 0, 17) });
+
             Task<BatchResult> receiveA = adapterA.ReceiveBatchAsync(initiator);
             Task<BatchResult> receiveB = adapterB.ReceiveBatchAsync(acceptor);
             Task<int> sendA = adapterA.RunOutboundRoundAsync([initiator]);
