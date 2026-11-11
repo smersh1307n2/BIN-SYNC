@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using System.Security.Cryptography;
 using Fld1.Engine.Db;
 using Fld1.Storage.Engine;
 using Fld1.Storage.Ipc;
@@ -43,6 +44,15 @@ public sealed class StorageIpcHostCompositionTests
                         throw new InvalidDataException("Unknown FLD host operation code.");
                     operationIds.Enqueue(operation.OperationId);
                     ReadOnlyMemory<byte> operationPayload = operation.Payload;
+                    byte[] clientId = new byte[16];
+                    byte[] operationId = new byte[16];
+                    context.ClientId.TryWriteBytes(clientId);
+                    operation.OperationId.TryWriteBytes(operationId);
+                    byte[] fingerprint = SHA256.HashData(operationPayload.Span);
+
+                    if (database.TryGetLocalOperationReceipt(
+                        clientId, operationId, fingerprint, out FldLocalOperationCommitResult? prior))
+                        return ValueTask.FromResult<ReadOnlyMemory<byte>>(prior!.Result);
 
                     if (operationPayload.Length < 20)
                         throw new InvalidDataException("FLD write request is truncated.");
@@ -53,8 +63,15 @@ public sealed class StorageIpcHostCompositionTests
                     byte[] requestedValue = operationPayload[20..].ToArray();
 
                     database.Put(requestedRecord, requestedField, requestedValue, requestedKeyEpoch);
-                    _ = database.Commit();
-                    return ValueTask.FromResult<ReadOnlyMemory<byte>>(requestedRecord);
+                    FldLocalOperationCommitResult committed = database.CommitWithReceipt(
+                        new FldLocalOperationReceipt
+                        {
+                            ClientId = clientId,
+                            OperationId = operationId,
+                            Fingerprint = fingerprint,
+                            Result = requestedRecord
+                        });
+                    return ValueTask.FromResult<ReadOnlyMemory<byte>>(committed.Result);
                 },
                 maxConcurrentClients: 1);
             Task serverTask = server.RunAsync(serverCancellation.Token);
@@ -93,6 +110,10 @@ public sealed class StorageIpcHostCompositionTests
 
                 ReadOnlyMemory<byte> secondResponse = await client.RequestAsync(secondOperation);
                 Assert.Equal(recordId, secondResponse.ToArray());
+
+                // Retry the first stable operation after a different operation has committed.
+                ReadOnlyMemory<byte> replayedResponse = await client.RequestAsync(firstOperation);
+                Assert.Equal(recordId, replayedResponse.ToArray());
             }
             finally
             {
@@ -104,12 +125,15 @@ public sealed class StorageIpcHostCompositionTests
             Assert.Equal(value, stored);
             Assert.True(database.TryGetBytes(recordId, checked((ushort)(fieldId + 1)), out byte[]? storedAfterOverload));
             Assert.Equal("same-session-after-overload"u8.ToArray(), storedAfterOverload);
-            Assert.Equal(new ulong[] { 1, 2 }, requestIds.ToArray());
+            Assert.Equal(new ulong[] { 1, 2, 3 }, requestIds.ToArray());
             Assert.Equal(new[]
             {
                 Guid.Parse("31000000-0000-0000-0000-000000000001"),
-                Guid.Parse("31000000-0000-0000-0000-000000000002")
+                Guid.Parse("31000000-0000-0000-0000-000000000002"),
+                Guid.Parse("31000000-0000-0000-0000-000000000001")
             }, operationIds.ToArray());
+            Assert.Equal(2ul, database.PendingFlushedCommitSeq);
+            Assert.Equal(2, database.ReadOutboxBatch(0, 10).Count);
         }
         finally
         {
