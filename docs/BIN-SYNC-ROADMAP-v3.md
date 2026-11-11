@@ -3352,3 +3352,9 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] T Add a real-process lost-APPLY-response test that commits durably but suppresses the IPC response before caller observation; distinguish this from existing client-side/coordinator fault injection.
 - [ ] A/T Audit the async commit-guard boundary across remote APPLY, relay reconciliation, local publication and application writes. The namespace admission gate remains coordinator-instance scoped; host composition must enforce one coordinator/admission domain per namespace and prevent bypass writers until a process-wide writer protocol is proven.
 - [ ] V3.1 roster/frontier/checkpoint/rejoin/FULL_REPLACE and safe-GC proofs remain separate required work. Physical GC and FULL_REPLACE remain disabled until their adversarial and crash-recovery proofs are complete.
+
+### CI follow-up — Windows IPC endpoint replacement
+
+- [x A] Diagnosed the red Windows cross-repository host-adapter job on commit `d065d63`: the FLD host restart test failed while publishing its endpoint after the previous Host process had been force-stopped. `StorageIpcEndpoint.Publish` attempted `File.Move(..., overwrite: true)`; Windows returned `UnauthorizedAccessException` at the endpoint replacement step. The FLD Core/Storage/Manifest/Run/WAL/Engine durability tests and the BIN-SYNC test suites in that run passed.
+- [x A] Updated FLD-DB `fix/crash-consistency-outbox` in commit `b852329`: after the new Host has acquired the exclusive database partition lease, it normalizes and removes the stale endpoint name, then publishes the already-flushed temporary endpoint file without overwrite. This is safe because the partition lease excludes a live prior owner; startup readers already tolerate the brief absent-endpoint interval.
+- [ ] V Re-run the cross-repository Windows host-adapter integration against FLD-DB commit `b852329`; do not treat the red check as resolved until that exact run passes.
