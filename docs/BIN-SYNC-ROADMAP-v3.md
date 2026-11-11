@@ -2734,3 +2734,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added Storage tests for round-trip framing, handshake/generation boundaries, Castagnoli CRC check vector, corruption, truncation and payload/session limits. FLD-DB commit `de6e18e935b5e835e2c2d50ee58f8cbecf991410` adds the test suite; source protocol is in commit `5db14b5b288da3bb842fa89669ee9e9f6b39904b`.
 - [x CI] BIN-SYNC commit `d1b682ec84d89c9ea23a10ace4b2dda10073a0ff` adds `Fld1.Storage.Tests` to the private cross-repository gate before Run/WAL/Engine and FLD host tests. First run against the IPC implementation is pending.
 - [~ T] This is only the frame codec foundation. Still required: named-pipe/Unix-domain transport listener/client, host discovery and ownership handoff, bounded per-session request queue, reconnect/session-generation fencing, durable idempotent request ledger, remote write batches, pinned read snapshots and snapshot reclamation/EBR, FLD Database client facade, and the single-owner Host executable. No SHM mapping is claimed yet.
+
+
+### 1.91 — Storage IPC frame tests added; public API allowlist aligned (2026-11-11)
+
+- [!] First Storage test execution ran 44 tests: **43 passed, 1 failed**. The only failure was the intentional public API surface allowlist, which still enumerated the pre-IPC Storage exports and rejected the three new `Fld1.Storage.Ipc` types. The frame codec itself compiled and its protocol tests passed.
+- [x C] FLD-DB commit `2c88cd531ad8e9698fa0fcf3378d311d88cc56f4` adds the approved `StorageIpcFrame`, `StorageIpcFrameType` and `StorageIpcProtocol` exports and permits the explicit `Fld1.Storage.Ipc` namespace alongside `Fld1.Storage.Engine`. CRC calculation remains an internal helper, not an extra public API.
+- [x T] Storage IPC tests cover v1 round-trip, Hello/HelloAck/Goodbye session-generation rules, CRC32C check vector, corrupted payload, truncated payload, oversized payload and invalid request/session identity.
+- [~ T] Re-run the expanded cross-repository gate against the latest FLD Storage head `b7f3c3f0b2951bbadba8325f3e6e592f3be07b81`. Then implement the actual local transport/server/client; frame codec alone is not shared access.
