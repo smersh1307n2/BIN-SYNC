@@ -800,7 +800,7 @@ public sealed class StorageIpcHostCompositionTests
 
                 Assert.True(reopened.TryGetBytes(recordId, fieldId, out byte[]? stored));
                 Assert.Equal(value, stored);
-                Assert.Equal(1, reopened.ReadOutboxBatch(0, 10).Count);
+                Assert.Single(reopened.ReadOutboxBatch(0, 10));
             }
         }
         finally
