@@ -105,6 +105,61 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
+    public void Contextual_remote_record_tombstone_preserves_origin_metadata_in_fld_lifecycle_row()
+    {
+        const uint namespaceId = 9;
+        byte[] localAuthor = Id(0x91);
+        byte[] issuer = Id(0x92);
+        byte[] sender = Id(0x93);
+        byte[] recordBytes = Id(0x94);
+        byte[] changeBytes = Id(0x95);
+        byte[] batchBytes = Id(0x96);
+        byte[] batchDigest = Id(0x97);
+        byte[] recordsRoot = Id(0x98);
+        var mutation = new ProviderMutation
+        {
+            RecordId = RecordId.From(recordBytes),
+            FieldId = FldLifecycle.FieldId,
+            IsRecordTombstone = true,
+            HlcWall = 223456,
+            HlcLogical = 4,
+            AuthorNodeId = NodeId.From(issuer),
+            KeyEpoch = 0,
+            Value = Array.Empty<byte>(),
+            ChangeId = BatchId.From(changeBytes),
+            OriginAuthorEpoch = 7,
+            OriginSequence = 12
+        };
+        var batch = new ProviderRemoteBatchCommit(
+            Guid.NewGuid(),
+            NodeId.From(sender),
+            senderTransportEpoch: 3,
+            namespaceId: checked((int)namespaceId),
+            NodeId.From(issuer),
+            issuerEpoch: 7,
+            BatchId.From(batchBytes),
+            cursorStart: 12,
+            cursorEnd: 12,
+            new byte[16],
+            batchDigest,
+            recordsRoot,
+            protocolStateDelta: Array.Empty<byte>(),
+            mutations: new[] { mutation });
+
+        using var database = FldDatabase.Open(_directory, namespaceId, localAuthor);
+        var adapter = new FldRemoteBatchApplyStore(database);
+        ProviderApplyReceipt receipt = adapter.ApplyRemoteBatch(batch);
+
+        Assert.False(receipt.IsDuplicate);
+        Assert.True(database.TryResolve(recordBytes, FldLifecycle.FieldId, out FieldResolver.Resolved resolved));
+        Assert.Equal(FldLifecycle.DeadValue.ToArray(), resolved.Value);
+        Assert.Equal(changeBytes, resolved.ChangeId);
+        Assert.Equal(7U, resolved.OriginAuthorEpoch);
+        Assert.Equal(12UL, resolved.OriginSequence);
+        Assert.Equal(0UL, database.GetOutboxHighWatermark());
+    }
+
+    [Fact]
     public void Local_fld_outbox_feed_preserves_stable_change_identity_across_reopen()
     {
         const uint namespaceId = 8;
