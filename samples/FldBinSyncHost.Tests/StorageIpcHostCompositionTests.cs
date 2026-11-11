@@ -23,11 +23,12 @@ public sealed class StorageIpcHostCompositionTests
         const ushort fieldId = 0x0317;
         const ushort keyEpoch = 4;
         byte[] value = "ipc-to-fld-durable-write"u8.ToArray();
-        byte[] request = new byte[20 + value.Length];
-        recordId.CopyTo(request, 0);
-        BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(16), fieldId);
-        BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(18), keyEpoch);
-        value.CopyTo(request, 20);
+        byte[] request = new byte[28 + value.Length];
+        BinaryPrimitives.WriteUInt64LittleEndian(request, 1);
+        recordId.CopyTo(request, 8);
+        BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(24), fieldId);
+        BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(26), keyEpoch);
+        value.CopyTo(request, 28);
         var requestIds = new ConcurrentQueue<ulong>();
         var operationIds = new ConcurrentQueue<Guid>();
         Guid ipcClientId = Guid.NewGuid();
@@ -54,19 +55,20 @@ public sealed class StorageIpcHostCompositionTests
                     byte[] operationId = new byte[16];
                     context.ClientId.TryWriteBytes(clientId);
                     operation.OperationId.TryWriteBytes(operationId);
+                    ulong clientSequence = BinaryPrimitives.ReadUInt64LittleEndian(operationPayload.Span);
                     byte[] fingerprint = SHA256.HashData(operationPayload.Span);
 
                     if (database.TryGetLocalOperationReceipt(
-                        clientId, operationId, fingerprint, out FldLocalOperationCommitResult? prior))
+                        clientId, operationId, clientSequence, fingerprint, out FldLocalOperationCommitResult? prior))
                         return ValueTask.FromResult<ReadOnlyMemory<byte>>(prior!.Result);
 
-                    if (operationPayload.Length < 20)
+                    if (operationPayload.Length < 28)
                         throw new InvalidDataException("FLD write request is truncated.");
 
-                    byte[] requestedRecord = operationPayload.Slice(0, 16).ToArray();
-                    ushort requestedField = BinaryPrimitives.ReadUInt16LittleEndian(operationPayload.Span[16..]);
-                    ushort requestedKeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(operationPayload.Span[18..]);
-                    byte[] requestedValue = operationPayload[20..].ToArray();
+                    byte[] requestedRecord = operationPayload.Slice(8, 16).ToArray();
+                    ushort requestedField = BinaryPrimitives.ReadUInt16LittleEndian(operationPayload.Span[24..]);
+                    ushort requestedKeyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(operationPayload.Span[26..]);
+                    byte[] requestedValue = operationPayload[28..].ToArray();
 
                     database.Put(requestedRecord, requestedField, requestedValue, requestedKeyEpoch);
                     FldLocalOperationCommitResult committed = database.CommitWithReceipt(
@@ -74,6 +76,7 @@ public sealed class StorageIpcHostCompositionTests
                         {
                             ClientId = clientId,
                             OperationId = operationId,
+                            ClientSequence = clientSequence,
                             Fingerprint = fingerprint,
                             Result = requestedRecord
                         });
@@ -99,11 +102,12 @@ public sealed class StorageIpcHostCompositionTests
                 Assert.Equal(recordId, response.ToArray());
 
                 byte[] secondValue = "same-session-after-overload"u8.ToArray();
-                byte[] secondRequest = new byte[20 + secondValue.Length];
-                recordId.CopyTo(secondRequest, 0);
-                BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(16), checked((ushort)(fieldId + 1)));
-                BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(18), keyEpoch);
-                secondValue.CopyTo(secondRequest, 20);
+                byte[] secondRequest = new byte[28 + secondValue.Length];
+                BinaryPrimitives.WriteUInt64LittleEndian(secondRequest, 2);
+                recordId.CopyTo(secondRequest, 8);
+                BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(24), checked((ushort)(fieldId + 1)));
+                BinaryPrimitives.WriteUInt16LittleEndian(secondRequest.AsSpan(26), keyEpoch);
+                secondValue.CopyTo(secondRequest, 28);
                 byte[] secondOperation = StorageIpcOperationProtocol.Encode(
                     new StorageIpcOperationEnvelope(
                         Guid.Parse("31000000-0000-0000-0000-000000000002"), 1, secondRequest));
@@ -144,7 +148,7 @@ public sealed class StorageIpcHostCompositionTests
             byte[] firstFingerprint = SHA256.HashData(request);
             using var reopened = FldDatabase.Open(directory, namespaceId, localAuthor);
             Assert.True(reopened.TryGetLocalOperationReceipt(
-                stableClientId, stableOperationId, firstFingerprint, out FldLocalOperationCommitResult? durableReplay));
+                stableClientId, stableOperationId, 1, firstFingerprint, out FldLocalOperationCommitResult? durableReplay));
             Assert.Equal(recordId, durableReplay!.Result);
             Assert.Equal(2, reopened.ReadOutboxBatch(0, 10).Count);
         }
