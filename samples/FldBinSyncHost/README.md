@@ -206,3 +206,21 @@ var coordinator = new StorageSyncCoordinator(
 ```
 
 The host must ensure `fldDataProvider` and `fldApply` operate on the same durable FLD state and participate in the same `fld.AcquireCommitGuard()` outer lease. `FldDatabaseDataProvider` is implemented, including the snapshot-pin guard required by FULL_REPLACE commit. For FULL_REPLACE, pass `FldBinSyncHostAdapter.AcquireFullReplaceCommitGuard` as the receiver's commit-guard factory; it holds the Metadata Store transaction gate and fails closed while any target-namespace PendingApply or immutable outbound/relay reservation remains. FLD's ApplyJournal contains committed idempotency receipts rather than a separate pending-provider-intent queue; the FLD commit lease excludes in-flight applies, and the unsealed-WAL barrier is included in the host draft horizon. Cross-repository build and adversarial T-pass remain pending.
+
+## Process-isolated async provider (initial IPC slice)
+
+`FldDatabaseIpcAsyncDataProvider` connects to the separate Database Host and implements the core `IAsyncDataProvider` surface without sync-over-async. Supply a stable per-replica `ClientId`, the expected BIN-SYNC local replica id, and the host's active author-epoch authority:
+
+```csharp
+await using var provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+    databaseRoot, stableClientId, timeout, localReplica, activeAuthorEpoch,
+    recordIdResolver, fieldIdResolver, cancellationToken);
+```
+
+The connection verifies the Host's authoritative LocalAuthor and acquires a fresh Outbox lease. Local append uses operation 0x2111 with OperationId derived from ChangeId; the Host assigns the durable per-client receipt sequence under the same commit lock as the Outbox append. Reconnect with the same ClientId and ChangeId to replay an uncertain append safely. The provider's Outbox ACK uses 0x2112 to retire only the corresponding contiguous provider receipts.
+
+Point reads use 0x210F/0x2110 and revalidate ChangeId before every value chunk. Whole-state reads use generation-pinned snapshot pages and value chunks. Snapshot handles are invalid after Host restart; reconnect and open a new snapshot.
+
+Use `FldDatabaseIpcRemoteBatchApplyStore` for remote apply. It implements `IAsyncProviderRemoteBatchCommitStore` and preserves the full authenticated batch context. The context-free `IAsyncDataProvider.ApplyRemoteBatchAsync` path intentionally throws.
+
+**Boundary:** this is an IPC-backed provider primitive, not yet a complete process-isolated BIN-SYNC coordinator. It does not implement the optional async commit-guard, publication-mode, published-origin, author-epoch, snapshot-state, FULL_REPLACE, durable-snapshot or GC-scanner capabilities. `StorageSyncCoordinator` remains synchronous and Monitor-based. Do not use sync-over-async or hold Monitor across awaits. The async coordinator and composed async-safe commit lease remain the next architectural gate. Physical GC stays disabled.

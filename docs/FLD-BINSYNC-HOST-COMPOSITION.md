@@ -186,3 +186,21 @@ The `StorageSyncCoordinator` constructor's optional `remoteBatchCommitStore` arg
 
 
 `FldRemoteBatchApplyStore` is an external host adapter; it preserves the full incoming batch header for `FldDatabase.ApplyRemoteBatch` and is not `IDataProvider`. Pass the exact same instance as `remoteBatchCommitStore` to `StorageSyncCoordinator` and to `FldBinSyncHostAdapter`; the latter rejects a mismatched instance/database. For normal inbound traffic use `ReceiveAndPublishAllAsync`, which routes through `ReceiveBatchBeforeAckAsync` so contextual FLD apply and receipt finalization complete before the sender is ACKed.
+
+## Process-isolated async provider boundary (initial slice)
+
+The sample also contains `FldDatabaseIpcAsyncDataProvider` and `FldDatabaseIpcRemoteBatchApplyStore`. Connect to the Database Host with a stable per-replica `ClientId`, the expected BIN-SYNC `LocalAuthor`, and the active author-epoch authority:
+
+```csharp
+await using var provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+    databaseRoot, stableClientId, timeout, localReplica, activeAuthorEpoch,
+    recordIdResolver, fieldIdResolver, cancellationToken);
+
+var remoteApply = new FldDatabaseIpcRemoteBatchApplyStore(ipcClient, namespaceId);
+```
+
+The provider verifies `GetLocalAuthor` against the configured local replica before taking an Outbox lease. Local drafts use IPC operation 0x2111: the operation id is the big-endian Guid form of ChangeId, and the Host assigns the receipt sequence under the database commit lock. A retry with the same ClientId, ChangeId and payload returns the original receipt across Host restart. Feed ACK uses 0x2112 so the Host retires only receipts covered by the contiguous safe Outbox prefix. Current point reads use 0x210F/0x2110; each value chunk is revalidated against the metadata ChangeId. Snapshot handles remain Host-generation-bound and must be reopened after Host restart.
+
+`FldDatabaseIpcRemoteBatchApplyStore` is the only supported remote APPLY path for this adapter. It preserves the complete authenticated `ProviderRemoteBatchCommit` context; the base `IAsyncDataProvider.ApplyRemoteBatchAsync(Guid, mutations)` intentionally rejects context-free APPLY.
+
+This is not yet a production `StorageSyncCoordinator` replacement. The IPC provider implements only the core async data-provider contract and the contextual remote-apply capability. It does not advertise async commit guards, publication stamping/cutover, author-epoch closure, snapshot-state apply, FULL_REPLACE, durable snapshot retention or GC reference scanning. The existing coordinator is still synchronous and uses thread-affine Monitor gates. Do not bridge it with `.GetAwaiter().GetResult()`, sync-over-async, or a Monitor held across await. The next gate is a composed async-safe commit lease that covers every Node, Metadata Store and FLD writer, followed by an async coordinator and two-process parity tests.
