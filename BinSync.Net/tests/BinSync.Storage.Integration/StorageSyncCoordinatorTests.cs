@@ -17,6 +17,58 @@ public sealed class StorageSyncCoordinatorTests
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-coordinator-" + Guid.NewGuid().ToString("N"));
 
+    private sealed class RecordingAsyncRemoteBatchStore : IAsyncProviderRemoteBatchCommitStore
+    {
+        private readonly IDataProvider _provider;
+        public ProviderRemoteBatchCommit? LastCommit { get; private set; }
+
+        public RecordingAsyncRemoteBatchStore(IDataProvider provider) => _provider = provider;
+
+        public ValueTask<ProviderApplyReceipt> ApplyRemoteBatchAsync(
+            ProviderRemoteBatchCommit batch, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            LastCommit = batch;
+            return ValueTask.FromResult(_provider.ApplyRemoteBatch(batch.ApplyToken, batch.Mutations));
+        }
+    }
+
+    [Fact]
+    public async Task Async_provider_receive_commits_node_provider_and_metadata_before_transport_ack()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-remote-apply"), 489);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(88);
+        using var receiver = NewNode(89);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "async-remote-apply");
+        var asyncProvider = new RecordingAsyncRemoteBatchStore(provider);
+        RecordId record = RecordId.From(Guid.Parse("88000000-0000-0000-0000-000000000088").ToByteArray());
+        Assert.True(sender.WriteField(1, record, 0x0891, "async-ipc-apply"u8.ToArray(), new Hlc(8900, 0)));
+
+        Task<BatchResult> receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
+            acceptor, asyncProvider, node => StorageNodePersistence.Save(storage, node));
+        Assert.True(await initiator.PushBatchAsync(sender, 1));
+        BatchResult result = await receive.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(1, result.Applied);
+        Assert.NotNull(asyncProvider.LastCommit);
+        Assert.Equal(sender.NodeId, asyncProvider.LastCommit!.SenderPeer);
+        Assert.Equal(1u, asyncProvider.LastCommit.IssuerEpoch);
+        Assert.Equal(1, asyncProvider.LastCommit.Mutations.Count);
+        Assert.NotEqual(Guid.Empty, asyncProvider.LastCommit.ApplyToken);
+        Assert.Empty(metadata.ReadPendingApplyIntents("async-remote-apply", receiver.NodeId));
+        Assert.True(receiver.TryGetField(1, record, 0x0891, out var nodeValue));
+        Assert.Equal("async-ipc-apply", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.True(provider.TryReadCurrent(record, 0x0891, out var providerValue));
+        Assert.Equal("async-ipc-apply", Encoding.UTF8.GetString(providerValue!.Value));
+    }
+
     [Fact]
     public async Task Pending_receive_intent_replays_wire_batch_into_node_and_provider_after_interruption()
     {
