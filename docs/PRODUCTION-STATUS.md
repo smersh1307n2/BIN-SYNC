@@ -9,12 +9,15 @@
 - The earlier 42962678340 Engine failure was only a test fixture passing an explicit 1 MiB chunk size while expecting the protocol maximum. FLD test commit d6a6857e corrected the call to use the documented default; no IPC implementation rollback was needed.
 - Cross-repository integration is verified at this head. Physical receipt, ChangeId and tombstone/ghost GC remain disabled pending their independent safe-horizon and crash/recovery proofs.
 
-## FLD IPC snapshot handles — implementation under verification — 2026-11-11
+## FLD IPC snapshot handles — exact-head verification green — 2026-11-11
 
-- FLD-DB now exposes metadata-only snapshot pages and bounded value chunks through Database IPC. Handles are bound to ClientId and dispatcher HostGeneration, survive reconnects within one host generation, and are rejected after host restart.
-- IPC snapshot ownership is durably marked before provider manifest publication. Restart cleanup prunes stale IPC-owned pins only and preserves non-IPC provider snapshots, including BIN-SYNC FULL_REPLACE generations.
-- Added tests for snapshot page retry semantics, chunk reads, writes/checkpoint/compaction stability, idempotent open/release, client isolation, reconnect, host restart, and non-IPC snapshot preservation.
-- Exact-head cross-repository CI is pending; do not mark this milestone green until FLD Engine tests and FldBinSyncHost integration pass on Ubuntu and Windows.
+- FLD-DB exposes metadata-only snapshot pages and bounded value chunks through Database IPC. Handles bind to ClientId and dispatcher HostGeneration, survive reconnects within one host generation, and are rejected after host restart.
+- IPC-owned snapshots persist an atomic ipc.handle descriptor before manifest publication. Host restart prunes only stale IPC-owned generations and preserves non-IPC provider snapshots, including BIN-SYNC FULL_REPLACE generations.
+- Snapshot tests cover page retry limits, chunk boundaries, writes/checkpoint/compaction stability, idempotent active open/release, client isolation, reconnect, host restart invalidation and non-IPC snapshot preservation.
+- Exact-head BIN-SYNC run 42965583024 passed on Ubuntu and Windows. BIN-SYNC tests: 678/678 each OS; FLD suites: Core 23, Storage 66, Manifest 11, Run 26, WAL 21, Engine 73; FldBinSyncHost.Tests 15/15 each OS. Host adapter builds: 0 warnings, 0 errors.
+- Separate Storage Integration run 42965583027 passed on Ubuntu, Windows and macOS.
+- Backup refs created for BIN-SYNC main/feature-fld-external-storage and FLD-DB main/fix-crash-consistency-outbox under backup/2026-11-11/.
+- Follow-ups: two non-fatal xUnit1031 warnings remain in SyncApplyTests.cs; add a true child-process-death harness for Unix named-Mutex abandonment (the current thread-abandonment scenario is Windows-only).
 
 ## T-pass integration follow-up — 2026-11-11
 
