@@ -25,6 +25,7 @@ public sealed class StorageIpcHostCompositionTests
         byte[] value = "ipc-to-fld-durable-write"u8.ToArray();
         var requestIds = new ConcurrentQueue<ulong>();
         var operationIds = new ConcurrentQueue<Guid>();
+        Guid ipcClientId = Guid.NewGuid();
 
         try
         {
@@ -79,7 +80,7 @@ public sealed class StorageIpcHostCompositionTests
             try
             {
                 await using var client = await StorageIpcClientConnection.ConnectAsync(
-                    pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10));
+                    pipeName, ipcClientId, TimeSpan.FromSeconds(10));
                 Exception overload = await Assert.ThrowsAnyAsync<Exception>(async () =>
                     await StorageIpcClientConnection.ConnectAsync(
                         pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10)));
@@ -134,6 +135,19 @@ public sealed class StorageIpcHostCompositionTests
             }, operationIds.ToArray());
             Assert.Equal(2ul, database.PendingFlushedCommitSeq);
             Assert.Equal(2, database.ReadOutboxBatch(0, 10).Count);
+
+            // Reopen the actual FLD database and recover the same response without reapplying.
+            database.Dispose();
+            byte[] stableClientId = new byte[16];
+            ipcClientId.TryWriteBytes(stableClientId);
+            byte[] stableOperationId = new byte[16];
+            Guid.Parse("31000000-0000-0000-0000-000000000001").TryWriteBytes(stableOperationId);
+            byte[] firstFingerprint = SHA256.HashData(request);
+            using var reopened = FldDatabase.Open(directory, namespaceId, localAuthor);
+            Assert.True(reopened.TryGetLocalOperationReceipt(
+                stableClientId, stableOperationId, firstFingerprint, out FldLocalOperationCommitResult? durableReplay));
+            Assert.Equal(recordId, durableReplay!.Result);
+            Assert.Equal(2, reopened.ReadOutboxBatch(0, 10).Count);
         }
         finally
         {
