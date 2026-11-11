@@ -3374,3 +3374,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] The retry assertions require the receiver to recognize the duplicate without applying the operation again, retain the exact value, and return the ACK that advances the sender's per-author cursor. This complements §1.95's real FLD Host process crash after durable APPLY but before IPC response; it is a transport/session test, not yet a two-Host FLD ACK-loss process test.
 - [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository builds/tests must pass before this transport-loss proof is considered verified.
 - [ ] T Extend ACK-loss coverage through two independent FLD Database Host processes and the async Metadata/FLD adapter, then add crash/restart interruption tests across receive intent, Node checkpoint, provider APPLY receipt and Metadata finalization.
+
+
+## 1.97. Process-wide async admission and peer-send gates — 2026-11-11
+
+- [x C] Replaced coordinator-instance-owned async admission with a process-wide registry keyed by durable `(NodeId, namespaceId)`. Separate `AsyncStorageSyncCoordinator` facades for the same local replica/namespace now share the same receive/publication/recovery `SemaphoreSlim`.
+- [x C] Per-peer outbound reservation/ACK gates are shared by the same registry as well, so multiple coordinator facades cannot concurrently reserve/send the same peer stream while different peers remain independent.
+- [x T] Added `Async_coordinator_instances_share_one_namespace_admission_gate`: one coordinator blocks inside provider publication while a second coordinator attempts PendingApply recovery; the second must remain blocked until the first releases the shared admission lease.
+- [x A] The Node metadata-store-owned publication fence already rejects legacy direct Node-owned local writes, receive validation and Node Outbox transport after cutover. This protects the main Node bypass path. The shared registry does not serialize arbitrary direct calls into public Metadata Store mutation APIs; production host composition must keep that writer capability private and route namespace mutations through the coordinator. Do not claim a universal application-writer barrier yet.
+- [ ] CI Exact-head BIN-SYNC and FLD Storage Integration workflows must pass for the shared-gate implementation and test before marking this change verified.
+- [ ] A remaining limitation is process scope: the registry coordinates coordinator instances in one process, not multiple processes. Cross-process coordination remains the responsibility of the single-owner Host/partition lease and durable Metadata transactions.
