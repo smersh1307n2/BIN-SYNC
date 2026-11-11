@@ -3,6 +3,7 @@ using BinSync.FldHost;
 using BinSync.Storage;
 using Fld1.Storage.Engine;
 using Fld1.Engine.Db;
+using Fld1.Engine.Storage;
 using Xunit;
 
 namespace BinSync.FldHost.Tests;
