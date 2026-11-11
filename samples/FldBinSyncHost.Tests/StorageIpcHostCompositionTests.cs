@@ -170,6 +170,88 @@ public sealed class StorageIpcHostCompositionTests
     }
 
     [Fact]
+    public async Task Database_ipc_snapshot_handle_reads_bounded_values_and_is_client_bound()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-ipc-snapshot-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 33;
+        byte[] localAuthor = Id(0x41);
+        byte[] recordId = Id(0x42);
+        const ushort fieldId = 0x0331;
+        byte[] value = "cross-repository-snapshot-value"u8.ToArray();
+        Guid ownerId = Guid.NewGuid();
+        Guid clientId = Guid.NewGuid();
+        Guid otherClientId = Guid.NewGuid();
+        Guid openOperationId = Guid.NewGuid();
+
+        try
+        {
+            using var database = FldDatabase.Open(directory, namespaceId, localAuthor);
+            using var dispatcher = new FldDatabaseIpcDispatcher(database);
+            using var serverCancellation = new CancellationTokenSource();
+            var server = new StorageIpcServer(
+                StorageIpcEndpoint.ComputePipeName(directory, 0), dispatcher.HandleAsync);
+            Task serverTask = server.RunAsync(serverCancellation.Token);
+
+            try
+            {
+                await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                StorageIpcEndpoint.Publish(directory, StorageIpcEndpoint.Create(
+                    directory, 0, ownerId, Environment.ProcessId));
+
+                FldDatabaseIpcSnapshotHandle handle;
+                await using (var client = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                    directory, clientId, TimeSpan.FromSeconds(10)))
+                {
+                    FldDatabaseIpcWriteResult write = await client.WriteBatchAsync(
+                        Guid.NewGuid(), 1,
+                        [new FldDatabaseIpcMutation(recordId, fieldId, 4, false, value)]);
+                    Assert.Equal(1ul, write.CommitSeq);
+
+                    handle = await client.OpenSnapshotAsync(openOperationId);
+                    Assert.Equal(dispatcher.HostGeneration, handle.HostGeneration);
+                    FldProviderSnapshotMetadataPage page =
+                        await client.ReadSnapshotPageAsync(handle, 0, 8);
+                    Assert.Single(page.Entries);
+                    Assert.Equal((uint)value.Length, page.Entries[0].ValueLength);
+
+                    FldProviderSnapshotValueChunk? chunk =
+                        await client.ReadSnapshotValueChunkAsync(handle, recordId, fieldId, 0, 7);
+                    Assert.NotNull(chunk);
+                    Assert.Equal((uint)value.Length, chunk.ValueLength);
+                    Assert.Equal(value[..7], chunk.ValueChunk);
+
+                    await using var otherClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                        directory, otherClientId, TimeSpan.FromSeconds(10));
+                    await Assert.ThrowsAsync<StorageIpcRemoteException>(
+                        async () => await otherClient.ReadSnapshotPageAsync(handle, 0, 8));
+                }
+
+                // A new pipe session with the same stable ClientId can continue the snapshot.
+                await using (var reconnected = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                    directory, clientId, TimeSpan.FromSeconds(10)))
+                {
+                    FldProviderSnapshotMetadataPage page =
+                        await reconnected.ReadSnapshotPageAsync(handle, 0, 8);
+                    Assert.Single(page.Entries);
+                    Assert.True(await reconnected.ReleaseSnapshotAsync(handle));
+                    Assert.True(await reconnected.ReleaseSnapshotAsync(handle));
+                }
+            }
+            finally
+            {
+                serverCancellation.Cancel();
+                await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                StorageIpcEndpoint.DeleteIfOwned(directory, 0, ownerId);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Previous_ipc_connection_generation_is_rejected_before_any_fld_write()
     {
         string directory = Path.Combine(
