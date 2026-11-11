@@ -217,6 +217,50 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Async_metadata_outbound_delivery_uses_frozen_store_and_waits_for_remote_apply_ack()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-metadata-outbound"), 490);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(90);
+        using var receiver = NewNode(91);
+        const string scope = "async-metadata-outbound";
+        RecordId record = RecordId.From(Guid.Parse("90000000-0000-0000-0000-000000000090").ToByteArray());
+
+        Assert.True(sender.WriteField(1, record, 0x0892,
+            "metadata-outbound"u8.ToArray(), new Hlc(9000, 0)));
+        var legacyPublisher = new StorageSyncCoordinator(sender, provider, 1, metadata, scope);
+        Assert.Equal(1, legacyPublisher.PublishLocalChanges(_ => { }));
+        Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, sender.NodeId, 1, sender.NodeId));
+
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+
+        var senderCoordinator = new AsyncStorageSyncCoordinator(sender, metadata, scope, 1);
+        var receiverCoordinator = new AsyncStorageSyncCoordinator(receiver, metadata, scope, 1);
+        var remoteProvider = new RecordingAsyncRemoteBatchStore(provider);
+        Task<BatchResult> receive = receiverCoordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
+            acceptor, remoteProvider, node => StorageNodePersistence.Save(storage, node));
+
+        Assert.True(await senderCoordinator.PushNextBatchAsync(initiator));
+        BatchResult result = await receive.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(1, result.Applied);
+        ProviderMutation mutation = Assert.Single(remoteProvider.LastCommit!.Mutations);
+        Assert.Equal(record, mutation.RecordId);
+        Assert.Equal((ushort)0x0892, mutation.FieldId);
+        Assert.Equal("metadata-outbound", Encoding.UTF8.GetString(mutation.Value));
+        Assert.Equal(1UL, metadata.GetReceiveCursor(scope, receiver.NodeId,
+            sender.NodeId, checked((uint)sender.Epoch), 1));
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, sender.NodeId, 1, sender.NodeId));
+        Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
+    }
+
+    [Fact]
     public async Task Async_local_publication_coalesces_feed_and_acks_outbox_before_receipts()
     {
         Directory.CreateDirectory(_root);
