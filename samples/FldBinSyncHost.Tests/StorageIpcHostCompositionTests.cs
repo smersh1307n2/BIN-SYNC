@@ -461,6 +461,9 @@ public sealed class StorageIpcHostCompositionTests
                 StorageIpcEndpointInfo publishedEndpoint = StorageIpcEndpoint.Read(directory, partition);
                 Assert.Equal(ownerId, publishedEndpoint.OwnerId);
                 Assert.Equal(pipeName, publishedEndpoint.PipeName);
+                Assert.Equal(
+                    $".fld1-storage-ipc-{partition:X16}.endpoint",
+                    Path.GetFileName(StorageIpcEndpoint.GetEndpointFilePath(directory, partition)));
 
                 await using (var client = await StorageIpcClientConnection.ConnectToDatabaseAsync(
                     directory, partition, clientId, TimeSpan.FromSeconds(10)))
