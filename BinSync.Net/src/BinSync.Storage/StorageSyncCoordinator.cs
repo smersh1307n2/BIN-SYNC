@@ -2578,6 +2578,9 @@ public sealed class StorageSyncCoordinator
         ArgumentNullException.ThrowIfNull(asyncProvider);
         ArgumentNullException.ThrowIfNull(persistNode);
         RegisterInterestedPeer(session, _namespaceId);
+        await _asyncRemoteApplyGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
         StorageRemoteApplyPlan? plan = null;
         BatchResult result = await session.ReceiveBatchAsync(
             _node,
@@ -2595,12 +2598,17 @@ public sealed class StorageSyncCoordinator
             {
                 StorageRemoteApplyPlan accepted = plan
                     ?? throw new InvalidOperationException("Receive intent was not durably staged.");
-                await ApplyRemoteBatchAfterNodeApplyAsync(
+                await ApplyRemoteBatchAfterNodeApplyCoreAsync(
                     batch, accepted, asyncProvider, persistNode, ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
         if (plan?.IsDuplicate == true)
             result.Duplicate = true;
         return result;
+        }
+        finally
+        {
+            _asyncRemoteApplyGate.Release();
+        }
     }
 
     /// <summary>
@@ -2615,6 +2623,25 @@ public sealed class StorageSyncCoordinator
         Action<Node> persistNode,
         CancellationToken ct = default)
     {
+        await _asyncRemoteApplyGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await ApplyRemoteBatchAfterNodeApplyCoreAsync(
+                batch, plan, asyncProvider, persistNode, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _asyncRemoteApplyGate.Release();
+        }
+    }
+
+    private async Task<ProviderApplyReceipt> ApplyRemoteBatchAfterNodeApplyCoreAsync(
+        Batch batch,
+        StorageRemoteApplyPlan plan,
+        IAsyncProviderRemoteBatchCommitStore asyncProvider,
+        Action<Node> persistNode,
+        CancellationToken ct)
+    {
         ArgumentNullException.ThrowIfNull(batch);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(asyncProvider);
@@ -2626,10 +2653,8 @@ public sealed class StorageSyncCoordinator
             !plan.Batch.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest.ToArray()))
             throw new InvalidDataException("Pre-staged receive intent does not match the applied Node batch.");
 
-        await _asyncRemoteApplyGate.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            // The Node mutation has already happened in SyncSession. Persist it before
+        // The caller owns the async admission gate for the complete receive transaction.
+        // The Node mutation has already happened in SyncSession. Persist it before
             // crossing the process boundary; a failed checkpoint prevents provider APPLY.
             persistNode(_node);
             var mutations = CreateProviderMutations(plan.Batch.Operations);
@@ -2671,12 +2696,7 @@ public sealed class StorageSyncCoordinator
                         throw new InvalidDataException("Finalized metadata receipt header fingerprint does not match the applied Node batch.");
                 }
             }
-            return receipt;
-        }
-        finally
-        {
-            _asyncRemoteApplyGate.Release();
-        }
+        return receipt;
     }
 
     /// <summary>
