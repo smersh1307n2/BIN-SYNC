@@ -409,6 +409,46 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Async_startup_recovery_publishes_local_feed_before_accepting_sessions()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-startup-recovery"), 495);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(94);
+        const string scope = "async-startup-recovery";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+
+        using var wal = Wal.Open(Path.Combine(_root, "async-startup-recovery.wal"));
+        node.AttachWal(wal);
+        RecordId record = RecordId.From(Guid.Parse("94000000-0000-0000-0000-000000000094").ToByteArray());
+        BatchId changeId = BatchId.From(Guid.Parse("94000000-0000-0000-0000-000000000095").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0905, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9400, Value = "startup-recovery"u8.ToArray(), ChangeId = changeId
+        });
+
+        var asyncProvider = new RecordingAsyncLocalProvider(provider);
+        var asyncRemoteProvider = new RecordingAsyncRemoteBatchStore(provider);
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        AsyncStorageStartupRecoveryResult result = await coordinator.RecoverBeforeAcceptingSessionsAsync(
+            asyncProvider, asyncRemoteProvider,
+            current => StorageNodePersistence.Save(storage, current));
+
+        Assert.Equal(0, result.RecoveredRemoteBatches);
+        Assert.Equal(1, result.PublishedLocalChanges);
+        Assert.Empty(metadata.ReadPendingApplyIntents(scope, node.NodeId));
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.True(node.TryGetField(1, record, 0x0905, out var value));
+        Assert.Equal("startup-recovery", Encoding.UTF8.GetString(value!.Value));
+    }
+
+    [Fact]
     public async Task Async_pending_apply_recovery_replays_exact_wire_payload_before_finalizing_metadata()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "async-pending-recovery"), 428);

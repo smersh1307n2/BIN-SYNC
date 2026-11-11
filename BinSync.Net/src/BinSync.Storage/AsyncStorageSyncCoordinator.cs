@@ -2,6 +2,10 @@ using System.IO;
 
 namespace BinSync.Storage;
 
+/// <summary>Durable work completed by the async coordinator before sessions are accepted.</summary>
+public sealed record AsyncStorageStartupRecoveryResult(
+    int RecoveredRemoteBatches, int PublishedLocalChanges);
+
 /// <summary>
 /// Async-only coordinator for remote receive/recovery and provider local-feed
 /// publication. It owns Node and Metadata durability without requiring an IDataProvider
@@ -30,6 +34,32 @@ public sealed class AsyncStorageSyncCoordinator
         _metadataStore = metadataStore;
         _scopeId = scopeId;
         _namespaceId = namespaceId;
+    }
+
+    /// <summary>
+    /// Recover durable remote APPLY intents and publish the captured local provider feed
+    /// before the host accepts new synchronization sessions. Call during startup, with
+    /// no concurrent coordinator session operations. A failure is fail-closed and the
+    /// same method can be retried after the underlying provider reconnects.
+    /// </summary>
+    public async Task<AsyncStorageStartupRecoveryResult> RecoverBeforeAcceptingSessionsAsync(
+        IAsyncDataProvider asyncProvider,
+        IAsyncProviderRemoteBatchCommitStore asyncRemoteProvider,
+        Action<Node> persistNode,
+        int localFeedLimit = 1024,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(asyncProvider);
+        ArgumentNullException.ThrowIfNull(asyncRemoteProvider);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (localFeedLimit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(localFeedLimit));
+
+        int recoveredRemote = await RecoverPendingAppliesAsync(
+            asyncRemoteProvider, persistNode, ct).ConfigureAwait(false);
+        int publishedLocal = await PublishLocalChangesAsync(
+            asyncProvider, persistNode, localFeedLimit, ct).ConfigureAwait(false);
+        return new AsyncStorageStartupRecoveryResult(recoveredRemote, publishedLocal);
     }
 
     /// <summary>
