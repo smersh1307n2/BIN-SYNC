@@ -485,7 +485,7 @@ public sealed class StorageIpcHostCompositionTests
             {
                 serverCancellation.Cancel();
                 await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
-                StorageIpcEndpoint.DeleteIfOwned(directory, ownerId);
+                StorageIpcEndpoint.DeleteIfOwned(directory, partition, ownerId);
             }
 
             Assert.Equal(2UL, storage.LastCommitSeq);
