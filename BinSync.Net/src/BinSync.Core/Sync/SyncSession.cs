@@ -270,7 +270,8 @@ public partial class SyncSession : IAsyncDisposable
         Action<Batch, BatchResult>? beforeAck,
         CancellationToken ct = default,
         bool receiveStateOwnedByMetadataStore = false,
-        Func<Batch, ReadOnlyMemory<byte>, NodeId, IReadOnlyList<bool>>? beforeApplyWithOperationDecisions = null)
+        Func<Batch, ReadOnlyMemory<byte>, NodeId, IReadOnlyList<bool>>? beforeApplyWithOperationDecisions = null,
+        Func<Batch, BatchResult, Task>? beforeAckAsync = null)
     {
         ArgumentNullException.ThrowIfNull(receiver);
         ValidateLocalNode(receiver);
@@ -291,6 +292,8 @@ public partial class SyncSession : IAsyncDisposable
                 throw new InvalidOperationException("Metadata-owned receive requires per-operation decisions from the durable Metadata Store.");
             if (beforeApply is not null && beforeApplyWithOperationDecisions is not null)
                 throw new InvalidOperationException("Specify either the legacy before-apply callback or the metadata decision callback, not both.");
+            if (beforeAck is not null && beforeAckAsync is not null)
+                throw new InvalidOperationException("Specify either the synchronous or asynchronous before-ACK callback, not both.");
             if (!receiveStateOwnedByMetadataStore && beforeApplyWithOperationDecisions is not null)
                 throw new InvalidOperationException("Metadata apply decisions require Metadata-Store-authoritative receive mode.");
 
@@ -308,6 +311,8 @@ public partial class SyncSession : IAsyncDisposable
                     applyOperations ?? throw new InvalidOperationException("Metadata apply decisions were not supplied."))
                 : receiver.ApplyBatchPayloadWithBatch(frame.Payload, PeerNodeId);
             beforeAck?.Invoke(batch, result);
+            if (beforeAckAsync is not null)
+                await beforeAckAsync(batch, result).ConfigureAwait(false);
             var ack = Transport.EncodeAck(result.BatchId, result.CursorEnd, result.DurableAuthor);
             await SendFrameAsync(0x0B, 0x0001_0000u | (uint)result.NamespaceId, 2, ack, ct).ConfigureAwait(false);
             return result;
