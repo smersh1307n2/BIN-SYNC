@@ -151,6 +151,17 @@ public sealed class StorageIpcHostCompositionTests
                 stableClientId, stableOperationId, 1, firstFingerprint, out FldLocalOperationCommitResult? durableReplay));
             Assert.Equal(recordId, durableReplay!.Result);
             Assert.Equal(2, reopened.ReadOutboxBatch(0, 10).Count);
+
+            // The client has durably received both results; retire the contiguous prefix.
+            Assert.True(reopened.AcknowledgeLocalOperationReceipts(stableClientId, 2));
+            Assert.Throws<InvalidOperationException>(() => reopened.TryGetLocalOperationReceipt(
+                stableClientId, stableOperationId, 1, firstFingerprint, out _));
+            reopened.Dispose();
+
+            using var acknowledgedReopen = FldDatabase.Open(directory, namespaceId, localAuthor);
+            Assert.Throws<InvalidOperationException>(() => acknowledgedReopen.TryGetLocalOperationReceipt(
+                stableClientId, stableOperationId, 1, firstFingerprint, out _));
+            Assert.Equal(2, acknowledgedReopen.ReadOutboxBatch(0, 10).Count);
         }
         finally
         {
