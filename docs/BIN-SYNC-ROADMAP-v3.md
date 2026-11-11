@@ -1,3 +1,12 @@
+## 1.71. FLD public host build passes; default-chunk test corrected — 2026-11-11
+
+- [x CI] Public FLD checkout and FldBinSyncHost build succeeded on both Ubuntu and Windows without FLD_DB_READ_TOKEN; both host adapter builds completed with zero warnings/errors.
+- [x CI] BIN-SYNC Linux/Windows build and test jobs, benchmark build, fuzz + lab, and v3.1 signed control-plane vectors all passed in run 42962678340.
+- [x T] FLD Storage 66/66, Manifest 11/11, Run 26/26, and WAL 21/21 passed in the same run.
+- [x FLD] The sole Engine test failure was a test-call mismatch, not an IPC implementation defect: the second client explicitly requested the 1 MiB chunkSize while asserting the 4,194,210-byte protocol maximum. FLD commit d6a6857e removes that argument so the test exercises the documented default maximum chunk.
+- [x C] BIN-SYNC integration workflow now also runs Fld1.Core.Tests; commit 75746428.
+- [ ] New exact-head workflow run is required to confirm the corrected Engine test, Core suite, and FldBinSyncHost.Tests on both operating systems.
+
 ## 1.70. Public FLD-DB checkout gate enabled — 2026-11-11
 
 - [x] smersh1307n2/FLD-DB is now public. Unauthenticated Git access verified the integration branch fix/crash-consistency-outbox at 03f988eeea3e0c8cc1f4209834ddf3fb1d157a37.
