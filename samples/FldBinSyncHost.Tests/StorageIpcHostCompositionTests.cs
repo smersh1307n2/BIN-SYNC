@@ -210,6 +210,8 @@ public sealed class StorageIpcHostCompositionTests
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-fld-ipc-ledger-" + Guid.NewGuid().ToString("N"));
+        string foreignDirectory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-ipc-ledger-foreign-" + Guid.NewGuid().ToString("N"));
         const ulong partition = 0x3103;
         Guid clientId = Guid.Parse("31030000-0000-0000-0000-000000000001");
         Guid operationId = Guid.Parse("31030000-0000-0000-0000-000000000002");
@@ -230,6 +232,11 @@ public sealed class StorageIpcHostCompositionTests
                     batch, clientId, operationId, fingerprint, result, out byte[]? prior));
                 Assert.Null(prior);
                 batch.Commit();
+
+                using var foreign = StorageDatabase.Open(foreignDirectory, partition);
+                using var foreignBatch = foreign.BeginWriteBatch();
+                Assert.Throws<ArgumentException>(() => ledger.TryStageResult(
+                    foreignBatch, clientId, Guid.NewGuid(), fingerprint, result, out _));
             }
 
             using (var reopened = StorageDatabase.Open(directory, partition))
@@ -255,6 +262,7 @@ public sealed class StorageIpcHostCompositionTests
         finally
         {
             try { Directory.Delete(directory, recursive: true); } catch { }
+            try { Directory.Delete(foreignDirectory, recursive: true); } catch { }
         }
     }
 
