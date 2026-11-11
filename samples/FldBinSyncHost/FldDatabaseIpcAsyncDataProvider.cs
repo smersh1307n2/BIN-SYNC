@@ -8,11 +8,11 @@ namespace BinSync.FldHost;
 
 /// <summary>
 /// Process-isolated IDataProvider implementation over the FLD Database IPC facade.
-/// It advertises IAsyncDataProvider, independent IPC receipt lifecycle, and immutable
-/// published-origin stamping. Async commit guards, publication cutover, author-epoch
-/// closure, FULL_REPLACE and GC capabilities are not emulated.
+/// It advertises IAsyncDataProvider, independent IPC receipt lifecycle, immutable
+/// published-origin stamping, and durable publication cutover. Async commit guards,
+/// author-epoch closure, FULL_REPLACE and GC capabilities are not emulated.
 /// </summary>
-public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore
+public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore, IAsyncProviderPublicationMode
 {
     private readonly FldDatabaseIpcClient _client;
     private readonly FldDatabaseIpcOutboxLease _outboxLease;
@@ -98,6 +98,22 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         ProviderMutation mutation, CancellationToken cancellationToken = default)
     {
         _ = await AppendLocalChangeWithReceiptAsync(mutation, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<(bool Exists, ulong NodeOutboxHighWatermark)> TryGetMetadataStoreOwnedPublicationCutoverAsync(
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfUnavailable(cancellationToken);
+        return await _client.TryGetMetadataStoreOwnedPublicationCutoverAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async ValueTask EnableMetadataStoreOwnedPublicationAsync(
+        ulong nodeOutboxHighWatermark, CancellationToken cancellationToken = default)
+    {
+        ThrowIfUnavailable(cancellationToken);
+        await _client.EnableMetadataStoreOwnedPublicationAsync(
+            nodeOutboxHighWatermark, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ulong> AppendLocalChangeWithReceiptAsync(
