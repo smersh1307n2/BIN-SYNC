@@ -257,6 +257,10 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1UL, metadata.GetReceiveCursor(scope, receiver.NodeId,
             sender.NodeId, checked((uint)sender.Epoch), 1));
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, sender.NodeId, 1, sender.NodeId));
+        Assert.Equal(1UL, Assert.Single(metadata.ReadPeerStreamStates(
+            scope, sender.NodeId, receiver.NodeId, checked((uint)receiver.Epoch), 1)).State.AckedCursor);
+        Assert.True(provider.TryReadCurrent(record, 0x0892, out var current));
+        Assert.Equal("metadata-outbound", Encoding.UTF8.GetString(current!.Value));
         Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
     }
 
