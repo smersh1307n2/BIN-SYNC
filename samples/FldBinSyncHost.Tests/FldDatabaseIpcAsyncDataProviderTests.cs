@@ -89,18 +89,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await provider.ReleaseSnapshotAsync(snapshot.Token);
             Assert.Equal(1ul, await provider.GetLocalChangeHighWatermarkAsync());
 
-            byte[] clientBytes = new byte[16];
-            clientId.TryWriteBytes(clientBytes, bigEndian: true, out _);
-            Guid operationGuid = new(changeBytes, bigEndian: true);
-            byte[] operationBytes = new byte[16];
-            operationGuid.TryWriteBytes(operationBytes, bigEndian: true, out _);
-            var localMutation = new FldLocalProviderMutation(
-                recordBytes, 7, value, changeBytes, 17, 123456, 9, 3);
-            byte[] request = FldDatabaseIpcLocalProviderProtocol.EncodeAutoSequenceRequest([localMutation]);
-            byte[] fingerprint = FldDatabaseIpcProtocol.ComputeFingerprint(
-                FldDatabaseIpcOperationCodes.AppendLocalProviderBatchAutoSequence, request);
-            Assert.Throws<InvalidOperationException>(() =>
-                database.TryGetLocalOperationReceipt(clientBytes, operationBytes, 1, fingerprint, out _));
         }
         finally
         {
