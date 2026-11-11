@@ -190,6 +190,90 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
+    [Fact]
+    public async Task Async_remote_batch_store_preserves_context_and_deduplicates_apply()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "fld-async-remote-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x535;
+        byte[] localAuthor = Id(0x51);
+        byte[] sender = Id(0x52);
+        byte[] issuer = Id(0x53);
+        byte[] record = Id(0x54);
+        byte[] change = Id(0x55);
+        byte[] batchId = Id(0x56);
+        byte[] batchDigest = Id(0x57);
+        byte[] recordsRoot = Id(0x58);
+        byte[] value = "async-contextual-apply"u8.ToArray();
+        Guid ownerId = Guid.NewGuid();
+        Guid clientId = Guid.NewGuid();
+
+        using var database = FldDatabase.Open(root, namespaceId, localAuthor);
+        using var dispatcher = new FldDatabaseIpcDispatcher(database);
+        using var shutdown = new CancellationTokenSource();
+        var server = new StorageIpcServer(
+            StorageIpcEndpoint.ComputePipeName(root, 0), dispatcher.HandleAsync);
+        Task serverTask = server.RunAsync(shutdown.Token);
+        try
+        {
+            await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+            StorageIpcEndpoint.Publish(root, StorageIpcEndpoint.Create(
+                root, 0, ownerId, Environment.ProcessId));
+            await using var client = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                root, clientId, TimeSpan.FromSeconds(10));
+            var store = new FldDatabaseIpcRemoteBatchApplyStore(client, checked((int)namespaceId));
+            var mutation = new ProviderMutation
+            {
+                RecordId = RecordId.From(record),
+                FieldId = 0x0102,
+                HlcWall = 123456,
+                HlcLogical = 3,
+                AuthorNodeId = NodeId.From(issuer),
+                KeyEpoch = 2,
+                Value = value,
+                ChangeId = BatchId.From(change),
+                OriginAuthorEpoch = 4,
+                OriginSequence = 9
+            };
+            var batch = new ProviderRemoteBatchCommit(
+                Guid.NewGuid(),
+                NodeId.From(sender),
+                senderTransportEpoch: 5,
+                namespaceId: checked((int)namespaceId),
+                NodeId.From(issuer),
+                issuerEpoch: 4,
+                BatchId.From(batchId),
+                cursorStart: 1,
+                cursorEnd: 1,
+                new byte[16],
+                batchDigest,
+                recordsRoot,
+                protocolStateDelta: new byte[] { 0xA1, 0xB2 },
+                mutations: [mutation]);
+
+            ProviderApplyReceipt first = await store.ApplyRemoteBatchAsync(batch);
+            Assert.False(first.IsDuplicate);
+            Assert.Equal(batchDigest, first.BatchFingerprint);
+            Assert.True(database.TryGetBytes(record, 0x0102, out byte[]? stored));
+            Assert.Equal(value, stored);
+            Assert.Equal(0ul, database.GetOutboxHighWatermark());
+            Assert.Equal(1ul, database.GetRelayJournalHighWatermark());
+
+            ProviderApplyReceipt duplicate = await store.ApplyRemoteBatchAsync(batch);
+            Assert.True(duplicate.IsDuplicate);
+            Assert.Equal(first.BatchFingerprint, duplicate.BatchFingerprint);
+            Assert.Equal(1ul, database.GetRelayJournalHighWatermark());
+        }
+        finally
+        {
+            shutdown.Cancel();
+            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+            StorageIpcEndpoint.DeleteIfOwned(root, 0, ownerId);
+            dispatcher.Dispose();
+            database.Dispose();
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] id = new byte[16];
