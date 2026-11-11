@@ -989,6 +989,107 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Global_ChangeId_equivocation_from_another_peer_is_rejected_after_reopen()
+    {
+        string directory = Path.Combine(_root, "global-changeid-equivocation-reopen");
+        const ulong partitionId = 460;
+        const string scope = "global-changeid-equivocation-reopen";
+        NodeId local = Node(1), senderA = Node(2), senderB = Node(4), author = Node(3);
+        BatchId sharedChangeId = Batch(153);
+        Guid applyToken = Guid.Parse("00000000-0000-0000-0000-000000000460");
+
+        var first = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = senderA,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(160),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)161, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)162, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = sharedChangeId,
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 153,
+                    Fingerprint = Enumerable.Repeat((byte)163, 16).ToArray(),
+                    Payload = new byte[] { 1, 2, 3 },
+                    RelayEligible = true
+                }
+            }
+        };
+        var equivocation = new MetadataIncomingBatch
+        {
+            ScopeId = scope,
+            LocalReplica = local,
+            SenderPeer = senderB,
+            SenderEpoch = 1,
+            AuthorStreamNodeId = author,
+            NamespaceId = 7,
+            BatchId = Batch(164),
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)165, 16).ToArray(),
+            HeaderFingerprint = Enumerable.Repeat((byte)166, 16).ToArray(),
+            Operations = new[]
+            {
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = sharedChangeId,
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 154,
+                    Fingerprint = Enumerable.Repeat((byte)167, 16).ToArray(),
+                    Payload = new byte[] { 9, 8, 7 },
+                    RelayEligible = true
+                }
+            }
+        };
+
+        try
+        {
+            using (var store = new StorageMetadataStore(directory, partitionId, deleteOnDispose: false))
+            {
+                store.BeginPendingApply(first, applyToken);
+                var finalized = store.FinalizePendingApply(scope, local,
+                    new MetadataProviderApplyReceipt(applyToken, first.BatchDigest));
+                Assert.False(finalized.IsDuplicate);
+                Assert.Equal(1, finalized.NewRelayOperationCount);
+            }
+
+            using var reopened = new StorageMetadataStore(directory, partitionId, deleteOnDispose: false);
+            Assert.Empty(reopened.ReadPendingApplyIntents(scope, local));
+            var relay = reopened.ReadRelay(scope, local, 7, author, 0, 10);
+            Assert.Single(relay.Items);
+            Assert.Equal(sharedChangeId, relay.Items[0].ChangeId);
+            Assert.Equal(1UL, reopened.GetRelayHighWatermark(scope, local, 7, author));
+
+            var duplicate = reopened.FinalizePendingApply(scope, local,
+                new MetadataProviderApplyReceipt(applyToken, first.BatchDigest));
+            Assert.True(duplicate.IsDuplicate);
+
+            Assert.Throws<InvalidDataException>(() =>
+                reopened.BeginPendingApply(equivocation,
+                    Guid.Parse("00000000-0000-0000-0000-000000000461")));
+            Assert.Empty(reopened.ReadPendingApplyIntents(scope, local));
+            Assert.Single(reopened.ReadRelay(scope, local, 7, author, 0, 10).Items);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Pending_ChangeId_identity_is_scoped_by_namespace()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "pending-changeid-namespace"), 437);
