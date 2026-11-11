@@ -20,6 +20,7 @@ public sealed class AsyncStorageSyncCoordinator
     private readonly int _namespaceId;
     private readonly SemaphoreSlim _asyncAdmissionGate = new(1, 1);
     private readonly object _metadataGate = new();
+    private readonly Dictionary<NodeId, SemaphoreSlim> _outboundPeerGates = new();
 
     public AsyncStorageSyncCoordinator(
         Node node, IMetadataStore metadataStore, string scopeId, int namespaceId)
@@ -404,41 +405,60 @@ public sealed class AsyncStorageSyncCoordinator
         if (_metadataStore is not IMetadataPeerStateStore peerStore)
             throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
 
-        Dictionary<NodeId, ulong> ceilings;
-        await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
+        SemaphoreSlim peerGate;
+        lock (_metadataGate)
+        {
+            if (!_outboundPeerGates.TryGetValue(session.PeerNodeId, out peerGate!))
+            {
+                peerGate = new SemaphoreSlim(1, 1);
+                _outboundPeerGates.Add(session.PeerNodeId, peerGate);
+            }
+        }
+
+        // Multiple transport sessions can represent the same peer. Serialize that
+        // peer's reservation/ACK lifecycle, while allowing other peers and inbound
+        // traffic to proceed independently.
+        await peerGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            RegisterInterestedPeer(session, _namespaceId);
-            ceilings = new Dictionary<NodeId, ulong>();
-            foreach (NodeId author in peerStore.ReadOutboundAuthors(
-                _scopeId, _node.NodeId, _namespaceId))
+            Dictionary<NodeId, ulong> ceilings;
+            await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
+            try
             {
-                if (author == session.PeerNodeId) continue;
-                ulong high = _metadataStore.GetOutboundHighWatermark(
-                    _scopeId, _node.NodeId, _namespaceId, author);
-                if (high != 0) ceilings[author] = high;
+                RegisterInterestedPeer(session, _namespaceId);
+                ceilings = new Dictionary<NodeId, ulong>();
+                foreach (NodeId author in peerStore.ReadOutboundAuthors(
+                    _scopeId, _node.NodeId, _namespaceId))
+                {
+                    if (author == session.PeerNodeId) continue;
+                    ulong high = _metadataStore.GetOutboundHighWatermark(
+                        _scopeId, _node.NodeId, _namespaceId, author);
+                    if (high != 0) ceilings[author] = high;
+                }
+                foreach (NodeId author in peerStore.ReadRelayAuthors(
+                    _scopeId, _node.NodeId, _namespaceId))
+                {
+                    if (author == session.PeerNodeId || author == _node.NodeId) continue;
+                    ulong high = _metadataStore.GetRelayHighWatermark(
+                        _scopeId, _node.NodeId, _namespaceId, author);
+                    if (high != 0) ceilings[author] = high;
+                }
             }
-            foreach (NodeId author in peerStore.ReadRelayAuthors(
-                _scopeId, _node.NodeId, _namespaceId))
+            finally
             {
-                if (author == session.PeerNodeId || author == _node.NodeId) continue;
-                ulong high = _metadataStore.GetRelayHighWatermark(
-                    _scopeId, _node.NodeId, _namespaceId, author);
-                if (high != 0) ceilings[author] = high;
+                _asyncAdmissionGate.Release();
             }
+
+            // Do not hold namespace admission while waiting for ACK: the peer may be
+            // sending in the opposite direction and need this coordinator's receive gate.
+            return await session.PushBatchAsync(
+                _node, _namespaceId, peerStore, _scopeId,
+                ceilings, schemaVersion, ct).ConfigureAwait(false);
         }
         finally
         {
-            _asyncAdmissionGate.Release();
+            peerGate.Release();
         }
-
-        // Never hold namespace admission while waiting for transport ACK: the peer may
-        // simultaneously send a batch whose receive path needs this same coordinator.
-        // The immutable reservation plus captured ceilings make this network phase safe
-        // to overlap with later publication and remote receive.
-        return await session.PushBatchAsync(
-            _node, _namespaceId, peerStore, _scopeId,
-            ceilings, schemaVersion, ct).ConfigureAwait(false);
     }
 
     /// <summary>
