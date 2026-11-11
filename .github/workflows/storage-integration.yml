@@ -25,7 +25,7 @@ on:
 
 concurrency:
   group: storage-integration-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
