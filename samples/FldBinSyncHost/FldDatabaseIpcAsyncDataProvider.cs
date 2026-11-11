@@ -98,37 +98,46 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
     {
         ArgumentNullException.ThrowIfNull(mutation);
         ThrowIfUnavailable(cancellationToken);
-        ProviderMutationCodec.Validate(mutation);
-        uint activeEpoch = _activeAuthorEpoch();
-        if (activeEpoch == 0 || mutation.AuthorNodeId != _localAuthor ||
-            mutation.ChangeId.IsZero || mutation.OriginAuthorEpoch != activeEpoch ||
-            mutation.OriginSequence != 0)
-            throw new InvalidDataException(
-                "FLD local drafts require the configured local author, active author epoch, stable ChangeId and deferred OriginSequence.");
-
-        byte[] recordId = mutation.RecordId.ToArray();
-        byte[] value;
-        bool isTombstone;
-        if (mutation.IsRecordTombstone)
+        await _feedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            value = FldLifecycle.DeadValue.ToArray();
-            isTombstone = false;
-        }
-        else
-        {
-            if (mutation.FieldId == FldLifecycle.FieldId)
-                throw new InvalidDataException("The lifecycle field can only be appended as a record tombstone.");
-            value = mutation.IsTombstone ? Array.Empty<byte>() : mutation.Value.ToArray();
-            isTombstone = mutation.IsTombstone;
-        }
+            ThrowIfUnavailable(cancellationToken);
+            ProviderMutationCodec.Validate(mutation);
+            uint activeEpoch = _activeAuthorEpoch();
+            if (activeEpoch == 0 || mutation.AuthorNodeId != _localAuthor ||
+                mutation.ChangeId.IsZero || mutation.OriginAuthorEpoch != activeEpoch ||
+                mutation.OriginSequence != 0)
+                throw new InvalidDataException(
+                    "FLD local drafts require the configured local author, active author epoch, stable ChangeId and deferred OriginSequence.");
 
-        var local = new FldLocalProviderMutation(
-            recordId, mutation.FieldId, value, mutation.ChangeId.ToArray(),
-            activeEpoch, mutation.HlcWall, mutation.HlcLogical,
-            mutation.KeyEpoch, isTombstone);
-        Guid operationId = new(mutation.ChangeId.ToArray(), bigEndian: true);
-        await _client.AppendLocalProviderBatchAutoSequenceAsync(
-            operationId, [local], cancellationToken).ConfigureAwait(false);
+            byte[] recordId = mutation.RecordId.ToArray();
+            byte[] value;
+            bool isTombstone;
+            if (mutation.IsRecordTombstone)
+            {
+                value = FldLifecycle.DeadValue.ToArray();
+                isTombstone = false;
+            }
+            else
+            {
+                if (mutation.FieldId == FldLifecycle.FieldId)
+                    throw new InvalidDataException("The lifecycle field can only be appended as a record tombstone.");
+                value = mutation.IsTombstone ? Array.Empty<byte>() : mutation.Value.ToArray();
+                isTombstone = mutation.IsTombstone;
+            }
+
+            var local = new FldLocalProviderMutation(
+                recordId, mutation.FieldId, value, mutation.ChangeId.ToArray(),
+                activeEpoch, mutation.HlcWall, mutation.HlcLogical,
+                mutation.KeyEpoch, isTombstone);
+            Guid operationId = new(mutation.ChangeId.ToArray(), bigEndian: true);
+            await _client.AppendLocalProviderBatchAutoSequenceAsync(
+                operationId, [local], cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _feedGate.Release();
+        }
     }
 
     public async ValueTask<ProviderChangePage> ReadLocalChangesAsync(
@@ -139,6 +148,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         await _feedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfUnavailable(cancellationToken);
             ulong highWatermark = await _client.GetOutboxHighWatermarkAsync(cancellationToken)
                 .ConfigureAwait(false);
             if (afterSequence > highWatermark)
@@ -156,11 +166,13 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
                 FldDatabaseIpcOutboxEntryChunk? first = await _client.ReadOutboxEntryChunkAsync(
                     _outboxLease, cursor, maxChunkBytes: (uint)Math.Min(1024 * 1024, FldDatabaseIpcProtocol.MaxOutboxChunkBytes),
                     cancellationToken: cancellationToken).ConfigureAwait(false);
-                if (first is null)
+                if (first is null || first.OutboxSeq > highWatermark)
                 {
                     reachedEnd = true;
                     break;
                 }
+                if (first.OutboxSeq <= cursor)
+                    throw new InvalidDataException("FLD Outbox cursor did not advance.");
 
                 byte[] value = await ReadCompleteOutboxValueAsync(first, cursor, cancellationToken)
                     .ConfigureAwait(false);
@@ -198,6 +210,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         await _feedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            ThrowIfUnavailable(cancellationToken);
             ulong highWatermark = await _client.GetOutboxHighWatermarkAsync(cancellationToken)
                 .ConfigureAwait(false);
             if (safeThroughSequence > highWatermark)
@@ -384,16 +397,26 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
     {
         if (first.ValueLength > int.MaxValue)
             throw new InvalidDataException("FLD Outbox value exceeds the managed array limit.");
+        if (first.ValueOffset != 0)
+            throw new InvalidDataException("FLD Outbox entry did not start at value offset zero.");
+
         byte[] value = new byte[checked((int)first.ValueLength)];
         FldDatabaseIpcOutboxEntryChunk current = first;
+        uint expectedOffset = 0;
         while (true)
         {
-            ValidateOutboxContinuation(first, current, checked((uint)value.Length - current.ValueOffset));
-            current.ValueChunk.CopyTo(value, checked((int)current.ValueOffset));
-            if (current.IsComplete) return value;
-            uint nextOffset = checked(current.ValueOffset + (uint)current.ValueChunk.Length);
+            uint remaining = checked((uint)value.Length - expectedOffset);
+            ValidateOutboxContinuation(first, current, expectedOffset, remaining);
+            if (!current.IsComplete && current.ValueChunk.Length == 0)
+                throw new InvalidDataException("FLD Outbox returned an empty non-final value chunk.");
+
+            current.ValueChunk.CopyTo(value, checked((int)expectedOffset));
+            expectedOffset = checked(expectedOffset + (uint)current.ValueChunk.Length);
+            if (current.IsComplete)
+                return value;
+
             current = await _client.ReadOutboxEntryChunkAsync(
-                _outboxLease, afterSequence, first.OutboxSeq, nextOffset,
+                _outboxLease, afterSequence, first.OutboxSeq, expectedOffset,
                 (uint)Math.Min(1024 * 1024, FldDatabaseIpcProtocol.MaxOutboxChunkBytes),
                 cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidDataException("FLD Outbox continuation disappeared during a value read.");
@@ -401,16 +424,21 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
     }
 
     private static void ValidateOutboxContinuation(
-        FldDatabaseIpcOutboxEntryChunk first, FldDatabaseIpcOutboxEntryChunk current, uint remaining)
+        FldDatabaseIpcOutboxEntryChunk first,
+        FldDatabaseIpcOutboxEntryChunk current,
+        uint expectedOffset,
+        uint remaining)
     {
+        bool expectedComplete = (ulong)expectedOffset + (uint)current.ValueChunk.Length == first.ValueLength;
         if (current.OutboxSeq != first.OutboxSeq || current.CommitSeq != first.CommitSeq ||
             current.FieldId != first.FieldId || current.OpKind != first.OpKind ||
             current.KeyEpoch != first.KeyEpoch || current.ValueLength != first.ValueLength ||
-            current.ValueOffset > first.ValueLength || current.ValueChunk.Length > remaining ||
+            current.ValueOffset != expectedOffset || current.ValueChunk.Length > remaining ||
+            current.IsComplete != expectedComplete ||
             !current.ChangeId.AsSpan().SequenceEqual(first.ChangeId) ||
             !current.RecordId.AsSpan().SequenceEqual(first.RecordId) ||
             !current.AuthorNodeId.AsSpan().SequenceEqual(first.AuthorNodeId))
-            throw new InvalidDataException("FLD Outbox continuation changed entry identity or bounds.");
+            throw new InvalidDataException("FLD Outbox continuation changed entry identity, offset or bounds.");
     }
 
     private async Task<byte[]> ReadCompleteSnapshotValueAsync(
