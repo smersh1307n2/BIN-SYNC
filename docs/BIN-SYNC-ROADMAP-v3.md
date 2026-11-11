@@ -1,3 +1,13 @@
+## 1.81. First asynchronous remote-APPLY receive path — 2026-11-11
+
+- [x C] `SyncSession.ReceiveBatchAsync` now supports an awaited before-ACK callback. The transport ACK is not encoded or sent until the asynchronous durability callback completes; the existing synchronous callback/API remains available and mutually exclusive.
+- [x C] `StorageSyncCoordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync` stages the exact durable PendingApply decision before Node mutation, checkpoints Node, awaits the full-context `IAsyncProviderRemoteBatchCommitStore` APPLY, validates the returned ApplyToken, finalizes the Metadata receipt, and only then permits the transport ACK.
+- [x C] No Monitor is held across the provider await. The async APPLY phase is serialized per coordinator with a `SemaphoreSlim`; uncertain provider responses are retried using the same deterministic ApplyToken and immutable batch context.
+- [x T] Added an integration test exercising the asynchronous provider path over a real `SyncSession`/`PipeTransport` pair and checking Node/provider state, preserved sender/issuer context, PendingApply finalization and completion before ACK.
+- [~ CI] Exact-head build and tests are required. This first slice covers ordinary contextual DELTA_BATCH remote APPLY only; it does not complete async local publication, receipt persistence/ACK, snapshot rehydration, FULL_REPLACE, author-epoch transitions or GC.
+- [!] One receive stream per namespace/coordinator remains the supported orchestration assumption for this slice. Concurrent independent sessions sharing one coordinator still need an explicit namespace-wide admission/serialization boundary before production enablement. Do not claim full two-process parity.
+- [ ] Next: verify this commit on Linux/Windows/macOS; add response-loss/restart tests around provider APPLY and Metadata finalization; then implement async local feed publication with immutable origin stamping and receipt sequence persistence before receipt ACK.
+
 ## 1.80. Async provider implementation and writer-lock audit — 2026-11-11
 
 - [x C/T] Added the first process-isolated `IAsyncDataProvider` implementation in `samples/FldBinSyncHost/FldDatabaseIpcAsyncDataProvider.cs`, plus separate `IAsyncProviderRemoteBatchCommitStore` and `IAsyncProviderPublishedOriginStore` capabilities. It uses asynchronous IPC only; no sync-over-async.
