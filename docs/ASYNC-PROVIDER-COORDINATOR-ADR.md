@@ -145,3 +145,10 @@ The current synchronous lock chain is confirmed in code:
 Therefore a SemaphoreSlim added only to the IPC dispatcher is insufficient: direct Node and Metadata Store writers would bypass it, and holding any existing Monitor across an IPC await is invalid. A future async commit barrier must either (a) replace/augment every conflicting writer path with one shared sync+async gate protocol, or (b) use the durable PendingApply/intent plus short-lock snapshot/revalidation protocol and prove each crash cut. Do not implement a partial lease that serializes only IPC requests.
 
 Until that design is selected and tested, `FldDatabaseIpcAsyncDataProvider` deliberately does not implement `IAsyncProviderCommitGuard`, and the synchronous `StorageSyncCoordinator` must not consume it. Physical GC and FULL_REPLACE remain unavailable through this async adapter.
+
+
+## Published-origin IPC capability update — 2026-11-11
+
+FLD Database IPC operation 0x2114 now exposes the existing identity-only `CommitPublishedOrigins` WAL path. The process-isolated sample implements `IAsyncProviderPublishedOriginStore` and maps BIN-SYNC's immutable `(ChangeId, OperationOrigin)` stamps without creating another Outbox row or pending journal. The FLD operation is idempotent for an exact stamp, ignores a superseded ChangeId, and rejects conflicting origins for a still-current ChangeId.
+
+This is a real async optional capability, but it is not sufficient for safe end-to-end publication by itself: without the composed async commit barrier, a caller cannot claim atomicity across Metadata Store publication and the FLD current-state projection. The remaining optional capabilities and coordinator lock gate remain open.
