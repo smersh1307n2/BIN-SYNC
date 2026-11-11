@@ -60,7 +60,9 @@ public sealed class StorageSyncCoordinatorTests
         Assert.NotNull(asyncProvider.LastCommit);
         Assert.Equal(sender.NodeId, asyncProvider.LastCommit!.SenderPeer);
         Assert.Equal(1u, asyncProvider.LastCommit.IssuerEpoch);
-        Assert.Equal(1, asyncProvider.LastCommit.Mutations.Count);
+        ProviderMutation appliedMutation = Assert.Single(asyncProvider.LastCommit.Mutations);
+        Assert.Equal(record, appliedMutation.RecordId);
+        Assert.Equal((ushort)0x0891, appliedMutation.FieldId);
         Assert.NotEqual(Guid.Empty, asyncProvider.LastCommit.ApplyToken);
         Assert.Empty(metadata.ReadPendingApplyIntents("async-remote-apply", receiver.NodeId));
         Assert.True(receiver.TryGetField(1, record, 0x0891, out var nodeValue));
