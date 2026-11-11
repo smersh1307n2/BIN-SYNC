@@ -2879,3 +2879,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] FLD-DB commit `9f15c05bfb8690a53e321cfab9de485efe97387e` adds a race test with two write batches created at the same base CommitSeq. Both stage the same ClientId + OperationId + fingerprint and different data mutations; the first commits, the second must fail with `StorageConflictException`, and only the first mutation plus one durable result may remain.
 - [x T] BIN-SYNC commit `cbe6c6c22926447b3914eef04bb8ab6a4341e874` mirrors the concurrent duplicate-operation contract in the cross-repository host test project.
 - [~ CI] Re-run the exact cross-repository gate against FLD head `9f15c05bfb8690a53e321cfab9de485efe97387e` and BIN-SYNC head containing `cbe6c6c22926447b3914eef04bb8ab6a4341e874`.
+
+
+
+### 1.107 — Concurrent duplicate operation commit fence passes the cross-repository gate
+
+- [x CI] BIN-SYNC run `42936934333` validated the same-CommitSeq duplicate-operation race: FLD Storage **58/58**, Run **26/26**, WAL **17/17**, Engine **63/63**, `FldBinSyncHost.Tests` **12/12**; host build **0 warnings / 0 errors**. BIN-SYNC core passed **678/678** on Linux and **678/678** on Windows; Fuzz/Lab and signed vectors passed.
+- [x CI] Storage Integration run `42936934399` passed on Ubuntu, Windows and macOS.
+- [x T] The race test proves two batches may stage the same identity from the same base CommitSeq, but only one can commit. The loser receives `StorageConflictException`; its distinct data mutation is absent, and the durable winning result is available for replay. The BIN-SYNC sample repeats this public contract.
+- [~ T] Storage-only operation idempotency is now covered for exact replay, conflicting fingerprint, process-reopen recovery, WAL-flush crash recovery, wrong-store batch rejection and concurrent duplicate commits. Next: wire the ledger into an IPC handler and simulate a committed operation whose response is lost during server shutdown, then reconnect with the same ClientId + OperationId and prove the durable result is replayed without a second commit.
