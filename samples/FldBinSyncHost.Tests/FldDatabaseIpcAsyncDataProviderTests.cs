@@ -543,6 +543,83 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1UL, Assert.Single(metadataB.ReadPeerStreamStates(
                 "two-host-b", nodeB.NodeId, nodeA.NodeId, checked((uint)acceptor.PeerEpoch),
                 checked((int)namespaceId))).State.AckedCursor);
+
+            // Now prove transport ACK loss across the actual two FLD Database Host
+            // processes. A's immutable outbound reservation survives the lost ACK;
+            // B has already durably committed the remote APPLY and finalized Metadata.
+            await initiator.DisposeAsync();
+            initiator = null;
+            await acceptor.DisposeAsync();
+            acceptor = null;
+
+            RecordId ackLossRecord = RecordId.From(Id(0x77));
+            byte[] ackLossValue = "host-a-to-host-b-ack-loss"u8.ToArray();
+            await providerA.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            {
+                RecordId = ackLossRecord,
+                FieldId = 0x0753,
+                AuthorNodeId = authorA,
+                OriginAuthorEpoch = 17,
+                HlcWall = 73_100,
+                HlcLogical = 3,
+                Value = ackLossValue,
+                ChangeId = BatchId.From(Id(0x78))
+            });
+
+            var (ackLossToA, ackLossToB) = PipeTransport.CreatePair();
+            var droppingAckTransport = new DropFirstAckTransport(ackLossToB);
+            Task<SyncSession> ackLossAcceptTask = SyncSession.AcceptAsync(nodeB, droppingAckTransport);
+            Task<SyncSession> ackLossConnectTask = SyncSession.ConnectAsync(nodeA, ackLossToA);
+            acceptor = await ackLossAcceptTask;
+            initiator = await ackLossConnectTask;
+
+            Task<BatchResult> lostAckReceive = recoveredAdapterB.ReceiveBatchAsync(acceptor);
+            Task<int> lostAckSend = recoveredAdapterA.RunOutboundRoundAsync([initiator]);
+            await Assert.ThrowsAnyAsync<IOException>(async () =>
+                await lostAckReceive.WaitAsync(TimeSpan.FromSeconds(60)));
+            await Assert.ThrowsAnyAsync<Exception>(async () =>
+                await lostAckSend.WaitAsync(TimeSpan.FromSeconds(60)));
+
+            ProviderMutation? appliedBeforeRetry = await providerB.ReadCurrentAsync(ackLossRecord, 0x0753);
+            Assert.NotNull(appliedBeforeRetry);
+            Assert.Equal(ackLossValue, appliedBeforeRetry!.Value);
+            Assert.Equal(BatchId.From(Id(0x78)), appliedBeforeRetry.ChangeId);
+            Assert.Equal(2UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, checked((uint)initiator.PeerEpoch),
+                checked((int)namespaceId))).State.AckedCursor);
+
+            await initiator.DisposeAsync();
+            initiator = null;
+            await acceptor.DisposeAsync();
+            acceptor = null;
+
+            // A fresh session replays the exact reserved batch. B returns a duplicate
+            // ACK without another provider mutation; only then does A advance its
+            // durable peer ACK cursor.
+            var (ackRetryToA, ackRetryToB) = PipeTransport.CreatePair();
+            Task<SyncSession> ackRetryAcceptTask = SyncSession.AcceptAsync(nodeB, ackRetryToB);
+            Task<SyncSession> ackRetryConnectTask = SyncSession.ConnectAsync(nodeA, ackRetryToA);
+            acceptor = await ackRetryAcceptTask;
+            initiator = await ackRetryConnectTask;
+
+            Task<BatchResult> replayReceive = recoveredAdapterB.ReceiveBatchAsync(acceptor);
+            Task<int> replaySend = recoveredAdapterA.RunOutboundRoundAsync([initiator]);
+            await Task.WhenAll(replayReceive, replaySend).WaitAsync(TimeSpan.FromSeconds(60));
+            BatchResult replayResult = await replayReceive;
+            Assert.True(replayResult.Duplicate);
+            Assert.Equal(0, replayResult.Applied);
+            Assert.Equal(1, await replaySend);
+            Assert.Equal(2UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(2UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, checked((uint)initiator.PeerEpoch),
+                checked((int)namespaceId))).State.AckedCursor);
+            ProviderMutation? afterReplay = await providerB.ReadCurrentAsync(ackLossRecord, 0x0753);
+            Assert.NotNull(afterReplay);
+            Assert.Equal(ackLossValue, afterReplay!.Value);
+            Assert.Equal(BatchId.From(Id(0x78)), afterReplay.ChangeId);
         }
         finally
         {
