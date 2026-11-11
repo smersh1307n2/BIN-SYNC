@@ -156,7 +156,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         FldDatabaseIpcAsyncRemoteBatchApplyStore? applyStore = null;
         try
         {
-            host = StartDatabaseHost(hostRoot, namespaceId, localAuthor);
+            host = StartDatabaseHost(
+                hostRoot, namespaceId, localAuthor, dropRemoteApplyResponseForTest: true);
             StorageIpcEndpointInfo firstEndpoint =
                 await WaitForHostEndpointAsync(hostRoot, host, TimeSpan.FromSeconds(45));
 
@@ -195,13 +196,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 protocolStateDelta: Array.Empty<byte>(),
                 new[] { mutation });
 
-            ProviderApplyReceipt first = await applyStore.ApplyRemoteBatchAsync(batch);
-            Assert.Equal(batch.ApplyToken, first.ApplyToken);
-            Assert.False(first.IsDuplicate);
+            // The real Host process exits immediately after ApplyRemoteBatch has
+            // committed its WAL/receipt, but before StorageIpcServer writes the IPC
+            // response frame. The caller must observe response loss, not a receipt.
+            Exception lostResponse = await Assert.ThrowsAnyAsync<Exception>(async () =>
+                await applyStore.ApplyRemoteBatchAsync(batch));
+            Assert.True(
+                lostResponse is IOException or InvalidDataException or ObjectDisposedException,
+                $"Expected IPC response loss after durable remote APPLY, received {lostResponse.GetType().Name}.");
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(86, host.ExitCode);
 
-            // Simulate a full FLD Database Host process restart after durable APPLY.
-            // The sender retries the same immutable batch after reconnecting; the
-            // recovered ApplyJournal must return the original durable receipt.
             await applyStore.DisposeAsync();
             applyStore = null;
             await reader.DisposeAsync();
@@ -211,6 +216,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await WaitForDatabaseWriterReleaseAsync(
                 hostRoot, namespaceId, localAuthor, TimeSpan.FromSeconds(15));
 
+            // Restart the real Host against the same database root and retry the
+            // exact immutable batch through fresh IPC clients. The ApplyJournal,
+            // not the old IPC connection/client identity, must return its receipt.
             host = StartDatabaseHost(hostRoot, namespaceId, localAuthor);
             _ = await WaitForHostEndpointAsync(
                 hostRoot, host, TimeSpan.FromSeconds(45), firstEndpoint.OwnerId);
@@ -222,8 +230,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 hostRoot, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
 
             ProviderApplyReceipt retry = await applyStore.ApplyRemoteBatchAsync(batch);
-            Assert.Equal(first.ApplyToken, retry.ApplyToken);
-            Assert.Equal(first.BatchFingerprint, retry.BatchFingerprint);
+            Assert.Equal(batch.ApplyToken, retry.ApplyToken);
+            Assert.Equal(batch.BatchDigest.ToArray(), retry.BatchFingerprint);
             Assert.True(retry.IsDuplicate);
 
             ProviderMutation? current = await reader.ReadCurrentAsync(
@@ -557,7 +565,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
-    private static Process StartDatabaseHost(string root, uint namespaceId, byte[] localAuthor)
+    private static Process StartDatabaseHost(
+        string root, uint namespaceId, byte[] localAuthor, bool dropRemoteApplyResponseForTest = false)
     {
         AssemblyMetadataAttribute repositoryMetadata = typeof(FldDatabaseIpcAsyncDataProviderTests)
             .Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -586,6 +595,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         start.ArgumentList.Add(root);
         start.ArgumentList.Add(namespaceId.ToString(CultureInfo.InvariantCulture));
         start.ArgumentList.Add(Convert.ToHexString(localAuthor));
+        if (dropRemoteApplyResponseForTest)
+            start.ArgumentList.Add("--test-drop-remote-apply-response");
         return Process.Start(start)
             ?? throw new InvalidOperationException("Could not start the real FLD Database Host process.");
     }
