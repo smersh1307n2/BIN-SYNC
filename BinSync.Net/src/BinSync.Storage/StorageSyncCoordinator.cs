@@ -2855,6 +2855,120 @@ public sealed class StorageSyncCoordinator
         }
     }
 
+    /// <summary>
+    /// Recover durable PendingApply intents through an asynchronous contextual provider.
+    /// Invoke during host startup, before admitting sync sessions or application writes.
+    /// Exact wire payload replay, Node checkpoint, provider APPLY and metadata finalization
+    /// are ordered identically to the live async receive path. The async admission gate is
+    /// held for the whole recovery pass, but no thread-affine lock crosses provider IPC.
+    /// </summary>
+    public async Task<int> RecoverPendingAppliesAsync(
+        IAsyncProviderRemoteBatchCommitStore asyncProvider,
+        Action<Node> persistNode,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(asyncProvider);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException("A durable scoped Metadata Store is required for asynchronous recovery.");
+
+        await _asyncRemoteApplyGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<MetadataPendingApplyIntent> intents;
+            lock (_gate)
+                intents = _metadataStore.ReadPendingApplyIntents(_scopeId, _node.NodeId);
+
+            int recovered = 0;
+            foreach (MetadataPendingApplyIntent intent in intents)
+            {
+                ct.ThrowIfCancellationRequested();
+                MetadataIncomingBatch pending = intent.Batch;
+                if (pending.NamespaceId != _namespaceId)
+                    continue;
+
+                // Async provider recovery must never silently downgrade to the lossy
+                // synchronous (ApplyToken, mutations) provider contract.
+                if (!pending.ReceiveStateOwnedByMetadataStore ||
+                    pending.WirePayload.Length == 0 ||
+                    pending.HeaderFingerprint.Length == 0)
+                    throw new InvalidDataException(
+                        "Async PendingApply recovery requires the exact metadata-authoritative wire payload and header fingerprint.");
+                if (intent.ApplyOperations.Count != pending.Operations.Count)
+                    throw new InvalidDataException("PendingApply operation decision mask is incomplete.");
+
+                Batch recoveredBatch;
+                lock (_gate)
+                {
+                    recoveredBatch = _node.ApplyBatchPayloadWithMetadataAuthority(
+                        pending.WirePayload, pending.SenderPeer, intent.ApplyOperations).Batch;
+                    persistNode(_node);
+                }
+
+                if (recoveredBatch.NamespaceId != _namespaceId ||
+                    recoveredBatch.BatchId != pending.BatchId ||
+                    !recoveredBatch.BatchDigest.ToArray().AsSpan().SequenceEqual(pending.BatchDigest) ||
+                    !recoveredBatch.PrevBatchDigest.ToArray().AsSpan().SequenceEqual(pending.PreviousBatchDigest) ||
+                    !InboxReceiptIdentity.Compute(recoveredBatch).AsSpan().SequenceEqual(pending.HeaderFingerprint) ||
+                    CreateBatchApplyToken(recoveredBatch) != intent.ApplyToken)
+                    throw new InvalidDataException(
+                        "Recovered wire payload does not match its durable PendingApply identity.");
+
+                var mutations = CreateProviderMutations(pending.Operations);
+                if (mutations.Count == 0)
+                    throw new InvalidDataException("PendingApply intent contains no provider mutations.");
+
+                var context = new ProviderRemoteBatchCommit(
+                    intent.ApplyToken,
+                    pending.SenderPeer,
+                    pending.TransportPeerEpoch,
+                    pending.NamespaceId,
+                    recoveredBatch.IssuerNodeId,
+                    checked((uint)recoveredBatch.IssuerEpoch),
+                    recoveredBatch.BatchId,
+                    checked((ulong)recoveredBatch.CursorStart),
+                    checked((ulong)recoveredBatch.CursorEnd),
+                    recoveredBatch.PrevBatchDigest.ToArray(),
+                    recoveredBatch.BatchDigest.ToArray(),
+                    recoveredBatch.RecordsRoot.ToArray(),
+                    ReadOnlySpan<byte>.Empty,
+                    mutations);
+
+                // If the host loses the response after provider commit, the intent stays
+                // durable and the same ApplyToken/context is retried on the next startup.
+                ProviderApplyReceipt providerReceipt = await asyncProvider.ApplyRemoteBatchAsync(
+                    context, ct).ConfigureAwait(false);
+                if (providerReceipt.ApplyToken != intent.ApplyToken)
+                    throw new InvalidDataException("Async provider returned a receipt for a different recovered ApplyToken.");
+
+                lock (_gate)
+                {
+                    MetadataBatchReceipt metadataReceipt = _metadataStore.FinalizePendingApply(
+                        _scopeId, _node.NodeId,
+                        new MetadataProviderApplyReceipt(intent.ApplyToken, pending.BatchDigest.ToArray()));
+                    NodeId expectedAuthor = !pending.AuthorStreamNodeId.IsZero
+                        ? pending.AuthorStreamNodeId
+                        : pending.Operations.Count == 0 ? default : pending.Operations[0].AuthorNodeId;
+                    if (!metadataReceipt.DurableAuthor.IsZero &&
+                        metadataReceipt.DurableAuthor != expectedAuthor)
+                        throw new InvalidDataException(
+                            "Recovered metadata receipt author does not match its PendingApply intent.");
+                    if (!metadataReceipt.HeaderFingerprint.AsSpan().SequenceEqual(pending.HeaderFingerprint))
+                        throw new InvalidDataException(
+                            "Recovered metadata receipt header fingerprint does not match its PendingApply intent.");
+                }
+
+                recovered++;
+            }
+
+            return recovered;
+        }
+        finally
+        {
+            _asyncRemoteApplyGate.Release();
+        }
+    }
+
     private ProviderApplyReceipt ApplyProviderRemoteBatch(
         Batch wireBatch,
         MetadataIncomingBatch pending,
