@@ -3178,3 +3178,15 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ C/T] The async coordinator must persist that sequence in its existing Node WAL/commit record before calling receipt ACK. The Node's existing durable ChangeId is the retry identity; do not add a second identity or payload journal.
 - [ ] C/T Test interruption at each boundary: before send, FLD WAL commit before response, response received before completion marker, completion marker before receipt ACK, receipt ACK before completion watermark, and restart during recovery. Outbox ACK must remain independent and must not retire IPC receipts.
 - [ ] A/D Only after those semantics are proven, design the async coordinator around a cross-call async-safe commit barrier; do not bridge the synchronous Monitor-based coordinator with sync-over-async.
+
+
+### 1.83 — Select the process-isolated async coordinator consistency model
+
+- [x A] Chose durable PendingApply/intent plus short-lock snapshot/revalidation for ordinary remote APPLY and local feed publication. Do not hold Node, coordinator or MetadataStore Monitor locks across IPC awaits.
+- [x A] Reuse the existing `StorageRelayPublicationGate` SemaphoreSlim to serialize remote APPLY, relay reconciliation and publication. The FLD APPLY_COMMIT plus MetadataStore PendingApply/finalize sequence is the crash-recovery boundary.
+- [ ] C Implement the async remote-apply path: stage PendingApply and persist Node under short synchronous gates; release gates; await `IAsyncProviderRemoteBatchCommitStore`; reacquire the MetadataStore gate and finalize. Recover by replaying the exact apply token and batch.
+- [ ] C Implement async local-feed publication using a captured FLD source-feed ceiling. Read only through that ceiling; writes after capture remain for the next pass. Persist cutover/publication intent under short locks and do not hold them while sending.
+- [ ] C/T Persist the returned IPC ClientSequence in the existing Node WAL/commit record, then call the separate receipt ACK. Advance source Outbox ACK only after durable publication; prove that neither ACK can retire the other's state.
+- [ ] T Inject crashes before/after Node checkpoint, FLD APPLY_COMMIT, MetadataStore finalization, origin stamping, peer ACK, Node receipt-sequence persistence, IPC receipt ACK and Outbox ACK. Add concurrent local-write tests across each await boundary.
+- [ ] A/C Keep FULL_REPLACE, snapshot-state replacement and physical GC disabled until they have dedicated async-safe guards and complete crash-recovery proofs.
+
