@@ -3301,3 +3301,32 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact code head 61a46df715935d5d8f8a2c5a1b5196ac6ec91751 passed BIN-SYNC .NET 10 Linux/Windows (681 tests each), Fuzz/Lab, signed vectors and cross-repository FLD host adapter builds on Ubuntu/Windows (Storage 66, Manifest 11, Run 26, WAL 21, Engine 88, Host IPC 22 on each OS). FLD Storage Integration passed on Ubuntu, macOS and Windows (244 tests per OS). Runs: BIN-SYNC push 43032816937, PR 43032825938; FLD Storage Integration 43032826211.
 - [ ] T Process-isolated end-to-end test using the real FLD Database Host and IPC client, including Host restart between append, Node WAL mapping, Metadata freeze, origin stamp and the two independent ACKs.
 - [ ] A/T Audit async commit-guard coverage for concurrent remote APPLY, relay reconciliation and application writes. FULL_REPLACE, snapshot-state replacement and physical GC remain disabled until async-safe guards and safe-horizon proofs exist.
+
+### 1.89 — Process-isolated async remote APPLY adapter
+
+- [x C] Added `FldDatabaseIpcAsyncRemoteBatchApplyStore` as the FLD IPC implementation of `IAsyncProviderRemoteBatchCommitStore`. It preserves the complete contextual commit identity and mutation provenance and awaits the FLD Host's durable APPLY receipt before BIN-SYNC can acknowledge the transport batch.
+- [x T] Added a real Database Host process test that applies a remote batch, reconnects through a new IPC ClientId, retries the identical commit and verifies the duplicate receipt plus persisted ChangeId/origin provenance.
+- [x CI] The adapter and its cross-repository build are included in the verified BIN-SYNC CI checkpoint recorded in §1.92.
+
+### 1.90 — Durable Metadata outbound delivery
+
+- [x C] Added `AsyncStorageSyncCoordinator.PushNextBatchAsync` to send immutable Metadata-owned outbound/relay operations through the existing durable peer reservation and transport ACK path.
+- [x C] Added per-peer outbound serialization. The namespace admission gate is used only to capture the finite outbound/relay ceilings and is released before waiting for network ACK; a peer gate serializes reservation/ACK lifecycle for concurrent sessions to the same peer.
+- [x T] Added an integration test that verifies a frozen Metadata operation is delivered, remotely applied before ACK, and reflected in receive cursor, durable peer ACK cursor and provider state.
+- [x C/T] Corrected the test fixture to publish through the async provider feed and to establish the initial peer snapshot baseline before incremental delivery. The test is not weakened: it still verifies the actual durable delivery and ACK path.
+
+### 1.91 — Async host composition and two-process exchange
+
+- [x C] Added `FldBinSyncAsyncHostAdapter` to compose startup recovery, local publication, inbound batch receive and outbound rounds while leaving process-lifetime Node, Metadata Store, IPC providers and sessions owned by the host.
+- [x T] Added a bidirectional integration test with two independent FLD Database Host processes, separate Node/Metadata/WAL roots and a paired transport. It verifies both directions' provider state, Node cache, receive cursors and durable peer ACK progression.
+- [ ] T Extend this scenario with restart of both peers after exchange; reload Node, Metadata and FLD Host state, reconnect with stable provider receipt identities, then prove duplicate/replay behavior and cursor/ACK parity.
+- [ ] T Add a two-host interruption matrix for lost transport ACK, remote APPLY committed before ACK response, and restart between receive intent, Node checkpoint, FLD APPLY receipt and Metadata finalization.
+
+### 1.92 — Admission deadlock and snapshot-baseline corrections; exact CI checkpoint
+
+- [x C] Fixed full-duplex async admission ordering: inbound network wait occurs without holding namespace admission; after a complete batch arrives, the receive path acquires admission for durable processing. Outbound delivery captures finite ceilings under admission and releases it before transport ACK wait.
+- [x T] Corrected both incremental-delivery fixtures to persist the empty initial peer stream baseline before attempting DELTA_BATCH. The two-host test now models the post-initial-snapshot state explicitly.
+- [x CI] Exact branch head `bc5cc5c59d3b2111032de51f0fd51288d3b60123` passed `BinSync.Net` run `43043987396` (6/6 jobs: .NET Linux/Windows, Fuzz + Lab, V3.1 signed control-plane golden vectors, FLD host adapter builds on Ubuntu/Windows) and `FLD Storage Integration` run `43043987421` (3/3: Ubuntu, Windows, macOS).
+- [ ] A/T Audit the async commit-guard boundary across remote APPLY, relay reconciliation, local publication and application writes. The current namespace admission gate is coordinator-instance scoped; host composition must enforce one coordinator/admission domain per namespace and prevent bypass writers until a process-wide writer protocol is proven.
+- [ ] T Complete the two-host restart/crash matrix before marking async provider integration complete.
+- [ ] V3.1 roster/frontier/checkpoint/rejoin/FULL_REPLACE and safe-GC proofs remain separate required work. Physical GC and FULL_REPLACE remain disabled until their adversarial and crash-recovery proofs are complete.
