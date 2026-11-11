@@ -121,7 +121,7 @@ public sealed class InProcessAsyncDataProviderAdapterTests
             NodeId.From(Id(0x94)),
             senderTransportEpoch: 5,
             namespaceId: 813,
-            NodeId.From(Id(0x95)),
+            NodeId.From(Id(0x92)),
             issuerEpoch: 8,
             BatchId.From(Id(0x96)),
             cursorStart: 17,
