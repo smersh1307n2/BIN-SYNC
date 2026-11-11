@@ -378,6 +378,78 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Async_local_publication_recovers_after_node_checkpoint_before_wal_published_marker()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-node-checkpoint-window"), 500);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        const string scope = "async-node-checkpoint-window";
+        Node node = NewNode(100);
+        string walPath = Path.Combine(_root, "async-node-checkpoint-window.wal");
+        Wal wal = Wal.Open(walPath);
+        try
+        {
+            var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+            legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+            node.AttachWal(wal);
+            var asyncProvider = new RecordingAsyncLocalProvider(provider);
+            RecordId record = RecordId.From(Guid.Parse("a0000000-0000-0000-0000-000000000001").ToByteArray());
+            BatchId changeId = BatchId.From(Guid.Parse("a0000000-0000-0000-0000-000000000002").ToByteArray());
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record, FieldId = 0x0A01, AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1, HlcWall = 10001, Value = "checkpoint-window"u8.ToArray(), ChangeId = changeId
+            });
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+            bool loseAfterCheckpoint = true;
+
+            await Assert.ThrowsAsync<IOException>(async () =>
+                await coordinator.PublishLocalChangesAsync(asyncProvider, current =>
+                {
+                    StorageNodePersistence.Save(storage, current);
+                    if (loseAfterCheckpoint)
+                    {
+                        loseAfterCheckpoint = false;
+                        throw new IOException("simulated process interruption after durable Node checkpoint");
+                    }
+                }));
+
+            Assert.Equal(0UL, asyncProvider.LastOutboxAck);
+            Assert.Equal(0UL, asyncProvider.LastReceiptAck);
+            Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+            Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+            Assert.True(node.HasPendingProviderOperationReceipts);
+
+            NodeId localNodeId = node.NodeId;
+            node.Dispose();
+            wal.Dispose();
+            node = StorageNodePersistence.Load(storage, localNodeId);
+            wal = Wal.Open(walPath);
+            node.AttachWal(wal);
+            Assert.True(node.HasPendingProviderOperationReceipts);
+
+            var retryCoordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+            int retried = await retryCoordinator.PublishLocalChangesAsync(
+                asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+            Assert.Equal(1, retried);
+            Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+            Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+            Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+            Assert.False(node.HasPendingProviderOperationReceipts);
+            Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+            Assert.True(node.TryGetField(1, record, 0x0A01, out var value));
+            Assert.Equal("checkpoint-window", Encoding.UTF8.GetString(value!.Value));
+        }
+        finally
+        {
+            wal.Dispose();
+            node.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task Async_local_publication_recovers_receipt_ack_after_source_outbox_ack_response_loss()
     {
         Directory.CreateDirectory(_root);
