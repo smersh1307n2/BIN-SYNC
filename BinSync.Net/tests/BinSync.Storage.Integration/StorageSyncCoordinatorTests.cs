@@ -250,45 +250,65 @@ public sealed class StorageSyncCoordinatorTests
         using var storage = StorageDatabase.Open(Path.Combine(_root, "async-local-receipt-recovery"), 492);
         using var provider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
-        using var node = NewNode(91);
         const string scope = "async-local-receipt-recovery";
-        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
-        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
-
+        Node node = NewNode(91);
         string walPath = Path.Combine(_root, "async-local-receipt-recovery.wal");
-        using var wal = Wal.Open(walPath);
-        node.AttachWal(wal);
-        var asyncProvider = new RecordingAsyncLocalProvider(provider)
+        Wal wal = Wal.Open(walPath);
+        try
         {
-            LoseNextReceiptAckResponseAfterCommit = true
-        };
-        RecordId record = RecordId.From(Guid.Parse("91000000-0000-0000-0000-000000000091").ToByteArray());
-        BatchId changeId = BatchId.From(Guid.Parse("91000000-0000-0000-0000-000000000092").ToByteArray());
-        provider.AppendLocalChange(new ProviderMutation
+            var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+            legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+            node.AttachWal(wal);
+            var asyncProvider = new RecordingAsyncLocalProvider(provider)
+            {
+                LoseNextReceiptAckResponseAfterCommit = true
+            };
+            RecordId record = RecordId.From(Guid.Parse("91000000-0000-0000-0000-000000000091").ToByteArray());
+            BatchId changeId = BatchId.From(Guid.Parse("91000000-0000-0000-0000-000000000092").ToByteArray());
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record, FieldId = 0x0902, AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1, HlcWall = 9100, Value = "receipt-recovery"u8.ToArray(), ChangeId = changeId
+            });
+
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+            await Assert.ThrowsAsync<IOException>(async () =>
+                await coordinator.PublishLocalChangesAsync(
+                    asyncProvider, current => StorageNodePersistence.Save(storage, current)));
+
+            Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+            Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+            Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+            Assert.True(node.HasPendingProviderOperationReceipts);
+            Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+
+            // Simulate a process restart after source Outbox ACK and provider receipt
+            // ACK commit, but before the caller receives the receipt-ACK response.
+            NodeId localNodeId = node.NodeId;
+            node.Dispose();
+            wal.Dispose();
+            node = StorageNodePersistence.Load(storage, localNodeId);
+            wal = Wal.Open(walPath);
+            node.AttachWal(wal);
+            Assert.True(node.HasPendingProviderOperationReceipts);
+
+            var retryCoordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+            int retried = await retryCoordinator.PublishLocalChangesAsync(
+                asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+            Assert.Equal(0, retried);
+            Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+            Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+            Assert.False(node.HasPendingProviderOperationReceipts);
+            Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+            Assert.True(node.TryGetField(1, record, 0x0902, out var recoveredValue));
+            Assert.Equal("receipt-recovery", Encoding.UTF8.GetString(recoveredValue!.Value));
+        }
+        finally
         {
-            RecordId = record, FieldId = 0x0902, AuthorNodeId = node.NodeId,
-            OriginAuthorEpoch = 1, HlcWall = 9100, Value = "receipt-recovery"u8.ToArray(), ChangeId = changeId
-        });
-
-        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
-        await Assert.ThrowsAsync<IOException>(async () =>
-            await coordinator.PublishLocalChangesAsync(
-                asyncProvider, current => StorageNodePersistence.Save(storage, current)));
-
-        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
-        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
-        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
-        Assert.True(node.HasPendingProviderOperationReceipts);
-        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
-
-        int retried = await coordinator.PublishLocalChangesAsync(
-            asyncProvider, current => StorageNodePersistence.Save(storage, current));
-
-        Assert.Equal(0, retried);
-        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
-        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
-        Assert.False(node.HasPendingProviderOperationReceipts);
-        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+            wal.Dispose();
+            node.Dispose();
+        }
     }
 
     [Fact]
