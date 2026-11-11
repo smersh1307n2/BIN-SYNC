@@ -3124,6 +3124,16 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 
 
 
+### 1.80 — Close the IPC snapshot restart-semantics gap before async provider implementation
+
+- [x A] Re-read the dispatcher lifetime path: _snapshotHandles and _snapshotOpenOperations are in-memory maps owned by one FldDatabaseIpcDispatcher; Dispose releases every remaining snapshot and clears both maps. HostGeneration is newly generated for each dispatcher.
+- [x A] Corrected the IPC contract: snapshot page/value/release calls are reconnect-safe only within the same live Host generation. They are not restart-resumable handles. Replaying the same (ClientId, OpenOperationId) after restart is not deduplicated by the old dispatcher and may create a new snapshot/watermark.
+- [x D] Updated FLD-DB docs/FLD-DATABASE-IPC.md to distinguish host-generation-scoped snapshot handles from WAL-durable local write receipts and Outbox state.
+- [ ] C/T Add a process-restart test proving stale snapshot tokens are rejected after dispatcher restart and a new open returns a new HostGeneration; ensure client-side enumeration discards old cursors and starts from the new snapshot watermark.
+- [ ] C/T Implement the IPC-backed IAsyncDataProvider with a host-supplied durable operation identity journal. Local mutation retry identity (ClientId, ClientSequence, OperationId, exact payload fingerprint) must be persisted before send and retained until its durable receipt is safely acknowledged. Do not use ephemeral sequence counters or generate a fresh operation id on uncertain retry.
+- [ ] C/T Specify async snapshot behavior explicitly: cancellation/connection loss within one Host generation may retry with the same open operation id; Host-generation change invalidates the handle and requires a new snapshot operation. The provider must not claim cross-restart snapshot continuity.
+- [ ] A/D Continue only with operations whose idempotency and lifetime are proven; then add atomic published-origin and publication/author-epoch IPC contracts. Keep FULL_REPLACE, snapshot-state apply and GC disabled until their contracts and safe-horizon proofs exist.
+
 ### 1.79 — Reconcile async-provider IPC inventory against implemented snapshot contract
 
 - [x A] Re-audited `FldDatabaseIpcClient`, dispatcher and `FldProviderSnapshot`: snapshot-open already returns the exact source-feed watermark captured with the immutable generation; metadata pages already expose current field provenance; bounded value chunks read from the same pinned generation.
