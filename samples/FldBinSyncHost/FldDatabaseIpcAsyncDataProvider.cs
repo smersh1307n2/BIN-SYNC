@@ -8,11 +8,11 @@ namespace BinSync.FldHost;
 
 /// <summary>
 /// Process-isolated IDataProvider implementation over the FLD Database IPC facade.
-/// It advertises IAsyncDataProvider and immutable published-origin stamping only;
-/// async commit guards, publication cutover, author-epoch closure, FULL_REPLACE and GC
-/// capabilities are not emulated.
+/// It advertises IAsyncDataProvider, independent IPC receipt lifecycle, and immutable
+/// published-origin stamping. Async commit guards, publication cutover, author-epoch
+/// closure, FULL_REPLACE and GC capabilities are not emulated.
 /// </summary>
-public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore
+public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore
 {
     private readonly FldDatabaseIpcClient _client;
     private readonly FldDatabaseIpcOutboxLease _outboxLease;
@@ -165,6 +165,57 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 throughSequence, cancellationToken).ConfigureAwait(false);
             if (!acknowledged)
                 throw new InvalidOperationException("FLD did not acknowledge the requested IPC receipt prefix.");
+        }
+        finally
+        {
+            _feedGate.Release();
+        }
+    }
+
+    public async ValueTask CommitPublishedOriginsAsync(
+        IReadOnlyList<ProviderPublishedOrigin> published,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        ThrowIfUnavailable(cancellationToken);
+        if (published.Count == 0) return;
+
+        await _feedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfUnavailable(cancellationToken);
+            uint activeEpoch = _activeAuthorEpoch();
+            if (activeEpoch == 0)
+                throw new InvalidOperationException("The FLD provider has no active BIN-SYNC author epoch.");
+
+            var stamps = new FldPublishedOrigin[published.Count];
+            for (int i = 0; i < stamps.Length; i++)
+            {
+                ProviderPublishedOrigin item = published[i]
+                    ?? throw new ArgumentException("Published-origin list contains null.", nameof(published));
+                ProviderChange change = item.Change
+                    ?? throw new InvalidDataException("Published-origin entry has no provider change.");
+                if (change.ChangeId.IsZero || change.Mutation.ChangeId != change.ChangeId ||
+                    change.Mutation.AuthorNodeId != _localAuthor ||
+                    change.Mutation.OriginAuthorEpoch != activeEpoch ||
+                    change.Mutation.OriginSequence != 0 ||
+                    item.Origin.AuthorNodeId != _localAuthor ||
+                    item.Origin.AuthorEpoch != activeEpoch || item.Origin.Sequence == 0)
+                    throw new InvalidDataException("Published-origin entry does not match the active local draft identity.");
+
+                byte[] recordId = new byte[16];
+                change.Mutation.RecordId.WriteTo(recordId);
+                stamps[i] = new FldPublishedOrigin
+                {
+                    RecordId = recordId,
+                    FieldId = change.Mutation.FieldId,
+                    ChangeId = change.ChangeId.ToArray(),
+                    OriginAuthorEpoch = item.Origin.AuthorEpoch,
+                    OriginSequence = item.Origin.Sequence
+                };
+            }
+
+            await _client.CommitPublishedOriginsAsync(stamps, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
