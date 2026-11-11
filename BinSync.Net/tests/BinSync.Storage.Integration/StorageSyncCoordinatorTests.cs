@@ -348,7 +348,8 @@ public sealed class StorageSyncCoordinatorTests
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "metadata-receipt-client-namespace"), 497);
         using var metadata = new StorageMetadataStore(storage);
-        NodeId local = NodeId.From(IdBytes(97));
+        using var localNode = NewNode(97);
+        NodeId local = localNode.NodeId;
         Guid clientId = Guid.Parse("97000000-0000-0000-0000-000000000097");
 
         Assert.Equal(clientId, metadata.BindProviderReceiptStream("receipt-client-namespace", local, 1, clientId));
