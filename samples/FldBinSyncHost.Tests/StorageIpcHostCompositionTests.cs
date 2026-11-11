@@ -51,10 +51,9 @@ public sealed class StorageIpcHostCompositionTests
             {
                 await using var client = await StorageIpcClientConnection.ConnectAsync(
                     pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10));
-                Exception? overload = await Record.ExceptionAsync(async () =>
+                Exception overload = await Assert.ThrowsAnyAsync<Exception>(async () =>
                     await StorageIpcClientConnection.ConnectAsync(
                         pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10)));
-                Assert.NotNull(overload);
                 Assert.True(overload is IOException or InvalidDataException,
                     $"Expected a transport-level overload rejection, received {overload.GetType().Name}.");
 
