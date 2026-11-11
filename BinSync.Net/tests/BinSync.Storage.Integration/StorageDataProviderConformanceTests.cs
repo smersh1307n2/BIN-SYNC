@@ -1097,6 +1097,84 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
 
     [Fact]
+    public void Record_tombstone_physical_gc_stays_disabled_and_retains_tombstone_after_reopen()
+    {
+        string directory = Path.Combine(_root, "record-tombstone-gc-disabled");
+        Directory.CreateDirectory(directory);
+        RecordId record = Record(142);
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, partitionId: 102))
+            using (var provider = new StorageDataProvider(storage))
+            using (var metadata = new StorageMetadataStore(storage))
+            {
+                var gcStore = new StorageNamespaceGcStore(
+                    storage, "fld-db/gc-disabled", Node(99));
+                using var trust = new TrustStore();
+                provider.AppendLocalChange(new ProviderMutation
+                {
+                    RecordId = record,
+                    FieldId = Model.LifecycleFieldId,
+                    IsRecordTombstone = true,
+                    HlcWall = 500,
+                    HlcLogical = 1,
+                    AuthorNodeId = Node(1),
+                    OriginAuthorEpoch = 1,
+                    Value = Array.Empty<byte>()
+                });
+
+                int leaseAttempts = 0;
+                var scanner = new DelegateApplicationGcReferenceScanner((_, _, _) =>
+                    throw new InvalidOperationException("Reference scan must not start while physical GC is disabled."));
+                int reclaimed = provider.CompactRecordTombstones(
+                    "fld-db/gc-disabled", Node(99), 1, metadata, gcStore, trust, 16,
+                    () =>
+                    {
+                        leaseAttempts++;
+                        throw new InvalidOperationException("GC lease must not be acquired while physical GC is disabled.");
+                    },
+                    scanner);
+
+                Assert.False(gcStore.IsTombstoneGcProofEnabled);
+                Assert.Equal(0, reclaimed);
+                Assert.Equal(0, leaseAttempts);
+
+                ProviderSnapshotHandle snapshot = provider.OpenSnapshot();
+                try
+                {
+                    ProviderSnapshotPage page = provider.ReadSnapshot(snapshot.Token, 0, 16);
+                    Assert.Contains(page.Entries, entry =>
+                        entry.RecordId == record && entry.IsRecordTombstone);
+                }
+                finally
+                {
+                    provider.ReleaseSnapshot(snapshot.Token);
+                }
+            }
+
+            using (var reopened = new StorageDataProvider(directory, partitionId: 102, deleteOnDispose: false))
+            {
+                ProviderSnapshotHandle snapshot = reopened.OpenSnapshot();
+                try
+                {
+                    ProviderSnapshotPage page = reopened.ReadSnapshot(snapshot.Token, 0, 16);
+                    Assert.Contains(page.Entries, entry =>
+                        entry.RecordId == record && entry.IsRecordTombstone);
+                }
+                finally
+                {
+                    reopened.ReleaseSnapshot(snapshot.Token);
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+
+    [Fact]
     public void Full_replace_retains_old_generations_until_safe_gc_proof()
     {
         string directory = Path.Combine(_root, "provider-generation-reclaim");
