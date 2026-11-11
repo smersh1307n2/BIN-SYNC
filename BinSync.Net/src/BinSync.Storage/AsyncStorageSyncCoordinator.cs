@@ -342,8 +342,16 @@ public sealed class AsyncStorageSyncCoordinator
             publishedOrigins.AddRange(recoveredPublishedOrigins);
             for (int i = 0; i < published.Count; i++)
                 publishedOrigins.Add(new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance));
-            if (publishedOrigins.Count != 0)
-                await originStore.CommitPublishedOriginsAsync(publishedOrigins, ct).ConfigureAwait(false);
+            // FLD's versioned published-origin IPC frame is capped at 4096 entries.
+            // Chunking is crash-safe because each stamp is immutable and idempotent;
+            // a retry may safely repeat any prefix whose response was lost.
+            const int maxPublishedOriginBatch = 4096;
+            for (int offset = 0; offset < publishedOrigins.Count; offset += maxPublishedOriginBatch)
+            {
+                int count = Math.Min(maxPublishedOriginBatch, publishedOrigins.Count - offset);
+                ProviderPublishedOrigin[] page = publishedOrigins.GetRange(offset, count).ToArray();
+                await originStore.CommitPublishedOriginsAsync(page, ct).ConfigureAwait(false);
+            }
 
             // Node remains an application-data cache. Persist it before marking the
             // receipt mappings terminal or acknowledging either provider retention domain.
