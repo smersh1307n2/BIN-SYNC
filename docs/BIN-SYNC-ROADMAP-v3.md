@@ -2824,3 +2824,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] FLD-DB commit `47c509ed273f4fe492dd4635be1d332cffaed280` verifies the handler receives request IDs 1, 2 in order on one connection. BIN-SYNC commit `050fac24f4e41389946069c6a29392f9d04ee838` extends the real-FLD host integration test to assert that the handler sees those exact IDs across the two durable writes.
 - [~ CI] Re-run against FLD head `47c509ed273f4fe492dd4635be1d332cffaed280` and the latest BIN-SYNC PR head. After this test is green, define a separate stable operation/idempotency identity in the host request envelope; do not conflate it with the session-local frame RequestId.
 - [~ T] Durable exactly-once effects require the host to persist a stable operation identity and request fingerprint with the operation's durable result (atomically with Storage mutations, or via FLD's existing durable apply receipt for Database operations). A retry after reconnect must reuse that same operation identity and identical request fingerprint; conflicting reuse must fail closed. This is the next design/implementation item.
+
+
+
+### 1.101 — Reconnect fencing, shutdown, and request correlation pass the full cross-repository gate — 2026-11-11
+
+- [x CI] BIN-SYNC run `42934307412` validated §1.99: FLD Storage **49/49**, Run **26/26**, WAL **17/17**, Engine **63/63**, `FldBinSyncHost.Tests` **10/10**; BIN-SYNC Linux/Windows **678/678**, Fuzz/Lab and signed vectors passed. The Storage Integration matrix passed on Ubuntu, macOS and Windows.
+- [x CI] BIN-SYNC run `42934655761` validated §1.100 against the updated FLD IPC request-context contract: FLD Storage **50/50**, Run **26/26**, WAL **17/17**, Engine **63/63**, `FldBinSyncHost.Tests` **10/10**; host build **0 warnings / 0 errors**. BIN-SYNC Linux/Windows **678/678**, Fuzz/Lab and signed control-plane vectors passed. Storage Integration run `42934655730` passed on all three platforms.
+- [x T] The new handler correlation assertion passed: two writes on one live session reach the FLD host handler with request IDs 1 then 2. The IDs are explicitly transport-scoped; they are not reused as durable operation identities.
+- [!] Two existing xUnit1031 warnings remain in `Fld1.Engine.Tests/SyncApplyTests.cs`; the Storage IPC tests compile without their earlier blocking-task warnings.
+- [~ T] Session lifecycle and correlation are now tested through the cross-repository gate. Next: specify the durable operation envelope and idempotency ledger contract (stable OperationId + canonical request fingerprint + durable result), then implement crash-safe replay without conflating OperationId with session RequestId.
