@@ -10,6 +10,8 @@ public enum WalRecordType : byte
     Checkpoint = 0x02,
     LocalMutation = 0x03,
     RemoteBatch = 0x04,
+    ProviderOperationReceipt = 0x05,
+    ProviderOperationReceiptAck = 0x06,
 }
 
 /// <summary>
@@ -18,9 +20,10 @@ public enum WalRecordType : byte
 public sealed class Wal : IDisposable
 {
     /// <summary>WAL format identifier string written at the start of a log segment.</summary>
-    public const string Tag = "BIN-SYNC/WAL/v3";
+    public const string Tag = "BIN-SYNC/WAL/v4";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
-    private const ushort Version = 3;
+    private const ushort Version = 4;
+    private const ushort PreviousVersion = 3;
     private const int RecordDigestLen = 16;
     private const string RecordDigestTag = "BIN-SYNC/WAL-RECORD/v2";
 
@@ -62,14 +65,15 @@ public sealed class Wal : IDisposable
         }
         else
         {
+            ushort fileVersion;
             fs.Position = 0;
             using (var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true))
             {
                 if (ReadBEU32(br) != Magic)
                     throw new InvalidDataException("Not a BinSync WAL (bad magic).");
-                var version = ReadBEU16(br);
-                if (version != Version)
-                    throw new InvalidDataException($"Unsupported WAL version {version}; BIN-SYNC v3 requires WAL v3.");
+                fileVersion = ReadBEU16(br);
+                if (fileVersion != PreviousVersion && fileVersion != Version)
+                    throw new InvalidDataException($"Unsupported WAL version {fileVersion}; supported versions are {PreviousVersion} and {Version}.");
             }
             long validEnd = 6;
             while (validEnd + 4 <= fs.Length)
@@ -88,7 +92,7 @@ public sealed class Wal : IDisposable
                     fs.ReadExactly(storedDigest);
                     VerifyRecordDigest(payload, storedDigest);
                 }
-                ValidateRecord(payload);
+                ValidateRecord(payload, fileVersion);
                 validEnd = fs.Position;
                 seq++;
             }
@@ -100,6 +104,8 @@ public sealed class Wal : IDisposable
                 fs.SetLength(validEnd);
                 fs.Flush(flushToDisk: true);
             }
+            if (fileVersion == PreviousVersion)
+                fs = UpgradeToCurrentVersion(path, fs);
             fs.Position = fs.Length;
         }
         return new Wal(path, fs, seq);
@@ -161,6 +167,38 @@ public sealed class Wal : IDisposable
         w.Raw(batchPayload);
         var payload = w.Value();
         ValidateRecord(payload);
+        return AppendRaw(payload);
+    }
+
+    /// <summary>Persist the stable FLD ClientSequence assigned to one ChangeId.</summary>
+    internal long AppendProviderOperationReceipt(
+        int namespaceId, BatchId changeId, ulong clientSequence, bool published)
+    {
+        Node.ValidateNamespaceId(namespaceId);
+        if (changeId.IsZero || clientSequence == 0)
+            throw new ArgumentException("Provider receipt identity and ClientSequence must be non-zero.");
+        var w = new Writer();
+        w.U8((byte)WalRecordType.ProviderOperationReceipt);
+        w.Varint((ulong)namespaceId);
+        w.B128(changeId);
+        w.Varint(clientSequence);
+        w.U8(published ? (byte)1 : (byte)0);
+        var payload = w.Value();
+        ValidateRecord(payload, Version);
+        return AppendRaw(payload);
+    }
+
+    /// <summary>Persist confirmation that the provider ACKed a contiguous ClientSequence prefix.</summary>
+    internal long AppendProviderOperationReceiptAck(int namespaceId, ulong throughSequence)
+    {
+        Node.ValidateNamespaceId(namespaceId);
+        if (throughSequence == 0) throw new ArgumentOutOfRangeException(nameof(throughSequence));
+        var w = new Writer();
+        w.U8((byte)WalRecordType.ProviderOperationReceiptAck);
+        w.Varint((ulong)namespaceId);
+        w.Varint(throughSequence);
+        var payload = w.Value();
+        ValidateRecord(payload, Version);
         return AppendRaw(payload);
     }
 
@@ -258,8 +296,8 @@ public sealed class Wal : IDisposable
         using var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true);
         if (ReadBEU32(br) != Magic) throw new InvalidDataException("Not a BinSync WAL.");
         var version = ReadBEU16(br);
-        if (version != Version)
-            throw new InvalidDataException($"Unsupported WAL version {version}; WAL v2 is required.");
+        if (version != PreviousVersion && version != Version)
+            throw new InvalidDataException($"Unsupported WAL version {version}; supported versions are {PreviousVersion} and {Version}.");
         var records = new List<byte[]>();
         while (fs.Position + 4 <= fs.Length)
         {
@@ -276,7 +314,7 @@ public sealed class Wal : IDisposable
                 fs.ReadExactly(storedDigest);
                 VerifyRecordDigest(payload, storedDigest);
             }
-            ValidateRecord(payload);
+            ValidateRecord(payload, version);
             records.Add(payload);
         }
 
@@ -344,6 +382,9 @@ public sealed class Wal : IDisposable
                 if (_fs is null) throw new ObjectDisposedException(nameof(Wal));
                 if (_faulted)
                     throw new InvalidOperationException("WAL is faulted after an earlier I/O error; reopen it before checkpointing.");
+                if (node.HasPendingProviderOperationReceipts)
+                    throw new InvalidOperationException(
+                        "Cannot checkpoint/truncate the Node WAL while provider operation receipts remain unacknowledged.");
                 // The node state cannot change, and no WAL append can interleave,
                 // between the snapshot and truncation.
                 NodePersistence.Save(node, snapshotPath);
@@ -365,7 +406,7 @@ public sealed class Wal : IDisposable
 
     // Validate framing and the complete payload before any replay mutation.
     // A complete but malformed record is corruption, not a torn tail.
-    private static void ValidateRecord(byte[] payload)
+    private static void ValidateRecord(byte[] payload, ushort version = Version)
     {
         var r = new Reader(payload);
         var type = (WalRecordType)r.U8();
@@ -383,6 +424,20 @@ public sealed class Wal : IDisposable
                         !remote.Aliases.Any(x => x.NodeId == remote.SenderPeer && x.Epoch == remote.SenderEpoch))
                         throw new InvalidDataException("WAL remote-batch session map does not identify its sender.");
                     CausalWire.ValidatePayload(remote.BatchPayload);
+                    break;
+                }
+            case WalRecordType.ProviderOperationReceipt:
+                {
+                    if (version < Version)
+                        throw new InvalidDataException("Provider operation receipt records require WAL v4.");
+                    _ = ReadProviderOperationReceipt(r);
+                    break;
+                }
+            case WalRecordType.ProviderOperationReceiptAck:
+                {
+                    if (version < Version)
+                        throw new InvalidDataException("Provider receipt ACK records require WAL v4.");
+                    _ = ReadProviderOperationReceiptAck(r);
                     break;
                 }
             case WalRecordType.LocalMutation:
@@ -475,9 +530,43 @@ public sealed class Wal : IDisposable
                     return node.ReplayRemoteBatch(remote.SenderPeer, remote.SenderEpoch,
                         remote.Aliases, remote.BatchPayload) ? 1 : 0;
                 }
+            case WalRecordType.ProviderOperationReceipt:
+                {
+                    var receipt = ReadProviderOperationReceipt(r);
+                    return node.ReplayProviderOperationReceipt(
+                        receipt.NamespaceId, receipt.ChangeId, receipt.ClientSequence, receipt.Published);
+                }
+            case WalRecordType.ProviderOperationReceiptAck:
+                {
+                    var receiptAck = ReadProviderOperationReceiptAck(r);
+                    return node.ReplayProviderOperationReceiptAck(
+                        receiptAck.NamespaceId, receiptAck.ThroughSequence);
+                }
             default:
                 throw new InvalidDataException($"Unknown WAL record type 0x{(byte)type:X2}.");
         }
+    }
+
+    private static (int NamespaceId, BatchId ChangeId, ulong ClientSequence, bool Published)
+        ReadProviderOperationReceipt(Reader reader)
+    {
+        ulong rawNamespace = reader.Varint();
+        var changeId = BatchId.From(reader.B128());
+        ulong clientSequence = reader.Varint();
+        byte published = reader.U8();
+        if (rawNamespace > ushort.MaxValue || changeId.IsZero || clientSequence == 0 || published > 1)
+            throw new InvalidDataException("Invalid WAL provider operation receipt.");
+        return ((int)rawNamespace, changeId, clientSequence, published != 0);
+    }
+
+    private static (int NamespaceId, ulong ThroughSequence)
+        ReadProviderOperationReceiptAck(Reader reader)
+    {
+        ulong rawNamespace = reader.Varint();
+        ulong throughSequence = reader.Varint();
+        if (rawNamespace > ushort.MaxValue || throughSequence == 0)
+            throw new InvalidDataException("Invalid WAL provider operation receipt ACK.");
+        return ((int)rawNamespace, throughSequence);
     }
 
     private static (NodeId SenderPeer, int SenderEpoch, List<AliasMapEntry> Aliases, byte[] BatchPayload)
@@ -544,6 +633,37 @@ public sealed class Wal : IDisposable
         };
         for (ulong i = 0; i < depCount; i++) entry.CausalDeps.Add(BatchId.From(r.B128()));
         return (applyFlag != 0, entry);
+    }
+
+    private static FileStream UpgradeToCurrentVersion(string path, FileStream previous)
+    {
+        string tempPath = path + ".upgrade-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            using (var temp = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 4096, FileOptions.WriteThrough))
+            {
+                WriteHeader(temp);
+                previous.Position = 6;
+                previous.CopyTo(temp);
+                temp.Flush(flushToDisk: true);
+            }
+
+            // Close the old handle before atomic replacement (Windows requires delete sharing).
+            previous.Dispose();
+            File.Move(tempPath, path, overwrite: true);
+            return new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read,
+                4096, FileOptions.WriteThrough);
+        }
+        catch
+        {
+            previous.Dispose();
+            if (File.Exists(tempPath))
+            {
+                try { File.Delete(tempPath); } catch { /* best effort */ }
+            }
+            throw;
+        }
     }
 
     private static void WriteHeader(FileStream fs)

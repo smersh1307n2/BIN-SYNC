@@ -95,6 +95,10 @@ public sealed partial class Node
         Outbox.EnsureCapacity(staged.Outbox.Count);
         _outboxSeq.EnsureCapacity(staged._outboxSeq.Count);
         var restoredInboxAuthors = staged.InboxAuthors.Clone();
+        var restoredProviderReceipts = new Dictionary<(int Ns, BatchId ChangeId), ProviderOperationReceiptState>(staged.ProviderOperationReceipts);
+        var restoredProviderReceiptSequences = new Dictionary<(int Ns, ulong ClientSequence), BatchId>(staged.ProviderOperationReceiptSequences);
+        var restoredProviderReceiptHighWatermarks = new Dictionary<int, ulong>(staged.ProviderOperationReceiptHighWatermarks);
+        var restoredProviderReceiptAckedThrough = new Dictionary<int, ulong>(staged.ProviderOperationReceiptAckedThrough);
         LastBatchDigest.EnsureCapacity(staged.LastBatchDigest.Count);
         LastStreamDigest.EnsureCapacity(staged.LastStreamDigest.Count);
         AliasToNode.EnsureCapacity(staged.AliasToNode.Count);
@@ -103,6 +107,10 @@ public sealed partial class Node
         PeerStates.EnsureCapacity(staged.PeerStates.Count);
         SeenChanges.EnsureCapacity(staged.SeenChanges.Count);
         GlobalChangeLedger.EnsureCapacity(staged.GlobalChangeLedger.Count);
+        ProviderOperationReceipts.EnsureCapacity(restoredProviderReceipts.Count);
+        ProviderOperationReceiptSequences.EnsureCapacity(restoredProviderReceiptSequences.Count);
+        ProviderOperationReceiptHighWatermarks.EnsureCapacity(restoredProviderReceiptHighWatermarks.Count);
+        ProviderOperationReceiptAckedThrough.EnsureCapacity(restoredProviderReceiptAckedThrough.Count);
         LastStreamAuthor.EnsureCapacity(staged.LastStreamAuthor.Count);
         KnownEpochs.EnsureCapacity(staged.KnownEpochs.Count);
         PeerSessionEpochs.EnsureCapacity(staged.PeerSessionEpochs.Count);
@@ -124,6 +132,12 @@ public sealed partial class Node
         ReplaceContents(PeerStates, staged.PeerStates);
         ReplaceContents(SeenChanges, staged.SeenChanges);
         ReplaceContents(GlobalChangeLedger, staged.GlobalChangeLedger);
+        ProviderOperationReceipts.Clear();
+        foreach (var pair in restoredProviderReceipts) ProviderOperationReceipts.Add(pair.Key, pair.Value);
+        ProviderOperationReceiptSequences.Clear();
+        foreach (var pair in restoredProviderReceiptSequences) ProviderOperationReceiptSequences.Add(pair.Key, pair.Value);
+        ReplaceContents(ProviderOperationReceiptHighWatermarks, restoredProviderReceiptHighWatermarks);
+        ReplaceContents(ProviderOperationReceiptAckedThrough, restoredProviderReceiptAckedThrough);
         ReplaceContents(LastStreamAuthor, staged.LastStreamAuthor);
         ReplaceContents(KnownEpochs, staged.KnownEpochs);
         ReplaceContents(PeerSessionEpochs, staged.PeerSessionEpochs);
@@ -159,6 +173,249 @@ public sealed partial class Node
     {
         destination.Clear();
         destination.AddRange(source);
+    }
+
+    /// <summary>True while receipt sequence mappings still require the WAL for recovery.</summary>
+    internal bool HasPendingProviderOperationReceipts
+    {
+        get { lock (_lockMeta) return ProviderOperationReceipts.Count != 0; }
+    }
+
+    internal bool TryGetProviderOperationReceipt(
+        int namespaceId, BatchId changeId, out ulong clientSequence, out bool published)
+    {
+        ValidateNamespaceId(namespaceId);
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            if (ProviderOperationReceipts.TryGetValue((namespaceId, changeId), out var state))
+            {
+                clientSequence = state.ClientSequence;
+                published = state.Published;
+                return true;
+            }
+            clientSequence = 0;
+            published = false;
+            return false;
+        }
+    }
+
+    internal IReadOnlyList<ProviderOperationReceiptSnapshot> ReadProviderOperationReceipts(int namespaceId)
+    {
+        ValidateNamespaceId(namespaceId);
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            return ProviderOperationReceipts
+                .Where(pair => pair.Key.Ns == namespaceId)
+                .Select(pair => new ProviderOperationReceiptSnapshot(
+                    pair.Key.ChangeId, pair.Value.ClientSequence, pair.Value.Published))
+                .OrderBy(item => item.ClientSequence)
+                .ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Highest contiguous Published ClientSequence retained by the WAL. A new WAL
+    /// generation may begin at an arbitrary sequence after a prior prefix was ACKed
+    /// and checkpointed; gaps inside the retained generation are never skipped.
+    /// </summary>
+    internal ulong GetPublishedProviderOperationReceiptPrefix(int namespaceId)
+    {
+        ValidateNamespaceId(namespaceId);
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            return GetPublishedProviderOperationReceiptPrefixUnsafe(namespaceId);
+        }
+    }
+
+    internal void RecordProviderOperationReceipt(int namespaceId, BatchId changeId, ulong clientSequence)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (changeId.IsZero || clientSequence == 0)
+            throw new ArgumentException("Provider receipt identity and ClientSequence must be non-zero.");
+        using (EnterAllGates())
+        {
+            var key = (namespaceId, changeId);
+            if (ProviderOperationReceipts.TryGetValue(key, out var existing))
+            {
+                if (existing.ClientSequence != clientSequence)
+                    throw new InvalidDataException("One ChangeId was assigned conflicting provider ClientSequences.");
+                return;
+            }
+            if (_wal is null)
+                throw new InvalidOperationException("A durable Node WAL must be attached before recording provider operation receipts.");
+            if (ProviderOperationReceiptSequences.ContainsKey((namespaceId, clientSequence)))
+                throw new InvalidDataException("Provider ClientSequence is already assigned to another ChangeId.");
+
+            ulong expected = ProviderOperationReceiptHighWatermarks.TryGetValue(namespaceId, out ulong high)
+                ? checked(high + 1)
+                : ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out ulong acked)
+                    ? checked(acked + 1)
+                    : 0;
+            if (expected != 0 && clientSequence != expected)
+                throw new InvalidDataException("Provider ClientSequence is not contiguous with the retained receipt prefix.");
+
+            _wal.AppendProviderOperationReceipt(namespaceId, changeId, clientSequence, published: false);
+            ProviderOperationReceipts.Add(key, new ProviderOperationReceiptState(clientSequence, Published: false));
+            ProviderOperationReceiptSequences.Add((namespaceId, clientSequence), changeId);
+            ProviderOperationReceiptHighWatermarks[namespaceId] = clientSequence;
+        }
+    }
+
+    internal void MarkProviderOperationReceiptPublished(int namespaceId, BatchId changeId, ulong clientSequence)
+    {
+        ValidateNamespaceId(namespaceId);
+        using (EnterAllGates())
+        {
+            var key = (namespaceId, changeId);
+            if (!ProviderOperationReceipts.TryGetValue(key, out var state) ||
+                state.ClientSequence != clientSequence)
+                throw new InvalidDataException("Cannot publish a provider receipt without its exact durable ClientSequence mapping.");
+            if (state.Published) return;
+            if (_wal is null)
+                throw new InvalidOperationException("A durable Node WAL must be attached before marking provider receipts Published.");
+
+            _wal.AppendProviderOperationReceipt(namespaceId, changeId, clientSequence, published: true);
+            ProviderOperationReceipts[key] = state with { Published = true };
+        }
+    }
+
+    /// <summary>
+    /// Record a provider receipt ACK only after the provider confirms the same
+    /// contiguous Published prefix. This record is what allows WAL checkpoint/truncate.
+    /// </summary>
+    internal int AcknowledgeProviderOperationReceipts(int namespaceId, ulong throughSequence)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (throughSequence == 0) throw new ArgumentOutOfRangeException(nameof(throughSequence));
+        using (EnterAllGates())
+        {
+            ulong alreadyAcked = ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out var acked)
+                ? acked : 0;
+            if (throughSequence <= alreadyAcked) return 0;
+            ulong prefix = GetPublishedProviderOperationReceiptPrefixUnsafe(namespaceId);
+            if (throughSequence > prefix)
+                throw new InvalidDataException("Provider receipt ACK exceeds the contiguous Published ClientSequence prefix.");
+            if (_wal is null)
+                throw new InvalidOperationException("A durable Node WAL must be attached before acknowledging provider operation receipts.");
+
+            _wal.AppendProviderOperationReceiptAck(namespaceId, throughSequence);
+            int removed = 0;
+            foreach (var pair in ProviderOperationReceiptSequences
+                .Where(pair => pair.Key.Ns == namespaceId && pair.Key.ClientSequence <= throughSequence)
+                .ToArray())
+            {
+                ProviderOperationReceiptSequences.Remove(pair.Key);
+                ProviderOperationReceipts.Remove((namespaceId, pair.Value));
+                removed++;
+            }
+            ProviderOperationReceiptAckedThrough[namespaceId] = throughSequence;
+            if (!ProviderOperationReceiptSequences.Keys.Any(key => key.Ns == namespaceId))
+                ProviderOperationReceiptHighWatermarks.Remove(namespaceId);
+            return removed;
+        }
+    }
+
+    internal int ReplayProviderOperationReceipt(
+        int namespaceId, BatchId changeId, ulong clientSequence, bool published)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (changeId.IsZero || clientSequence == 0)
+            throw new InvalidDataException("Invalid WAL provider operation receipt identity.");
+        lock (_lockMeta)
+        {
+            var key = (namespaceId, changeId);
+            if (ProviderOperationReceipts.TryGetValue(key, out var existing))
+            {
+                if (existing.ClientSequence != clientSequence)
+                    throw new InvalidDataException("WAL provider receipt conflicts with an existing ChangeId mapping.");
+                if (published && !existing.Published)
+                {
+                    ProviderOperationReceipts[key] = existing with { Published = true };
+                    return 1;
+                }
+                return 0;
+            }
+            if (published)
+                throw new InvalidDataException("WAL Published receipt marker has no preceding durable receipt mapping.");
+            if (ProviderOperationReceiptSequences.ContainsKey((namespaceId, clientSequence)))
+                throw new InvalidDataException("WAL provider ClientSequence is assigned to multiple ChangeIds.");
+
+            ulong acked = ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out var ack) ? ack : 0;
+            ulong expected = ProviderOperationReceiptHighWatermarks.TryGetValue(namespaceId, out var high)
+                ? checked(high + 1)
+                : ack != 0 ? checked(ack + 1) : 0;
+            if (expected != 0 && clientSequence != expected)
+                throw new InvalidDataException("WAL provider receipt sequence contains a gap or reordering.");
+
+            ProviderOperationReceipts.Add(key, new ProviderOperationReceiptState(clientSequence, Published: false));
+            ProviderOperationReceiptSequences.Add((namespaceId, clientSequence), changeId);
+            ProviderOperationReceiptHighWatermarks[namespaceId] = clientSequence;
+            return 1;
+        }
+    }
+
+    internal int ReplayProviderOperationReceiptAck(int namespaceId, ulong throughSequence)
+    {
+        ValidateNamespaceId(namespaceId);
+        if (throughSequence == 0)
+            throw new InvalidDataException("WAL provider receipt ACK sequence must be non-zero.");
+        lock (_lockMeta)
+        {
+            ulong alreadyAcked = ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out var acked)
+                ? acked : 0;
+            if (throughSequence <= alreadyAcked) return 0;
+            if (throughSequence > GetPublishedProviderOperationReceiptPrefixUnsafe(namespaceId))
+                throw new InvalidDataException("WAL provider receipt ACK exceeds the contiguous Published prefix.");
+
+            int removed = 0;
+            foreach (var pair in ProviderOperationReceiptSequences
+                .Where(pair => pair.Key.Ns == namespaceId && pair.Key.ClientSequence <= throughSequence)
+                .ToArray())
+            {
+                ProviderOperationReceiptSequences.Remove(pair.Key);
+                ProviderOperationReceipts.Remove((namespaceId, pair.Value));
+                removed++;
+            }
+            ProviderOperationReceiptAckedThrough[namespaceId] = throughSequence;
+            if (!ProviderOperationReceiptSequences.Keys.Any(key => key.Ns == namespaceId))
+                ProviderOperationReceiptHighWatermarks.Remove(namespaceId);
+            return removed;
+        }
+    }
+
+    private ulong GetPublishedProviderOperationReceiptPrefixUnsafe(int namespaceId)
+    {
+        ulong acked = ProviderOperationReceiptAckedThrough.TryGetValue(namespaceId, out var value)
+            ? value : 0;
+        ulong next = checked(acked + 1);
+        if (!ProviderOperationReceiptSequences.ContainsKey((namespaceId, next)))
+        {
+            if (acked != 0 || !ProviderOperationReceiptHighWatermarks.TryGetValue(namespaceId, out _))
+                return acked;
+            ulong first = ProviderOperationReceiptSequences.Keys
+                .Where(key => key.Ns == namespaceId)
+                .Select(key => key.ClientSequence)
+                .DefaultIfEmpty(0)
+                .Min();
+            if (first == 0) return 0;
+            acked = first - 1;
+            next = first;
+        }
+
+        ulong prefix = acked;
+        while (ProviderOperationReceiptSequences.TryGetValue((namespaceId, next), out var changeId))
+        {
+            if (!ProviderOperationReceipts.TryGetValue((namespaceId, changeId), out var state) ||
+                !state.Published)
+                break;
+            prefix = next;
+            if (next == ulong.MaxValue) break;
+            next++;
+        }
+        return prefix;
     }
 
     internal bool ReplayLocalMutation(OutboxEntry entry, bool applyToStorage)

@@ -783,4 +783,129 @@ public class WalTests
     }
 
 
+
+
+    [Fact]
+    public void Wal_v3_segment_is_upgraded_to_v4_before_receipt_records_are_appended()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-v3-upgrade-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "node.wal");
+        try
+        {
+            var source = Fix.MakeNode(941);
+            var rid = Fix.Rid(941);
+            using (var wal = Wal.Open(path))
+            {
+                source.AttachWal(wal);
+                Assert.True(source.WriteField(1, rid, 0x100, new byte[] { 0x41 }));
+            }
+
+            // Existing v3 record payloads are byte-compatible with v4; downgrade only
+            // the header to simulate a durable WAL segment created by the previous release.
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                fs.Position = 4;
+                Span<byte> version = stackalloc byte[2];
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt16BigEndian(version, 3);
+                fs.Write(version);
+                fs.Flush(flushToDisk: true);
+            }
+
+            var receiver = Fix.MakeNode(941);
+            BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
+            using (var wal = Wal.Open(path))
+            {
+                byte[] header = File.ReadAllBytes(path);
+                Assert.Equal((ushort)4,
+                    System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(4, 2)));
+                receiver.AttachWal(wal);
+                receiver.RecordProviderOperationReceipt(1, changeId, 17);
+                receiver.MarkProviderOperationReceiptPublished(1, changeId, 17);
+                Assert.Equal(3, wal.Sequence);
+            }
+
+            var recovered = Fix.MakeNode(941);
+            using (var wal = Wal.Open(path))
+            {
+                Assert.Equal(3, wal.Replay(recovered));
+            }
+            Assert.True(recovered.TryGetProviderOperationReceipt(1, changeId, out ulong sequence, out bool published));
+            Assert.Equal(17UL, sequence);
+            Assert.True(published);
+            Assert.Equal(17UL, recovered.GetPublishedProviderOperationReceiptPrefix(1));
+            Assert.True(recovered.TryGetField(1, rid, 0x100, out var field));
+            Assert.Equal(new byte[] { 0x41 }, field!.Value);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Wal_checkpoint_cannot_truncate_unacknowledged_provider_receipt_mappings()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-receipt-checkpoint-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var walPath = Path.Combine(dir, "node.wal");
+        var snapshotPath = Path.Combine(dir, "node.state");
+        try
+        {
+            var node = Fix.MakeNode(942);
+            BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
+            using var wal = Wal.Open(walPath);
+            node.AttachWal(wal);
+            node.RecordProviderOperationReceipt(1, changeId, 7);
+
+            Assert.Throws<InvalidOperationException>(() => wal.Checkpoint(node, snapshotPath));
+            Assert.False(File.Exists(snapshotPath));
+            Assert.Equal(1, wal.Sequence);
+
+            node.MarkProviderOperationReceiptPublished(1, changeId, 7);
+            Assert.Equal(7UL, node.GetPublishedProviderOperationReceiptPrefix(1));
+            Assert.Equal(1, node.AcknowledgeProviderOperationReceipts(1, 7));
+            Assert.False(node.TryGetProviderOperationReceipt(1, changeId, out _, out _));
+
+            wal.Checkpoint(node, snapshotPath);
+            Assert.Equal(0, wal.Sequence);
+            var recovered = NodePersistence.Load(snapshotPath);
+            Assert.Empty(recovered.ReadProviderOperationReceipts(1));
+            Assert.Equal(0, Wal.ReplayFile(walPath, recovered));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
+
+    [Fact]
+    public void Provider_receipt_ACK_must_not_cross_an_unpublished_or_missing_sequence()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-receipt-prefix-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var node = Fix.MakeNode(943);
+            using var wal = Wal.Open(Path.Combine(dir, "node.wal"));
+            node.AttachWal(wal);
+            BatchId first = BatchId.From(Guid.NewGuid().ToByteArray());
+            BatchId second = BatchId.From(Guid.NewGuid().ToByteArray());
+
+            node.RecordProviderOperationReceipt(1, first, 20);
+            node.RecordProviderOperationReceipt(1, second, 21);
+            node.MarkProviderOperationReceiptPublished(1, first, 20);
+            Assert.Equal(20UL, node.GetPublishedProviderOperationReceiptPrefix(1));
+            Assert.Throws<InvalidDataException>(() => node.AcknowledgeProviderOperationReceipts(1, 21));
+
+            node.MarkProviderOperationReceiptPublished(1, second, 21);
+            Assert.Equal(21UL, node.GetPublishedProviderOperationReceiptPrefix(1));
+            Assert.Equal(2, node.AcknowledgeProviderOperationReceipts(1, 21));
+            Assert.Empty(node.ReadProviderOperationReceipts(1));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* best effort */ }
+        }
+    }
 }

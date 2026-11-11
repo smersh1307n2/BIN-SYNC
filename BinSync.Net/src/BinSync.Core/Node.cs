@@ -5,6 +5,9 @@
 
 namespace BinSync;
 
+internal readonly record struct ProviderOperationReceiptState(ulong ClientSequence, bool Published);
+internal readonly record struct ProviderOperationReceiptSnapshot(BatchId ChangeId, ulong ClientSequence, bool Published);
+
 /// <summary>Sync node: storage, outbox, alias maps, create/apply delta batches. Identity is fixed at construction.</summary>
 public sealed partial class Node : IDisposable
 {
@@ -234,6 +237,12 @@ public sealed partial class Node : IDisposable
     // Route-independent operation identity. Key is (namespace, ChangeId); values
     // retain only a compact semantic fingerprint, never the operation payload.
     internal Dictionary<(int Ns, BatchId ChangeId), ChangeLedgerValue> GlobalChangeLedger { get; } = new();
+    // Unacknowledged FLD operation receipts are intentionally retained in Node WAL,
+    // not duplicated as payloads or copied into the Node snapshot.
+    internal Dictionary<(int Ns, BatchId ChangeId), ProviderOperationReceiptState> ProviderOperationReceipts { get; } = new();
+    internal Dictionary<(int Ns, ulong ClientSequence), BatchId> ProviderOperationReceiptSequences { get; } = new();
+    internal Dictionary<int, ulong> ProviderOperationReceiptHighWatermarks { get; } = new();
+    internal Dictionary<int, ulong> ProviderOperationReceiptAckedThrough { get; } = new();
     // Errata E-11: per-(senderPeer, ns) cache of the durable author stream last accepted.
     /// <summary>Cache of the durable author stream last accepted per (sender, ns).</summary>
     internal Dictionary<(NodeId, int), NodeId> LastStreamAuthor { get; } = new();
@@ -417,6 +426,10 @@ public sealed partial class Node : IDisposable
             NodeToAlias.Clear();
             SeenChanges.Clear();
             GlobalChangeLedger.Clear();
+            ProviderOperationReceipts.Clear();
+            ProviderOperationReceiptSequences.Clear();
+            ProviderOperationReceiptHighWatermarks.Clear();
+            ProviderOperationReceiptAckedThrough.Clear();
             LastBatchDigest.Clear();
             LastStreamDigest.Clear();
             DurableAuthors.Clear();
