@@ -24,6 +24,7 @@ public sealed class StorageSyncCoordinator
     private StorageNamespaceGcStore? _namespaceGcStore;
     private TrustStore? _namespaceGcTrustStore;
     private readonly object _gate = new();
+    private readonly SemaphoreSlim _asyncRemoteApplyGate = new(1, 1);
 
     /// <summary>The immutable namespace coordinated by this instance.</summary>
     public int NamespaceId => _namespaceId;
@@ -2559,6 +2560,123 @@ public sealed class StorageSyncCoordinator
         if (plan?.IsDuplicate == true)
             result.Duplicate = true;
         return result;
+    }
+
+    /// <summary>
+    /// Receive using an asynchronous contextual provider. The PendingApply intent and
+    /// Node checkpoint are durable before the first IPC await; Metadata finalization and
+    /// the transport ACK occur only after the provider's idempotent APPLY receipt returns.
+    /// No thread-affine Monitor is held across the provider await.
+    /// </summary>
+    public async Task<BatchResult> ReceiveBatchWithAsyncProviderBeforeAckAsync(
+        SyncSession session,
+        IAsyncProviderRemoteBatchCommitStore asyncProvider,
+        Action<Node> persistNode,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(asyncProvider);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        RegisterInterestedPeer(session, _namespaceId);
+        StorageRemoteApplyPlan? plan = null;
+        BatchResult result = await session.ReceiveBatchAsync(
+            _node,
+            beforeApply: null,
+            beforeAck: null,
+            ct: ct,
+            receiveStateOwnedByMetadataStore: true,
+            beforeApplyWithOperationDecisions: (batch, payload, senderPeer) =>
+            {
+                plan = BeginRemoteBatchBeforeNodeApply(
+                    batch, payload.ToArray(), senderPeer, checked((uint)session.PeerEpoch));
+                return plan.ApplyOperations;
+            },
+            beforeAckAsync: async (batch, _) =>
+            {
+                StorageRemoteApplyPlan accepted = plan
+                    ?? throw new InvalidOperationException("Receive intent was not durably staged.");
+                await ApplyRemoteBatchAfterNodeApplyAsync(
+                    batch, accepted, asyncProvider, persistNode, ct).ConfigureAwait(false);
+            }).ConfigureAwait(false);
+        if (plan?.IsDuplicate == true)
+            result.Duplicate = true;
+        return result;
+    }
+
+    /// <summary>
+    /// Complete a staged receive through an asynchronous provider without carrying
+    /// Node/Metadata Monitor locks across IPC. A repeated call uses the same durable
+    /// ApplyToken and immutable batch context, so response-loss retries remain idempotent.
+    /// </summary>
+    public async Task<ProviderApplyReceipt> ApplyRemoteBatchAfterNodeApplyAsync(
+        Batch batch,
+        StorageRemoteApplyPlan plan,
+        IAsyncProviderRemoteBatchCommitStore asyncProvider,
+        Action<Node> persistNode,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(batch);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(asyncProvider);
+        ArgumentNullException.ThrowIfNull(persistNode);
+        if (_metadataStore is null || string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException("A durable scoped Metadata Store is required for asynchronous receive.");
+        if (batch.NamespaceId != _namespaceId || plan.ApplyToken != CreateBatchApplyToken(batch) ||
+            plan.Batch.BatchId != batch.BatchId ||
+            !plan.Batch.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest.ToArray()))
+            throw new InvalidDataException("Pre-staged receive intent does not match the applied Node batch.");
+
+        await _asyncRemoteApplyGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            // The Node mutation has already happened in SyncSession. Persist it before
+            // crossing the process boundary; a failed checkpoint prevents provider APPLY.
+            persistNode(_node);
+            var mutations = CreateProviderMutations(plan.Batch.Operations);
+            if (mutations.Count == 0)
+                throw new InvalidDataException("Pre-staged receive intent contains no provider mutations.");
+
+            var context = new ProviderRemoteBatchCommit(
+                plan.ApplyToken,
+                plan.Batch.SenderPeer,
+                plan.Batch.TransportPeerEpoch,
+                plan.Batch.NamespaceId,
+                batch.IssuerNodeId,
+                checked((uint)batch.IssuerEpoch),
+                batch.BatchId,
+                checked((ulong)batch.CursorStart),
+                checked((ulong)batch.CursorEnd),
+                batch.PrevBatchDigest.ToArray(),
+                batch.BatchDigest.ToArray(),
+                batch.RecordsRoot.ToArray(),
+                ReadOnlySpan<byte>.Empty,
+                mutations);
+
+            ProviderApplyReceipt receipt = await asyncProvider.ApplyRemoteBatchAsync(
+                context, ct).ConfigureAwait(false);
+            if (receipt.ApplyToken != plan.ApplyToken)
+                throw new InvalidDataException("Async provider returned a receipt for a different ApplyToken.");
+
+            if (plan.FinalizeMetadata)
+            {
+                lock (_gate)
+                {
+                    var metadataReceipt = _metadataStore.FinalizePendingApply(
+                        _scopeId, _node.NodeId,
+                        new MetadataProviderApplyReceipt(plan.ApplyToken, plan.Batch.BatchDigest.ToArray()));
+                    if (metadataReceipt.DurableAuthor != batch.DurableAuthor)
+                        throw new InvalidDataException("Finalized metadata receipt author does not match the applied Node batch.");
+                    byte[] expectedHeaderFingerprint = InboxReceiptIdentity.Compute(batch).ToArray();
+                    if (!metadataReceipt.HeaderFingerprint.AsSpan().SequenceEqual(expectedHeaderFingerprint))
+                        throw new InvalidDataException("Finalized metadata receipt header fingerprint does not match the applied Node batch.");
+                }
+            }
+            return receipt;
+        }
+        finally
+        {
+            _asyncRemoteApplyGate.Release();
+        }
     }
 
     /// <summary>
