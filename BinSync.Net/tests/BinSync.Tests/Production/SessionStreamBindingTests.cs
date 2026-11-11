@@ -153,6 +153,7 @@ public sealed class SessionStreamBindingTests
         Task<BatchResult> retryReceive = retryServer.ReceiveBatchAsync(receiver);
         Assert.True(await retryPush.WaitAsync(TimeSpan.FromSeconds(5)));
         BatchResult duplicate = await retryReceive.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(duplicate.Duplicate);
         Assert.Equal(0, duplicate.Applied);
         Assert.True(receiver.TryGetField(1, record, 0x100, out var afterRetry));
         Assert.Equal(value, afterRetry!.Value);
